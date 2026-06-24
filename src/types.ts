@@ -77,6 +77,39 @@ export interface NumberEvent {
   number: number;
 }
 
+/** A selectable audio track exposed by the active player (the picker's view model). */
+export interface AudioTrackOption {
+  index: number;
+  label: string;
+  active: boolean;
+  /** False = shown but not switchable — a same-language rendition webOS collapsed
+   *  out of the native list. Defaults to switchable when absent. */
+  available?: boolean;
+}
+
+/** Normalized audio rendition, unified across the hls.js list and the native
+ *  HTMLMediaElement.audioTracks list so one selection routine serves both. */
+export interface AudioOption {
+  index: number;
+  name: string;
+  lang: string;
+  isDefault: boolean;
+  active: boolean;
+}
+
+/** A remembered audio-track choice, matched against future streams by name then language. */
+export interface AudioPref {
+  name: string;
+  lang: string;
+}
+
+/** An audio rendition declared in an HLS master playlist (EXT-X-MEDIA:TYPE=AUDIO). */
+export interface ManifestAudio {
+  name: string;
+  lang: string;
+  isDefault: boolean;
+}
+
 export interface ViewHandler {
   handleAction(action: Action, event?: NumberEvent): void;
 }

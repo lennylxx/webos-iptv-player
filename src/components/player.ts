@@ -1,5 +1,8 @@
-import type { Action, Channel, CatchupInfo } from '../types';
+import type { Action, Channel, CatchupInfo, AudioTrackOption, AudioOption, AudioPref, ManifestAudio } from '../types';
 import { $, show, hide, html, Safe } from '../utils/dom';
+import { channelKey } from '../utils/channel';
+import { fetchText } from '../utils/fetch-helper';
+import { audioLabel, hlsAudioOptions, nativeAudioOptions, chooseAudioIndex, isPrefMatch, parseAudioRenditions, mergeManifestNames } from '../utils/audio-tracks';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
@@ -7,6 +10,7 @@ import { CONFIG } from '../config';
 import { formatTime, formatPosition, formatDuration, getProgress } from '../utils/time';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
 import { createLogger } from '../utils/logger';
+import { showToast } from './toast';
 
 const log = createLogger('Player');
 
@@ -34,6 +38,8 @@ export class Player {
   private wasPlayingBeforeHide = false;
   private loadToken = 0;
   private hlsRecoveries = 0; // fatal hls.js errors recovered since the last good fragment
+  private manifestAudio: ManifestAudio[] = []; // real track names parsed from the HLS master (webOS)
+  private manifestSeq = 0;
   constructor(container: HTMLElement, onBack: () => void) {
     this.container = container;
     this.onBack = onBack;
@@ -80,8 +86,12 @@ export class Player {
 
   private bindVideoEvents(el: HTMLVideoElement): void {
     el.addEventListener('error', () => this.onError());
-    el.addEventListener('loadedmetadata', () =>
-      log.info('loadedmetadata', el.videoWidth + 'x' + el.videoHeight, '| duration:', el.duration));
+    el.addEventListener('loadedmetadata', () => {
+      log.info('loadedmetadata', el.videoWidth + 'x' + el.videoHeight, '| duration:', el.duration);
+      this.applyNativeAudioSelection();
+    });
+    // Some platforms populate audioTracks asynchronously, after loadedmetadata.
+    el.audioTracks?.addEventListener?.('addtrack', () => this.applyNativeAudioSelection());
     el.addEventListener('playing', () => log.info('playing'));
     el.addEventListener('waiting', () => log.debug('waiting (buffering)'));
     el.addEventListener('stalled', () => log.warn('stalled'));
@@ -197,6 +207,7 @@ export class Player {
 
   private loadStream(url: string, extras: Record<string, string> | null): void {
     if (!this.videoEl) return;
+    this.manifestAudio = [];
 
     if (this.hls) {
       this.hls.destroy();
@@ -216,6 +227,9 @@ export class Player {
     if (isWebOS) {
       const mime = isFlvUrl ? 'video/x-flv' : isTsUrl ? 'video/mp2t' : 'application/vnd.apple.mpegurl';
       log.info('loadStream url=', url, '| webOS native | catchup:', !!this.catchupInfo, '| MIME', mime);
+      // HLS only: read the master's EXT-X-MEDIA audio names — native audioTracks
+      // expose them with empty name/language on webOS.
+      if (!isTsUrl && !isFlvUrl) void this.loadManifestAudio(url, ++this.manifestSeq);
       this.playNative(url, mime);
       return;
     }
@@ -306,6 +320,9 @@ export class Player {
       this.hls = new Hls(hlsConfig);
       this.hls.loadSource(url);
       this.hls.attachMedia(this.videoEl);
+      // The audio track list isn't ready at MANIFEST_PARSED — hls.js fills it
+      // and fires AUDIO_TRACKS_UPDATED separately, so apply the saved pick there.
+      this.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => this.applyHlsAudioSelection());
       this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
         log.info('hls.js MANIFEST_PARSED — starting playback');
         this.videoEl?.play().catch(e => log.warn('hls play() rejected:', e));
@@ -562,6 +579,120 @@ export class Player {
 
   getCurrentIndex(): number {
     return this.currentIndex;
+  }
+
+  /**
+   * Normalized audio renditions of the active stream — from hls.js in the desktop
+   * preview, or the native `HTMLMediaElement.audioTracks` on webOS (whose alternate
+   * tracks come back empty-named, so real labels are overlaid from the parsed
+   * manifest — see `loadManifestAudio`).
+   */
+  private audioOptions(): AudioOption[] {
+    if (this.hls) return hlsAudioOptions(this.hls.audioTracks || [], this.hls.audioTrack);
+    const list = this.videoEl?.audioTracks;
+    if (!list) return [];
+    return mergeManifestNames(nativeAudioOptions(list), this.manifestAudio);
+  }
+
+  // Fetch the HLS master and parse its audio-rendition names so the picker,
+  // toast and per-channel memory show real labels instead of "Audio 2". Native
+  // audioTracks carry no usable name/language on webOS, so this is the only
+  // source. Re-applies a saved pick once names are known; degrades to generic
+  // labels on a fetch/parse failure.
+  private async loadManifestAudio(url: string, seq: number): Promise<void> {
+    try {
+      const renditions = parseAudioRenditions(await fetchText(url));
+      if (seq !== this.manifestSeq || renditions.length < 2) return;
+      this.manifestAudio = renditions;
+      log.info('manifest audio:', renditions.map(r => r.name || r.lang || '?').join(', '));
+      this.applyNativeAudioSelection();
+    } catch (e) {
+      log.warn('manifest audio fetch failed:', e);
+    }
+  }
+
+  // Picker-facing options. When webOS collapses same-language renditions (the
+  // native list is shorter than the manifest), surface every manifest rendition
+  // but mark the hidden ones unavailable — the TV can't switch to them, so the
+  // picker greys them rather than pretending. `available` assumes the manifest
+  // lists the native-exposed renditions first (default / first-per-language).
+  private displayAudioOptions(): Array<AudioOption & { available: boolean }> {
+    const opts = this.audioOptions();
+    if (this.manifestAudio.length > opts.length) {
+      return this.manifestAudio.map((m, i) => ({
+        index: i, name: m.name, lang: m.lang, isDefault: m.isDefault,
+        active: m.isDefault, available: i < opts.length,
+      }));
+    }
+    return opts.map(o => ({ ...o, available: true }));
+  }
+
+  /** Audio tracks for the picker. Labels prefer name, then language, then a position. */
+  getAudioTracks(): AudioTrackOption[] {
+    return this.displayAudioOptions().map(o => ({
+      index: o.index, label: audioLabel(o), active: o.active, available: o.available,
+    }));
+  }
+
+  /** Switch the active audio track and remember it for this channel. No-op for a
+   *  greyed (unavailable) track — webOS can't switch to a collapsed rendition. */
+  selectAudioTrack(index: number): void {
+    const opt = this.displayAudioOptions().find(o => o.index === index);
+    if (!opt || !opt.available) return;
+    if (this.hls) {
+      if (index >= 0 && index < (this.hls.audioTracks?.length || 0)) this.hls.audioTrack = index;
+    } else {
+      const list = this.videoEl?.audioTracks;
+      if (!list || index < 0 || index >= list.length) return;
+      for (let i = 0; i < list.length; i++) list[i].enabled = (i === index);
+    }
+    this.rememberAudio(opt);
+    showToast(`Switching audio track to ${audioLabel(opt)}`);
+  }
+
+  private audioPrefKey(): string {
+    return this.currentChannel ? channelKey(this.currentChannel) : '';
+  }
+
+  private rememberAudio(opt: AudioOption): void {
+    const key = this.audioPrefKey();
+    if (key) StorageService.setAudioPref(key, { name: opt.name, lang: opt.lang });
+    log.info('audio: user picked', opt.index, audioLabel(opt), key ? '— saved to storage' : '(no channel key, not saved)');
+  }
+
+  // Report the storage read and the resolved track on every tune-in — even when
+  // no switch is needed (the chosen track is already active) — so the default
+  // pick and the pref lookup are both visible in the log.
+  private logAudioChoice(path: string, options: AudioOption[], pref: AudioPref | null, idx: number): void {
+    const opt = options.find(o => o.index === idx);
+    const label = opt ? audioLabel(opt) : `Audio ${idx + 1}`;
+    log.info(`audio: ${path} | tracks:`, options.length,
+      '| storage pref:', pref ? (pref.name || pref.lang || '(unnamed)') : 'none',
+      '| using:', idx, label, isPrefMatch(opt, pref) ? '(saved pref)' : '(stream default)');
+  }
+
+  // Re-apply the remembered choice on tune-in; with no saved pick the stream
+  // default stands. hls.js drives its own rendition, so the two paths are split.
+  private applyHlsAudioSelection(): void {
+    if (!this.hls) return;
+    const options = this.audioOptions();
+    if (options.length < 2) return;
+    const pref = StorageService.getAudioPref(this.audioPrefKey());
+    const idx = chooseAudioIndex(options, pref);
+    this.logAudioChoice('hls', options, pref, idx);
+    if (idx >= 0 && idx !== this.hls.audioTrack) this.hls.audioTrack = idx;
+  }
+
+  private applyNativeAudioSelection(): void {
+    if (this.hls) return; // hls.js owns the rendition; videoEl exposes only the active one
+    const list = this.videoEl?.audioTracks;
+    if (!list || list.length < 2) return;
+    const options = this.audioOptions();
+    const pref = StorageService.getAudioPref(this.audioPrefKey());
+    const idx = chooseAudioIndex(options, pref);
+    this.logAudioChoice('native', options, pref, idx);
+    if (idx < 0 || list[idx].enabled) return; // already active — don't disturb playback
+    for (let i = 0; i < list.length; i++) list[i].enabled = (i === idx);
   }
 
   handleAction(action: Action): void {

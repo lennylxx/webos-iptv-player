@@ -73,4 +73,31 @@ describe('StorageService', () => {
       expect(StorageService.getFavorites()).toEqual([]);
     });
   });
+
+  describe('audio preferences', () => {
+    it('returns null when no choice is saved for a channel', () => {
+      expect(StorageService.getAudioPref('ch1')).toBeNull();
+    });
+
+    it('remembers a choice per channel without bleeding across channels', () => {
+      StorageService.setAudioPref('ch1', { name: 'Track 1', lang: 'l1' });
+      StorageService.setAudioPref('ch2', { name: 'Track 2', lang: 'l2' });
+      expect(StorageService.getAudioPref('ch1')).toEqual({ name: 'Track 1', lang: 'l1' });
+      expect(StorageService.getAudioPref('ch2')).toEqual({ name: 'Track 2', lang: 'l2' });
+      expect(StorageService.getAudioPref('ch3')).toBeNull();
+    });
+
+    it('persists through localStorage (survives a reload)', () => {
+      StorageService.setAudioPref('ch1', { name: 'Track 2', lang: 'l1' });
+      // A fresh read goes back to localStorage — no in-memory cache.
+      expect(StorageService.getAudioPref('ch1')).toEqual({ name: 'Track 2', lang: 'l1' });
+      expect(localStorage.getItem('iptv_audio_prefs')).toContain('Track 2');
+    });
+
+    it('ignores an empty channel id', () => {
+      StorageService.setAudioPref('', { name: 'Track 1', lang: 'l1' });
+      expect(StorageService.getAudioPref('')).toBeNull();
+      expect(localStorage.getItem('iptv_audio_prefs')).toBeNull();
+    });
+  });
 });

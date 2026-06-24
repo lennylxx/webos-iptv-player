@@ -448,6 +448,7 @@
   color: var(--text-primary);
   cursor: pointer;
   transition: var(--transition);
+  white-space: nowrap; /* keep a row's label on one line; the value chip ellipsizes instead */
 }
 
 .player-menu .menu-item.focused {
@@ -471,3 +472,56 @@
 .menu-dot.green { background: #2ecc71; }
 .menu-dot.yellow { background: #f1c40f; }
 .menu-dot.blue { background: #3498db; }
+
+/* Glyph in the colour-dot slot */
+.menu-icon {
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 18px;
+  line-height: 1;
+}
+.menu-icon.audio { color: #9b59b6; }
+
+/* Current audio track shown on the "Audio Track" row */
+.player-menu .menu-item-value {
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: 16px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0; /* allow the chip to shrink (and ellipsize) so the label keeps its line */
+  max-width: 140px;
+}
+
+/* Fixed check / chevron column in the audio sub-menu so labels align */
+.player-menu .menu-check {
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+  color: #2ecc71;
+  font-weight: 700;
+}
+
+.player-menu .menu-check.menu-back {
+  color: var(--text-primary);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.player-menu .menu-track-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-menu .menu-item.unavailable {
+  opacity: 0.4;
+}
+.player-menu .menu-item.unavailable.focused {
+  opacity: 0.6;
+}

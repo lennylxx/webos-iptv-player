@@ -70,6 +70,8 @@ class App {
       this.views.player,
       () => this.player.getCurrentIndex(),
       (action) => this.onMenuAction(action),
+      () => this.player.getAudioTracks(),
+      (index) => this.player.selectAudioTrack(index),
     );
 
     KeyHandler.init();
@@ -386,7 +388,8 @@ class App {
         if (this.sidebar.visible) {
           this.sidebar.hide();
         } else if (this.menu.visible) {
-          this.menu.hide();
+          // Let the menu step out of its audio sub-menu before closing.
+          if (!this.menu.handleBack()) this.menu.hide();
         } else {
           this.player.handleAction('back');
         }

@@ -1,5 +1,5 @@
 import { CONFIG } from '../config';
-import type { Channel, PlaylistEntry, TzMode } from '../types';
+import type { AudioPref, Channel, PlaylistEntry, TzMode } from '../types';
 import { channelKey } from '../utils/channel';
 
 const PREFIX = CONFIG.STORAGE_PREFIX;
@@ -107,6 +107,18 @@ export const StorageService = {
   },
   setAutoPlay(val: boolean): void {
     set('auto_play', val);
+  },
+
+  // Preferred audio track per channel (keyed by channelKey). Absent = follow the stream's default.
+  getAudioPref(channelId: string): AudioPref | null {
+    if (!channelId) return null;
+    return get<Record<string, AudioPref>>('audio_prefs', {})[channelId] ?? null;
+  },
+  setAudioPref(channelId: string, pref: AudioPref): void {
+    if (!channelId) return;
+    const all = get<Record<string, AudioPref>>('audio_prefs', {});
+    all[channelId] = pref;
+    set('audio_prefs', all);
   },
 
   // 'device' = the device's timezone (default), 'feed' = the EPG feed's timezone.
