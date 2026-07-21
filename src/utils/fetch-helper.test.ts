@@ -1,5 +1,6 @@
+import { gzipSync, strToU8 } from 'fflate';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { fetchText, fetchWithTimeout, fetchWithRetry } from './fetch-helper';
+import { fetchMaybeGzipText, fetchText, fetchWithTimeout, fetchWithRetry } from './fetch-helper';
 
 function okResponse(body = 'body'): Response {
   return {
@@ -50,6 +51,21 @@ describe('fetchText / fetchWithTimeout', () => {
     const assertion = expect(p).rejects.toThrow('Aborted');
     await vi.advanceTimersByTimeAsync(5000);
     await assertion;
+  });
+});
+
+describe('fetchMaybeGzipText', () => {
+  it('reads an uncompressed UTF-8 response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<tv/>')));
+    await expect(fetchMaybeGzipText('http://host/epg.xml')).resolves.toBe('<tv/>');
+  });
+
+  it('decompresses a raw XMLTV .xml.gz response', async () => {
+    const xmltv = '<?xml version="1.0"?><tv><channel id="ch1"/></tv>';
+    const compressed = gzipSync(strToU8(xmltv));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(compressed)));
+
+    await expect(fetchMaybeGzipText('http://host/guide.xml.gz')).resolves.toBe(xmltv);
   });
 });
 

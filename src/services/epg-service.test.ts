@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('./idb-cache', () => ({ getCachedEpg: vi.fn(), setCachedEpg: vi.fn(async () => {}) }));
-vi.mock('../utils/fetch-helper', () => ({ fetchText: vi.fn(async () => '<tv/>') }));
+vi.mock('../utils/fetch-helper', () => ({ fetchMaybeGzipText: vi.fn(async () => '<tv/>') }));
 vi.mock('../parsers/xmltv-parser', () => ({ parseXMLTV: vi.fn() }));
 vi.mock('./storage-service', () => ({ StorageService: { getEpgUrl: vi.fn(() => 'http://epg') } }));
 
 import { EpgService } from './epg-service';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
 import { parseXMLTV } from '../parsers/xmltv-parser';
-import { fetchText } from '../utils/fetch-helper';
+import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import type { Channel, Programme, ParsedEpg } from '../types';
 
 function prog(over: Partial<Programme>): Programme {
@@ -106,7 +106,7 @@ describe('EpgService.load — timezone offset capture', () => {
 
     await EpgService.load();
 
-    expect(fetchText).toHaveBeenCalled(); // did NOT trust the stale cache
+    expect(fetchMaybeGzipText).toHaveBeenCalled(); // did NOT trust the stale cache
     expect(EpgService.tzOffsetMinutes).toBe(480);
   });
 
@@ -116,7 +116,7 @@ describe('EpgService.load — timezone offset capture', () => {
 
     await EpgService.load();
 
-    expect(fetchText).not.toHaveBeenCalled(); // trusted the cache
+    expect(fetchMaybeGzipText).not.toHaveBeenCalled(); // trusted the cache
     expect(EpgService.tzOffsetMinutes).toBeNull();
   });
 });

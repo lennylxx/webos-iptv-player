@@ -1,6 +1,6 @@
 import type { Channel, EpgChannel, Programme } from '../types';
 import { parseXMLTV } from '../parsers/xmltv-parser';
-import { fetchText } from '../utils/fetch-helper';
+import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
 import { CONFIG } from '../config';
 import { StorageService } from './storage-service';
@@ -81,7 +81,7 @@ class EpgServiceImpl {
     const done = log.time('refresh');
     log.info('Fetching EPG from', url);
     try {
-      const text = await fetchText(url, 120000);
+      const text = await fetchMaybeGzipText(url, 120000);
       log.info('Fetched EPG:', text.length, 'bytes');
       const parseDone = log.time('parse');
       const result = parseXMLTV(text);

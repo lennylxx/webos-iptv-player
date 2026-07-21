@@ -20,6 +20,18 @@ export async function fetchText(url: string, timeout = 30000): Promise<string> {
   return response.text();
 }
 
+export async function fetchMaybeGzipText(url: string, timeout = 30000): Promise<string> {
+  const response = await fetchWithTimeout(url, {}, timeout);
+  let bytes = new Uint8Array(await response.arrayBuffer());
+
+  if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    const { gunzipSync } = await import('fflate');
+    bytes = gunzipSync(bytes);
+  }
+
+  return new TextDecoder().decode(bytes);
+}
+
 export async function fetchWithRetry(
   url: string,
   options: RequestInit = {},
