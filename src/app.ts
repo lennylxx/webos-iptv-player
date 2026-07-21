@@ -113,7 +113,7 @@ class App {
     this.search = new Search(this.views.search, {
       onRevealTabBar: () => this.tabBar.focus(),
       onBack: () => this.goLive(),
-      onPlayChannel: (idx) => { this.tabBar.blur(); this.playChannel(idx); },
+      onPlayChannel: (idx, catchup) => { this.tabBar.blur(); this.playChannel(idx, catchup); },
       onOpenMovie: (account, vod) => {
         this.tabBar.blur();
         this.showView('movies');
@@ -429,10 +429,18 @@ class App {
 
       if (epgUrl) {
         EpgService.load()
-          .then(() => { this.applyDisplayTz(); this.channelList.render(); })
+          .then(() => {
+            this.applyDisplayTz();
+            this.channelList.render();
+            this.search.refreshPrograms();
+          })
           .catch(err => log.error('EPG load failed:', err));
         setInterval(() => EpgService.refresh()
-          .then(() => { this.applyDisplayTz(); this.channelList.render(); })
+          .then(() => {
+            this.applyDisplayTz();
+            this.channelList.render();
+            this.search.refreshPrograms();
+          })
           .catch(err => log.error('EPG refresh failed:', err)),
           CONFIG.EPG_REFRESH_INTERVAL);
       }
@@ -456,6 +464,7 @@ class App {
     this.player.closeSubtitleSearch(); // never let the subtitle overlay linger across a view change
     this.player.closeSubtitleOffset(); // never let the subtitle-sync overlay linger across a view change
     this.epgGrid.dismissPrompt(); // never let the catch-up prompt linger across a view change
+    this.search.dismissPrompt();
     for (const [key, el] of Object.entries(this.views)) {
       if (key === 'loading') continue;
       if (key === name) show(el);
@@ -674,7 +683,11 @@ class App {
       this.showView('epg');
       this.epgGrid.render();
       // Refresh EPG data in background, then re-render
-      EpgService.refresh().then(() => { this.applyDisplayTz(); this.epgGrid.render(); });
+      EpgService.refresh().then(() => {
+        this.applyDisplayTz();
+        this.epgGrid.render();
+        this.search.refreshPrograms();
+      });
       return;
     }
     if (action === 'blue' && currentView !== 'settings') {

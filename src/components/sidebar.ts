@@ -4,7 +4,7 @@ import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { $, html } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { rankByName } from '../utils/channel-search';
+import { rankChannels } from '../utils/channel-search';
 
 type SidebarEntry = { ch: Channel; globalIdx: number };
 
@@ -141,7 +141,7 @@ export class Sidebar {
       const pool = pl ? all.filter(c => c.playlistIds.includes(pl)) : all;
       const idxOf = new Map<Channel, number>();
       for (let i = 0; i < all.length; i++) idxOf.set(all[i], i);
-      return rankByName(pool, q).map(ch => ({ ch, globalIdx: idxOf.get(ch)! }));
+      return rankChannels(pool, q).map(ch => ({ ch, globalIdx: idxOf.get(ch)! }));
     }
     if (!this.playlist) {
       return all.map((ch, i) => ({ ch, globalIdx: i }));

@@ -1,4 +1,4 @@
-/* Search results: a query box over Channels / Movies / Series result rails.
+/* Search results: a query box over Channels / Programs / Movies / Series.
    The poster rails reuse the shared catalog tile/poster visuals; these are the
    search-only bits (the query box and the M3U vertical channel list). */
 .search-view {
@@ -36,6 +36,7 @@
   flex-direction: column;
   gap: 8px;
 }
+.search-channels { margin-bottom: 28px; }
 .search-channel-row {
   display: flex;
   align-items: center;
@@ -68,4 +69,64 @@
 .search-row-name {
   font-size: 30px;
   color: var(--text-primary);
+}
+
+.search-programs { margin: 0 0 28px; }
+.search-program-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.search-program-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  min-height: 72px;
+  padding: 12px 20px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--catalog-surface);
+  cursor: pointer;
+}
+.search-program-row.focused {
+  border-color: var(--focus-ring);
+  background: var(--bg-tertiary);
+}
+.search-program-time {
+  width: 150px;
+  flex: none;
+  font-size: 21px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+.search-program-body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.search-program-title {
+  overflow: hidden;
+  font-size: 28px;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-program-channel {
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 21px;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-program-action {
+  flex: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 20px;
+  color: var(--text-primary);
+  background: var(--catalog-control);
+}
+.search-program-row.state-live .search-program-action {
+  color: #fff;
+  background: var(--accent);
 }

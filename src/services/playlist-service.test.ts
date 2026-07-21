@@ -330,6 +330,11 @@ describe('PlaylistService.search', () => {
     expect(PlaylistService.search('')).toEqual([]);
     expect(PlaylistService.search('   ')).toEqual([]);
   });
+
+  it('matches channel genres through natural-language-lite synonyms', () => {
+    expect(PlaylistService.search('footy').map(c => c.name)).toEqual(['Bravo']);
+    expect(PlaylistService.search('headlines').map(c => c.name)).toEqual(['Alpha', 'Charlie']);
+  });
 });
 
 describe('PlaylistService.getGroupsForPlaylist', () => {

@@ -1,5 +1,9 @@
 import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab } from './helpers';
 
+function xmltvDate(date: Date): string {
+  return date.toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
+}
+
 // Seed one Xtream account (enables the tab bar) and stub the player_api.php
 // catalog calls + the get.php/xmltv.php the live path uses. get_vod_streams /
 // get_series with no category return the whole catalog Search matches against;
@@ -7,10 +11,18 @@ import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab } from './helpers
 // that are substrings of others are routed most-specific-first (get_series_*
 // before get_series, get_vod_info/get_vod_categories before get_vod_streams).
 async function seedSearch(page: import('@playwright/test').Page): Promise<void> {
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const stop = new Date(start.getTime() + 60 * 60 * 1000);
+  const epg = `<tv>
+    <channel id="one"><display-name>Channel One</display-name></channel>
+    <programme channel="one" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+      <title>Future Report</title><category>News</category>
+    </programme>
+  </tv>`;
   await page.route('**/get.php*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U }));
   await page.route('**/xmltv.php*', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/xml', body: '<tv></tv>' }));
+    route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
   await page.route('**/player_api.php*', (route) => {
     const url = route.request().url();
     if (url.includes('get_vod_categories')) {
@@ -76,6 +88,24 @@ test('unified search matches channels, movies, and series; a channel result play
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
+});
+
+test('program search shows XMLTV metadata and toggles a future reminder', async ({ page }) => {
+  await seedSearch(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterSearch(page);
+
+  await page.locator('.tab-bar-search-input').fill('report');
+  const result = page.locator('#view-search .search-program-row');
+  await expect(result).toContainText('Future Report');
+  await expect(result).toContainText('Channel One');
+  await expect(result).toContainText('Set reminder');
+
+  await result.click();
+  await expect(result).toContainText('Reminder set');
+  await expect.poll(() => page.evaluate(() =>
+    JSON.parse(localStorage.getItem('iptv_reminders') || '[]').length)).toBe(1);
 });
 
 test('a movie search result deep-links into its Movies detail and Back returns to Search', async ({ page }) => {

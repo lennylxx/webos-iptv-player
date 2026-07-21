@@ -1,10 +1,17 @@
-import type { Action, Channel, PlaylistEntry, VodItem, SeriesItem } from '../types';
+import type { Action, CatchupInfo, Channel, PlaylistEntry, Programme, VodItem, SeriesItem } from '../types';
 import { SpatialNav } from '../navigation/spatial-nav';
 import { html } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { PlaylistService } from '../services/playlist-service';
+import { EpgService } from '../services/epg-service';
+import { ReminderService } from '../services/reminder-service';
+import { StorageService } from '../services/storage-service';
 import { loadAllVodStreams, loadAllSeries } from '../services/xtream-catalog';
-import { rankByName } from '../utils/channel-search';
+import { prepareSearchItems, rankByName, rankPrepared, type PreparedSearchItem } from '../utils/channel-search';
+import { channelKey } from '../utils/channel';
+import { formatDayLabel, formatTime } from '../utils/time';
+import { showToast } from './toast';
+import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
 
@@ -13,14 +20,20 @@ const log = createLogger('Search');
 export interface SearchHandlers {
   onRevealTabBar: () => void;
   onBack: () => void;
-  onPlayChannel: (index: number) => void;
+  onPlayChannel: (index: number, catchup?: CatchupInfo) => void;
   onOpenMovie: (account: PlaylistEntry, vod: VodItem) => void;
   onOpenSeries: (account: PlaylistEntry, series: SeriesItem) => void;
 }
 
-// The Search section: one query box over three result rails (Channels / Movies /
-// Series). All three are relevance-ranked by name (rankByName) and capped; movies
-// and series match the account's full catalogs, loaded once on open and cached.
+interface ProgramResult {
+  channel: Channel;
+  channelIndex: number;
+  programme: Programme;
+}
+
+// The Search section: one query box over Channels / Programs / Movies / Series.
+// Results are relevance-ranked and capped; movies and series match the account's
+// full catalogs, loaded once on open and cached.
 // Up from the box reveals the tab bar; Back returns to Live. The global key
 // handler ignores INPUT keydowns, so the box owns its own text input + focus-out
 // keys.
@@ -30,7 +43,10 @@ export class Search {
   private query = '';
   private allVod: VodItem[] = [];
   private allSeries: SeriesItem[] = [];
+  private programIndex: PreparedSearchItem<ProgramResult>[] = [];
   private loadedFor: string | null = null;
+  private visiblePrograms: ProgramResult[] = [];
+  private resumePrompt = new CatchupResumePrompt();
 
   constructor(private container: HTMLElement, private handlers: SearchHandlers) {
     this.nav = new SpatialNav(container);
@@ -52,6 +68,7 @@ export class Search {
   async open(account: PlaylistEntry | null): Promise<void> {
     this.account = account;
     this.query = '';
+    this.buildProgramIndex();
     this.render();
     if (account) await this.loadCatalog(account);
   }
@@ -62,7 +79,20 @@ export class Search {
     this.render();
   }
 
+  refreshPrograms(): void {
+    this.buildProgramIndex();
+    if (this.query.trim()) this.render();
+  }
+
+  dismissPrompt(): void {
+    this.resumePrompt.hide();
+  }
+
   handleAction(action: Action): void {
+    if (this.resumePrompt.visible) {
+      this.resumePrompt.handleAction(action);
+      return;
+    }
     switch (action) {
       case 'up':
         if (!this.nav.move('up')) this.handlers.onRevealTabBar();
@@ -112,6 +142,8 @@ export class Search {
       input.setSelectionRange(input.value.length, input.value.length);
     } else if (el.dataset.channelIndex !== undefined) {
       this.handlers.onPlayChannel(parseInt(el.dataset.channelIndex, 10));
+    } else if (el.dataset.programIndex !== undefined) {
+      this.activateProgram(parseInt(el.dataset.programIndex, 10));
     } else if (this.account && el.dataset.streamId !== undefined) {
       const v = this.allVod.find((x) => x.streamId === el.dataset.streamId);
       if (v) this.handlers.onOpenMovie(this.account, v);
@@ -186,17 +218,142 @@ export class Search {
     `;
   }
 
+  private buildProgramIndex(): void {
+    const programs: ProgramResult[] = [];
+    for (let channelIndex = 0; channelIndex < PlaylistService.channels.length; channelIndex++) {
+      const channel = PlaylistService.channels[channelIndex];
+      const epgId = EpgService.findChannelId(channel);
+      if (!epgId) continue;
+      for (const programme of EpgService.programmes[epgId] ?? []) {
+        programs.push({ channel, channelIndex, programme });
+      }
+    }
+    this.programIndex = prepareSearchItems(programs, result => [
+      result.programme.title,
+      result.programme.category,
+      result.programme.description,
+      result.channel.name,
+      result.channel.group,
+    ]);
+  }
+
+  private findPrograms(query: string): ProgramResult[] {
+    return rankPrepared(this.programIndex, query);
+  }
+
+  private programRow(result: ProgramResult, index: number): ReturnType<typeof html> {
+    const { channel, programme } = result;
+    const now = Date.now();
+    const state = programme.stop.getTime() <= now ? 'past' : programme.start.getTime() > now ? 'future' : 'live';
+    const day = formatDayLabel(programme.start);
+    const action = state === 'live'
+      ? 'Live now'
+      : state === 'future'
+        ? (ReminderService.has(channelKey(channel), programme.start.getTime()) ? 'Reminder set' : 'Set reminder')
+        : channel.catchupSource ? 'Catch up' : 'Open channel';
+    return html`
+      <div class="search-program-row state-${state}" data-focusable
+           data-key="p:${String(result.channelIndex)}:${String(programme.start.getTime())}"
+           data-program-index="${String(index)}">
+        <div class="search-program-time">${day.weekday} ${day.date}<br>${formatTime(programme.start)}</div>
+        <div class="search-program-body">
+          <div class="search-program-title">${programme.title}</div>
+          <div class="search-program-channel">${channel.name}${programme.category ? html` · ${programme.category}` : ''}</div>
+        </div>
+        <div class="search-program-action">${action}</div>
+      </div>
+    `;
+  }
+
+  private activateProgram(index: number): void {
+    const result = this.visiblePrograms[index];
+    if (!result) return;
+    const { channel, programme } = result;
+    const now = Date.now();
+    if (programme.start.getTime() > now) {
+      const key = channelKey(channel);
+      const startMs = programme.start.getTime();
+      if (ReminderService.has(key, startMs)) {
+        ReminderService.remove(key, startMs);
+        showToast('Reminder removed');
+      } else {
+        ReminderService.add({
+          channelKey: key,
+          channelName: channel.name,
+          title: programme.title,
+          startMs,
+          stopMs: programme.stop.getTime(),
+        });
+        showToast('Reminder set');
+      }
+      this.render();
+      return;
+    }
+
+    if (programme.stop.getTime() <= now && channel.catchupSource) {
+      const key = channelKey(channel);
+      const startMs = programme.start.getTime();
+      const progress = StorageService.getCatchupProgressList(key)
+        .find(entry => entry.progStart === startMs && !entry.completed);
+      if (progress) {
+        this.resumePrompt.show(programme.title, progress.position, {
+          onResume: () => this.playProgram(result, progress.position),
+          onStartOver: () => {
+            StorageService.clearCatchupProgress(key, startMs);
+            this.playProgram(result);
+          },
+          onCancel: () => { /* keep Search open */ },
+        });
+        return;
+      }
+    }
+    this.playProgram(result);
+  }
+
+  private playProgram(result: ProgramResult, resumeSecs?: number): void {
+    const { channel, channelIndex, programme } = result;
+    let catchup: CatchupInfo | undefined;
+    if (programme.stop.getTime() <= Date.now() && channel.catchupSource) {
+      catchup = {
+        start: Math.floor(programme.start.getTime() / 1000),
+        end: Math.floor(programme.stop.getTime() / 1000),
+        title: programme.title,
+        description: programme.description,
+        icon: programme.icon,
+        resumeSecs,
+      };
+    }
+    this.handlers.onPlayChannel(channelIndex, catchup);
+  }
+
   private render(): void {
     const cap = CONFIG.XTREAM.SEARCH_RESULT_CAP;
     const q = this.query.trim();
     const channels = q ? PlaylistService.search(this.query).slice(0, cap) : [];
     const isXtream = !!this.account;
+    this.visiblePrograms = q ? this.findPrograms(this.query).slice(0, cap) : [];
 
-    // Xtream: horizontal poster rails across Channels / Movies / Series.
-    // M3U-only: a vertical list of channel results.
+    // Xtream: horizontal poster rails for catalog results. M3U-only channels and
+    // EPG programs use compact rows so their metadata remains readable.
     const movies = isXtream ? rankByName(this.allVod, this.query).slice(0, cap) : [];
     const series = isXtream ? rankByName(this.allSeries, this.query).slice(0, cap) : [];
-    const hasResults = channels.length > 0 || movies.length > 0 || series.length > 0;
+    const hasResults = channels.length > 0 || this.visiblePrograms.length > 0 || movies.length > 0 || series.length > 0;
+    const channelSection = channels.length
+      ? html`
+          <div class="search-channels">
+            <h2 class="catalog-rail-title">Channels</h2>
+            <div class="search-list">${channels.map((ch) => this.channelRow(ch))}</div>
+          </div>
+        `
+      : '';
+    const programSection = this.visiblePrograms.length
+      ? html`
+          <div class="search-programs">
+            <h2 class="catalog-rail-title">Programs</h2>
+            <div class="search-program-list">${this.visiblePrograms.map((result, index) => this.programRow(result, index))}</div>
+          </div>
+        `
+      : '';
 
     // The results view is only shown while a query is typed (App.handleSearchQuery),
     // so the empty-query case renders nothing.
@@ -207,10 +364,14 @@ export class Search {
         : isXtream
           ? html`
                 ${channels.length ? this.rail('Channels', channels.map((ch) => this.channelTile(ch))) : ''}
+                ${programSection}
                 ${movies.length ? this.rail('Movies', movies.map((v) => this.movieTile(v))) : ''}
                 ${series.length ? this.rail('Series', series.map((s) => this.seriesTile(s))) : ''}
               `
-          : html`<div class="search-list">${channels.map((ch) => this.channelRow(ch))}</div>`;
+          : html`
+              ${channelSection}
+              ${programSection}
+            `;
 
     // The query box lives in the tab bar; this view renders results only.
     morph(this.container, html`

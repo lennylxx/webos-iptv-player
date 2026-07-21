@@ -43,7 +43,7 @@ export const CONFIG = {
     RAIL_ITEMS: 20,                     // posters shown per rail before the "all categories" drill-in
     RESUME_MIN_SECS: 15,                // below this, treat as "start over" (don't store a resume point)
     RESUME_FINISH_PAD: 30,              // within this of the end = finished (clear the resume point)
-    SEARCH_RESULT_CAP: 30,              // max results rendered per Search group (Channels/Movies/Series)
+    SEARCH_RESULT_CAP: 30,              // max results rendered per Search group
   },
 
   // Catch-up (time-shift) resume and history store tuning.
