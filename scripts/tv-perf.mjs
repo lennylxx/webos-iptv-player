@@ -253,12 +253,14 @@ export function parsePerformanceArgs(argv = []) {
     tracePath: null,
     mode: 'monitor',
     snapshotPath: null,
+    allocationSnapshotPath: null,
     gcBefore: false,
     help: false,
   };
 
   let sawCollectGarbage = false;
   let sawSnapshot = false;
+  let sawAllocationSnapshot = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -319,6 +321,15 @@ export function parsePerformanceArgs(argv = []) {
         options.snapshotPath = parseNonEmptyString(parseRequiredStringValue(argv, index, token), token);
         index += 1;
         break;
+      case '--allocation-snapshot':
+        options.mode = 'allocation-snapshot';
+        sawAllocationSnapshot = true;
+        options.allocationSnapshotPath = parseNonEmptyString(
+          parseRequiredStringValue(argv, index, token),
+          token,
+        );
+        index += 1;
+        break;
       case '--gc-before':
         options.gcBefore = true;
         break;
@@ -333,12 +344,14 @@ export function parsePerformanceArgs(argv = []) {
     }
   }
 
-  if (options.gcBefore && !sawSnapshot) {
-    throw new Error('--gc-before requires --snapshot.');
+  if (options.gcBefore && !sawSnapshot && !sawAllocationSnapshot) {
+    throw new Error('--gc-before requires --snapshot or --allocation-snapshot.');
   }
 
-  if (sawCollectGarbage && sawSnapshot) {
-    throw new Error('--collect-garbage cannot be combined with --snapshot.');
+  if (Number(sawCollectGarbage) + Number(sawSnapshot) + Number(sawAllocationSnapshot) > 1) {
+    throw new Error(
+      '--collect-garbage, --snapshot, and --allocation-snapshot cannot be combined.',
+    );
   }
 
   if (options.mode === 'gc' && (
@@ -353,6 +366,13 @@ export function parsePerformanceArgs(argv = []) {
     || options.cpuProfilePath != null || options.tracePath != null
   )) {
     throw new Error('--snapshot cannot be combined with duration or recording options.');
+  }
+
+  if (options.mode === 'allocation-snapshot' && (
+    options.jsonlPath != null || options.csvPath != null
+    || options.cpuProfilePath != null || options.tracePath != null
+  )) {
+    throw new Error('--allocation-snapshot cannot be combined with other recording options.');
   }
 
   return options;
@@ -472,7 +492,9 @@ Options:
   --trace <path>         At 80% CPU for 3s, record six 5s Chrome Trace parts
   --collect-garbage      Force a garbage collection and exit
   --snapshot <path>      Capture a heap snapshot to <path> and exit
-  --gc-before            With --snapshot, force garbage collection first
+  --allocation-snapshot <path>
+                         Record allocation stacks, then write a heap snapshot
+  --gc-before            With a snapshot mode, force garbage collection first
   --help                 Show this help
 `;
 
@@ -717,7 +739,15 @@ export async function collectGarbage(client) {
   await client.call('HeapProfiler.collectGarbage');
 }
 
-export async function takeHeapSnapshot(client, destination, { gcBefore = false } = {}, dependencies = {}) {
+export async function takeHeapSnapshot(
+  client,
+  destination,
+  {
+    gcBefore = false,
+    snapshotMethod = 'HeapProfiler.takeHeapSnapshot',
+  } = {},
+  dependencies = {},
+) {
   const tempPath = buildTempSnapshotPath(destination);
   let stream = null;
   let streamState = { error: null };
@@ -748,7 +778,7 @@ export async function takeHeapSnapshot(client, destination, { gcBefore = false }
       });
     });
 
-    await client.call('HeapProfiler.takeHeapSnapshot');
+    await client.call(snapshotMethod);
     await writes;
     if (streamState.error) throw streamState.error;
 
@@ -793,6 +823,65 @@ export async function takeHeapSnapshot(client, destination, { gcBefore = false }
     await rm(tempPath, { force: true });
     throw abortError;
   }
+}
+
+const waitUntilStopped = async (stopState) => {
+  if (stopState.stopped) return;
+  await new Promise((resolve) => {
+    stopState.signal.addEventListener('abort', resolve, { once: true });
+  });
+};
+
+export async function takeAllocationSnapshot(
+  client,
+  destination,
+  { durationMs = null, gcBefore = false } = {},
+  dependencies = {},
+) {
+  const signalSource = dependencies.signalSource ?? process;
+  const wait = dependencies.wait ?? defaultWait;
+  const stopState = createStopState();
+  const removeSignalHandlers = registerSignalHandlers(stopState, signalSource);
+  let trackingStarted = false;
+  let firstError = null;
+
+  try {
+    await client.call('HeapProfiler.enable');
+    if (gcBefore) {
+      await client.call('HeapProfiler.collectGarbage');
+    }
+    await client.call('HeapProfiler.startTrackingHeapObjects', {
+      trackAllocations: true,
+    });
+    trackingStarted = true;
+
+    if (durationMs == null) {
+      await waitUntilStopped(stopState);
+    } else {
+      await waitOrStop(durationMs, stopState, wait);
+    }
+
+    trackingStarted = false;
+    await takeHeapSnapshot(
+      client,
+      destination,
+      { snapshotMethod: 'HeapProfiler.stopTrackingHeapObjects' },
+      dependencies,
+    );
+  } catch (error) {
+    firstError = toError(error);
+  } finally {
+    if (trackingStarted) {
+      try {
+        await client.call('HeapProfiler.stopTrackingHeapObjects');
+      } catch (error) {
+        if (!firstError) firstError = toError(error);
+      }
+    }
+    removeSignalHandlers();
+  }
+
+  if (firstError) throw firstError;
 }
 
 const runWithSignalAbort = async (options, dependencies, action) => {
@@ -1189,6 +1278,33 @@ export async function main(argv, dependencies = {}) {
     } catch (error) {
       await writeChunk(stderr, `tv-perf: ${toError(error).message}\n`);
       return 1;
+    }
+  }
+
+  if (options.mode === 'allocation-snapshot') {
+    let client = null;
+    try {
+      ({ client } = await connectClient(options, dependencies));
+      const durationText = options.durationMs == null
+        ? 'Press Ctrl-C after reproducing the suspected leak.\n'
+        : `Recording allocation stacks for ${options.durationMs / 1000} seconds...\n`;
+      await writeChunk(stdout, durationText);
+      await takeAllocationSnapshot(
+        client,
+        options.allocationSnapshotPath,
+        { durationMs: options.durationMs, gcBefore: options.gcBefore },
+        dependencies,
+      );
+      await writeChunk(
+        stdout,
+        `Allocation heap snapshot written to ${options.allocationSnapshotPath}\n`,
+      );
+      return 0;
+    } catch (error) {
+      await writeChunk(stderr, `tv-perf: ${toError(error).message}\n`);
+      return 1;
+    } finally {
+      client?.close();
     }
   }
 

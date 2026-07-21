@@ -22,6 +22,7 @@ import {
   startTrace,
   stopCpuProfile,
   stopTrace,
+  takeAllocationSnapshot,
   takeHeapSnapshot,
 } from './tv-perf.mjs';
 
@@ -801,6 +802,60 @@ describe('takeHeapSnapshot abort handling', () => {
   });
 });
 
+describe('takeAllocationSnapshot', () => {
+  it('records allocation stacks for the requested window and writes a loadable snapshot', async () => {
+    const outputDir = path.join(unitOutputRoot, 'allocation-snapshot');
+    await mkdir(outputDir, { recursive: true });
+    const destination = path.join(outputDir, 'alpha.heapsnapshot');
+    const signalSource = new EventEmitter();
+    const calls = [];
+    const listeners = new Map();
+    const client = {
+      on(method, listener) {
+        const set = listeners.get(method) ?? new Set();
+        set.add(listener);
+        listeners.set(method, set);
+        return () => set.delete(listener);
+      },
+      async call(method, params) {
+        calls.push({ method, params });
+        if (method === 'HeapProfiler.stopTrackingHeapObjects') {
+          for (const listener of listeners.get('HeapProfiler.addHeapSnapshotChunk') ?? []) {
+            listener({ chunk: '{"snapshot":{}}' });
+          }
+        }
+        return {};
+      },
+      close() {},
+    };
+
+    await takeAllocationSnapshot(client, destination, {
+      durationMs: 250,
+      gcBefore: true,
+    }, {
+      signalSource,
+      wait: async (durationMs, { signal }) => {
+        expect(durationMs).toBe(250);
+        expect(signal.aborted).toBe(false);
+      },
+    });
+
+    expect(calls).toEqual([
+      { method: 'HeapProfiler.enable', params: undefined },
+      { method: 'HeapProfiler.collectGarbage', params: undefined },
+      {
+        method: 'HeapProfiler.startTrackingHeapObjects',
+        params: { trackAllocations: true },
+      },
+      { method: 'HeapProfiler.enable', params: undefined },
+      { method: 'HeapProfiler.stopTrackingHeapObjects', params: undefined },
+    ]);
+    expect(await readFile(destination, 'utf8')).toBe('{"snapshot":{}}');
+    expect(signalSource.listenerCount('SIGINT')).toBe(0);
+    expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+  });
+});
+
 const firstMetrics = [
   { name: 'Timestamp', value: 10 },
   { name: 'TaskDuration', value: 2 },
@@ -867,6 +922,19 @@ describe('parsePerformanceArgs', () => {
     });
   });
 
+  it('parses an allocation snapshot with an optional recording duration', () => {
+    expect(parsePerformanceArgs([
+      '--allocation-snapshot', 'allocation.heapsnapshot',
+      '--duration', '5',
+      '--gc-before',
+    ])).toMatchObject({
+      mode: 'allocation-snapshot',
+      allocationSnapshotPath: 'allocation.heapsnapshot',
+      durationMs: 5000,
+      gcBefore: true,
+    });
+  });
+
   it('rejects invalid option values and unknown flags', () => {
     expect(() => parsePerformanceArgs(['--interval', '0'])).toThrow(/interval/i);
     expect(() => parsePerformanceArgs(['--duration', '-1'])).toThrow(/duration/i);
@@ -894,6 +962,14 @@ describe('parsePerformanceArgs', () => {
       .toThrow(/collect-garbage/i);
     expect(() => parsePerformanceArgs(['--snapshot', 'dump.heapsnapshot', '--trace', 'trace.json']))
       .toThrow(/snapshot/i);
+    expect(() => parsePerformanceArgs([
+      '--allocation-snapshot', 'allocation.heapsnapshot',
+      '--jsonl', 'samples.jsonl',
+    ])).toThrow(/allocation-snapshot/i);
+    expect(() => parsePerformanceArgs([
+      '--snapshot', 'dump.heapsnapshot',
+      '--allocation-snapshot', 'allocation.heapsnapshot',
+    ])).toThrow(/cannot be combined/i);
   });
 });
 
