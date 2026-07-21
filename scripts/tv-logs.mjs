@@ -21,16 +21,11 @@ const appFilter = opt('--app', '');
 const port = opt('--port', '9998');
 const seconds = parseInt(opt('--seconds', '0'), 10); // 0 = run until Ctrl-C
 const history = args.includes('--history');
-const deviceName = process.env.TV_DEVICE ? `--device ${process.env.TV_DEVICE} ` : '';
-const launchCommand = `ares-launch ${deviceName}${appFilter || '<app-id>'}`;
-const launchHint = `Make sure the TV is on and the app is running:\n  ${launchCommand}`;
 const toErrorMessage = (value) => {
   if (value instanceof Error && value.message) return value.message;
   if (typeof value?.message === 'string' && value.message) return value.message;
   return String(value);
 };
-const isDiscoveryFailure = (message) =>
-  message === 'fetch failed' || message.startsWith('CDP target discovery failed:');
 
 // Resolve the device IP from ares-setup-device (no secrets needed for CDP).
 let ip;
@@ -51,17 +46,7 @@ try {
     targetSelection: 'legacy-tv-app',
   }));
 } catch (e) {
-  const message = toErrorMessage(e);
-  if (message === 'No inspectable page targets available.') {
-    console.error(
-      `tv-logs: no inspectable page found on ${ip}:${port}` +
-        (appFilter ? ` for "${appFilter}"` : '') + `. ${launchHint}`,
-    );
-  } else if (isDiscoveryFailure(message)) {
-    console.error(`tv-logs: no DevTools endpoint on ${ip}:${port}. ${launchHint}`);
-  } else {
-    console.error(`tv-logs: ${message}`);
-  }
+  console.error(`tv-logs: ${toErrorMessage(e)}`);
   process.exit(1);
 }
 

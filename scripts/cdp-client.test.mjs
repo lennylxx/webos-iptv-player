@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CdpClient,
+  normalizeDeviceConfigurationError,
   resolveCdpTarget,
   resolveCdpWebSocketUrl,
   resolveConfiguredDeviceIp,
@@ -169,7 +170,14 @@ describe('resolveConfiguredDeviceIp', () => {
 
   it('throws the shared error when device resolution fails', () => {
     expect(() => resolveConfiguredDeviceIp({ execFile: () => 'not-json' }))
-      .toThrow('cannot resolve device IP from ares-setup-device');
+      .toThrow(/TV device configuration failed.*ares-setup-device -F.*TV_DEVICE/);
+  });
+
+  it('normalizes injected device lookup failures with repair instructions', () => {
+    expect(normalizeDeviceConfigurationError(new Error('missing device')))
+      .toMatchObject({
+        message: expect.stringMatching(/missing device.*ares-setup-device -F.*TV_DEVICE/),
+      });
   });
 });
 
@@ -374,6 +382,33 @@ describe('resolveCdpWebSocketUrl', () => {
     })).rejects.toThrow('CDP target discovery failed: invalid JSON');
   });
 
+  it('reports precise discovery network failures with the endpoint and repair hint', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }),
+      });
+    });
+
+    await expect(resolveCdpWebSocketUrl({
+      host: '192.0.2.1',
+      port: 9998,
+      fetchImpl,
+    })).rejects.toThrow(
+      /CDP discovery failed at http:\/\/192\.0\.2\.1:9998\/json\/list: connection refused.*Developer Mode/,
+    );
+  });
+
+  it('reports when discovery succeeds but no app page is open', async () => {
+    await expect(resolveCdpWebSocketUrl({
+      host: '192.0.2.1',
+      port: 9998,
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => [],
+      }),
+    })).rejects.toThrow(/endpoint is reachable.*Open the app on the TV/);
+  });
+
   it('accepts direct WebSocket URLs without discovery', async () => {
     await expect(resolveCdpWebSocketUrl({
       url: 'wss://192.0.2.1:9222/devtools/page/page-a',
@@ -474,5 +509,19 @@ describe('CdpClient', () => {
     await expect(CdpClient.connect('ws://192.0.2.1:9222/devtools/page/page-a', {
       WebSocketImpl: FakeWebSocket,
     })).rejects.toThrow('open failed');
+  });
+
+  it('includes the WebSocket endpoint when the browser provides no specific error', async () => {
+    FakeWebSocket.behavior = {
+      onConstruct(socket) {
+        socket.failOpen('CDP connection failed');
+      },
+    };
+
+    await expect(CdpClient.connect('ws://192.0.2.1:9222/devtools/page/page-a', {
+      WebSocketImpl: FakeWebSocket,
+    })).rejects.toThrow(
+      /CDP WebSocket connection failed at ws:\/\/192\.0\.2\.1:9222\/devtools\/page\/page-a/,
+    );
   });
 });

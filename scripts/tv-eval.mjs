@@ -28,16 +28,11 @@ const opt = (name, def) => {
 const appFilter = opt('--app', '');
 const port = opt('--port', '9998');
 const file = opt('--file', opt('-f', ''));
-const deviceName = process.env.TV_DEVICE ? `--device ${process.env.TV_DEVICE} ` : '';
-const launchCommand = `ares-launch ${deviceName}${appFilter || '<app-id>'}`;
-const launchHint = `Make sure the TV is on and the app is running:\n  ${launchCommand}`;
 const toErrorMessage = (value) => {
   if (value instanceof Error && value.message) return value.message;
   if (typeof value?.message === 'string' && value.message) return value.message;
   return String(value);
 };
-const isDiscoveryFailure = (message) =>
-  message === 'fetch failed' || message.startsWith('CDP target discovery failed:');
 // Everything that isn't a recognized flag (or a flag's value) is the expression.
 const flags = new Set(['--app', '--port', '--file', '-f']);
 const positional = args
@@ -100,17 +95,7 @@ try {
     }
   }
 } catch (e) {
-  const message = toErrorMessage(e);
-  if (message === 'No inspectable page targets available.') {
-    console.error(
-      `tv-eval: no inspectable page found on ${ip}:${port}` +
-        (appFilter ? ` for "${appFilter}"` : '') + `. ${launchHint}`,
-    );
-  } else if (isDiscoveryFailure(message)) {
-    console.error(`tv-eval: no DevTools endpoint on ${ip}:${port}. ${launchHint}`);
-  } else {
-    console.error(`tv-eval: ${message}`);
-  }
+  console.error(`tv-eval: ${toErrorMessage(e)}`);
   exitCode = 1;
 } finally {
   client?.close();

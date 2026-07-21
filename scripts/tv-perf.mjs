@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Sample a webOS app's performance counters (CPU, JS heap, DOM nodes, …) over the
-// Chrome DevTools Protocol, and capture heap snapshots / force GC — the headless
-// counterpart of DevTools' Performance Monitor and Memory panel.
+// Chrome DevTools Protocol, capture CPU profiles and heap snapshots, or force
+// GC — the headless counterpart of DevTools' Performance Monitor and panels.
 //
 // Usage:
 //   node scripts/tv-perf.mjs [--app <id>] [--port 9998] [options]
@@ -9,11 +9,16 @@
 // (default device, or TV_DEVICE=<name>), like tv-logs.mjs / tv-eval.mjs.
 import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
-import { mkdir, rename, rm } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
-import { CdpClient, resolveCdpTarget, resolveConfiguredDeviceIp } from './cdp-client.mjs';
+import {
+  CdpClient,
+  normalizeDeviceConfigurationError,
+  resolveCdpTarget,
+  resolveConfiguredDeviceIp,
+} from './cdp-client.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure metric + argument logic (no I/O). Isolated as functions and exported so
@@ -22,6 +27,28 @@ import { CdpClient, resolveCdpTarget, resolveConfiguredDeviceIp } from './cdp-cl
 
 const MiB = 1048576;
 const SAMPLE_STATE = Symbol('cdpPerformanceSampleState');
+const CPU_PROFILE_THRESHOLD_PERCENT = 80;
+const CPU_PROFILE_TRIGGER_MS = 3000;
+const CPU_PROFILE_DURATION_MS = 30000;
+const CPU_PROFILE_PART_DURATION_MS = 5000;
+const CPU_PROFILE_PART_COUNT = CPU_PROFILE_DURATION_MS / CPU_PROFILE_PART_DURATION_MS;
+const TRACE_BUFFER_SIZE_KB = 4096;
+const TRACE_CATEGORY_CANDIDATES = [
+  'devtools.timeline',
+  'blink.user_timing',
+  'v8',
+  'v8.execute',
+  'media',
+  'renderer',
+  'renderer.scheduler',
+  'scheduler',
+  'scheduler.long_tasks',
+  'sequence_manager',
+  'toplevel',
+  'loading',
+  'gpu',
+];
+const traceCategoryCache = new WeakMap();
 
 const SAMPLE_FIELDS = [
   { key: 'observedAt', label: 'Observed At', kind: 'date', width: 24 },
@@ -222,6 +249,8 @@ export function parsePerformanceArgs(argv = []) {
     durationMs: null,
     jsonlPath: null,
     csvPath: null,
+    cpuProfilePath: null,
+    tracePath: null,
     mode: 'monitor',
     snapshotPath: null,
     gcBefore: false,
@@ -272,6 +301,14 @@ export function parsePerformanceArgs(argv = []) {
         options.csvPath = parseNonEmptyString(parseRequiredStringValue(argv, index, token), token);
         index += 1;
         break;
+      case '--cpu-profile':
+        options.cpuProfilePath = parseNonEmptyString(parseRequiredStringValue(argv, index, token), token);
+        index += 1;
+        break;
+      case '--trace':
+        options.tracePath = parseNonEmptyString(parseRequiredStringValue(argv, index, token), token);
+        index += 1;
+        break;
       case '--collect-garbage':
         options.mode = 'gc';
         sawCollectGarbage = true;
@@ -306,12 +343,14 @@ export function parsePerformanceArgs(argv = []) {
 
   if (options.mode === 'gc' && (
     options.durationMs != null || options.jsonlPath != null || options.csvPath != null
+    || options.cpuProfilePath != null || options.tracePath != null
   )) {
     throw new Error('--collect-garbage cannot be combined with duration or recording options.');
   }
 
   if (options.mode === 'snapshot' && (
     options.durationMs != null || options.jsonlPath != null || options.csvPath != null
+    || options.cpuProfilePath != null || options.tracePath != null
   )) {
     throw new Error('--snapshot cannot be combined with duration or recording options.');
   }
@@ -416,8 +455,8 @@ export function formatMonitorTarget(target) {
 const HELP_TEXT = `Usage: node scripts/tv-perf.mjs [--app <id>] [options]
 
 Sample a webOS app's performance counters (CPU, JS heap, DOM nodes, listeners)
-over the Chrome DevTools Protocol, and capture heap snapshots or force GC — the
-headless counterpart of DevTools' Performance Monitor and Memory panel.
+over the Chrome DevTools Protocol, capture CPU profiles, timeline traces, or
+heap snapshots, and force GC.
 
 Options:
   --host <host>          CDP discovery host (default: configured TV device)
@@ -429,21 +468,13 @@ Options:
   --duration <seconds>   Stop after the given duration
   --jsonl <path>         Record samples as JSONL
   --csv <path>           Record samples as CSV
+  --cpu-profile <path>   At 80% CPU for 3s, record six 5s .cpuprofile parts
+  --trace <path>         At 80% CPU for 3s, record six 5s Chrome Trace parts
   --collect-garbage      Force a garbage collection and exit
   --snapshot <path>      Capture a heap snapshot to <path> and exit
   --gc-before            With --snapshot, force garbage collection first
   --help                 Show this help
 `;
-
-const NO_PAGE_TARGET_PATTERN = /^No page target matched "([^"]+)"/;
-const NETWORK_ERROR_CODES = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'ENOTFOUND',
-  'ETIMEDOUT',
-]);
 
 const toError = (value) => {
   if (value instanceof Error) return value;
@@ -524,6 +555,126 @@ const waitForStreamClosed = async (stream) => {
 };
 
 const buildTempSnapshotPath = (destination) => `${destination}.${process.pid}.${Date.now()}.tmp`;
+
+const writeJsonAtomically = async (
+  destination,
+  value,
+  { writeFileImpl = writeFile, renameImpl = rename, rmImpl = rm } = {},
+) => {
+  const tempPath = buildTempSnapshotPath(destination);
+  await mkdir(path.dirname(destination), { recursive: true });
+
+  try {
+    await writeFileImpl(tempPath, JSON.stringify(value), { encoding: 'utf8', flag: 'wx' });
+    await renameImpl(tempPath, destination);
+  } catch (error) {
+    await rmImpl(tempPath, { force: true });
+    throw error;
+  }
+};
+
+export async function startCpuProfile(client) {
+  await client.call('Profiler.enable');
+  await client.call('Profiler.start');
+}
+
+export async function stopCpuProfile(client, destination, dependencies = {}) {
+  const response = await client.call('Profiler.stop');
+  if (response?.profile == null) {
+    throw new Error('CDP returned no CPU profile.');
+  }
+  await writeJsonAtomically(destination, response.profile, dependencies);
+}
+
+export function formatCpuProfilePartPath(destination, partNumber) {
+  const extension = path.extname(destination);
+  const stem = extension ? destination.slice(0, -extension.length) : destination;
+  const suffix = String(partNumber).padStart(2, '0');
+  return `${stem}.part${suffix}${extension || '.cpuprofile'}`;
+}
+
+export async function resolveTraceCategories(client) {
+  let categoriesPromise = traceCategoryCache.get(client);
+  if (!categoriesPromise) {
+    categoriesPromise = client.call('Tracing.getCategories').then((response) => {
+      const supported = new Set(response?.categories ?? []);
+      const selected = TRACE_CATEGORY_CANDIDATES.filter((category) => supported.has(category));
+      if (!selected.length) {
+        throw new Error('The target exposes no supported diagnostic trace categories.');
+      }
+      return selected;
+    });
+    traceCategoryCache.set(client, categoriesPromise);
+  }
+  return categoriesPromise;
+}
+
+export async function startTrace(client) {
+  const categories = await resolveTraceCategories(client);
+  const traceEvents = [];
+  let maxBufferUsage = 0;
+  let resolveComplete;
+  const complete = new Promise((resolve) => {
+    resolveComplete = resolve;
+  });
+  const unsubscribeData = client.on('Tracing.dataCollected', ({ value }) => {
+    if (Array.isArray(value)) traceEvents.push(...value);
+  });
+  const unsubscribeBufferUsage = client.on('Tracing.bufferUsage', ({ percentFull = 0 }) => {
+    maxBufferUsage = Math.max(maxBufferUsage, percentFull);
+  });
+  const unsubscribeComplete = client.on('Tracing.tracingComplete', resolveComplete);
+
+  try {
+    await client.call('Tracing.start', {
+      bufferUsageReportingInterval: 1000,
+      traceConfig: {
+        recordMode: 'recordUntilFull',
+        traceBufferSizeInKb: TRACE_BUFFER_SIZE_KB,
+        enableSampling: false,
+        includedCategories: categories,
+      },
+    });
+  } catch (error) {
+    unsubscribeData();
+    unsubscribeBufferUsage();
+    unsubscribeComplete();
+    throw error;
+  }
+
+  return {
+    traceEvents,
+    categories,
+    complete,
+    get maxBufferUsage() {
+      return maxBufferUsage;
+    },
+    close() {
+      unsubscribeData();
+      unsubscribeBufferUsage();
+      unsubscribeComplete();
+    },
+  };
+}
+
+export async function stopTrace(client, session, destination, dependencies = {}) {
+  try {
+    await client.call('Tracing.end');
+    const completion = await session.complete;
+    await writeJsonAtomically(destination, {
+      traceEvents: session.traceEvents,
+      displayTimeUnit: 'ms',
+      tvPerf: {
+        bufferSizeKb: TRACE_BUFFER_SIZE_KB,
+        categories: session.categories,
+        maxBufferUsage: session.maxBufferUsage,
+        dataLossOccurred: completion?.dataLossOccurred ?? false,
+      },
+    }, dependencies);
+  } finally {
+    session.close();
+  }
+}
 
 // Attaches the persistent 'error' listener synchronously, in the same tick the
 // stream is created, so there is never a tick where the stream can emit
@@ -794,45 +945,21 @@ const createRenderer = async (output) => {
   };
 };
 
-const isNetworkError = (error) => {
-  const normalized = toError(error);
-  const code = error?.cause?.code ?? error?.code;
-
-  if (normalized.message === 'fetch failed' || normalized.message === 'CDP connection failed') {
-    return true;
-  }
-
-  if (typeof code === 'string' && NETWORK_ERROR_CODES.has(code)) {
-    return true;
-  }
-
-  return /ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|ETIMEDOUT/i.test(normalized.message);
-};
-
-const normalizeConnectionError = (error) => {
-  const normalized = toError(error);
-  const message = normalized.message;
-  const noPageTargetMatch = message.match(NO_PAGE_TARGET_PATTERN);
-  if (noPageTargetMatch) {
-    return new Error(`no page target matches "${noPageTargetMatch[1]}"`);
-  }
-  if (isNetworkError(error)) {
-    return new Error('cannot reach CDP endpoint');
-  }
-  return normalized;
-};
-
 const connectClient = async (
   options,
   { fetchImpl, WebSocketImpl, resolveDeviceIp = resolveConfiguredDeviceIp } = {},
 ) => {
   let resolved;
+  let host = options.host;
   try {
     // With neither --host nor --url, fall back to the configured TV device IP
     // (ares-setup-device), mirroring tv-logs.mjs / tv-eval.mjs.
-    let host = options.host;
     if (!host && !options.url) {
-      host = resolveDeviceIp();
+      try {
+        host = resolveDeviceIp();
+      } catch (error) {
+        throw normalizeDeviceConfigurationError(error);
+      }
     }
     resolved = await resolveCdpTarget({
       url: options.url,
@@ -843,14 +970,14 @@ const connectClient = async (
       fetchImpl,
     });
   } catch (error) {
-    throw normalizeConnectionError(error);
+    throw error;
   }
 
   try {
     const client = await CdpClient.connect(resolved.wsUrl, { WebSocketImpl });
     return { client, target: resolved.target };
   } catch (error) {
-    throw normalizeConnectionError(error);
+    throw error;
   }
 };
 
@@ -866,6 +993,14 @@ export async function runMonitor(options, dependencies = {}) {
   let renderer = null;
   let removeSignalHandlers = () => {};
   let client = null;
+  let cpuProfilerStarted = false;
+  let traceSession = null;
+  let captureTriggered = false;
+  let capturePartNumber = 0;
+  const cpuProfilePaths = [];
+  const tracePaths = [];
+  let captureDeadlineAt = null;
+  let consecutiveHighCpuSamples = 0;
   let previousSample = null;
   let firstError = null;
 
@@ -873,6 +1008,50 @@ export async function runMonitor(options, dependencies = {}) {
     if (!firstError) {
       firstError = toError(error);
     }
+  };
+
+  const captureStarted = () => cpuProfilerStarted || traceSession != null;
+
+  const startCapturePart = async () => {
+    if (options.cpuProfilePath) {
+      await startCpuProfile(client);
+      cpuProfilerStarted = true;
+    }
+    if (options.tracePath) {
+      traceSession = await startTrace(client);
+    }
+    captureDeadlineAt = nowMs() + CPU_PROFILE_PART_DURATION_MS;
+  };
+
+  const finishCapturePart = async () => {
+    if (!captureStarted()) return;
+    capturePartNumber += 1;
+    let captureError = null;
+
+    if (cpuProfilerStarted) {
+      cpuProfilerStarted = false;
+      const destination = formatCpuProfilePartPath(options.cpuProfilePath, capturePartNumber);
+      try {
+        await stopCpuProfile(client, destination, dependencies);
+        cpuProfilePaths.push(destination);
+      } catch (error) {
+        captureError = error;
+      }
+    }
+
+    if (traceSession) {
+      const activeTraceSession = traceSession;
+      traceSession = null;
+      const destination = formatCpuProfilePartPath(options.tracePath, capturePartNumber);
+      try {
+        await stopTrace(client, activeTraceSession, destination, dependencies);
+        tracePaths.push(destination);
+      } catch (error) {
+        if (!captureError) captureError = error;
+      }
+    }
+
+    if (captureError) throw captureError;
   };
 
   try {
@@ -885,7 +1064,14 @@ export async function runMonitor(options, dependencies = {}) {
     renderer.setBanner(formatDeviceInfo(await gatherDeviceInfo(client), formatMonitorTarget(target)));
 
     while (!stopState.stopped) {
-      if (deadlineAt != null && nowMs() >= deadlineAt) {
+      if (captureStarted() && nowMs() >= captureDeadlineAt) {
+        await finishCapturePart();
+        if (capturePartNumber >= CPU_PROFILE_PART_COUNT) {
+          break;
+        }
+        await startCapturePart();
+      }
+      if (!captureStarted() && deadlineAt != null && nowMs() >= deadlineAt) {
         break;
       }
 
@@ -901,10 +1087,25 @@ export async function runMonitor(options, dependencies = {}) {
         await recorders.csv.write(`${serializeCsvRow(sample)}\n`);
       }
 
-      if (deadlineAt != null) {
-        const remainingMs = deadlineAt - nowMs();
+      if ((options.cpuProfilePath || options.tracePath) && !captureTriggered) {
+        if (sample.cpuPercent != null && sample.cpuPercent >= CPU_PROFILE_THRESHOLD_PERCENT) {
+          consecutiveHighCpuSamples += 1;
+        } else {
+          consecutiveHighCpuSamples = 0;
+        }
+
+        const requiredSamples = Math.max(1, Math.ceil(CPU_PROFILE_TRIGGER_MS / options.intervalMs));
+        if (consecutiveHighCpuSamples >= requiredSamples) {
+          await startCapturePart();
+          captureTriggered = true;
+        }
+      }
+
+      const activeDeadlineAt = captureStarted() ? captureDeadlineAt : deadlineAt;
+      if (activeDeadlineAt != null) {
+        const remainingMs = activeDeadlineAt - nowMs();
         if (remainingMs <= 0) {
-          break;
+          continue;
         }
 
         await waitOrStop(Math.min(options.intervalMs, remainingMs), stopState, wait);
@@ -921,6 +1122,12 @@ export async function runMonitor(options, dependencies = {}) {
     rememberError(error);
   } finally {
     removeSignalHandlers();
+
+    try {
+      await finishCapturePart();
+    } catch (error) {
+      rememberError(error);
+    }
 
     try {
       client?.close();
@@ -942,6 +1149,7 @@ export async function runMonitor(options, dependencies = {}) {
   }
 
   if (firstError) throw firstError;
+  return { captureTriggered, cpuProfilePaths, tracePaths };
 }
 
 export async function main(argv, dependencies = {}) {
@@ -985,7 +1193,19 @@ export async function main(argv, dependencies = {}) {
   }
 
   try {
-    await runMonitor(options, dependencies);
+    const result = await runMonitor(options, dependencies);
+    if (options.cpuProfilePath) {
+      const message = result.cpuProfilePaths.length
+        ? `CPU profile parts written:\n${result.cpuProfilePaths.map((filePath) => `  ${filePath}`).join('\n')}\n`
+        : `CPU stayed below ${CPU_PROFILE_THRESHOLD_PERCENT}% for the trigger window; no profile written\n`;
+      await writeChunk(stdout, message);
+    }
+    if (options.tracePath) {
+      const message = result.tracePaths.length
+        ? `Trace parts written:\n${result.tracePaths.map((filePath) => `  ${filePath}`).join('\n')}\n`
+        : `CPU stayed below ${CPU_PROFILE_THRESHOLD_PERCENT}% for the trigger window; no trace written\n`;
+      await writeChunk(stdout, message);
+    }
     return 0;
   } catch (error) {
     await writeChunk(stderr, `tv-perf: ${toError(error).message}\n`);

@@ -1,12 +1,13 @@
 import { EventEmitter } from 'node:events';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CSV_HEADER,
+  formatCpuProfilePartPath,
   formatDeviceInfo,
   formatMonitorTarget,
   formatTerminalHeader,
@@ -17,6 +18,10 @@ import {
   runMonitor,
   serializeCsvRow,
   serializeJsonl,
+  startCpuProfile,
+  startTrace,
+  stopCpuProfile,
+  stopTrace,
   takeHeapSnapshot,
 } from './tv-perf.mjs';
 
@@ -95,6 +100,8 @@ class FakeWebSocket {
     this.closed = false;
     this.metricsCalls = 0;
     this.closeCalls = 0;
+    this.methods = [];
+    this.metricSamples = [SAMPLE_METRICS];
     queueMicrotask(() => {
       this.dispatch('open', {});
     });
@@ -117,11 +124,60 @@ class FakeWebSocket {
 
   send(data) {
     const message = JSON.parse(data);
+    this.methods.push(message.method);
     let result = {};
 
     if (message.method === 'Performance.getMetrics') {
       this.metricsCalls += 1;
-      result = { metrics: SAMPLE_METRICS };
+      result = {
+        metrics: this.metricSamples[Math.min(this.metricsCalls - 1, this.metricSamples.length - 1)],
+      };
+    }
+    if (message.method === 'Profiler.stop') {
+      result = {
+        profile: {
+          nodes: [{ id: 1, callFrame: { functionName: 'alpha' } }],
+          startTime: 1,
+          endTime: 2,
+          samples: [1],
+          timeDeltas: [1000],
+        },
+      };
+    }
+    if (message.method === 'Tracing.getCategories') {
+      result = {
+        categories: [
+          'devtools.timeline',
+          'blink.user_timing',
+          'media',
+          'renderer.scheduler',
+          'unsupported.extra',
+        ],
+      };
+    }
+    if (message.method === 'Tracing.end') {
+      queueMicrotask(() => {
+        this.dispatch('message', {
+          data: JSON.stringify({
+            method: 'Tracing.dataCollected',
+            params: {
+              value: [{ name: 'Task', cat: 'devtools.timeline', ph: 'X', ts: 1, dur: 2 }],
+            },
+          }),
+        });
+        this.dispatch('message', {
+          data: JSON.stringify({
+            method: 'Tracing.bufferUsage',
+            params: { percentFull: 0.25 },
+          }),
+        });
+        this.dispatch('message', {
+          data: JSON.stringify({
+            method: 'Tracing.tracingComplete',
+            params: { dataLossOccurred: false },
+          }),
+        });
+      });
     }
 
     queueMicrotask(() => {
@@ -321,6 +377,204 @@ describe('runMonitor duration handling', () => {
   });
 });
 
+describe('triggered diagnostics', () => {
+  it('records six CPU profile and trace parts after CPU stays high for 3 seconds', async () => {
+    const signalSource = new EventEmitter();
+    const stdout = new FakeOutput();
+    const clock = { now: 0 };
+    const destination = path.join(unitOutputRoot, 'profiles', 'alpha.cpuprofile');
+    const traceDestination = path.join(unitOutputRoot, 'profiles', 'alpha.trace.json');
+    let socket = null;
+    const WebSocketImpl = class extends FakeWebSocket {
+      constructor(url) {
+        super(url);
+        this.metricSamples = [
+          [
+            { name: 'Timestamp', value: 1 },
+            { name: 'TaskDuration', value: 0 },
+          ],
+          [
+            { name: 'Timestamp', value: 2 },
+            { name: 'TaskDuration', value: 0.9 },
+          ],
+          [
+            { name: 'Timestamp', value: 3 },
+            { name: 'TaskDuration', value: 1.8 },
+          ],
+          [
+            { name: 'Timestamp', value: 4 },
+            { name: 'TaskDuration', value: 2.7 },
+          ],
+        ];
+        socket = this;
+      }
+    };
+
+    await runMonitor({
+      url: 'ws://127.0.0.1:9222/devtools/page/test',
+      intervalMs: 1_000,
+      durationMs: 10_000,
+      jsonlPath: null,
+      csvPath: null,
+      cpuProfilePath: destination,
+      tracePath: traceDestination,
+    }, {
+      stdout,
+      signalSource,
+      WebSocketImpl,
+      nowMs: () => clock.now,
+      wait: async (intervalMs) => {
+        clock.now += intervalMs;
+      },
+    });
+
+    expect(socket?.methods.filter((method) => method === 'Profiler.enable')).toHaveLength(6);
+    expect(socket?.methods.filter((method) => method === 'Profiler.start')).toHaveLength(6);
+    expect(socket?.methods.filter((method) => method === 'Profiler.stop')).toHaveLength(6);
+    expect(socket?.methods.filter((method) => method === 'Tracing.start')).toHaveLength(6);
+    expect(socket?.methods.filter((method) => method === 'Tracing.end')).toHaveLength(6);
+    expect(socket?.methods.filter((method) => method === 'Tracing.getCategories')).toHaveLength(1);
+    expect(socket?.methods.indexOf('Profiler.start'))
+      .toBeGreaterThan(socket?.methods.indexOf('Performance.getMetrics') ?? -1);
+    expect(socket?.methods.indexOf('Profiler.stop'))
+      .toBeGreaterThan(socket?.methods.indexOf('Performance.getMetrics') ?? -1);
+    expect(clock.now).toBe(33_000);
+    for (let partNumber = 1; partNumber <= 6; partNumber += 1) {
+      const partPath = formatCpuProfilePartPath(destination, partNumber);
+      expect(JSON.parse(await readFile(partPath, 'utf8'))).toMatchObject({
+        nodes: [{ id: 1, callFrame: { functionName: 'alpha' } }],
+        samples: [1],
+        timeDeltas: [1000],
+      });
+      const tracePath = formatCpuProfilePartPath(traceDestination, partNumber);
+      expect(JSON.parse(await readFile(tracePath, 'utf8'))).toEqual({
+        traceEvents: [
+          { name: 'Task', cat: 'devtools.timeline', ph: 'X', ts: 1, dur: 2 },
+        ],
+        displayTimeUnit: 'ms',
+        tvPerf: {
+          bufferSizeKb: 4096,
+          categories: [
+            'devtools.timeline',
+            'blink.user_timing',
+            'media',
+            'renderer.scheduler',
+          ],
+          maxBufferUsage: 0.25,
+          dataLossOccurred: false,
+        },
+      });
+    }
+  });
+
+  it('does not create a profile when CPU does not reach the trigger threshold', async () => {
+    const stdout = new FakeOutput();
+    const clock = { now: 0 };
+    const destination = path.join(unitOutputRoot, 'profiles', 'idle.cpuprofile');
+
+    const result = await runMonitor({
+      url: 'ws://127.0.0.1:9222/devtools/page/test',
+      intervalMs: 1_000,
+      durationMs: 3_000,
+      jsonlPath: null,
+      csvPath: null,
+      cpuProfilePath: destination,
+    }, {
+      stdout,
+      WebSocketImpl: FakeWebSocket,
+      nowMs: () => clock.now,
+      wait: async (intervalMs) => {
+        clock.now += intervalMs;
+      },
+    });
+
+    expect(result).toEqual({
+      captureTriggered: false,
+      cpuProfilePaths: [],
+      tracePaths: [],
+    });
+    await expect(readFile(destination, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('formats numbered part paths while preserving the requested extension', () => {
+    expect(formatCpuProfilePartPath('profile.cpuprofile', 1))
+      .toBe('profile.part01.cpuprofile');
+    expect(formatCpuProfilePartPath('profiles/alpha', 6))
+      .toBe('profiles/alpha.part06.cpuprofile');
+  });
+
+  it('rejects a missing CDP profile without writing a success-shaped file', async () => {
+    const calls = [];
+    const client = {
+      async call(method) {
+        calls.push(method);
+        return {};
+      },
+    };
+    const destination = path.join(unitOutputRoot, 'profiles', 'missing.cpuprofile');
+
+    await startCpuProfile(client);
+    await expect(stopCpuProfile(client, destination)).rejects.toThrow(/no CPU profile/i);
+
+    expect(calls).toEqual(['Profiler.enable', 'Profiler.start', 'Profiler.stop']);
+    await expect(readFile(destination, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('cleans up trace listeners when tracing fails to start', async () => {
+    const listeners = new Map();
+    const client = {
+      on(method, listener) {
+        listeners.set(method, listener);
+        return () => listeners.delete(method);
+      },
+      async call() {
+        throw new Error('trace unavailable');
+      },
+    };
+
+    await expect(startTrace(client)).rejects.toThrow('trace unavailable');
+    expect(listeners.size).toBe(0);
+  });
+
+  it('rejects targets without any supported diagnostic trace category', async () => {
+    const client = {
+      async call(method) {
+        if (method === 'Tracing.getCategories') {
+          return { categories: ['unsupported.extra'] };
+        }
+        return {};
+      },
+    };
+
+    await expect(startTrace(client)).rejects.toThrow(/no supported diagnostic trace categories/i);
+  });
+
+  it('rejects a failed trace end and removes its listeners', async () => {
+    const listeners = new Map();
+    const client = {
+      on(method, listener) {
+        listeners.set(method, listener);
+        return () => listeners.delete(method);
+      },
+      async call(method) {
+        if (method === 'Tracing.getCategories') {
+          return { categories: ['devtools.timeline'] };
+        }
+        if (method === 'Tracing.end') throw new Error('trace disconnected');
+        return {};
+      },
+    };
+    const session = await startTrace(client);
+
+    await expect(stopTrace(
+      client,
+      session,
+      path.join(unitOutputRoot, 'trace.json'),
+    )).rejects.toThrow('trace disconnected');
+    expect(listeners.size).toBe(0);
+  });
+});
+
 describe('runMonitor recorder cleanup', () => {
   it('closes opened recorders when renderer setup fails after acquisition', async () => {
     const recorderStreams = [];
@@ -352,7 +606,7 @@ describe('runMonitor recorder cleanup', () => {
 });
 
 describe('main discovery diagnostics', () => {
-  it('reports fetch failures as unreachable endpoints', async () => {
+  it('reports the failed discovery endpoint and actionable fallback diagnostics', async () => {
     const stdout = new FakeOutput();
     const stderr = new FakeOutput();
 
@@ -370,7 +624,42 @@ describe('main discovery diagnostics', () => {
     });
 
     expect(exitCode).toBe(1);
-    expect(stderr.chunks.join('')).toContain('cannot reach CDP endpoint');
+    expect(stderr.chunks.join('')).toContain(
+      'CDP discovery failed at http://127.0.0.1:9222/json/list: fetch failed',
+    );
+    expect(stderr.chunks.join('')).toContain('TV is on, reachable, and the app is open');
+  });
+
+  it.each([
+    ['ECONNREFUSED', 'connection refused', 'Developer Mode is active'],
+    ['EHOSTUNREACH', 'host unreachable', 'same LAN'],
+    ['ENETUNREACH', 'network unreachable', 'computer network connection'],
+    ['ENOTFOUND', 'host name not found', 'configured TV host name'],
+    ['ETIMEDOUT', 'connection timed out', 'firewall'],
+    ['ECONNRESET', 'connection reset', 'closed the connection'],
+  ])('reports %s discovery failures precisely', async (code, reason, hint) => {
+    const stdout = new FakeOutput();
+    const stderr = new FakeOutput();
+
+    const exitCode = await main([
+      '--host', '192.0.2.1',
+      '--port', '9998',
+      '--duration', '0.1',
+    ], {
+      stdout,
+      stderr,
+      fetchImpl: async () => {
+        throw new TypeError('fetch failed', {
+          cause: Object.assign(new Error(reason), { code }),
+        });
+      },
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stderr.chunks.join('')).toContain(
+      `CDP discovery failed at http://192.0.2.1:9998/json/list: ${reason}`,
+    );
+    expect(stderr.chunks.join('')).toContain(hint);
   });
 
   it('preserves discovery failure diagnostics for reachable non-2xx responses', async () => {
@@ -416,6 +705,49 @@ describe('main discovery diagnostics', () => {
 
     expect(exitCode).toBe(1);
     expect(requested[0]).toContain('192.0.2.55:9998');
+  });
+
+  it('reports how to repair missing TV device configuration', async () => {
+    const stdout = new FakeOutput();
+    const stderr = new FakeOutput();
+
+    const exitCode = await main([
+      '--app', 'com.example.app',
+      '--duration', '0.1',
+    ], {
+      stdout,
+      stderr,
+      resolveDeviceIp: () => {
+        throw new Error('cannot resolve device IP from ares-setup-device');
+      },
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stderr.chunks.join('')).toContain('TV device configuration failed');
+    expect(stderr.chunks.join('')).toContain('ares-setup-device -F');
+    expect(stderr.chunks.join('')).toContain('TV_DEVICE');
+  });
+
+  it('distinguishes a reachable endpoint with no open app page', async () => {
+    const stdout = new FakeOutput();
+    const stderr = new FakeOutput();
+
+    const exitCode = await main([
+      '--host', '192.0.2.1',
+      '--port', '9998',
+      '--duration', '0.1',
+    ], {
+      stdout,
+      stderr,
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => [],
+      }),
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stderr.chunks.join('')).toContain('CDP endpoint is reachable');
+    expect(stderr.chunks.join('')).toContain('Open the app on the TV');
   });
 });
 
@@ -521,6 +853,8 @@ describe('parsePerformanceArgs', () => {
       '--duration', '2',
       '--jsonl', 'samples.jsonl',
       '--csv', 'samples.csv',
+      '--cpu-profile', 'profile.cpuprofile',
+      '--trace', 'trace.json',
     ])).toMatchObject({
       url: 'http://host/a',
       target: 'Alpha',
@@ -528,6 +862,8 @@ describe('parsePerformanceArgs', () => {
       durationMs: 2000,
       jsonlPath: 'samples.jsonl',
       csvPath: 'samples.csv',
+      cpuProfilePath: 'profile.cpuprofile',
+      tracePath: 'trace.json',
     });
   });
 
@@ -537,6 +873,8 @@ describe('parsePerformanceArgs', () => {
     expect(() => parsePerformanceArgs(['--port', 'abc'])).toThrow(/port/i);
     expect(() => parsePerformanceArgs(['--target'])).toThrow(/target/i);
     expect(() => parsePerformanceArgs(['--target', '--bogus'])).toThrow(/target/i);
+    expect(() => parsePerformanceArgs(['--cpu-profile', '--bogus'])).toThrow(/cpu-profile/i);
+    expect(() => parsePerformanceArgs(['--trace', '--bogus'])).toThrow(/trace/i);
     expect(() => parsePerformanceArgs(['--interval', '--bogus'])).toThrow(/interval/i);
     expect(() => parsePerformanceArgs(['--port', '-1'])).toThrow(/port/i);
     expect(() => parsePerformanceArgs(['--unknown'])).toThrow(/unknown/i);
@@ -550,6 +888,12 @@ describe('parsePerformanceArgs', () => {
       .toThrow(/snapshot/i);
     expect(() => parsePerformanceArgs(['--collect-garbage', '--jsonl', 'samples.jsonl']))
       .toThrow(/collect-garbage/i);
+    expect(() => parsePerformanceArgs(['--snapshot', 'dump.heapsnapshot', '--cpu-profile', 'profile.cpuprofile']))
+      .toThrow(/snapshot/i);
+    expect(() => parsePerformanceArgs(['--collect-garbage', '--cpu-profile', 'profile.cpuprofile']))
+      .toThrow(/collect-garbage/i);
+    expect(() => parsePerformanceArgs(['--snapshot', 'dump.heapsnapshot', '--trace', 'trace.json']))
+      .toThrow(/snapshot/i);
   });
 });
 

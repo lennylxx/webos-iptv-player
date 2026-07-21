@@ -1,7 +1,33 @@
 import { execFileSync } from 'node:child_process';
 
-const DEVICE_LOOKUP_ERROR = 'cannot resolve device IP from ares-setup-device';
 const CONNECTION_CLOSED_ERROR = 'CDP connection closed';
+const NO_PAGE_TARGET_PATTERN = /^No page target matched "([^"]+)"/;
+const NETWORK_ERROR_DETAILS = new Map([
+  ['ECONNREFUSED', {
+    reason: 'connection refused',
+    hint: 'Check that Developer Mode is active, the app is open, and the CDP port is correct.',
+  }],
+  ['ECONNRESET', {
+    reason: 'connection reset',
+    hint: 'The app, TV, or network closed the connection while it was being established.',
+  }],
+  ['EHOSTUNREACH', {
+    reason: 'host unreachable',
+    hint: 'Check that the TV is on, its IP address is current, and the computer is on the same LAN.',
+  }],
+  ['ENETUNREACH', {
+    reason: 'network unreachable',
+    hint: 'Check the computer network connection and that the TV is on the same LAN.',
+  }],
+  ['ENOTFOUND', {
+    reason: 'host name not found',
+    hint: 'Check the configured TV host name or use its current IP address.',
+  }],
+  ['ETIMEDOUT', {
+    reason: 'connection timed out',
+    hint: 'Check that the TV is on, reachable on the LAN, and not blocked by a firewall.',
+  }],
+]);
 
 const matchFields = (page) => [
   page.id ?? '',
@@ -31,6 +57,64 @@ const toErrorMessage = (value, fallback) => {
   return fallback;
 };
 
+const findNetworkErrorCode = (error) => {
+  const queue = [error];
+  const visited = new Set();
+
+  while (queue.length) {
+    const value = queue.shift();
+    if (value == null || typeof value !== 'object' || visited.has(value)) continue;
+    visited.add(value);
+
+    if (typeof value.code === 'string' && NETWORK_ERROR_DETAILS.has(value.code)) {
+      return value.code;
+    }
+    if (value.cause) queue.push(value.cause);
+    if (Array.isArray(value.errors)) queue.push(...value.errors);
+  }
+
+  const message = toErrorMessage(error, '');
+  return [...NETWORK_ERROR_DETAILS.keys()].find((code) => message.includes(code)) ?? null;
+};
+
+export function normalizeCdpConnectionError(error, { endpoint, phase }) {
+  const message = toErrorMessage(error, String(error));
+  const noPageTargetMatch = message.match(NO_PAGE_TARGET_PATTERN);
+  if (noPageTargetMatch) {
+    return new Error(
+      `app target "${noPageTargetMatch[1]}" is not open or inspectable. ${message}`,
+    );
+  }
+  if (message === 'No inspectable page targets available.') {
+    return new Error(
+      'CDP endpoint is reachable, but no inspectable app page is open. Open the app on the TV and retry.',
+    );
+  }
+
+  const networkCode = findNetworkErrorCode(error);
+  if (networkCode) {
+    const detail = NETWORK_ERROR_DETAILS.get(networkCode);
+    return new Error(`${phase} failed at ${endpoint}: ${detail.reason}. ${detail.hint}`);
+  }
+  if (message === 'fetch failed' || message === 'CDP connection failed') {
+    return new Error(
+      `${phase} failed at ${endpoint}: ${message}. Check that the TV is on, reachable, and the app is open.`,
+    );
+  }
+  return error instanceof Error ? error : new Error(message);
+}
+
+export function normalizeDeviceConfigurationError(error) {
+  const message = toErrorMessage(error, 'cannot resolve device IP');
+  if (message.startsWith('TV device configuration failed:')) {
+    return error instanceof Error ? error : new Error(message);
+  }
+  return new Error(
+    `TV device configuration failed: ${message}. `
+    + 'Run "ares-setup-device -F" and set a default device or TV_DEVICE.',
+  );
+}
+
 export function resolveConfiguredDeviceIp({ deviceName, execFile = execFileSync } = {}) {
   try {
     const raw = execFile(
@@ -50,7 +134,9 @@ export function resolveConfiguredDeviceIp({ deviceName, execFile = execFileSync 
     if (!ip) throw new Error('missing device ip');
     return ip;
   } catch {
-    throw new Error(DEVICE_LOOKUP_ERROR);
+    throw normalizeDeviceConfigurationError(
+      new Error('cannot resolve device IP from ares-setup-device'),
+    );
   }
 }
 
@@ -128,7 +214,15 @@ export async function resolveCdpTarget({
   const discoveryUrl = discoveryBase.pathname === '/json/list'
     ? discoveryBase.href
     : new URL('/json/list', discoveryBase).href;
-  const response = await fetchImpl(discoveryUrl);
+  let response;
+  try {
+    response = await fetchImpl(discoveryUrl);
+  } catch (error) {
+    throw normalizeCdpConnectionError(error, {
+      endpoint: discoveryUrl,
+      phase: 'CDP discovery',
+    });
+  }
   if (!response.ok) {
     throw new Error(`CDP target discovery failed: ${response.status}`);
   }
@@ -140,7 +234,15 @@ export async function resolveCdpTarget({
     throw new Error('CDP target discovery failed: invalid JSON');
   }
 
-  const selected = selectPageTarget(targets, target, { fallbackToFirst, targetSelection });
+  let selected;
+  try {
+    selected = selectPageTarget(targets, target, { fallbackToFirst, targetSelection });
+  } catch (error) {
+    throw normalizeCdpConnectionError(error, {
+      endpoint: discoveryUrl,
+      phase: 'CDP discovery',
+    });
+  }
   const wsUrl = selected?.webSocketDebuggerUrl;
   if (!wsUrl) throw new Error('Selected page target does not expose a WebSocket debugger URL.');
 
@@ -166,7 +268,10 @@ export class CdpClient {
       const onError = (event) => {
         socket.removeEventListener('open', onOpen);
         socket.removeEventListener('error', onError);
-        reject(new Error(toErrorMessage(event, 'CDP connection failed')));
+        reject(normalizeCdpConnectionError(event, {
+          endpoint: url,
+          phase: 'CDP WebSocket connection',
+        }));
       };
       socket.addEventListener('open', onOpen);
       socket.addEventListener('error', onError);
