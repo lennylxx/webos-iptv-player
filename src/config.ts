@@ -28,6 +28,7 @@ export const CONFIG = {
     RESYNC_TIMEOUT: 8000,       // ms safety cap to clear the "Resyncing…" message if `playing` never fires
     SUBTITLE_OFFSET_STEP: 0.25, // seconds per Left/Right press in the subtitle-sync adjuster
     SUBTITLE_OFFSET_MAX: 60,    // max |offset| the adjuster allows (seconds)
+    NEXT_EPISODE_COUNTDOWN: 10, // seconds before an available next episode starts automatically
   },
 
   EPG: {

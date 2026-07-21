@@ -1,4 +1,4 @@
-import type { PlaylistEntry, SeriesCategory, SeriesItem, SeriesInfo, Episode, ResumeEntry, ResumeKind } from '../types';
+import type { PlaylistEntry, SeriesCategory, SeriesItem, SeriesInfo, Episode, ResumeEntry, ResumeKind, VodQueueItem } from '../types';
 import { html, raw, Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
@@ -79,6 +79,29 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     return ep.title ? `${series.name} — ${code} — ${ep.title}` : `${series.name} — ${code}`;
   }
 
+  private episodePlayback(series: SeriesItem, ep: Episode): VodQueueItem {
+    const a = this.account!;
+    return {
+      url: xtreamEpisodeUrl(this.creds(), ep.id, ep.containerExtension || 'mp4'),
+      title: this.episodeLabel(series, ep),
+      poster: ep.poster || series.poster,
+      accountId: a.id,
+      itemId: ep.id,
+      kind: 'episode',
+      subtitles: ep.subtitles,
+      searchMeta: { season: ep.season, episode: ep.episode },
+    };
+  }
+
+  private episodesAfter(episodeId: string, series: SeriesItem): VodQueueItem[] {
+    const info = this.currentInfo;
+    if (!info) return [];
+    const episodes = info.seasons.reduce<Episode[]>(
+      (all, season) => all.concat(info.episodesBySeason[season] ?? []), []);
+    const index = episodes.findIndex((ep) => ep.id === episodeId);
+    return index < 0 ? [] : episodes.slice(index + 1).map((ep) => this.episodePlayback(series, ep));
+  }
+
   private playEpisode(episodeId: string): void {
     const ep = this.findEpisode(episodeId);
     const series = this.currentSeries;
@@ -86,15 +109,9 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     if (!ep || !series || !a) return;
     const saved = StorageService.getResume(a.id, 'episode', ep.id);
     this.handlers.onPlayVod({
-      url: xtreamEpisodeUrl(this.creds(), ep.id, ep.containerExtension || 'mp4'),
-      title: this.episodeLabel(series, ep),
-      poster: ep.poster || series.poster,
-      accountId: a.id,
-      itemId: ep.id,
-      kind: 'episode',
+      ...this.episodePlayback(series, ep),
       resumeSecs: saved ? saved.position : 0,
-      subtitles: ep.subtitles,
-      searchMeta: { season: ep.season, episode: ep.episode },
+      episodeQueue: this.episodesAfter(ep.id, series),
     });
   }
 
@@ -119,6 +136,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       kind: 'episode',
       resumeSecs: r.position,
       subtitles: [],
+      episodeQueue: r.episodeQueue,
     });
   }
 

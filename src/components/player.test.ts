@@ -1064,6 +1064,22 @@ describe('Player VOD mode', () => {
     expect(player.isVod()).toBe(false); // stop() cleared VOD state
   });
 
+  it('stores the remaining episode queue with the resume point', () => {
+    const video = fakeVideo(1800);
+    player.init(video);
+    const next = {
+      url: 'http://host:8080/series/u/p/e2.mp4', title: 'Series One — S1E2',
+      poster: '', accountId: 'x1', itemId: 'e2', kind: 'episode' as const, subtitles: [],
+    };
+    player.playVod(req({ itemId: 'e1', kind: 'episode', episodeQueue: [next] }));
+    video.currentTime = 300;
+    player.handleAction('back');
+    expect(StorageService.setResume).toHaveBeenCalledWith(expect.objectContaining({
+      itemId: 'e1',
+      episodeQueue: [next],
+    }));
+  });
+
   it('clears the resume point and calls onBack when the movie ends', () => {
     const video = fakeVideo(3600);
     player.init(video);
@@ -1072,6 +1088,56 @@ describe('Player VOD mode', () => {
     video.dispatchEvent(new Event('ended'));
     expect(StorageService.clearResume).toHaveBeenCalledWith('x1', 'vod', '10');
     expect(r.onBack).toHaveBeenCalled();
+  });
+
+  it('counts down and automatically starts the next episode', async () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'duration', { value: 1800, configurable: true });
+    container.appendChild(video);
+    player.init(video);
+    const next = {
+      url: 'http://host:8080/series/u/p/e2.mp4', title: 'Series One — S1E2',
+      poster: '', accountId: 'x1', itemId: 'e2', kind: 'episode' as const, subtitles: [],
+    };
+    player.playVod(req({ itemId: 'e1', kind: 'episode', episodeQueue: [next] }));
+    vi.mocked(probeMedia).mockClear();
+
+    video.dispatchEvent(new Event('ended'));
+    expect(container.textContent).toContain('Playing in 10 seconds');
+    expect(container.textContent).toContain('Series One — S1E2');
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(probeMedia).toHaveBeenCalledWith(next.url, 'x1|media_probe|episode|e2');
+    expect(player.isVod()).toBe(true);
+  });
+
+  it('cancels the next-episode countdown with Back', () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'duration', { value: 1800, configurable: true });
+    container.appendChild(video);
+    player.init(video);
+    const r = req({
+      itemId: 'e1',
+      kind: 'episode',
+      episodeQueue: [{
+        url: 'http://host:8080/series/u/p/e2.mp4', title: 'Series One — S1E2',
+        poster: '', accountId: 'x1', itemId: 'e2', kind: 'episode', subtitles: [],
+      }],
+    });
+    player.playVod(r);
+    video.dispatchEvent(new Event('ended'));
+    player.handleAction('back');
+
+    expect(r.onBack).toHaveBeenCalledTimes(1);
+    expect(player.isVod()).toBe(false);
+    vi.advanceTimersByTime(10_000);
+    expect(r.onBack).toHaveBeenCalledTimes(1);
   });
 
   it('ignores channel up/down in VOD mode', () => {

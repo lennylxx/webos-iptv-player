@@ -1,5 +1,5 @@
 import type { Action, Channel, CatchupInfo, AudioTrackOption, AudioOption, AudioPref, ManifestAudio,
-  SubtitleTrackOption, SubtitleOption, SubtitlePref, ManifestSubtitle, ManifestClosedCaption, VodPlayback, SidecarSubtitle } from '../types';
+  SubtitleTrackOption, SubtitleOption, SubtitlePref, ManifestSubtitle, ManifestClosedCaption, VodPlayback, VodQueueItem, SidecarSubtitle } from '../types';
 import { $, show, hide, html, raw, Safe } from '../utils/dom';
 import { channelKey } from '../utils/channel';
 import { morph } from '../utils/morph';
@@ -63,6 +63,8 @@ export class Player {
   private currentIndex = -1;
   private catchupInfo: CatchupInfo | null = null;
   private vod: VodPlayback | null = null;
+  private nextEpisodeSeconds = 0;
+  private nextEpisodeTimer: ReturnType<typeof setInterval> | null = null;
   private pendingResumeSecs = 0;
   private osdVisible = false;
   private pointerX: number | null = null;
@@ -364,6 +366,7 @@ export class Player {
       position: el.currentTime || 0,
       duration: dur,
       updatedAt: Date.now(),
+      episodeQueue: v.episodeQueue,
     });
   }
 
@@ -393,6 +396,11 @@ export class Player {
 
   private handleVodAction(action: Action): void {
     if (this.subsOverlay?.visible) { this.subsOverlay.handleAction(action); return; }
+    if (this.nextEpisodeTimer) {
+      if (action === 'select' || action === 'play') this.playNextEpisode();
+      else if (action === 'back' || action === 'stop') this.cancelNextEpisode();
+      return;
+    }
     switch (action) {
       case 'back':
       case 'stop': {
@@ -645,6 +653,11 @@ export class Player {
       this.vod = null; // before stop(), so it doesn't re-save a resume point for a finished movie
       StorageService.clearResume(v.accountId, v.kind, v.itemId);
       this.stop();
+      const next = v.kind === 'episode' ? v.episodeQueue?.[0] : undefined;
+      if (next) {
+        this.startNextEpisode(next, v.episodeQueue?.slice(1) ?? [], v.onBack);
+        return;
+      }
       v.onBack();
       return;
     }
@@ -659,6 +672,7 @@ export class Player {
   }
 
   stop(): void {
+    this.clearNextEpisodeTimer();
     if (this.vod) this.saveVodResume();
     this.saveCatchupProgress(); // save before the video element is torn down
     this.stallWatchdog.stop();
@@ -690,6 +704,40 @@ export class Player {
     this.catchupSuspendPos = -1;
     this.resyncing = false;
     if (this.resyncTimer) { clearTimeout(this.resyncTimer); this.resyncTimer = null; }
+  }
+
+  private startNextEpisode(next: VodQueueItem, remaining: VodQueueItem[], onBack: () => void): void {
+    this.recreateVideoEl();
+    this.vod = { ...next, resumeSecs: 0, episodeQueue: remaining, onBack };
+    this.nextEpisodeSeconds = CONFIG.PLAYER.NEXT_EPISODE_COUNTDOWN;
+    this.osdVisible = true;
+    this.renderOSD();
+    show($('#player-osd', this.container));
+    show(this.container);
+    this.nextEpisodeTimer = setInterval(() => {
+      this.nextEpisodeSeconds--;
+      if (this.nextEpisodeSeconds <= 0) this.playNextEpisode();
+      else this.renderOSD();
+    }, 1000);
+  }
+
+  private clearNextEpisodeTimer(): void {
+    if (this.nextEpisodeTimer) clearInterval(this.nextEpisodeTimer);
+    this.nextEpisodeTimer = null;
+    this.nextEpisodeSeconds = 0;
+  }
+
+  private playNextEpisode(): void {
+    const next = this.vod;
+    if (!next || !this.nextEpisodeTimer) return;
+    this.clearNextEpisodeTimer();
+    this.playVod(next);
+  }
+
+  private cancelNextEpisode(): void {
+    const back = this.vod?.onBack;
+    this.stop();
+    back?.();
   }
 
   private loadStream(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
@@ -976,6 +1024,11 @@ export class Player {
    *  or Go-to-Live control under it. Coordinate-based because the OSD controls sit
    *  over the video plane. */
   private onPointerRelease(x: number, y: number): void {
+    if (this.nextEpisodeTimer) {
+      if (this.hitsControl('[data-next-play]', x, y)) this.playNextEpisode();
+      else if (this.hitsControl('[data-next-cancel]', x, y)) this.cancelNextEpisode();
+      return;
+    }
     if (this.seekAtPointer(x, y)) return;
     if (this.hitsControl('[data-playpause]', x, y)) this.pauseToggle();
     else if (this.hitsControl('[data-golive]', x, y)) this.goToLive();
@@ -1214,6 +1267,20 @@ export class Player {
   // The VOD OSD reuses the Live markup: an `.osd-channel` header (movie/episode
   // title + shared stream-info) over the shared seekable `.osd-progress-row`.
   private renderVodOSD(osd: HTMLElement): void {
+    if (this.nextEpisodeSeconds > 0) {
+      morph(osd, html`
+        <div class="osd-next-episode">
+          <div class="osd-next-episode-label">Up next</div>
+          <div class="osd-channel-name">${this.vod?.title ?? ''}</div>
+          <div class="osd-next-episode-time">Playing in ${this.nextEpisodeSeconds} seconds</div>
+          <div class="osd-next-episode-actions">
+            <button data-next-play>Play now</button>
+            <button data-next-cancel>Cancel</button>
+          </div>
+        </div>
+      `);
+      return;
+    }
     const v = this.videoEl;
     const dur = v && Number.isFinite(v.duration) ? v.duration : 0;
     const pos = v ? Math.min(v.currentTime || 0, dur || Infinity) : 0;

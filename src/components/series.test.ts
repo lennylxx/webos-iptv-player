@@ -175,6 +175,13 @@ describe('Series detail', () => {
       itemId: 'e1', accountId: 'x1', kind: 'episode', resumeSecs: 0,
       url: 'http://host:8080/series/u/p/e1.mp4',
       title: expect.stringContaining('S1E1'),
+      episodeQueue: [
+        expect.objectContaining({
+          itemId: 'e2',
+          url: 'http://host:8080/series/u/p/e2.mkv',
+          title: expect.stringContaining('S2E1'),
+        }),
+      ],
     }));
   });
 
@@ -209,6 +216,25 @@ describe('Series detail', () => {
     row.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     view.handleAction('select');
     expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({ itemId: 'e1', resumeSecs: 450 }));
+  });
+
+  it('restores the remaining episode queue from Continue Watching', async () => {
+    const next = {
+      url: 'http://host:8080/series/u/p/e2.mkv', title: 'Series One — S2E1 — Episode Two',
+      poster: '', accountId: 'x1', itemId: 'e2', kind: 'episode', subtitles: [],
+    };
+    storageMock.getResumeList.mockReturnValue([
+      {
+        accountId: 'x1', kind: 'episode', itemId: 'e1', name: 'Series One — S1E1',
+        poster: '', ext: 'mp4', position: 450, duration: 1500, updatedAt: 1,
+        episodeQueue: [next],
+      },
+    ]);
+    const { view, handlers } = await openWith();
+    const tile = container.querySelector('.catalog-tile[data-resume-episode="e1"]') as HTMLElement;
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({ episodeQueue: [next] }));
   });
 
   it('shows an empty state when the series has no seasons', async () => {

@@ -386,6 +386,47 @@
   padding: 20px;
 }
 
+.osd-next-episode {
+  padding: 8px 0;
+}
+
+.osd-next-episode-label {
+  margin-bottom: 4px;
+  color: var(--accent);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.osd-next-episode-time {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 24px;
+}
+
+.osd-next-episode-actions {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.osd-next-episode-actions button {
+  padding: 10px 20px;
+  border: 1px solid var(--overlay-chip);
+  border-radius: 6px;
+  background: var(--overlay-chip);
+  color: var(--text-primary);
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.osd-next-episode-actions button:first-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
 /* Player sidebar overlay (Magic Remote / left key) */
 .player-sidebar {
   position: absolute;

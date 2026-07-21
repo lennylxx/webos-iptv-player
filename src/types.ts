@@ -281,6 +281,7 @@ export interface ResumeEntry {
   position: number;   // seconds into the stream
   duration: number;   // total seconds, or 0 if unknown
   updatedAt: number;  // epoch ms, for recency ordering
+  episodeQueue?: VodQueueItem[];
 }
 
 // Structured metadata for online subtitle search (passed from Xtream catalog to player).
@@ -305,17 +306,21 @@ export interface CatchupProgressEntry {
   completed: boolean;  // true once the programme has been watched to the end
 }
 
-// A VOD playback request handed to the player's VOD mode. The player derives no
-// channel context from this; onBack returns the UI to the originating screen.
-export interface VodPlayback {
+export interface VodQueueItem {
   url: string;
   title: string;
   poster: string;
   accountId: string;
   itemId: string;
   kind: ResumeKind;
-  resumeSecs: number;
   subtitles: SidecarSubtitle[];
   searchMeta?: SearchMeta;
+}
+
+// A VOD playback request handed to the player's VOD mode. The player derives no
+// channel context from this; onBack returns the UI to the originating screen.
+export interface VodPlayback extends VodQueueItem {
+  resumeSecs: number;
+  episodeQueue?: VodQueueItem[];
   onBack: () => void;
 }
