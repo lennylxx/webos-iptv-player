@@ -15,6 +15,8 @@ export const CONFIG = {
   PLAYER: {
     OSD_TIMEOUT: 5000,
     BUFFER_LENGTH: 30,
+    MANIFEST_TIMEOUT: 5000,
+    MANIFEST_MAX_BYTES: 256 * 1024,
     CHANNEL_NUMBER_TIMEOUT: 2000,
     SEEK_STEP: 30,              // seconds per Left/Right press while seeking catch-up or live DVR
     HLS_MAX_RECOVERIES: 3,      // bounded hls.js fatal-error retries before giving up → next channel

@@ -5,7 +5,7 @@ import { $, show, hide, html, raw, Safe } from '../utils/dom';
 import { channelKey } from '../utils/channel';
 import { morph } from '../utils/morph';
 import { dvrWindow, dvrState, type DvrWindow, type DvrState } from '../utils/dvr';
-import { fetchText } from '../utils/fetch-helper';
+import { fetchLimitedText } from '../utils/fetch-helper';
 import { audioLabel, hlsAudioOptions, nativeAudioOptions, chooseAudioIndex, isPrefMatch, parseAudioRenditions, mergeManifestNames } from '../utils/audio-tracks';
 import { subtitleLabel, hlsSubtitleOptions, manifestSubtitleOptions, nativeSubtitleOptions, chooseSubtitleIndex, isSubtitlePrefMatch, parseSubtitleRenditions, parseClosedCaptions, closedCaptionLabel, clampSubtitleOffset, formatSubtitleOffset, shiftForeignTrack } from '../utils/subtitle-tracks';
 import { PlaylistService } from '../services/playlist-service';
@@ -104,6 +104,7 @@ export class Player {
   private manifestVariants: StreamVariant[] = []; // HLS master variants for best-effort codec readout
   private vodInfo: MediaInfo | null = null; // container-header stream info for the active VOD (codec/fps/HDR)
   private manifestSeq = 0;
+  private manifestController: AbortController | null = null;
   private subs = new HlsSubtitles(); // self-rendered subtitles on the webOS native path
   private vodSubs = new VodSubtitles(); // sidecar SRT/WebVTT tracks for VOD (Xtream)
   private assSubs = new AssSubtitles(); // sidecar ASS/SSA subtitles for VOD, drawn by assjs
@@ -245,6 +246,7 @@ export class Player {
       }
       this.stallWatchdog.stop();
       this.subs.stop();
+      this.cancelManifestTracks();
       if (this.hls) {
         this.hls.destroy();
         this.hls = null;
@@ -748,6 +750,7 @@ export class Player {
     this.saveCatchupProgress(); // save before the video element is torn down
     this.stallWatchdog.stop();
     this.subs.stop();
+    this.cancelManifestTracks();
     this.vodSubs.clear();
     this.assSubs.destroy();
     if (this.hls) {
@@ -814,6 +817,7 @@ export class Player {
 
   private loadStream(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
     if (!this.videoEl) return;
+    this.cancelManifestTracks();
     this.manifestAudio = [];
     this.manifestSubtitles = [];
     this.manifestClosedCaptions = [];
@@ -850,7 +854,7 @@ export class Player {
       log.info('loadStream url=', url, '| webOS native | catchup:', !!this.catchupInfo, '| MIME', mime);
       // HLS only: read the master's EXT-X-MEDIA audio/subtitle names — native
       // audio/text tracks expose them with empty name/language on webOS.
-      if (!isTsUrl && !isFlvUrl) void this.loadManifestTracks(url, ++this.manifestSeq);
+      if (!isTsUrl && !isFlvUrl) void this.loadManifestTracks(url, this.manifestSeq);
       this.playNative(url, mime);
       return;
     }
@@ -1539,8 +1543,17 @@ export class Player {
   // name/language on webOS, so this is the only source. Re-applies the saved
   // picks once names are known; degrades to generic labels on a fetch failure.
   private async loadManifestTracks(url: string, seq: number): Promise<void> {
+    const controller = new AbortController();
+    this.manifestController?.abort();
+    this.manifestController = controller;
     try {
-      const text = await fetchText(url);
+      const text = await fetchLimitedText(
+        url,
+        CONFIG.PLAYER.MANIFEST_MAX_BYTES,
+        CONFIG.PLAYER.MANIFEST_TIMEOUT,
+        controller.signal,
+        '#EXTM3U',
+      );
       if (seq !== this.manifestSeq) return;
       const audio = parseAudioRenditions(text);
       if (audio.length >= 2) {
@@ -1569,8 +1582,17 @@ export class Player {
         log.info('manifest variants:', variants.length);
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       log.warn('manifest tracks fetch failed:', e);
+    } finally {
+      if (this.manifestController === controller) this.manifestController = null;
     }
+  }
+
+  private cancelManifestTracks(): void {
+    this.manifestSeq++;
+    this.manifestController?.abort();
+    this.manifestController = null;
   }
 
   // Picker-facing options. When webOS collapses same-language renditions (the

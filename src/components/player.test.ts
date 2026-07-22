@@ -372,6 +372,30 @@ describe('Player live playback', () => {
     expect(player.canSeek()).toBe(false);
     expect(container.querySelector('[data-seekbar]')).toBeNull();
   });
+
+  it('aborts the previous manifest probe when a new one starts', async () => {
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal('fetch', vi.fn((_url: string, opts: RequestInit) => {
+      signals.push(opts.signal as AbortSignal);
+      return new Promise<Response>((_resolve, reject) => {
+        opts.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')));
+      });
+    }));
+    const internals = player as unknown as {
+      loadManifestTracks(url: string, seq: number): Promise<void>;
+    };
+
+    const first = internals.loadManifestTracks('http://host/a', 0);
+    await Promise.resolve();
+    const second = internals.loadManifestTracks('http://host/b', 0);
+    await Promise.resolve();
+
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    player.stop();
+    await Promise.all([first, second]);
+  });
 });
 
 describe('Player Recently Watched recording', () => {

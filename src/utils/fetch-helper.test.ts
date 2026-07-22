@@ -1,6 +1,6 @@
 import { gzipSync, strToU8 } from 'fflate';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { fetchMaybeGzipText, fetchText, fetchWithTimeout, fetchWithRetry } from './fetch-helper';
+import { fetchLimitedText, fetchMaybeGzipText, fetchText, fetchWithTimeout, fetchWithRetry } from './fetch-helper';
 
 function okResponse(body = 'body'): Response {
   return {
@@ -50,6 +50,67 @@ describe('fetchText / fetchWithTimeout', () => {
     const p = fetchWithTimeout('http://x', {}, 5000);
     const assertion = expect(p).rejects.toThrow('Aborted');
     await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
+  it('keeps the fetchText timeout active while reading the response body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: RequestInit) => ({
+      ok: true,
+      text: () => new Promise<string>((_resolve, reject) => {
+        opts.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')));
+      }),
+    } as unknown as Response)));
+    const p = fetchText('http://x', 5000);
+    const assertion = expect(p).rejects.toThrow('Aborted');
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+});
+
+describe('fetchLimitedText', () => {
+  it('cancels an endless response after reaching the byte limit', async () => {
+    const cancel = vi.fn(async () => {});
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array(5) })
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array(5) });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read, cancel }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://x', 8, 5000)).rejects.toThrow('exceeds 8 bytes');
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('cancels binary MPEG-TS data as soon as it cannot be an HLS manifest', async () => {
+    const cancel = vi.fn(async () => {});
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array([0x47, 0x40, 0x00, 0x10, 0x00, 0x00, 0x01]) })
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array(1024) });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read, cancel }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://host/a', 256 * 1024, 5000, undefined, '#EXTM3U'))
+      .rejects.toThrow('does not begin with #EXTM3U');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('honors an external abort while reading the body', async () => {
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn((_url: string, opts: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        opts.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')));
+      }),
+    ));
+
+    const p = fetchLimitedText('http://x', 1024, 5000, controller.signal);
+    const assertion = expect(p).rejects.toThrow('Aborted');
+    controller.abort();
     await assertion;
   });
 });
