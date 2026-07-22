@@ -53,12 +53,18 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
   protected abstract selectExtra(el: HTMLElement): boolean;
   // The Continue Watching rail (or '' when there is nothing to resume).
   protected abstract continueRail(): Safe | '';
-  // A tile id that isn't in a loaded category (Movies' Continue rail); default none.
-  protected resumeFallback(_id: string): I | null { return null; }
+  // The Watchlist rail (or '' when it is empty).
+  protected abstract watchlistRail(): Safe | '';
+  // A tile id that isn't in a loaded category (Continue/Watchlist); default none.
+  protected fallbackItem(_id: string): I | null { return null; }
   // Hero when no rail item exists (Movies falls back to a resumed item); default none.
   protected heroFallback(): I | null { return null; }
 
   setAccount(account: PlaylistEntry): void { this.account = account; }
+
+  refreshPlaybackState(): void {
+    if (this.mode === 'detail') this.renderDetail();
+  }
 
   async open(account: PlaylistEntry): Promise<void> {
     this.account = account;
@@ -157,7 +163,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
 
   protected findItem(categoryId: string, id: string): I | null {
     const inCat = this.itemsByCategory[categoryId] ?? [];
-    return inCat.find((x) => this.itemId(x) === id) ?? this.resumeFallback(id);
+    return inCat.find((x) => this.itemId(x) === id) ?? this.fallbackItem(id);
   }
 
   private async openGrid(categoryId: string): Promise<void> {
@@ -209,6 +215,9 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
     this.mode = 'browse';
     this.resume = StorageService.getResumeList(this.account!.id).filter((e) => e.kind === this.resumeKind);
     const hero = this.railGroups[0]?.items[0] ?? this.heroFallback();
+    const continueRail = this.continueRail();
+    const watchlistRail = this.watchlistRail();
+    const hasContent = this.categories.length > 0 || !!continueRail || !!watchlistRail;
     // A poster URL sits inside a CSS url('…') string, where the html escaper's
     // entity encoding is decoded before CSS parses it; percent-encode the
     // characters that could break out of the string.
@@ -221,7 +230,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
 
     morph(this.container, html`
       <div class="catalog-view catalog-browse" data-nav-container>
-        ${this.categories.length === 0
+        ${!hasContent
           ? html`<p class="catalog-hint catalog-empty">${this.emptyMessage}</p>`
           : html`
             <div class="catalog-hero" style="background-image: url('${heroBg}')">
@@ -234,7 +243,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
             <div class="catalog-rails">
               <div class="catalog-rails-spacer"></div>
               <div class="catalog-rails-body">
-                ${this.continueRail()}
+                ${continueRail}
+                ${watchlistRail}
                 ${this.railGroups.map((r) => this.rail(r.category.name, r.items.map((it) => this.tile(it))))}
                 ${moreCats.length ? this.rail('All Categories', moreCats.map((c) => html`
                   <div class="catalog-cat" data-focusable data-key="c:${c.id}" data-category-id="${c.id}">${c.name}</div>

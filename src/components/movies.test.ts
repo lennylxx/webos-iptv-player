@@ -1,13 +1,34 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { PlaylistEntry } from '../types';
+import type { PlaylistEntry, WatchlistEntry, WatchlistKind } from '../types';
 
-const { catalogMock, storageMock } = vi.hoisted(() => ({
-  catalogMock: { loadVodCategories: vi.fn(), loadVodStreams: vi.fn(), loadVodInfo: vi.fn() },
-  storageMock: { getResumeList: vi.fn(() => [] as unknown[]), getResume: vi.fn(() => null) },
-}));
+const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() => {
+  const watchlistState = { entries: [] as WatchlistEntry[] };
+  return {
+    catalogMock: { loadVodCategories: vi.fn(), loadVodStreams: vi.fn(), loadVodInfo: vi.fn() },
+    watchlistState,
+    storageMock: {
+      getResumeList: vi.fn(() => [] as unknown[]),
+      getResume: vi.fn(() => null),
+      getWatchlist: vi.fn(() => watchlistState.entries),
+      isWatchlisted: vi.fn((_accountId: string, _kind: WatchlistKind, itemId: string) =>
+        watchlistState.entries.some((entry) => entry.itemId === itemId)),
+      toggleWatchlist: vi.fn((entry: WatchlistEntry) => {
+        const index = watchlistState.entries.findIndex((item) => item.itemId === entry.itemId);
+        if (index >= 0) {
+          watchlistState.entries.splice(index, 1);
+          return false;
+        }
+        watchlistState.entries.unshift(entry);
+        return true;
+      }),
+    },
+    toastMock: { showToast: vi.fn() },
+  };
+});
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
+vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 
 import { Movies } from './movies';
 
@@ -26,6 +47,7 @@ beforeEach(() => {
   // return so a prior test's mockReturnValue override doesn't leak (order-safety).
   storageMock.getResumeList.mockReturnValue([]);
   storageMock.getResume.mockReturnValue(null);
+  watchlistState.entries = [];
   container = document.createElement('div');
   document.body.appendChild(container);
 });
@@ -71,6 +93,60 @@ describe('Movies browse + grid', () => {
     ]);
     await openWith();
     expect(container.textContent).toContain('Continue Watching');
+  });
+
+  it('shows a Watchlist rail from stored movie snapshots', async () => {
+    watchlistState.entries = [{
+      accountId: 'x1', kind: 'vod', itemId: '42', name: 'Saved Movie', poster: '',
+      rating: '', categoryId: '9', containerExtension: 'mkv', addedAt: 2,
+    }];
+    catalogMock.loadVodInfo.mockResolvedValue({
+      plot: '', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+      poster: '', imdbId: '', tmdbId: '', year: 0,
+    });
+    const { view } = await openWith();
+    expect(container.textContent).toContain('Watchlist');
+    const tile = container.querySelector('.catalog-tile[data-item-id="42"]') as HTMLElement;
+    expect(tile.textContent).toContain('Saved Movie');
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve(); await Promise.resolve();
+    expect(container.querySelector('.movies-detail')?.textContent).toContain('Saved Movie');
+  });
+
+  it('queues only the movies after one launched from the Watchlist rail', async () => {
+    watchlistState.entries = [
+      {
+        accountId: 'x1', kind: 'vod', itemId: '42', name: 'Saved Movie One', poster: '',
+        rating: '', categoryId: '9', containerExtension: 'mp4', addedAt: 2,
+      },
+      {
+        accountId: 'x1', kind: 'vod', itemId: '43', name: 'Saved Movie Two', poster: '',
+        rating: '', categoryId: '9', containerExtension: 'mkv', addedAt: 1,
+      },
+    ];
+    catalogMock.loadVodInfo.mockResolvedValue({
+      plot: '', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+      poster: '', imdbId: '', tmdbId: '', year: 0,
+    });
+    const { view, handlers } = await openWith();
+    const tile = container.querySelector('[data-watchlist-item="42"]') as HTMLElement;
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve(); await Promise.resolve();
+    const play = container.querySelector('[data-action="play"]') as HTMLElement;
+    play.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({
+      itemId: '42',
+      watchlistQueue: [
+        expect.objectContaining({
+          itemId: '43',
+          title: 'Saved Movie Two',
+          url: 'http://host:8080/movie/u/p/43.mkv',
+        }),
+      ],
+    }));
   });
 
   it('reveals the tab bar when Up cannot move within the view', async () => {
@@ -128,6 +204,32 @@ describe('Movies browse + grid', () => {
 });
 
 describe('Movies detail', () => {
+  it('adds and removes the movie from Watchlist without losing button focus', async () => {
+    catalogMock.loadVodInfo.mockResolvedValue({
+      plot: '', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+      poster: '', imdbId: '', tmdbId: '', year: 0,
+    });
+    const { view } = await openWith();
+    const tile = container.querySelector('.catalog-tile[data-item-id="10"]') as HTMLElement;
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve(); await Promise.resolve();
+
+    const button = container.querySelector('[data-action="watchlist"]') as HTMLElement;
+    button.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(storageMock.toggleWatchlist).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: 'x1', kind: 'vod', itemId: '10', name: 'Movie One',
+    }));
+    expect(container.querySelector('[data-action="watchlist"]')?.textContent).toContain('Remove from Watchlist');
+    expect(container.querySelector('.focused')?.getAttribute('data-key')).toBe('watchlist');
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Added to Watchlist');
+
+    view.handleAction('select');
+    expect(container.querySelector('[data-action="watchlist"]')?.textContent).toContain('Add to Watchlist');
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Removed from Watchlist');
+  });
+
   it('renders plot/meta and a Play button, and plays from the start', async () => {
     catalogMock.loadVodInfo.mockResolvedValue({
       plot: 'A plot.', cast: 'Actor A', director: 'Dir A', genre: 'Drama',
@@ -149,6 +251,7 @@ describe('Movies detail', () => {
     expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({
       itemId: '10', accountId: 'x1', kind: 'vod', resumeSecs: 0,
       url: 'http://host:8080/movie/u/p/10.mp4',
+      watchlistQueue: undefined,
     }));
   });
 
@@ -171,6 +274,26 @@ describe('Movies detail', () => {
     resume.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     view.handleAction('select');
     expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({ resumeSecs: 900 }));
+  });
+
+  it('refreshes the detail actions when playback creates a resume point', async () => {
+    catalogMock.loadVodInfo.mockResolvedValue({
+      plot: '', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 3600,
+      poster: '', imdbId: '', tmdbId: '', year: 0,
+    });
+    const { view } = await openWith();
+    const tile = container.querySelector('.catalog-tile[data-item-id="10"]') as HTMLElement;
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve(); await Promise.resolve();
+    expect(container.querySelector('[data-action="resume"]')).toBeNull();
+
+    storageMock.getResume.mockReturnValue({
+      accountId: 'x1', kind: 'vod', itemId: '10', name: 'Movie One', poster: '',
+      ext: 'mp4', position: 20, duration: 3600, updatedAt: 1,
+    });
+    view.refreshPlaybackState();
+    expect(container.querySelector('[data-action="resume"]')).not.toBeNull();
   });
 
   it('backs out of detail to the browse view', async () => {

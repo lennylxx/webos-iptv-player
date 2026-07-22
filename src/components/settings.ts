@@ -183,6 +183,7 @@ export class Settings {
   // Pending theme selection (persisted on Save; live-previewed while browsing).
   private selectedTheme = '';
   private confirmationPrompt = new ConfirmationPrompt();
+  private watchlistAccount: PlaylistEntry | null = null;
 
   constructor(container: HTMLElement, onSave: (action: SaveAction) => void) {
     this.container = container;
@@ -232,6 +233,8 @@ export class Settings {
     const allPlaylists = StorageService.getPlaylists();
     const playlists = allPlaylists.filter(pl => pl.source !== 'upload' && pl.source !== 'xtream');
     const accounts = allPlaylists.filter(pl => pl.source === 'xtream');
+    const selectedAccountId = StorageService.getSelectedXtreamAccountId();
+    this.watchlistAccount = accounts.find((account) => account.id === selectedAccountId) ?? accounts[0] ?? null;
     const uploads = allPlaylists.filter(pl => pl.source === 'upload');
     const epgUrl = StorageService.getEpgUrl();
     const autoPlay = StorageService.getAutoPlay();
@@ -360,6 +363,18 @@ export class Settings {
             <button class="btn btn-danger" data-focusable id="clear-recently-watched"
                     aria-label="Clear Recently Watched">Clear Recently Watched</button>
           </div>
+          ${this.watchlistAccount ? html`
+            <div class="settings-history-action">
+              <div class="settings-history-copy">
+                <div class="settings-history-title">Watchlist</div>
+                <div class="settings-history-description">
+                  Clear saved Movies and Series for ${this.watchlistAccount.name}.
+                </div>
+              </div>
+              <button class="btn btn-danger" data-focusable id="clear-watchlist"
+                      aria-label="Clear Watchlist">Clear Watchlist</button>
+            </div>
+          ` : ''}
         </div>
 
         <div class="settings-section">
@@ -494,6 +509,19 @@ export class Settings {
         onConfirm: () => {
           StorageService.clearRecentlyWatched();
           showToast('Recently Watched cleared');
+        },
+        onCancel: () => {},
+      });
+    } else if (el.id === 'clear-watchlist' && this.watchlistAccount) {
+      const account = this.watchlistAccount;
+      this.confirmationPrompt.show({
+        title: 'Clear Watchlist?',
+        message: `This removes all Movies and Series from ${account.name}'s Watchlist.`,
+        confirmLabel: 'Clear',
+        cancelLabel: 'Cancel',
+        onConfirm: () => {
+          StorageService.clearWatchlist(account.id);
+          showToast(`Watchlist cleared for "${account.name}"`);
         },
         onCancel: () => {},
       });

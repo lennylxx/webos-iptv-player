@@ -33,3 +33,9 @@ export const DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-
 
 // Check mark for the current row in the account switcher (no exotic Unicode).
 export const CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>';
+
+const WATCHLIST_PATH = 'M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z';
+export function watchlistIcon(active: boolean): string {
+  return `<svg class="watchlist-glyph ${active ? 'set' : 'unset'}" viewBox="0 0 24 24" aria-hidden="true">`
+    + `<path d="${WATCHLIST_PATH}"/></svg>`;
+}

@@ -38,6 +38,8 @@ async function setup(page: Page): Promise<void> {
         : playlist('Bravo', 'http://host/b.m3u8'),
     });
   });
+  await page.route('**/player_api.php*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
   await page.route('**/m3u.xml', (route) =>
     route.fulfill({ status: 200, contentType: 'application/xml', body: epg('Alpha', 'Alpha Program') }));
   await page.route('**/xmltv.php*', (route) => {

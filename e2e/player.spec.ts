@@ -1,4 +1,6 @@
-import { test, expect, type Page, routePlaylist, routeLiveManifest, seedPlaylist, SEARCH_M3U } from './helpers';
+import {
+  test, expect, type Page, routePlaylist, routeLiveManifest, seedPlaylist, neuterVideo, SEARCH_M3U,
+} from './helpers';
 
 // The player view: playback start, sidebar, action menu, OSD, and live DVR.
 
@@ -84,6 +86,7 @@ test('a long player-menu list scrolls with the Magic-Remote wheel, not the chann
   await routePlaylist(page);
   // Minimal live manifest so hls.js doesn't fatal → no auto-zap to the next channel.
   await routeLiveManifest(page);
+  await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
@@ -124,6 +127,7 @@ test('starting playback shows the OSD with channel info; the yellow key re-opens
   // stream fatals, onError swaps the OSD to the error message, and the channel-info
   // assertions below fail.
   await routeLiveManifest(page);
+  await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();

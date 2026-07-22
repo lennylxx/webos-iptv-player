@@ -280,6 +280,20 @@ export interface SeriesInfo {
   episodesBySeason: Record<number, Episode[]>;
 }
 
+export type WatchlistKind = 'vod' | 'series';
+
+export interface WatchlistEntry {
+  accountId: string;
+  kind: WatchlistKind;
+  itemId: string;
+  name: string;
+  poster: string;
+  rating: string;
+  categoryId: string;
+  containerExtension?: string;
+  addedAt: number;
+}
+
 // Local resume store: last playback position per catalog item. Kept in
 // localStorage (Xtream doesn't persist third-party resume). `kind` lets Movies
 // and Series share one store. name/poster are denormalized so the
@@ -297,6 +311,7 @@ export interface ResumeEntry {
   duration: number;   // total seconds, or 0 if unknown
   updatedAt: number;  // epoch ms, for recency ordering
   episodeQueue?: VodQueueItem[];
+  watchlistOwner?: WatchlistOwner;
 }
 
 // Structured metadata for online subtitle search (passed from Xtream catalog to player).
@@ -338,6 +353,12 @@ export interface VodQueueItem {
   kind: ResumeKind;
   subtitles: SidecarSubtitle[];
   searchMeta?: SearchMeta;
+  watchlistOwner?: WatchlistOwner;
+}
+
+export interface WatchlistOwner {
+  kind: 'series';
+  itemId: string;
 }
 
 // A VOD playback request handed to the player's VOD mode. The player derives no
@@ -345,5 +366,7 @@ export interface VodQueueItem {
 export interface VodPlayback extends VodQueueItem {
   resumeSecs: number;
   episodeQueue?: VodQueueItem[];
+  /** Transient movie queue created only when playback starts from Watchlist. */
+  watchlistQueue?: VodQueueItem[];
   onBack: () => void;
 }

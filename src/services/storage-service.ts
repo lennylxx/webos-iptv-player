@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, type OverlayStyle } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, EpgSource, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, EpgSource, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist-id';
@@ -265,6 +265,47 @@ export const StorageService = {
   },
   setSelectedXtreamAccountId(id: string): void {
     set('selectedXtream', id);
+  },
+
+  getWatchlist(accountId: string, kind: WatchlistKind): WatchlistEntry[] {
+    const all = get<Record<string, WatchlistEntry>>('watchlist', {});
+    return Object.keys(all)
+      .map((key) => all[key])
+      .filter((entry) => entry.accountId === accountId && entry.kind === kind)
+      .sort((a, b) => b.addedAt - a.addedAt);
+  },
+  isWatchlisted(accountId: string, kind: WatchlistKind, itemId: string): boolean {
+    return this.getWatchlist(accountId, kind).some((entry) => entry.itemId === itemId);
+  },
+  toggleWatchlist(entry: WatchlistEntry): boolean {
+    const all = get<Record<string, WatchlistEntry>>('watchlist', {});
+    const key = `${entry.accountId}|${entry.kind}|${entry.itemId}`;
+    if (all[key]) {
+      delete all[key];
+      set('watchlist', all);
+      return false;
+    }
+
+    all[key] = entry;
+    const scoped = Object.keys(all)
+      .map((itemKey) => ({ key: itemKey, entry: all[itemKey] }))
+      .filter((item) => item.entry.accountId === entry.accountId && item.entry.kind === entry.kind)
+      .sort((a, b) => b.entry.addedAt - a.entry.addedAt);
+    for (const item of scoped.slice(CONFIG.XTREAM.WATCHLIST_MAX_ITEMS)) delete all[item.key];
+    set('watchlist', all);
+    return true;
+  },
+  removeWatchlist(accountId: string, kind: WatchlistKind, itemId: string): void {
+    const all = get<Record<string, WatchlistEntry>>('watchlist', {});
+    delete all[`${accountId}|${kind}|${itemId}`];
+    set('watchlist', all);
+  },
+  clearWatchlist(accountId: string): void {
+    const all = get<Record<string, WatchlistEntry>>('watchlist', {});
+    for (const key of Object.keys(all)) {
+      if (all[key].accountId === accountId) delete all[key];
+    }
+    set('watchlist', all);
   },
 
   getOnlineSubtitleConfig(): OnlineSubtitleConfig {

@@ -98,7 +98,13 @@ class App {
       onBack: () => this.goLive(),
       onPlayVod: (req) => {
         this.showView('player');
-        this.player.playVod({ ...req, onBack: () => this.showView('movies') });
+        this.player.playVod({
+          ...req,
+          onBack: () => {
+            this.showView('movies');
+            this.movies.refreshPlaybackState();
+          },
+        });
       },
     });
     this.series = new Series(this.views.series, {
@@ -106,7 +112,13 @@ class App {
       onBack: () => this.goLive(),
       onPlayVod: (req) => {
         this.showView('player');
-        this.player.playVod({ ...req, onBack: () => this.showView('series') });
+        this.player.playVod({
+          ...req,
+          onBack: () => {
+            this.showView('series');
+            this.series.refreshPlaybackState();
+          },
+        });
       },
     });
     this.search = new Search(this.views.search, {

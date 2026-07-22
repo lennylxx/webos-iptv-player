@@ -65,8 +65,8 @@ export class Player {
   private currentIndex = -1;
   private catchupInfo: CatchupInfo | null = null;
   private vod: VodPlayback | null = null;
-  private nextEpisodeSeconds = 0;
-  private nextEpisodeTimer: ReturnType<typeof setInterval> | null = null;
+  private upNextSeconds = 0;
+  private upNextTimer: ReturnType<typeof setInterval> | null = null;
   private pendingResumeSecs = 0;
   private osdVisible = false;
   private pointerX: number | null = null;
@@ -431,6 +431,7 @@ export class Player {
       duration: dur,
       updatedAt: Date.now(),
       episodeQueue: v.episodeQueue,
+      watchlistOwner: v.watchlistOwner,
     });
   }
 
@@ -463,9 +464,9 @@ export class Player {
 
   private handleVodAction(action: Action): void {
     if (this.subsOverlay?.visible) { this.subsOverlay.handleAction(action); return; }
-    if (this.nextEpisodeTimer) {
-      if (action === 'select' || action === 'play') this.playNextEpisode();
-      else if (action === 'back' || action === 'stop') this.cancelNextEpisode();
+    if (this.upNextTimer) {
+      if (action === 'select' || action === 'play') this.playNextItem();
+      else if (action === 'back' || action === 'stop') this.cancelNextItem();
       return;
     }
     switch (action) {
@@ -722,10 +723,16 @@ export class Player {
       const v = this.vod;
       this.vod = null; // before stop(), so it doesn't re-save a resume point for a finished movie
       StorageService.clearResume(v.accountId, v.kind, v.itemId);
+      if (v.kind === 'vod') {
+        StorageService.removeWatchlist(v.accountId, 'vod', v.itemId);
+      } else if ((v.episodeQueue?.length ?? 0) === 0 && v.watchlistOwner) {
+        StorageService.removeWatchlist(v.accountId, v.watchlistOwner.kind, v.watchlistOwner.itemId);
+      }
       this.stop();
-      const next = v.kind === 'episode' ? v.episodeQueue?.[0] : undefined;
+      const queue = v.kind === 'episode' ? v.episodeQueue : v.watchlistQueue;
+      const next = queue?.[0];
       if (next) {
-        this.startNextEpisode(next, v.episodeQueue?.slice(1) ?? [], v.onBack);
+        this.startNextItem(next, queue?.slice(1) ?? [], v.kind === 'episode', v.onBack);
         return;
       }
       v.onBack();
@@ -743,7 +750,7 @@ export class Player {
 
   stop(): void {
     this.startPlaybackGeneration();
-    this.clearNextEpisodeTimer();
+    this.clearUpNextTimer();
     if (this.vod) this.saveVodResume();
     this.saveCatchupProgress(); // save before the video element is torn down
     this.stallWatchdog.stop();
@@ -778,35 +785,46 @@ export class Player {
     if (this.resyncTimer) { clearTimeout(this.resyncTimer); this.resyncTimer = null; }
   }
 
-  private startNextEpisode(next: VodQueueItem, remaining: VodQueueItem[], onBack: () => void): void {
+  private startNextItem(
+    next: VodQueueItem,
+    remaining: VodQueueItem[],
+    isEpisodeQueue: boolean,
+    onBack: () => void,
+  ): void {
     this.recreateVideoEl();
-    this.vod = { ...next, resumeSecs: 0, episodeQueue: remaining, onBack };
-    this.nextEpisodeSeconds = CONFIG.PLAYER.NEXT_EPISODE_COUNTDOWN;
+    this.vod = {
+      ...next,
+      resumeSecs: 0,
+      episodeQueue: isEpisodeQueue ? remaining : undefined,
+      watchlistQueue: isEpisodeQueue ? undefined : remaining,
+      onBack,
+    };
+    this.upNextSeconds = CONFIG.PLAYER.UP_NEXT_COUNTDOWN;
     this.osdVisible = true;
     this.renderOSD();
     show($('#player-osd', this.container));
     show(this.container);
-    this.nextEpisodeTimer = setInterval(() => {
-      this.nextEpisodeSeconds--;
-      if (this.nextEpisodeSeconds <= 0) this.playNextEpisode();
+    this.upNextTimer = setInterval(() => {
+      this.upNextSeconds--;
+      if (this.upNextSeconds <= 0) this.playNextItem();
       else this.renderOSD();
     }, 1000);
   }
 
-  private clearNextEpisodeTimer(): void {
-    if (this.nextEpisodeTimer) clearInterval(this.nextEpisodeTimer);
-    this.nextEpisodeTimer = null;
-    this.nextEpisodeSeconds = 0;
+  private clearUpNextTimer(): void {
+    if (this.upNextTimer) clearInterval(this.upNextTimer);
+    this.upNextTimer = null;
+    this.upNextSeconds = 0;
   }
 
-  private playNextEpisode(): void {
+  private playNextItem(): void {
     const next = this.vod;
-    if (!next || !this.nextEpisodeTimer) return;
-    this.clearNextEpisodeTimer();
+    if (!next || !this.upNextTimer) return;
+    this.clearUpNextTimer();
     this.playVod(next);
   }
 
-  private cancelNextEpisode(): void {
+  private cancelNextItem(): void {
     const back = this.vod?.onBack;
     this.stop();
     back?.();
@@ -1111,9 +1129,9 @@ export class Player {
    *  or Go-to-Live control under it. Coordinate-based because the OSD controls sit
    *  over the video plane. */
   private onPointerRelease(x: number, y: number): void {
-    if (this.nextEpisodeTimer) {
-      if (this.hitsControl('[data-next-play]', x, y)) this.playNextEpisode();
-      else if (this.hitsControl('[data-next-cancel]', x, y)) this.cancelNextEpisode();
+    if (this.upNextTimer) {
+      if (this.hitsControl('[data-next-play]', x, y)) this.playNextItem();
+      else if (this.hitsControl('[data-next-cancel]', x, y)) this.cancelNextItem();
       return;
     }
     if (this.seekAtPointer(x, y)) return;
@@ -1354,12 +1372,12 @@ export class Player {
   // The VOD OSD reuses the Live markup: an `.osd-channel` header (movie/episode
   // title + shared stream-info) over the shared seekable `.osd-progress-row`.
   private renderVodOSD(osd: HTMLElement): void {
-    if (this.nextEpisodeSeconds > 0) {
+    if (this.upNextSeconds > 0) {
       morph(osd, html`
         <div class="osd-next-episode">
           <div class="osd-next-episode-label">Up next</div>
           <div class="osd-channel-name">${this.vod?.title ?? ''}</div>
-          <div class="osd-next-episode-time">Playing in ${this.nextEpisodeSeconds} seconds</div>
+          <div class="osd-next-episode-time">Playing in ${this.upNextSeconds} seconds</div>
           <div class="osd-next-episode-actions">
             <button data-next-play>Play now</button>
             <button data-next-cancel>Cancel</button>

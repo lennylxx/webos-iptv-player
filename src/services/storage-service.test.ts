@@ -187,7 +187,7 @@ describe('StorageService', () => {
   });
 });
 
-import type { CatchupProgressEntry, ResumeEntry } from '../types';
+import type { CatchupProgressEntry, ResumeEntry, WatchlistEntry } from '../types';
 
 const resume = (over: Partial<ResumeEntry>): ResumeEntry => ({
   accountId: 'x1', kind: 'vod', itemId: '10', name: 'Movie One', poster: '', ext: 'mp4',
@@ -204,6 +204,73 @@ describe('selected Xtream account id', () => {
   it('round-trips a stored id', () => {
     StorageService.setSelectedXtreamAccountId('a2');
     expect(StorageService.getSelectedXtreamAccountId()).toBe('a2');
+  });
+});
+
+const watchlist = (over: Partial<WatchlistEntry> = {}): WatchlistEntry => ({
+  accountId: 'x1',
+  kind: 'vod',
+  itemId: '10',
+  name: 'Movie One',
+  poster: 'http://host/a',
+  rating: '',
+  categoryId: '1',
+  containerExtension: 'mp4',
+  addedAt: 1000,
+  ...over,
+});
+
+describe('StorageService Watchlist store', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('toggles entries and lists them newest first', () => {
+    expect(StorageService.toggleWatchlist(watchlist({ itemId: '10', addedAt: 1000 }))).toBe(true);
+    expect(StorageService.toggleWatchlist(watchlist({ itemId: '11', addedAt: 2000 }))).toBe(true);
+    expect(StorageService.getWatchlist('x1', 'vod').map((entry) => entry.itemId)).toEqual(['11', '10']);
+    expect(StorageService.isWatchlisted('x1', 'vod', '10')).toBe(true);
+
+    expect(StorageService.toggleWatchlist(watchlist({ itemId: '10', addedAt: 3000 }))).toBe(false);
+    expect(StorageService.isWatchlisted('x1', 'vod', '10')).toBe(false);
+  });
+
+  it('removes one completed item without affecting the rest', () => {
+    StorageService.toggleWatchlist(watchlist({ itemId: '10' }));
+    StorageService.toggleWatchlist(watchlist({ itemId: '11' }));
+    StorageService.removeWatchlist('x1', 'vod', '10');
+    expect(StorageService.getWatchlist('x1', 'vod').map((entry) => entry.itemId)).toEqual(['11']);
+  });
+
+  it('isolates accounts and content types', () => {
+    StorageService.toggleWatchlist(watchlist({ accountId: 'x1', kind: 'vod', itemId: 'same' }));
+    StorageService.toggleWatchlist(watchlist({ accountId: 'x1', kind: 'series', itemId: 'same' }));
+    StorageService.toggleWatchlist(watchlist({ accountId: 'x2', kind: 'vod', itemId: 'same' }));
+
+    expect(StorageService.getWatchlist('x1', 'vod')).toHaveLength(1);
+    expect(StorageService.getWatchlist('x1', 'series')).toHaveLength(1);
+    expect(StorageService.getWatchlist('x2', 'vod')).toHaveLength(1);
+  });
+
+  it('caps each account and content type at 200 entries', () => {
+    for (let i = 0; i < 205; i++) {
+      StorageService.toggleWatchlist(watchlist({ itemId: String(i), addedAt: i }));
+    }
+    const entries = StorageService.getWatchlist('x1', 'vod');
+    expect(entries).toHaveLength(200);
+    expect(entries[0].itemId).toBe('204');
+    expect(entries[199].itemId).toBe('5');
+  });
+
+  it('clears both content types for one account only', () => {
+    StorageService.toggleWatchlist(watchlist({ accountId: 'x1', kind: 'vod' }));
+    StorageService.toggleWatchlist(watchlist({ accountId: 'x1', kind: 'series' }));
+    StorageService.toggleWatchlist(watchlist({ accountId: 'x2', kind: 'vod' }));
+
+    StorageService.clearWatchlist('x1');
+    expect(StorageService.getWatchlist('x1', 'vod')).toEqual([]);
+    expect(StorageService.getWatchlist('x1', 'series')).toEqual([]);
+    expect(StorageService.getWatchlist('x2', 'vod')).toHaveLength(1);
   });
 });
 

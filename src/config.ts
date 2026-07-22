@@ -28,7 +28,7 @@ export const CONFIG = {
     RESYNC_TIMEOUT: 8000,       // ms safety cap to clear the "Resyncing…" message if `playing` never fires
     SUBTITLE_OFFSET_STEP: 0.25, // seconds per Left/Right press in the subtitle-sync adjuster
     SUBTITLE_OFFSET_MAX: 60,    // max |offset| the adjuster allows (seconds)
-    NEXT_EPISODE_COUNTDOWN: 10, // seconds before an available next episode starts automatically
+    UP_NEXT_COUNTDOWN: 10,      // seconds before the queued episode/movie starts automatically
   },
 
   EPG: {
@@ -46,6 +46,7 @@ export const CONFIG = {
     RESUME_FINISH_PAD: 30,              // within this of the end = finished (clear the resume point)
     SEARCH_RESULT_CAP: 30,              // max results rendered per Search group
     ARCHIVE_TTL_MS: 10 * 60 * 1000,     // per-channel get_simple_data_table freshness
+    WATCHLIST_MAX_ITEMS: 200,            // per account and content type
   },
 
   // Catch-up (time-shift) resume and history store tuning.

@@ -1,11 +1,12 @@
-import type { PlaylistEntry, SeriesCategory, SeriesItem, SeriesInfo, Episode, ResumeEntry, ResumeKind, VodQueueItem } from '../types';
+import type { PlaylistEntry, SeriesCategory, SeriesItem, SeriesInfo, Episode, ResumeEntry, ResumeKind, VodQueueItem, WatchlistEntry } from '../types';
 import { html, raw, Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
 import { loadSeriesCategories, loadSeries, loadSeriesInfo } from '../services/xtream-catalog';
 import { xtreamEpisodeUrl, type XtreamCredentials } from '../utils/xtream-url';
 import { CatalogView } from './catalog-view';
-import { PLAY_ICON } from './icons';
+import { PLAY_ICON, watchlistIcon } from './icons';
+import { showToast } from './toast';
 
 // The Series section: browse (Continue rail of resumed episodes + per-category
 // rails + an "all categories" drill-in) → per-category poster grid → a detail
@@ -36,11 +37,59 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       : '';
   }
 
+  protected watchlistRail(): Safe | '' {
+    const entries = StorageService.getWatchlist(this.account!.id, 'series');
+    return entries.length
+      ? this.rail('Watchlist', entries.map((entry) => this.tile(this.watchlistEntryToSeries(entry))))
+      : '';
+  }
+
+  protected fallbackItem(seriesId: string): SeriesItem | null {
+    const entry = StorageService.getWatchlist(this.account!.id, 'series')
+      .find((item) => item.itemId === seriesId);
+    return entry ? this.watchlistEntryToSeries(entry) : null;
+  }
+
+  protected heroFallback(): SeriesItem | null {
+    const entry = StorageService.getWatchlist(this.account!.id, 'series')[0];
+    return entry ? this.watchlistEntryToSeries(entry) : null;
+  }
+
+  private watchlistEntryToSeries(entry: WatchlistEntry): SeriesItem {
+    return {
+      accountId: entry.accountId,
+      seriesId: entry.itemId,
+      name: entry.name,
+      poster: entry.poster,
+      rating: entry.rating,
+      categoryId: entry.categoryId,
+    };
+  }
+
   protected selectExtra(el: HTMLElement): boolean {
+    if (el.dataset.action === 'watchlist') { this.toggleWatchlist(); return true; }
     if (el.dataset.resumeEpisode !== undefined) { this.playResume(el.dataset.resumeEpisode); return true; }
     if (el.dataset.season !== undefined) { this.selectSeason(Number(el.dataset.season)); return true; }
     if (el.dataset.episodeId !== undefined) { this.playEpisode(el.dataset.episodeId); return true; }
     return false;
+  }
+
+  private toggleWatchlist(): void {
+    const series = this.currentSeries;
+    const account = this.account;
+    if (!series || !account) return;
+    const added = StorageService.toggleWatchlist({
+      accountId: account.id,
+      kind: 'series',
+      itemId: series.seriesId,
+      name: series.name,
+      poster: series.poster,
+      rating: series.rating,
+      categoryId: series.categoryId,
+      addedAt: Date.now(),
+    });
+    showToast(added ? 'Added to Watchlist' : 'Removed from Watchlist');
+    this.renderDetail();
   }
 
   protected async openDetail(series: SeriesItem): Promise<void> {
@@ -90,6 +139,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       kind: 'episode',
       subtitles: ep.subtitles,
       searchMeta: { season: ep.season, episode: ep.episode },
+      watchlistOwner: { kind: 'series', itemId: series.seriesId },
     };
   }
 
@@ -137,6 +187,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       resumeSecs: r.position,
       subtitles: [],
       episodeQueue: r.episodeQueue,
+      watchlistOwner: r.watchlistOwner,
     });
   }
 
@@ -175,6 +226,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     const info = this.currentInfo;
     const episodes = info ? (info.episodesBySeason[this.selectedSeason] ?? []) : [];
     const prevKey = this.nav.focused?.getAttribute('data-key') ?? null;
+    const watchlisted = StorageService.isWatchlisted(a.id, 'series', series.seriesId);
 
     morph(this.container, html`
       <div class="catalog-view series-detail" data-nav-container>
@@ -183,6 +235,12 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
           <div class="detail-body">
             <h1 class="detail-title">${series.name}</h1>
             ${series.rating ? html`<div class="detail-meta">${series.rating}</div>` : ''}
+            <div class="detail-actions">
+              <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
+                <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>
+                ${watchlisted ? 'Remove from Watchlist' : 'Add to Watchlist'}
+              </button>
+            </div>
             ${this.detailLoading
               ? html`<p class="catalog-hint">Loading…</p>`
               : !info

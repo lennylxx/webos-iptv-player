@@ -1,13 +1,34 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { PlaylistEntry } from '../types';
+import type { PlaylistEntry, WatchlistEntry, WatchlistKind } from '../types';
 
-const { catalogMock, storageMock } = vi.hoisted(() => ({
-  catalogMock: { loadSeriesCategories: vi.fn(), loadSeries: vi.fn(), loadSeriesInfo: vi.fn() },
-  storageMock: { getResumeList: vi.fn(() => [] as unknown[]), getResume: vi.fn(() => null) },
-}));
+const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() => {
+  const watchlistState = { entries: [] as WatchlistEntry[] };
+  return {
+    catalogMock: { loadSeriesCategories: vi.fn(), loadSeries: vi.fn(), loadSeriesInfo: vi.fn() },
+    watchlistState,
+    storageMock: {
+      getResumeList: vi.fn(() => [] as unknown[]),
+      getResume: vi.fn(() => null),
+      getWatchlist: vi.fn(() => watchlistState.entries),
+      isWatchlisted: vi.fn((_accountId: string, _kind: WatchlistKind, itemId: string) =>
+        watchlistState.entries.some((entry) => entry.itemId === itemId)),
+      toggleWatchlist: vi.fn((entry: WatchlistEntry) => {
+        const index = watchlistState.entries.findIndex((item) => item.itemId === entry.itemId);
+        if (index >= 0) {
+          watchlistState.entries.splice(index, 1);
+          return false;
+        }
+        watchlistState.entries.unshift(entry);
+        return true;
+      }),
+    },
+    toastMock: { showToast: vi.fn() },
+  };
+});
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
+vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 
 import { Series } from './series';
 
@@ -26,6 +47,7 @@ beforeEach(() => {
   // prior test's mockReturnValue override doesn't leak (order-safety).
   storageMock.getResumeList.mockReturnValue([]);
   storageMock.getResume.mockReturnValue(null);
+  watchlistState.entries = [];
   container = document.createElement('div');
   document.body.appendChild(container);
 });
@@ -78,6 +100,22 @@ describe('Series browse + grid', () => {
       itemId: 'e1', accountId: 'x1', kind: 'episode', resumeSecs: 300,
       url: 'http://host:8080/series/u/p/e1.mkv',
     }));
+  });
+
+  it('shows a Watchlist rail from stored series snapshots', async () => {
+    watchlistState.entries = [{
+      accountId: 'x1', kind: 'series', itemId: 's9', name: 'Saved Series',
+      poster: '', rating: '', categoryId: '9', addedAt: 2,
+    }];
+    catalogMock.loadSeriesInfo.mockResolvedValue({ seasons: [], episodesBySeason: {} });
+    const { view } = await openWith();
+    expect(container.textContent).toContain('Watchlist');
+    const tile = container.querySelector('.catalog-tile[data-item-id="s9"]') as HTMLElement;
+    expect(tile.textContent).toContain('Saved Series');
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve(); await Promise.resolve();
+    expect(container.querySelector('.series-detail')?.textContent).toContain('Saved Series');
   });
 
   it('reveals the tab bar when Up cannot move within the view', async () => {
@@ -158,6 +196,26 @@ async function openDetail(view: Series) {
 }
 
 describe('Series detail', () => {
+  it('adds and removes the series from Watchlist without losing button focus', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    const { view } = await openWith();
+    await openDetail(view);
+
+    const button = container.querySelector('[data-action="watchlist"]') as HTMLElement;
+    button.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(storageMock.toggleWatchlist).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: 'x1', kind: 'series', itemId: 's1', name: 'Series One',
+    }));
+    expect(container.querySelector('[data-action="watchlist"]')?.textContent).toContain('Remove from Watchlist');
+    expect(container.querySelector('.focused')?.getAttribute('data-key')).toBe('watchlist');
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Added to Watchlist');
+
+    view.handleAction('select');
+    expect(container.querySelector('[data-action="watchlist"]')?.textContent).toContain('Add to Watchlist');
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Removed from Watchlist');
+  });
+
   it('renders a season selector and the first season\'s episodes, and plays from the start', async () => {
     catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
     const { view, handlers } = await openWith();
@@ -175,11 +233,13 @@ describe('Series detail', () => {
       itemId: 'e1', accountId: 'x1', kind: 'episode', resumeSecs: 0,
       url: 'http://host:8080/series/u/p/e1.mp4',
       title: expect.stringContaining('S1E1'),
+      watchlistOwner: { kind: 'series', itemId: 's1' },
       episodeQueue: [
         expect.objectContaining({
           itemId: 'e2',
           url: 'http://host:8080/series/u/p/e2.mkv',
           title: expect.stringContaining('S2E1'),
+          watchlistOwner: { kind: 'series', itemId: 's1' },
         }),
       ],
     }));
@@ -228,13 +288,17 @@ describe('Series detail', () => {
         accountId: 'x1', kind: 'episode', itemId: 'e1', name: 'Series One — S1E1',
         poster: '', ext: 'mp4', position: 450, duration: 1500, updatedAt: 1,
         episodeQueue: [next],
+        watchlistOwner: { kind: 'series', itemId: 's1' },
       },
     ]);
     const { view, handlers } = await openWith();
     const tile = container.querySelector('.catalog-tile[data-resume-episode="e1"]') as HTMLElement;
     tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     view.handleAction('select');
-    expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({ episodeQueue: [next] }));
+    expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({
+      episodeQueue: [next],
+      watchlistOwner: { kind: 'series', itemId: 's1' },
+    }));
   });
 
   it('shows an empty state when the series has no seasons', async () => {

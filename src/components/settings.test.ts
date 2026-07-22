@@ -38,6 +38,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
       getTzMode: vi.fn(() => state.tzMode),
       getEpgTzOffset: vi.fn(() => state.tzOffset),
       getOnlineSubtitleConfig: vi.fn(() => state.onlineSubtitles),
+      getSelectedXtreamAccountId: vi.fn(() => null),
       setPlaylists: vi.fn(),
       setEpgUrl: vi.fn(),
       setAutoPlay: vi.fn(),
@@ -47,6 +48,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
       setOnlineSubtitleConfig: vi.fn((cfg: any) => { state.onlineSubtitles = cfg; }),
       remove: vi.fn(),
       clearRecentlyWatched: vi.fn(),
+      clearWatchlist: vi.fn(),
     },
     toastMock: { showToast: vi.fn() },
     uploadMock: {
@@ -94,6 +96,7 @@ beforeEach(() => {
   state.autoPlay = false;
   state.theme = 'midnight';
   state.overlayStyle = 'dark';
+  storageMock.getSelectedXtreamAccountId.mockReturnValue(null);
   state.onlineSubtitles = {
     preferredLanguage: '',
     subdl: { apiKey: '' },
@@ -349,6 +352,48 @@ describe('Settings Recently Watched clearing', () => {
     expect(action?.textContent).toContain('Recently Watched');
     expect(action?.textContent).toContain('Clear recent live channels and Catch-up progress');
     expect(action?.querySelector('#clear-recently-watched')).not.toBeNull();
+  });
+
+  describe('Settings Watchlist clearing', () => {
+    beforeEach(() => {
+      state.playlists = [
+        {
+          id: 'x1',
+          name: 'Account Alpha',
+          url: 'http://host',
+          source: 'xtream',
+          xtream: { username: 'u', password: 'p' },
+        },
+        {
+          id: 'x2',
+          name: 'Account Bravo',
+          url: 'http://host',
+          source: 'xtream',
+          xtream: { username: 'u2', password: 'p2' },
+        },
+      ];
+      storageMock.getSelectedXtreamAccountId.mockReturnValue('x2');
+      settings.render();
+    });
+
+    it('shows the selected account in the Watchlist clear setting', () => {
+      const action = container.querySelector('#clear-watchlist')?.closest('.settings-history-action');
+      expect(action?.textContent).toContain('Watchlist');
+      expect(action?.textContent).toContain('Account Bravo');
+    });
+
+    it('requires confirmation and clears only the selected account', () => {
+      click('#clear-watchlist');
+      expect(document.querySelector('.confirmation-title')?.textContent).toBe('Clear Watchlist?');
+      expect(document.querySelector('.confirmation-message')?.textContent).toContain('Account Bravo');
+      expect(storageMock.clearWatchlist).not.toHaveBeenCalled();
+
+      settings.handleAction('left');
+      settings.handleAction('select');
+
+      expect(storageMock.clearWatchlist).toHaveBeenCalledWith('x2');
+      expect(toastMock.showToast).toHaveBeenCalledWith('Watchlist cleared for "Account Bravo"');
+    });
   });
 
   it('requires confirmation before clearing Recently Watched', () => {
