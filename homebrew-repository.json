@@ -5,6 +5,7 @@
       "title": "webOS IPTV Player",
       "iconUri": "https://raw.githubusercontent.com/lennylxx/webos-iptv-player/main/assets/icon130.png",
       "manifestUrl": "https://github.com/lennylxx/webos-iptv-player/releases/latest/download/com.lennylxx.iptv.manifest.json",
+      "fullDescriptionUrl": "https://lennylxx.github.io/webos-iptv-player/",
       "shortDescription": "An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, XMLTV program guides, and catch-up/timeshift playback."
     }
   ]
