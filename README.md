@@ -6,29 +6,33 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 ## Screenshots
 
-| Channel list | Program guide |
+| Channel list | Recently watched |
 | --- | --- |
-| ![Channel list](https://github.com/user-attachments/assets/1e90635f-92e1-4c39-9ef4-d2f1a5b1688d) | ![Program guide](https://github.com/user-attachments/assets/8a66bd03-8dde-4cde-9601-06b6a8f34696) |
+| ![Channel list](https://github.com/user-attachments/assets/83e195ef-dc72-4e04-b9a3-4fb3b2515d21) | ![Recently watched](https://github.com/user-attachments/assets/2040d2f1-e263-4b75-8ff5-c3b43ea6341b) |
 
-| Catch-up resume | Channel info |
+| Program guide | Catch-up resume |
 | --- | --- |
-| ![Catch-up resume](https://github.com/user-attachments/assets/ec9a1247-a9d7-489b-be1e-d12f93d94d3b) | ![Channel info](https://github.com/user-attachments/assets/9b77591d-ac4f-4746-bf69-5d4527f6ce8c) |
+| ![Program guide](https://github.com/user-attachments/assets/8a66bd03-8dde-4cde-9601-06b6a8f34696) | ![Catch-up resume](https://github.com/user-attachments/assets/ec9a1247-a9d7-489b-be1e-d12f93d94d3b) |
 
-| Playback overlays | Subtitles |
+| Channel info | Playback overlays |
 | --- | --- |
-| ![Playback overlays](https://github.com/user-attachments/assets/fd74f4cc-a0a0-4357-add6-2ce2e691af99) | ![Subtitles](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) |
+| ![Channel info](https://github.com/user-attachments/assets/9b77591d-ac4f-4746-bf69-5d4527f6ce8c) | ![Playback overlays](https://github.com/user-attachments/assets/fd74f4cc-a0a0-4357-add6-2ce2e691af99) |
 
-| Subtitle search | Movies |
+| Subtitles | Subtitle search |
 | --- | --- |
-| ![Subtitle search](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) | ![Movies](https://github.com/user-attachments/assets/143c7505-f09f-44f6-9543-bcc56c485635) |
+| ![Subtitles](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) | ![Subtitle search](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) |
 
-| Movie detail | Series detail |
+| Movies | Movie detail |
 | --- | --- |
-| ![Movie detail](https://github.com/user-attachments/assets/3cf56ae5-4c96-4610-9aff-a26d7ab2ef87) | ![Series detail](https://github.com/user-attachments/assets/5fdfb763-8d30-4b27-84c3-80d3a3c3620b) |
+| ![Movies](https://github.com/user-attachments/assets/143c7505-f09f-44f6-9543-bcc56c485635) | ![Movie detail](https://github.com/user-attachments/assets/0876fd43-19af-41c1-bc0b-bc3785d7b447) |
 
-| Search | Settings |
+| Series detail | Search |
 | --- | --- |
-| ![Search](https://github.com/user-attachments/assets/bb13b04f-4e79-47dc-bfa2-1b6925029a11) | ![Settings](https://github.com/user-attachments/assets/5997a614-62d2-4634-a65b-14e268204992) |
+| ![Series detail](https://github.com/user-attachments/assets/26eff63b-50dd-4a17-acf0-65f7e5ba3128) | ![Search](https://github.com/user-attachments/assets/9dbb9b5e-f8cf-4c5b-8a09-07f728444191) |
+
+| Settings | Theme picker |
+| --- | --- |
+| ![Settings](https://github.com/user-attachments/assets/5997a614-62d2-4634-a65b-14e268204992) | ![Theme picker](https://github.com/user-attachments/assets/19c75a7d-8fe9-4b90-906c-41d219e82d3d) |
 
 ## Features
 

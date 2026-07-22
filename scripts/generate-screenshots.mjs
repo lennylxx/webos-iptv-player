@@ -6,9 +6,11 @@
 // fixtures and a frozen clock, then captures each view into screenshots/:
 //
 //   channel-list.png   channel list (the README hero)
+//   recently-watched.png  mixed live and resumable catch-up history
 //   epg-guide.png      three-pane program guide, with catch-up resume markers
 //   epg-catchup-resume.png  the Resume / Start Over / Cancel resume prompt
 //   settings.png       settings incl. the LAN-upload QR
+//   themes.png         Settings Appearance section with the theme picker
 //   player.png         playback overlays: channel switcher + action menu
 //   channel-info.png   channel info bar (the OSD) — live DVR (timeshift) view
 //   subtitles.png      self-rendered WebVTT cues — ::cue colors + positioning
@@ -412,7 +414,14 @@ function startServer() {
 const fulfill = (body, type) => (route) =>
   route.fulfill({ status: 200, contentType: type, headers: { 'access-control-allow-origin': '*' }, body });
 
-async function setupPage(page, { upload = false, fakeStream = false, xtream = false, subs = false, catchup = false } = {}) {
+async function setupPage(page, {
+  upload = false,
+  fakeStream = false,
+  xtream = false,
+  subs = false,
+  catchup = false,
+  recently = false,
+} = {}) {
   // Freeze the clock before any app code runs (real timers keep working).
   await page.addInitScript((fixed) => {
     const RealDate = Date;
@@ -464,7 +473,7 @@ async function setupPage(page, { upload = false, fakeStream = false, xtream = fa
 
   // Seed catch-up progress on the hero channel so its already-aired programs show
   // the Resume/Watched markers in the guide. Same FNV-1a key the app derives.
-  if (catchup) {
+  if (catchup || recently) {
     await page.addInitScript(({ url, entries }) => {
       let h = 0x811c9dc5;
       const stable = url.split('#')[0].split('?')[0];
@@ -475,7 +484,29 @@ async function setupPage(page, { upload = false, fakeStream = false, xtream = fa
         map[`${channelKey}|${e.progStart}`] = { ...e, channelKey, expiresAt: e.progEnd + 7 * 86400 * 1000 };
       }
       localStorage.setItem('iptv_catchup_progress', JSON.stringify(map));
-    }, { url: CATCHUP_URL, entries: CATCHUP_PROGRESS });
+    }, {
+      url: CATCHUP_URL,
+      entries: recently
+        ? CATCHUP_PROGRESS.map(entry => entry.completed ? entry : { ...entry, updatedAt: NOW - 60_000 })
+        : CATCHUP_PROGRESS,
+    });
+  }
+
+  if (recently) {
+    await page.addInitScript(({ urls, now }) => {
+      const channelKey = (url) => {
+        let h = 0x811c9dc5;
+        const stable = url.split('#')[0].split('?')[0];
+        for (let i = 0; i < stable.length; i++) { h ^= stable.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+        return (h >>> 0).toString(16).padStart(8, '0');
+      };
+      localStorage.setItem('iptv_recently_watched_live', JSON.stringify(
+        urls.map((url, index) => ({ channelKey: channelKey(url), updatedAt: now - (index + 1) * 5 * 60_000 })),
+      ));
+    }, {
+      urls: [1, 3, 6, 9, 12].map(index => `https://demo.local/stream/${CHANNELS[index].id}.m3u8`),
+      now: NOW,
+    });
   }
 
   // Seed a few resume points so the Movies/Series "Continue Watching" rails and
@@ -643,7 +674,7 @@ const newPage = async (opts) => {
 try {
   // 1) Channel list (the hero) — first channel playing + focused, no OSD.
   {
-    const { context, page } = await newPage();
+    const { context, page } = await newPage({ recently: true });
     await gotoChannels(page, base);
     await page.keyboard.press('Enter');     // play the focused (first) channel...
     await page.locator('#player-osd .osd-programme-title').waitFor({ state: 'visible' });
@@ -653,6 +684,20 @@ try {
     await page.waitForTimeout(400);
     await shoot(page, 'channel-list.png');
     console.log('  channel-list.png');
+    await context.close();
+  }
+
+  // 1b) Recently Watched — resumable catch-up mixed with recently played live channels.
+  {
+    const { context, page } = await newPage({ recently: true });
+    await gotoChannels(page, base);
+    await page.locator('[data-group="Recently Watched"]').click();
+    await page.locator('.channel-main .recent-catchup').waitFor({ state: 'visible' });
+    await page.locator('.channel-main .recent-live').first().waitFor({ state: 'visible' });
+    await clearToasts(page);
+    await page.waitForTimeout(400);
+    await shoot(page, 'recently-watched.png');
+    console.log('  recently-watched.png');
     await context.close();
   }
 
@@ -710,6 +755,24 @@ try {
     await page.waitForTimeout(300);
     await shoot(page, 'settings.png');
     console.log('  settings.png');
+    await context.close();
+  }
+
+  // 3b) Theme picker — scroll Settings to Appearance and select a preview swatch.
+  {
+    const { context, page } = await newPage();
+    await gotoChannels(page, base);
+    await remote(page, KEY.BLUE);
+    await page.locator('#view-settings').waitFor({ state: 'visible' });
+    const picker = page.locator('.theme-swatch-grid');
+    await picker.waitFor({ state: 'attached' });
+    await picker.evaluate((el) => el.parentElement?.scrollIntoView({ block: 'start' }));
+    await page.locator('.theme-swatch[data-theme-id="midnight"]').click();
+    await picker.waitFor({ state: 'visible' });
+    await clearToasts(page);
+    await page.waitForTimeout(400);
+    await shoot(page, 'themes.png');
+    console.log('  themes.png');
     await context.close();
   }
 
@@ -990,6 +1053,19 @@ try {
     await page.locator('.tab-bar-search-input').waitFor({ state: 'visible' });
     await page.locator('.tab-bar-search-input').fill('or'); // matches channels, movies, series
     await page.locator('#view-search .catalog-rail-title').first().waitFor({ state: 'visible', timeout: 10_000 });
+    await page.locator('#view-search .catalog-tile[data-stream-id]').first().waitFor({ state: 'visible', timeout: 10_000 });
+    await page.locator('#view-search .search-program-row', { hasText: 'Reminder set' })
+      .waitFor({ state: 'visible', timeout: 10_000 });
+    await page.locator('#view-search .search-program-row').evaluateAll((rows) => {
+      const reminder = rows.find((row) => row.querySelector('.search-program-action')?.textContent === 'Reminder set');
+      if (!reminder) throw new Error('Search screenshot reminder result is missing');
+      const keep = [reminder];
+      for (const row of rows) {
+        if (row !== reminder && keep.length < 3) keep.push(row);
+        row.style.display = 'none';
+      }
+      for (const row of keep) row.style.display = '';
+    });
     await page.waitForTimeout(800);
     await clearToasts(page);
     await shoot(page, 'search.png');
