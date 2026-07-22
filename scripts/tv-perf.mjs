@@ -19,6 +19,13 @@ import {
   resolveCdpTarget,
   resolveConfiguredDeviceIp,
 } from './cdp-client.mjs';
+import {
+  enableCdpLogs,
+  serializeCdpLogEvent,
+  subscribeCdpLogs,
+} from './cdp-logs.mjs';
+
+export { redactLogText, serializeCdpLogEvent } from './cdp-logs.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure metric + argument logic (no I/O). Isolated as functions and exported so
@@ -32,6 +39,8 @@ const CPU_PROFILE_TRIGGER_MS = 3000;
 const CPU_PROFILE_DURATION_MS = 30000;
 const CPU_PROFILE_PART_DURATION_MS = 5000;
 const CPU_PROFILE_PART_COUNT = CPU_PROFILE_DURATION_MS / CPU_PROFILE_PART_DURATION_MS;
+const LOG_PRETRIGGER_MS = 30000;
+const LOG_PRETRIGGER_MAX_ENTRIES = 1000;
 const TRACE_BUFFER_SIZE_KB = 4096;
 const TRACE_CATEGORY_CANDIDATES = [
   'devtools.timeline',
@@ -249,6 +258,7 @@ export function parsePerformanceArgs(argv = []) {
     durationMs: null,
     jsonlPath: null,
     csvPath: null,
+    redactedLogsPath: null,
     cpuProfilePath: null,
     tracePath: null,
     mode: 'monitor',
@@ -301,6 +311,13 @@ export function parsePerformanceArgs(argv = []) {
         break;
       case '--csv':
         options.csvPath = parseNonEmptyString(parseRequiredStringValue(argv, index, token), token);
+        index += 1;
+        break;
+      case '--redacted-logs':
+        options.redactedLogsPath = parseNonEmptyString(
+          parseRequiredStringValue(argv, index, token),
+          token,
+        );
         index += 1;
         break;
       case '--cpu-profile':
@@ -356,6 +373,7 @@ export function parsePerformanceArgs(argv = []) {
 
   if (options.mode === 'gc' && (
     options.durationMs != null || options.jsonlPath != null || options.csvPath != null
+    || options.redactedLogsPath != null
     || options.cpuProfilePath != null || options.tracePath != null
   )) {
     throw new Error('--collect-garbage cannot be combined with duration or recording options.');
@@ -363,13 +381,14 @@ export function parsePerformanceArgs(argv = []) {
 
   if (options.mode === 'snapshot' && (
     options.durationMs != null || options.jsonlPath != null || options.csvPath != null
+    || options.redactedLogsPath != null
     || options.cpuProfilePath != null || options.tracePath != null
   )) {
     throw new Error('--snapshot cannot be combined with duration or recording options.');
   }
 
   if (options.mode === 'allocation-snapshot' && (
-    options.jsonlPath != null || options.csvPath != null
+    options.jsonlPath != null || options.csvPath != null || options.redactedLogsPath != null
     || options.cpuProfilePath != null || options.tracePath != null
   )) {
     throw new Error('--allocation-snapshot cannot be combined with other recording options.');
@@ -488,6 +507,8 @@ Options:
   --duration <seconds>   Stop after the given duration
   --jsonl <path>         Record samples as JSONL
   --csv <path>           Record samples as CSV
+  --redacted-logs <path> Record shareable console, exception, and browser logs;
+                         with CPU/trace capture, retain 30s before the trigger
   --cpu-profile <path>   At 80% CPU for 3s, record six 5s .cpuprofile parts
   --trace <path>         At 80% CPU for 3s, record six 5s Chrome Trace parts
   --collect-garbage      Force a garbage collection and exit
@@ -952,11 +973,72 @@ const openRecorders = async (options, dependencies) => {
       await csv.write(`${CSV_HEADER}\n`);
     }
 
-    return { jsonl, csv, all: recorders };
+    const logs = await createRecorder(options.redactedLogsPath, dependencies);
+    if (logs) recorders.push(logs);
+
+    return { jsonl, csv, logs, all: recorders };
   } catch (error) {
     await Promise.allSettled(recorders.map((recorder) => recorder.close()));
     throw error;
   }
+};
+
+const createLogCapture = (client, recorder, { deferred, nowMs }) => {
+  let active = !deferred;
+  let buffer = [];
+  let writes = Promise.resolve();
+  let writeError = null;
+
+  const enqueue = (line) => {
+    writes = writes
+      .then(() => recorder.write(line))
+      .catch((error) => {
+        if (!writeError) writeError = toError(error);
+      });
+  };
+
+  const accept = (method, params) => {
+    const receivedAt = nowMs();
+    const line = serializeCdpLogEvent(method, params, new Date(), {
+      redactSensitive: true,
+    });
+    if (active) {
+      enqueue(line);
+      return;
+    }
+
+    buffer.push({ receivedAt, line });
+    const cutoff = receivedAt - LOG_PRETRIGGER_MS;
+    buffer = buffer
+      .filter((entry) => entry.receivedAt >= cutoff)
+      .slice(-LOG_PRETRIGGER_MAX_ENTRIES);
+  };
+
+  const unsubscribers = subscribeCdpLogs(client, accept);
+  const flushBuffer = () => {
+    const cutoff = nowMs() - LOG_PRETRIGGER_MS;
+    for (const entry of buffer) {
+      if (entry.receivedAt >= cutoff) enqueue(entry.line);
+    }
+    buffer = [];
+  };
+
+  return {
+    async enable() {
+      await enableCdpLogs(client, { history: true });
+    },
+    trigger() {
+      if (active) return;
+      active = true;
+      flushBuffer();
+    },
+    async close() {
+      for (const unsubscribe of unsubscribers) unsubscribe();
+      if (!active) flushBuffer();
+      await writes;
+      if (writeError) throw writeError;
+    },
+  };
 };
 
 // Read slowly-changing device context (CPU cores, approximate RAM, GPU, and the
@@ -1078,8 +1160,9 @@ export async function runMonitor(options, dependencies = {}) {
   const stopState = createStopState();
   const startedAt = nowMs();
   const deadlineAt = options.durationMs != null ? startedAt + options.durationMs : null;
-  let recorders = { jsonl: null, csv: null, all: [] };
+  let recorders = { jsonl: null, csv: null, logs: null, all: [] };
   let renderer = null;
+  let logCapture = null;
   let removeSignalHandlers = () => {};
   let client = null;
   let cpuProfilerStarted = false;
@@ -1149,6 +1232,13 @@ export async function runMonitor(options, dependencies = {}) {
     removeSignalHandlers = registerSignalHandlers(stopState, signalSource);
     let target;
     ({ client, target } = await connectClient(options, dependencies));
+    if (recorders.logs) {
+      logCapture = createLogCapture(client, recorders.logs, {
+        deferred: Boolean(options.cpuProfilePath || options.tracePath),
+        nowMs,
+      });
+      await logCapture.enable();
+    }
     await client.call('Performance.enable');
     renderer.setBanner(formatDeviceInfo(await gatherDeviceInfo(client), formatMonitorTarget(target)));
 
@@ -1185,6 +1275,7 @@ export async function runMonitor(options, dependencies = {}) {
 
         const requiredSamples = Math.max(1, Math.ceil(CPU_PROFILE_TRIGGER_MS / options.intervalMs));
         if (consecutiveHighCpuSamples >= requiredSamples) {
+          logCapture?.trigger();
           await startCapturePart();
           captureTriggered = true;
         }
@@ -1214,6 +1305,12 @@ export async function runMonitor(options, dependencies = {}) {
 
     try {
       await finishCapturePart();
+    } catch (error) {
+      rememberError(error);
+    }
+
+    try {
+      await logCapture?.close();
     } catch (error) {
       rememberError(error);
     }
@@ -1315,6 +1412,9 @@ export async function main(argv, dependencies = {}) {
         ? `CPU profile parts written:\n${result.cpuProfilePaths.map((filePath) => `  ${filePath}`).join('\n')}\n`
         : `CPU stayed below ${CPU_PROFILE_THRESHOLD_PERCENT}% for the trigger window; no profile written\n`;
       await writeChunk(stdout, message);
+    }
+    if (options.redactedLogsPath) {
+      await writeChunk(stdout, `Redacted logs written to ${options.redactedLogsPath}\n`);
     }
     if (options.tracePath) {
       const message = result.tracePaths.length

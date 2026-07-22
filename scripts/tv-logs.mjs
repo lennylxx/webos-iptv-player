@@ -11,6 +11,11 @@ import {
   resolveCdpTarget,
   resolveConfiguredDeviceIp,
 } from './cdp-client.mjs';
+import {
+  enableCdpLogs,
+  normalizeCdpLogEvent,
+  subscribeCdpLogs,
+} from './cdp-logs.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => {
@@ -52,21 +57,6 @@ try {
 
 console.error(`tv-logs: attached to "${page?.title || ''}" (${page?.description || page?.url || ''})`);
 
-// Render a CDP RemoteObject argument as a short string.
-const render = (a) => {
-  if (a == null) return '';
-  if ('value' in a) return typeof a.value === 'object' ? JSON.stringify(a.value) : String(a.value);
-  if (a.unserializableValue != null) return String(a.unserializableValue);
-  if (a.preview?.properties) {
-    const body = a.preview.properties.map((p) => `${p.name}: ${p.value}`).join(', ');
-    return a.subtype === 'array' ? `[${body}]` : `{${body}}`;
-  }
-  return a.description ?? a.type ?? '';
-};
-// Prefer the CDP event time (buffered history is replayed on attach, so
-// receive-time would mislabel old entries as "now").
-const stamp = (ts) => new Date(ts ?? Date.now()).toTimeString().slice(0, 8);
-
 let client;
 try {
   client = await CdpClient.connect(wsUrl);
@@ -75,17 +65,17 @@ try {
   process.exit(0);
 }
 
-client.on('Runtime.consoleAPICalled', (params) => {
-  const text = (params.args || []).map(render).join(' ');
-  const tag = params.type === 'log' ? '' : `.${params.type}`;
-  console.log(`${stamp(params.timestamp)} [console${tag}] ${text}`);
-});
-client.on('Runtime.exceptionThrown', (params) => {
-  const details = params.exceptionDetails;
-  console.log(`${stamp(params.timestamp)} [exception] ${details.exception?.description || details.text}`);
-});
-client.on('Log.entryAdded', (params) => {
-  console.log(`${stamp(params.entry.timestamp)} [${params.entry.level}] ${params.entry.text}`);
+subscribeCdpLogs(client, (method, params) => {
+  const event = normalizeCdpLogEvent(method, params);
+  const stamp = new Date(event.observedAt).toTimeString().slice(0, 8);
+  if (event.source === 'console') {
+    const tag = event.level === 'log' ? '' : `.${event.level}`;
+    console.log(`${stamp} [console${tag}] ${event.text}`);
+  } else if (event.source === 'exception') {
+    console.log(`${stamp} [exception] ${event.text}`);
+  } else {
+    console.log(`${stamp} [${event.level}] ${event.text}`);
+  }
 });
 client.socket.addEventListener('error', (event) => {
   console.error('tv-logs: ws error', event.message || event);
@@ -94,15 +84,10 @@ client.socket.addEventListener('close', () => {
   process.exit(0);
 });
 
-const callAndCloseOnError = (method) => {
-  void client.call(method).catch((error) => {
-    console.error(`tv-logs: ${toErrorMessage(error)}`);
-    client.close();
-  });
-};
-callAndCloseOnError('Runtime.enable');
-if (history) callAndCloseOnError('Log.enable'); // replays buffered browser-side log entries
-callAndCloseOnError('Console.enable');
+void enableCdpLogs(client, { history }).catch((error) => {
+  console.error(`tv-logs: ${toErrorMessage(error)}`);
+  client.close();
+});
 
 if (seconds > 0) setTimeout(() => client.close(), seconds * 1000);
 process.on('SIGINT', () => client.close());

@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { normalizeCdpLogEvent } from './cdp-logs.mjs';
 import {
   CSV_HEADER,
   formatCpuProfilePartPath,
@@ -16,6 +17,8 @@ import {
   normalizeMetrics,
   parsePerformanceArgs,
   runMonitor,
+  redactLogText,
+  serializeCdpLogEvent,
   serializeCsvRow,
   serializeJsonl,
   startCpuProfile,
@@ -385,6 +388,11 @@ describe('triggered diagnostics', () => {
     const clock = { now: 0 };
     const destination = path.join(unitOutputRoot, 'profiles', 'alpha.cpuprofile');
     const traceDestination = path.join(unitOutputRoot, 'profiles', 'alpha.trace.json');
+    const redactedLogsDestination = path.join(
+      unitOutputRoot,
+      'profiles',
+      'alpha.logs.jsonl',
+    );
     let socket = null;
     const WebSocketImpl = class extends FakeWebSocket {
       constructor(url) {
@@ -409,6 +417,24 @@ describe('triggered diagnostics', () => {
         ];
         socket = this;
       }
+
+      send(data) {
+        const message = JSON.parse(data);
+        super.send(data);
+        if (message.method === 'Performance.getMetrics' && this.metricsCalls === 1) {
+          queueMicrotask(() => {
+            this.dispatch('message', {
+              data: JSON.stringify({
+                method: 'Runtime.consoleAPICalled',
+                params: {
+                  type: 'log',
+                  args: [{ value: 'Before trigger http://host/a?token=secret' }],
+                },
+              }),
+            });
+          });
+        }
+      }
     };
 
     await runMonitor({
@@ -417,6 +443,7 @@ describe('triggered diagnostics', () => {
       durationMs: 10_000,
       jsonlPath: null,
       csvPath: null,
+      redactedLogsPath: redactedLogsDestination,
       cpuProfilePath: destination,
       tracePath: traceDestination,
     }, {
@@ -466,6 +493,13 @@ describe('triggered diagnostics', () => {
         },
       });
     }
+    expect((await readFile(redactedLogsDestination, 'utf8')).trim()).not.toBe('');
+    expect(JSON.parse(
+      (await readFile(redactedLogsDestination, 'utf8')).trim(),
+    )).toMatchObject({
+      source: 'console',
+      text: 'Before trigger [redacted-url]',
+    });
   });
 
   it('does not create a profile when CPU does not reach the trigger threshold', async () => {
@@ -908,6 +942,7 @@ describe('parsePerformanceArgs', () => {
       '--duration', '2',
       '--jsonl', 'samples.jsonl',
       '--csv', 'samples.csv',
+      '--redacted-logs', 'events.jsonl',
       '--cpu-profile', 'profile.cpuprofile',
       '--trace', 'trace.json',
     ])).toMatchObject({
@@ -917,6 +952,7 @@ describe('parsePerformanceArgs', () => {
       durationMs: 2000,
       jsonlPath: 'samples.jsonl',
       csvPath: 'samples.csv',
+      redactedLogsPath: 'events.jsonl',
       cpuProfilePath: 'profile.cpuprofile',
       tracePath: 'trace.json',
     });
@@ -943,6 +979,7 @@ describe('parsePerformanceArgs', () => {
     expect(() => parsePerformanceArgs(['--target', '--bogus'])).toThrow(/target/i);
     expect(() => parsePerformanceArgs(['--cpu-profile', '--bogus'])).toThrow(/cpu-profile/i);
     expect(() => parsePerformanceArgs(['--trace', '--bogus'])).toThrow(/trace/i);
+    expect(() => parsePerformanceArgs(['--redacted-logs', '--bogus'])).toThrow(/redacted-logs/i);
     expect(() => parsePerformanceArgs(['--interval', '--bogus'])).toThrow(/interval/i);
     expect(() => parsePerformanceArgs(['--port', '-1'])).toThrow(/port/i);
     expect(() => parsePerformanceArgs(['--unknown'])).toThrow(/unknown/i);
@@ -963,6 +1000,11 @@ describe('parsePerformanceArgs', () => {
     expect(() => parsePerformanceArgs(['--snapshot', 'dump.heapsnapshot', '--trace', 'trace.json']))
       .toThrow(/snapshot/i);
     expect(() => parsePerformanceArgs([
+      '--snapshot', 'dump.heapsnapshot',
+      '--redacted-logs', 'events.jsonl',
+    ]))
+      .toThrow(/snapshot/i);
+    expect(() => parsePerformanceArgs([
       '--allocation-snapshot', 'allocation.heapsnapshot',
       '--jsonl', 'samples.jsonl',
     ])).toThrow(/allocation-snapshot/i);
@@ -970,6 +1012,115 @@ describe('parsePerformanceArgs', () => {
       '--snapshot', 'dump.heapsnapshot',
       '--allocation-snapshot', 'allocation.heapsnapshot',
     ])).toThrow(/cannot be combined/i);
+  });
+});
+
+describe('CDP log recording', () => {
+  it('keeps shared tv-logs events untouched by default', () => {
+    expect(normalizeCdpLogEvent('Runtime.consoleAPICalled', {
+      type: 'log',
+      args: [{ value: 'Playing http://host/a?token=secret' }],
+    })).toMatchObject({
+      source: 'console',
+      level: 'log',
+      text: 'Playing http://host/a?token=secret',
+    });
+  });
+
+  it('serializes console, exception, and browser events while redacting sensitive values', () => {
+    expect(redactLogText(
+      'load http://name:secret@host/live/name/secret/1.ts token=abc password: "secret"',
+    )).toBe('load [redacted-url] token=[redacted] password: [redacted]');
+
+    expect(JSON.parse(serializeCdpLogEvent('Runtime.consoleAPICalled', {
+      timestamp: Date.parse('2026-01-01T00:00:00.000Z'),
+      type: 'warning',
+      args: [{ value: 'load http://host/a?username=name&password=secret' }],
+    }, undefined, { redactSensitive: true }))).toEqual({
+      observedAt: '2026-01-01T00:00:00.000Z',
+      source: 'console',
+      level: 'warning',
+      text: 'load [redacted-url]',
+    });
+
+    expect(JSON.parse(serializeCdpLogEvent('Runtime.exceptionThrown', {
+      exceptionDetails: { exception: { description: 'Error: Alpha' } },
+    }, new Date('2026-01-01T00:00:01.000Z')))).toMatchObject({
+      source: 'exception',
+      level: 'error',
+      text: 'Error: Alpha',
+    });
+
+    expect(JSON.parse(serializeCdpLogEvent('Log.entryAdded', {
+      entry: { source: 'network', level: 'error', text: 'Bravo' },
+    }, new Date('2026-01-01T00:00:02.000Z')))).toMatchObject({
+      source: 'network',
+      level: 'error',
+      text: 'Bravo',
+    });
+  });
+
+  it('records CDP logs through the monitor connection', async () => {
+    const stdout = new FakeOutput();
+    const clock = { now: 0 };
+    const redactedLogsPath = path.join(unitOutputRoot, 'events.jsonl');
+    let socket = null;
+    const WebSocketImpl = class extends FakeWebSocket {
+      constructor(url) {
+        super(url);
+        socket = this;
+      }
+
+      send(data) {
+        const message = JSON.parse(data);
+        super.send(data);
+        if (message.method === 'Log.enable') {
+          queueMicrotask(() => {
+            this.dispatch('message', {
+              data: JSON.stringify({
+                method: 'Runtime.consoleAPICalled',
+                params: {
+                  type: 'log',
+                  args: [{ value: 'Playing http://host/a?token=secret' }],
+                },
+              }),
+            });
+          });
+        }
+      }
+    };
+
+    await runMonitor({
+      url: 'ws://127.0.0.1:9222/devtools/page/test',
+      intervalMs: 1_000,
+      durationMs: 1_000,
+      jsonlPath: null,
+      csvPath: null,
+      redactedLogsPath,
+    }, {
+      stdout,
+      WebSocketImpl,
+      nowMs: () => clock.now,
+      wait: async (intervalMs) => {
+        clock.now += intervalMs;
+      },
+    });
+
+    expect(socket?.methods).toEqual(expect.arrayContaining([
+      'Runtime.enable',
+      'Console.enable',
+      'Log.enable',
+    ]));
+    const entries = (await readFile(redactedLogsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      source: 'console',
+      level: 'log',
+      text: 'Playing [redacted-url]',
+    });
   });
 });
 
