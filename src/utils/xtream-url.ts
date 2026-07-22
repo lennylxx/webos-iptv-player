@@ -61,3 +61,66 @@ export function xtreamEpisodeUrl(c: XtreamCredentials, episodeId: string, ext: s
   const base = normalizeXtreamBaseUrl(c.baseUrl);
   return `${base}/series/${encodeURIComponent(c.username)}/${encodeURIComponent(c.password)}/${episodeId}.${ext}`;
 }
+
+/** Xtream archive URL template. Duration is in minutes; start is provider-local
+ *  wall-clock time and is resolved when the EPG program is selected. */
+export function xtreamCatchupSource(c: XtreamCredentials, streamId: string): string {
+  const base = normalizeXtreamBaseUrl(c.baseUrl);
+  return `${base}/timeshift/${encodeURIComponent(c.username)}/${encodeURIComponent(c.password)}/{duration}/{start}/${streamId}.ts`;
+}
+
+/** Legacy Xtream archive template used by panels without the path-form route. */
+export function xtreamCatchupFallbackSource(c: XtreamCredentials, streamId: string): string {
+  const base = normalizeXtreamBaseUrl(c.baseUrl);
+  return `${base}/streaming/timeshift.php?username=${encodeURIComponent(c.username)}` +
+    `&password=${encodeURIComponent(c.password)}&stream=${encodeURIComponent(streamId)}` +
+    '&start={start}&duration={duration}&extension=ts';
+}
+
+/** Extract the stream id from standard Xtream live URL variants. */
+export function xtreamLiveStreamId(url: string): string {
+  try {
+    const parts = new URL(url).pathname.split('/').filter(Boolean);
+    if (parts.includes('movie') || parts.includes('series') || parts.length < 3) return '';
+    const match = parts[parts.length - 1].match(/^([^/.]+)(?:\.[^/]*)?$/);
+    return match ? decodeURIComponent(match[1]) : '';
+  } catch {
+    return '';
+  }
+}
+
+const pad2 = (value: number): string => String(value).padStart(2, '0');
+
+/** Format an absolute EPG timestamp for Xtream's YYYY-MM-DD:HH-MM path segment. */
+export function formatXtreamCatchupStart(
+  utcSeconds: number,
+  timeZone = '',
+  offsetMinutes?: number,
+): string {
+  const date = new Date(utcSeconds * 1000);
+  if (timeZone) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(date);
+      const part = (type: Intl.DateTimeFormatPartTypes): string =>
+        parts.find(item => item.type === type)?.value || '';
+      const hour = part('hour') === '24' ? '00' : part('hour');
+      if (part('year') && part('month') && part('day') && hour && part('minute')) {
+        return `${part('year')}-${part('month')}-${part('day')}:${hour}-${part('minute')}`;
+      }
+    } catch {
+      // Fall through to the provider offset or UTC.
+    }
+  }
+
+  const shifted = new Date(date.getTime() + (offsetMinutes ?? 0) * 60000);
+  return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}:` +
+    `${pad2(shifted.getUTCHours())}-${pad2(shifted.getUTCMinutes())}`;
+}

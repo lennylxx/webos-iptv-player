@@ -6,6 +6,7 @@ import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { ReminderService } from '../services/reminder-service';
 import { StorageService } from '../services/storage-service';
+import { XtreamArchiveService } from '../services/xtream-archive';
 import { loadAllVodStreams, loadAllSeries } from '../services/xtream-catalog';
 import { prepareSearchItems, rankByName, rankPrepared, type PreparedSearchItem } from '../utils/channel-search';
 import { channelKey } from '../utils/channel';
@@ -143,7 +144,7 @@ export class Search {
     } else if (el.dataset.channelIndex !== undefined) {
       this.handlers.onPlayChannel(parseInt(el.dataset.channelIndex, 10));
     } else if (el.dataset.programIndex !== undefined) {
-      this.activateProgram(parseInt(el.dataset.programIndex, 10));
+      void this.activateProgram(parseInt(el.dataset.programIndex, 10));
     } else if (this.account && el.dataset.streamId !== undefined) {
       const v = this.allVod.find((x) => x.streamId === el.dataset.streamId);
       if (v) this.handlers.onOpenMovie(this.account, v);
@@ -250,7 +251,7 @@ export class Search {
       ? 'Live now'
       : state === 'future'
         ? (ReminderService.has(channelKey(channel), programme.start.getTime()) ? 'Reminder set' : 'Set reminder')
-        : channel.catchupSource ? 'Catch up' : 'Open channel';
+        : XtreamArchiveService.isAvailable(channel, programme.start.getTime()) ? 'Catch up' : 'Open channel';
     return html`
       <div class="search-program-row state-${state}" data-focusable
            data-key="p:${String(result.channelIndex)}:${String(programme.start.getTime())}"
@@ -265,7 +266,7 @@ export class Search {
     `;
   }
 
-  private activateProgram(index: number): void {
+  private async activateProgram(index: number): Promise<void> {
     const result = this.visiblePrograms[index];
     if (!result) return;
     const { channel, programme } = result;
@@ -290,7 +291,17 @@ export class Search {
       return;
     }
 
-    if (programme.stop.getTime() <= now && channel.catchupSource) {
+    if (programme.stop.getTime() <= now && channel.catchupAccountId && channel.catchupStreamId) {
+      await XtreamArchiveService.load(channel);
+      if (!XtreamArchiveService.isAvailable(channel, programme.start.getTime())) {
+        showToast('Program is not available for catch-up');
+        this.render();
+        return;
+      }
+    }
+
+    if (programme.stop.getTime() <= now &&
+        XtreamArchiveService.isAvailable(channel, programme.start.getTime())) {
       const key = channelKey(channel);
       const startMs = programme.start.getTime();
       const progress = StorageService.getCatchupProgressList(key)
@@ -313,7 +324,8 @@ export class Search {
   private playProgram(result: ProgramResult, resumeSecs?: number): void {
     const { channel, channelIndex, programme } = result;
     let catchup: CatchupInfo | undefined;
-    if (programme.stop.getTime() <= Date.now() && channel.catchupSource) {
+    if (programme.stop.getTime() <= Date.now() &&
+        XtreamArchiveService.isAvailable(channel, programme.start.getTime())) {
       catchup = {
         start: Math.floor(programme.start.getTime() / 1000),
         end: Math.floor(programme.stop.getTime() / 1000),

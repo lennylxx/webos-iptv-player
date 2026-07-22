@@ -1,4 +1,4 @@
-import type { Action, NumberEvent, CatchupInfo, CatchupProgressEntry, Programme } from '../types';
+import type { Action, NumberEvent, CatchupInfo, CatchupProgressEntry, Channel, Programme } from '../types';
 import { html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { channelKey } from '../utils/channel';
@@ -6,6 +6,7 @@ import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { ReminderService } from '../services/reminder-service';
+import { XtreamArchiveService } from '../services/xtream-archive';
 import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { showToast } from './toast';
 import { formatTime, formatDayLabel, displayDayKey, startOfDisplayDay, addDisplayDays, formatDuration } from '../utils/time';
@@ -22,6 +23,7 @@ export class EpgGrid {
   private focusCol: FocusCol = 'channels';
   private focusProg = 0;
   private resumePrompt = new CatchupResumePrompt();
+  private archiveLoadingKey = '';
 
   constructor(container: HTMLElement, onChannelSelect: (index: number, catchup?: CatchupInfo) => void) {
     this.container = container;
@@ -114,6 +116,7 @@ export class EpgGrid {
     }
     const todayMs = startOfDisplayDay(new Date()).getTime();
     const programmes = this.getCurrentProgrammes();
+    this.loadArchiveAvailability(channel);
 
     // Load catch-up progress once per render for the current channel.
     const hasCatchup = !!(channel && channel.catchupSource);
@@ -182,7 +185,10 @@ export class EpgGrid {
                     // via catch-up), live (airing now), and upcoming.
                     const state = stopMs <= now ? 'past' : startMs > now ? 'future' : 'live';
                     const current = state === 'live';
-                    const progress = state === 'past' && hasCatchup ? progressMap!.get(startMs) : undefined;
+                    const catchupAvailable = state === 'past' && channel
+                      ? XtreamArchiveService.isAvailable(channel, startMs)
+                      : false;
+                    const progress = catchupAvailable && hasCatchup ? progressMap!.get(startMs) : undefined;
                     return html`
                       <div class="epg-programme-item state-${state} ${current ? 'current' : ''} ${foc ? 'focused' : ''}"
                            data-key="${String(p.start.getTime())}"
@@ -279,6 +285,23 @@ export class EpgGrid {
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
+  private loadArchiveAvailability(channel: Channel | undefined): void {
+    if (!channel?.catchupAccountId || !channel.catchupStreamId) return;
+    if (XtreamArchiveService.getCached(channel) !== undefined) return;
+    const key = `${channel.catchupAccountId}:${channel.catchupStreamId}`;
+    if (this.archiveLoadingKey === key) return;
+    this.archiveLoadingKey = key;
+    void XtreamArchiveService.load(channel).then(() => {
+      if (this.archiveLoadingKey !== key) return;
+      this.archiveLoadingKey = '';
+      const selected = PlaylistService.channels[this.selectedChannelIdx];
+      if (selected?.catchupAccountId === channel.catchupAccountId &&
+          selected.catchupStreamId === channel.catchupStreamId) {
+        this.render();
+      }
+    });
+  }
+
   private playSelectedProgramme(resumeSecs?: number): void {
     const programmes = this.getCurrentProgrammes();
     const prog = programmes[this.focusProg];
@@ -289,7 +312,8 @@ export class EpgGrid {
 
     const channel = PlaylistService.channels[this.selectedChannelIdx];
     let catchup: CatchupInfo | undefined;
-    if (progStart < now && progStop && channel && channel.catchupSource) {
+    if (progStop <= now && channel &&
+        XtreamArchiveService.isAvailable(channel, prog.start.getTime())) {
       catchup = {
         start: progStart,
         end: progStop,
@@ -302,13 +326,25 @@ export class EpgGrid {
     this.onChannelSelect(this.selectedChannelIdx, catchup);
   }
 
-  private activateFocusedProgramme(): void {
+  private async activateFocusedProgramme(): Promise<void> {
     const prog = this.getCurrentProgrammes()[this.focusProg];
     if (!prog) return;
     if (prog.start.getTime() > Date.now()) { this.toggleReminder(); return; }
 
     const channel = PlaylistService.channels[this.selectedChannelIdx];
-    if (channel && channel.catchupSource) {
+    const isPast = prog.stop.getTime() <= Date.now();
+    if (isPast && channel?.catchupAccountId && channel.catchupStreamId) {
+      const channelIndex = this.selectedChannelIdx;
+      await XtreamArchiveService.load(channel);
+      if (PlaylistService.channels[channelIndex] !== channel) return;
+      this.render();
+    }
+    if (isPast && channel?.catchupSource &&
+        !XtreamArchiveService.isAvailable(channel, prog.start.getTime())) {
+      showToast('Program is not available for catch-up');
+      return;
+    }
+    if (isPast && channel?.catchupSource) {
       const chKey = channelKey(channel);
       const startMs = prog.start.getTime();
       const entries = StorageService.getCatchupProgressList(chKey);
@@ -451,7 +487,7 @@ export class EpgGrid {
         if (this.focusCol === 'channels') {
           this.onChannelSelect(this.selectedChannelIdx);
         } else if (this.focusCol === 'programmes') {
-          this.activateFocusedProgramme();
+          void this.activateFocusedProgramme();
         } else if (this.focusCol === 'dates') {
           this.focusCol = 'programmes';
           this.focusProg = 0;

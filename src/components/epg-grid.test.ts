@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { state, playlistMock, epgMock } = vi.hoisted(() => {
+const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
   const state = {
     channels: [] as any[],
     programmes: {} as Record<string, any[]>,
@@ -15,17 +15,24 @@ const { state, playlistMock, epgMock } = vi.hoisted(() => {
       get programmes() { return state.programmes; },
       findChannelId: vi.fn((ch: any) => (state.programmes[ch.name] ? ch.name : null)),
     },
+    archiveMock: {
+      getCached: vi.fn(() => null as Set<number> | null | undefined),
+      load: vi.fn(async () => null as Set<number> | null),
+      isAvailable: vi.fn((channel: { catchupSource?: string }) => !!channel.catchupSource),
+    },
   };
 });
 
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
 vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
+vi.mock('../services/xtream-archive', () => ({ XtreamArchiveService: archiveMock }));
 
-const { reminderMock } = vi.hoisted(() => ({
+const { reminderMock, toastMock } = vi.hoisted(() => ({
   reminderMock: { has: vi.fn(() => false), add: vi.fn(), remove: vi.fn() },
+  toastMock: vi.fn(),
 }));
 vi.mock('../services/reminder-service', () => ({ ReminderService: reminderMock }));
-vi.mock('./toast', () => ({ showToast: vi.fn() }));
+vi.mock('./toast', () => ({ showToast: toastMock }));
 
 const { storageMock } = vi.hoisted(() => ({
   storageMock: {
@@ -75,6 +82,9 @@ beforeEach(() => {
     ],
   };
   vi.clearAllMocks();
+  archiveMock.getCached.mockReturnValue(null);
+  archiveMock.load.mockResolvedValue(null);
+  archiveMock.isAvailable.mockImplementation((channel: { catchupSource?: string }) => !!channel.catchupSource);
   document.body.innerHTML = '';
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -493,6 +503,28 @@ describe('EpgGrid non-catchup channel selection', () => {
     state.channels = [{ name: 'Chan A', url: 'http://host/a' }];
     storageMock.getCatchupProgressList.mockReturnValue([]);
     grid.render();
+  });
+
+  describe('EpgGrid Xtream archive availability', () => {
+    it('does not play a program whose has_archive flag is false', async () => {
+      state.channels = [{
+        name: 'Chan A',
+        url: 'http://host/a',
+        catchupSource: 'http://host/catchup/{start}',
+        catchupAccountId: 'x1',
+        catchupStreamId: '101',
+      }];
+      archiveMock.getCached.mockReturnValue(new Set());
+      archiveMock.load.mockResolvedValue(new Set());
+      archiveMock.isAvailable.mockReturnValue(false);
+      grid.render();
+      grid.handleAction('right');
+      grid.handleAction('select');
+      await Promise.resolve();
+
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(toastMock).toHaveBeenCalledWith('Program is not available for catch-up');
+    });
   });
 
   it('selecting a past programme on a non-catchup channel passes no CatchupInfo', () => {

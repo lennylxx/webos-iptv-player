@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { PlaylistEntry, Programme } from '../types';
 
-const { catalogMock, playlistMock, epgMock, reminderMock, storageMock } = vi.hoisted(() => ({
+const { catalogMock, playlistMock, epgMock, reminderMock, storageMock, archiveMock, toastMock } = vi.hoisted(() => ({
   catalogMock: { loadAllVodStreams: vi.fn(), loadAllSeries: vi.fn() },
   playlistMock: { channels: [] as unknown[], search: vi.fn(() => [] as unknown[]), indexOf: vi.fn(() => 0) },
   epgMock: {
@@ -11,12 +11,19 @@ const { catalogMock, playlistMock, epgMock, reminderMock, storageMock } = vi.hoi
   },
   reminderMock: { has: vi.fn(() => false), add: vi.fn(), remove: vi.fn() },
   storageMock: { getCatchupProgressList: vi.fn(() => [] as unknown[]), clearCatchupProgress: vi.fn() },
+  archiveMock: {
+    load: vi.fn(async () => null as Set<number> | null),
+    isAvailable: vi.fn((channel: { catchupSource?: string }) => !!channel.catchupSource),
+  },
+  toastMock: vi.fn(),
 }));
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
 vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
 vi.mock('../services/reminder-service', () => ({ ReminderService: reminderMock }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
+vi.mock('../services/xtream-archive', () => ({ XtreamArchiveService: archiveMock }));
+vi.mock('./toast', () => ({ showToast: toastMock }));
 
 import { Search } from './search';
 import { CONFIG } from '../config';
@@ -47,6 +54,8 @@ beforeEach(() => {
   epgMock.findChannelId.mockImplementation((channel: { id: string }) => channel.id);
   reminderMock.has.mockReturnValue(false);
   storageMock.getCatchupProgressList.mockReturnValue([]);
+  archiveMock.load.mockResolvedValue(null);
+  archiveMock.isAvailable.mockImplementation((channel: { catchupSource?: string }) => !!channel.catchupSource);
   container = document.createElement('div');
   document.body.appendChild(container);
 });
@@ -185,6 +194,29 @@ describe('Search', () => {
 
     view.handleAction('select');
     expect(handlers.onPlayChannel).toHaveBeenCalledWith(0, expect.objectContaining({ resumeSecs: 30 }));
+  });
+
+  it('does not play an Xtream program whose has_archive flag is false', async () => {
+    const now = Date.now();
+    const channel = {
+      ...chan('Alpha'),
+      catchupSource: '{utc}',
+      catchupAccountId: 'x1',
+      catchupStreamId: '101',
+    };
+    playlistMock.channels = [channel];
+    epgMock.programmes = { Alpha: [prog('Past Report', now - 120000, now - 60000)] };
+    archiveMock.load.mockResolvedValue(new Set());
+    archiveMock.isAvailable.mockReturnValue(false);
+    const { view, handlers } = await openWith();
+    view.setQuery('past');
+    const row = container.querySelector('.search-program-row') as HTMLElement;
+    row.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve();
+
+    expect(handlers.onPlayChannel).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledWith('Program is not available for catch-up');
   });
 
   it('toggles a reminder for a future program', async () => {

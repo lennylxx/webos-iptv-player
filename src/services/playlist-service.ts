@@ -1,11 +1,19 @@
 import type { Channel, EpgSource, PlaylistTab } from '../types';
 import { parseM3U } from '../parsers/m3u-parser';
 import { fetchText } from '../utils/fetch-helper';
-import { xtreamPlaylistUrl, xtreamEpgUrl } from '../utils/xtream-url';
+import {
+  xtreamPlaylistUrl,
+  xtreamEpgUrl,
+  xtreamCatchupSource,
+  xtreamCatchupFallbackSource,
+  xtreamLiveStreamId,
+  type XtreamCredentials,
+} from '../utils/xtream-url';
 import { channelKey } from '../utils/channel';
 import { rankChannels } from '../utils/channel-search';
 import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
+import { createXtreamClient } from './xtream-client';
 
 const log = createLogger('Playlist');
 
@@ -80,6 +88,9 @@ class PlaylistServiceImpl {
         const text = await fetchText(fetchUrl, 60000);
         log.info('Fetched', pl.name || pl.url, '|', text.length, 'bytes');
         const parsed = parseM3U(text, fetchUrl);
+        if (pl.source === 'xtream' && pl.xtream) {
+          await this.applyXtreamCatchup(parsed.channels, { baseUrl: pl.url, ...pl.xtream }, plKey);
+        }
         log.info('Parsed', parsed.channels.length, 'channels,', parsed.groups.length, 'groups',
           parsed.epgUrl ? `| epg: ${parsed.epgUrl}` : '');
         let added = 0, dupes = 0;
@@ -133,6 +144,39 @@ class PlaylistServiceImpl {
     log.info('Refresh complete:', allChannels.length, 'total channels,', epgSources.length, 'epg sources');
     done();
     return allChannels;
+  }
+
+  private async applyXtreamCatchup(
+    channels: Channel[],
+    credentials: XtreamCredentials,
+    accountId: string,
+  ): Promise<void> {
+    const client = createXtreamClient(credentials);
+    const streams = await client.getLiveStreams();
+    const archived = new Map(streams
+      .filter(stream => stream.archive)
+      .map(stream => [stream.streamId, stream]));
+    if (!archived.size) return;
+
+    const clock = await client.getServerClock();
+    let enabled = 0;
+    for (const channel of channels) {
+      const streamId = xtreamLiveStreamId(channel.url);
+      const stream = archived.get(streamId);
+      if (!stream) continue;
+      channel.catchupAccountId = accountId;
+      channel.catchupStreamId = streamId;
+      if (!channel.catchupSource) {
+        channel.catchup = 'xtream';
+        channel.catchupSource = xtreamCatchupSource(credentials, streamId);
+        channel.catchupFallbackSource = xtreamCatchupFallbackSource(credentials, streamId);
+        channel.catchupDays = stream.archiveDurationDays;
+        enabled++;
+      }
+      if (clock?.timeZone) channel.catchupTimeZone = clock.timeZone;
+      if (clock?.offsetMinutes != null) channel.catchupTimeOffsetMinutes = clock.offsetMinutes;
+    }
+    log.info('Enabled Xtream catch-up for', enabled, 'channels');
   }
 
   private buildGroups(): void {

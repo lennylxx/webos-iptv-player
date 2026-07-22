@@ -6,6 +6,10 @@ import {
   xtreamPlayerApi,
   xtreamVodUrl,
   xtreamEpisodeUrl,
+  xtreamCatchupSource,
+  xtreamCatchupFallbackSource,
+  xtreamLiveStreamId,
+  formatXtreamCatchupStart,
 } from './xtream-url';
 
 const creds = { baseUrl: 'http://host:8080', username: 'u1', password: 'p1' };
@@ -103,5 +107,51 @@ describe('xtreamVodUrl', () => {
 describe('xtreamEpisodeUrl', () => {
   it('builds /series/{user}/{pass}/{id}.{ext} on the normalized base', () => {
     expect(xtreamEpisodeUrl(creds, '42', 'mkv')).toBe('http://host:8080/series/u1/p1/42.mkv');
+  });
+});
+
+describe('Xtream catch-up URLs', () => {
+  it('builds a timeshift template with encoded credentials', () => {
+    expect(xtreamCatchupSource(
+      { baseUrl: 'http://host', username: 'u 1', password: 'p/1' },
+      '42',
+    )).toBe('http://host/timeshift/u%201/p%2F1/{duration}/{start}/42.ts');
+  });
+
+  it('builds the legacy PHP fallback template with encoded parameters', () => {
+    expect(xtreamCatchupFallbackSource(
+      { baseUrl: 'http://host', username: 'u 1', password: 'p&1' },
+      '42',
+    )).toBe(
+      'http://host/streaming/timeshift.php?username=u%201&password=p%261&stream=42' +
+      '&start={start}&duration={duration}&extension=ts',
+    );
+  });
+
+  it('extracts ids from standard and legacy live URLs only', () => {
+    expect(xtreamLiveStreamId('http://host/live/u1/p1/42.ts')).toBe('42');
+    expect(xtreamLiveStreamId('http://host/u1/p1/43.m3u8')).toBe('43');
+    expect(xtreamLiveStreamId('http://host/movie/u1/p1/42.mp4')).toBe('');
+    expect(xtreamLiveStreamId('not a url')).toBe('');
+  });
+
+  it('formats UTC catch-up time when no provider clock is available', () => {
+    expect(formatXtreamCatchupStart(Date.UTC(2026, 6, 21, 19, 30) / 1000))
+      .toBe('2026-07-21:19-30');
+  });
+
+  it('formats catch-up time in the provider timezone', () => {
+    expect(formatXtreamCatchupStart(
+      Date.UTC(2026, 6, 21, 19, 30) / 1000,
+      'America/New_York',
+    )).toBe('2026-07-21:15-30');
+  });
+
+  it('uses the provider offset when its timezone is invalid', () => {
+    expect(formatXtreamCatchupStart(
+      Date.UTC(2026, 6, 21, 19, 30) / 1000,
+      'Invalid/Zone',
+      120,
+    )).toBe('2026-07-21:21-30');
   });
 });

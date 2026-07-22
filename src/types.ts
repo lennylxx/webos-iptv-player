@@ -10,7 +10,16 @@ export interface Channel {
   playlistIds: string[];
   catchup: string;
   catchupSource: string;
+  /** Alternate legacy endpoint used when an Xtream path-form timeshift fails. */
+  catchupFallbackSource?: string;
+  /** Xtream account and stream identity used for program-level archive checks. */
+  catchupAccountId?: string;
+  catchupStreamId?: string;
   catchupDays: number;
+  /** Provider timezone used to format Xtream's wall-clock timeshift path. */
+  catchupTimeZone?: string;
+  /** Fixed fallback when the provider timezone is absent or unsupported. */
+  catchupTimeOffsetMinutes?: number;
 }
 
 /** One playlist tab. `id` is the configured playlist's stable id (so two

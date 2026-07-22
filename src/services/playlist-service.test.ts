@@ -190,7 +190,13 @@ http://host:8080/live/u1/p1/102.ts`;
       { id: 'x', name: 'Acct', url: 'http://host:8080', source: 'xtream',
         xtream: { username: 'u1', password: 'p1' } },
     ]);
-    fetchTextMock.mockResolvedValue(XT);
+    fetchTextMock.mockImplementation((url: string) => {
+      if (url.includes('action=get_live_streams')) return Promise.resolve('[]');
+      if (url.includes('player_api.php')) return Promise.resolve(JSON.stringify({
+        server_info: { timezone: 'UTC', timestamp_now: 1784662200, time_now: '2026-07-21 20:30:00' },
+      }));
+      return Promise.resolve(XT);
+    });
   });
 
   it('fetches the derived get.php playlist URL, not the bare base', async () => {
@@ -213,6 +219,59 @@ http://host:8080/live/u1/p1/102.ts`;
     expect(PlaylistService.epgSources.map((source) => source.url)).toContain(
       'http://host:8080/xmltv.php?username=u1&password=p1',
     );
+  });
+
+  it('enables catch-up only for streams archived by the account', async () => {
+    fetchTextMock.mockImplementation((url: string) => {
+      if (url.includes('action=get_live_streams')) {
+        return Promise.resolve(JSON.stringify([
+          { stream_id: 101, tv_archive: 1, tv_archive_duration: '7' },
+          { stream_id: 102, tv_archive: 0, tv_archive_duration: '0' },
+        ]));
+      }
+      if (url.includes('player_api.php')) {
+        return Promise.resolve(JSON.stringify({
+          server_info: { timezone: 'Etc/GMT-2', timestamp_now: 1784665800, time_now: '2026-07-21 22:30:00' },
+        }));
+      }
+      return Promise.resolve(XT);
+    });
+
+    const channels = await PlaylistService.refresh();
+    expect(channels[0]).toMatchObject({
+      catchup: 'xtream',
+      catchupDays: 7,
+      catchupSource: 'http://host:8080/timeshift/u1/p1/{duration}/{start}/101.ts',
+      catchupFallbackSource: 'http://host:8080/streaming/timeshift.php?username=u1&password=p1' +
+        '&stream=101&start={start}&duration={duration}&extension=ts',
+      catchupAccountId: 'x',
+      catchupStreamId: '101',
+      catchupTimeZone: 'Etc/GMT-2',
+      catchupTimeOffsetMinutes: 120,
+    });
+    expect(channels[1].catchupSource).toBe('');
+  });
+
+  it('keeps provider-supplied M3U catch-up metadata', async () => {
+    const withCatchup = XT.replace(
+      'tvg-id="a"',
+      'tvg-id="a" catchup="default" catchup-days="3" catchup-source="http://host/archive/{utc}"',
+    );
+    fetchTextMock.mockImplementation((url: string) => {
+      if (url.includes('action=get_live_streams')) {
+        return Promise.resolve(JSON.stringify([
+          { stream_id: 101, tv_archive: 1, tv_archive_duration: 7 },
+        ]));
+      }
+      if (url.includes('player_api.php')) return Promise.resolve('{}');
+      return Promise.resolve(withCatchup);
+    });
+    const channels = await PlaylistService.refresh();
+    expect(channels[0]).toMatchObject({
+      catchup: 'default',
+      catchupDays: 3,
+      catchupSource: 'http://host/archive/{utc}',
+    });
   });
 
   it('keeps one tab for the account even when its feed is unreachable', async () => {

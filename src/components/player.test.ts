@@ -57,6 +57,14 @@ const CHANNEL_NO_CATCHUP = {
   id: 'c2', name: 'NoCatchup', logo: '', group: '', url: 'http://host/play/c2', extras: null,
   playlistIds: [], catchupDays: 0,
 };
+const XTREAM_CHANNEL = {
+  ...CHANNEL,
+  catchup: 'xtream',
+  catchupSource: 'http://host/timeshift/u1/p1/{duration}/{start}/42.ts',
+  catchupFallbackSource: 'http://host/streaming/timeshift.php?username=u1&password=p1' +
+    '&stream=42&start={start}&duration={duration}&extension=ts',
+  catchupTimeZone: 'America/New_York',
+};
 // 120-second catch-up programme.
 const CATCHUP = { start: 1_000_000, end: 1_000_120, title: 'Prog', description: '', icon: '' };
 
@@ -293,6 +301,45 @@ describe('Player catch-up pause/play', () => {
 });
 
 describe('Player catch-up completion', () => {
+  it('resolves an Xtream timeshift URL in the provider timezone', async () => {
+    playlistMock.getByIndex.mockReturnValue(XTREAM_CHANNEL);
+    const start = Date.UTC(2026, 6, 21, 19, 30) / 1000;
+    player.play(0, {
+      ...CATCHUP,
+      start,
+      end: start + 3661,
+    });
+    await flush();
+    expect(video.src)
+      .toContain('/timeshift/u1/p1/62/2026-07-21:15-30/42.ts');
+  });
+
+  it('retries a failed Xtream catch-up through the legacy PHP endpoint', async () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const realVideo = document.createElement('video');
+    container.appendChild(realVideo);
+    player.init(realVideo);
+    playlistMock.getByIndex.mockReturnValue(XTREAM_CHANNEL);
+    const start = Date.UTC(2026, 6, 21, 19, 30) / 1000;
+
+    player.play(0, { ...CATCHUP, start, end: start + 3600 });
+    await flush();
+    expect(realVideo.src).toContain('/timeshift/');
+
+    realVideo.dispatchEvent(new Event('error'));
+    await flush();
+    const fallbackVideo = container.querySelector('video')!;
+    expect(fallbackVideo.src).toContain(
+      '/streaming/timeshift.php?username=u1&password=p1&stream=42' +
+      '&start=2026-07-21:15-30&duration=60&extension=ts',
+    );
+
+    fallbackVideo.dispatchEvent(new Event('error'));
+    expect(container.querySelector('video')).toBe(fallbackVideo);
+  });
+
   it('resumes the channel live stream when the catch-up programme ends', async () => {
     HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
     HTMLMediaElement.prototype.pause = vi.fn();
@@ -1215,6 +1262,35 @@ describe('Player catch-up save/restore lifecycle', () => {
     player.play(0, { ...CATCHUP, resumeSecs: 45 });
     video.dispatchEvent(new Event('loadedmetadata'));
     expect(video.currentTime).toBe(45);
+  });
+
+  it('restores and persists progress for Xtream catch-up', async () => {
+    playlistMock.getByIndex.mockReturnValue(XTREAM_CHANNEL);
+    const start = Date.UTC(2026, 6, 21, 19, 30) / 1000;
+    player.play(0, {
+      ...CATCHUP,
+      start,
+      end: start + 3600,
+      resumeSecs: 45,
+    });
+    await flush();
+
+    expect(video.src).toContain('/timeshift/u1/p1/60/2026-07-21:15-30/42.ts');
+    video.dispatchEvent(new Event('loadedmetadata'));
+    expect(video.currentTime).toBe(45);
+
+    video.currentTime = 70;
+    setCatchupProgress().mockClear();
+    video.dispatchEvent(new Event('seeked'));
+    expect(setCatchupProgress()).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelKey: channelKey(XTREAM_CHANNEL),
+        progStart: start * 1000,
+        progEnd: (start + 3600) * 1000,
+        position: 70,
+      }),
+      XTREAM_CHANNEL.catchupDays,
+    );
   });
 
   it('clamps resumeSecs to duration-1 if it would overshoot', () => {

@@ -1,5 +1,6 @@
 import type { Action, Channel, CatchupInfo, AudioTrackOption, AudioOption, AudioPref, ManifestAudio,
   SubtitleTrackOption, SubtitleOption, SubtitlePref, ManifestSubtitle, ManifestClosedCaption, VodPlayback, VodQueueItem, SidecarSubtitle } from '../types';
+import { formatXtreamCatchupStart } from '../utils/xtream-url';
 import { $, show, hide, html, raw, Safe } from '../utils/dom';
 import { channelKey } from '../utils/channel';
 import { morph } from '../utils/morph';
@@ -88,6 +89,7 @@ export class Player {
   // Position (seconds) saved from the video element before suspend() destroys it.
   // play() consumes this to restore the position on resume; -1 = not pending.
   private catchupSuspendPos = -1;
+  private catchupFallbackActive = false;
   // Manual A/V resync (catch-up / VOD): true from the resync seek until playback
   // resumes, gating the "Resyncing…" message and debouncing repeat presses.
   private resyncing = false;
@@ -268,9 +270,22 @@ export class Player {
 
   // Resolve the playable URL for a channel, applying the catch-up template when
   // a catch-up window is active. Shared by play() and the stall reload path.
-  private resolveStreamUrl(channel: Channel, catchup: CatchupInfo | null): string {
+  private resolveStreamUrl(channel: Channel, catchup: CatchupInfo | null, fallback = false): string {
     if (catchup && channel.catchupSource) {
-      return channel.catchupSource
+      let source = fallback && channel.catchupFallbackSource
+        ? channel.catchupFallbackSource
+        : channel.catchupSource;
+      if (channel.catchup === 'xtream') {
+        const durationMinutes = Math.max(1, Math.ceil((catchup.end - catchup.start) / 60));
+        source = source
+          .replace('{duration}', String(durationMinutes))
+          .replace('{start}', formatXtreamCatchupStart(
+            catchup.start,
+            channel.catchupTimeZone,
+            channel.catchupTimeOffsetMinutes,
+          ));
+      }
+      return source
         .replace('{channel-id}', encodeURIComponent(channel.id || channel.name))
         .replace('{utc}', String(catchup.start))
         .replace('{utcend}', String(catchup.end));
@@ -304,6 +319,7 @@ export class Player {
     this.currentChannel = channel;
     this.currentIndex = channelIndex;
     this.catchupInfo = catchup || null;
+    this.catchupFallbackActive = false;
     this.vod = null;
     this.catchupCheckpointAt = Date.now(); // reset periodic-save timer for the new session
     this.failedIcons.clear(); // fresh icon-load attempts per channel/programme visit
@@ -642,7 +658,10 @@ export class Player {
     this.updateOSDMessage('Reconnecting…');
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
-    this.loadStream(this.resolveStreamUrl(this.currentChannel, this.catchupInfo), this.currentChannel.extras);
+    this.loadStream(
+      this.resolveStreamUrl(this.currentChannel, this.catchupInfo, this.catchupFallbackActive),
+      this.currentChannel.extras,
+    );
   }
 
   // A finished catch-up VOD would otherwise freeze on its last frame; fall back
@@ -702,6 +721,7 @@ export class Player {
     this.pendingResumeSecs = 0;
     this.catchupCheckpointAt = 0;
     this.catchupSuspendPos = -1;
+    this.catchupFallbackActive = false;
     this.resyncing = false;
     if (this.resyncTimer) { clearTimeout(this.resyncTimer); this.resyncTimer = null; }
   }
@@ -760,7 +780,8 @@ export class Player {
       this.mpegtsPlayer = null;
     }
 
-    const isTsUrl = url.endsWith('.ts') || url.includes('.ts?');
+    const isTsUrl = url.endsWith('.ts') || url.includes('.ts?') ||
+      /[?&]extension=ts(?:&|$)/i.test(url);
     const isFlvUrl = url.endsWith('.flv') || url.includes('.flv?');
 
     // webOS: the TV's hardware HLS/TS decoders beat MSE libraries, so play
@@ -947,6 +968,19 @@ export class Player {
       this.stop();
       showToast('Unable to play this title');
       v.onBack();
+      return;
+    }
+    if (this.catchupInfo && this.currentChannel?.catchup === 'xtream' &&
+        this.currentChannel.catchupFallbackSource && !this.catchupFallbackActive) {
+      this.catchupFallbackActive = true;
+      log.warn('Xtream catch-up path failed — trying legacy endpoint');
+      this.updateOSDMessage('Retrying catch-up…');
+      this.recreateVideoEl();
+      this.videoEl?.classList.add('active');
+      this.loadStream(
+        this.resolveStreamUrl(this.currentChannel, this.catchupInfo, true),
+        this.currentChannel.extras,
+      );
       return;
     }
     const v = this.videoEl;

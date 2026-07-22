@@ -92,6 +92,85 @@ describe('XtreamClient.getAccountInfo', () => {
   });
 });
 
+describe('XtreamClient live archive metadata', () => {
+  it('normalizes archive flags and retention days', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify([
+      { stream_id: 10, tv_archive: 1, tv_archive_duration: '7' },
+      { stream_id: '11', tv_archive: '0', tv_archive_duration: 0 },
+      { tv_archive: 1, tv_archive_duration: 3 },
+    ]));
+    expect(await createXtreamClient(creds).getLiveStreams()).toEqual([
+      { streamId: '10', archive: true, archiveDurationDays: 7 },
+      { streamId: '11', archive: false, archiveDurationDays: 0 },
+    ]);
+    expect(fetchTextMock).toHaveBeenCalledWith(
+      expect.stringContaining('action=get_live_streams'),
+      expect.any(Number),
+    );
+  });
+
+  it('reads the provider timezone and derives its fixed-offset fallback', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify({
+      server_info: {
+        timezone: 'Etc/GMT-2',
+        timestamp_now: 1784665800,
+        time_now: '2026-07-21 22:30:00',
+      },
+    }));
+    expect(await createXtreamClient(creds).getServerClock()).toEqual({
+      timeZone: 'Etc/GMT-2',
+      offsetMinutes: 120,
+    });
+  });
+
+  it('returns safe empty values when archive endpoints fail', async () => {
+    fetchTextMock.mockResolvedValue('<html>nope</html>');
+    expect(await createXtreamClient(creds).getLiveStreams()).toEqual([]);
+    expect(await createXtreamClient(creds).getServerClock()).toBeNull();
+  });
+});
+
+describe('XtreamClient program archive listings', () => {
+  it('parses timestamps and explicit has_archive flags', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify({
+      epg_listings: [
+        { start_timestamp: '1709978400', stop_timestamp: '1709982000', has_archive: 1 },
+        { start_timestamp: 1709982000, stop_timestamp: 1709985600, has_archive: '0' },
+        { start_timestamp: '1709985600', stop_timestamp: '1709989200' },
+      ],
+    }));
+    expect(await createXtreamClient(creds).getArchiveListings('101')).toEqual([
+      { start: 1709978400, stop: 1709982000, hasArchive: true },
+      { start: 1709982000, stop: 1709985600, hasArchive: false },
+      { start: 1709985600, stop: 1709989200, hasArchive: null },
+    ]);
+    expect(fetchTextMock).toHaveBeenCalledWith(
+      expect.stringMatching(/action=get_simple_data_table.*stream_id=101/),
+      expect.any(Number),
+    );
+  });
+
+  it('drops malformed time ranges', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify({
+      epg_listings: [
+        { start_timestamp: 0, stop_timestamp: 1, has_archive: 1 },
+        { start_timestamp: 100, stop_timestamp: 100, has_archive: 1 },
+        { start_timestamp: 100, stop_timestamp: 200, has_archive: 1 },
+      ],
+    }));
+    expect(await createXtreamClient(creds).getArchiveListings('101')).toEqual([
+      { start: 100, stop: 200, hasArchive: true },
+    ]);
+  });
+
+  it('returns null when the endpoint is unsupported or malformed', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify({ server_info: {} }));
+    expect(await createXtreamClient(creds).getArchiveListings('101')).toBeNull();
+    fetchTextMock.mockResolvedValue('<html>nope</html>');
+    expect(await createXtreamClient(creds).getArchiveListings('101')).toBeNull();
+  });
+});
+
 describe('XtreamClient VOD', () => {
   it('lists VOD categories, dropping entries with no id', async () => {
     fetchTextMock.mockResolvedValue(JSON.stringify([

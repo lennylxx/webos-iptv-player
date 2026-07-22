@@ -21,6 +21,23 @@ export interface XtreamAccountInfo {
   activeConnections: number;
 }
 
+export interface XtreamLiveStream {
+  streamId: string;
+  archive: boolean;
+  archiveDurationDays: number;
+}
+
+export interface XtreamServerClock {
+  timeZone: string;
+  offsetMinutes: number | null;
+}
+
+export interface XtreamArchiveListing {
+  start: number;
+  stop: number;
+  hasArchive: boolean | null;
+}
+
 function toNumber(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -61,6 +78,22 @@ function parseSubtitles(v: unknown): SidecarSubtitle[] {
     .filter((s) => /^https?:\/\//i.test(s.url));
 }
 
+function parseServerOffset(server: Record<string, unknown>): number | null {
+  const timestamp = toNumber(server.timestamp_now);
+  const timeNow = toStr(server.time_now);
+  const match = timeNow.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!timestamp || !match) return null;
+  const wallClockAsUtc = Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6] || 0),
+  );
+  return Math.round((wallClockAsUtc - timestamp * 1000) / 60000);
+}
+
 /** A per-account handle over the Xtream `player_api.php` JSON endpoint. Flat
  *  composition (no inheritance); catalog methods grow on the same factory. */
 export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
@@ -84,6 +117,53 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         log.warn('getAccountInfo failed:', err);
         return null;
       }
+    },
+
+    async getLiveStreams(): Promise<XtreamLiveStream[]> {
+      const arr = asArray(await fetchJson(xtreamPlayerApi(creds, 'get_live_streams'), CATALOG_TIMEOUT));
+      return arr
+        .map((stream) => ({
+          streamId: toStr(stream.stream_id),
+          archive: stream.tv_archive === 1 || stream.tv_archive === '1' || stream.tv_archive === true,
+          archiveDurationDays: Math.max(0, toNumber(stream.tv_archive_duration)),
+        }))
+        .filter(stream => stream.streamId !== '');
+    },
+
+    async getServerClock(): Promise<XtreamServerClock | null> {
+      const data = await fetchJson(xtreamPlayerApi(creds), ACCOUNT_INFO_TIMEOUT);
+      if (!data || typeof data !== 'object') return null;
+      const server = (data as { server_info?: unknown }).server_info;
+      if (!server || typeof server !== 'object') return null;
+      const record = server as Record<string, unknown>;
+      return {
+        timeZone: toStr(record.timezone),
+        offsetMinutes: parseServerOffset(record),
+      };
+    },
+
+    async getArchiveListings(streamId: string): Promise<XtreamArchiveListing[] | null> {
+      const data = await fetchJson(
+        xtreamPlayerApi(creds, 'get_simple_data_table', { stream_id: streamId }),
+        CATALOG_TIMEOUT,
+      );
+      if (!data || typeof data !== 'object') return null;
+      const raw = (data as { epg_listings?: unknown }).epg_listings;
+      if (!Array.isArray(raw)) return null;
+      return asArray(raw)
+        .map((listing) => {
+          const start = toNumber(listing.start_timestamp);
+          const stop = toNumber(listing.stop_timestamp);
+          const flag = listing.has_archive;
+          return {
+            start,
+            stop,
+            hasArchive: flag === undefined || flag === null
+              ? null
+              : flag === 1 || flag === '1' || flag === true,
+          };
+        })
+        .filter(listing => listing.start > 0 && listing.stop > listing.start);
     },
 
     async getVodCategories(): Promise<VodCategory[]> {
