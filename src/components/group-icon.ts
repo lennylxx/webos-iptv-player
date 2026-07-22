@@ -141,6 +141,7 @@ function iconImg(name: string): string {
 export function groupIcon(group: string): string {
   if (group === 'All') return iconImg('all');
   if (group === 'Favorites') return iconImg('star');
+  if (group === 'Recently Watched') return iconImg('three_oclock');
   const icon = matchGroupIcon(group);
   return icon ? iconImg(icon) : '&#9654;'; // fallback for unmatched groups
 }

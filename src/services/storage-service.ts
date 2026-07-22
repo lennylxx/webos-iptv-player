@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, type OverlayStyle } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, EpgSource, PlaylistEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, EpgSource, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist-id';
@@ -88,6 +88,18 @@ export const StorageService = {
   },
   setLastChannel(index: number): void {
     set('last_channel', index);
+  },
+
+  getRecentlyWatchedLive(): RecentlyWatchedLiveEntry[] {
+    return get<RecentlyWatchedLiveEntry[]>('recently_watched_live', [])
+      .filter(entry => !!entry.channelKey && Number.isFinite(entry.updatedAt))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+  touchRecentlyWatchedLive(chKey: string, now?: number): void {
+    if (!chKey) return;
+    const entries = this.getRecentlyWatchedLive().filter(entry => entry.channelKey !== chKey);
+    entries.unshift({ channelKey: chKey, updatedAt: now ?? Date.now() });
+    set('recently_watched_live', entries.slice(0, CONFIG.RECENTLY_WATCHED.MAX_LIVE_ENTRIES));
   },
 
   getFavorites(): string[] {
@@ -347,6 +359,29 @@ export const StorageService = {
       }
     }
     return result;
+  },
+
+  getAllCatchupProgress(now?: number): CatchupProgressEntry[] {
+    const n = now ?? Date.now();
+    const all = get<Record<string, CatchupProgressEntry & { expiresAt: number }>>('catchup_progress', {});
+    let pruned = false;
+    const result: CatchupProgressEntry[] = [];
+    for (const k of Object.keys(all)) {
+      if (all[k].expiresAt <= n) {
+        delete all[k];
+        pruned = true;
+        continue;
+      }
+      const { expiresAt: _x, ...entry } = all[k];
+      result.push(entry);
+    }
+    if (pruned) set('catchup_progress', all);
+    return result.sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+
+  clearRecentlyWatched(): void {
+    remove('recently_watched_live');
+    remove('catchup_progress');
   },
 
 };

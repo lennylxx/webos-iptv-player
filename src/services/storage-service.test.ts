@@ -253,6 +253,59 @@ describe('StorageService resume store', () => {
   });
 });
 
+describe('StorageService recently watched live store', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('stores newest entries first and moves a repeated channel to the front', () => {
+    StorageService.touchRecentlyWatchedLive('ch1', 1000);
+    StorageService.touchRecentlyWatchedLive('ch2', 2000);
+    StorageService.touchRecentlyWatchedLive('ch1', 3000);
+    expect(StorageService.getRecentlyWatchedLive()).toEqual([
+      { channelKey: 'ch1', updatedAt: 3000 },
+      { channelKey: 'ch2', updatedAt: 2000 },
+    ]);
+  });
+
+  it('caps the stored live history', () => {
+    for (let i = 0; i < 35; i++) {
+      StorageService.touchRecentlyWatchedLive(`ch${String(i)}`, i);
+    }
+    const entries = StorageService.getRecentlyWatchedLive();
+    expect(entries).toHaveLength(30);
+    expect(entries[0].channelKey).toBe('ch34');
+    expect(entries[29].channelKey).toBe('ch5');
+  });
+
+  it('ignores an empty channel key', () => {
+    StorageService.touchRecentlyWatchedLive('', 1000);
+    expect(StorageService.getRecentlyWatchedLive()).toEqual([]);
+  });
+
+  it('retries after evicting only the playlist cache on a quota error', () => {
+    StorageService.set('cached_playlist', { value: 'cache' });
+    const original = Storage.prototype.setItem;
+    let rejected = false;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (!rejected && key === 'iptv_recently_watched_live') {
+        rejected = true;
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      return original.call(this, key, value);
+    });
+    try {
+      StorageService.touchRecentlyWatchedLive('ch1', 1000);
+      expect(StorageService.getRecentlyWatchedLive()).toEqual([
+        { channelKey: 'ch1', updatedAt: 1000 },
+      ]);
+      expect(localStorage.getItem('iptv_cached_playlist')).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('StorageService catchup progress store', () => {
   beforeEach(() => { localStorage.clear(); });
 
@@ -277,11 +330,12 @@ describe('StorageService catchup progress store', () => {
   });
 
   it('round-trips a catchup progress entry', () => {
-    StorageService.setCatchupProgress(mkEntry(), 7, baseNow);
+    StorageService.setCatchupProgress(mkEntry({ title: 'Program Alpha', description: 'Summary', icon: 'http://host/a' }), 7, baseNow);
     const got = StorageService.getCatchupProgress('ck1', baseNow - HOUR, baseNow);
     expect(got).not.toBeNull();
     expect(got!.position).toBe(60);
     expect(got!.completed).toBe(false);
+    expect(got).toMatchObject({ title: 'Program Alpha', description: 'Summary', icon: 'http://host/a' });
   });
 
   it('isolates entries by channelKey', () => {
@@ -423,5 +477,46 @@ describe('StorageService catchup progress store', () => {
       expect(list).toHaveLength(1);
       expect((list[0] as any).expiresAt).toBeUndefined();
     });
+  });
+
+  describe('getAllCatchupProgress', () => {
+    it('returns every non-expired entry newest first and prunes expired data', () => {
+      StorageService.setCatchupProgress(mkEntry({
+        channelKey: 'ck1',
+        progEnd: baseNow + HOUR,
+        updatedAt: baseNow,
+      }), 1, baseNow);
+      StorageService.setCatchupProgress(mkEntry({
+        channelKey: 'ck2',
+        progStart: baseNow,
+        progEnd: baseNow + 30 * DAY,
+        updatedAt: baseNow + 1,
+      }), 7, baseNow);
+
+      const afterExpiry = baseNow + HOUR + DAY + 1;
+      expect(StorageService.getAllCatchupProgress(afterExpiry).map(entry => entry.channelKey))
+        .toEqual(['ck2']);
+      const stored = JSON.parse(localStorage.getItem('iptv_catchup_progress') ?? '{}');
+      expect(Object.keys(stored).every(key => key.startsWith('ck2|'))).toBe(true);
+    });
+
+    it('keeps legacy entries without display snapshots readable', () => {
+      StorageService.setCatchupProgress(mkEntry(), 7, baseNow);
+      expect(StorageService.getAllCatchupProgress(baseNow)[0]).not.toHaveProperty('title');
+    });
+  });
+
+  it('clears live and Catch-up history without touching VOD resume or Favorites', () => {
+    StorageService.touchRecentlyWatchedLive('ch1', baseNow);
+    StorageService.setCatchupProgress(mkEntry(), 7, baseNow);
+    StorageService.setResume(resume({}));
+    StorageService.setFavorites(['ch1']);
+
+    StorageService.clearRecentlyWatched();
+
+    expect(StorageService.getRecentlyWatchedLive()).toEqual([]);
+    expect(StorageService.getAllCatchupProgress(baseNow)).toEqual([]);
+    expect(StorageService.getResume('x1', 'vod', '10')).not.toBeNull();
+    expect(StorageService.getFavorites()).toEqual(['ch1']);
   });
 });

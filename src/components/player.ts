@@ -57,6 +57,7 @@ type MpegtsType = typeof import('mpegts.js').default;
 export class Player {
   private container: HTMLElement;
   private onBack: () => void;
+  private onTvPlaybackChanged: (channelIndex: number, catchupStart: number | null) => void;
   private videoEl: HTMLVideoElement | null = null;
   private hls: InstanceType<HlsType> | null = null;
   private mpegtsPlayer: { destroy(): void } | null = null;
@@ -90,6 +91,9 @@ export class Player {
   // play() consumes this to restore the position on resume; -1 = not pending.
   private catchupSuspendPos = -1;
   private catchupFallbackActive = false;
+  private playbackGeneration = 0;
+  private liveHistoryGeneration = -1;
+  private liveHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   // Manual A/V resync (catch-up / VOD): true from the resync seek until playback
   // resumes, gating the "Resyncing…" message and debouncing repeat presses.
   private resyncing = false;
@@ -109,9 +113,14 @@ export class Player {
   private subtitleOffsetS = 0; // per-stream subtitle timing offset (seconds; + = later)
   private offsetOverlay: SubtitleOffsetOverlay | null = null;
   private stallWatchdog: StallWatchdog;
-  constructor(container: HTMLElement, onBack: () => void) {
+  constructor(
+    container: HTMLElement,
+    onBack: () => void,
+    onTvPlaybackChanged: (channelIndex: number, catchupStart: number | null) => void = () => {},
+  ) {
     this.container = container;
     this.onBack = onBack;
+    this.onTvPlaybackChanged = onTvPlaybackChanged;
     this.stallWatchdog = new StallWatchdog({
       probe: (): StallProbe => {
         const v = this.videoEl;
@@ -203,9 +212,19 @@ export class Player {
     // Some platforms populate audio/text tracks asynchronously, after loadedmetadata.
     el.audioTracks?.addEventListener?.('addtrack', () => this.applyNativeAudioSelection());
     el.textTracks?.addEventListener?.('addtrack', () => this.applyNativeSubtitleSelection());
-    el.addEventListener('playing', () => { log.info('playing'); if (this.resyncing) this.endResync(); });
-    el.addEventListener('waiting', () => log.debug('waiting (buffering)'));
-    el.addEventListener('stalled', () => log.warn('stalled'));
+    el.addEventListener('playing', () => {
+      log.info('playing');
+      if (this.resyncing) this.endResync();
+      this.confirmLiveHistory(el);
+    });
+    el.addEventListener('waiting', () => {
+      log.debug('waiting (buffering)');
+      this.cancelLiveHistoryTimer();
+    });
+    el.addEventListener('stalled', () => {
+      log.warn('stalled');
+      this.cancelLiveHistoryTimer();
+    });
     el.addEventListener('timeupdate', () => this.refreshProgress());
     el.addEventListener('seeked', () => { if (this.catchupInfo) this.saveCatchupProgress(); });
     el.addEventListener('ended', () => this.onEnded());
@@ -293,6 +312,32 @@ export class Player {
     return channel.url;
   }
 
+  private startPlaybackGeneration(): void {
+    this.cancelLiveHistoryTimer();
+    this.playbackGeneration++;
+    this.liveHistoryGeneration = -1;
+  }
+
+  private cancelLiveHistoryTimer(): void {
+    if (this.liveHistoryTimer === null) return;
+    clearTimeout(this.liveHistoryTimer);
+    this.liveHistoryTimer = null;
+  }
+
+  private confirmLiveHistory(el: HTMLVideoElement): void {
+    if (el !== this.videoEl || this.vod || this.catchupInfo || !this.currentChannel) return;
+    const generation = this.playbackGeneration;
+    if (this.liveHistoryGeneration === generation || this.liveHistoryTimer !== null) return;
+    const channel = this.currentChannel;
+    this.liveHistoryTimer = setTimeout(() => {
+      this.liveHistoryTimer = null;
+      if (generation !== this.playbackGeneration || el !== this.videoEl || el.paused ||
+          this.vod || this.catchupInfo || this.currentChannel !== channel) return;
+      StorageService.touchRecentlyWatchedLive(channelKey(channel));
+      this.liveHistoryGeneration = generation;
+    }, CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS);
+  }
+
   play(channelIndex: number, catchup?: CatchupInfo): void {
     this.stallWatchdog.stop();
     const channel = PlaylistService.getByIndex(channelIndex);
@@ -300,6 +345,7 @@ export class Player {
       log.warn('play() ignored — no channel or video element', { channelIndex, hasChannel: !!channel });
       return;
     }
+    this.startPlaybackGeneration();
 
     // Save progress for the outgoing catch-up session (channel switch, stopping catch-up).
     // Skip when resuming from suspend: catchupSuspendPos >= 0 means the element is fresh
@@ -319,6 +365,7 @@ export class Player {
     this.currentChannel = channel;
     this.currentIndex = channelIndex;
     this.catchupInfo = catchup || null;
+    this.onTvPlaybackChanged(channelIndex, catchup ? catchup.start * 1000 : null);
     this.catchupFallbackActive = false;
     this.vod = null;
     this.catchupCheckpointAt = Date.now(); // reset periodic-save timer for the new session
@@ -340,6 +387,7 @@ export class Player {
   playVod(v: VodPlayback): void {
     this.stallWatchdog.stop();
     if (!this.videoEl) { log.warn('playVod ignored — no video element'); return; }
+    this.startPlaybackGeneration();
     log.info('playVod', v.title, '| resume', v.resumeSecs);
     this.saveCatchupProgress(); // save any active catch-up before switching to VOD
     this.currentChannel = null;
@@ -403,6 +451,9 @@ export class Player {
       channelKey: channelKey(ch),
       progStart: progStartMs,
       progEnd: progEndMs,
+      title: info.title,
+      description: info.description,
+      icon: info.icon,
       position: pos,
       duration: dur,
       updatedAt: Date.now(),
@@ -691,6 +742,7 @@ export class Player {
   }
 
   stop(): void {
+    this.startPlaybackGeneration();
     this.clearNextEpisodeTimer();
     if (this.vod) this.saveVodResume();
     this.saveCatchupProgress(); // save before the video element is torn down
@@ -961,6 +1013,7 @@ export class Player {
   }
 
   private onError(): void {
+    this.cancelLiveHistoryTimer();
     if (this.vod) {
       const v = this.vod;
       this.vod = null;            // so stop() won't overwrite/wipe the resume point on error

@@ -26,6 +26,7 @@ vi.mock('../services/storage-service', () => ({
     setResume: vi.fn(), clearResume: vi.fn(),
     getPickedOnlineSub: vi.fn(), setPickedOnlineSub: vi.fn(),
     setCatchupProgress: vi.fn(), getCatchupProgress: vi.fn(), clearCatchupProgress: vi.fn(),
+    touchRecentlyWatchedLive: vi.fn(),
     getSubtitleOffset: vi.fn(() => 0), setSubtitleOffset: vi.fn(),
   },
 }));
@@ -347,6 +348,8 @@ describe('Player catch-up completion', () => {
     const v = document.createElement('video');
     Object.defineProperty(v, 'duration', { value: 120, configurable: true });
     container.appendChild(v);
+    const onPlaybackChanged = vi.fn();
+    player = new Player(container, vi.fn(), onPlaybackChanged);
     player.init(v);
 
     player.play(0, CATCHUP);
@@ -359,6 +362,7 @@ describe('Player catch-up completion', () => {
 
     expect(container.querySelector('video')!.src).toContain('/play/'); // live URL on the fresh element
     expect(player.canSeek()).toBe(false); // live, not seekable
+    expect(onPlaybackChanged).toHaveBeenLastCalledWith(0, null);
   });
 });
 
@@ -367,6 +371,60 @@ describe('Player live playback', () => {
     player.play(0); // live, no catch-up
     expect(player.canSeek()).toBe(false);
     expect(container.querySelector('[data-seekbar]')).toBeNull();
+  });
+});
+
+describe('Player Recently Watched recording', () => {
+  const touchLive = () => vi.mocked(StorageService.touchRecentlyWatchedLive);
+
+  beforeEach(() => {
+    touchLive().mockClear();
+  });
+
+  it('records live playback after five continuous seconds', () => {
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS - 1);
+    expect(touchLive()).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(touchLive()).toHaveBeenCalledWith(channelKey(CHANNEL));
+  });
+
+  it('does not record Catch-up playback as live', () => {
+    player.play(0, CATCHUP);
+    video.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS);
+    expect(touchLive()).not.toHaveBeenCalled();
+  });
+
+  it('cancels a pending live record when playback buffers', () => {
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(2000);
+    video.dispatchEvent(new Event('waiting'));
+    vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS);
+    expect(touchLive()).not.toHaveBeenCalled();
+  });
+
+  it('cancels the abandoned playback generation', () => {
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(2000);
+
+    player.play(1);
+    vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS);
+    expect(touchLive()).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates repeated playing events in one playback generation', () => {
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    video.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS);
+    video.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS);
+    expect(touchLive()).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1315,6 +1373,9 @@ describe('Player catch-up save/restore lifecycle', () => {
         channelKey: channelKey(CHANNEL),
         progStart: CATCHUP.start * 1000,
         progEnd: CATCHUP.end * 1000,
+        title: CATCHUP.title,
+        description: CATCHUP.description,
+        icon: CATCHUP.icon,
         position: 60,
       }),
       CHANNEL.catchupDays,

@@ -56,6 +56,12 @@ export const CONFIG = {
     CHECKPOINT_INTERVAL: 30 * 1000,     // how often the player should call setCatchupProgress
   },
 
+  RECENTLY_WATCHED: {
+    LIVE_CONFIRM_MS: 5 * 1000,
+    MAX_LIVE_ENTRIES: 30,
+    MAX_VISIBLE_ITEMS: 50,
+  },
+
   // Max characters shown for a reminder's programme title and channel name
   // before an ellipsis, so long names don't overflow the toast/alert/in-app prompt.
   REMINDER: {

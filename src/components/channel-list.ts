@@ -1,24 +1,29 @@
-import type { Action, NumberEvent } from '../types';
+import type { Action, CatchupInfo, Channel, NumberEvent } from '../types';
 import { SpatialNav } from '../navigation/spatial-nav';
-import { html, raw } from '../utils/dom';
+import { html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { channelKey } from '../utils/channel';
+import { formatPosition } from '../utils/time';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
+import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { groupIcon } from './group-icon';
+import { showToast } from './toast';
 
 export class ChannelList {
   private container: HTMLElement;
-  private onChannelSelect: (index: number) => void;
+  private onChannelSelect: (index: number, catchup?: CatchupInfo) => void;
   private nav: SpatialNav;
   private currentGroup = 'All';
   private currentPlaylist = '';  // '' = All playlists
   private playingIndex = -1;
+  private playingCatchupStart: number | null = null;
+  private recentItems: RecentlyWatchedItem[] = [];
 
   constructor(
     container: HTMLElement,
-    onChannelSelect: (index: number) => void,
+    onChannelSelect: (index: number, catchup?: CatchupInfo) => void,
   ) {
     this.container = container;
     this.onChannelSelect = onChannelSelect;
@@ -48,7 +53,9 @@ export class ChannelList {
     // The selected playlist may have just been deleted in settings — fall back to All.
     if (this.currentPlaylist && !tabs.some(t => t.id === this.currentPlaylist)) this.currentPlaylist = '';
     const showTabs = tabs.length > 1;
-    const groups = ['All', 'Favorites', ...PlaylistService.getGroupsForPlaylist(this.currentPlaylist || undefined)];
+    const groups = ['All', 'Favorites', 'Recently Watched', ...PlaylistService.getGroupsForPlaylist(this.currentPlaylist || undefined)];
+    this.recentItems = RecentlyWatchedService.getItems(this.currentPlaylist || undefined);
+    const showingRecent = this.currentGroup === 'Recently Watched';
     const filteredChannels = PlaylistService.getByGroup(this.currentGroup, this.currentPlaylist || undefined);
     const totalChannels = this.currentPlaylist
       ? PlaylistService.getByGroup('All', this.currentPlaylist).length
@@ -86,40 +93,22 @@ export class ChannelList {
                    data-focusable data-group="${g}">
                 <span class="group-icon">${raw(groupIcon(g))}</span>
                 <span class="group-name">${g}</span>
-                <span class="group-count">${PlaylistService.getByGroup(g, this.currentPlaylist || undefined).length}</span>
+                <span class="group-count">${g === 'Recently Watched'
+                  ? this.recentItems.length
+                  : PlaylistService.getByGroup(g, this.currentPlaylist || undefined).length}</span>
               </div>
             `)}
           </div>
         </div>
         <div class="channel-main" data-nav-container>
           <div class="channel-list-scroll">
-            ${filteredChannels.length === 0
-              ? raw(`<div class="empty-state">No channels found</div>`)
-              : filteredChannels.map(ch => {
-                  const globalIdx = PlaylistService.indexOf(ch);
-                  const epgId = EpgService.findChannelId(ch);
-                  const nowPlaying = epgId ? EpgService.getNowPlaying(epgId) : null;
-                  const isPlaying = globalIdx === this.playingIndex;
-                  const isFav = favs.includes(channelKey(ch));
-
-                  return html`
-                    <div class="channel-item ${isPlaying ? 'playing' : ''}"
-                         data-key="ch:${String(globalIdx)}"
-                         data-focusable data-channel-index="${globalIdx}">
-                      <div class="channel-number">${globalIdx + 1}</div>
-                      <div class="channel-logo-wrap">
-                        ${ch.logo
-                          ? html`<img class="channel-logo" src="${ch.logo}" alt="" loading="lazy" onerror="this.style.display='none'">`
-                          : html`<div class="channel-logo-placeholder">${ch.name.charAt(0)}</div>`}
-                      </div>
-                      <div class="channel-info">
-                        <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${ch.name}</div>
-                        ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
-                      </div>
-                      ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
-                    </div>
-                  `;
-                })}
+            ${showingRecent
+              ? (this.recentItems.length
+                  ? this.recentItems.map((item, index) => this.renderRecentItem(item, index, favs))
+                  : raw('<div class="empty-state">Nothing watched yet</div>'))
+              : (filteredChannels.length
+                  ? filteredChannels.map(ch => this.renderChannel(ch, favs))
+                  : raw('<div class="empty-state">No channels found</div>'))}
           </div>
         </div>
       </div>
@@ -177,9 +166,17 @@ export class ChannelList {
         } else if (focused.dataset.group !== undefined) {
           this.currentGroup = focused.dataset.group;
           this.render();
+        } else if (focused.dataset.recentIndex !== undefined) {
+          const item = this.recentItems[parseInt(focused.dataset.recentIndex, 10)];
+          if (item?.kind === 'live') {
+            this.setPlaying(item.channelIndex);
+            this.onChannelSelect(item.channelIndex);
+          } else if (item) {
+            void this.playRecentCatchup(item);
+          }
         } else if (focused.dataset.channelIndex !== undefined) {
           const idx = parseInt(focused.dataset.channelIndex, 10);
-          this.playingIndex = idx;
+          this.setPlaying(idx);
           this.onChannelSelect(idx);
         }
         break;
@@ -211,8 +208,9 @@ export class ChannelList {
     return false;
   }
 
-  setPlayingIndex(idx: number): void {
+  setPlaying(idx: number, catchupStart?: number | null): void {
     this.playingIndex = idx;
+    this.playingCatchupStart = catchupStart ?? null;
   }
 
   /** On entering the view: highlight the first channel (else the first focusable). */
@@ -220,6 +218,94 @@ export class ChannelList {
     const entry = this.container.querySelector<HTMLElement>('.channel-main [data-channel-index]')
       ?? this.container.querySelector<HTMLElement>('[data-focusable]');
     if (entry) this.nav.focus(entry);
+  }
+
+  private renderChannel(ch: Channel, favs: string[]): Safe {
+    const globalIdx = PlaylistService.indexOf(ch);
+    const epgId = EpgService.findChannelId(ch);
+    const nowPlaying = epgId ? EpgService.getNowPlaying(epgId) : null;
+    const isPlaying = globalIdx === this.playingIndex && this.playingCatchupStart === null;
+    const isFav = favs.includes(channelKey(ch));
+
+    return html`
+      <div class="channel-item ${isPlaying ? 'playing' : ''}"
+           data-key="ch:${String(globalIdx)}"
+           data-focusable data-channel-index="${globalIdx}">
+        <div class="channel-number">${globalIdx + 1}</div>
+        ${this.renderLogo(ch)}
+        <div class="channel-info">
+          <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${ch.name}</div>
+          ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
+        </div>
+        ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
+      </div>
+    `;
+  }
+
+  private renderRecentItem(item: RecentlyWatchedItem, index: number, favs: string[]): Safe {
+    const isFav = favs.includes(channelKey(item.channel));
+    if (item.kind === 'live') {
+      const epgId = EpgService.findChannelId(item.channel);
+      const nowPlaying = epgId ? EpgService.getNowPlaying(epgId) : null;
+      const isPlaying = item.channelIndex === this.playingIndex && this.playingCatchupStart === null;
+      return html`
+        <div class="channel-item recent-item recent-live ${isPlaying ? 'playing' : ''}"
+             data-key="recent:live:${channelKey(item.channel)}"
+             data-focusable data-recent-index="${index}" data-channel-index="${item.channelIndex}">
+          <div class="channel-number">${item.channelIndex + 1}</div>
+          ${this.renderLogo(item.channel)}
+          <div class="channel-info">
+            <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${item.channel.name}</div>
+            ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
+          </div>
+          <div class="recent-kind-badge live">LIVE</div>
+          ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
+        </div>
+      `;
+    }
+
+    const duration = item.progress.duration > 0
+      ? item.progress.duration
+      : Math.max(1, (item.progress.progEnd - item.progress.progStart) / 1000);
+    const percent = Math.round(Math.max(0, Math.min(1, item.progress.position / duration)) * 100);
+    const isPlaying = item.channelIndex === this.playingIndex &&
+      this.playingCatchupStart === item.progress.progStart;
+    return html`
+      <div class="channel-item recent-item recent-catchup ${isPlaying ? 'playing' : ''}"
+           data-key="recent:catchup:${channelKey(item.channel)}:${item.progress.progStart}"
+           data-focusable data-recent-index="${index}" data-channel-index="${item.channelIndex}">
+        <div class="channel-number">${item.channelIndex + 1}</div>
+        ${this.renderLogo(item.channel)}
+        <div class="channel-info">
+          <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${item.progress.title ?? ''}</div>
+          <div class="channel-now">${item.channel.name} - Resume at ${formatPosition(item.progress.position)}</div>
+          <div class="recent-progress"><div class="recent-progress-fill" style="width:${percent}%"></div></div>
+        </div>
+        <div class="recent-kind-badge catchup">CATCH-UP</div>
+        ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
+      </div>
+    `;
+  }
+
+  private renderLogo(ch: Channel): Safe {
+    return html`
+      <div class="channel-logo-wrap">
+        ${ch.logo
+          ? html`<img class="channel-logo" src="${ch.logo}" alt="" loading="lazy" onerror="this.style.display='none'">`
+          : html`<div class="channel-logo-placeholder">${ch.name.charAt(0)}</div>`}
+      </div>
+    `;
+  }
+
+  private async playRecentCatchup(item: Extract<RecentlyWatchedItem, { kind: 'catchup' }>): Promise<void> {
+    const catchup = await RecentlyWatchedService.catchupInfo(item);
+    if (!catchup) {
+      showToast('This Catch-up program is no longer available');
+      this.render();
+      return;
+    }
+    this.setPlaying(item.channelIndex, item.progress.progStart);
+    this.onChannelSelect(item.channelIndex, catchup);
   }
 
 }

@@ -46,6 +46,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
       setTzMode: vi.fn(),
       setOnlineSubtitleConfig: vi.fn((cfg: any) => { state.onlineSubtitles = cfg; }),
       remove: vi.fn(),
+      clearRecentlyWatched: vi.fn(),
     },
     toastMock: { showToast: vi.fn() },
     uploadMock: {
@@ -337,6 +338,38 @@ describe('Settings editing', () => {
     expect(onSave).toHaveBeenLastCalledWith('cancel');
     click('#refresh-data');
     expect(onSave).toHaveBeenLastCalledWith('reload');
+  });
+});
+
+describe('Settings Recently Watched clearing', () => {
+  beforeEach(() => settings.render());
+
+  it('groups the scope explanation and clear action in one setting', () => {
+    const action = container.querySelector('.settings-history-action');
+    expect(action?.textContent).toContain('Recently Watched');
+    expect(action?.textContent).toContain('Clear recent live channels and Catch-up progress');
+    expect(action?.querySelector('#clear-recently-watched')).not.toBeNull();
+  });
+
+  it('requires confirmation before clearing Recently Watched', () => {
+    click('#clear-recently-watched');
+    expect(settings.isPromptVisible).toBe(true);
+    expect(document.querySelector('.confirmation-title')?.textContent).toBe('Clear Recently Watched?');
+    expect(storageMock.clearRecentlyWatched).not.toHaveBeenCalled();
+
+    settings.handleAction('left');
+    settings.handleAction('select');
+
+    expect(storageMock.clearRecentlyWatched).toHaveBeenCalledTimes(1);
+    expect(toastMock.showToast).toHaveBeenCalledWith('Recently Watched cleared');
+    expect(settings.isPromptVisible).toBe(false);
+  });
+
+  it('cancels without clearing', () => {
+    click('#clear-recently-watched');
+    settings.handleAction('back');
+    expect(storageMock.clearRecentlyWatched).not.toHaveBeenCalled();
+    expect(settings.isPromptVisible).toBe(false);
   });
 });
 

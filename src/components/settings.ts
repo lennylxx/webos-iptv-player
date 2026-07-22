@@ -12,6 +12,7 @@ import { CONFIG } from '../config';
 import { THEMES, OVERLAY_STYLES, type ThemeMeta, type OverlayStyle } from '../config/themes';
 import { previewTheme } from '../services/theme-service';
 import { showToast } from './toast';
+import { ConfirmationPrompt } from './confirmation-prompt';
 import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
 
@@ -181,6 +182,7 @@ export class Settings {
   private nav: SpatialNav;
   // Pending theme selection (persisted on Save; live-previewed while browsing).
   private selectedTheme = '';
+  private confirmationPrompt = new ConfirmationPrompt();
 
   constructor(container: HTMLElement, onSave: (action: SaveAction) => void) {
     this.container = container;
@@ -348,6 +350,16 @@ export class Settings {
             <label>Auto-play last channel on startup</label>
             ${toggleGroup('auto-play', [{ value: 'on', label: 'ON' }, { value: 'off', label: 'OFF' }], autoPlay ? 'on' : 'off')}
           </div>
+          <div class="settings-history-action">
+            <div class="settings-history-copy">
+              <div class="settings-history-title">Recently Watched</div>
+              <div class="settings-history-description">
+                Clear recent live channels and Catch-up progress. Movies and Series are not affected.
+              </div>
+            </div>
+            <button class="btn btn-danger" data-focusable id="clear-recently-watched"
+                    aria-label="Clear Recently Watched">Clear Recently Watched</button>
+          </div>
         </div>
 
         <div class="settings-section">
@@ -419,6 +431,10 @@ export class Settings {
   }
 
   handleAction(action: Action): void {
+    if (this.confirmationPrompt.visible) {
+      this.confirmationPrompt.handleAction(action);
+      return;
+    }
     switch (action) {
       case 'up':
       case 'down':
@@ -469,9 +485,29 @@ export class Settings {
       StorageService.remove('cached_playlist');
       void clearCachedEpg();
       showToast('Cache cleared');
+    } else if (el.id === 'clear-recently-watched') {
+      this.confirmationPrompt.show({
+        title: 'Clear Recently Watched?',
+        message: 'This removes recent live channels and Catch-up progress. Movies and Series are not affected.',
+        confirmLabel: 'Clear',
+        cancelLabel: 'Cancel',
+        onConfirm: () => {
+          StorageService.clearRecentlyWatched();
+          showToast('Recently Watched cleared');
+        },
+        onCancel: () => {},
+      });
     } else if (el.tagName === 'INPUT') {
       (el as HTMLInputElement).focus();
     }
+  }
+
+  get isPromptVisible(): boolean {
+    return this.confirmationPrompt.visible;
+  }
+
+  dismissPrompt(): void {
+    this.confirmationPrompt.hide();
   }
 
   // Live theme preview: focusing (D-pad) or hovering (pointer) a swatch previews

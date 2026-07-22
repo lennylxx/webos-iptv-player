@@ -14,6 +14,16 @@ const EPG = `<?xml version="1.0" encoding="UTF-8"?><tv>
 <programme channel="ch1" start="20240309110000 +0000" stop="20240309130000 +0000"><title>Live Show</title></programme>
 </tv>`;
 
+function stableChannelKey(url: string): string {
+  const stable = url.split('#')[0].split('?')[0];
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < stable.length; i++) {
+    hash ^= stable.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 function key(page: Page, keyCode: number): Promise<void> {
   return page.evaluate(
     (code) => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: code, bubbles: true })),
@@ -105,4 +115,46 @@ test('blocks an Xtream program whose archive recording is unavailable', async ({
   await expect(page.locator('#view-epg')).toBeVisible();
   await expect(page.locator('#view-player')).toBeHidden();
   await expect(page.locator('.toast.visible')).toHaveText('Program is not available for catch-up');
+});
+
+test('resumes Xtream Catch-up directly from Recently Watched', async ({ page }) => {
+  await setup(page);
+  await page.addInitScript((seed) => {
+    localStorage.setItem('iptv_catchup_progress', JSON.stringify({
+      [`${seed.channelKey}|${seed.start}`]: {
+        channelKey: seed.channelKey,
+        progStart: seed.start,
+        progEnd: seed.end,
+        title: 'Earlier Show',
+        description: '',
+        icon: '',
+        position: 1800,
+        duration: 3600,
+        updatedAt: seed.now,
+        completed: false,
+        expiresAt: seed.end + 7 * 86400 * 1000,
+      },
+    }));
+  }, {
+    channelKey: stableChannelKey('http://host.example.com:8080/live/u1/p1/101.ts'),
+    start: Date.parse('2024-03-09T10:00:00Z'),
+    end: Date.parse('2024-03-09T11:00:00Z'),
+    now: NOW.getTime(),
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.locator('[data-group="Recently Watched"]').click();
+  await expect(page.locator('.recent-catchup')).toContainText('Earlier Show');
+
+  const archiveRequest = page.waitForRequest(request =>
+    request.url().includes('action=get_simple_data_table'));
+  const timeshiftRequest = page.waitForRequest(request => request.url().includes('/timeshift/'));
+  await page.locator('.recent-catchup').click();
+
+  await archiveRequest;
+  expect((await timeshiftRequest).url()).toBe(
+    'http://host.example.com:8080/timeshift/u1/p1/60/2024-03-09:12-00/101.ts',
+  );
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator('.catchup-resume-prompt')).toHaveCount(0);
 });

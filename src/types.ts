@@ -315,10 +315,18 @@ export interface CatchupProgressEntry {
   channelKey: string;
   progStart: number;   // programme start epoch ms
   progEnd: number;     // programme end epoch ms
+  title?: string;      // display snapshot for Recently Watched; absent on legacy entries
+  description?: string;
+  icon?: string;
   position: number;    // playback position seconds
   duration: number;    // media duration seconds (0 = unknown)
   updatedAt: number;   // epoch ms of last checkpoint
   completed: boolean;  // true once the programme has been watched to the end
+}
+
+export interface RecentlyWatchedLiveEntry {
+  channelKey: string;
+  updatedAt: number;
 }
 
 export interface VodQueueItem {

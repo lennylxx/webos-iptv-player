@@ -246,6 +246,36 @@
   display: inline-flex;
 }
 
+.settings-history-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 22px;
+}
+
+.settings-history-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-history-title {
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 22px;
+}
+
+.settings-history-description {
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.settings-history-action .btn {
+  flex-shrink: 0;
+  min-width: 288px;
+}
+
 .toggle-option {
   min-width: 120px;
   padding: 10px 24px;

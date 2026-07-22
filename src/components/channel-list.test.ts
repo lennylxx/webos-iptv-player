@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
+import type { RecentlyWatchedItem } from '../services/recently-watched';
 
-const { data, playlistMock, epgMock, storageMock } = vi.hoisted(() => {
+const { data, playlistMock, epgMock, storageMock, recentMock, toastMock } = vi.hoisted(() => {
   const mk = (o: Partial<Channel>): Channel => ({
     id: '', name: '', logo: '', group: '', url: '', extras: null,
     playlistIds: [], catchup: '', catchupSource: '', catchupDays: 0, ...o,
@@ -35,12 +36,20 @@ const { data, playlistMock, epgMock, storageMock } = vi.hoisted(() => {
       getFavorites: () => data.favorites,
       toggleFavorite: vi.fn(),
     },
+    recentMock: {
+      items: [] as RecentlyWatchedItem[],
+      getItems: vi.fn(() => recentMock.items),
+      catchupInfo: vi.fn(),
+    },
+    toastMock: { showToast: vi.fn() },
   };
 });
 
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
 vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
+vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentMock }));
+vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 
 import { ChannelList } from './channel-list';
 import { channelKey } from '../utils/channel';
@@ -52,6 +61,10 @@ let list: ChannelList;
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   data.favorites = [];
+  recentMock.items = [];
+  recentMock.getItems.mockClear();
+  recentMock.catchupInfo.mockReset();
+  toastMock.showToast.mockClear();
   playlistMock.playlistTabs = [];
   storageMock.toggleFavorite.mockClear();
   container = document.createElement('div');
@@ -93,11 +106,11 @@ describe('ChannelList.render', () => {
     expect(container.querySelector('.search-icon')).toBeNull();
   });
 
-  it('renders the group list including All and Favorites', () => {
+  it('renders the group list including All, Favorites, and Recently Watched', () => {
     list.render();
     const groups = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
       .map(g => g.dataset.group);
-    expect(groups).toEqual(['All', 'Favorites', 'News', 'Sports']);
+    expect(groups).toEqual(['All', 'Favorites', 'Recently Watched', 'News', 'Sports']);
   });
 
   it('marks favorites with a star', () => {
@@ -113,6 +126,51 @@ describe('ChannelList.render', () => {
     hover(container.querySelector<HTMLElement>('[data-group="Favorites"]')!);
     list.handleAction('select');
     expect(container.querySelector('.empty-state')?.textContent).toBe('No channels found');
+  });
+
+  it('renders distinct live and Catch-up rows in Recently Watched', () => {
+    const live = {
+      kind: 'live' as const,
+      channel: data.channels[0],
+      channelIndex: 0,
+      updatedAt: 2000,
+    };
+    const catchup = {
+      kind: 'catchup' as const,
+      channel: data.channels[1],
+      channelIndex: 1,
+      updatedAt: 1000,
+      progress: {
+        channelKey: channelKey(data.channels[1]),
+        progStart: 1000,
+        progEnd: 3_601_000,
+        title: 'Program Alpha',
+        description: '',
+        icon: '',
+        position: 600,
+        duration: 3600,
+        updatedAt: 1000,
+        completed: false,
+      },
+    };
+    recentMock.items = [live, catchup];
+
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    list.handleAction('select');
+
+    expect(channelItems()).toHaveLength(2);
+    expect(channelItems()[0].querySelector('.recent-kind-badge')?.textContent).toBe('LIVE');
+    expect(channelItems()[1].querySelector('.recent-kind-badge')?.textContent).toBe('CATCH-UP');
+    expect(channelItems()[1].textContent).toContain('Program Alpha');
+    expect(channelItems()[1].textContent).toContain('Resume at 10:00');
+  });
+
+  it('shows the Recently Watched empty state', () => {
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    list.handleAction('select');
+    expect(container.querySelector('.empty-state')?.textContent).toBe('Nothing watched yet');
   });
 
   it('escapes a malicious channel name instead of rendering live HTML (XSS)', () => {
@@ -135,6 +193,87 @@ describe('ChannelList interaction', () => {
     hover(channelItems()[1]);
     list.handleAction('select');
     expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  it('selecting a recent live row starts live playback', () => {
+    recentMock.items = [{
+      kind: 'live',
+      channel: data.channels[1],
+      channelIndex: 1,
+      updatedAt: 1000,
+    }];
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    list.handleAction('select');
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  it('selecting a recent Catch-up row resumes directly', async () => {
+    const catchup = {
+      kind: 'catchup' as const,
+      channel: data.channels[0],
+      channelIndex: 0,
+      updatedAt: 1000,
+      progress: {
+        channelKey: channelKey(data.channels[0]),
+        progStart: 1_000_000,
+        progEnd: 4_600_000,
+        title: 'Program Alpha',
+        description: '',
+        icon: '',
+        position: 600,
+        duration: 3600,
+        updatedAt: 1000,
+        completed: false,
+      },
+    };
+    recentMock.items = [catchup];
+    const info = {
+      start: 1000,
+      end: 4600,
+      title: 'Program Alpha',
+      description: '',
+      icon: '',
+      resumeSecs: 600,
+    };
+    recentMock.catchupInfo.mockResolvedValue(info);
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    list.handleAction('select');
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    await Promise.resolve();
+    expect(onSelect).toHaveBeenCalledWith(0, info);
+  });
+
+  it('removes an unavailable recent Catch-up row and shows a toast', async () => {
+    recentMock.items = [{
+      kind: 'catchup',
+      channel: data.channels[0],
+      channelIndex: 0,
+      updatedAt: 1000,
+      progress: {
+        channelKey: channelKey(data.channels[0]),
+        progStart: 1_000_000,
+        progEnd: 4_600_000,
+        title: 'Program Alpha',
+        position: 600,
+        duration: 3600,
+        updatedAt: 1000,
+        completed: false,
+      },
+    }];
+    recentMock.catchupInfo.mockResolvedValue(null);
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    list.handleAction('select');
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    await Promise.resolve();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(toastMock.showToast).toHaveBeenCalledWith('This Catch-up program is no longer available');
   });
 
   it('plays a channel on a pointer click', () => {
@@ -187,8 +326,8 @@ describe('ChannelList interaction', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('setPlayingIndex marks the playing channel on the next render', () => {
-    list.setPlayingIndex(2);
+  it('setPlaying marks the playing channel on the next render', () => {
+    list.setPlaying(2);
     list.render();
     expect(channelItems()[2].classList.contains('playing')).toBe(true);
   });
@@ -229,7 +368,7 @@ describe('ChannelList morph lifecycle', () => {
   it('preserves channel-item node identity across re-renders', () => {
     list.render();
     const before = channelItems();
-    list.setPlayingIndex(1);
+    list.setPlaying(1);
     list.render();
     const after = channelItems();
     expect(after[0]).toBe(before[0]);

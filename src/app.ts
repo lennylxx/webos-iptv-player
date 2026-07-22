@@ -65,13 +65,12 @@ class App {
 
     this.channelList = new ChannelList(
       this.views.channels,
-      (idx) => this.playChannel(idx),
+      (idx, catchup) => this.playChannel(idx, catchup),
     );
     this.player = new Player(this.views.player, () => {
-      this.channelList.setPlayingIndex(this.player.getCurrentIndex());
       this.channelList.render();
       this.showView('channels');
-    });
+    }, (idx, catchupStart) => this.channelList.setPlaying(idx, catchupStart));
     this.epgGrid = new EpgGrid(this.views.epg, (idx, catchup) => this.playChannel(idx, catchup));
     this.settings = new Settings(this.views.settings, (action) => this.onSettingsSaved(action));
 
@@ -464,6 +463,7 @@ class App {
     this.player.closeSubtitleOffset(); // never let the subtitle-sync overlay linger across a view change
     this.epgGrid.dismissPrompt(); // never let the catch-up prompt linger across a view change
     this.search.dismissPrompt();
+    this.settings.dismissPrompt();
     for (const [key, el] of Object.entries(this.views)) {
       if (key === 'loading') continue;
       if (key === name) show(el);
@@ -587,7 +587,6 @@ class App {
   }
 
   private playChannel(index: number, catchup?: CatchupInfo): void {
-    this.channelList.setPlayingIndex(index);
     this.showView('player');
     this.player.play(index, catchup);
   }
@@ -659,6 +658,11 @@ class App {
     // consume all actions (including back/blue globals) while it is visible.
     if (this.epgGrid.isPromptVisible) {
       this.epgGrid.handleAction(action, event);
+      return;
+    }
+
+    if (this.settings.isPromptVisible) {
+      this.settings.handleAction(action);
       return;
     }
 

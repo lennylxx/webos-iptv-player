@@ -196,7 +196,8 @@ h3 {
 
 /* Program-reminder & catch-up resume prompts — overlay modals */
 .reminder-prompt,
-.catchup-resume-prompt {
+.catchup-resume-prompt,
+.confirmation-prompt {
   position: fixed;
   top: 0;
   right: 0;
@@ -209,12 +210,14 @@ h3 {
   z-index: 10000;
 }
 .reminder-prompt.hidden,
-.catchup-resume-prompt.hidden {
+.catchup-resume-prompt.hidden,
+.confirmation-prompt.hidden {
   display: none;
 }
 
 .reminder-dialog,
-.catchup-resume-dialog {
+.catchup-resume-dialog,
+.confirmation-dialog {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -224,21 +227,24 @@ h3 {
 }
 
 .reminder-message,
-.catchup-resume-message {
+.catchup-resume-message,
+.confirmation-message {
   color: var(--text-primary);
   font-size: 30px;
   margin: 0 0 32px;
 }
 
 .reminder-buttons,
-.catchup-resume-buttons {
+.catchup-resume-buttons,
+.confirmation-buttons {
   display: flex;
   gap: 24px;
   justify-content: center;
 }
 
 .reminder-btn,
-.catchup-resume-btn {
+.catchup-resume-btn,
+.confirmation-btn {
   min-width: 160px;
   padding: 14px 32px;
   font-size: 26px;
@@ -250,11 +256,21 @@ h3 {
 }
 
 .reminder-btn.focused,
-.catchup-resume-btn.focused {
+.catchup-resume-btn.focused,
+.confirmation-btn.focused {
   border-color: var(--focus-ring);
   background: var(--accent-dim);
   color: #fff;
   box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.confirmation-title {
+  margin: 0 0 16px;
+  font-size: 34px;
+}
+
+.confirmation-btn.danger {
+  color: var(--danger);
 }
 
 /* EPG reminder bell badge — dim on any future program (affordance), accent once set */
