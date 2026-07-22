@@ -43,7 +43,7 @@ beforeEach(() => {
   PlaylistService.channels = [];
   PlaylistService.groups = [];
   PlaylistService.playlistTabs = [];
-  PlaylistService.epgUrls = [];
+  PlaylistService.epgSources = [];
 });
 
 describe('PlaylistService.refresh', () => {
@@ -70,7 +70,9 @@ describe('PlaylistService.refresh', () => {
 
   it('rewrites a loopback EPG host to the playlist host', async () => {
     await PlaylistService.refresh();
-    expect(PlaylistService.epgUrls).toEqual(['http://host1:8080/epg.xml']);
+    expect(PlaylistService.epgSources).toEqual([
+      { url: 'http://host1:8080/epg.xml', playlistIds: ['a'], kind: 'm3u' },
+    ]);
   });
 
   it('builds the group set and one tab per loaded playlist', async () => {
@@ -156,7 +158,7 @@ describe('PlaylistService.refresh', () => {
     await PlaylistService.refresh();
     expect(storageMock.setCachedPlaylist).toHaveBeenCalledWith(
       PlaylistService.channels,
-      ['http://host1:8080/epg.xml'],
+      [{ url: 'http://host1:8080/epg.xml', playlistIds: ['a'], kind: 'm3u' }],
     );
   });
 
@@ -208,7 +210,7 @@ http://host:8080/live/u1/p1/102.ts`;
 
   it('pushes the derived xmltv.php EPG URL', async () => {
     await PlaylistService.refresh();
-    expect(PlaylistService.epgUrls).toContain(
+    expect(PlaylistService.epgSources.map((source) => source.url)).toContain(
       'http://host:8080/xmltv.php?username=u1&password=p1',
     );
   });
@@ -223,11 +225,12 @@ http://host:8080/live/u1/p1/102.ts`;
 describe('PlaylistService.load', () => {
   it('uses the cached playlist without hitting the network', async () => {
     const cached = [channel({ id: 'a', name: 'Alpha', group: 'News', playlistIds: ['P1'] })];
-    storageMock.getCachedPlaylist.mockReturnValue({ channels: cached, epgUrls: ['http://e'] });
+    const epgSources = [{ url: 'http://e', playlistIds: ['P1'], kind: 'm3u' }];
+    storageMock.getCachedPlaylist.mockReturnValue({ channels: cached, epgSources });
     const result = await PlaylistService.load();
     expect(result).toBe(cached);
     expect(PlaylistService.groups).toEqual(['News']);
-    expect(PlaylistService.epgUrls).toEqual(['http://e']);
+    expect(PlaylistService.epgSources).toEqual(epgSources);
     expect(fetchTextMock).not.toHaveBeenCalled();
   });
 
@@ -356,7 +359,7 @@ describe('PlaylistService.getGroupsForPlaylist', () => {
 });
 
 describe('PlaylistService.reset', () => {
-  it('clears channels, groups, playlistTabs and epgUrls', async () => {
+  it('clears channels, groups, playlistTabs and epgSources', async () => {
     storageMock.getPlaylists.mockReturnValue([
       { id: 'a', name: 'P1', url: 'http://host/1.m3u' },
     ]);
@@ -365,14 +368,14 @@ describe('PlaylistService.reset', () => {
     expect(PlaylistService.channels.length).toBeGreaterThan(0);
     expect(PlaylistService.groups.length).toBeGreaterThan(0);
     expect(PlaylistService.playlistTabs).toEqual([{ id: 'a', name: 'P1' }]);
-    expect(PlaylistService.epgUrls.length).toBeGreaterThan(0);
+    expect(PlaylistService.epgSources.length).toBeGreaterThan(0);
 
     PlaylistService.reset();
 
     expect(PlaylistService.channels).toEqual([]);
     expect(PlaylistService.groups).toEqual([]);
     expect(PlaylistService.playlistTabs).toEqual([]);
-    expect(PlaylistService.epgUrls).toEqual([]);
+    expect(PlaylistService.epgSources).toEqual([]);
   });
 });
 

@@ -24,7 +24,7 @@ import { channelKey } from './utils/channel';
 import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
-import type { Action, NumberEvent, CatchupInfo, PlaylistEntry } from './types';
+import type { Action, NumberEvent, CatchupInfo, EpgSource, PlaylistEntry } from './types';
 
 const log = createLogger('App');
 
@@ -357,6 +357,14 @@ class App {
     setDisplayTz(StorageService.getTzMode(), offset);
   }
 
+  private epgSources(): EpgSource[] {
+    const manualUrl = StorageService.getEpgUrl();
+    const discovered = PlaylistService.epgSources;
+    return manualUrl && !discovered.some((source) => source.url === manualUrl)
+      ? [{ url: manualUrl, playlistIds: [], kind: 'manual' }, ...discovered]
+      : discovered;
+  }
+
   private async loadData(): Promise<void> {
     const done = log.time('loadData');
     show(this.views.loading);
@@ -393,19 +401,10 @@ class App {
       await PlaylistService.load();
       log.info('Channels loaded:', PlaylistService.channels.length,
         '| groups:', PlaylistService.groups.length,
-        '| epgUrls:', PlaylistService.epgUrls);
-
-      // Use manually configured EPG URL, or fall back to embedded url-tvg from M3U
-      let epgUrl = StorageService.getEpgUrl();
-      if (!epgUrl && PlaylistService.epgUrls.length) {
-        epgUrl = PlaylistService.epgUrls[0];
-        StorageService.setEpgUrl(epgUrl);
-        log.info('Using embedded EPG URL from M3U:', epgUrl);
-      } else if (epgUrl) {
-        log.info('Using configured EPG URL:', epgUrl);
-      } else {
-        log.warn('No EPG URL configured');
-      }
+        '| epgSources:', PlaylistService.epgSources);
+      const epgSources = this.epgSources();
+      if (epgSources.length) log.info('Using EPG sources:', epgSources);
+      else log.warn('No EPG sources configured');
 
       const hasXtream = StorageService.getPlaylists().some((p) => p.source === 'xtream');
       this.tabBar.setSections(hasXtream);
@@ -427,8 +426,8 @@ class App {
         }
       }
 
-      if (epgUrl) {
-        EpgService.load()
+      if (epgSources.length) {
+        EpgService.load(epgSources)
           .then(() => {
             this.applyDisplayTz();
             this.channelList.render();

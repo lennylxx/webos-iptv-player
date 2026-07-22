@@ -20,6 +20,12 @@ export interface PlaylistTab {
   name: string;
 }
 
+export interface EpgSource {
+  url: string;
+  playlistIds: string[];
+  kind: 'manual' | 'm3u' | 'xtream';
+}
+
 export interface ParsedPlaylist {
   channels: Channel[];
   groups: string[];

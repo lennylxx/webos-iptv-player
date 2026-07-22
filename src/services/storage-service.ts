@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, type OverlayStyle } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, PlaylistEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, EpgSource, PlaylistEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist-id';
@@ -10,9 +10,9 @@ const log = createLogger('Storage');
 
 const PREFIX = CONFIG.STORAGE_PREFIX;
 
-// Versioned cache schema. Bump when the cached Channel shape changes so an older
-// payload (lower/absent version) is treated as a miss and re-fetched.
-const CACHE_VERSION = 1;
+// Versioned playlist cache schema. Bump when its channel or EPG-source shape
+// changes so an older payload is treated as a miss and re-fetched.
+const CACHE_VERSION = 2;
 
 function get<T>(key: string, defaultValue: T): T {
   try {
@@ -207,16 +207,16 @@ export const StorageService = {
     set('epg_tz_offset', min);
   },
 
-  getCachedPlaylist(): { channels: Channel[]; epgUrls: string[] } | null {
-    const data = get<{ version?: number; channels: Channel[]; epgUrls?: string[]; timestamp: number } | null>('cached_playlist', null);
+  getCachedPlaylist(): { channels: Channel[]; epgSources: EpgSource[] } | null {
+    const data = get<{ version?: number; channels: Channel[]; epgSources?: EpgSource[]; timestamp: number } | null>('cached_playlist', null);
     if (!data || data.version !== CACHE_VERSION) return null;
     if (Date.now() - data.timestamp > CONFIG.PLAYLIST_REFRESH_INTERVAL) return null;
     if (!data.channels || data.channels.length === 0) return null;
-    return { channels: data.channels, epgUrls: data.epgUrls ?? [] };
+    return { channels: data.channels, epgSources: data.epgSources ?? [] };
   },
-  setCachedPlaylist(channels: Channel[], epgUrls: string[] = []): void {
+  setCachedPlaylist(channels: Channel[], epgSources: EpgSource[] = []): void {
     if (!channels.length) return;
-    set('cached_playlist', { version: CACHE_VERSION, channels, epgUrls, timestamp: Date.now() });
+    set('cached_playlist', { version: CACHE_VERSION, channels, epgSources, timestamp: Date.now() });
   },
 
   // Resume points, one localStorage map keyed `${accountId}|${kind}|${itemId}`.

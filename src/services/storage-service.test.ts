@@ -36,6 +36,21 @@ describe('StorageService', () => {
     expect(StorageService.getEpgUrl()).toBe('http://epg/guide.xml');
   });
 
+  it('stores playlist cache EPG sources and invalidates the URL-only schema', () => {
+    const channels = [ch({ id: 'a', name: 'Alpha', url: 'http://host/a', playlistIds: ['p1'] })];
+    StorageService.set('cached_playlist', {
+      version: 1,
+      channels,
+      epgUrls: ['http://host/epg.xml'],
+      timestamp: Date.now(),
+    });
+    expect(StorageService.getCachedPlaylist()).toBeNull();
+
+    const epgSources = [{ url: 'http://host/epg.xml', playlistIds: ['p1'], kind: 'm3u' as const }];
+    StorageService.setCachedPlaylist(channels, epgSources);
+    expect(StorageService.getCachedPlaylist()).toEqual({ channels, epgSources });
+  });
+
   it('defaults the theme to midnight and round-trips a selection', () => {
     expect(StorageService.getTheme()).toBe('midnight');
     StorageService.setTheme('arctic');

@@ -1,20 +1,25 @@
-import type { Channel, EpgChannel, Programme } from '../types';
+import type { Channel, EpgChannel, EpgSource, ParsedEpg, Programme } from '../types';
 import { parseXMLTV } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
 import { CONFIG } from '../config';
-import { StorageService } from './storage-service';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
 
 const log = createLogger('EPG');
 
+interface SourceState {
+  data: ParsedEpg;
+  timestamp: number;
+}
+
 class EpgServiceImpl {
   channels: Record<string, EpgChannel> = {};
   programmes: Record<string, Programme[]> = {};
-  /** Timezone offset (minutes east of UTC) of the source feed, or null. Display only. */
+  /** Offset of the first loaded feed that declares one. Display remains global. */
   tzOffsetMinutes: number | null = null;
   loaded = false;
-  private lastFetchTime = 0;
+  private sources: EpgSource[] = [];
+  private states = new Map<string, SourceState>();
 
   /**
    * Clear all in-memory state. Called when the user removes every configured
@@ -25,112 +30,156 @@ class EpgServiceImpl {
     this.programmes = {};
     this.tzOffsetMinutes = null;
     this.loaded = false;
-    this.lastFetchTime = 0;
+    this.sources = [];
+    this.states.clear();
   }
 
-  async load(): Promise<void> {
-    const url = StorageService.getEpgUrl();
-    if (!url) {
-      log.warn('No EPG URL — skipping load');
-      return;
-    }
-
-    try {
-      const cached = await getCachedEpg(url);
-      if (cached) {
-        const age = Date.now() - cached.timestamp;
-        // A cache written before tz capture lacks the field entirely (vs. a feed
-        // with no offset, which stores it as null). Refresh those so 'feed'
-        // mode gets the offset instead of silently falling back to the device clock.
-        const hasTzField = 'tzOffsetMinutes' in cached.data;
-        if (age < CONFIG.EPG_REFRESH_INTERVAL && hasTzField) {
-          this.channels = cached.data.channels;
-          this.programmes = cached.data.programmes;
-          this.tzOffsetMinutes = cached.data.tzOffsetMinutes ?? null;
-          this.loaded = true;
-          this.lastFetchTime = cached.timestamp;
-          log.info('Loaded from IDB cache:',
-            Object.keys(cached.data.channels).length, 'channels,',
-            Object.keys(cached.data.programmes).length, 'with programmes, age',
-            Math.round(age / 60000), 'min');
-          return;
-        }
-        log.info(hasTzField
-          ? `Cache stale (age ${Math.round(age / 60000)} min) — refreshing`
-          : 'Cache predates timezone capture — refreshing');
-      }
-    } catch (err) {
-      log.warn('Cache read failed:', err);
-    }
-
-    return this.refresh();
+  async load(sources: EpgSource[]): Promise<void> {
+    this.setSources(sources);
+    await Promise.all(this.sources.map((source) => this.loadSource(source)));
+    this.rebuildIndexes();
+    this.loaded = this.sources.length > 0;
   }
 
   async refresh(): Promise<void> {
-    const url = StorageService.getEpgUrl();
-    if (!url) {
-      log.warn('No EPG URL — skipping refresh');
-      return;
-    }
-
-    if (this.loaded && Date.now() - this.lastFetchTime < CONFIG.EPG_REFRESH_INTERVAL) {
-      log.info('Skipping refresh — data is fresh');
-      return;
-    }
-
-    const done = log.time('refresh');
-    log.info('Fetching EPG from', url);
-    try {
-      const text = await fetchMaybeGzipText(url, 120000);
-      log.info('Fetched EPG:', text.length, 'bytes');
-      const parseDone = log.time('parse');
-      const result = parseXMLTV(text);
-      parseDone();
-      this.channels = result.channels;
-      this.programmes = result.programmes;
-      this.tzOffsetMinutes = result.tzOffsetMinutes ?? null;
-      this.loaded = true;
-      this.lastFetchTime = Date.now();
-      const programmeCount = Object.values(result.programmes).reduce((n, p) => n + p.length, 0);
-      log.info('Loaded', Object.keys(result.channels).length, 'channels,',
-        Object.keys(result.programmes).length, 'channels with programmes,', programmeCount, 'programmes');
-
-      // Don't cache an empty EPG: a transient upstream failure can return channels
-      // with zero programmes, and caching that would mask real data until the TTL
-      // expires. Skipping the write lets the next load refetch.
-      if (programmeCount > 0) {
-        setCachedEpg(url, result).catch(err => log.warn('Cache write failed:', err));
-      } else {
-        log.warn('EPG has 0 programmes — not caching so it refetches next load');
-      }
-    } catch (err) {
-      log.error('Failed to load EPG:', err);
-    }
-    done();
+    await Promise.all(this.sources.map(async (source) => {
+      const state = this.states.get(source.url);
+      if (state && Date.now() - state.timestamp < CONFIG.EPG_REFRESH_INTERVAL) return;
+      await this.fetchSource(source);
+    }));
+    this.rebuildIndexes();
+    this.loaded = this.sources.length > 0;
   }
 
   getNowPlaying(channelId: string): Programme | null {
     const progs = this.programmes[channelId];
     if (!progs) return null;
     const now = Date.now();
-    return progs.find(p => p.start.getTime() <= now && p.stop.getTime() > now) ?? null;
+    return progs.find((p) => p.start.getTime() <= now && p.stop.getTime() > now) ?? null;
   }
 
   getUpcoming(channelId: string, count = 5): Programme[] {
     const progs = this.programmes[channelId];
     if (!progs) return [];
     const now = Date.now();
-    return progs.filter(p => p.start.getTime() > now).slice(0, count);
+    return progs.filter((p) => p.start.getTime() > now).slice(0, count);
   }
 
-  findChannelId(m3uChannel: Channel): string | null {
-    if (m3uChannel.id && this.programmes[m3uChannel.id]) {
-      return m3uChannel.id;
+  findChannelId(channel: Channel): string | null {
+    if (!this.sources.length) return this.findLegacyChannelId(channel);
+    const candidates = this.sources.filter((source) =>
+      source.kind === 'manual' || source.playlistIds.some((id) => channel.playlistIds.includes(id)));
+
+    for (const source of candidates) {
+      if (!channel.id) continue;
+      const key = this.channelKey(source.url, channel.id);
+      if (this.programmes[key]?.length) return key;
     }
-    for (const [id, ch] of Object.entries(this.channels)) {
-      if (ch.name && ch.name.toLowerCase() === m3uChannel.name.toLowerCase()) {
-        return id;
+
+    const name = channel.name.toLowerCase();
+    if (!name) return null;
+    for (const source of candidates) {
+      const state = this.states.get(source.url);
+      if (!state) continue;
+      for (const id in state.data.channels) {
+        if (state.data.channels[id].name.toLowerCase() !== name) continue;
+        const key = this.channelKey(source.url, id);
+        if (this.programmes[key]?.length) return key;
       }
+    }
+    return null;
+  }
+
+  private setSources(sources: EpgSource[]): void {
+    const merged: EpgSource[] = [];
+    for (const source of sources) {
+      if (!source.url) continue;
+      const existing = merged.find((item) => item.url === source.url);
+      if (existing) {
+        for (const id of source.playlistIds) {
+          if (!existing.playlistIds.includes(id)) existing.playlistIds.push(id);
+        }
+        if (source.kind === 'manual') existing.kind = 'manual';
+      } else {
+        merged.push({ ...source, playlistIds: source.playlistIds.slice() });
+      }
+    }
+    this.sources = merged;
+    const active = new Set(merged.map((source) => source.url));
+    for (const url of this.states.keys()) {
+      if (!active.has(url)) this.states.delete(url);
+    }
+  }
+
+  private async loadSource(source: EpgSource): Promise<void> {
+    try {
+      const cached = await getCachedEpg(source.url);
+      if (cached) {
+        this.states.set(source.url, { data: cached.data, timestamp: cached.timestamp });
+        const age = Date.now() - cached.timestamp;
+        const hasTzField = 'tzOffsetMinutes' in cached.data;
+        if (age < CONFIG.EPG_REFRESH_INTERVAL && hasTzField) {
+          log.info('Loaded cache:', source.url, '|', Object.keys(cached.data.programmes).length,
+            'channels with programmes, age', Math.round(age / 60000), 'min');
+          return;
+        }
+      }
+    } catch (err) {
+      log.warn('Cache read failed:', source.url, err);
+    }
+    await this.fetchSource(source);
+  }
+
+  private async fetchSource(source: EpgSource): Promise<void> {
+    const done = log.time(`fetch '${source.url}'`);
+    try {
+      const text = await fetchMaybeGzipText(source.url, 120000);
+      const result = parseXMLTV(text);
+      const programmeCount = Object.values(result.programmes).reduce((n, list) => n + list.length, 0);
+      this.states.set(source.url, { data: result, timestamp: Date.now() });
+      log.info('Loaded', source.url, '|', Object.keys(result.channels).length, 'channels,',
+        programmeCount, 'programmes');
+      // Don't cache an empty feed: it may be a transient upstream response, and
+      // persisting it would hide valid programme data until the cache expires.
+      if (programmeCount > 0) {
+        await setCachedEpg(source.url, result);
+      } else {
+        log.warn('EPG has 0 programmes — not caching:', source.url);
+      }
+    } catch (err) {
+      log.error('Failed to load EPG:', source.url, err);
+    }
+    done();
+  }
+
+  private rebuildIndexes(): void {
+    this.channels = {};
+    this.programmes = {};
+    this.tzOffsetMinutes = null;
+    for (const source of this.sources) {
+      const data = this.states.get(source.url)?.data;
+      if (!data) continue;
+      if (this.tzOffsetMinutes === null && data.tzOffsetMinutes != null) {
+        this.tzOffsetMinutes = data.tzOffsetMinutes;
+      }
+      for (const id in data.channels) {
+        this.channels[this.channelKey(source.url, id)] = data.channels[id];
+      }
+      for (const id in data.programmes) {
+        this.programmes[this.channelKey(source.url, id)] = data.programmes[id];
+      }
+    }
+  }
+
+  private channelKey(url: string, id: string): string {
+    return `${encodeURIComponent(url)}::${id}`;
+  }
+
+  private findLegacyChannelId(channel: Channel): string | null {
+    if (channel.id && this.programmes[channel.id]) return channel.id;
+    if (!channel.name) return null;
+    for (const id in this.channels) {
+      if (this.channels[id].name.toLowerCase() === channel.name.toLowerCase()) return id;
     }
     return null;
   }

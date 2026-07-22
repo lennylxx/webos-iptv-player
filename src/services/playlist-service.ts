@@ -1,4 +1,4 @@
-import type { Channel, PlaylistTab } from '../types';
+import type { Channel, EpgSource, PlaylistTab } from '../types';
 import { parseM3U } from '../parsers/m3u-parser';
 import { fetchText } from '../utils/fetch-helper';
 import { xtreamPlaylistUrl, xtreamEpgUrl } from '../utils/xtream-url';
@@ -13,7 +13,7 @@ class PlaylistServiceImpl {
   channels: Channel[] = [];
   groups: string[] = [];
   playlistTabs: PlaylistTab[] = [];
-  epgUrls: string[] = [];
+  epgSources: EpgSource[] = [];
   private indexMap = new Map<Channel, number>(); // channel -> global index, O(1) indexOf
 
   /**
@@ -25,7 +25,7 @@ class PlaylistServiceImpl {
     this.channels = [];
     this.groups = [];
     this.playlistTabs = [];
-    this.epgUrls = [];
+    this.epgSources = [];
     this.indexMap = new Map();
   }
 
@@ -33,8 +33,8 @@ class PlaylistServiceImpl {
     const cached = StorageService.getCachedPlaylist();
     if (cached) {
       this.channels = cached.channels;
-      this.epgUrls = cached.epgUrls ?? [];
-      log.info('Cache hit:', this.channels.length, 'channels,', this.epgUrls.length, 'epg urls');
+      this.epgSources = cached.epgSources;
+      log.info('Cache hit:', this.channels.length, 'channels,', this.epgSources.length, 'epg sources');
       this.buildGroups();
       this.buildPlaylistTabs();
       StorageService.migrateFavoriteKeys(this.channels);
@@ -55,7 +55,15 @@ class PlaylistServiceImpl {
 
     const allChannels: Channel[] = [];
     const byUrl = new Map<string, Channel>();
-    const epgUrls: string[] = [];
+    const epgSources: EpgSource[] = [];
+    const addEpgSource = (url: string, playlistId: string, kind: EpgSource['kind']): void => {
+      const existing = epgSources.find((source) => source.url === url);
+      if (existing) {
+        if (!existing.playlistIds.includes(playlistId)) existing.playlistIds.push(playlistId);
+        return;
+      }
+      epgSources.push({ url, playlistIds: [playlistId], kind });
+    };
 
     for (const pl of playlists) {
       // Tag channels by the playlist's stable id, not its name or position, so
@@ -94,7 +102,7 @@ class PlaylistServiceImpl {
         if (pl.source === 'xtream' && pl.xtream) {
           // The panel's own XMLTV endpoint; the get.php url-tvg (if any) is added below too.
           const epg = xtreamEpgUrl({ baseUrl: pl.url, ...pl.xtream });
-          if (!epgUrls.includes(epg)) epgUrls.push(epg);
+          addEpgSource(epg, plKey, 'xtream');
         }
         if (parsed.epgUrl) {
           // Resolve localhost/127.0.0.1 in embedded EPG URL to the playlist's host
@@ -108,7 +116,7 @@ class PlaylistServiceImpl {
               log.info('Rewrote loopback EPG host to', epgParsed.hostname);
             }
           } catch (e) { log.warn('Could not parse EPG URL:', epg, e); }
-          if (!epgUrls.includes(epg)) epgUrls.push(epg);
+          addEpgSource(epg, plKey, 'm3u');
         }
       } catch (err) {
         log.error(`Failed to load playlist '${pl.name || pl.url}':`, err);
@@ -117,12 +125,12 @@ class PlaylistServiceImpl {
     }
 
     this.channels = allChannels;
-    this.epgUrls = epgUrls;
+    this.epgSources = epgSources;
     this.buildGroups();
     this.buildPlaylistTabs();
     StorageService.migrateFavoriteKeys(this.channels);
-    StorageService.setCachedPlaylist(allChannels, epgUrls);
-    log.info('Refresh complete:', allChannels.length, 'total channels,', epgUrls.length, 'epg urls');
+    StorageService.setCachedPlaylist(allChannels, epgSources);
+    log.info('Refresh complete:', allChannels.length, 'total channels,', epgSources.length, 'epg sources');
     done();
     return allChannels;
   }
