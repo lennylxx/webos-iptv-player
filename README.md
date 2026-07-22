@@ -46,7 +46,9 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 - **Program guide (EPG)** — three-pane guide with an auto-derived date range, cached for instant reopen
 - **Reminders** — flag an upcoming program and get notified at air time, even with the app closed, to tune straight in
-- **Movies & Series** — browse an Xtream account's VOD catalogs, with a Continue Watching rail that resumes where you left off
+- **Recently Watched** — return to recent live channels or resume partially watched catch-up programs
+- **Movies & Series** — browse an Xtream account's VOD catalogs, with Continue Watching and account-scoped Watchlist rails
+- **Automatic VOD queues** — continue through series episodes or remaining Watchlist movies, removing completed titles from the Watchlist
 - **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams
 
 **Playback**
@@ -58,7 +60,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 **Navigation**
 
-- **Search** — across channels, movies, and series, plus quick channel search in the sidebar
+- **Search** — across channels, EPG programs, movies, and series, with direct live, catch-up, and reminder actions
 - **Channel sidebar** — switch channels over the video with current-program info
 - **Favorites, auto-play, and genre group icons** for faster browsing
 - **Full remote & Magic Remote** — spatial D-pad navigation and pointer control across every view
