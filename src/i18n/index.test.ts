@@ -26,6 +26,8 @@ describe('i18n', () => {
     expect(resolveLocale('system', 'de-DE')).toBe('en');
     expect(resolveLocale('system', 'es-ES')).toBe('es');
     expect(resolveLocale('system', 'es-MX')).toBe('es');
+    expect(resolveLocale('system', 'fr-FR')).toBe('fr');
+    expect(resolveLocale('system', 'fr-CA')).toBe('fr');
     expect(resolveLocale('zh-CN', 'en-US')).toBe('zh-CN');
   });
 
@@ -33,6 +35,7 @@ describe('i18n', () => {
     expect(isLocalePreference('system')).toBe(true);
     expect(isLocalePreference('en')).toBe(true);
     expect(isLocalePreference('es')).toBe(true);
+    expect(isLocalePreference('fr')).toBe(true);
     expect(isLocalePreference('zh-CN')).toBe(true);
     expect(isLocalePreference('l1')).toBe(false);
   });
@@ -42,6 +45,7 @@ describe('i18n', () => {
     expect(localeOptions()).toEqual([
       { value: 'en', label: 'English' },
       { value: 'es', label: 'Español' },
+      { value: 'fr', label: 'Français' },
       { value: 'zh-CN', label: '简体中文' },
     ]);
   });
@@ -58,6 +62,13 @@ describe('i18n', () => {
     expect(t('channel.recentlyWatched')).toBe('Vistos recientemente');
     expect(t('channel.count', { count: 12 })).toBe('12 canales');
     expect(document.documentElement.lang).toBe('es');
+  });
+
+  it('translates and interpolates French messages', () => {
+    setLocale('fr');
+    expect(t('channel.recentlyWatched')).toBe('Vus récemment');
+    expect(t('channel.count', { count: 12 })).toBe('12 chaînes');
+    expect(document.documentElement.lang).toBe('fr');
   });
 
   it('enables pseudo-localization without exposing another locale option', () => {

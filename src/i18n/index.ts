@@ -1,5 +1,6 @@
 import { EN_MESSAGES, type MessageKey } from './en';
 import { ES_MESSAGES } from './es';
+import { FR_MESSAGES } from './fr';
 import { pseudoLocalize } from './pseudo';
 import { ZH_CN_MESSAGES } from './zh-CN';
 
@@ -25,6 +26,12 @@ const LOCALES = {
     displayName: 'Español',
     systemExact: [],
     systemPrefixes: ['es'],
+  },
+  fr: {
+    messages: FR_MESSAGES,
+    displayName: 'Français',
+    systemExact: [],
+    systemPrefixes: ['fr'],
   },
   'zh-CN': {
     messages: ZH_CN_MESSAGES,
