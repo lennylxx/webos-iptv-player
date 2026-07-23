@@ -24,12 +24,15 @@ describe('i18n', () => {
     expect(resolveLocale('system', 'zh-TW')).toBe('en');
     expect(resolveLocale('system', 'zh-Hant-CN')).toBe('en');
     expect(resolveLocale('system', 'de-DE')).toBe('en');
+    expect(resolveLocale('system', 'es-ES')).toBe('es');
+    expect(resolveLocale('system', 'es-MX')).toBe('es');
     expect(resolveLocale('zh-CN', 'en-US')).toBe('zh-CN');
   });
 
   it('recognizes locale preferences from the registered message catalogs', () => {
     expect(isLocalePreference('system')).toBe(true);
     expect(isLocalePreference('en')).toBe(true);
+    expect(isLocalePreference('es')).toBe(true);
     expect(isLocalePreference('zh-CN')).toBe(true);
     expect(isLocalePreference('l1')).toBe(false);
   });
@@ -38,6 +41,7 @@ describe('i18n', () => {
     expect(DEFAULT_LOCALE).toBe('en');
     expect(localeOptions()).toEqual([
       { value: 'en', label: 'English' },
+      { value: 'es', label: 'Español' },
       { value: 'zh-CN', label: '简体中文' },
     ]);
   });
@@ -47,6 +51,13 @@ describe('i18n', () => {
     expect(t('channel.recentlyWatched')).toBe('最近观看');
     expect(t('channel.count', { count: 12 })).toBe('12 个频道');
     expect(document.documentElement.lang).toBe('zh-CN');
+  });
+
+  it('translates and interpolates Spanish messages', () => {
+    setLocale('es');
+    expect(t('channel.recentlyWatched')).toBe('Vistos recientemente');
+    expect(t('channel.count', { count: 12 })).toBe('12 canales');
+    expect(document.documentElement.lang).toBe('es');
   });
 
   it('has no empty translations or mismatched placeholders', () => {
