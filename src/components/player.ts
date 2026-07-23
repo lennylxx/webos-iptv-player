@@ -23,6 +23,7 @@ import { resolutionBadge, hdrLabel, frameRateLabel, parseVariants, pickVariant, 
 import { extFromUrl, containerMime } from '../utils/url';
 import { probeMedia } from '../services/media-probe';
 import { createLogger } from '../utils/logger';
+import { t } from '../i18n';
 import { PLAY_ICON, PAUSE_ICON, RESYNC_ICON } from './icons';
 import { showToast } from './toast';
 import { subtitleSearchService } from '../services/subtitle-search/subtitle-search-service';
@@ -628,17 +629,17 @@ export class Player {
     const overlay = this.ensureSubsOverlay();
     if (!overlay || !this.vod) return;
     if (query != null) overlay.setQuery(query);
-    overlay.showStatus('Searching…');
+    overlay.showStatus(t('subtitle.searching'));
     try {
       const base = this.buildSubtitleQuery();
       const q = query != null ? { ...base, manualQuery: query } : base;
       const results = await subtitleSearchService.search(q);
       if (this.vod == null) return;
-      if (!results.length) { overlay.showStatus('No subtitles found'); return; }
+      if (!results.length) { overlay.showStatus(t('subtitle.noneFound')); return; }
       overlay.open(results, subtitleSearchService.preferredLanguage());
     } catch (e) {
       log.warn('subtitle search failed:', e);
-      overlay.showStatus('Subtitle search failed');
+      overlay.showStatus(t('subtitle.searchFailed'));
     }
   }
 
@@ -646,7 +647,7 @@ export class Player {
     const overlay = this.subsOverlay;
     const v = this.vod;
     if (!v) return;
-    overlay?.showStatus('Downloading…');
+    overlay?.showStatus(t('subtitle.downloading'));
     try {
       const dl = await subtitleSearchService.download(r);
       if (this.vod !== v) return; // the user switched items mid-download — don't apply/persist to the wrong VOD
@@ -669,10 +670,10 @@ export class Player {
       }
       this.rememberSubtitle({ off: false, name: r.releaseName || r.language, lang: r.language });
       overlay?.close();
-      showToast(`Subtitles: ${r.releaseName || r.language}`);
+      showToast(t('player.subtitlesTrack', { name: r.releaseName || r.language }));
     } catch (e) {
       log.warn('online subtitle download failed:', e);
-      overlay?.showStatus('Download failed', true);
+      overlay?.showStatus(t('subtitle.downloadFailed'), true);
     }
   }
 
@@ -707,7 +708,7 @@ export class Player {
   private reloadCurrentStream(): void {
     if (!this.currentChannel || this.currentIndex < 0) return;
     log.warn('stall watchdog — reloading current stream:', this.currentChannel.name);
-    this.updateOSDMessage('Reconnecting…');
+    this.updateOSDMessage(t('player.reconnecting'));
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
     this.loadStream(
@@ -1037,7 +1038,7 @@ export class Player {
       this.vod = null;            // so stop() won't overwrite/wipe the resume point on error
       log.warn('VOD playback error:', v.title);
       this.stop();
-      showToast('Unable to play this title');
+      showToast(t('player.unableToPlay'));
       v.onBack();
       return;
     }
@@ -1045,7 +1046,7 @@ export class Player {
         this.currentChannel.catchupFallbackSource && !this.catchupFallbackActive) {
       this.catchupFallbackActive = true;
       log.warn('Xtream catch-up path failed — trying legacy endpoint');
-      this.updateOSDMessage('Retrying catch-up…');
+      this.updateOSDMessage(t('player.retryingCatchup'));
       this.recreateVideoEl();
       this.videoEl?.classList.add('active');
       this.loadStream(
@@ -1057,7 +1058,7 @@ export class Player {
     const v = this.videoEl;
     log.error('video error', v?.error ? { code: v.error.code, message: v.error.message } : 'no error info',
       '| channel:', this.currentChannel?.name, '| url:', this.currentChannel?.url);
-    this.updateOSDMessage('Stream error - trying next channel...');
+    this.updateOSDMessage(t('player.streamError'));
     setTimeout(() => this.channelUp(), 2000);
   }
 
@@ -1189,7 +1190,7 @@ export class Player {
     this.resyncing = true;
     const target = Math.max(0, v.currentTime - CONFIG.PLAYER.RESYNC_SEEK_BACK);
     log.info('A/V resync — seek', v.currentTime.toFixed(2), '→', target.toFixed(2));
-    this.updateOSDMessage('Resyncing…');
+    this.updateOSDMessage(t('player.resyncing'));
     v.currentTime = target;
     if (this.resyncTimer) clearTimeout(this.resyncTimer);
     this.resyncTimer = setTimeout(() => this.endResync(), CONFIG.PLAYER.RESYNC_TIMEOUT);
@@ -1268,7 +1269,7 @@ export class Player {
       const bar = $('.osd-progress-bar', this.container) as HTMLElement | null;
       if (bar) bar.style.width = `${st.fraction * 100}%`;
       const behind = $('.osd-dvr-behind', this.container);
-      if (behind) behind.textContent = st.atLiveEdge ? 'LIVE' : `-${formatPosition(st.behindLive)}`;
+      if (behind) behind.textContent = st.atLiveEdge ? t('common.live') : `-${formatPosition(st.behindLive)}`;
       const liveEl = $('.osd-dvr-live', this.container) as HTMLElement | null;
       if (liveEl) liveEl.classList.toggle('is-live', st.atLiveEdge);
       return;
@@ -1306,7 +1307,7 @@ export class Player {
   private playPauseButton(): Safe {
     const paused = !!this.videoEl?.paused;
     return html`
-      <button class="osd-dvr-btn" data-playpause aria-label="${paused ? 'Play' : 'Pause'}">
+      <button class="osd-dvr-btn" data-playpause aria-label="${t(paused ? 'player.play' : 'player.pause')}">
         ${paused ? raw(PLAY_ICON) : raw(PAUSE_ICON)}
       </button>
     `;
@@ -1316,7 +1317,7 @@ export class Player {
    *  onPointerRelease; invokes resyncAV() to flush the pipeline and re-lock A/V. */
   private resyncButton(): Safe {
     return html`
-      <button class="osd-resync-btn" data-resync aria-label="Resync audio and video">
+      <button class="osd-resync-btn" data-resync aria-label="${t('player.resync')}">
         ${raw(RESYNC_ICON)}
       </button>
     `;
@@ -1326,11 +1327,11 @@ export class Player {
     return html`
       <div class="osd-progress-row osd-dvr-row">
         ${this.playPauseButton()}
-        <span class="osd-time-current osd-dvr-behind">${st.atLiveEdge ? 'LIVE' : `-${formatPosition(st.behindLive)}`}</span>
+        <span class="osd-time-current osd-dvr-behind">${st.atLiveEdge ? t('common.live') : `-${formatPosition(st.behindLive)}`}</span>
         <div class="osd-progress" data-seekbar>
           <div class="osd-progress-bar" style="width: ${st.fraction * 100}%"></div>
         </div>
-        <button class="osd-time-end osd-dvr-live ${st.atLiveEdge ? 'is-live' : ''}" data-golive aria-label="Go to live">LIVE</button>
+        <button class="osd-time-end osd-dvr-live ${st.atLiveEdge ? 'is-live' : ''}" data-golive aria-label="${t('player.goLive')}">${t('common.live')}</button>
       </div>
     `;
   }
@@ -1375,12 +1376,15 @@ export class Player {
     if (this.upNextSeconds > 0) {
       morph(osd, html`
         <div class="osd-next-episode">
-          <div class="osd-next-episode-label">Up next</div>
+          <div class="osd-next-episode-label">${t('player.upNext')}</div>
           <div class="osd-channel-name">${this.vod?.title ?? ''}</div>
-          <div class="osd-next-episode-time">Playing in ${this.upNextSeconds} seconds</div>
+          <div class="osd-next-episode-time">${t(
+            this.upNextSeconds === 1 ? 'player.playingInOne' : 'player.playingIn',
+            { count: this.upNextSeconds },
+          )}</div>
           <div class="osd-next-episode-actions">
-            <button data-next-play>Play now</button>
-            <button data-next-cancel>Cancel</button>
+            <button data-next-play>${t('player.playNow')}</button>
+            <button data-next-cancel>${t('common.cancel')}</button>
           </div>
         </div>
       `);
@@ -1428,7 +1432,7 @@ export class Player {
       const duration = formatDuration(end.getTime() - start.getTime());
       programmeHtml = html`
         <div class="osd-programme">
-          <div class="osd-now-label">CATCH-UP</div>
+          <div class="osd-now-label">${t('common.catchup')}</div>
           <div class="osd-programme-detail">
             ${this.programmeIcon(catchup.icon)}
             <div class="osd-programme-info">
@@ -1463,7 +1467,7 @@ export class Player {
       if (nowPlaying || st) {
         const next = upcoming.length ? html`
             <div class="osd-next">
-              <span class="osd-next-label">NEXT</span>
+              <span class="osd-next-label">${t('player.next')}</span>
               <span class="osd-next-title">${upcoming[0].title} <span class="osd-next-time">${formatTime(upcoming[0].start)}</span></span>
             </div>
           ` : '';
@@ -1474,7 +1478,9 @@ export class Player {
                 <div class="osd-programme-title">${nowPlaying.title}</div>
                 <div class="osd-programme-time">
                   ${formatTime(nowPlaying.start)} - ${formatTime(nowPlaying.stop)}
-                  <span class="osd-remaining">${formatDuration(nowPlaying.stop.getTime() - Date.now())} remaining</span>
+                  <span class="osd-remaining">${t('player.remaining', {
+                    duration: formatDuration(nowPlaying.stop.getTime() - Date.now()),
+                  })}</span>
                 </div>
               </div>
             </div>` : '';
@@ -1488,7 +1494,7 @@ export class Player {
             </div>` : '');
         programmeHtml = html`
           <div class="osd-programme">
-            <div class="osd-now-label">${st && !st.atLiveEdge ? 'TIMESHIFT' : 'NOW'}</div>
+            <div class="osd-now-label">${t(st && !st.atLiveEdge ? 'player.timeshift' : 'player.now')}</div>
             ${detail}
             ${progressRow}
             ${nowPlaying && nowPlaying.description ? html`<div class="osd-description">${nowPlaying.description}</div>` : ''}
@@ -1631,7 +1637,7 @@ export class Player {
       for (let i = 0; i < list.length; i++) list[i].enabled = (i === index);
     }
     this.rememberAudio(opt);
-    showToast(`Switching audio track to ${audioLabel(opt)}`);
+    showToast(t('player.switchingAudio', { name: audioLabel(opt) }));
   }
 
   private channelPrefKey(): string {
@@ -1650,7 +1656,7 @@ export class Player {
   // pick and the pref lookup are both visible in the log.
   private logAudioChoice(path: string, options: AudioOption[], pref: AudioPref | null, idx: number): void {
     const opt = options.find(o => o.index === idx);
-    const label = opt ? audioLabel(opt) : `Audio ${idx + 1}`;
+    const label = opt ? audioLabel(opt) : t('player.audioFallback', { number: idx + 1 });
     log.info(`audio: ${path} | tracks:`, options.length,
       '| storage pref:', pref ? (pref.name || pref.lang || '(unnamed)') : 'none',
       '| using:', idx, label, isPrefMatch(opt, pref) ? '(saved pref)' : '(stream default)');
@@ -1731,7 +1737,7 @@ export class Player {
       });
     }
     if (this.vod && subtitleSearchService.isAvailable()) {
-      tracks.push({ index: SEARCH_ONLINE_INDEX, label: 'Search online…', active: false, available: true });
+      tracks.push({ index: SEARCH_ONLINE_INDEX, label: t('player.searchOnline'), active: false, available: true });
     }
     return tracks;
   }
@@ -1752,14 +1758,14 @@ export class Player {
       this.selfRenderIndex = -1;
       this.setNativeCC(true);
       this.rememberSubtitle({ off: false, cc: true, name: '', lang: '' });
-      showToast(`Subtitles: ${closedCaptionLabel(this.manifestClosedCaptions)}`);
+      showToast(t('player.subtitlesTrack', { name: closedCaptionLabel(this.manifestClosedCaptions) }));
       return;
     }
     if (index === -1) {
       this.setNativeCC(false);
       this.applySubtitleChoice(-1);
       this.rememberSubtitle({ off: true, name: '', lang: '' });
-      showToast('Subtitles off');
+      showToast(t('player.subtitlesOff'));
       return;
     }
     const opt = this.displaySubtitleOptions().find(o => o.index === index);
@@ -1767,7 +1773,7 @@ export class Player {
     this.setNativeCC(false);
     this.applySubtitleChoice(index);
     this.rememberSubtitle({ off: false, name: opt.name, lang: opt.lang });
-    showToast(`Subtitles: ${subtitleLabel(opt)}`);
+    showToast(t('player.subtitlesTrack', { name: subtitleLabel(opt) }));
   }
 
   // Toggle the native caption compositor (CEA-608/708, also IMSC) via Luna. Only
@@ -1870,7 +1876,9 @@ export class Player {
 
   private logSubtitleChoice(path: string, options: SubtitleOption[], pref: SubtitlePref | null, idx: number): void {
     const opt = options.find(o => o.index === idx);
-    const label = idx < 0 ? 'Off' : opt ? subtitleLabel(opt) : `Subtitle ${idx + 1}`;
+    const label = idx < 0 ? t('common.off') : opt
+      ? subtitleLabel(opt)
+      : t('player.subtitleFallback', { number: idx + 1 });
     const src = pref?.off ? '(off pref)' : isSubtitlePrefMatch(opt, pref) ? '(saved pref)' : '(stream default)';
     log.info(`subtitle: ${path} | tracks:`, options.length,
       '| storage pref:', pref ? (pref.off ? 'off' : (pref.name || pref.lang || '(unnamed)')) : 'none',

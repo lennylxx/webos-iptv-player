@@ -314,7 +314,7 @@ describe('Series detail', () => {
     const { view } = await openWith();
     await openDetail(view);
     expect(container.querySelector('.series-detail')).not.toBeNull();
-    expect(container.textContent).toContain("Couldn't load episodes.");
+    expect(container.textContent).toContain('Unable to load episodes.');
     expect(container.textContent).not.toContain('Loading…');
   });
 });

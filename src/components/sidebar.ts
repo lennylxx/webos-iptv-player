@@ -5,6 +5,7 @@ import { EpgService } from '../services/epg-service';
 import { $, html } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { rankChannels } from '../utils/channel-search';
+import { t } from '../i18n';
 
 type SidebarEntry = { ch: Channel; globalIdx: number };
 
@@ -202,18 +203,20 @@ export class Sidebar {
     const entries = this.getChannels();
     const currentIdx = this.getCurrentIndex();
     const currentTab = tabs.find(t => t.id === this.playlist);
-    const searchPlaceholder = currentTab ? `Search ${currentTab.name}...` : 'Search all channels...';
+    const searchPlaceholder = currentTab
+      ? t('search.sidebarPlaylist', { name: currentTab.name })
+      : t('search.sidebarAll');
 
     morph(el, html`
-      <div class="sidebar-title">Channels</div>
+      <div class="sidebar-title">${t('common.channels')}</div>
       <input type="text" class="sidebar-search-input ${this.focusIdx === -1 ? 'focused' : ''}" data-key="search"
-             aria-label="Search channels" placeholder="${searchPlaceholder}"
+             aria-label="${t('search.ariaChannels')}" placeholder="${searchPlaceholder}"
              value="${this.searchQuery}">
       ${showTabs ? html`
         <div class="sidebar-tabs">
           <div class="sidebar-tab ${!this.playlist ? 'active' : ''}"
                data-key="tab:"
-               data-sidebar-playlist="">All</div>
+               data-sidebar-playlist="">${t('common.all')}</div>
           ${tabs.map(t => html`
             <div class="sidebar-tab ${t.id === this.playlist ? 'active' : ''}"
                  data-key="tab:${t.id}"

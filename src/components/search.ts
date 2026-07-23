@@ -15,6 +15,7 @@ import { showToast } from './toast';
 import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
+import { t } from '../i18n';
 
 const log = createLogger('Search');
 
@@ -248,10 +249,10 @@ export class Search {
     const state = programme.stop.getTime() <= now ? 'past' : programme.start.getTime() > now ? 'future' : 'live';
     const day = formatDayLabel(programme.start);
     const action = state === 'live'
-      ? 'Live now'
+      ? t('search.liveNow')
       : state === 'future'
-        ? (ReminderService.has(channelKey(channel), programme.start.getTime()) ? 'Reminder set' : 'Set reminder')
-        : XtreamArchiveService.isAvailable(channel, programme.start.getTime()) ? 'Catch up' : 'Open channel';
+        ? (ReminderService.has(channelKey(channel), programme.start.getTime()) ? t('search.reminderSet') : t('search.setReminder'))
+        : XtreamArchiveService.isAvailable(channel, programme.start.getTime()) ? t('search.catchUp') : t('search.openChannel');
     return html`
       <div class="search-program-row state-${state}" data-focusable
            data-key="p:${String(result.channelIndex)}:${String(programme.start.getTime())}"
@@ -276,7 +277,7 @@ export class Search {
       const startMs = programme.start.getTime();
       if (ReminderService.has(key, startMs)) {
         ReminderService.remove(key, startMs);
-        showToast('Reminder removed');
+        showToast(t('epg.reminderRemoved'));
       } else {
         ReminderService.add({
           channelKey: key,
@@ -285,7 +286,7 @@ export class Search {
           startMs,
           stopMs: programme.stop.getTime(),
         });
-        showToast('Reminder set');
+        showToast(t('epg.reminderSet'));
       }
       this.render();
       return;
@@ -294,7 +295,7 @@ export class Search {
     if (programme.stop.getTime() <= now && channel.catchupAccountId && channel.catchupStreamId) {
       await XtreamArchiveService.load(channel);
       if (!XtreamArchiveService.isAvailable(channel, programme.start.getTime())) {
-        showToast('Program is not available for catch-up');
+        showToast(t('epg.catchupUnavailable'));
         this.render();
         return;
       }
@@ -353,7 +354,7 @@ export class Search {
     const channelSection = channels.length
       ? html`
           <div class="search-channels">
-            <h2 class="catalog-rail-title">Channels</h2>
+            <h2 class="catalog-rail-title">${t('common.channels')}</h2>
             <div class="search-list">${channels.map((ch) => this.channelRow(ch))}</div>
           </div>
         `
@@ -361,7 +362,7 @@ export class Search {
     const programSection = this.visiblePrograms.length
       ? html`
           <div class="search-programs">
-            <h2 class="catalog-rail-title">Programs</h2>
+            <h2 class="catalog-rail-title">${t('search.programs')}</h2>
             <div class="search-program-list">${this.visiblePrograms.map((result, index) => this.programRow(result, index))}</div>
           </div>
         `
@@ -372,13 +373,13 @@ export class Search {
     const resultsBody = !q
       ? html``
       : !hasResults
-        ? html`<p class="catalog-hint search-empty">No results match your search.</p>`
+        ? html`<p class="catalog-hint search-empty">${t('search.empty')}</p>`
         : isXtream
           ? html`
-                ${channels.length ? this.rail('Channels', channels.map((ch) => this.channelTile(ch))) : ''}
+                ${channels.length ? this.rail(t('common.channels'), channels.map((ch) => this.channelTile(ch))) : ''}
                 ${programSection}
-                ${movies.length ? this.rail('Movies', movies.map((v) => this.movieTile(v))) : ''}
-                ${series.length ? this.rail('Series', series.map((s) => this.seriesTile(s))) : ''}
+                ${movies.length ? this.rail(t('common.movies'), movies.map((v) => this.movieTile(v))) : ''}
+                ${series.length ? this.rail(t('common.series'), series.map((s) => this.seriesTile(s))) : ''}
               `
           : html`
               ${channelSection}

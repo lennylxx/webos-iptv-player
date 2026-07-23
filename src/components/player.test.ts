@@ -1220,7 +1220,7 @@ describe('Player VOD mode', () => {
     vi.mocked(probeMedia).mockClear();
 
     video.dispatchEvent(new Event('ended'));
-    expect(container.textContent).toContain('Playing in 10 seconds');
+    expect(container.textContent).toContain('Starts in 10 seconds');
     expect(container.textContent).toContain('Movie Two');
 
     await vi.advanceTimersByTimeAsync(10_000);
@@ -1243,7 +1243,7 @@ describe('Player VOD mode', () => {
     vi.mocked(probeMedia).mockClear();
 
     video.dispatchEvent(new Event('ended'));
-    expect(container.textContent).toContain('Playing in 10 seconds');
+    expect(container.textContent).toContain('Starts in 10 seconds');
     expect(container.textContent).toContain('Series One — S1E2');
 
     await vi.advanceTimersByTimeAsync(10_000);

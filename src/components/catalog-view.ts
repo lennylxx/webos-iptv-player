@@ -4,6 +4,7 @@ import { html, Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
 import { CONFIG } from '../config';
+import { t } from '../i18n';
 
 export interface CatalogHandlers {
   onRevealTabBar: () => void;
@@ -206,7 +207,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
   private renderLoading(): void {
     morph(this.container, html`
       <div class="catalog-view catalog-loading" data-nav-container>
-        <p class="catalog-hint">Loading…</p>
+        <p class="catalog-hint">${t('common.loading')}</p>
       </div>
     `);
   }
@@ -246,7 +247,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
                 ${continueRail}
                 ${watchlistRail}
                 ${this.railGroups.map((r) => this.rail(r.category.name, r.items.map((it) => this.tile(it))))}
-                ${moreCats.length ? this.rail('All Categories', moreCats.map((c) => html`
+                ${moreCats.length ? this.rail(t('catalog.allCategories'), moreCats.map((c) => html`
                   <div class="catalog-cat" data-focusable data-key="c:${c.id}" data-category-id="${c.id}">${c.name}</div>
                 `)) : ''}
               </div>

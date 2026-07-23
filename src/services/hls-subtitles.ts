@@ -1,5 +1,6 @@
 import { parseWebVTT, applyCueSettings, type VttCueSettings } from '../utils/webvtt';
 import { createLogger } from '../utils/logger';
+import { t } from '../i18n';
 
 const log = createLogger('HlsSubs');
 
@@ -69,7 +70,7 @@ export class HlsSubtitles {
       this.loggedNoAnchor = false;
       // Reuse one track per element — TextTracks can't be removed, only disabled.
       if (!this.track || this.trackVideo !== video) {
-        this.track = video.addTextTrack('subtitles', 'Subtitles', rend.lang || 'und');
+        this.track = video.addTextTrack('subtitles', t('player.subtitles'), rend.lang || 'und');
         this.trackVideo = video;
       }
       this.track.mode = 'showing';

@@ -114,7 +114,7 @@ test('blocks an Xtream program whose archive recording is unavailable', async ({
 
   await expect(page.locator('#view-epg')).toBeVisible();
   await expect(page.locator('#view-player')).toBeHidden();
-  await expect(page.locator('.toast.visible')).toHaveText('Program is not available for catch-up');
+  await expect(page.locator('.toast.visible')).toHaveText("This program isn't available for catch-up.");
 });
 
 test('resumes Xtream Catch-up directly from Recently Watched', async ({ page }) => {
@@ -143,7 +143,7 @@ test('resumes Xtream Catch-up directly from Recently Watched', async ({ page }) 
   });
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
-  await page.locator('[data-group="Recently Watched"]').click();
+  await page.locator('[data-group="builtin:recently-watched"]').click();
   await expect(page.locator('.recent-catchup')).toContainText('Earlier Show');
 
   const archiveRequest = page.waitForRequest(request =>

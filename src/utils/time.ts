@@ -1,6 +1,10 @@
 import type { TzMode } from '../types';
+import { t, type MessageKey } from '../i18n';
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKDAY_KEYS: MessageKey[] = [
+  'weekday.0', 'weekday.1', 'weekday.2', 'weekday.3',
+  'weekday.4', 'weekday.5', 'weekday.6',
+];
 
 // Display-only timezone state. Every absolute instant (Programme.start/stop,
 // Date.now(), catch-up seconds) is stored and compared in real UTC; this state
@@ -84,7 +88,10 @@ export function formatTime(date: Date): string {
 // Weekday + MM/DD label for a day, in the active display timezone.
 export function formatDayLabel(date: Date): { weekday: string; date: string } {
   const p = displayParts(date);
-  return { weekday: WEEKDAYS[p.weekday], date: `${pad2(p.month + 1)}/${pad2(p.day)}` };
+  return {
+    weekday: t(WEEKDAY_KEYS[p.weekday]),
+    date: t('date.monthDay', { month: pad2(p.month + 1), day: pad2(p.day) }),
+  };
 }
 
 // Stable YYYY-MM-DD key for a day, in the active display timezone.
@@ -129,8 +136,8 @@ export function formatDuration(ms: number): string {
   const totalMin = Math.floor(ms / 60000);
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  if (h > 0) return t('duration.hoursMinutes', { hours: h, minutes: m });
+  return t('duration.minutes', { minutes: m });
 }
 
 export function getTimeSlots(startTime: Date, hours: number, slotMinutes = 30): Date[] {

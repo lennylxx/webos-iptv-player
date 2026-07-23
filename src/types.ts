@@ -105,6 +105,9 @@ export interface Reminder {
 /** Which timezone EPG times are displayed in: the device's, or the feed's. */
 export type TzMode = 'device' | 'feed';
 
+export type BuiltinChannelGroup = 'all' | 'favorites' | 'recently-watched';
+export type ChannelGroupId = `builtin:${BuiltinChannelGroup}` | `source:${string}`;
+
 export type NavDirection = 'up' | 'down' | 'left' | 'right';
 
 export type Action =

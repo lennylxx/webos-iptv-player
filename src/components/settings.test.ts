@@ -350,7 +350,7 @@ describe('Settings Recently Watched clearing', () => {
   it('groups the scope explanation and clear action in one setting', () => {
     const action = container.querySelector('.settings-history-action');
     expect(action?.textContent).toContain('Recently Watched');
-    expect(action?.textContent).toContain('Clear recent live channels and Catch-up progress');
+    expect(action?.textContent).toContain('Clear recent live channels and catch-up progress');
     expect(action?.querySelector('#clear-recently-watched')).not.toBeNull();
   });
 
@@ -484,7 +484,7 @@ describe('Settings.save', () => {
     (container.querySelector('#os-key') as HTMLInputElement).value = 'OK';
     (container.querySelector('#os-user') as HTMLInputElement).value = 'u';
     (container.querySelector('#os-pass') as HTMLInputElement).value = 'p';
-    click('[data-dropdown-value="zh-CN"]');
+    click('#os-pref-lang [data-dropdown-value="zh-CN"]');
     click('#save-settings');
     const cfg = storageMock.getOnlineSubtitleConfig();
     expect(cfg.subdl.apiKey).toBe('SK');
@@ -619,7 +619,7 @@ describe('Settings uploads section', () => {
     settings.render();
     await new Promise((r) => setTimeout(r, 0));
     expect(container.querySelector('#upload-info')!.textContent)
-      .toContain('Upload service is not running');
+      .toContain('The upload service is currently unavailable.');
   });
 });
 
@@ -769,12 +769,12 @@ describe('Settings Xtream section', () => {
     expect(container.querySelector<HTMLElement>('#add-xtream')).not.toBeNull();
   });
 
-  it('renders the Xtream Account section first, above Playlists', () => {
+  it('renders the Xtream Accounts section first, above Playlists', () => {
     settings.render();
     const heads = Array.from(container.querySelectorAll('.settings-section h3'))
       .map((h) => h.textContent);
-    expect(heads[0]).toBe('Xtream Account');
-    expect(heads.indexOf('Xtream Account')).toBeLessThan(heads.indexOf('Playlists'));
+    expect(heads[0]).toBe('Xtream Accounts');
+    expect(heads.indexOf('Xtream Accounts')).toBeLessThan(heads.indexOf('Playlists'));
   });
 
   it('adds a blank xtream card and drops the empty hint', () => {
@@ -913,7 +913,7 @@ describe('Settings Xtream section', () => {
     expect(xtreamMock.getAccountInfo).not.toHaveBeenCalled();
     const status = card.querySelector('.xtream-status')!;
     expect(status.classList.contains('err')).toBe(true);
-    expect(status.textContent).toContain('server, username and password');
+    expect(status.textContent).toContain('server URL, username, and password');
   });
 
   it('Check reports a verify failure when the panel is unreachable (null)', async () => {

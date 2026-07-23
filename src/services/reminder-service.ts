@@ -4,6 +4,7 @@ import { StorageService } from './storage-service';
 import { PlaylistService } from './playlist-service';
 import { channelKey } from '../utils/channel';
 import { truncate } from '../utils/text';
+import { t } from '../i18n';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('Reminder');
@@ -119,7 +120,7 @@ class ReminderServiceImpl {
           method: 'luna://com.webos.notification/createToast',
           params: {
             sourceId: CONFIG.APP_ID,
-            message: `${channel} - ${title} is now live — open the app to watch`,
+            message: t('reminder.toast', { channel, title }),
           },
         };
     try {
@@ -128,7 +129,7 @@ class ReminderServiceImpl {
         parameters: {
           activity: {
             name,
-            description: 'Program reminder',
+            description: t('reminder.title'),
             type: { foreground: true, persist: true },
             schedule: { start: this.localTimeString(reminder.startMs), local: true },
             callback,

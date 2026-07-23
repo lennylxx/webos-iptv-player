@@ -16,9 +16,9 @@ const { data, playlistMock, epgMock, storageMock, recentMock, toastMock } = vi.h
   const data = { channels, favorites: [] as string[] };
 
   const getByGroup = (group: string, _playlist?: string): Channel[] => {
-    if (!group || group === 'All') return channels;
-    if (group === 'Favorites') return channels.filter(c => data.favorites.includes(c.id || c.name));
-    return channels.filter(c => c.group === group);
+    if (group === 'builtin:all' || group === 'builtin:recently-watched') return channels;
+    if (group === 'builtin:favorites') return channels.filter(c => data.favorites.includes(c.id || c.name));
+    return channels.filter(c => c.group === group.slice('source:'.length));
   };
 
   return {
@@ -100,6 +100,16 @@ describe('ChannelList.render', () => {
     expect(container.textContent).toContain('Alpha');
   });
 
+  it('uses the singular channel count for a one-channel playlist', () => {
+    const removed = playlistMock.channels.splice(1);
+    try {
+      list.render();
+      expect(container.querySelector('.channel-count')?.textContent).toBe('1 channel');
+    } finally {
+      playlistMock.channels.push(...removed);
+    }
+  });
+
   it('renders no inline search magnifier (the tab bar owns search)', () => {
     list.render();
     expect(container.querySelector('.channel-search')).toBeNull();
@@ -110,7 +120,13 @@ describe('ChannelList.render', () => {
     list.render();
     const groups = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
       .map(g => g.dataset.group);
-    expect(groups).toEqual(['All', 'Favorites', 'Recently Watched', 'News', 'Sports']);
+    expect(groups).toEqual([
+      'builtin:all',
+      'builtin:favorites',
+      'builtin:recently-watched',
+      'source:News',
+      'source:Sports',
+    ]);
   });
 
   it('marks favorites with a star', () => {
@@ -123,7 +139,7 @@ describe('ChannelList.render', () => {
   it('shows an empty state when a group has no channels', () => {
     data.favorites = [];
     list.render();
-    hover(container.querySelector<HTMLElement>('[data-group="Favorites"]')!);
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:favorites"]')!);
     list.handleAction('select');
     expect(container.querySelector('.empty-state')?.textContent).toBe('No channels found');
   });
@@ -156,7 +172,7 @@ describe('ChannelList.render', () => {
     recentMock.items = [live, catchup];
 
     list.render();
-    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
     list.handleAction('select');
 
     expect(channelItems()).toHaveLength(2);
@@ -168,7 +184,7 @@ describe('ChannelList.render', () => {
 
   it('shows the Recently Watched empty state', () => {
     list.render();
-    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
     list.handleAction('select');
     expect(container.querySelector('.empty-state')?.textContent).toBe('Nothing watched yet');
   });
@@ -203,7 +219,7 @@ describe('ChannelList interaction', () => {
       updatedAt: 1000,
     }];
     list.render();
-    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
     list.handleAction('select');
     hover(channelItems()[0]);
     list.handleAction('select');
@@ -240,7 +256,7 @@ describe('ChannelList interaction', () => {
     };
     recentMock.catchupInfo.mockResolvedValue(info);
     list.render();
-    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
     list.handleAction('select');
     hover(channelItems()[0]);
     list.handleAction('select');
@@ -267,13 +283,13 @@ describe('ChannelList interaction', () => {
     }];
     recentMock.catchupInfo.mockResolvedValue(null);
     list.render();
-    hover(container.querySelector<HTMLElement>('[data-group="Recently Watched"]')!);
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
     list.handleAction('select');
     hover(channelItems()[0]);
     list.handleAction('select');
     await Promise.resolve();
     expect(onSelect).not.toHaveBeenCalled();
-    expect(toastMock.showToast).toHaveBeenCalledWith('This Catch-up program is no longer available');
+    expect(toastMock.showToast).toHaveBeenCalledWith('This catch-up program is no longer available.');
   });
 
   it('plays a channel on a pointer click', () => {
@@ -286,7 +302,7 @@ describe('ChannelList interaction', () => {
   });
 
   it('switches group on a pointer click over a group item', () => {
-    const group = container.querySelector<HTMLElement>('[data-group="Sports"]')!;
+    const group = container.querySelector<HTMLElement>('[data-group="source:Sports"]')!;
     const orig = document.elementFromPoint;
     document.elementFromPoint = () => group;
     container.dispatchEvent(new MouseEvent('click', { clientX: 10, clientY: 10, bubbles: true }));
@@ -296,7 +312,7 @@ describe('ChannelList interaction', () => {
   });
 
   it('selecting a group filters the channel list', () => {
-    hover(container.querySelector<HTMLElement>('[data-group="Sports"]')!);
+    hover(container.querySelector<HTMLElement>('[data-group="source:Sports"]')!);
     list.handleAction('select');
     expect(channelItems()).toHaveLength(1);
     expect(container.textContent).toContain('Bravo');

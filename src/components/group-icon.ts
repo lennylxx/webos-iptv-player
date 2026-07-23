@@ -138,10 +138,10 @@ function iconImg(name: string): string {
  * play-triangle icon for unmatched groups. (Inserted via the caller's `raw()`
  * helper.)
  */
-export function groupIcon(group: string): string {
-  if (group === 'All') return iconImg('all');
-  if (group === 'Favorites') return iconImg('star');
-  if (group === 'Recently Watched') return iconImg('three_oclock');
+export function groupIcon(group: string, builtin?: 'all' | 'favorites' | 'recently-watched'): string {
+  if (builtin === 'all') return iconImg('all');
+  if (builtin === 'favorites') return iconImg('star');
+  if (builtin === 'recently-watched') return iconImg('three_oclock');
   const icon = matchGroupIcon(group);
   return icon ? iconImg(icon) : '&#9654;'; // fallback for unmatched groups
 }

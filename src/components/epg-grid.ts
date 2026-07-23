@@ -11,6 +11,7 @@ import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { showToast } from './toast';
 import { formatTime, formatDayLabel, displayDayKey, startOfDisplayDay, addDisplayDays, formatDuration } from '../utils/time';
 import { bellIcon, REPLAY_ICON } from './icons';
+import { t } from '../i18n';
 
 type FocusCol = 'channels' | 'dates' | 'programmes';
 
@@ -130,13 +131,16 @@ export class EpgGrid {
     morph(this.container, html`
       <div class="epg-view">
         <div class="epg-header">
-          <h2>Program Guide</h2>
-          <span class="epg-page-info">${channel?.name ?? ''}${programmes.length ? html` · ${programmes.length} programs` : ''}</span>
+          <h2>${t('epg.title')}</h2>
+          <span class="epg-page-info">${channel?.name ?? ''}${programmes.length ? html` · ${t(
+            programmes.length === 1 ? 'epg.programCountOne' : 'epg.programCount',
+            { count: programmes.length },
+          )}` : ''}</span>
           ${raw(`
             <div class="epg-legend">
-              <span class="epg-legend-item state-past"><i class="epg-legend-dot"></i>Aired</span>
-              <span class="epg-legend-item state-future"><i class="epg-legend-dot"></i>Upcoming</span>
-              <span class="epg-legend-item">${bellIcon(true)}Reminder</span>
+              <span class="epg-legend-item state-past"><i class="epg-legend-dot"></i>${t('epg.aired')}</span>
+              <span class="epg-legend-item state-future"><i class="epg-legend-dot"></i>${t('epg.upcoming')}</span>
+              <span class="epg-legend-item">${bellIcon(true)}${t('epg.reminder')}</span>
             </div>
           `)}
         </div>
@@ -175,7 +179,7 @@ export class EpgGrid {
             </div>
             <div class="epg-programmes-pane ${this.focusCol === 'programmes' ? 'pane-focused' : ''}" id="epg-programmes">
               ${programmes.length === 0
-                ? raw('<div class="epg-no-data">No program data</div>')
+                ? html`<div class="epg-no-data">${t('epg.noData')}</div>`
                 : programmes.map((p, i) => {
                     const foc = i === this.focusProg && this.focusCol === 'programmes';
                     const now = Date.now();
@@ -201,10 +205,10 @@ export class EpgGrid {
                         </div>
                         <div class="epg-prog-body">
                           <div class="epg-prog-title">
-                            ${current ? raw('<span class="epg-now-badge"><span class="epg-now-dot"></span>LIVE</span>') : ''}
+                            ${current ? html`<span class="epg-now-badge"><span class="epg-now-dot"></span>${t('common.live')}</span>` : ''}
                             ${p.title}
                             ${state === 'future' && channel ? raw(bellIcon(ReminderService.has(channelKey(channel), startMs))) : ''}
-                            ${progress ? html`<span class="epg-catchup-badge ${progress.completed ? 'watched' : 'resume'}">${progress.completed ? 'Watched' : 'Resume'}</span>` : ''}
+                            ${progress ? html`<span class="epg-catchup-badge ${progress.completed ? 'watched' : 'resume'}">${t(progress.completed ? 'epg.watched' : 'common.resume')}</span>` : ''}
                           </div>
                           ${progress && !progress.completed && progress.duration > 0 ? html`<div class="epg-catchup-progress"><div class="epg-catchup-progress-fill" style="width: ${Math.min(100, Math.max(0, Math.round(progress.position / progress.duration * 100)))}%"></div></div>` : ''}
                           ${p.description ? html`<div class="epg-prog-desc">${p.description.slice(0, 200)}</div>` : ''}
@@ -341,7 +345,7 @@ export class EpgGrid {
     }
     if (isPast && channel?.catchupSource &&
         !XtreamArchiveService.isAvailable(channel, prog.start.getTime())) {
-      showToast('Program is not available for catch-up');
+      showToast(t('epg.catchupUnavailable'));
       return;
     }
     if (isPast && channel?.catchupSource) {
@@ -374,7 +378,7 @@ export class EpgGrid {
     const startMs = prog.start.getTime();
     if (ReminderService.has(chKey, startMs)) {
       ReminderService.remove(chKey, startMs);
-      showToast('Reminder removed');
+      showToast(t('epg.reminderRemoved'));
     } else {
       ReminderService.add({
         channelKey: chKey,
@@ -383,7 +387,7 @@ export class EpgGrid {
         startMs,
         stopMs: prog.stop.getTime(),
       });
-      showToast('Reminder set');
+      showToast(t('epg.reminderSet'));
     }
     this.render();
   }

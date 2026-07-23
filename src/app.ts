@@ -25,6 +25,7 @@ import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
 import type { Action, NumberEvent, CatchupInfo, EpgSource, PlaylistEntry } from './types';
+import { t } from './i18n';
 
 const log = createLogger('App');
 
@@ -51,6 +52,8 @@ class App {
   async init(): Promise<void> {
     const done = log.time('init');
     log.info('Initializing app');
+    const initialLoadingText = $('#loading-text');
+    if (initialLoadingText) initialLoadingText.textContent = t('common.loading');
     initTheme();
     this.views = {
       channels: $('#view-channels')!,
@@ -403,12 +406,12 @@ class App {
         this.channelList.render();
         this.showView('settings');
         this.settings.render();
-        showToast('Welcome! Add a playlist URL to get started.');
+        showToast(t('app.welcome'));
         return;
       }
 
       const loadingText = $('#loading-text');
-      if (loadingText) loadingText.textContent = 'Loading channels...';
+      if (loadingText) loadingText.textContent = t('app.loadingChannels');
       await PlaylistService.load();
       log.info('Channels loaded:', PlaylistService.channels.length,
         '| groups:', PlaylistService.groups.length,
@@ -425,7 +428,10 @@ class App {
       this.showView('channels');
       this.channelList.render();
 
-      showToast(`${PlaylistService.channels.length} channels loaded`);
+      showToast(t(
+        PlaylistService.channels.length === 1 ? 'app.channelsLoadedOne' : 'app.channelsLoaded',
+        { count: PlaylistService.channels.length },
+      ));
 
       this.scanReminders();
 
@@ -458,7 +464,7 @@ class App {
       log.error('loadData failed:', err);
       this.showView('settings');
       this.settings.render();
-      showToast('Failed to load playlist. Check your URL.');
+      showToast(t('app.loadFailed'));
     } finally {
       hide(this.views.loading);
       done();
@@ -752,7 +758,7 @@ class App {
           else window.close();
         } else {
           this.backPressTime = now;
-          showToast('Press back again to exit');
+          showToast(t('app.exitHint'));
         }
         return;
       }
@@ -897,8 +903,8 @@ class App {
     const key = channelKey(ch);
     StorageService.toggleFavorite(key);
     showToast(StorageService.getFavorites().includes(key)
-      ? `Added "${ch.name}" to favorites`
-      : `Removed "${ch.name}" from favorites`);
+      ? t('channel.favoriteAdded', { name: ch.name })
+      : t('channel.favoriteRemoved', { name: ch.name }));
     this.channelList.render();
   }
 

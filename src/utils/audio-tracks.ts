@@ -1,4 +1,5 @@
 import type { AudioOption, AudioPref, ManifestAudio } from '../types';
+import { t } from '../i18n';
 
 // The hls.js audio-track fields we read, structural to avoid an hls.js type dep.
 export interface HlsAudioTrackLike {
@@ -9,7 +10,7 @@ export interface HlsAudioTrackLike {
 
 /** Display label for a rendition: its name, then language, then a positional fallback. */
 export function audioLabel(opt: AudioOption): string {
-  return opt.name || opt.lang || `Audio ${opt.index + 1}`;
+  return opt.name || opt.lang || t('player.audioFallback', { number: opt.index + 1 });
 }
 
 /** Normalize hls.js renditions. `currentIdx` is hls.audioTrack (the active one). */

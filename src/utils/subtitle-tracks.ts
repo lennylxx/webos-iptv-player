@@ -3,6 +3,7 @@ import { CONFIG } from '../config';
 import ISO6391 from 'iso-639-1';
 import { iso6392BTo1 } from 'iso-639-2/2b-to-1';
 import { iso6392TTo1 } from 'iso-639-2/2t-to-1';
+import { t } from '../i18n';
 
 // The hls.js subtitle-track fields we read, structural to avoid an hls.js type dep.
 export interface HlsSubtitleTrackLike {
@@ -28,7 +29,7 @@ export function languageName(lang: string): string {
 export function subtitleLabel(opt: SubtitleOption): string {
   if (opt.name) return opt.name;
   if (opt.lang) return languageName(opt.lang);
-  return `Subtitle ${opt.index + 1}`;
+  return t('player.subtitleFallback', { number: opt.index + 1 });
 }
 
 /** Normalize hls.js subtitle renditions. `currentIdx` is hls.subtitleTrack (-1 = off). */

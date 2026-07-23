@@ -2,6 +2,7 @@ import type { SidecarSubtitle } from '../types';
 import { parseSubtitleFile } from '../utils/srt';
 import { fetchText } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
+import { t } from '../i18n';
 
 const log = createLogger('VodSubs');
 
@@ -24,7 +25,7 @@ export class VodSubtitles {
     for (const s of sidecars) {
       const el = document.createElement('track');
       el.kind = 'subtitles';
-      el.label = s.name || s.lang || 'Subtitle';
+      el.label = s.name || s.lang || t('player.subtitles');
       if (s.lang) el.srclang = s.lang;
       video.appendChild(el);
       const track = el.track;
@@ -59,7 +60,7 @@ export class VodSubtitles {
   addOnline(video: HTMLVideoElement, sub: SidecarSubtitle): TextTrack | null {
     const el = document.createElement('track');
     el.kind = 'subtitles';
-    el.label = sub.name || sub.lang || 'Subtitle';
+    el.label = sub.name || sub.lang || t('player.subtitles');
     if (sub.lang) el.srclang = sub.lang;
     video.appendChild(el);
     const track = el.track;

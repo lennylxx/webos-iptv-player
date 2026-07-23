@@ -3,19 +3,20 @@ import { PlaylistService } from '../services/playlist-service';
 import { $, html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SUBTITLE_ICON } from './icons';
+import { t, type MessageKey } from '../i18n';
 
 const AUTO_HIDE_MS = 5000;
 
 const MENU_ITEMS = [
-  { action: 'red' as const, color: 'red', label: 'Program Guide' },
-  { action: 'green' as const, color: 'green', label: 'Toggle Favorite' },
-  { action: 'yellow' as const, color: 'yellow', label: 'Channel Info' },
-  { action: 'blue' as const, color: 'blue', label: 'Settings' },
+  { action: 'red' as const, color: 'red', labelKey: 'player.guide' },
+  { action: 'green' as const, color: 'green', labelKey: 'player.toggleFavorite' },
+  { action: 'yellow' as const, color: 'yellow', labelKey: 'player.channelInfo' },
+  { action: 'blue' as const, color: 'blue', labelKey: 'common.settings' },
 ];
 
 const VOD_MENU_ITEMS = [
-  { action: 'yellow' as const, color: 'yellow', label: 'Title Info' },
-  { action: 'blue' as const, color: 'blue', label: 'Settings' },
+  { action: 'yellow' as const, color: 'yellow', labelKey: 'player.titleInfo' },
+  { action: 'blue' as const, color: 'blue', labelKey: 'common.settings' },
 ];
 
 // Sentinel data-menu-action values for the non-color rows.
@@ -237,29 +238,29 @@ export class PlayerMenu {
 
     morph(el, html`
       <div class="menu-header">
-        <h2>Menu</h2>
-        ${chName ? html`<div class="menu-subtitle">Playing: ${chName}</div>` : ''}
+        <h2>${t('player.menu')}</h2>
+        ${chName ? html`<div class="menu-subtitle">${t('player.playing', { name: chName })}</div>` : ''}
       </div>
       <div class="menu-items">
         ${rows.map((item, i) => html`
           <div class="menu-item ${i === this.focusIdx ? 'focused' : ''}"
                data-key="${item.action}"
                data-focusable data-menu-action="${item.action}">
-            <span class="menu-dot ${item.color}"></span> ${item.label}
+            <span class="menu-dot ${item.color}"></span> ${t(item.labelKey as MessageKey)}
           </div>
         `)}
         ${audioShown ? html`
           <div class="menu-item ${audioRowIdx === this.focusIdx ? 'focused' : ''}"
                data-focusable data-menu-action="${OPEN_AUDIO}">
-            <span class="menu-icon audio">♫</span> Audio Track
+            <span class="menu-icon audio">♫</span> ${t('player.audioTrack')}
             <span class="menu-item-value">${activeTrack?.label || ''}</span>
           </div>
         ` : ''}
         ${subtitles.length >= 1 ? html`
           <div class="menu-item ${subsRowIdx === this.focusIdx ? 'focused' : ''}"
                data-focusable data-menu-action="${OPEN_SUBS}">
-            <span class="menu-icon subtitle">${raw(SUBTITLE_ICON)}</span> Subtitles
-            <span class="menu-item-value">${activeSub?.label || 'Off'}</span>
+            <span class="menu-icon subtitle">${raw(SUBTITLE_ICON)}</span> ${t('player.subtitles')}
+            <span class="menu-item-value">${activeSub?.label || t('common.off')}</span>
           </div>
         ` : ''}
       </div>
@@ -274,12 +275,12 @@ export class PlayerMenu {
 
     morph(el, html`
       <div class="menu-header">
-        <h2>Audio Track</h2>
+        <h2>${t('player.audioTrack')}</h2>
       </div>
       <div class="menu-items">
         <div class="menu-item ${this.focusIdx === 0 ? 'focused' : ''}"
              data-focusable data-menu-action="${BACK}">
-          <span class="menu-check menu-back">‹</span> Back
+          <span class="menu-check menu-back">‹</span> ${t('common.back')}
         </div>
         ${tracks.map((t, i) => html`
           <div class="menu-item ${this.focusIdx === i + 1 ? 'focused' : ''} ${t.available === false ? 'unavailable' : ''}"
@@ -301,17 +302,17 @@ export class PlayerMenu {
 
     morph(el, html`
       <div class="menu-header">
-        <h2>Subtitles</h2>
+        <h2>${t('player.subtitles')}</h2>
       </div>
       <div class="menu-items">
         <div class="menu-item ${this.focusIdx === 0 ? 'focused' : ''}"
              data-focusable data-menu-action="${BACK}">
-          <span class="menu-check menu-back">‹</span> Back
+          <span class="menu-check menu-back">‹</span> ${t('common.back')}
         </div>
         <div class="menu-item ${this.focusIdx === 1 ? 'focused' : ''}"
              data-focusable data-menu-action="${PICK_SUB}" data-track-index="-1">
           <span class="menu-check">${anyActive ? '' : '✓'}</span>
-          <span class="menu-track-label">Off</span>
+          <span class="menu-track-label">${t('common.off')}</span>
         </div>
         ${tracks.map((t, i) => html`
           <div class="menu-item ${this.focusIdx === i + 2 ? 'focused' : ''} ${t.available === false ? 'unavailable' : ''}"
@@ -326,7 +327,7 @@ export class PlayerMenu {
             <div class="menu-item ${this.focusIdx === tracks.length + 2 ? 'focused' : ''}"
                  data-focusable data-menu-action="${OPEN_OFFSET}">
               <span class="menu-check"></span>
-              <span class="menu-track-label">Subtitle Sync</span>
+              <span class="menu-track-label">${t('player.subtitleSync')}</span>
               <span class="menu-item-value">${st.label}</span>
             </div>` : '';
         })()}

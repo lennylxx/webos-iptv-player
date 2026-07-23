@@ -1,4 +1,4 @@
-import type { Action, CatchupInfo, Channel, NumberEvent } from '../types';
+import type { Action, BuiltinChannelGroup, CatchupInfo, Channel, ChannelGroupId, NumberEvent } from '../types';
 import { SpatialNav } from '../navigation/spatial-nav';
 import { html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
@@ -10,12 +10,13 @@ import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { groupIcon } from './group-icon';
 import { showToast } from './toast';
+import { t } from '../i18n';
 
 export class ChannelList {
   private container: HTMLElement;
   private onChannelSelect: (index: number, catchup?: CatchupInfo) => void;
   private nav: SpatialNav;
-  private currentGroup = 'All';
+  private currentGroup: ChannelGroupId = 'builtin:all';
   private currentPlaylist = '';  // '' = All playlists
   private playingIndex = -1;
   private playingCatchupStart: number | null = null;
@@ -53,12 +54,21 @@ export class ChannelList {
     // The selected playlist may have just been deleted in settings — fall back to All.
     if (this.currentPlaylist && !tabs.some(t => t.id === this.currentPlaylist)) this.currentPlaylist = '';
     const showTabs = tabs.length > 1;
-    const groups = ['All', 'Favorites', 'Recently Watched', ...PlaylistService.getGroupsForPlaylist(this.currentPlaylist || undefined)];
+    const builtins: { id: ChannelGroupId; label: string; builtin: BuiltinChannelGroup }[] = [
+      { id: 'builtin:all', label: t('common.all'), builtin: 'all' },
+      { id: 'builtin:favorites', label: t('channel.favorites'), builtin: 'favorites' },
+      { id: 'builtin:recently-watched', label: t('channel.recentlyWatched'), builtin: 'recently-watched' },
+    ];
+    const groups = [
+      ...builtins,
+      ...PlaylistService.getGroupsForPlaylist(this.currentPlaylist || undefined)
+        .map(name => ({ id: `source:${name}` as ChannelGroupId, label: name, builtin: undefined })),
+    ];
     this.recentItems = RecentlyWatchedService.getItems(this.currentPlaylist || undefined);
-    const showingRecent = this.currentGroup === 'Recently Watched';
+    const showingRecent = this.currentGroup === 'builtin:recently-watched';
     const filteredChannels = PlaylistService.getByGroup(this.currentGroup, this.currentPlaylist || undefined);
     const totalChannels = this.currentPlaylist
-      ? PlaylistService.getByGroup('All', this.currentPlaylist).length
+      ? PlaylistService.getByGroup('builtin:all', this.currentPlaylist).length
       : PlaylistService.channels.length;
     const favs = StorageService.getFavorites();
 
@@ -72,13 +82,15 @@ export class ChannelList {
       <div class="channel-view">
         <div class="sidebar" data-nav-container>
           <div class="sidebar-header">
-            <div class="channel-count">${totalChannels} channels</div>
+            <div class="channel-count">${t(totalChannels === 1 ? 'channel.countOne' : 'channel.count', {
+              count: totalChannels,
+            })}</div>
           </div>
           ${showTabs ? html`
             <div class="playlist-tabs">
               <div class="playlist-tab ${!this.currentPlaylist ? 'active' : ''}"
                    data-key="tab:"
-                   data-focusable data-playlist="">All</div>
+                   data-focusable data-playlist="">${t('common.all')}</div>
               ${tabs.map(t => html`
                 <div class="playlist-tab ${t.id === this.currentPlaylist ? 'active' : ''}"
                      data-key="tab:${t.id}"
@@ -88,14 +100,14 @@ export class ChannelList {
           ` : ''}
           <div class="group-list">
             ${groups.map(g => html`
-              <div class="group-item ${g === this.currentGroup ? 'active' : ''}"
-                   data-key="g:${g}"
-                   data-focusable data-group="${g}">
-                <span class="group-icon">${raw(groupIcon(g))}</span>
-                <span class="group-name">${g}</span>
-                <span class="group-count">${g === 'Recently Watched'
+              <div class="group-item ${g.id === this.currentGroup ? 'active' : ''}"
+                   data-key="g:${g.id}"
+                   data-focusable data-group="${g.id}">
+                <span class="group-icon">${raw(groupIcon(g.label, g.builtin))}</span>
+                <span class="group-name">${g.label}</span>
+                <span class="group-count">${g.id === 'builtin:recently-watched'
                   ? this.recentItems.length
-                  : PlaylistService.getByGroup(g, this.currentPlaylist || undefined).length}</span>
+                  : PlaylistService.getByGroup(g.id, this.currentPlaylist || undefined).length}</span>
               </div>
             `)}
           </div>
@@ -105,10 +117,10 @@ export class ChannelList {
             ${showingRecent
               ? (this.recentItems.length
                   ? this.recentItems.map((item, index) => this.renderRecentItem(item, index, favs))
-                  : raw('<div class="empty-state">Nothing watched yet</div>'))
+                  : html`<div class="empty-state">${t('channel.recentEmpty')}</div>`)
               : (filteredChannels.length
                   ? filteredChannels.map(ch => this.renderChannel(ch, favs))
-                  : raw('<div class="empty-state">No channels found</div>'))}
+                  : html`<div class="empty-state">${t('channel.empty')}</div>`)}
           </div>
         </div>
       </div>
@@ -161,10 +173,10 @@ export class ChannelList {
 
         if (focused.dataset.playlist !== undefined) {
           this.currentPlaylist = focused.dataset.playlist;
-          this.currentGroup = 'All';
+          this.currentGroup = 'builtin:all';
           this.render();
         } else if (focused.dataset.group !== undefined) {
-          this.currentGroup = focused.dataset.group;
+          this.currentGroup = focused.dataset.group as ChannelGroupId;
           this.render();
         } else if (focused.dataset.recentIndex !== undefined) {
           const item = this.recentItems[parseInt(focused.dataset.recentIndex, 10)];
@@ -258,7 +270,7 @@ export class ChannelList {
             <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${item.channel.name}</div>
             ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
           </div>
-          <div class="recent-kind-badge live">LIVE</div>
+          <div class="recent-kind-badge live">${t('common.live')}</div>
           ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
         </div>
       `;
@@ -278,10 +290,13 @@ export class ChannelList {
         ${this.renderLogo(item.channel)}
         <div class="channel-info">
           <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${item.progress.title ?? ''}</div>
-          <div class="channel-now">${item.channel.name} - Resume at ${formatPosition(item.progress.position)}</div>
+          <div class="channel-now">${t('channel.resumeAt', {
+            channel: item.channel.name,
+            position: formatPosition(item.progress.position),
+          })}</div>
           <div class="recent-progress"><div class="recent-progress-fill" style="width:${percent}%"></div></div>
         </div>
-        <div class="recent-kind-badge catchup">CATCH-UP</div>
+        <div class="recent-kind-badge catchup">${t('common.catchup')}</div>
         ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
       </div>
     `;
@@ -300,7 +315,7 @@ export class ChannelList {
   private async playRecentCatchup(item: Extract<RecentlyWatchedItem, { kind: 'catchup' }>): Promise<void> {
     const catchup = await RecentlyWatchedService.catchupInfo(item);
     if (!catchup) {
-      showToast('This Catch-up program is no longer available');
+      showToast(t('channel.catchupUnavailable'));
       this.render();
       return;
     }

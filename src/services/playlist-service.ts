@@ -1,4 +1,4 @@
-import type { Channel, EpgSource, PlaylistTab } from '../types';
+import type { Channel, ChannelGroupId, EpgSource, PlaylistTab } from '../types';
 import { parseM3U } from '../parsers/m3u-parser';
 import { fetchText } from '../utils/fetch-helper';
 import {
@@ -199,17 +199,18 @@ class PlaylistServiceImpl {
     this.playlistTabs = configured.map(pl => ({ id: pl.id, name: pl.name || pl.url }));
   }
 
-  getByGroup(group: string, playlist?: string): Channel[] {
+  getByGroup(group: ChannelGroupId, playlist?: string): Channel[] {
     let filtered = this.channels;
     if (playlist) {
       filtered = filtered.filter(ch => ch.playlistIds.includes(playlist));
     }
-    if (!group || group === 'All') return filtered;
-    if (group === 'Favorites') {
+    if (group === 'builtin:all' || group === 'builtin:recently-watched') return filtered;
+    if (group === 'builtin:favorites') {
       const favs = StorageService.getFavorites();
       return filtered.filter(ch => favs.includes(channelKey(ch)));
     }
-    return filtered.filter(ch => ch.group === group);
+    const sourceGroup = group.slice('source:'.length);
+    return filtered.filter(ch => ch.group === sourceGroup);
   }
 
   /** Relevance-ranked name/genre search, optionally scoped to one playlist. Empty query → []. */

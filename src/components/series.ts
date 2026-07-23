@@ -7,16 +7,17 @@ import { xtreamEpisodeUrl, type XtreamCredentials } from '../utils/xtream-url';
 import { CatalogView } from './catalog-view';
 import { PLAY_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
+import { t } from '../i18n';
 
 // The Series section: browse (Continue rail of resumed episodes + per-category
 // rails + an "all categories" drill-in) → per-category poster grid → a detail
 // screen with a season selector over an episode list. The browse/grid/nav
 // machinery lives in CatalogView.
 export class Series extends CatalogView<SeriesCategory, SeriesItem> {
-  protected readonly kicker = 'Series';
+  protected get kicker(): string { return t('common.series'); }
   protected readonly resumeKind: ResumeKind = 'episode';
-  protected readonly emptyMessage = 'No series available on this account.';
-  protected readonly gridEmptyMessage = 'No series in this category.';
+  protected get emptyMessage(): string { return t('catalog.noSeries'); }
+  protected get gridEmptyMessage(): string { return t('catalog.noSeriesCategory'); }
 
   private currentSeries: SeriesItem | null = null;
   private currentInfo: SeriesInfo | null = null;
@@ -33,14 +34,14 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
 
   protected continueRail(): Safe | '' {
     return this.resume.length
-      ? this.rail('Continue Watching', this.resume.map((r) => this.resumeTile(r)))
+      ? this.rail(t('catalog.continueWatching'), this.resume.map((r) => this.resumeTile(r)))
       : '';
   }
 
   protected watchlistRail(): Safe | '' {
     const entries = StorageService.getWatchlist(this.account!.id, 'series');
     return entries.length
-      ? this.rail('Watchlist', entries.map((entry) => this.tile(this.watchlistEntryToSeries(entry))))
+      ? this.rail(t('common.watchlist'), entries.map((entry) => this.tile(this.watchlistEntryToSeries(entry))))
       : '';
   }
 
@@ -88,7 +89,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       categoryId: series.categoryId,
       addedAt: Date.now(),
     });
-    showToast(added ? 'Added to Watchlist' : 'Removed from Watchlist');
+    showToast(t(added ? 'catalog.watchlistAdded' : 'catalog.watchlistRemoved'));
     this.renderDetail();
   }
 
@@ -202,7 +203,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
 
   private episodeRow(accountId: string, ep: Episode): Safe {
     const saved = StorageService.getResume(accountId, 'episode', ep.id);
-    const mins = ep.durationSecs > 0 ? `${Math.floor(ep.durationSecs / 60)} min` : '';
+    const mins = ep.durationSecs > 0 ? t('catalog.minutes', { count: Math.floor(ep.durationSecs / 60) }) : '';
     return html`
       <div class="episode-row" data-focusable data-key="ep:${ep.id}" data-episode-id="${ep.id}">
         <span class="episode-badge">${raw(PLAY_ICON)}</span>
@@ -210,7 +211,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
           <div class="episode-title">
             <span class="episode-num">E${ep.episode}</span>
             <span class="episode-name">${ep.title}</span>
-            ${saved ? html`<span class="episode-resume">Resume</span>` : ''}
+            ${saved ? html`<span class="episode-resume">${t('common.resume')}</span>` : ''}
           </div>
           ${mins ? html`<div class="episode-meta">${mins}</div>` : ''}
           ${ep.plot ? html`<p class="episode-plot">${ep.plot}</p>` : ''}
@@ -238,20 +239,20 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
             <div class="detail-actions">
               <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
                 <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>
-                ${watchlisted ? 'Remove from Watchlist' : 'Add to Watchlist'}
+                ${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}
               </button>
             </div>
             ${this.detailLoading
-              ? html`<p class="catalog-hint">Loading…</p>`
+              ? html`<p class="catalog-hint">${t('common.loading')}</p>`
               : !info
-                ? html`<p class="catalog-hint">Couldn't load episodes.</p>`
+                ? html`<p class="catalog-hint">${t('catalog.loadEpisodesFailed')}</p>`
                 : info.seasons.length === 0
-                  ? html`<p class="catalog-hint">No episodes available.</p>`
+                  ? html`<p class="catalog-hint">${t('catalog.noEpisodes')}</p>`
                   : html`
                   <div class="series-seasons">
                     ${info.seasons.map((n) => html`
                       <button class="series-season-btn ${n === this.selectedSeason ? 'active' : ''}"
-                              data-focusable data-key="season:${n}" data-season="${n}">Season ${n}</button>
+                              data-focusable data-key="season:${n}" data-season="${n}">${t('catalog.season', { number: n })}</button>
                     `)}
                   </div>
                 `}
@@ -260,7 +261,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
         ${info && info.seasons.length > 0 ? html`
           <div class="series-episodes">
             ${episodes.length === 0
-              ? html`<p class="catalog-hint">No episodes in this season.</p>`
+              ? html`<p class="catalog-hint">${t('catalog.noSeasonEpisodes')}</p>`
               : episodes.map((ep) => this.episodeRow(a.id, ep))}
           </div>
         ` : ''}

@@ -1,4 +1,5 @@
 import type { AudioTrackOption, SubtitleTrackOption } from '../types';
+import { t } from '../i18n';
 
 export type StreamVariant = {
   width: number; height: number; videoCodec: string; audioCodec: string;
@@ -140,13 +141,13 @@ export function audioSummary(tracks: AudioTrackOption[]): string {
   // Audio has no "off" state — if no track is flagged active yet (the flag can
   // lag at tune-in), fall back to the first/default track, which is what plays.
   const active = tracks.find(t => t.active) ?? tracks[0];
-  const label = active.label || 'Audio';
+  const label = active.label || t('player.audioTrack');
   return tracks.length > 1 ? `${label} (${tracks.length})` : label;
 }
 
 export function subtitleSummary(tracks: SubtitleTrackOption[]): string {
   if (!tracks.length) return '';
   const active = tracks.find(t => t.active);
-  const base = active ? (active.label || 'On') : 'Off';
+  const base = active ? (active.label || t('settings.on')) : t('common.off');
   return tracks.length > 1 ? `${base} (${tracks.length})` : base;
 }

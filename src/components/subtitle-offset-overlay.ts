@@ -3,6 +3,7 @@ import { html, show, hide } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { CONFIG } from '../config';
 import { clampSubtitleOffset, formatSubtitleOffset } from '../utils/subtitle-tracks';
+import { t } from '../i18n';
 
 /**
  * A small modal adjuster shown over the player for nudging the subtitle offset.
@@ -66,10 +67,10 @@ export class SubtitleOffsetOverlay {
   private render(): void {
     morph(this.el, html`
       <div class="subs-offset-card" data-self-activate>
-        <div class="subs-offset-title">Subtitle Sync</div>
+        <div class="subs-offset-title">${t('player.subtitleSync')}</div>
         <div class="subs-offset-value">${formatSubtitleOffset(this.seconds)}</div>
-        <div class="subs-offset-hint">Left / Right to adjust, OK to reset, Back to close</div>
-        <div class="subs-offset-reset" data-focusable data-offset-reset>Reset</div>
+        <div class="subs-offset-hint">${t('subtitle.syncHint')}</div>
+        <div class="subs-offset-reset" data-focusable data-offset-reset>${t('subtitle.reset')}</div>
       </div>
     `);
   }

@@ -66,6 +66,10 @@ describe('GET /upload', () => {
     const body = await res.text();
     expect(body).toMatch(/^<!DOCTYPE html>/);
     expect(body).toContain('Upload M3U Playlist');
+    expect(body).toContain('var MESSAGES = {');
+    expect(body).toContain('title: "Upload M3U Playlist"');
+    expect(body).toContain('success: "Successfully uploaded"');
+    expect(body).not.toContain('navigator.language');
   });
 });
 

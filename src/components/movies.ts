@@ -7,15 +7,16 @@ import { xtreamVodUrl } from '../utils/xtream-url';
 import { CatalogView } from './catalog-view';
 import { PLAY_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
+import { t } from '../i18n';
 
 // The Movies section: browse (Continue rail + per-category rails + an "all
 // categories" drill-in) → per-category poster grid → a detail screen with
 // Play / Resume. The browse/grid/nav machinery lives in CatalogView.
 export class Movies extends CatalogView<VodCategory, VodItem> {
-  protected readonly kicker = 'Movies';
+  protected get kicker(): string { return t('common.movies'); }
   protected readonly resumeKind: ResumeKind = 'vod';
-  protected readonly emptyMessage = 'No movies available on this account.';
-  protected readonly gridEmptyMessage = 'No movies in this category.';
+  protected get emptyMessage(): string { return t('catalog.noMovies'); }
+  protected get gridEmptyMessage(): string { return t('catalog.noMoviesCategory'); }
 
   private currentVod: VodItem | null = null;
   private currentInfo: VodInfo | null = null;
@@ -50,14 +51,14 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
 
   protected continueRail(): Safe | '' {
     return this.resume.length
-      ? this.rail('Continue Watching', this.resume.map((r) => this.tile(this.resumeToVod(r.itemId)!)))
+      ? this.rail(t('catalog.continueWatching'), this.resume.map((r) => this.tile(this.resumeToVod(r.itemId)!)))
       : '';
   }
 
   protected watchlistRail(): Safe | '' {
     const entries = StorageService.getWatchlist(this.account!.id, 'vod');
     return entries.length
-      ? this.rail('Watchlist', entries.map((entry) => this.watchlistTile(entry)))
+      ? this.rail(t('common.watchlist'), entries.map((entry) => this.watchlistTile(entry)))
       : '';
   }
 
@@ -123,7 +124,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
       containerExtension: vod.containerExtension,
       addedAt: Date.now(),
     });
-    showToast(added ? 'Added to Watchlist' : 'Removed from Watchlist');
+    showToast(t(added ? 'catalog.watchlistAdded' : 'catalog.watchlistRemoved'));
     this.renderDetail();
   }
 
@@ -196,7 +197,9 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     const saved = StorageService.getResume(a.id, 'vod', vod.streamId);
     const poster = info?.poster || vod.poster;
     const year = info ? (info.releaseDate.match(/\d{4}/) || [''])[0] : '';
-    const mins = info && info.durationSecs > 0 ? `${Math.floor(info.durationSecs / 60)} min` : '';
+    const mins = info && info.durationSecs > 0
+      ? t('catalog.minutes', { count: Math.floor(info.durationSecs / 60) })
+      : '';
     const meta = [year, mins, info?.genre, vod.rating].filter((s) => !!s);
     const watchlisted = StorageService.isWatchlisted(a.id, 'vod', vod.streamId);
 
@@ -208,19 +211,19 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
           <h1 class="detail-title">${vod.name}</h1>
           <div class="detail-meta">${meta.join('  ·  ')}</div>
           ${info?.plot ? html`<p class="detail-plot">${info.plot}</p>` : ''}
-          ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">Cast</span> ${info.cast}</div>` : ''}
-          ${info?.director ? html`<div class="detail-cast"><span class="detail-label">Director</span> ${info.director}</div>` : ''}
+          ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
+          ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
           <div class="detail-actions">
             ${saved ? html`
               <button class="detail-btn detail-btn-primary" data-focusable data-key="resume" data-action="resume">
-                <span class="detail-btn-icon">${raw(PLAY_ICON)}</span>Resume
+                <span class="detail-btn-icon">${raw(PLAY_ICON)}</span>${t('common.resume')}
               </button>` : ''}
             <button class="detail-btn ${saved ? '' : 'detail-btn-primary'}" data-focusable data-key="play" data-action="play">
-              <span class="detail-btn-icon">${raw(PLAY_ICON)}</span>${saved ? 'Play from start' : 'Play'}
+              <span class="detail-btn-icon">${raw(PLAY_ICON)}</span>${t(saved ? 'catalog.playFromStart' : 'catalog.play')}
             </button>
             <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
               <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>
-              ${watchlisted ? 'Remove from Watchlist' : 'Add to Watchlist'}
+              ${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}
             </button>
           </div>
         </div>

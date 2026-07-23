@@ -28,8 +28,12 @@ function stableChannelKey(url: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-async function setup(page: Page, seedHistory = true): Promise<void> {
-  await page.clock.setFixedTime(NOW);
+async function setup(page: Page, seedHistory = true, controlTimers = false): Promise<void> {
+  if (controlTimers) {
+    await page.clock.install({ time: NOW });
+  } else {
+    await page.clock.setFixedTime(NOW);
+  }
   await page.route('**/playlist.m3u', route =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: M3U }));
   await page.route('**/*.m3u8*', route =>
@@ -87,7 +91,7 @@ async function setup(page: Page, seedHistory = true): Promise<void> {
 async function openRecentlyWatched(page: Page): Promise<void> {
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
-  await page.locator('[data-group="Recently Watched"]').click();
+  await page.locator('[data-group="builtin:recently-watched"]').click();
 }
 
 test('mixes live and resumable Catch-up rows in recency order', async ({ page }) => {
@@ -104,7 +108,7 @@ test('mixes live and resumable Catch-up rows in recency order', async ({ page })
 });
 
 test('adds a live channel only after confirmed playback', async ({ page }) => {
-  await setup(page, false);
+  await setup(page, false, true);
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
 
@@ -122,7 +126,7 @@ test('adds a live channel only after confirmed playback', async ({ page }) => {
   )).toBe(1);
 
   await page.keyboard.press('Escape');
-  await page.locator('[data-group="Recently Watched"]').click();
+  await page.locator('[data-group="builtin:recently-watched"]').click();
   await expect(page.locator('.recent-live')).toContainText('Channel Bravo');
 });
 
@@ -196,10 +200,10 @@ test('filters Recently Watched by the selected playlist', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
   await page.locator('[data-playlist="p1"]').click();
-  await page.locator('[data-group="Recently Watched"]').click();
+  await page.locator('[data-group="builtin:recently-watched"]').click();
 
   await expect(page.locator('.recent-item')).toHaveCount(1);
   await expect(page.locator('.recent-item')).toContainText('Channel Alpha');
   await expect(page.locator('.recent-item')).not.toContainText('Channel Bravo');
-  await expect(page.locator('[data-group="Recently Watched"] .group-count')).toHaveText('1');
+  await expect(page.locator('[data-group="builtin:recently-watched"] .group-count')).toHaveText('1');
 });

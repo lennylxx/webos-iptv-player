@@ -11,7 +11,7 @@ describe('ReminderPrompt', () => {
   it('renders the title and Watch now/Cancel and starts focused on Watch now', () => {
     prompt.show('Alpha', 'Bravo', { onConfirm: vi.fn(), onCancel: vi.fn() });
     expect(prompt.visible).toBe(true);
-    expect(document.querySelector('.reminder-message')!.textContent).toContain('Bravo - Alpha');
+    expect(document.querySelector('.reminder-message')!.textContent).toContain('Bravo — Alpha');
     expect(buttons().map(b => b.textContent)).toEqual(['Watch now', 'Cancel']);
     expect(document.querySelector('.reminder-btn.focused')!.textContent).toBe('Watch now');
   });

@@ -2,6 +2,7 @@ import type { Action, PlaylistEntry } from '../types';
 import { html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { avatarColor, firstLetter } from '../utils/avatar';
+import { t } from '../i18n';
 import { CHECK_ICON } from './icons';
 
 interface AccountSwitcherHandlers {
@@ -117,7 +118,7 @@ export class AccountSwitcher {
     const active = this.accounts.find((a) => a.id === this.selectedId) ?? this.accounts[0];
     morph(this.slot, html`
       <button class="account-avatar ${this.focused ? 'focused' : ''}" data-key="account-avatar"
-              aria-label="Switch account" style="background:${avatarColor(active.name)}">${firstLetter(active.name)}</button>
+              aria-label="${t('nav.switchAccount')}" style="background:${avatarColor(active.name)}">${firstLetter(active.name)}</button>
       ${this.open ? html`
         <div class="account-menu" data-nav-container>
           ${this.accounts.map((a, i) => html`

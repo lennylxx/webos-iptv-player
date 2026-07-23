@@ -45,7 +45,7 @@ test('selecting a group filters the channel list', async ({ page }) => {
   await expect(page.locator('#view-channels')).toBeVisible();
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(4);
 
-  await page.locator('[data-group="News"]').click();
+  await page.locator('[data-group="source:News"]').click();
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(2);
   await expect(page.locator('.channel-main')).toContainText('Alpha News');
   await expect(page.locator('.channel-main')).not.toContainText('Delta Sports');

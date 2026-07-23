@@ -4,6 +4,7 @@ import { html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { languageName } from '../utils/subtitle-tracks';
 import { DOWNLOAD_ICON } from './icons';
+import { t } from '../i18n';
 
 const PROVIDER_LABEL: Record<string, string> = { opensubtitles: 'OpenSubtitles', subdl: 'SubDL', assrt: 'Assrt' };
 
@@ -175,16 +176,16 @@ export class SubtitleSearchOverlay {
             <div class="subs-row ${i === this.focusIdx ? 'focused' : ''}"
                  data-key="${r.providerId}:${r.id}:${i}" data-focusable data-result-index="${i}">
               <span class="subs-row-label">${this.label(r)}</span>
-              ${r.downloads ? html`<span class="subs-count" title="Downloads">${raw(DOWNLOAD_ICON)}${formatCount(r.downloads)}</span>` : ''}
+              ${r.downloads ? html`<span class="subs-count" title="${t('subtitle.downloads')}">${raw(DOWNLOAD_ICON)}${formatCount(r.downloads)}</span>` : ''}
             </div>
           `)}
         </div>
       `;
     morph(this.el, html`
       <div class="subs-overlay">
-        <div class="subs-overlay-header">Online Subtitles</div>
+        <div class="subs-overlay-header">${t('subtitle.online')}</div>
         <input class="subs-search-input" data-key="subs-input" type="text"
-               placeholder="Search by title…" aria-label="Search subtitles" value="${this.query}">
+               placeholder="${t('subtitle.searchTitle')}" aria-label="${t('subtitle.searchAria')}" value="${this.query}">
         ${body}
       </div>
     `);

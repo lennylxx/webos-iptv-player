@@ -1,6 +1,7 @@
 import type { Action } from '../types';
 import { html } from '../utils/dom';
 import { morph } from '../utils/morph';
+import { t } from '../i18n';
 import { formatPosition } from '../utils/time';
 
 interface ResumeHandlers {
@@ -80,14 +81,17 @@ export class CatchupResumePrompt {
     if (!this.el) return;
     morph(this.el, html`
       <div class="catchup-resume-dialog">
-        <p class="catchup-resume-message">Resume "${this.title}" from ${formatPosition(this.position)}?</p>
+        <p class="catchup-resume-message">${t('prompt.resume', {
+          title: this.title,
+          position: formatPosition(this.position),
+        })}</p>
         <div class="catchup-resume-buttons">
           <button class="catchup-resume-btn ${this.focusIdx === 0 ? 'focused' : ''}"
-                  data-key="resume" data-action="resume">Resume</button>
+                  data-key="resume" data-action="resume">${t('common.resume')}</button>
           <button class="catchup-resume-btn ${this.focusIdx === 1 ? 'focused' : ''}"
-                  data-key="start-over" data-action="start-over">Start Over</button>
+                  data-key="start-over" data-action="start-over">${t('prompt.startOver')}</button>
           <button class="catchup-resume-btn ${this.focusIdx === 2 ? 'focused' : ''}"
-                  data-key="cancel" data-action="cancel">Cancel</button>
+                  data-key="cancel" data-action="cancel">${t('common.cancel')}</button>
         </div>
       </div>
     `);

@@ -4,6 +4,7 @@ import { morph } from '../utils/morph';
 import { CONFIG } from '../config';
 import { SEARCH_ICON } from './icons';
 import { AccountSwitcher } from './account-switcher';
+import { t, type MessageKey } from '../i18n';
 
 // Cap for the expanded inline search box.
 export const SEARCH_INPUT_MAX_WIDTH = 600;
@@ -11,11 +12,11 @@ export const SEARCH_INPUT_MAX_WIDTH = 600;
 // The single source of truth for the sections: order, label, the view each maps
 // to, and whether it needs an Xtream account.
 export const SECTIONS = [
-  { id: 'live', label: 'Live', view: 'channels', xtreamOnly: false },
-  { id: 'movies', label: 'Movies', view: 'movies', xtreamOnly: true },
-  { id: 'series', label: 'Series', view: 'series', xtreamOnly: true },
-  { id: 'settings', label: 'Settings', view: 'settings', xtreamOnly: false },
-  { id: 'search', label: 'Search', view: 'search', xtreamOnly: false },
+  { id: 'live', labelKey: 'nav.live', view: 'channels', xtreamOnly: false },
+  { id: 'movies', labelKey: 'nav.movies', view: 'movies', xtreamOnly: true },
+  { id: 'series', labelKey: 'nav.series', view: 'series', xtreamOnly: true },
+  { id: 'settings', labelKey: 'nav.settings', view: 'settings', xtreamOnly: false },
+  { id: 'search', labelKey: 'nav.search', view: 'search', xtreamOnly: false },
 ] as const;
 
 export type Section = typeof SECTIONS[number]['id'];
@@ -265,8 +266,8 @@ export class TabBar {
 
   private searchPlaceholder(): string {
     return this.hasXtream
-      ? 'Search channels, movies, and series\u2026'
-      : 'Search channels\u2026';
+      ? t('search.all')
+      : t('search.channels');
   }
 
   private ensureEl(): void {
@@ -292,7 +293,7 @@ export class TabBar {
           const activeCls = s.id === this.active ? 'active' : '';
           return html`
           <button class="tab-bar-item ${focusedCls} ${activeCls}"
-                  data-key="${s.id}" data-section="${s.id}" aria-label="${s.label}">${s.label}</button>
+                  data-key="${s.id}" data-section="${s.id}" aria-label="${t(s.labelKey as MessageKey)}">${t(s.labelKey as MessageKey)}</button>
         `;
         })}
         <div class="tab-bar-search ${this.searchExpanded ? 'expanded' : ''}" data-key="search-slot" data-morph-preserve></div>
@@ -312,12 +313,12 @@ export class TabBar {
       const input = document.createElement('input');
       input.type = 'text';
       input.className = 'tab-bar-search-input';
-      input.setAttribute('aria-label', 'Search');
+      input.setAttribute('aria-label', t('common.search'));
       const btn = document.createElement('button');
       btn.className = 'tab-bar-item search-icon';
       btn.dataset.key = 'search';
       btn.dataset.section = 'search';
-      btn.setAttribute('aria-label', 'Search');
+      btn.setAttribute('aria-label', t('common.search'));
       btn.innerHTML = SEARCH_ICON; // trusted constant
       wrap.appendChild(input);
       wrap.appendChild(btn);

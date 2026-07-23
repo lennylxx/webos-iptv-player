@@ -216,7 +216,7 @@ describe('Search', () => {
     await Promise.resolve();
 
     expect(handlers.onPlayChannel).not.toHaveBeenCalled();
-    expect(toastMock).toHaveBeenCalledWith('Program is not available for catch-up');
+    expect(toastMock).toHaveBeenCalledWith("This program isn't available for catch-up.");
   });
 
   it('toggles a reminder for a future program', async () => {

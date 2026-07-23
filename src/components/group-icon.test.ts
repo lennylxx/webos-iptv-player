@@ -124,10 +124,10 @@ describe('groupIcon (rendered HTML)', () => {
   });
 
   it('renders All and Favorites as icons too', () => {
-    expect(groupIcon('All')).toBe(
+    expect(groupIcon('All', 'all')).toBe(
       '<img class="group-logo" src="assets/group-icons/all.svg" alt="">',
     );
-    expect(groupIcon('Favorites')).toBe(
+    expect(groupIcon('Favorites', 'favorites')).toBe(
       '<img class="group-logo" src="assets/group-icons/star.svg" alt="">',
     );
   });

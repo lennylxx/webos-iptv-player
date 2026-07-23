@@ -98,7 +98,7 @@ describe('PlaylistService.refresh', () => {
       { id: 'b', name: 'P2' },
       { id: 'c', name: 'P3' },
     ]);
-    expect(PlaylistService.getByGroup('All', 'c').map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    expect(PlaylistService.getByGroup('builtin:all', 'c').map(c => c.name)).toEqual(['Alpha', 'Bravo']);
   });
 
   it('keeps a same-URL sibling tab after the other is deleted', async () => {
@@ -120,7 +120,7 @@ describe('PlaylistService.refresh', () => {
     ]);
     await PlaylistService.refresh();
     expect(PlaylistService.playlistTabs).toEqual([{ id: 'c', name: 'P3' }]);
-    expect(PlaylistService.getByGroup('All', 'c').map(ch => ch.name)).toEqual(['Alpha', 'Bravo']);
+    expect(PlaylistService.getByGroup('builtin:all', 'c').map(ch => ch.name)).toEqual(['Alpha', 'Bravo']);
   });
 
   it('still shows a tab for a configured playlist that loaded no channels', async () => {
@@ -135,7 +135,7 @@ describe('PlaylistService.refresh', () => {
       { id: 'a', name: 'P1' },
       { id: 'x', name: 'Down' },
     ]);
-    expect(PlaylistService.getByGroup('All', 'x')).toEqual([]); // its tab is empty when selected
+    expect(PlaylistService.getByGroup('builtin:all', 'x')).toEqual([]); // its tab is empty when selected
   });
 
   it('shows two same-named playlists as separate tabs, each with its own channels', async () => {
@@ -149,8 +149,8 @@ describe('PlaylistService.refresh', () => {
       { id: 'b', name: 'Combo' },
     ]);
     // Each tab shows only its own playlist's channels; "All" still de-dups.
-    expect(PlaylistService.getByGroup('All', 'a').map(c => c.name)).toEqual(['Alpha', 'Bravo']);
-    expect(PlaylistService.getByGroup('All', 'b').map(c => c.name)).toEqual(['Bravo', 'Charlie']);
+    expect(PlaylistService.getByGroup('builtin:all', 'a').map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    expect(PlaylistService.getByGroup('builtin:all', 'b').map(c => c.name)).toEqual(['Bravo', 'Charlie']);
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
   });
 
@@ -351,21 +351,28 @@ describe('PlaylistService.getByGroup', () => {
   });
 
   it('returns everything for "All"', () => {
-    expect(PlaylistService.getByGroup('All').map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect(PlaylistService.getByGroup('builtin:all').map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
   });
 
   it('filters by group', () => {
-    expect(PlaylistService.getByGroup('News').map(c => c.name)).toEqual(['Alpha', 'Charlie']);
+    expect(PlaylistService.getByGroup('source:News').map(c => c.name)).toEqual(['Alpha', 'Charlie']);
+  });
+
+  it('keeps a provider group named Favorites separate from the built-in filter', () => {
+    PlaylistService.channels[0].group = 'Favorites';
+    storageMock.getFavorites.mockReturnValue([channelKey(PlaylistService.channels[1])]);
+    expect(PlaylistService.getByGroup('source:Favorites').map(c => c.name)).toEqual(['Alpha']);
+    expect(PlaylistService.getByGroup('builtin:favorites').map(c => c.name)).toEqual(['Bravo']);
   });
 
   it('filters by playlist when provided', () => {
-    expect(PlaylistService.getByGroup('All', 'P1').map(c => c.name)).toEqual(['Alpha', 'Bravo']);
-    expect(PlaylistService.getByGroup('News', 'P2').map(c => c.name)).toEqual(['Charlie']);
+    expect(PlaylistService.getByGroup('builtin:all', 'P1').map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    expect(PlaylistService.getByGroup('source:News', 'P2').map(c => c.name)).toEqual(['Charlie']);
   });
 
   it('resolves "Favorites" against StorageService, keyed by channelKey', () => {
     storageMock.getFavorites.mockReturnValue([channelKey(PlaylistService.channels[1])]);
-    expect(PlaylistService.getByGroup('Favorites').map(c => c.name)).toEqual(['Bravo']);
+    expect(PlaylistService.getByGroup('builtin:favorites').map(c => c.name)).toEqual(['Bravo']);
   });
 });
 

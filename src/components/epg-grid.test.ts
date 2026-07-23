@@ -141,7 +141,7 @@ describe('EpgGrid mouse interaction', () => {
   it('selecting a different channel re-renders its (empty) guide', () => {
     clickData('data-channel-idx', 1);
     expect(channelItems()[1].classList.contains('selected')).toBe(true);
-    expect(container.querySelector('.epg-no-data')!.textContent).toBe('No program data');
+    expect(container.querySelector('.epg-no-data')!.textContent).toBe('No program information available.');
   });
 
   it('clicking the already-selected focused channel plays it', () => {
@@ -523,7 +523,7 @@ describe('EpgGrid non-catchup channel selection', () => {
       await Promise.resolve();
 
       expect(onSelect).not.toHaveBeenCalled();
-      expect(toastMock).toHaveBeenCalledWith('Program is not available for catch-up');
+      expect(toastMock).toHaveBeenCalledWith("This program isn't available for catch-up.");
     });
   });
 

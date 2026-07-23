@@ -161,6 +161,36 @@
   var fileEl = document.getElementById("file");
   var list = document.getElementById("list");
 
+  var MESSAGES = {
+    title: "Upload M3U Playlist",
+    subtitle: "Drop .m3u files here to add them to the TV",
+    drop: "Drag & drop your .m3u files here",
+    or: "or",
+    browse: "Browse Files",
+    playlists: "Playlists",
+    empty: "No playlists yet",
+    channel: "channel",
+    channels: "channels",
+    success: "Successfully uploaded",
+    failed: "Failed: ",
+    networkError: "Failed: network error",
+  };
+
+  function tr(key) {
+    return MESSAGES[key];
+  }
+
+  function setStaticMessages() {
+    document.title = tr("title");
+    document.querySelector(".title").textContent = tr("title");
+    document.querySelector(".subtitle").textContent = tr("subtitle");
+    document.querySelector(".primary").textContent = tr("drop");
+    document.querySelector(".or").textContent = tr("or");
+    document.querySelector(".browse").textContent = tr("browse");
+    document.querySelector(".section").textContent = tr("playlists");
+    document.querySelector(".empty").textContent = tr("empty");
+  }
+
   // Drag-over highlight + drop handling. We listen on the whole document for
   // dragover/dragleave so the highlight feels reactive across the page, but
   // only the drop zone accepts the drop.
@@ -239,7 +269,7 @@
         if (existingIds[it.id]) return; // already rendered (in-progress just finished, or already persisted)
         var li = makeRow({
           name: it.name,
-          sub: it.count + " channel" + (it.count === 1 ? "" : "s"),
+          sub: it.count + " " + tr(it.count === 1 ? "channel" : "channels"),
           msg: "✓",
           msgClass: "ok",
           cls: "persisted",
@@ -264,7 +294,7 @@
     if (rows.length === 0 && !empty) {
       var e = document.createElement("li");
       e.className = "empty";
-      e.textContent = "No playlists yet";
+      e.textContent = tr("empty");
       list.appendChild(e);
     } else if (rows.length > 0 && empty) {
       empty.remove();
@@ -295,7 +325,7 @@
       try { data = JSON.parse(xhr.responseText); } catch (e) {}
       if (xhr.status >= 200 && xhr.status < 300 && data) {
         li.classList.add("done");
-        msg.textContent = "Successfully uploaded";
+        msg.textContent = tr("success");
         msg.classList.add("ok");
         li.dataset.id = data.id;
         xBtn.onclick = function () {
@@ -304,13 +334,13 @@
         setTimeout(refresh, 300);
       } else {
         li.classList.add("err");
-        msg.textContent = "Failed: " + ((data && data.error) || ("HTTP " + xhr.status));
+        msg.textContent = tr("failed") + ((data && data.error) || ("HTTP " + xhr.status));
         msg.classList.add("err");
       }
     };
     xhr.onerror = function () {
       li.classList.add("err");
-      msg.textContent = "Failed: network error";
+      msg.textContent = tr("networkError");
       msg.classList.add("err");
     };
 
@@ -319,6 +349,7 @@
     xhr.send(file);
   }
 
+  setStaticMessages();
   refresh();
 </script>
 </body>

@@ -1,6 +1,7 @@
 import type { Action } from '../types';
 import { html } from '../utils/dom';
 import { morph } from '../utils/morph';
+import { t } from '../i18n';
 
 interface PromptHandlers {
   onConfirm: () => void;
@@ -58,12 +59,15 @@ export class ReminderPrompt {
     if (!this.el) return;
     morph(this.el, html`
       <div class="reminder-dialog">
-        <p class="reminder-message">${this.channelName} - ${this.title} is now live — watch it?</p>
+        <p class="reminder-message">${t('reminder.message', {
+          channel: this.channelName,
+          title: this.title,
+        })}</p>
         <div class="reminder-buttons">
           <button class="reminder-btn ${this.focus === 'ok' ? 'focused' : ''}"
-                  data-key="ok" data-reminder-action="ok">Watch now</button>
+                  data-key="ok" data-reminder-action="ok">${t('reminder.watchNow')}</button>
           <button class="reminder-btn ${this.focus === 'cancel' ? 'focused' : ''}"
-                  data-key="cancel" data-reminder-action="cancel">Cancel</button>
+                  data-key="cancel" data-reminder-action="cancel">${t('common.cancel')}</button>
         </div>
       </div>
     `);

@@ -1,5 +1,5 @@
 import type { Action, PlaylistEntry, TzMode } from '../types';
-import { $, $$, html, raw, type Safe } from '../utils/dom';
+import { $, $$, html, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SpatialNav } from '../navigation/spatial-nav';
 import { StorageService } from '../services/storage-service';
@@ -15,6 +15,7 @@ import { showToast } from './toast';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
+import { t } from '../i18n';
 
 const log = createLogger('Settings');
 
@@ -37,7 +38,7 @@ function formatOffset(min: number): string {
 /** "MyList — 12 channels" when count is known, otherwise just the name. */
 function uploadLabel(pl: PlaylistEntry): string {
   if (typeof pl.count === 'number') {
-    return `${pl.name} — ${pl.count} channel${pl.count === 1 ? '' : 's'}`;
+    return `${pl.name} — ${t(pl.count === 1 ? 'channel.countOne' : 'channel.count', { count: pl.count })}`;
   }
   return pl.name;
 }
@@ -47,15 +48,15 @@ function uploadLabel(pl: PlaylistEntry): string {
  *  `data-theme` so every `var(--…)` inside resolves to that theme's colors,
  *  independent of the app's active theme. The mock is decorative (aria-hidden);
  *  the button's aria-label names the theme. */
-function themeSwatch(t: ThemeMeta, activeId: string): Safe {
+function themeSwatch(theme: ThemeMeta, activeId: string): Safe {
   return html`
-    <button class="theme-swatch ${t.id === activeId ? 'active' : ''}" data-focusable
-            data-theme-id="${t.id}" data-theme="${t.id}" aria-label="${t.name} theme">
+    <button class="theme-swatch ${theme.id === activeId ? 'active' : ''}" data-focusable
+            data-theme-id="${theme.id}" data-theme="${theme.id}" aria-label="${theme.name} theme">
       <span class="theme-swatch-preview" aria-hidden="true">
         <span class="tsp-tabs">
-          <span class="tsp-tab active">Live</span>
-          <span class="tsp-tab">Movies</span>
-          <span class="tsp-tab">Series</span>
+          <span class="tsp-tab active">${t('nav.live')}</span>
+          <span class="tsp-tab">${t('nav.movies')}</span>
+          <span class="tsp-tab">${t('nav.series')}</span>
         </span>
         <span class="tsp-tiles">
           <span class="tsp-tile focus">ch1</span>
@@ -63,11 +64,11 @@ function themeSwatch(t: ThemeMeta, activeId: string): Safe {
           <span class="tsp-tile">ch3</span>
         </span>
         <span class="tsp-rows">
-          <span class="tsp-row">Channel one</span>
-          <span class="tsp-row muted">Channel two</span>
+          <span class="tsp-row">${t('settings.previewChannelOne')}</span>
+          <span class="tsp-row muted">${t('settings.previewChannelTwo')}</span>
         </span>
         <span class="tsp-foot">
-          <span class="tsp-epg">EPG · now</span>
+          <span class="tsp-epg">${t('settings.previewEpgNow')}</span>
           <span class="tsp-dots">
             <span class="tsp-dot dn"></span>
             <span class="tsp-dot su"></span>
@@ -75,7 +76,7 @@ function themeSwatch(t: ThemeMeta, activeId: string): Safe {
           </span>
         </span>
       </span>
-      <span class="theme-swatch-name">${t.name}</span>
+      <span class="theme-swatch-name">${theme.name}</span>
     </button>`;
 }
 
@@ -93,19 +94,21 @@ function toggleGroup(id: string, options: { value: string; label: string }[], ac
 
 /** Preferred-subtitle-language options for the online-subtitle search ranking.
  *  '' = no preference. Endonyms render on the TV's fonts (Latin/Cyrillic/CJK/Hangul). */
-const SUBTITLE_LANGUAGES: { value: string; label: string }[] = [
-  { value: '', label: 'Any' },
-  { value: 'en', label: 'English' },
-  { value: 'zh-CN', label: '简体中文' },
-  { value: 'zh-TW', label: '繁體中文' },
-  { value: 'es', label: 'Español' },
-  { value: 'fr', label: 'Français' },
-  { value: 'de', label: 'Deutsch' },
-  { value: 'pt', label: 'Português' },
-  { value: 'ru', label: 'Русский' },
-  { value: 'ja', label: '日本語' },
-  { value: 'ko', label: '한국어' },
-];
+function subtitleLanguages(): { value: string; label: string }[] {
+  return [
+    { value: '', label: t('settings.any') },
+    { value: 'en', label: 'English' },
+    { value: 'zh-CN', label: '简体中文' },
+    { value: 'zh-TW', label: '繁體中文' },
+    { value: 'es', label: 'Español' },
+    { value: 'fr', label: 'Français' },
+    { value: 'de', label: 'Deutsch' },
+    { value: 'pt', label: 'Português' },
+    { value: 'ru', label: 'Русский' },
+    { value: 'ja', label: '日本語' },
+    { value: 'ko', label: '한국어' },
+  ];
+}
 
 /** Custom single-select dropdown — remote/D-pad friendly and app-styled (the app
  *  uses no native `<select>`). The trigger toggles the menu; each option carries a
@@ -136,29 +139,29 @@ function xtreamCard(pl: Partial<PlaylistEntry>) {
     <div class="xtream-card" data-id="${pl.id || ''}">
       <div class="xtream-fields">
         <div class="settings-field">
-          <label>Label</label>
+          <label>${t('settings.label')}</label>
           <input type="text" class="settings-input xtream-name" data-focusable
-                 aria-label="Account label" placeholder="My Provider" value="${pl.name || ''}">
+                 aria-label="${t('settings.accountLabel')}" placeholder="${t('settings.myProvider')}" value="${pl.name || ''}">
         </div>
         <div class="settings-field wide">
-          <label>Server URL</label>
+          <label>${t('settings.serverUrl')}</label>
           <input type="text" class="settings-input xtream-url" data-focusable
-                 aria-label="Server URL" placeholder="http://host:port" value="${pl.url || ''}">
+                 aria-label="${t('settings.serverUrl')}" placeholder="http://host:port" value="${pl.url || ''}">
         </div>
         <div class="settings-field">
-          <label>Username</label>
+          <label>${t('settings.username')}</label>
           <input type="text" class="settings-input xtream-username" data-focusable
-                 aria-label="Username" placeholder="username" value="${pl.xtream?.username || ''}">
+                 aria-label="${t('settings.username')}" placeholder="username" value="${pl.xtream?.username || ''}">
         </div>
         <div class="settings-field">
-          <label>Password</label>
+          <label>${t('settings.password')}</label>
           <input type="password" class="settings-input xtream-password" data-focusable
-                 aria-label="Password" placeholder="password" value="${pl.xtream?.password || ''}">
+                 aria-label="${t('settings.password')}" placeholder="password" value="${pl.xtream?.password || ''}">
         </div>
       </div>
       <div class="xtream-card-foot">
-        <button class="btn btn-secondary check-xtream" data-focusable>Check</button>
-        <button class="btn btn-danger remove-xtream" data-focusable>Remove</button>
+        <button class="btn btn-secondary check-xtream" data-focusable>${t('settings.check')}</button>
+        <button class="btn btn-danger remove-xtream" data-focusable>${t('common.remove')}</button>
         <div class="xtream-status"></div>
       </div>
     </div>`;
@@ -166,10 +169,12 @@ function xtreamCard(pl: Partial<PlaylistEntry>) {
 
 /** "expires 2026-08-01" (UTC) or "never expires" for a unix-seconds expiry. */
 function formatExpiry(expiresAt: number | null): string {
-  if (expiresAt === null) return 'never expires';
+  if (expiresAt === null) return t('settings.neverExpires');
   const d = new Date(expiresAt * 1000);
   const p = (n: number) => String(n).padStart(2, '0');
-  return `expires ${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+  return t('settings.expires', {
+    date: `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`,
+  });
 }
 
 /** What the app does after Settings closes: reload = re-fetch playlist/EPG;
@@ -244,55 +249,59 @@ export class Settings {
     const theme = StorageService.getTheme();
     this.selectedTheme = theme;
     const overlayStyle = StorageService.getOverlayStyle();
+    const overlayStyles = OVERLAY_STYLES.map(option => ({
+      value: option.value,
+      label: t(option.value === 'dark' ? 'settings.overlayDark' : 'settings.overlayFrosted'),
+    }));
 
     this.container.innerHTML = String(html`
       <div class="settings-view">
-        <h2 class="settings-title">Settings</h2>
+        <h2 class="settings-title">${t('common.settings')}</h2>
 
         <div class="settings-section">
-          <h3>Xtream Account</h3>
+          <h3>${t('settings.xtreamAccount')}</h3>
           <div class="xtream-entries" id="xtream-entries">
             ${accounts.length
               ? html`${accounts.map((pl) => xtreamCard(pl))}`
-              : raw('<div class="empty-hint">No Xtream accounts added yet</div>')}
+              : html`<div class="empty-hint">${t('settings.noXtream')}</div>`}
           </div>
-          <button class="btn btn-primary" data-focusable id="add-xtream">+ Add Xtream Account</button>
+          <button class="btn btn-primary" data-focusable id="add-xtream">${t('settings.addXtream')}</button>
         </div>
 
         <div class="settings-section">
-          <h3>Playlists</h3>
+          <h3>${t('settings.playlists')}</h3>
           <div class="playlist-entries" id="playlist-entries">
             ${playlists.length
               ? html`
                 <div class="settings-row playlist-header-row">
-                  <div class="settings-field"><label>Name</label></div>
-                  <div class="settings-field"><label>URL</label></div>
+                  <div class="settings-field"><label>${t('settings.name')}</label></div>
+                  <div class="settings-field"><label>${t('settings.url')}</label></div>
                   <div class="playlist-header-spacer"></div>
                 </div>
                 ${playlists.map((pl) => html`
                 <div class="settings-row" data-id="${pl.id}">
                   <div class="settings-field">
                     <input type="text" class="settings-input playlist-name"
-                           aria-label="Playlist name" placeholder="My Playlist"
+                           aria-label="${t('settings.playlistName')}" placeholder="${t('settings.myPlaylist')}"
                            data-focusable value="${pl.name || ''}">
                   </div>
                   <div class="settings-field">
                     <input type="text" class="settings-input playlist-url"
-                           aria-label="Playlist URL" placeholder="https://...m3u"
+                           aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
                            data-focusable value="${pl.url || ''}">
                   </div>
-                  <button class="btn btn-danger remove-playlist" data-focusable>Remove</button>
+                  <button class="btn btn-danger remove-playlist" data-focusable>${t('common.remove')}</button>
                 </div>
               `)}`
-              : raw('<div class="empty-hint">No playlists added yet</div>')}
+              : html`<div class="empty-hint">${t('settings.noPlaylists')}</div>`}
           </div>
-          <button class="btn btn-primary" data-focusable id="add-playlist">+ Add Playlist</button>
+          <button class="btn btn-primary" data-focusable id="add-playlist">${t('settings.addPlaylist')}</button>
         </div>
 
         <div class="settings-section">
-          <h3>Upload Playlist</h3>
+          <h3>${t('settings.uploadPlaylist')}</h3>
           <div class="upload-section">
-            <div class="upload-box upload-box-info" id="upload-info">Checking upload service...</div>
+            <div class="upload-box upload-box-info" id="upload-info">${t('settings.checkingUpload')}</div>
             <div class="upload-box upload-box-list">
               <div class="upload-entries" id="upload-entries">
                 ${uploads.length
@@ -302,20 +311,20 @@ export class Settings {
                         <label>${uploadLabel(pl)}</label>
                       </div>
                       <button class="btn btn-danger remove-upload" data-focusable
-                              data-url="${pl.url}">Remove</button>
+                              data-url="${pl.url}">${t('common.remove')}</button>
                     </div>
                   `)
-                  : raw('<div class="empty-hint">No uploaded playlists</div>')}
+                  : html`<div class="empty-hint">${t('settings.noUploads')}</div>`}
               </div>
             </div>
           </div>
         </div>
 
         <div class="settings-section">
-          <h3>EPG (Electronic Program Guide)</h3>
+          <h3>${t('settings.epg')}</h3>
           <div class="settings-row">
             <div class="settings-field wide">
-              <label>XMLTV URL</label>
+              <label>${t('settings.xmltvUrl')}</label>
               <input type="text" class="settings-input" data-focusable id="epg-url"
                      value="${epgUrl}" placeholder="https://example.com/epg.xml">
             </div>
@@ -323,95 +332,95 @@ export class Settings {
         </div>
 
         <div class="settings-section">
-          <h3>Appearance</h3>
+          <h3>${t('settings.appearance')}</h3>
           <div class="theme-swatch-grid">
             ${THEMES.map(t => themeSwatch(t, theme))}
           </div>
           <div class="settings-row settings-toggle-row">
-            <label>Player overlay glass</label>
-            ${toggleGroup('overlay-style', OVERLAY_STYLES, overlayStyle)}
+            <label>${t('settings.overlayGlass')}</label>
+            ${toggleGroup('overlay-style', overlayStyles, overlayStyle)}
           </div>
-          <div class="empty-hint">Dark stays readable over any video. Frosted is light-glass — best on light themes.</div>
+          <div class="empty-hint">${t('settings.overlayHint')}</div>
         </div>
 
         <div class="settings-section">
-          <h3>Display</h3>
+          <h3>${t('settings.display')}</h3>
           <div class="settings-row settings-toggle-row">
-            <label>Program time zone</label>
-            ${toggleGroup('tz-mode', [{ value: 'device', label: 'Device' }, { value: 'feed', label: 'Feed' }], feedTime ? 'feed' : 'device')}
+            <label>${t('settings.timeZone')}</label>
+            ${toggleGroup('tz-mode', [{ value: 'device', label: t('settings.device') }, { value: 'feed', label: t('settings.feed') }], feedTime ? 'feed' : 'device')}
           </div>
           <div class="empty-hint">
             ${tzOffset === null
-              ? 'Device uses your device’s time zone. Feed uses the EPG feed’s time zone (load EPG to detect it).'
-              : `Device uses your device’s time zone. Feed uses the EPG feed’s time zone (${formatOffset(tzOffset)}).`}
+              ? t('settings.timeZoneUnknown')
+              : t('settings.timeZoneKnown', { offset: formatOffset(tzOffset) })}
           </div>
         </div>
 
         <div class="settings-section">
-          <h3>Playback</h3>
+          <h3>${t('settings.playback')}</h3>
           <div class="settings-row settings-toggle-row">
-            <label>Auto-play last channel on startup</label>
-            ${toggleGroup('auto-play', [{ value: 'on', label: 'ON' }, { value: 'off', label: 'OFF' }], autoPlay ? 'on' : 'off')}
+            <label>${t('settings.autoPlay')}</label>
+            ${toggleGroup('auto-play', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], autoPlay ? 'on' : 'off')}
           </div>
           <div class="settings-history-action">
             <div class="settings-history-copy">
-              <div class="settings-history-title">Recently Watched</div>
+              <div class="settings-history-title">${t('channel.recentlyWatched')}</div>
               <div class="settings-history-description">
-                Clear recent live channels and Catch-up progress. Movies and Series are not affected.
+                ${t('settings.clearRecentDescription')}
               </div>
             </div>
             <button class="btn btn-danger" data-focusable id="clear-recently-watched"
-                    aria-label="Clear Recently Watched">Clear Recently Watched</button>
+                    aria-label="${t('settings.clearRecentlyWatched')}">${t('settings.clearRecentlyWatched')}</button>
           </div>
           ${this.watchlistAccount ? html`
             <div class="settings-history-action">
               <div class="settings-history-copy">
-                <div class="settings-history-title">Watchlist</div>
+                <div class="settings-history-title">${t('common.watchlist')}</div>
                 <div class="settings-history-description">
-                  Clear saved Movies and Series for ${this.watchlistAccount.name}.
+                  ${t('settings.clearWatchlistDescription', { account: this.watchlistAccount.name })}
                 </div>
               </div>
               <button class="btn btn-danger" data-focusable id="clear-watchlist"
-                      aria-label="Clear Watchlist">Clear Watchlist</button>
+                      aria-label="${t('settings.clearWatchlist')}">${t('settings.clearWatchlist')}</button>
             </div>
           ` : ''}
         </div>
 
         <div class="settings-section">
-          <h3>Online Subtitles</h3>
+          <h3>${t('settings.onlineSubtitles')}</h3>
           <div class="settings-row">
             <div class="settings-field">
-              <label>Preferred subtitle language</label>
-              ${dropdown('os-pref-lang', SUBTITLE_LANGUAGES, os.preferredLanguage)}
+              <label>${t('settings.preferredSubtitle')}</label>
+              ${dropdown('os-pref-lang', subtitleLanguages(), os.preferredLanguage)}
             </div>
           </div>
           <div class="settings-row">
             <div class="settings-field wide">
-              <label><span class="settings-domain">SubDL.com</span> API key</label>
+              <label><span class="settings-domain">SubDL.com</span> ${t('settings.apiKey')}</label>
               <input type="text" class="settings-input" data-focusable id="subdl-key"
                      value="${os.subdl.apiKey}" placeholder="api_key">
             </div>
           </div>
           <div class="settings-row">
             <div class="settings-field wide">
-              <label><span class="settings-domain">Assrt.net</span> API token (Chinese subtitles — optional; blank uses a shared token)</label>
+              <label><span class="settings-domain">Assrt.net</span> ${t('settings.assrtToken')}</label>
               <input type="text" class="settings-input" data-focusable id="assrt-key"
                      value="${os.assrt.apiKey}" placeholder="token">
             </div>
           </div>
           <div class="settings-row">
             <div class="settings-field">
-              <label><span class="settings-domain">OpenSubtitles.com</span> API key</label>
+              <label><span class="settings-domain">OpenSubtitles.com</span> ${t('settings.apiKey')}</label>
               <input type="text" class="settings-input" data-focusable id="os-key"
                      value="${os.opensubtitles.apiKey}" placeholder="api_key">
             </div>
             <div class="settings-field">
-              <label>Username</label>
+              <label>${t('settings.username')}</label>
               <input type="text" class="settings-input" data-focusable id="os-user"
                      value="${os.opensubtitles.username}" placeholder="username">
             </div>
             <div class="settings-field">
-              <label>Password</label>
+              <label>${t('settings.password')}</label>
               <input type="password" class="settings-input" data-focusable id="os-pass"
                      value="${os.opensubtitles.password}" placeholder="password">
             </div>
@@ -419,16 +428,16 @@ export class Settings {
         </div>
 
         <div class="settings-section">
-          <h3>Data Management</h3>
+          <h3>${t('settings.dataManagement')}</h3>
           <div class="settings-row">
-            <button class="btn btn-secondary" data-focusable id="refresh-data">Refresh All Data</button>
-            <button class="btn btn-danger" data-focusable id="clear-cache">Clear Cache</button>
+            <button class="btn btn-secondary" data-focusable id="refresh-data">${t('settings.refreshAll')}</button>
+            <button class="btn btn-danger" data-focusable id="clear-cache">${t('settings.clearCache')}</button>
           </div>
         </div>
 
         <div class="settings-actions">
-          <button class="btn btn-primary btn-large" data-focusable id="save-settings">Save &amp; Apply</button>
-          <button class="btn btn-secondary btn-large" data-focusable id="cancel-settings">Cancel</button>
+          <button class="btn btn-primary btn-large" data-focusable id="save-settings">${t('settings.saveApply')}</button>
+          <button class="btn btn-secondary btn-large" data-focusable id="cancel-settings">${t('common.cancel')}</button>
         </div>
 
         <div class="settings-about">
@@ -499,29 +508,29 @@ export class Settings {
     } else if (el.id === 'clear-cache') {
       StorageService.remove('cached_playlist');
       void clearCachedEpg();
-      showToast('Cache cleared');
+      showToast(t('settings.cacheCleared'));
     } else if (el.id === 'clear-recently-watched') {
       this.confirmationPrompt.show({
-        title: 'Clear Recently Watched?',
-        message: 'This removes recent live channels and Catch-up progress. Movies and Series are not affected.',
-        confirmLabel: 'Clear',
-        cancelLabel: 'Cancel',
+        title: t('settings.clearRecentTitle'),
+        message: t('settings.clearRecentMessage'),
+        confirmLabel: t('common.clear'),
+        cancelLabel: t('common.cancel'),
         onConfirm: () => {
           StorageService.clearRecentlyWatched();
-          showToast('Recently Watched cleared');
+          showToast(t('settings.recentCleared'));
         },
         onCancel: () => {},
       });
     } else if (el.id === 'clear-watchlist' && this.watchlistAccount) {
       const account = this.watchlistAccount;
       this.confirmationPrompt.show({
-        title: 'Clear Watchlist?',
-        message: `This removes all Movies and Series from ${account.name}'s Watchlist.`,
-        confirmLabel: 'Clear',
-        cancelLabel: 'Cancel',
+        title: t('settings.clearWatchlistTitle'),
+        message: t('settings.clearWatchlistMessage', { account: account.name }),
+        confirmLabel: t('common.clear'),
+        cancelLabel: t('common.cancel'),
         onConfirm: () => {
           StorageService.clearWatchlist(account.id);
-          showToast(`Watchlist cleared for "${account.name}"`);
+          showToast(t('settings.watchlistCleared', { account: account.name }));
         },
         onCancel: () => {},
       });
@@ -595,8 +604,8 @@ export class Settings {
       const header = document.createElement('div');
       header.className = 'settings-row playlist-header-row';
       header.innerHTML = `
-        <div class="settings-field"><label>Name</label></div>
-        <div class="settings-field"><label>URL</label></div>
+        <div class="settings-field"><label>${t('settings.name')}</label></div>
+        <div class="settings-field"><label>${t('settings.url')}</label></div>
         <div class="playlist-header-spacer"></div>
       `;
       entries.appendChild(header);
@@ -617,15 +626,15 @@ export class Settings {
     row.innerHTML = `
       <div class="settings-field">
         <input type="text" class="settings-input playlist-name"
-               aria-label="Playlist name" placeholder="My Playlist"
-               data-focusable value="Playlist ${nextNum}">
+               aria-label="${t('settings.playlistName')}" placeholder="${t('settings.myPlaylist')}"
+               data-focusable value="${t('settings.playlistDefault', { number: nextNum })}">
       </div>
       <div class="settings-field">
         <input type="text" class="settings-input playlist-url"
-               aria-label="Playlist URL" placeholder="https://...m3u"
+               aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
                data-focusable value="">
       </div>
-      <button class="btn btn-danger remove-playlist" data-focusable>Remove</button>
+      <button class="btn btn-danger remove-playlist" data-focusable>${t('common.remove')}</button>
     `;
     entries.appendChild(row);
 
@@ -648,7 +657,7 @@ export class Settings {
       if (header) header.remove();
       const e = document.createElement('div');
       e.className = 'empty-hint';
-      e.textContent = 'No playlists added yet';
+      e.textContent = t('settings.noPlaylists');
       entries.appendChild(e);
     }
     this.nav.focusFirst();
@@ -682,7 +691,7 @@ export class Settings {
     if (entries.querySelectorAll('.xtream-card').length === 0) {
       const e = document.createElement('div');
       e.className = 'empty-hint';
-      e.textContent = 'No Xtream accounts added yet';
+      e.textContent = t('settings.noXtream');
       entries.appendChild(e);
     }
     this.nav.focusFirst();
@@ -702,28 +711,31 @@ export class Settings {
     const username = card.querySelector<HTMLInputElement>('.xtream-username')!.value.trim();
     const password = card.querySelector<HTMLInputElement>('.xtream-password')!.value;
     if (!url || !username || !password) {
-      this.setXtreamStatus(id, html`Enter server, username and password first.`, 'err');
+      this.setXtreamStatus(id, html`${t('settings.enterCredentials')}`, 'err');
       return;
     }
 
-    this.setXtreamStatus(id, html`Checking\u2026`, '');
+    this.setXtreamStatus(id, html`${t('settings.checking')}`, '');
     const info = await createXtreamClient({ baseUrl: url, username, password }).getAccountInfo();
     if (!info) {
       log.warn('Xtream verify failed — server unreachable or non-JSON');
-      this.setXtreamStatus(id, html`Couldn\u2019t verify account.`, 'err');
+      this.setXtreamStatus(id, html`${t('settings.verifyFailed')}`, 'err');
       return;
     }
     if (!info.auth) {
       log.warn('Xtream verify rejected — credentials not accepted (auth 0)');
-      this.setXtreamStatus(id, html`Login failed \u2014 check credentials.`, 'err');
+      this.setXtreamStatus(id, html`${t('settings.loginFailed')}`, 'err');
       return;
     }
-    const status = info.status || 'Active';
+    const status = info.status || t('settings.active');
     log.info('Xtream verify OK —', status, '| expires', formatExpiry(info.expiresAt),
       '|', info.activeConnections + '/' + info.maxConnections, 'connections');
     this.setXtreamStatus(
       id,
-      html`${status} \u00b7 ${formatExpiry(info.expiresAt)} \u00b7 ${info.activeConnections}/${info.maxConnections} connections`,
+      html`${status} \u00b7 ${formatExpiry(info.expiresAt)} \u00b7 ${t('settings.connections', {
+        active: info.activeConnections,
+        max: info.maxConnections,
+      })}`,
       'ok',
     );
   }
@@ -747,7 +759,7 @@ export class Settings {
       const name = row.querySelector<HTMLInputElement>('.playlist-name')!.value.trim();
       playlists.push({
         id: row.dataset.id || genPlaylistId(),
-        name: name || `Playlist ${playlists.length + 1}`,
+        name: name || t('settings.playlistDefault', { number: playlists.length + 1 }),
         url,
         source: 'url',
       });
@@ -839,13 +851,15 @@ export class Settings {
     if (info) {
       const url = info.uploadUrl;
       morph(target, html`
-        <img class="upload-qr" alt="QR code linking to ${url}" src="${qrDataUrl(url)}">
+        <img class="upload-qr" alt="${t('settings.qrAlt', { url })}" src="${qrDataUrl(url)}">
         <div class="upload-instructions">
-          Scan QR code or open <span class="upload-url">${url}</span> to upload m3u files.
+          ${t('settings.uploadInstructionsBefore')}
+          <span class="upload-url">${url}</span>
+          ${t('settings.uploadInstructionsAfter')}
         </div>
       `);
     } else {
-      morph(target, html`<span>Upload service is not running.</span>`);
+      morph(target, html`<span>${t('settings.uploadUnavailable')}</span>`);
     }
   }
 
@@ -856,7 +870,7 @@ export class Settings {
     const remaining = StorageService.getPlaylists().filter(pl => pl.url !== url);
     StorageService.setPlaylists(remaining);
     StorageService.remove('cached_playlist');
-    showToast('Uploaded playlist removed');
+    showToast(t('settings.uploadRemoved'));
 
     await this.refreshUploads();
   }
@@ -887,9 +901,9 @@ export class Settings {
             <label>${uploadLabel(pl)}</label>
           </div>
           <button class="btn btn-danger remove-upload" data-focusable
-                  data-url="${pl.url}">Remove</button>
+                  data-url="${pl.url}">${t('common.remove')}</button>
         </div>
       `)}`
-      : html`<div class="empty-hint">No uploaded playlists</div>`);
+      : html`<div class="empty-hint">${t('settings.noUploads')}</div>`);
   }
 }
