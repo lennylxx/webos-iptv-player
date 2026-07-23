@@ -17,6 +17,7 @@ export default defineConfig({
     // Default to Node. DOM-dependent tests opt in per-file with:
     //   // @vitest-environment jsdom
     environment: 'node',
+    setupFiles: ['src/test/setup.ts'],
     include: ['src/**/*.test.ts', 'bundled-service/src/**/*.test.ts', 'webOSjs/**/*.test.ts', 'scripts/**/*.test.mjs'],
     // Keep coverage output under the shared test-output/ folder.
     coverage: {

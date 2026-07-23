@@ -25,7 +25,7 @@ import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
 import type { Action, NumberEvent, CatchupInfo, EpgSource, PlaylistEntry } from './types';
-import { t } from './i18n';
+import { getLocale, initLocale, resolveLocale, setLocale, t } from './i18n';
 
 const log = createLogger('App');
 
@@ -52,6 +52,7 @@ class App {
   async init(): Promise<void> {
     const done = log.time('init');
     log.info('Initializing app');
+    initLocale(StorageService.getLocalePreference());
     const initialLoadingText = $('#loading-text');
     if (initialLoadingText) initialLoadingText.textContent = t('common.loading');
     initTheme();
@@ -160,6 +161,7 @@ class App {
     this.bindUploadServiceLifecycle();
     this.bindReminderLifecycle();
     await this.queryDevMode();
+    ReminderService.reschedulePending();
     await this.loadData();
     // Cold launch from a "Watch now" alert: channels are loaded now, so tune.
     this.handleLaunchParams(this.coldLaunchParams());
@@ -910,6 +912,14 @@ class App {
 
 
   private async onSettingsSaved(action: SaveAction): Promise<void> {
+    if (action !== 'cancel') {
+      const locale = resolveLocale(StorageService.getLocalePreference());
+      if (locale !== getLocale()) {
+        setLocale(locale);
+        this.tabBar.refresh();
+        ReminderService.reschedulePending();
+      }
+    }
     if (action === 'reload') {
       StorageService.remove('cached_playlist');
       this.showView('channels');

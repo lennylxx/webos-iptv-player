@@ -90,6 +90,14 @@ class ReminderServiceImpl {
     }
   }
 
+  reschedulePending(now = Date.now()): void {
+    for (const reminder of this.list()) {
+      if (!reminder.answered && reminder.startMs > now && reminder.stopMs > now) {
+        this.schedule(reminder);
+      }
+    }
+  }
+
   private lunaRequest(): ((uri: string, opts: unknown) => void) | null {
     const w = window as unknown as { webOS?: { service?: { request?: (uri: string, opts: unknown) => void } } };
     return w.webOS?.service?.request ?? null;
@@ -114,7 +122,17 @@ class ReminderServiceImpl {
     const callback = this._devMode
       ? {
           method: `luna://${CONFIG.SERVICE_ID}/fireReminderAlert`,
-          params: { title, channelName: channel, channelKey: reminder.channelKey, appId: CONFIG.APP_ID },
+          params: {
+            copyVersion: 1,
+            title,
+            channelName: channel,
+            channelKey: reminder.channelKey,
+            appId: CONFIG.APP_ID,
+            alertTitle: t('reminder.title'),
+            alertMessage: t('reminder.message', { channel, title }),
+            watchLabel: t('reminder.watchNow'),
+            cancelLabel: t('common.cancel'),
+          },
         }
       : {
           method: 'luna://com.webos.notification/createToast',

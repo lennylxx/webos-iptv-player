@@ -52,6 +52,8 @@ if (isPreview && outputIndexHtml === indexHtml) {
 }
 writeFileSync('dist/index.html', outputIndexHtml);
 cpSync('appinfo.json', 'dist/appinfo.json');
+rmSync('dist/resources', { recursive: true, force: true });
+cpSync('resources', 'dist/resources', { recursive: true });
 cpSync('css', 'dist/css', { recursive: true });
 // Append the generated flex-`gap` fallback to legacy-webos.css (loaded last).
 appendFileSync('dist/css/legacy-webos.css', generateGapFallback('css'));

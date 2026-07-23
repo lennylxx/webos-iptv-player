@@ -63,6 +63,17 @@ describe('StorageService', () => {
     expect(StorageService.getOverlayStyle()).toBe('frosted');
   });
 
+  it('defaults to the system language and round-trips a locale preference', () => {
+    expect(StorageService.getLocalePreference()).toBe('system');
+    StorageService.setLocalePreference('zh-CN');
+    expect(StorageService.getLocalePreference()).toBe('zh-CN');
+  });
+
+  it('ignores an unsupported stored locale', () => {
+    StorageService.set('locale', 'l1');
+    expect(StorageService.getLocalePreference()).toBe('system');
+  });
+
   it('defaults reminders to an empty array and round-trips them', () => {
     expect(StorageService.getReminders()).toEqual([]);
     const list = [{ channelKey: 'k1', channelName: 'Chan A', title: 'Alpha', startMs: 100, stopMs: 200 }];

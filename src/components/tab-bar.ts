@@ -77,6 +77,8 @@ export class TabBar {
   // keeps Search active, so the host shouldn't re-sync the active tab then).
   get searchOpen(): boolean { return this.searchExpanded; }
 
+  refresh(): void { this.render(); }
+
   private get accountShown(): boolean { return this.accounts.length > 0; }
   // Focus targets = the sections, plus the account avatar when present.
   private ringLength(): number { return this.sections.length + (this.accountShown ? 1 : 0); }

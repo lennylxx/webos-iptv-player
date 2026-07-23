@@ -15,7 +15,7 @@ import { showToast } from './toast';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
-import { t } from '../i18n';
+import { localeOptions, t, type LocalePreference } from '../i18n';
 
 const log = createLogger('Settings');
 
@@ -107,6 +107,13 @@ function subtitleLanguages(): { value: string; label: string }[] {
     { value: 'ru', label: 'Русский' },
     { value: 'ja', label: '日本語' },
     { value: 'ko', label: '한국어' },
+  ];
+}
+
+function languageOptions(): { value: LocalePreference; label: string }[] {
+  return [
+    { value: 'system', label: t('settings.languageSystem') },
+    ...localeOptions(),
   ];
 }
 
@@ -249,6 +256,7 @@ export class Settings {
     const theme = StorageService.getTheme();
     this.selectedTheme = theme;
     const overlayStyle = StorageService.getOverlayStyle();
+    const localePreference = StorageService.getLocalePreference();
     const overlayStyles = OVERLAY_STYLES.map(option => ({
       value: option.value,
       label: t(option.value === 'dark' ? 'settings.overlayDark' : 'settings.overlayFrosted'),
@@ -266,6 +274,16 @@ export class Settings {
               : html`<div class="empty-hint">${t('settings.noXtream')}</div>`}
           </div>
           <button class="btn btn-primary" data-focusable id="add-xtream">${t('settings.addXtream')}</button>
+        </div>
+
+        <div class="settings-section">
+          <h3>${t('settings.language')}</h3>
+          <div class="settings-row">
+            <div class="settings-field">
+              ${dropdown('app-language', languageOptions(), localePreference)}
+            </div>
+          </div>
+          <div class="empty-hint">${t('settings.languageHint')}</div>
         </div>
 
         <div class="settings-section">
@@ -808,6 +826,9 @@ export class Settings {
 
     const overlayBtn = $('#overlay-style .toggle-option.active', this.container);
     if (overlayBtn?.dataset.value) StorageService.setOverlayStyle(overlayBtn.dataset.value as OverlayStyle);
+
+    const locale = ($('#app-language', this.container) as HTMLElement | null)?.dataset.value as LocalePreference | undefined;
+    if (locale) StorageService.setLocalePreference(locale);
 
     const prevOs = StorageService.getOnlineSubtitleConfig();
     const osVal = (id: string) => ($(`#${id}`, this.container) as HTMLInputElement | null)?.value.trim() ?? '';

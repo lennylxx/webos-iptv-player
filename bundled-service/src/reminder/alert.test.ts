@@ -27,4 +27,16 @@ describe('buildAlertPayload', () => {
     const p = buildAlertPayload('Bravo & "Co"', 'Charlie', 'ch2', 'com.example.app');
     expect(p.message).toContain('Bravo & "Co"');
   });
+
+  it('uses localized alert copy verbatim', () => {
+    const p = buildAlertPayload('Alpha', 'Bravo', 'ch1', 'com.example.app', {
+      title: 'Title l1',
+      message: 'Message l1',
+      watchLabel: 'Watch l1',
+      cancelLabel: 'Cancel l1',
+    });
+    expect(p.title).toBe('Title l1');
+    expect(p.message).toBe('Message l1');
+    expect(p.buttons.map(button => button.label)).toEqual(['Watch l1', 'Cancel l1']);
+  });
 });

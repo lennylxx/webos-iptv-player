@@ -10,6 +10,7 @@ vi.mock('./playlist-service', () => ({ PlaylistService: playlistMock }));
 import { ReminderService } from './reminder-service';
 import { channelKey } from '../utils/channel';
 import { CONFIG } from '../config';
+import { setLocale } from '../i18n';
 
 const chan = (url: string, name: string) => ({
   id: '', name, logo: '', group: '', url, extras: null,
@@ -84,6 +85,17 @@ describe('ReminderService scheduling', () => {
       .toBe('A - Alpha is now live — open the app to watch');
   });
 
+  it('schedules translated retail copy in the active locale', () => {
+    setLocale('zh-CN');
+    const request = mockLuna();
+    const startMs = new Date(2030, 0, 2, 15, 4, 5).getTime();
+    ReminderService.add(rem({ startMs, title: 'Alpha' }));
+    const [, opts] = request.mock.calls[0];
+    const activity = (opts as { parameters: { activity: Record<string, unknown> } }).parameters.activity;
+    expect((activity.callback as { params: { message: string } }).params.message)
+      .toBe('A - Alpha 已开始播出，打开应用即可观看');
+  });
+
   it('cancels the activity by name on remove', () => {
     const request = mockLuna();
     ReminderService.add(rem({ startMs: 5000 }));
@@ -108,9 +120,33 @@ describe('ReminderService scheduling', () => {
     const a = (opts as { parameters: { activity: Record<string, unknown> } }).parameters.activity;
     expect((a.callback as { method: string }).method)
       .toBe(`luna://${CONFIG.SERVICE_ID}/fireReminderAlert`);
-    expect((a.callback as { params: { title: string; channelName: string; channelKey: string; appId: string } }).params)
-      .toEqual({ title: 'Alpha', channelName: 'A', channelKey: keyA, appId: CONFIG.APP_ID });
+    expect((a.callback as { params: Record<string, unknown> }).params).toEqual({
+      copyVersion: 1,
+      title: 'Alpha',
+      channelName: 'A',
+      channelKey: keyA,
+      appId: CONFIG.APP_ID,
+      alertTitle: 'Program reminder',
+      alertMessage: 'A — Alpha is now live. Watch now?',
+      watchLabel: 'Watch now',
+      cancelLabel: 'Cancel',
+    });
     ReminderService.setDevMode(false);
+  });
+
+  it('reschedules only future unanswered reminders', () => {
+    const future = rem({ startMs: 5000, stopMs: 6000 });
+    ReminderService.add(future);
+    ReminderService.add(rem({ startMs: 7000, stopMs: 8000, answered: true }));
+    ReminderService.add(rem({ startMs: 1000, stopMs: 2000 }));
+    const request = mockLuna();
+
+    ReminderService.reschedulePending(3000);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    const [, opts] = request.mock.calls[0];
+    expect((opts as { parameters: { activity: { name: string } } }).parameters.activity.name)
+      .toBe(`iptvReminder-${keyA}-5000`);
   });
 });
 

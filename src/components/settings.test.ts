@@ -19,6 +19,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
     overlayStyle: 'dark' as string,
     tzMode: 'device' as TzMode,
     tzOffset: null as number | null,
+    locale: 'system' as const,
     onlineSubtitles: {
       preferredLanguage: '',
       subdl: { apiKey: '' },
@@ -37,6 +38,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
       getOverlayStyle: vi.fn(() => state.overlayStyle),
       getTzMode: vi.fn(() => state.tzMode),
       getEpgTzOffset: vi.fn(() => state.tzOffset),
+      getLocalePreference: vi.fn(() => state.locale),
       getOnlineSubtitleConfig: vi.fn(() => state.onlineSubtitles),
       getSelectedXtreamAccountId: vi.fn(() => null),
       setPlaylists: vi.fn(),
@@ -45,6 +47,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
       setTheme: vi.fn((id: string) => { state.theme = id; }),
       setOverlayStyle: vi.fn((s: string) => { state.overlayStyle = s; }),
       setTzMode: vi.fn(),
+      setLocalePreference: vi.fn(),
       setOnlineSubtitleConfig: vi.fn((cfg: any) => { state.onlineSubtitles = cfg; }),
       remove: vi.fn(),
       clearRecentlyWatched: vi.fn(),
@@ -84,6 +87,7 @@ vi.mock('../services/upload-client', () => ({
 
 import { Settings } from './settings';
 import { clearCachedEpg } from '../services/idb-cache';
+import { setLocale } from '../i18n';
 
 let container: HTMLElement;
 let onSave: ReturnType<typeof vi.fn>;
@@ -460,6 +464,23 @@ describe('Settings.save', () => {
     click('#save-settings');
     expect(storageMock.setTzMode).toHaveBeenCalledWith('feed');
     expect(onSave).toHaveBeenCalledWith('apply'); // no re-fetch
+  });
+
+  it('persists the selected app language as a display-only change', () => {
+    state.playlists = [{ id: 'p1', name: 'P', url: 'http://p' }];
+    settings.render();
+    click('#app-language [data-dropdown-trigger]');
+    click('#app-language [data-dropdown-value="zh-CN"]');
+    click('#save-settings');
+    expect(storageMock.setLocalePreference).toHaveBeenCalledWith('zh-CN');
+    expect(onSave).toHaveBeenCalledWith('apply');
+  });
+
+  it('renders the Settings title in Simplified Chinese', () => {
+    setLocale('zh-CN');
+    settings.render();
+    expect(container.querySelector('.settings-title')?.textContent).toBe('设置');
+    expect(container.querySelector('#app-language .dropdown-current')?.textContent).toBe('跟随系统');
   });
 
   it('defaults a missing name to "Playlist N"', () => {

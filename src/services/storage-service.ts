@@ -5,6 +5,7 @@ import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/ty
 import { channelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist-id';
 import { createLogger } from '../utils/logger';
+import { isLocalePreference, type LocalePreference } from '../i18n';
 
 const log = createLogger('Storage');
 
@@ -146,6 +147,14 @@ export const StorageService = {
   },
   setAutoPlay(val: boolean): void {
     set('auto_play', val);
+  },
+
+  getLocalePreference(): LocalePreference {
+    const locale = get<unknown>('locale', 'system');
+    return isLocalePreference(locale) ? locale : 'system';
+  },
+  setLocalePreference(locale: LocalePreference): void {
+    set('locale', locale);
   },
 
   // Selected color theme id (see src/config/themes.ts). Default = Midnight.

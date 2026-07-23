@@ -29,21 +29,34 @@ export interface AlertPayload {
   buttons: AlertButton[];
 }
 
+export interface AlertCopy {
+  title: string;
+  message: string;
+  watchLabel: string;
+  cancelLabel: string;
+}
+
 // Pure — unit-tested without child_process/fs.
-export function buildAlertPayload(title: string, channelName: string, channelKey: string, appId: string): AlertPayload {
+export function buildAlertPayload(
+  title: string,
+  channelName: string,
+  channelKey: string,
+  appId: string,
+  copy?: AlertCopy,
+): AlertPayload {
   return {
     sourceId: appId,
-    title: 'Program reminder',
-    message: `${channelName} - ${title} is now live — watch it?`,
+    title: copy ? copy.title : 'Program reminder',
+    message: copy ? copy.message : `${channelName} - ${title} is now live — watch it?`,
     modal: true,
     buttons: [
       {
-        label: 'Watch now',
+        label: copy ? copy.watchLabel : 'Watch now',
         focus: true,
         onclick: 'luna://com.webos.applicationManager/launch',
         params: { id: appId, params: { reminderChannelKey: channelKey } },
       },
-      { label: 'Cancel' },
+      { label: copy ? copy.cancelLabel : 'Cancel' },
     ],
   };
 }
