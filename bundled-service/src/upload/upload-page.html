@@ -162,25 +162,78 @@
   var list = document.getElementById("list");
 
   var MESSAGES = {
-    title: "Upload M3U Playlist",
-    subtitle: "Drop .m3u files here to add them to the TV",
-    drop: "Drag & drop your .m3u files here",
-    or: "or",
-    browse: "Browse Files",
-    playlists: "Playlists",
-    empty: "No playlists yet",
-    channel: "channel",
-    channels: "channels",
-    success: "Successfully uploaded",
-    failed: "Failed: ",
-    networkError: "Failed: network error",
+    en: {
+      systemExact: [],
+      systemPrefixes: [],
+      text: {
+        title: "Upload M3U Playlist",
+        subtitle: "Drop .m3u files here to add them to the TV",
+        drop: "Drag & drop your .m3u files here",
+        or: "or",
+        browse: "Browse Files",
+        playlists: "Playlists",
+        empty: "No playlists yet",
+        channelCountOne: "{count} channel",
+        channelCount: "{count} channels",
+        success: "Successfully uploaded",
+        failed: "Failed: ",
+        networkError: "Failed: network error",
+      },
+    },
+    "zh-CN": {
+      systemExact: ["zh"],
+      systemPrefixes: ["zh-cn", "zh-sg", "zh-hans"],
+      text: {
+        title: "上传 M3U 播放列表",
+        subtitle: "将 .m3u 文件拖到此处，即可添加到电视",
+        drop: "将 .m3u 文件拖放到这里",
+        or: "或",
+        browse: "选择文件",
+        playlists: "播放列表",
+        empty: "暂无播放列表",
+        channelCountOne: "{count} 个频道",
+        channelCount: "{count} 个频道",
+        success: "上传成功",
+        failed: "失败：",
+        networkError: "失败：网络错误",
+      },
+    },
   };
+  var DEFAULT_LOCALE = "en";
+  var locale = resolveLocale();
+  var messages = MESSAGES[locale].text;
 
-  function tr(key) {
-    return MESSAGES[key];
+  function resolveLocale() {
+    var languages = navigator.languages && navigator.languages.length
+      ? navigator.languages
+      : [navigator.language || DEFAULT_LOCALE];
+    var locales = Object.keys(MESSAGES);
+    for (var i = 0; i < languages.length; i += 1) {
+      var language = String(languages[i]).toLowerCase();
+      for (var j = 0; j < locales.length; j += 1) {
+        var definition = MESSAGES[locales[j]];
+        if (definition.systemExact.some(function (value) { return language === value; })
+            || definition.systemPrefixes.some(function (prefix) {
+              return language === prefix || language.indexOf(prefix + "-") === 0;
+            })) {
+          return locales[j];
+        }
+      }
+    }
+    return DEFAULT_LOCALE;
+  }
+
+  function tr(key, params) {
+    var message = messages[key];
+    if (typeof message !== "string") throw new Error("Missing upload message: " + locale + ":" + key);
+    if (!params) return message;
+    return message.replace(/\{([A-Za-z0-9_]+)\}/g, function (token, name) {
+      return params[name] === undefined ? token : String(params[name]);
+    });
   }
 
   function setStaticMessages() {
+    document.documentElement.lang = locale;
     document.title = tr("title");
     document.querySelector(".title").textContent = tr("title");
     document.querySelector(".subtitle").textContent = tr("subtitle");
@@ -269,7 +322,7 @@
         if (existingIds[it.id]) return; // already rendered (in-progress just finished, or already persisted)
         var li = makeRow({
           name: it.name,
-          sub: it.count + " " + tr(it.count === 1 ? "channel" : "channels"),
+          sub: tr(it.count === 1 ? "channelCountOne" : "channelCount", { count: it.count }),
           msg: "✓",
           msgClass: "ok",
           cls: "persisted",

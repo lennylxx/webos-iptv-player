@@ -68,8 +68,10 @@ describe('GET /upload', () => {
     expect(body).toContain('Upload M3U Playlist');
     expect(body).toContain('var MESSAGES = {');
     expect(body).toContain('title: "Upload M3U Playlist"');
+    expect(body).toContain('title: "上传 M3U 播放列表"');
     expect(body).toContain('success: "Successfully uploaded"');
-    expect(body).not.toContain('navigator.language');
+    expect(body).toContain('navigator.languages');
+    expect(body).toContain('navigator.language');
   });
 });
 
