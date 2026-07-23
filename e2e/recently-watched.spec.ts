@@ -28,12 +28,8 @@ function stableChannelKey(url: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-async function setup(page: Page, seedHistory = true, controlTimers = false): Promise<void> {
-  if (controlTimers) {
-    await page.clock.install({ time: NOW });
-  } else {
-    await page.clock.setFixedTime(NOW);
-  }
+async function setup(page: Page, seedHistory = true): Promise<void> {
+  await page.clock.setFixedTime(NOW);
   await page.route('**/playlist.m3u', route =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: M3U }));
   await page.route('**/*.m3u8*', route =>
@@ -108,22 +104,25 @@ test('mixes live and resumable Catch-up rows in recency order', async ({ page })
 });
 
 test('adds a live channel only after confirmed playback', async ({ page }) => {
-  await setup(page, false, true);
+  await setup(page, false);
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
 
+  const manifestResponse = page.waitForResponse(response => response.url().includes('/b.m3u8'));
   await page.locator('.channel-item').filter({ hasText: 'Channel Bravo' }).click();
   await expect(page.locator('#view-player')).toBeVisible();
+  await manifestResponse;
   await page.evaluate(() => {
     const video = document.querySelector<HTMLVideoElement>('#video-player')!;
     Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
-    video.dispatchEvent(new Event('playing'));
   });
-  await page.clock.fastForward(5000);
-
   await expect.poll(() => page.evaluate(() =>
-    JSON.parse(localStorage.getItem('iptv_recently_watched_live') ?? '[]').length,
-  )).toBe(1);
+    {
+      document.querySelector<HTMLVideoElement>('#video-player')!
+        .dispatchEvent(new Event('playing'));
+      return JSON.parse(localStorage.getItem('iptv_recently_watched_live') ?? '[]').length;
+    }
+  ), { timeout: 12_000, intervals: [500] }).toBe(1);
 
   await page.keyboard.press('Escape');
   await page.locator('[data-group="builtin:recently-watched"]').click();

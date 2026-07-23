@@ -466,6 +466,7 @@
   border-radius: var(--radius);
   color: var(--text-primary);
   outline: none;
+  text-overflow: ellipsis;
   transition: var(--transition);
   flex-shrink: 0;
 }
@@ -622,7 +623,9 @@
   position: absolute;
   top: 0;
   right: 0;
-  width: 340px;
+  width: fit-content;
+  min-width: 340px;
+  max-width: 440px;
   height: 1080px;
   background: rgba(10, 10, 15, 0.92);
   backdrop-filter: blur(12px);

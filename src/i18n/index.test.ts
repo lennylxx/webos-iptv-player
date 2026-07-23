@@ -60,6 +60,20 @@ describe('i18n', () => {
     expect(document.documentElement.lang).toBe('es');
   });
 
+  it('enables pseudo-localization without exposing another locale option', () => {
+    window.history.pushState({}, '', '?pseudo=1');
+    try {
+      setLocale('en');
+      expect(t('channel.count', { count: 12 })).toContain('12');
+      expect(t('channel.count', { count: 12 })).toMatch(/^\[!! /);
+      expect(document.documentElement.lang).toBe('en-XA');
+      expect(localeOptions().map(option => option.value)).not.toContain('en-XA');
+    } finally {
+      window.history.pushState({}, '', '/');
+      setLocale('en');
+    }
+  });
+
   it('has no empty translations or mismatched placeholders', () => {
     expect(validateTranslations()).toEqual([]);
   });

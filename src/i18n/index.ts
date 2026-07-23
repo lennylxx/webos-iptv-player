@@ -1,5 +1,6 @@
 import { EN_MESSAGES, type MessageKey } from './en';
 import { ES_MESSAGES } from './es';
+import { pseudoLocalize } from './pseudo';
 import { ZH_CN_MESSAGES } from './zh-CN';
 
 export type { MessageKey } from './en';
@@ -49,6 +50,10 @@ export function localeOptions(): { value: SupportedLocale; label: string }[] {
 
 let currentLocale: SupportedLocale = DEFAULT_LOCALE;
 
+function pseudoLocaleRequested(): boolean {
+  return typeof location !== 'undefined' && /(?:^|[?&])pseudo=1(?:&|$)/.test(location.search);
+}
+
 export function resolveLocale(
   preference: LocalePreference,
   browserLanguage = typeof navigator === 'undefined' ? DEFAULT_LOCALE : navigator.language,
@@ -68,7 +73,10 @@ export function resolveLocale(
 
 export function setLocale(locale: SupportedLocale): void {
   currentLocale = locale;
-  if (typeof document !== 'undefined') document.documentElement.lang = locale;
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang =
+      __ENABLE_PSEUDO_LOCALE__ && pseudoLocaleRequested() ? 'en-XA' : locale;
+  }
 }
 
 export function initLocale(preference: LocalePreference): void {
@@ -81,6 +89,9 @@ export function getLocale(): SupportedLocale {
 
 export function t(key: MessageKey, params?: Params): string {
   let message: string = LOCALES[currentLocale].messages[key];
+  if (__ENABLE_PSEUDO_LOCALE__ && pseudoLocaleRequested()) {
+    message = pseudoLocalize(EN_MESSAGES[key]);
+  }
   if (!params) return message;
   message = message.replace(/\{([A-Za-z0-9_]+)\}/g, (token, name: string) =>
     params[name] === undefined ? token : String(params[name]));

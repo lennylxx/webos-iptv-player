@@ -1,5 +1,12 @@
 import {
-  test, expect, type Page, routePlaylist, routeLiveManifest, seedPlaylist, neuterVideo, SEARCH_M3U,
+  test,
+  expect,
+  type Page,
+  routePlaylist,
+  routeLiveManifest,
+  seedPlaylist,
+  neuterVideo,
+  SEARCH_M3U,
 } from './helpers';
 
 // The player view: playback start, sidebar, action menu, OSD, and live DVR.
@@ -75,6 +82,40 @@ test('the right-edge player menu opens and lists its color actions', async ({ pa
   await expect(menu.locator('.menu-item.focused')).toHaveCount(1);
   await page.keyboard.press('ArrowDown');
   await expect(menu.locator('.menu-item').nth(1)).toHaveClass(/focused/);
+});
+
+test('keeps pseudo-localized player menu labels within the panel', async ({ page }) => {
+  await routePlaylist(page);
+  await routeLiveManifest(page);
+  await neuterVideo(page);
+  await seedPlaylist(page);
+  await page.goto('/?pseudo=1');
+
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-player')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+
+  const search = page.locator('.sidebar-search-input');
+  await expect(search).toBeVisible();
+  await expect(search).toHaveAttribute('placeholder', /^\[!! /);
+  await expect(search).toHaveCSS('text-overflow', 'ellipsis');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+
+  const menu = page.locator('#player-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.locator('.menu-item')).toHaveCount(4);
+  await expect(menu.locator('.menu-item').first()).toContainText('[!!');
+  const menuWidth = await menu.evaluate(element => element.getBoundingClientRect().width);
+  expect(menuWidth).toBeGreaterThan(340);
+  expect(menuWidth).toBeLessThanOrEqual(440);
+  const overflow = await menu.locator('.menu-header h2, .menu-subtitle, .menu-item')
+    .evaluateAll((elements) => elements
+      .filter((element) => element.scrollWidth > element.clientWidth + 1
+        || element.scrollHeight > element.clientHeight + 1)
+      .map((element) => element.textContent?.trim() ?? ''));
+  expect(overflow).toEqual([]);
 });
 
 test('a long player-menu list scrolls with the Magic-Remote wheel, not the channel', async ({ page }) => {

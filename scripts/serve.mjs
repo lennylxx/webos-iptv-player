@@ -16,8 +16,8 @@ const MIME = {
 };
 
 createServer(async (req, res) => {
-  const url = req.url === '/' ? '/index.html' : req.url;
-  const file = join(DIR, url);
+  const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+  const file = join(DIR, pathname === '/' ? '/index.html' : pathname);
   try {
     const data = await readFile(file);
     res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });

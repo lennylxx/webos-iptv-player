@@ -691,7 +691,7 @@ try {
   {
     const { context, page } = await newPage({ recently: true });
     await gotoChannels(page, base);
-    await page.locator('[data-group="Recently Watched"]').click();
+    await page.locator('[data-group="builtin:recently-watched"]').click();
     await page.locator('.channel-main .recent-catchup').waitFor({ state: 'visible' });
     await page.locator('.channel-main .recent-live').first().waitFor({ state: 'visible' });
     await clearToasts(page);

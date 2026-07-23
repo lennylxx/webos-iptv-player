@@ -68,6 +68,7 @@ const define = {
   '__APP_VERSION__': JSON.stringify(version),
   '__APP_ID__': JSON.stringify(appinfo.id),
   '__SERVICE_ID__': JSON.stringify(serviceId),
+  '__ENABLE_PSEUDO_LOCALE__': JSON.stringify(isPreview),
 };
 // Target Chromium 68 — the engine on webOS 5. This down-levels ES2020+
 // syntax (`?.`, `??`, etc.) which would otherwise fail to parse on

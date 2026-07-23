@@ -1,6 +1,7 @@
 declare const __APP_ID__: string;
 declare const __APP_VERSION__: string;
 declare const __SERVICE_ID__: string;
+declare const __ENABLE_PSEUDO_LOCALE__: boolean;
 
 // TypeScript's DOM lib dropped the multi-track interfaces (they're disabled by
 // default in most browsers), but LG's webOS WebView populates them from the

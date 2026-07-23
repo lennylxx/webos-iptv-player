@@ -1,4 +1,12 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page } from './helpers';
+import {
+  test,
+  expect,
+  routeLiveManifest,
+  neuterVideo,
+  SAMPLE_M3U,
+  enterTab,
+  type Page,
+} from './helpers';
 
 interface SeedWatchlistEntry {
   accountId: string;
@@ -179,6 +187,46 @@ test('shows Resume on return and keeps three movie actions at a stable height', 
   expect(new Set(layout.map((item) => item.height)).size).toBe(1);
   expect(new Set(layout.map((item) => item.top)).size).toBe(1);
   expect(layout.every((item) => item.whiteSpace === 'nowrap')).toBe(true);
+});
+
+test('keeps three pseudo-localized movie actions on one row without clipping', async ({ page }) => {
+  await seedWatchlistCatalog(page, [movieEntry('10', 'Movie One', 1000)]);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_resume', JSON.stringify({
+      'x1|vod|10': {
+        accountId: 'x1',
+        kind: 'vod',
+        itemId: '10',
+        name: 'Movie One',
+        poster: '',
+        ext: 'mp4',
+        position: 20,
+        duration: 120,
+        updatedAt: 1000,
+      },
+    }));
+  });
+  await routeLiveManifest(page);
+  await page.goto('/?pseudo=1');
+
+  await enterTab(page, 'movies');
+  await focusAndSelect(page, '#view-movies [data-watchlist-item="10"]');
+
+  const actions = page.locator('#view-movies .detail-btn');
+  await expect(actions).toHaveCount(3);
+  await expect(actions.first()).toContainText('[!!');
+  const layout = await page.locator('#view-movies .detail-actions').evaluate((row) => ({
+    clientWidth: row.clientWidth,
+    scrollWidth: row.scrollWidth,
+    buttons: Array.from(row.querySelectorAll<HTMLElement>('.detail-btn')).map((button) => ({
+      clientWidth: button.clientWidth,
+      scrollWidth: button.scrollWidth,
+      top: button.getBoundingClientRect().top,
+    })),
+  }));
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+  expect(layout.buttons.every(button => button.scrollWidth <= button.clientWidth + 1)).toBe(true);
+  expect(new Set(layout.buttons.map(button => button.top)).size).toBe(1);
 });
 
 test('auto-plays the next Watchlist movie and removes each completed movie', async ({ page }) => {
