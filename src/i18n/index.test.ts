@@ -30,6 +30,8 @@ describe('i18n', () => {
     expect(resolveLocale('system', 'es-MX')).toBe('es');
     expect(resolveLocale('system', 'fr-FR')).toBe('fr');
     expect(resolveLocale('system', 'fr-CA')).toBe('fr');
+    expect(resolveLocale('system', 'it-IT')).toBe('it');
+    expect(resolveLocale('system', 'it-CH')).toBe('it');
     expect(resolveLocale('system', 'pt-BR')).toBe('pt-BR');
     expect(resolveLocale('system', 'pt-PT')).toBe('pt-BR');
     expect(resolveLocale('system', 'ru-RU')).toBe('ru');
@@ -43,6 +45,7 @@ describe('i18n', () => {
     expect(isLocalePreference('de')).toBe(true);
     expect(isLocalePreference('es')).toBe(true);
     expect(isLocalePreference('fr')).toBe(true);
+    expect(isLocalePreference('it')).toBe(true);
     expect(isLocalePreference('pt-BR')).toBe(true);
     expect(isLocalePreference('ru')).toBe(true);
     expect(isLocalePreference('zh-CN')).toBe(true);
@@ -56,6 +59,7 @@ describe('i18n', () => {
       { value: 'de', label: 'Deutsch' },
       { value: 'es', label: 'Español' },
       { value: 'fr', label: 'Français' },
+      { value: 'it', label: 'Italiano' },
       { value: 'pt-BR', label: 'Português (Brasil)' },
       { value: 'ru', label: 'Русский' },
       { value: 'zh-CN', label: '简体中文' },
@@ -95,6 +99,13 @@ describe('i18n', () => {
     expect(t('channel.recentlyWatched')).toBe('Assistidos recentemente');
     expect(tp('channel.count', 12)).toBe('12 canais');
     expect(document.documentElement.lang).toBe('pt-BR');
+  });
+
+  it('translates and interpolates Italian messages', () => {
+    setLocale('it');
+    expect(t('channel.recentlyWatched')).toBe('Visti di recente');
+    expect(tp('channel.count', 12)).toBe('12 canali');
+    expect(document.documentElement.lang).toBe('it');
   });
 
   it('translates and interpolates Russian messages', () => {
