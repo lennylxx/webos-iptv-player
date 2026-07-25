@@ -1,4 +1,5 @@
 import { EN_MESSAGES, type MessageKey } from './en';
+import { DE_MESSAGES } from './de';
 import { ES_MESSAGES } from './es';
 import { FR_MESSAGES } from './fr';
 import { PT_BR_MESSAGES } from './pt-BR';
@@ -21,6 +22,12 @@ const LOCALES = {
     displayName: 'English',
     systemExact: [],
     systemPrefixes: [],
+  },
+  de: {
+    messages: DE_MESSAGES,
+    displayName: 'Deutsch',
+    systemExact: [],
+    systemPrefixes: ['de'],
   },
   es: {
     messages: ES_MESSAGES,

@@ -23,7 +23,8 @@ describe('i18n', () => {
     expect(resolveLocale('system', 'zh-Hans-CN')).toBe('zh-CN');
     expect(resolveLocale('system', 'zh-TW')).toBe('en');
     expect(resolveLocale('system', 'zh-Hant-CN')).toBe('en');
-    expect(resolveLocale('system', 'de-DE')).toBe('en');
+    expect(resolveLocale('system', 'de-DE')).toBe('de');
+    expect(resolveLocale('system', 'de-AT')).toBe('de');
     expect(resolveLocale('system', 'es-ES')).toBe('es');
     expect(resolveLocale('system', 'es-MX')).toBe('es');
     expect(resolveLocale('system', 'fr-FR')).toBe('fr');
@@ -36,6 +37,7 @@ describe('i18n', () => {
   it('recognizes locale preferences from the registered message catalogs', () => {
     expect(isLocalePreference('system')).toBe(true);
     expect(isLocalePreference('en')).toBe(true);
+    expect(isLocalePreference('de')).toBe(true);
     expect(isLocalePreference('es')).toBe(true);
     expect(isLocalePreference('fr')).toBe(true);
     expect(isLocalePreference('pt-BR')).toBe(true);
@@ -47,6 +49,7 @@ describe('i18n', () => {
     expect(DEFAULT_LOCALE).toBe('en');
     expect(localeOptions()).toEqual([
       { value: 'en', label: 'English' },
+      { value: 'de', label: 'Deutsch' },
       { value: 'es', label: 'Español' },
       { value: 'fr', label: 'Français' },
       { value: 'pt-BR', label: 'Português (Brasil)' },
@@ -59,6 +62,13 @@ describe('i18n', () => {
     expect(t('channel.recentlyWatched')).toBe('最近观看');
     expect(t('channel.count', { count: 12 })).toBe('12 个频道');
     expect(document.documentElement.lang).toBe('zh-CN');
+  });
+
+  it('translates and interpolates German messages', () => {
+    setLocale('de');
+    expect(t('channel.recentlyWatched')).toBe('Zuletzt angesehen');
+    expect(t('channel.count', { count: 12 })).toBe('12 Sender');
+    expect(document.documentElement.lang).toBe('de');
   });
 
   it('translates and interpolates Spanish messages', () => {
