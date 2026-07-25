@@ -20,7 +20,7 @@ import { formatTime, formatPosition, formatDuration, getProgress } from '../util
 import { getLenientLoaders } from '../utils/hls-stable-loader';
 import { StallWatchdog, type StallProbe } from '../utils/stall-watchdog';
 import { resolutionBadge, hdrLabel, frameRateLabel, parseVariants, pickVariant, codecName, audioSummary, subtitleSummary, type StreamVariant, type MediaInfo } from '../utils/stream-info';
-import { extFromUrl, containerMime } from '../utils/url';
+import { extFromUrl, containerMime, sniffStreamContentType } from '../utils/url';
 import { probeMedia } from '../services/media-probe';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
@@ -95,6 +95,7 @@ export class Player {
   private playbackGeneration = 0;
   private liveHistoryGeneration = -1;
   private liveHistoryTimer: ReturnType<typeof setTimeout> | null = null;
+  private errorAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
   // Manual A/V resync (catch-up / VOD): true from the resync seek until playback
   // resumes, gating the "Resyncing…" message and debouncing repeat presses.
   private resyncing = false;
@@ -218,6 +219,7 @@ export class Player {
       log.info('playing');
       if (this.resyncing) this.endResync();
       this.confirmLiveHistory(el);
+      if (this.osdVisible) this.resetOsdTimer();
     });
     el.addEventListener('waiting', () => {
       log.debug('waiting (buffering)');
@@ -317,6 +319,10 @@ export class Player {
 
   private startPlaybackGeneration(): void {
     this.cancelLiveHistoryTimer();
+    if (this.errorAdvanceTimer !== null) {
+      clearTimeout(this.errorAdvanceTimer);
+      this.errorAdvanceTimer = null;
+    }
     this.playbackGeneration++;
     this.liveHistoryGeneration = -1;
   }
@@ -836,6 +842,7 @@ export class Player {
 
   private loadStream(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
     if (!this.videoEl) return;
+    const token = ++this.loadToken;
     this.cancelManifestTracks();
     this.manifestAudio = [];
     this.manifestSubtitles = [];
@@ -858,10 +865,11 @@ export class Player {
     const isTsUrl = url.endsWith('.ts') || url.includes('.ts?') ||
       /[?&]extension=ts(?:&|$)/i.test(url);
     const isFlvUrl = url.endsWith('.flv') || url.includes('.flv?');
+    const isHlsUrl = /\.m3u8?(?:[?#]|$)/i.test(url);
 
     // webOS: the TV's hardware HLS/TS decoders beat MSE libraries, so play
-    // natively. The URL is enough to pick the <source> MIME (extension-less
-    // proxied streams default to HLS) and it avoids an extra round-trip per zap.
+    // natively. Probe extension-less URLs before choosing a MIME — the native
+    // pipeline may accept raw MPEG-TS labelled as HLS but then stall repeatedly.
     if (isWebOS) {
       if (opts?.direct) {
         const mime = containerMime(url);
@@ -869,12 +877,28 @@ export class Player {
         this.playNative(url, mime);
         return;
       }
-      const mime = isFlvUrl ? 'video/x-flv' : isTsUrl ? 'video/mp2t' : 'application/vnd.apple.mpegurl';
-      log.info('loadStream url=', url, '| webOS native | catchup:', !!this.catchupInfo, '| MIME', mime);
-      // HLS only: read the master's EXT-X-MEDIA audio/subtitle names — native
-      // audio/text tracks expose them with empty name/language on webOS.
-      if (!isTsUrl && !isFlvUrl) void this.loadManifestTracks(url, this.manifestSeq);
-      this.playNative(url, mime);
+      if (isTsUrl || isFlvUrl || isHlsUrl) {
+        const mime = isFlvUrl ? 'video/x-flv'
+          : isTsUrl ? 'video/mp2t'
+          : 'application/vnd.apple.mpegurl';
+        log.info('loadStream url=', url, '| webOS native | catchup:', !!this.catchupInfo, '| MIME', mime);
+        if (isHlsUrl) void this.loadManifestTracks(url, this.manifestSeq);
+        this.playNative(url, mime);
+        return;
+      }
+      void this.detectContentType(url).then(contentType => {
+        if (token !== this.loadToken || !this.videoEl) return;
+        const mime = contentType.includes('flv') ? 'video/x-flv'
+          : contentType.includes('mp2t') ? 'video/mp2t'
+          : /^(?:video|audio)\//.test(contentType) ? contentType
+          : 'application/vnd.apple.mpegurl';
+        log.info('loadStream url=', url, '| webOS native | content-type:', contentType || '(none)',
+          '| catchup:', !!this.catchupInfo, '| MIME', mime);
+        if (mime === 'application/vnd.apple.mpegurl') {
+          void this.loadManifestTracks(url, this.manifestSeq);
+        }
+        this.playNative(url, mime);
+      });
       return;
     }
 
@@ -883,13 +907,11 @@ export class Player {
     // serve HLS with no .m3u8 suffix — so classify by the server's Content-Type,
     // falling back to the URL and defaulting to HLS.
     if (opts?.direct) {
-      ++this.loadToken; // invalidate any in-flight detectContentType from a prior load
       log.info('loadStream url=', url, '| desktop direct VOD');
       this.videoEl.src = url;
       this.videoEl.play().catch(e => log.warn('Direct play() rejected:', e));
       return;
     }
-    const token = ++this.loadToken;
     this.detectContentType(url).then(ct => {
       if (token !== this.loadToken || !this.videoEl) return; // superseded by a newer load
       const isFlv = isFlvUrl || ct.includes('flv');
@@ -917,13 +939,40 @@ export class Player {
   // real signal. Headers are enough, so cancel the body. Returns '' on a
   // CORS/network failure, leaving the caller on its URL heuristic (default HLS).
   private async detectContentType(url: string): Promise<string> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CONFIG.PLAYER.MANIFEST_TIMEOUT);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: controller.signal });
       const ct = (res.headers.get('content-type') || '').toLowerCase();
-      res.body?.cancel().catch(() => {});
-      return ct;
+      if (ct.split(';')[0].trim() !== 'application/octet-stream') {
+        res.body?.cancel().catch(() => {});
+        return ct;
+      }
+
+      reader = res.body?.getReader() ?? null;
+      if (!reader) return ct;
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      while (length < 4096) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.length) continue;
+        chunks.push(value);
+        length += value.length;
+      }
+      const prefix = new Uint8Array(length);
+      let offset = 0;
+      for (const chunk of chunks) {
+        prefix.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return sniffStreamContentType(ct, prefix);
     } catch {
       return '';
+    } finally {
+      if (reader) void reader.cancel().catch(() => {});
+      clearTimeout(timer);
     }
   }
 
@@ -1060,10 +1109,14 @@ export class Player {
       return;
     }
     const v = this.videoEl;
+    if (this.errorAdvanceTimer !== null) return;
     log.error('video error', v?.error ? { code: v.error.code, message: v.error.message } : 'no error info',
       '| channel:', this.currentChannel?.name, '| url:', this.currentChannel?.url);
     this.updateOSDMessage(t('player.streamError'));
-    setTimeout(() => this.channelUp(), 2000);
+    this.errorAdvanceTimer = setTimeout(() => {
+      this.errorAdvanceTimer = null;
+      this.channelUp();
+    }, 2000);
   }
 
   showOSD(): void {

@@ -42,7 +42,7 @@ vi.mock('../services/idb-cache', () => ({
 }));
 
 import { Player, ASS_SUBTITLE_BASE } from './player';
-import { containerMime, extFromUrl } from '../utils/url';
+import { containerMime, extFromUrl, sniffStreamContentType } from '../utils/url';
 import { StorageService } from '../services/storage-service';
 import { showToast } from './toast';
 import { probeMedia } from '../services/media-probe';
@@ -396,6 +396,31 @@ describe('Player live playback', () => {
     expect(signals[1].aborted).toBe(false);
     player.stop();
     await Promise.all([first, second]);
+  });
+
+  it('coalesces repeated playback errors into one channel advance', () => {
+    playlistMock.channels = [{}, {}];
+    player.play(0);
+    playlistMock.getByIndex.mockClear();
+
+    for (let i = 0; i < 20; i++) video.dispatchEvent(new Event('error'));
+    vi.advanceTimersByTime(2000);
+
+    expect(playlistMock.getByIndex).toHaveBeenCalledTimes(1);
+    expect(playlistMock.getByIndex).toHaveBeenCalledWith(1);
+  });
+
+  it('starts the OSD hide timer when startup playback begins', async () => {
+    video.pause();
+    player.showOSD();
+    vi.advanceTimersByTime(CONFIG.PLAYER.OSD_TIMEOUT);
+    expect((container.querySelector('#player-osd') as HTMLElement).style.display).not.toBe('none');
+
+    await video.play();
+    video.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(CONFIG.PLAYER.OSD_TIMEOUT);
+
+    expect((container.querySelector('#player-osd') as HTMLElement).style.display).toBe('none');
   });
 });
 
@@ -1398,6 +1423,29 @@ describe('extFromUrl', () => {
     expect(extFromUrl('http://host/series/u/p/e1.mkv?token=x')).toBe('mkv');
     expect(extFromUrl('http://host/series/u/p/e1.avi#frag')).toBe('avi');
     expect(extFromUrl('http://host/movie/u/p/10')).toBe('');
+  });
+});
+
+describe('sniffStreamContentType', () => {
+  it('recognizes an MPEG-TS body served as application/octet-stream', () => {
+    const prefix = new Uint8Array(900);
+    prefix[300] = 0x47;
+    prefix[488] = 0x47;
+    prefix[676] = 0x47;
+    expect(sniffStreamContentType('application/octet-stream', prefix)).toBe('video/mp2t');
+  });
+
+  it('recognizes an HLS body served as application/octet-stream', () => {
+    const prefix = new TextEncoder().encode('#EXTM3U\n#EXT-X-VERSION:3');
+    expect(sniffStreamContentType('application/octet-stream', prefix))
+      .toBe('application/vnd.apple.mpegurl');
+  });
+
+  it('leaves unknown binary and specific response types unchanged', () => {
+    expect(sniffStreamContentType('application/octet-stream', new Uint8Array([1, 2, 3])))
+      .toBe('application/octet-stream');
+    expect(sniffStreamContentType('video/mp2t; charset=binary', new Uint8Array()))
+      .toBe('video/mp2t');
   });
 });
 

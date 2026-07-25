@@ -39,7 +39,8 @@ export function dvrWindow(
   const start = seekable.start(i);
   const end = seekable.end(i);
   const length = end - start;
-  if (length <= minWindow) return null;
+  if (!Number.isFinite(start) || !Number.isFinite(end) ||
+      !Number.isFinite(length) || length <= minWindow) return null;
   return { start, end, length };
 }
 

@@ -15,3 +15,22 @@ export function containerMime(url: string): string {
     default: return 'video/mp4';
   }
 }
+
+export function sniffStreamContentType(contentType: string, prefix: Uint8Array): string {
+  const type = contentType.toLowerCase().split(';')[0].trim();
+  if (type !== 'application/octet-stream') return type;
+
+  const packetSizes = [188, 192, 204];
+  for (const packetSize of packetSizes) {
+    for (let offset = 0; offset + packetSize * 2 < prefix.length; offset++) {
+      if (prefix[offset] === 0x47 &&
+          prefix[offset + packetSize] === 0x47 &&
+          prefix[offset + packetSize * 2] === 0x47) {
+        return 'video/mp2t';
+      }
+    }
+  }
+
+  const text = new TextDecoder().decode(prefix.slice(0, 7));
+  return text === '#EXTM3U' ? 'application/vnd.apple.mpegurl' : type;
+}

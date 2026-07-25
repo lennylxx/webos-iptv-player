@@ -30,6 +30,12 @@ describe('dvrWindow', () => {
     expect(dvrWindow(ranges([100, 103]), Infinity, 5)).toBeNull();
   });
 
+  it('returns null for non-finite seekable bounds reported by a native pipeline', () => {
+    expect(dvrWindow(ranges([0, Infinity]), Infinity, 5)).toBeNull();
+    expect(dvrWindow(ranges([-Infinity, 60]), Infinity, 5)).toBeNull();
+    expect(dvrWindow(ranges([NaN, 60]), Infinity, 5)).toBeNull();
+  });
+
   it('returns the window for a live stream with a usable range', () => {
     expect(dvrWindow(ranges([10, 70]), Infinity, 5)).toEqual({ start: 10, end: 70, length: 60 });
   });
