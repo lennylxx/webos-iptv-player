@@ -1,10 +1,10 @@
 import type { TzMode } from '../types';
-import { t, type MessageKey } from '../i18n';
+import { t } from '../i18n';
 
-const WEEKDAY_KEYS: MessageKey[] = [
+const WEEKDAY_KEYS = [
   'weekday.0', 'weekday.1', 'weekday.2', 'weekday.3',
   'weekday.4', 'weekday.5', 'weekday.6',
-];
+] as const;
 
 // Display-only timezone state. Every absolute instant (Programme.start/stop,
 // Date.now(), catch-up seconds) is stored and compared in real UTC; this state

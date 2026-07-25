@@ -29,7 +29,7 @@ import {
 } from '../utils/url';
 import { probeMedia } from '../services/media-probe';
 import { createLogger } from '../utils/logger';
-import { t } from '../i18n';
+import { t, tp } from '../i18n';
 import { PLAY_ICON, PAUSE_ICON, RESYNC_ICON } from './icons';
 import { showToast } from './toast';
 import { subtitleSearchService } from '../services/subtitle-search/subtitle-search-service';
@@ -1453,10 +1453,7 @@ export class Player {
         <div class="osd-next-episode">
           <div class="osd-next-episode-label">${t('player.upNext')}</div>
           <div class="osd-channel-name">${this.vod?.title ?? ''}</div>
-          <div class="osd-next-episode-time">${t(
-            this.upNextSeconds === 1 ? 'player.playingInOne' : 'player.playingIn',
-            { count: this.upNextSeconds },
-          )}</div>
+          <div class="osd-next-episode-time">${tp('player.playingIn', this.upNextSeconds)}</div>
           <div class="osd-next-episode-actions">
             <button data-next-play>${t('player.playNow')}</button>
             <button data-next-cancel>${t('common.cancel')}</button>

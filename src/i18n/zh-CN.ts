@@ -1,4 +1,4 @@
-import type { MessageKey } from './en';
+import type { MessageCatalog } from './en';
 
 export const ZH_CN_MESSAGES = {
   'common.all': '全部',
@@ -37,8 +37,9 @@ export const ZH_CN_MESSAGES = {
   'search.openChannel': '打开频道',
   'channel.favorites': '收藏',
   'channel.recentlyWatched': '最近观看',
-  'channel.count': '{count} 个频道',
-  'channel.countOne': '{count} 个频道',
+  'channel.count': {
+    other: '{count} 个频道',
+  },
   'channel.empty': '未找到频道',
   'channel.recentEmpty': '暂无观看记录',
   'channel.resumeAt': '{channel} - 从 {position} 继续',
@@ -46,8 +47,9 @@ export const ZH_CN_MESSAGES = {
   'channel.favoriteAdded': '已将“{name}”添加到收藏',
   'channel.favoriteRemoved': '已将“{name}”从收藏中移除',
   'epg.title': '节目指南',
-  'epg.programCount': '{count} 个节目',
-  'epg.programCountOne': '{count} 个节目',
+  'epg.programCount': {
+    other: '{count} 个节目',
+  },
   'epg.aired': '已播出',
   'epg.upcoming': '即将播出',
   'epg.reminder': '提醒',
@@ -93,8 +95,9 @@ export const ZH_CN_MESSAGES = {
   'player.timeshift': '时移',
   'player.remaining': '剩余 {duration}',
   'player.upNext': '即将播放',
-  'player.playingIn': '{count} 秒后开始播放',
-  'player.playingInOne': '{count} 秒后开始播放',
+  'player.playingIn': {
+    other: '{count} 秒后开始播放',
+  },
   'player.playNow': '立即播放',
   'player.unableToPlay': '无法播放此视频。',
   'player.reconnecting': '正在重新连接…',
@@ -204,8 +207,9 @@ export const ZH_CN_MESSAGES = {
   'settings.uploadRemoved': '已移除上传的播放列表',
   'app.welcome': '欢迎！请添加播放列表网址以开始使用。',
   'app.loadingChannels': '正在加载频道…',
-  'app.channelsLoaded': '已加载 {count} 个频道',
-  'app.channelsLoadedOne': '已加载 {count} 个频道',
+  'app.channelsLoaded': {
+    other: '已加载 {count} 个频道',
+  },
   'app.loadFailed': '无法加载播放列表，请检查 URL 后重试。',
   'app.exitHint': '再次按返回键退出',
   'weekday.0': '周日',
@@ -218,4 +222,4 @@ export const ZH_CN_MESSAGES = {
   'date.monthDay': '{month}月{day}日',
   'duration.hoursMinutes': '{hours}小时{minutes}分钟',
   'duration.minutes': '{minutes}分钟',
-} satisfies Record<MessageKey, string>;
+} satisfies MessageCatalog;

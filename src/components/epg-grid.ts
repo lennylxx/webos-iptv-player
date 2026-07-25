@@ -11,7 +11,7 @@ import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { showToast } from './toast';
 import { formatTime, formatDayLabel, displayDayKey, startOfDisplayDay, addDisplayDays, formatDuration } from '../utils/time';
 import { bellIcon, REPLAY_ICON } from './icons';
-import { t } from '../i18n';
+import { t, tp } from '../i18n';
 
 type FocusCol = 'channels' | 'dates' | 'programmes';
 
@@ -132,10 +132,9 @@ export class EpgGrid {
       <div class="epg-view">
         <div class="epg-header">
           <h2>${t('epg.title')}</h2>
-          <span class="epg-page-info">${channel?.name ?? ''}${programmes.length ? html` · ${t(
-            programmes.length === 1 ? 'epg.programCountOne' : 'epg.programCount',
-            { count: programmes.length },
-          )}` : ''}</span>
+          <span class="epg-page-info">${channel?.name ?? ''}${programmes.length
+            ? html` · ${tp('epg.programCount', programmes.length)}`
+            : ''}</span>
           ${raw(`
             <div class="epg-legend">
               <span class="epg-legend-item state-past"><i class="epg-legend-dot"></i>${t('epg.aired')}</span>

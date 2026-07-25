@@ -15,7 +15,7 @@ import { showToast } from './toast';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
-import { localeOptions, t, type LocalePreference } from '../i18n';
+import { localeOptions, t, tp, type LocalePreference } from '../i18n';
 
 const log = createLogger('Settings');
 
@@ -38,7 +38,7 @@ function formatOffset(min: number): string {
 /** "MyList — 12 channels" when count is known, otherwise just the name. */
 function uploadLabel(pl: PlaylistEntry): string {
   if (typeof pl.count === 'number') {
-    return `${pl.name} — ${t(pl.count === 1 ? 'channel.countOne' : 'channel.count', { count: pl.count })}`;
+    return `${pl.name} — ${tp('channel.count', pl.count)}`;
   }
   return pl.name;
 }

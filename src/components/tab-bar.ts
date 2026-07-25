@@ -4,7 +4,7 @@ import { morph } from '../utils/morph';
 import { CONFIG } from '../config';
 import { SEARCH_ICON } from './icons';
 import { AccountSwitcher } from './account-switcher';
-import { t, type MessageKey } from '../i18n';
+import { t } from '../i18n';
 
 // Cap for the expanded inline search box.
 export const SEARCH_INPUT_MAX_WIDTH = 600;
@@ -295,7 +295,7 @@ export class TabBar {
           const activeCls = s.id === this.active ? 'active' : '';
           return html`
           <button class="tab-bar-item ${focusedCls} ${activeCls}"
-                  data-key="${s.id}" data-section="${s.id}" aria-label="${t(s.labelKey as MessageKey)}">${t(s.labelKey as MessageKey)}</button>
+                  data-key="${s.id}" data-section="${s.id}" aria-label="${t(s.labelKey)}">${t(s.labelKey)}</button>
         `;
         })}
         <div class="tab-bar-search ${this.searchExpanded ? 'expanded' : ''}" data-key="search-slot" data-morph-preserve></div>

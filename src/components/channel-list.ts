@@ -10,7 +10,7 @@ import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { groupIcon } from './group-icon';
 import { showToast } from './toast';
-import { t } from '../i18n';
+import { t, tp } from '../i18n';
 
 export class ChannelList {
   private container: HTMLElement;
@@ -82,9 +82,7 @@ export class ChannelList {
       <div class="channel-view">
         <div class="sidebar" data-nav-container>
           <div class="sidebar-header">
-            <div class="channel-count">${t(totalChannels === 1 ? 'channel.countOne' : 'channel.count', {
-              count: totalChannels,
-            })}</div>
+            <div class="channel-count">${tp('channel.count', totalChannels)}</div>
           </div>
           ${showTabs ? html`
             <div class="playlist-tabs">

@@ -3,21 +3,21 @@ import { PlaylistService } from '../services/playlist-service';
 import { $, html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SUBTITLE_ICON } from './icons';
-import { t, type MessageKey } from '../i18n';
+import { t } from '../i18n';
 
 const AUTO_HIDE_MS = 5000;
 
 const MENU_ITEMS = [
-  { action: 'red' as const, color: 'red', labelKey: 'player.guide' },
-  { action: 'green' as const, color: 'green', labelKey: 'player.toggleFavorite' },
-  { action: 'yellow' as const, color: 'yellow', labelKey: 'player.channelInfo' },
-  { action: 'blue' as const, color: 'blue', labelKey: 'common.settings' },
-];
+  { action: 'red', color: 'red', labelKey: 'player.guide' },
+  { action: 'green', color: 'green', labelKey: 'player.toggleFavorite' },
+  { action: 'yellow', color: 'yellow', labelKey: 'player.channelInfo' },
+  { action: 'blue', color: 'blue', labelKey: 'common.settings' },
+] as const;
 
 const VOD_MENU_ITEMS = [
-  { action: 'yellow' as const, color: 'yellow', labelKey: 'player.titleInfo' },
-  { action: 'blue' as const, color: 'blue', labelKey: 'common.settings' },
-];
+  { action: 'yellow', color: 'yellow', labelKey: 'player.titleInfo' },
+  { action: 'blue', color: 'blue', labelKey: 'common.settings' },
+] as const;
 
 // Sentinel data-menu-action values for the non-color rows.
 const OPEN_AUDIO = '__audio_open__';
@@ -246,7 +246,7 @@ export class PlayerMenu {
           <div class="menu-item ${i === this.focusIdx ? 'focused' : ''}"
                data-key="${item.action}"
                data-focusable data-menu-action="${item.action}">
-            <span class="menu-dot ${item.color}"></span> ${t(item.labelKey as MessageKey)}
+            <span class="menu-dot ${item.color}"></span> ${t(item.labelKey)}
           </div>
         `)}
         ${audioShown ? html`

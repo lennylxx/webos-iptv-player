@@ -1,3 +1,8 @@
+export type PluralCategory = 'zero' | 'one' | 'two' | 'few' | 'many' | 'other';
+export type PluralMessage = Readonly<
+  { other: string } & Partial<Record<Exclude<PluralCategory, 'other'>, string>>
+>;
+
 export const EN_MESSAGES = {
   'common.all': 'All',
   'common.cancel': 'Cancel',
@@ -35,8 +40,10 @@ export const EN_MESSAGES = {
   'search.openChannel': 'Open channel',
   'channel.favorites': 'Favorites',
   'channel.recentlyWatched': 'Recently Watched',
-  'channel.count': '{count} channels',
-  'channel.countOne': '{count} channel',
+  'channel.count': {
+    one: '{count} channel',
+    other: '{count} channels',
+  },
   'channel.empty': 'No channels found',
   'channel.recentEmpty': 'Nothing watched yet',
   'channel.resumeAt': '{channel} - Resume at {position}',
@@ -44,8 +51,10 @@ export const EN_MESSAGES = {
   'channel.favoriteAdded': 'Added "{name}" to favorites',
   'channel.favoriteRemoved': 'Removed "{name}" from favorites',
   'epg.title': 'Program Guide',
-  'epg.programCount': '{count} programs',
-  'epg.programCountOne': '{count} program',
+  'epg.programCount': {
+    one: '{count} program',
+    other: '{count} programs',
+  },
   'epg.aired': 'Aired',
   'epg.upcoming': 'Upcoming',
   'epg.reminder': 'Reminder',
@@ -91,8 +100,10 @@ export const EN_MESSAGES = {
   'player.timeshift': 'TIMESHIFT',
   'player.remaining': '{duration} remaining',
   'player.upNext': 'Up next',
-  'player.playingIn': 'Starts in {count} seconds',
-  'player.playingInOne': 'Starts in {count} second',
+  'player.playingIn': {
+    one: 'Starts in {count} second',
+    other: 'Starts in {count} seconds',
+  },
   'player.playNow': 'Play now',
   'player.unableToPlay': 'Unable to play this video.',
   'player.reconnecting': 'Reconnecting…',
@@ -202,8 +213,10 @@ export const EN_MESSAGES = {
   'settings.uploadRemoved': 'Uploaded playlist removed',
   'app.welcome': 'Welcome! Add a playlist URL to get started.',
   'app.loadingChannels': 'Loading channels…',
-  'app.channelsLoaded': '{count} channels loaded',
-  'app.channelsLoadedOne': '{count} channel loaded',
+  'app.channelsLoaded': {
+    one: '{count} channel loaded',
+    other: '{count} channels loaded',
+  },
   'app.loadFailed': 'Unable to load the playlist. Check the URL and try again.',
   'app.exitHint': 'Press back again to exit',
   'weekday.0': 'Sun',
@@ -219,3 +232,10 @@ export const EN_MESSAGES = {
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;
+export type PluralMessageKey = {
+  [K in MessageKey]: (typeof EN_MESSAGES)[K] extends PluralMessage ? K : never;
+}[MessageKey];
+export type TextMessageKey = Exclude<MessageKey, PluralMessageKey>;
+export type MessageCatalog = {
+  [K in MessageKey]: (typeof EN_MESSAGES)[K] extends PluralMessage ? PluralMessage : string;
+};

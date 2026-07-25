@@ -173,8 +173,10 @@
         browse: "Browse Files",
         playlists: "Playlists",
         empty: "No playlists yet",
-        channelCountOne: "{count} channel",
-        channelCount: "{count} channels",
+        channelCount: {
+          one: "{count} channel",
+          other: "{count} channels",
+        },
         success: "Successfully uploaded",
         failed: "Failed: ",
         networkError: "Failed: network error",
@@ -191,8 +193,10 @@
         browse: "Dateien auswählen",
         playlists: "Wiedergabelisten",
         empty: "Noch keine Wiedergabelisten",
-        channelCountOne: "{count} Sender",
-        channelCount: "{count} Sender",
+        channelCount: {
+          one: "{count} Sender",
+          other: "{count} Sender",
+        },
         success: "Erfolgreich hochgeladen",
         failed: "Fehlgeschlagen: ",
         networkError: "Fehlgeschlagen: Netzwerkfehler",
@@ -209,8 +213,10 @@
         browse: "Elegir archivos",
         playlists: "Listas de reproducción",
         empty: "Aún no hay listas",
-        channelCountOne: "{count} canal",
-        channelCount: "{count} canales",
+        channelCount: {
+          one: "{count} canal",
+          other: "{count} canales",
+        },
         success: "Archivo subido",
         failed: "Error: ",
         networkError: "Error: problema de red",
@@ -227,8 +233,10 @@
         browse: "Choisir des fichiers",
         playlists: "Listes de lecture",
         empty: "Aucune liste pour le moment",
-        channelCountOne: "{count} chaîne",
-        channelCount: "{count} chaînes",
+        channelCount: {
+          one: "{count} chaîne",
+          other: "{count} chaînes",
+        },
         success: "Importation réussie",
         failed: "Échec : ",
         networkError: "Échec : erreur réseau",
@@ -245,11 +253,35 @@
         browse: "Escolher arquivos",
         playlists: "Listas de reprodução",
         empty: "Nenhuma lista ainda",
-        channelCountOne: "{count} canal",
-        channelCount: "{count} canais",
+        channelCount: {
+          one: "{count} canal",
+          other: "{count} canais",
+        },
         success: "Enviado com sucesso",
         failed: "Falha: ",
         networkError: "Falha: erro de rede",
+      },
+    },
+    ru: {
+      systemExact: [],
+      systemPrefixes: ["ru"],
+      text: {
+        title: "Загрузить плейлист M3U",
+        subtitle: "Перетащите сюда файлы .m3u, чтобы добавить их на телевизор",
+        drop: "Перетащите сюда файлы .m3u",
+        or: "или",
+        browse: "Выбрать файлы",
+        playlists: "Плейлисты",
+        empty: "Плейлистов пока нет",
+        channelCount: {
+          one: "{count} канал",
+          few: "{count} канала",
+          many: "{count} каналов",
+          other: "{count} канала",
+        },
+        success: "Успешно загружено",
+        failed: "Ошибка: ",
+        networkError: "Ошибка сети",
       },
     },
     "zh-CN": {
@@ -263,8 +295,9 @@
         browse: "选择文件",
         playlists: "播放列表",
         empty: "暂无播放列表",
-        channelCountOne: "{count} 个频道",
-        channelCount: "{count} 个频道",
+        channelCount: {
+          other: "{count} 个频道",
+        },
         success: "上传成功",
         failed: "失败：",
         networkError: "失败：网络错误",
@@ -302,6 +335,13 @@
     return message.replace(/\{([A-Za-z0-9_]+)\}/g, function (token, name) {
       return params[name] === undefined ? token : String(params[name]);
     });
+  }
+
+  function trPlural(key, count) {
+    var forms = messages[key];
+    var category = new Intl.PluralRules(locale).select(count);
+    var message = forms[category] || forms.other;
+    return message.replace("{count}", String(count));
   }
 
   function setStaticMessages() {
@@ -394,7 +434,7 @@
         if (existingIds[it.id]) return; // already rendered (in-progress just finished, or already persisted)
         var li = makeRow({
           name: it.name,
-          sub: tr(it.count === 1 ? "channelCountOne" : "channelCount", { count: it.count }),
+          sub: trPlural("channelCount", it.count),
           msg: "✓",
           msgClass: "ok",
           cls: "persisted",

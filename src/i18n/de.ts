@@ -1,4 +1,4 @@
-import type { MessageKey } from './en';
+import type { MessageCatalog } from './en';
 
 export const DE_MESSAGES = {
   'common.all': 'Alle',
@@ -37,8 +37,10 @@ export const DE_MESSAGES = {
   'search.openChannel': 'Sender öffnen',
   'channel.favorites': 'Favoriten',
   'channel.recentlyWatched': 'Zuletzt angesehen',
-  'channel.count': '{count} Sender',
-  'channel.countOne': '{count} Sender',
+  'channel.count': {
+    one: '{count} Sender',
+    other: '{count} Sender',
+  },
   'channel.empty': 'Keine Sender gefunden',
   'channel.recentEmpty': 'Noch nichts angesehen',
   'channel.resumeAt': '{channel} – Fortsetzen bei {position}',
@@ -46,8 +48,10 @@ export const DE_MESSAGES = {
   'channel.favoriteAdded': '„{name}“ zu den Favoriten hinzugefügt',
   'channel.favoriteRemoved': '„{name}“ aus den Favoriten entfernt',
   'epg.title': 'Programmübersicht',
-  'epg.programCount': '{count} Sendungen',
-  'epg.programCountOne': '{count} Sendung',
+  'epg.programCount': {
+    one: '{count} Sendung',
+    other: '{count} Sendungen',
+  },
   'epg.aired': 'Ausgestrahlt',
   'epg.upcoming': 'Demnächst',
   'epg.reminder': 'Erinnerung',
@@ -93,8 +97,10 @@ export const DE_MESSAGES = {
   'player.timeshift': 'TIMESHIFT',
   'player.remaining': 'Noch {duration}',
   'player.upNext': 'Als Nächstes',
-  'player.playingIn': 'Beginnt in {count} Sekunden',
-  'player.playingInOne': 'Beginnt in {count} Sekunde',
+  'player.playingIn': {
+    one: 'Beginnt in {count} Sekunde',
+    other: 'Beginnt in {count} Sekunden',
+  },
   'player.playNow': 'Jetzt abspielen',
   'player.unableToPlay': 'Dieses Video kann nicht abgespielt werden.',
   'player.reconnecting': 'Verbindung wird wiederhergestellt…',
@@ -204,8 +210,10 @@ export const DE_MESSAGES = {
   'settings.uploadRemoved': 'Hochgeladene Wiedergabeliste entfernt',
   'app.welcome': 'Willkommen! Füge zum Starten die URL einer Wiedergabeliste hinzu.',
   'app.loadingChannels': 'Sender werden geladen…',
-  'app.channelsLoaded': '{count} Sender geladen',
-  'app.channelsLoadedOne': '{count} Sender geladen',
+  'app.channelsLoaded': {
+    one: '{count} Sender geladen',
+    other: '{count} Sender geladen',
+  },
   'app.loadFailed': 'Die Wiedergabeliste konnte nicht geladen werden. URL überprüfen und erneut versuchen.',
   'app.exitHint': 'Zum Beenden erneut Zurück drücken',
   'weekday.0': 'So.',
@@ -218,4 +226,4 @@ export const DE_MESSAGES = {
   'date.monthDay': '{day}.{month}.',
   'duration.hoursMinutes': '{hours} Std. {minutes} Min.',
   'duration.minutes': '{minutes} Min.',
-} satisfies Record<MessageKey, string>;
+} satisfies MessageCatalog;

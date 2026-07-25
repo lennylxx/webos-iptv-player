@@ -1,4 +1,4 @@
-import type { MessageKey } from './en';
+import type { MessageCatalog } from './en';
 
 export const FR_MESSAGES = {
   'common.all': 'Tout',
@@ -37,8 +37,10 @@ export const FR_MESSAGES = {
   'search.openChannel': 'Ouvrir la chaîne',
   'channel.favorites': 'Favoris',
   'channel.recentlyWatched': 'Vus récemment',
-  'channel.count': '{count} chaînes',
-  'channel.countOne': '{count} chaîne',
+  'channel.count': {
+    one: '{count} chaîne',
+    other: '{count} chaînes',
+  },
   'channel.empty': 'Aucune chaîne trouvée',
   'channel.recentEmpty': 'Aucun visionnage récent',
   'channel.resumeAt': '{channel} - Reprendre à {position}',
@@ -46,8 +48,10 @@ export const FR_MESSAGES = {
   'channel.favoriteAdded': '« {name} » ajouté aux favoris',
   'channel.favoriteRemoved': '« {name} » supprimé des favoris',
   'epg.title': 'Guide des programmes',
-  'epg.programCount': '{count} programmes',
-  'epg.programCountOne': '{count} programme',
+  'epg.programCount': {
+    one: '{count} programme',
+    other: '{count} programmes',
+  },
   'epg.aired': 'Diffusé',
   'epg.upcoming': 'À venir',
   'epg.reminder': 'Rappel',
@@ -93,8 +97,10 @@ export const FR_MESSAGES = {
   'player.timeshift': 'DIFFÉRÉ',
   'player.remaining': 'Temps restant : {duration}',
   'player.upNext': 'À suivre',
-  'player.playingIn': 'Début dans {count} secondes',
-  'player.playingInOne': 'Début dans {count} seconde',
+  'player.playingIn': {
+    one: 'Début dans {count} seconde',
+    other: 'Début dans {count} secondes',
+  },
   'player.playNow': 'Lire maintenant',
   'player.unableToPlay': 'Impossible de lire cette vidéo.',
   'player.reconnecting': 'Reconnexion…',
@@ -204,8 +210,10 @@ export const FR_MESSAGES = {
   'settings.uploadRemoved': 'Liste importée supprimée',
   'app.welcome': 'Bienvenue ! Ajoutez l’URL d’une liste de lecture pour commencer.',
   'app.loadingChannels': 'Chargement des chaînes…',
-  'app.channelsLoaded': '{count} chaînes chargées',
-  'app.channelsLoadedOne': '{count} chaîne chargée',
+  'app.channelsLoaded': {
+    one: '{count} chaîne chargée',
+    other: '{count} chaînes chargées',
+  },
   'app.loadFailed': 'Impossible de charger la liste. Vérifiez l’URL et réessayez.',
   'app.exitHint': 'Appuyez de nouveau sur Retour pour quitter',
   'weekday.0': 'Dim',
@@ -218,4 +226,4 @@ export const FR_MESSAGES = {
   'date.monthDay': '{day}/{month}',
   'duration.hoursMinutes': '{hours} h {minutes} min',
   'duration.minutes': '{minutes} min',
-} satisfies Record<MessageKey, string>;
+} satisfies MessageCatalog;

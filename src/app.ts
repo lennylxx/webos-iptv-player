@@ -25,7 +25,7 @@ import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
 import type { Action, NumberEvent, CatchupInfo, EpgSource, PlaylistEntry } from './types';
-import { getLocale, initLocale, resolveLocale, setLocale, t } from './i18n';
+import { getLocale, initLocale, resolveLocale, setLocale, t, tp } from './i18n';
 
 const log = createLogger('App');
 
@@ -430,10 +430,7 @@ class App {
       this.showView('channels');
       this.channelList.render();
 
-      showToast(t(
-        PlaylistService.channels.length === 1 ? 'app.channelsLoadedOne' : 'app.channelsLoaded',
-        { count: PlaylistService.channels.length },
-      ));
+      showToast(tp('app.channelsLoaded', PlaylistService.channels.length));
 
       this.scanReminders();
 
