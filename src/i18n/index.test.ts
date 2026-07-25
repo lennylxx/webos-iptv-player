@@ -36,6 +36,7 @@ describe('i18n', () => {
     expect(resolveLocale('system', 'pt-PT')).toBe('pt-BR');
     expect(resolveLocale('system', 'ru-RU')).toBe('ru');
     expect(resolveLocale('system', 'ru-KZ')).toBe('ru');
+    expect(resolveLocale('system', 'uk-UA')).toBe('uk');
     expect(resolveLocale('zh-CN', 'en-US')).toBe('zh-CN');
   });
 
@@ -48,6 +49,7 @@ describe('i18n', () => {
     expect(isLocalePreference('it')).toBe(true);
     expect(isLocalePreference('pt-BR')).toBe(true);
     expect(isLocalePreference('ru')).toBe(true);
+    expect(isLocalePreference('uk')).toBe(true);
     expect(isLocalePreference('zh-CN')).toBe(true);
     expect(isLocalePreference('l1')).toBe(false);
   });
@@ -62,6 +64,7 @@ describe('i18n', () => {
       { value: 'it', label: 'Italiano' },
       { value: 'pt-BR', label: 'Português (Brasil)' },
       { value: 'ru', label: 'Русский' },
+      { value: 'uk', label: 'Українська' },
       { value: 'zh-CN', label: '简体中文' },
     ]);
   });
@@ -119,6 +122,16 @@ describe('i18n', () => {
     expect(tp('channel.count', 22)).toBe('22 канала');
     expect(tp('app.channelsLoaded', 22)).toBe('Загружено 22 канала');
     expect(document.documentElement.lang).toBe('ru');
+  });
+
+  it('translates and pluralizes Ukrainian messages', () => {
+    setLocale('uk');
+    expect(t('channel.recentlyWatched')).toBe('Нещодавно переглянуті');
+    expect(tp('channel.count', 1)).toBe('1 канал');
+    expect(tp('channel.count', 2)).toBe('2 канали');
+    expect(tp('channel.count', 5)).toBe('5 каналів');
+    expect(tp('channel.count', 21)).toBe('21 канал');
+    expect(document.documentElement.lang).toBe('uk');
   });
 
   it('enables pseudo-localization without exposing another locale option', () => {

@@ -14,6 +14,7 @@ import { IT_MESSAGES } from './it';
 import { PT_BR_MESSAGES } from './pt-BR';
 import { pseudoLocalize } from './pseudo';
 import { RU_MESSAGES } from './ru';
+import { UK_MESSAGES } from './uk';
 import { ZH_CN_MESSAGES } from './zh-CN';
 
 export type { MessageKey, PluralMessageKey, TextMessageKey } from './en';
@@ -68,6 +69,12 @@ const LOCALES = {
     displayName: 'Русский',
     systemExact: [],
     systemPrefixes: ['ru'],
+  },
+  uk: {
+    messages: UK_MESSAGES,
+    displayName: 'Українська',
+    systemExact: [],
+    systemPrefixes: ['uk'],
   },
   'zh-CN': {
     messages: ZH_CN_MESSAGES,
