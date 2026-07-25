@@ -36,6 +36,18 @@ describe('StorageService', () => {
     expect(StorageService.getEpgUrl()).toBe('http://epg/guide.xml');
   });
 
+  it('stores verified stream MIME routes and expires stale entries', () => {
+    expect(StorageService.getStreamMime('http://host/play')).toBeNull();
+    StorageService.setStreamMime('http://host/play', 'application/vnd.apple.mpegurl');
+    expect(StorageService.getStreamMime('http://host/play'))
+      .toBe('application/vnd.apple.mpegurl');
+
+    StorageService.set('stream_mimes', {
+      'http://host/play': { mime: 'application/vnd.apple.mpegurl', updatedAt: 0 },
+    });
+    expect(StorageService.getStreamMime('http://host/play')).toBeNull();
+  });
+
   it('stores playlist cache EPG sources and invalidates the URL-only schema', () => {
     const channels = [ch({ id: 'a', name: 'Alpha', url: 'http://host/a', playlistIds: ['p1'] })];
     StorageService.set('cached_playlist', {

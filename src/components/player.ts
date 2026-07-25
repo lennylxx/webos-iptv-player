@@ -20,7 +20,13 @@ import { formatTime, formatPosition, formatDuration, getProgress } from '../util
 import { getLenientLoaders } from '../utils/hls-stable-loader';
 import { StallWatchdog, type StallProbe } from '../utils/stall-watchdog';
 import { resolutionBadge, hdrLabel, frameRateLabel, parseVariants, pickVariant, codecName, audioSummary, subtitleSummary, type StreamVariant, type MediaInfo } from '../utils/stream-info';
-import { extFromUrl, containerMime, sniffStreamContentType } from '../utils/url';
+import {
+  extFromUrl,
+  containerMime,
+  sniffStreamContentType,
+  streamMime,
+  streamRouteKey,
+} from '../utils/url';
 import { probeMedia } from '../services/media-probe';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
@@ -868,8 +874,8 @@ export class Player {
     const isHlsUrl = /\.m3u8?(?:[?#]|$)/i.test(url);
 
     // webOS: the TV's hardware HLS/TS decoders beat MSE libraries, so play
-    // natively. Probe extension-less URLs before choosing a MIME — the native
-    // pipeline may accept raw MPEG-TS labelled as HLS but then stall repeatedly.
+    // natively. Explicit extensions and previously verified routes avoid a
+    // probe; only a cold ambiguous route pays the bounded classification cost.
     if (isWebOS) {
       if (opts?.direct) {
         const mime = containerMime(url);
@@ -886,14 +892,26 @@ export class Player {
         this.playNative(url, mime);
         return;
       }
+      const routeKey = streamRouteKey(url);
+      const cachedMime = StorageService.getStreamMime(routeKey);
+      if (cachedMime) {
+        log.info('loadStream url=', url, '| webOS native | cached MIME', cachedMime,
+          '| catchup:', !!this.catchupInfo);
+        if (cachedMime === 'application/vnd.apple.mpegurl') {
+          void this.loadManifestTracks(url, this.manifestSeq);
+        }
+        this.playNative(url, cachedMime);
+        return;
+      }
       void this.detectContentType(url).then(contentType => {
         if (token !== this.loadToken || !this.videoEl) return;
-        const mime = contentType.includes('flv') ? 'video/x-flv'
-          : contentType.includes('mp2t') ? 'video/mp2t'
-          : /^(?:video|audio)\//.test(contentType) ? contentType
-          : 'application/vnd.apple.mpegurl';
+        const mime = streamMime(contentType);
+        if (routeKey && contentType &&
+            contentType.split(';')[0].trim() !== 'application/octet-stream') {
+          StorageService.setStreamMime(routeKey, mime);
+        }
         log.info('loadStream url=', url, '| webOS native | content-type:', contentType || '(none)',
-          '| catchup:', !!this.catchupInfo, '| MIME', mime);
+          '| catchup:', !!this.catchupInfo, '| MIME', mime || '(auto)');
         if (mime === 'application/vnd.apple.mpegurl') {
           void this.loadManifestTracks(url, this.manifestSeq);
         }
@@ -984,7 +1002,7 @@ export class Player {
     this.videoEl.innerHTML = '';
     const source = document.createElement('source');
     source.src = url;
-    source.type = mime;
+    if (mime) source.type = mime;
     this.videoEl.appendChild(source);
     this.videoEl.load();
     this.videoEl.play().catch(e => log.warn('Native play() rejected:', e));

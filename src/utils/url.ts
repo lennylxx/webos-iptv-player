@@ -16,6 +16,27 @@ export function containerMime(url: string): string {
   }
 }
 
+export function streamRouteKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const route = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
+    return `${parsed.origin}/${route}`;
+  } catch {
+    return '';
+  }
+}
+
+export function streamMime(contentType: string): string {
+  const type = contentType.toLowerCase().split(';')[0].trim();
+  if (type.includes('flv')) return 'video/x-flv';
+  if (type.includes('mp2t')) return 'video/mp2t';
+  if (type.includes('mpegurl') || type.includes('m3u8')) {
+    return 'application/vnd.apple.mpegurl';
+  }
+  if (/^(?:video|audio)\//.test(type)) return type;
+  return '';
+}
+
 export function sniffStreamContentType(contentType: string, prefix: Uint8Array): string {
   const type = contentType.toLowerCase().split(';')[0].trim();
   if (type !== 'application/octet-stream') return type;

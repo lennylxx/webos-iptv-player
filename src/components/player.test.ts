@@ -23,6 +23,7 @@ vi.mock('../services/storage-service', () => ({
   StorageService: {
     setLastChannel: vi.fn(), getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
     getAudioPref: vi.fn(), setAudioPref: vi.fn(),
+    getStreamMime: vi.fn(() => null), setStreamMime: vi.fn(),
     setResume: vi.fn(), clearResume: vi.fn(),
     removeWatchlist: vi.fn(),
     getPickedOnlineSub: vi.fn(), setPickedOnlineSub: vi.fn(),
@@ -42,7 +43,13 @@ vi.mock('../services/idb-cache', () => ({
 }));
 
 import { Player, ASS_SUBTITLE_BASE } from './player';
-import { containerMime, extFromUrl, sniffStreamContentType } from '../utils/url';
+import {
+  containerMime,
+  extFromUrl,
+  sniffStreamContentType,
+  streamMime,
+  streamRouteKey,
+} from '../utils/url';
 import { StorageService } from '../services/storage-service';
 import { showToast } from './toast';
 import { probeMedia } from '../services/media-probe';
@@ -1446,6 +1453,24 @@ describe('sniffStreamContentType', () => {
       .toBe('application/octet-stream');
     expect(sniffStreamContentType('video/mp2t; charset=binary', new Uint8Array()))
       .toBe('video/mp2t');
+  });
+});
+
+describe('stream routing', () => {
+  it('groups extension-less channels by origin and route prefix', () => {
+    expect(streamRouteKey('http://host/play/ch1')).toBe('http://host/play');
+    expect(streamRouteKey('http://host/play/ch2?token=x')).toBe('http://host/play');
+    expect(streamRouteKey('http://host/catchup/ch1')).toBe('http://host/catchup');
+    expect(streamRouteKey('not a url')).toBe('');
+  });
+
+  it('maps detected content types to native MIME values', () => {
+    expect(streamMime('video/mp2t')).toBe('video/mp2t');
+    expect(streamMime('video/x-flv')).toBe('video/x-flv');
+    expect(streamMime('video/mp4; charset=binary')).toBe('video/mp4');
+    expect(streamMime('application/vnd.apple.mpegurl')).toBe('application/vnd.apple.mpegurl');
+    expect(streamMime('application/octet-stream')).toBe('');
+    expect(streamMime('')).toBe('');
   });
 });
 
