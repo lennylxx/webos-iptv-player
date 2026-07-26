@@ -315,6 +315,28 @@
   --border: #4a2732;
 }
 
+/* Cobalt Slate — cool graphite surfaces with a clear cobalt-blue focus. */
+[data-theme="cobalt-slate"] {
+  --bg-primary: #282c34;
+  --catalog-hero-scrim-rgb: 40 44 52;
+  --bg-secondary: #21252b;
+  --bg-tertiary: #2c313a;
+  --bg-card: #3a3f4b;
+  --text-primary: #abb2bf;
+  --text-secondary: #9da5b4;
+  --text-muted: #5c6370;
+  --accent: #61afef;
+  --accent-dim: #3e8ed0;
+  --accent-rgb: 97 175 239;
+  --accent-glow: rgb(var(--accent-rgb) / 0.3);
+  --danger: #e06c75;
+  --danger-rgb: 224 108 117;
+  --success: #98c379;
+  --warning: #e5c07b;
+  --warning-rgb: 229 192 123;
+  --border: #3e4451;
+}
+
 /* Non-default themes map catalog chrome onto their own palette. Midnight keeps
    the original catalog colors declared in main.css. */
 [data-theme="ember"],
@@ -329,7 +351,8 @@
 [data-theme="neon-night"],
 [data-theme="pastel-latte"],
 [data-theme="paper-light"],
-[data-theme="burgundy"] {
+[data-theme="burgundy"],
+[data-theme="cobalt-slate"] {
   --catalog-surface: var(--bg-card);
   --catalog-control: var(--bg-tertiary);
   --catalog-focus: var(--accent);

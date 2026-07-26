@@ -37,6 +37,136 @@ test.describe('Settings navigation', () => {
     await expect(page.locator('#view-player')).toBeHidden();
     await expect(page.locator('#view-settings')).toBeHidden();
   });
+
+  test('keeps Magic Remote hover separate from the weak scroll-position indicator', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#view-settings')).toBeVisible();
+
+    const general = page.locator('[data-settings-target="general"]');
+    const appearance = page.locator('[data-settings-target="appearance"]');
+    const playback = page.locator('[data-settings-target="playback"]');
+    const data = page.locator('[data-settings-target="data"]');
+
+    await playback.hover();
+    await expect(playback).toHaveClass(/focused/);
+    await expect(general).toHaveClass(/active/);
+
+    await appearance.click();
+    await expect(appearance).toHaveClass(/active/);
+    await page.locator('.settings-main').evaluate((main) => {
+      (main as HTMLElement).style.scrollBehavior = 'auto';
+      main.scrollTop = main.scrollHeight;
+      main.dispatchEvent(new Event('scroll'));
+    });
+
+    await expect(data).toHaveClass(/active/);
+    await playback.hover();
+    await expect(playback).toHaveClass(/focused/);
+    await expect(data).toHaveClass(/active/);
+  });
+
+  test('keeps the clicked weak indicator locked throughout smooth scrolling', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#view-settings')).toBeVisible();
+    await page.evaluate(() => {
+      const changes: string[] = [];
+      (window as typeof window & { __settingsActiveChanges: string[] }).__settingsActiveChanges = changes;
+      new MutationObserver(() => {
+        const active = document.querySelector<HTMLElement>('.settings-nav-item.active')
+          ?.dataset.settingsTarget;
+        if (active && changes[changes.length - 1] !== active) changes.push(active);
+      }).observe(document.querySelector('.settings-nav-list')!, {
+        attributes: true,
+        subtree: true,
+        attributeFilter: ['class'],
+      });
+    });
+
+    const data = page.locator('[data-settings-target="data"]');
+    await data.hover();
+    await page.evaluate(() => {
+      (window as typeof window & { __settingsActiveChanges: string[] }).__settingsActiveChanges.length = 0;
+    });
+    await data.click();
+    await expect.poll(() => page.locator('.settings-main').evaluate((main) =>
+      Math.abs(main.scrollHeight - main.clientHeight - main.scrollTop) <= 1)).toBe(true);
+
+    const changes = await page.evaluate(() =>
+      (window as typeof window & { __settingsActiveChanges: string[] }).__settingsActiveChanges);
+    expect(changes).toEqual(['data']);
+  });
+
+  test('Right enters the selected sidebar category without changing its weak indicator', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#view-settings')).toBeVisible();
+
+    const guide = page.locator('[data-settings-target="guide"]');
+    await guide.dispatchEvent('nav:hover');
+    await page.keyboard.press('ArrowRight');
+
+    await expect(page.locator('#epg-url')).toHaveClass(/focused/);
+    await expect(guide).toHaveClass(/active/);
+  });
+
+  test('Left returns from a category content boundary to its sidebar item', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#view-settings')).toBeVisible();
+
+    const guide = page.locator('[data-settings-target="guide"]');
+    await guide.dispatchEvent('nav:hover');
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('#epg-url')).toHaveClass(/focused/);
+
+    await page.keyboard.press('ArrowLeft');
+    await expect(guide).toHaveClass(/focused/);
+  });
+
+  test('keeps every localized sidebar label on one line', async ({ page }) => {
+    const locales = ['en', 'de', 'es', 'fr', 'it', 'pt-BR', 'ru', 'uk', 'zh-CN'];
+    await page.goto('/');
+
+    for (const locale of locales) {
+      await page.evaluate((value) => {
+        localStorage.setItem('iptv_locale', JSON.stringify(value));
+      }, locale);
+      await page.reload();
+      await expect(page.locator('html')).toHaveAttribute('lang', locale);
+
+      const result = await page.locator('.settings-sidebar').evaluate((sidebar) => {
+        const bad = Array.from(sidebar.querySelectorAll<HTMLElement>(
+          '.settings-nav-item, .settings-nav-help-row'))
+          .filter((item) => {
+            const label = item.lastElementChild;
+            if (!label) return true;
+            const range = document.createRange();
+            range.selectNodeContents(label);
+            return range.getClientRects().length !== 1 || item.scrollWidth > item.clientWidth;
+          })
+          .map((item) => item.textContent?.trim() ?? '');
+        return { bad, width: Math.round(sidebar.getBoundingClientRect().width) };
+      });
+
+      expect(result.bad, locale).toEqual([]);
+      expect(result.width, locale).toBeGreaterThanOrEqual(252);
+      expect(result.width, locale).toBeLessThanOrEqual(328);
+    }
+  });
+
+  test('lays out the 15 theme swatches across three full rows', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('[data-settings-target="appearance"]').click();
+
+    const rowCounts = await page.locator('.theme-swatch').evaluateAll((swatches) => {
+      const rows = new Map<number, number>();
+      for (const swatch of swatches) {
+        const top = Math.round(swatch.getBoundingClientRect().top);
+        rows.set(top, (rows.get(top) ?? 0) + 1);
+      }
+      return Array.from(rows.values());
+    });
+
+    expect(rowCounts).toEqual([5, 5, 5]);
+  });
 });
 
 test.describe('Settings playlists', () => {

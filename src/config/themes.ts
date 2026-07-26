@@ -26,6 +26,7 @@ export const THEMES: ThemeMeta[] = [
   { id: 'pastel-latte', name: 'Pastel Latte', isLight: true },
   { id: 'paper-light', name: 'Paper Light', isLight: true },
   { id: 'burgundy', name: 'Burgundy', isLight: false },
+  { id: 'cobalt-slate', name: 'Cobalt Slate', isLight: false },
 ];
 
 export function isValidTheme(id: string | null | undefined): id is string {

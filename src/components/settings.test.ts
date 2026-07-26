@@ -121,6 +121,41 @@ function click(selector: string): void {
 }
 
 describe('Settings.render', () => {
+  it('renders the category sidebar with General first', () => {
+    settings.render();
+    const labels = Array.from(container.querySelectorAll('.settings-nav-item'))
+      .map((item) => item.textContent?.trim());
+    expect(labels).toEqual([
+      'General',
+      'Sources',
+      'Program Guide',
+      'Appearance',
+      'Playback',
+      'Online Subtitles',
+      'Data Management',
+    ]);
+    expect(container.querySelector('.settings-nav-item.active')?.getAttribute('data-settings-target'))
+      .toBe('general');
+    expect(container.querySelector('.settings-nav-help')?.textContent)
+      .toContain('Choose category');
+    expect(container.querySelector('.settings-nav-help')?.textContent)
+      .toContain('Enter / return');
+  });
+
+  it('groups language and time zone under General, with autoplay under Playback', () => {
+    settings.render();
+    expect(container.querySelector('#app-language')?.closest('[data-settings-category]')
+      ?.getAttribute('data-settings-category')).toBe('general');
+    expect(container.querySelector('#tz-mode')?.closest('[data-settings-category]')
+      ?.getAttribute('data-settings-category')).toBe('guide');
+    expect(container.querySelector('#auto-play')?.closest('[data-settings-category]')
+      ?.getAttribute('data-settings-category')).toBe('playback');
+    expect(container.querySelector('#clear-recently-watched')?.closest('[data-settings-category]')
+      ?.getAttribute('data-settings-category')).toBe('data');
+    expect(container.querySelector('#settings-general')?.textContent).not.toContain('Display');
+    expect(container.querySelector('.settings-section .settings-section')).toBeNull();
+  });
+
   it('shows an empty hint when there are no playlists', () => {
     settings.render();
     expect(container.querySelector('#playlist-entries .empty-hint')?.textContent).toBe('No playlists added yet');
@@ -148,7 +183,7 @@ describe('Settings theme picker', () => {
   beforeEach(() => settings.render());
 
   it('renders a swatch per registered theme with the saved theme active', () => {
-    expect(container.querySelectorAll('.theme-swatch')).toHaveLength(14);
+    expect(container.querySelectorAll('.theme-swatch')).toHaveLength(15);
     expect(container.querySelector('.theme-swatch.active')!.getAttribute('data-theme-id')).toBe('midnight');
   });
 
@@ -480,6 +515,8 @@ describe('Settings.save', () => {
     setLocale('zh-CN');
     settings.render();
     expect(container.querySelector('.settings-title')?.textContent).toBe('设置');
+    expect(container.querySelector('#app-language')?.closest('.settings-section')
+      ?.querySelector('h3')?.textContent).toBe('语言 / Language');
     expect(container.querySelector('#app-language .dropdown-current')?.textContent).toBe('跟随系统');
   });
 
@@ -529,6 +566,62 @@ describe('Settings.handleAction', () => {
       .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     settings.handleAction('select');
     expect(storageMock.setPlaylists).toHaveBeenCalled();
+  });
+
+  it('moves right from a category to its first control', () => {
+    settings.render();
+    container.querySelector<HTMLElement>('[data-settings-target="appearance"]')!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    settings.handleAction('right');
+    expect(container.querySelector('.theme-swatch.focused')).not.toBeNull();
+  });
+
+  it('moves left from a content boundary back to the active category', () => {
+    settings.render();
+    click('[data-settings-target="guide"]');
+    container.querySelector<HTMLElement>('#epg-url')!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    settings.handleAction('left');
+    expect(container.querySelector('[data-settings-target="guide"]')?.classList.contains('focused'))
+      .toBe(true);
+  });
+
+  it('scrolls to a category when its sidebar item is activated', () => {
+    settings.render();
+    const target = container.querySelector<HTMLElement>('#settings-subtitles')!;
+    target.scrollIntoView = vi.fn();
+    click('[data-settings-target="subtitles"]');
+    expect(target.scrollIntoView).toHaveBeenCalledWith({
+      block: 'start',
+      inline: 'nearest',
+      behavior: 'smooth',
+    });
+    expect(target.scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it('updates the weak active category when content scrolling reaches the bottom', async () => {
+    settings.render();
+    const main = container.querySelector<HTMLElement>('.settings-main')!;
+    Object.defineProperties(main, {
+      scrollTop: { value: 900, configurable: true },
+      clientHeight: { value: 100, configurable: true },
+      scrollHeight: { value: 1000, configurable: true },
+    });
+    main.dispatchEvent(new Event('scroll'));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(container.querySelector('.settings-nav-item.active')?.getAttribute('data-settings-target'))
+      .toBe('data');
+  });
+
+  it('keeps the active category while Magic Remote hover moves elsewhere', () => {
+    settings.render();
+    click('[data-settings-target="appearance"]');
+    container.querySelector<HTMLElement>('[data-settings-target="playback"]')!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    expect(container.querySelector('.settings-nav-item.active')?.getAttribute('data-settings-target'))
+      .toBe('appearance');
+    expect(container.querySelector('[data-settings-target="playback"]')?.classList.contains('focused'))
+      .toBe(true);
   });
 });
 
@@ -790,11 +883,11 @@ describe('Settings Xtream section', () => {
     expect(container.querySelector<HTMLElement>('#add-xtream')).not.toBeNull();
   });
 
-  it('renders the Xtream Accounts section first, above Playlists', () => {
+  it('renders Language first and keeps Xtream Accounts above Playlists', () => {
     settings.render();
     const heads = Array.from(container.querySelectorAll('.settings-section h3'))
       .map((h) => h.textContent);
-    expect(heads[0]).toBe('Xtream Accounts');
+    expect(heads[0]).toBe('Language');
     expect(heads.indexOf('Xtream Accounts')).toBeLessThan(heads.indexOf('Playlists'));
   });
 

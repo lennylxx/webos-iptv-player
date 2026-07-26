@@ -1,14 +1,143 @@
 .settings-view {
-  padding: 40px 60px;
-  overflow-y: auto;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 32px;
+  padding: 40px 60px 40px 40px;
+  overflow: hidden;
   height: 100%;
   background: var(--bg-primary);
 }
 
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 252px;
+  max-width: 328px;
+  padding: 20px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 .settings-title {
   font-size: 36px;
-  margin-bottom: 32px;
+  margin: 0 16px 22px;
   color: var(--accent);
+}
+
+.settings-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 14px;
+  color: var(--text-secondary);
+  font-size: 20px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+
+.settings-nav-item.active {
+  color: var(--accent);
+}
+
+.settings-nav-item.active::before {
+  position: absolute;
+  top: 13px;
+  bottom: 13px;
+  left: -13px;
+  width: 4px;
+  background: var(--accent);
+  content: '';
+}
+
+.settings-nav-item.focused {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.settings-nav-item.active.focused {
+  color: var(--accent);
+}
+
+.settings-nav-icon {
+  display: flex;
+  flex: 0 0 26px;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-nav-icon svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-nav-help {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  padding: 18px 10px 0;
+  color: var(--text-muted);
+  font-size: 15px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-nav-help-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  white-space: nowrap;
+}
+
+.settings-nav-key {
+  display: flex;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.settings-nav-key svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-main {
+  min-width: 0;
+  height: 100%;
+  padding: 0 10px 0 4px;
+  overflow-y: auto;
+  scroll-behavior: smooth;
 }
 
 .settings-section {
@@ -139,9 +268,16 @@
 }
 
 .settings-actions {
+  position: sticky;
+  z-index: 10;
+  bottom: 0;
   display: flex;
+  justify-content: flex-end;
   gap: 16px;
   margin-top: 32px;
+  padding: 20px 0 8px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
 }
 
 .settings-about {
@@ -342,7 +478,7 @@
    its own surfaces/text render in that theme's colors. */
 .theme-swatch-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 18px;
   margin-bottom: 24px;
 }

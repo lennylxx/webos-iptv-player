@@ -1,5 +1,5 @@
 import type { Action, PlaylistEntry, TzMode } from '../types';
-import { $, $$, html, type Safe } from '../utils/dom';
+import { $, $$, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SpatialNav } from '../navigation/spatial-nav';
 import { StorageService } from '../services/storage-service';
@@ -15,7 +15,18 @@ import { showToast } from './toast';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
-import { localeOptions, t, tp, type LocalePreference } from '../i18n';
+import { localeOptions, t, tp, type LocalePreference, type TextMessageKey } from '../i18n';
+import {
+  APPEARANCE_ICON,
+  CAPTIONS_ICON,
+  DATABASE_ICON,
+  GLOBE_ICON,
+  GUIDE_ICON,
+  NAV_HORIZONTAL_ICON,
+  NAV_VERTICAL_ICON,
+  PLAYBACK_ICON,
+  SOURCES_ICON,
+} from './icons';
 
 const log = createLogger('Settings');
 
@@ -117,6 +128,66 @@ function languageOptions(): { value: LocalePreference; label: string }[] {
   ];
 }
 
+function languageHeading(): string {
+  const localized = t('settings.language');
+  return localized === 'Language' ? localized : `${localized} / Language`;
+}
+
+type SettingsCategory = 'general' | 'sources' | 'guide' | 'appearance'
+  | 'playback' | 'subtitles' | 'data';
+
+const SETTINGS_CATEGORIES: readonly {
+  id: SettingsCategory;
+  label: TextMessageKey;
+  icon: Safe;
+}[] = [
+  {
+    id: 'general',
+    label: 'settings.general',
+    icon: raw(GLOBE_ICON),
+  },
+  {
+    id: 'sources',
+    label: 'settings.sources',
+    icon: raw(SOURCES_ICON),
+  },
+  {
+    id: 'guide',
+    label: 'settings.guide',
+    icon: raw(GUIDE_ICON),
+  },
+  {
+    id: 'appearance',
+    label: 'settings.appearance',
+    icon: raw(APPEARANCE_ICON),
+  },
+  {
+    id: 'playback',
+    label: 'settings.playback',
+    icon: raw(PLAYBACK_ICON),
+  },
+  {
+    id: 'subtitles',
+    label: 'settings.onlineSubtitles',
+    icon: raw(CAPTIONS_ICON),
+  },
+  {
+    id: 'data',
+    label: 'settings.dataManagement',
+    icon: raw(DATABASE_ICON),
+  },
+];
+
+function settingsNavItem(category: typeof SETTINGS_CATEGORIES[number], active: boolean): Safe {
+  return html`
+    <button class="settings-nav-item ${active ? 'active' : ''}" data-focusable
+            data-settings-target="${category.id}">
+      <span class="settings-nav-icon">${category.icon}</span>
+      <span>${t(category.label)}</span>
+    </button>
+  `;
+}
+
 /** Custom single-select dropdown — remote/D-pad friendly and app-styled (the app
  *  uses no native `<select>`). The trigger toggles the menu; each option carries a
  *  `data-dropdown-value`; the chosen value lives on the root's `data-value`. Closed
@@ -196,6 +267,9 @@ export class Settings {
   private selectedTheme = '';
   private confirmationPrompt = new ConfirmationPrompt();
   private watchlistAccount: PlaylistEntry | null = null;
+  private ignoreCategoryScroll = false;
+  private categoryScrollFrame: number | null = null;
+  private categorySyncFrame: number | null = null;
 
   constructor(container: HTMLElement, onSave: (action: SaveAction) => void) {
     this.container = container;
@@ -239,6 +313,16 @@ export class Settings {
       const rel = e.relatedTarget as HTMLElement | null;
       if (!rel || !rel.closest('.theme-swatch')) previewTheme(this.selectedTheme);
     });
+
+    this.container.addEventListener('scroll', (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!target.classList.contains('settings-main') || this.ignoreCategoryScroll) return;
+      if (this.categorySyncFrame !== null) return;
+      this.categorySyncFrame = window.requestAnimationFrame(() => {
+        this.categorySyncFrame = null;
+        this.syncCategoryFromScroll(target);
+      });
+    }, true);
   }
 
   render(): void {
@@ -264,202 +348,229 @@ export class Settings {
 
     this.container.innerHTML = String(html`
       <div class="settings-view">
-        <h2 class="settings-title">${t('common.settings')}</h2>
-
-        <div class="settings-section">
-          <h3>${t('settings.xtreamAccount')}</h3>
-          <div class="xtream-entries" id="xtream-entries">
-            ${accounts.length
-              ? html`${accounts.map((pl) => xtreamCard(pl))}`
-              : html`<div class="empty-hint">${t('settings.noXtream')}</div>`}
+        <nav class="settings-sidebar" data-nav-container aria-label="${t('common.settings')}">
+          <h2 class="settings-title">${t('common.settings')}</h2>
+          <div class="settings-nav-list">
+            ${SETTINGS_CATEGORIES.map((category, index) => settingsNavItem(category, index === 0))}
           </div>
-          <button class="btn btn-primary" data-focusable id="add-xtream">${t('settings.addXtream')}</button>
-        </div>
-
-        <div class="settings-section">
-          <h3>${t('settings.language')}</h3>
-          <div class="settings-row">
-            <div class="settings-field">
-              ${dropdown('app-language', languageOptions(), localePreference)}
+          <div class="settings-nav-help">
+            <div class="settings-nav-help-row">
+              <span class="settings-nav-key">${raw(NAV_VERTICAL_ICON)}</span>
+              <span>${t('settings.navChooseCategory')}</span>
+            </div>
+            <div class="settings-nav-help-row">
+              <span class="settings-nav-key">${raw(NAV_HORIZONTAL_ICON)}</span>
+              <span>${t('settings.navEnterReturn')}</span>
             </div>
           </div>
-          <div class="empty-hint">${t('settings.languageHint')}</div>
-        </div>
+        </nav>
 
-        <div class="settings-section">
-          <h3>${t('settings.playlists')}</h3>
-          <div class="playlist-entries" id="playlist-entries">
-            ${playlists.length
-              ? html`
-                <div class="settings-row playlist-header-row">
-                  <div class="settings-field"><label>${t('settings.name')}</label></div>
-                  <div class="settings-field"><label>${t('settings.url')}</label></div>
-                  <div class="playlist-header-spacer"></div>
+        <div class="settings-main">
+          <div class="settings-category" id="settings-general" data-settings-category="general">
+            <div class="settings-section">
+              <h3>${languageHeading()}</h3>
+              <div class="settings-row">
+                <div class="settings-field">
+                  ${dropdown('app-language', languageOptions(), localePreference)}
                 </div>
-                ${playlists.map((pl) => html`
-                <div class="settings-row" data-id="${pl.id}">
-                  <div class="settings-field">
-                    <input type="text" class="settings-input playlist-name"
-                           aria-label="${t('settings.playlistName')}" placeholder="${t('settings.myPlaylist')}"
-                           data-focusable value="${pl.name || ''}">
-                  </div>
-                  <div class="settings-field">
-                    <input type="text" class="settings-input playlist-url"
-                           aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
-                           data-focusable value="${pl.url || ''}">
-                  </div>
-                  <button class="btn btn-danger remove-playlist" data-focusable>${t('common.remove')}</button>
-                </div>
-              `)}`
-              : html`<div class="empty-hint">${t('settings.noPlaylists')}</div>`}
+              </div>
+              <div class="empty-hint">${t('settings.languageHint')}</div>
+            </div>
           </div>
-          <button class="btn btn-primary" data-focusable id="add-playlist">${t('settings.addPlaylist')}</button>
-        </div>
 
-        <div class="settings-section">
-          <h3>${t('settings.uploadPlaylist')}</h3>
-          <div class="upload-section">
-            <div class="upload-box upload-box-info" id="upload-info">${t('settings.checkingUpload')}</div>
-            <div class="upload-box upload-box-list">
-              <div class="upload-entries" id="upload-entries">
-                ${uploads.length
-                  ? uploads.map((pl) => html`
-                    <div class="settings-row" data-key="${pl.url}">
-                      <div class="settings-field wide">
-                        <label>${uploadLabel(pl)}</label>
-                      </div>
-                      <button class="btn btn-danger remove-upload" data-focusable
-                              data-url="${pl.url}">${t('common.remove')}</button>
+          <div class="settings-category" id="settings-sources" data-settings-category="sources">
+            <div class="settings-section">
+              <h3>${t('settings.xtreamAccount')}</h3>
+              <div class="xtream-entries" id="xtream-entries">
+                ${accounts.length
+                  ? html`${accounts.map((pl) => xtreamCard(pl))}`
+                  : html`<div class="empty-hint">${t('settings.noXtream')}</div>`}
+              </div>
+              <button class="btn btn-primary" data-focusable id="add-xtream">${t('settings.addXtream')}</button>
+            </div>
+
+            <div class="settings-section">
+              <h3>${t('settings.playlists')}</h3>
+              <div class="playlist-entries" id="playlist-entries">
+                ${playlists.length
+                  ? html`
+                    <div class="settings-row playlist-header-row">
+                      <div class="settings-field"><label>${t('settings.name')}</label></div>
+                      <div class="settings-field"><label>${t('settings.url')}</label></div>
+                      <div class="playlist-header-spacer"></div>
                     </div>
-                  `)
-                  : html`<div class="empty-hint">${t('settings.noUploads')}</div>`}
+                    ${playlists.map((pl) => html`
+                    <div class="settings-row" data-id="${pl.id}">
+                      <div class="settings-field">
+                        <input type="text" class="settings-input playlist-name"
+                               aria-label="${t('settings.playlistName')}" placeholder="${t('settings.myPlaylist')}"
+                               data-focusable value="${pl.name || ''}">
+                      </div>
+                      <div class="settings-field">
+                        <input type="text" class="settings-input playlist-url"
+                               aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
+                               data-focusable value="${pl.url || ''}">
+                      </div>
+                      <button class="btn btn-danger remove-playlist" data-focusable>${t('common.remove')}</button>
+                    </div>
+                  `)}`
+                  : html`<div class="empty-hint">${t('settings.noPlaylists')}</div>`}
               </div>
+              <button class="btn btn-primary" data-focusable id="add-playlist">${t('settings.addPlaylist')}</button>
             </div>
-          </div>
-        </div>
 
-        <div class="settings-section">
-          <h3>${t('settings.epg')}</h3>
-          <div class="settings-row">
-            <div class="settings-field wide">
-              <label>${t('settings.xmltvUrl')}</label>
-              <input type="text" class="settings-input" data-focusable id="epg-url"
-                     value="${epgUrl}" placeholder="https://example.com/epg.xml">
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <h3>${t('settings.appearance')}</h3>
-          <div class="theme-swatch-grid">
-            ${THEMES.map(t => themeSwatch(t, theme))}
-          </div>
-          <div class="settings-row settings-toggle-row">
-            <label>${t('settings.overlayGlass')}</label>
-            ${toggleGroup('overlay-style', overlayStyles, overlayStyle)}
-          </div>
-          <div class="empty-hint">${t('settings.overlayHint')}</div>
-        </div>
-
-        <div class="settings-section">
-          <h3>${t('settings.display')}</h3>
-          <div class="settings-row settings-toggle-row">
-            <label>${t('settings.timeZone')}</label>
-            ${toggleGroup('tz-mode', [{ value: 'device', label: t('settings.device') }, { value: 'feed', label: t('settings.feed') }], feedTime ? 'feed' : 'device')}
-          </div>
-          <div class="empty-hint">
-            ${tzOffset === null
-              ? t('settings.timeZoneUnknown')
-              : t('settings.timeZoneKnown', { offset: formatOffset(tzOffset) })}
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <h3>${t('settings.playback')}</h3>
-          <div class="settings-row settings-toggle-row">
-            <label>${t('settings.autoPlay')}</label>
-            ${toggleGroup('auto-play', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], autoPlay ? 'on' : 'off')}
-          </div>
-          <div class="settings-history-action">
-            <div class="settings-history-copy">
-              <div class="settings-history-title">${t('channel.recentlyWatched')}</div>
-              <div class="settings-history-description">
-                ${t('settings.clearRecentDescription')}
-              </div>
-            </div>
-            <button class="btn btn-danger" data-focusable id="clear-recently-watched"
-                    aria-label="${t('settings.clearRecentlyWatched')}">${t('settings.clearRecentlyWatched')}</button>
-          </div>
-          ${this.watchlistAccount ? html`
-            <div class="settings-history-action">
-              <div class="settings-history-copy">
-                <div class="settings-history-title">${t('common.watchlist')}</div>
-                <div class="settings-history-description">
-                  ${t('settings.clearWatchlistDescription', { account: this.watchlistAccount.name })}
+            <div class="settings-section">
+              <h3>${t('settings.uploadPlaylist')}</h3>
+              <div class="upload-section">
+                <div class="upload-box upload-box-info" id="upload-info">${t('settings.checkingUpload')}</div>
+                <div class="upload-box upload-box-list">
+                  <div class="upload-entries" id="upload-entries">
+                    ${uploads.length
+                      ? uploads.map((pl) => html`
+                        <div class="settings-row" data-key="${pl.url}">
+                          <div class="settings-field wide">
+                            <label>${uploadLabel(pl)}</label>
+                          </div>
+                          <button class="btn btn-danger remove-upload" data-focusable
+                                  data-url="${pl.url}">${t('common.remove')}</button>
+                        </div>
+                      `)
+                      : html`<div class="empty-hint">${t('settings.noUploads')}</div>`}
+                  </div>
                 </div>
               </div>
-              <button class="btn btn-danger" data-focusable id="clear-watchlist"
-                      aria-label="${t('settings.clearWatchlist')}">${t('settings.clearWatchlist')}</button>
             </div>
-          ` : ''}
-        </div>
+          </div>
 
-        <div class="settings-section">
-          <h3>${t('settings.onlineSubtitles')}</h3>
-          <div class="settings-row">
-            <div class="settings-field">
-              <label>${t('settings.preferredSubtitle')}</label>
-              ${dropdown('os-pref-lang', subtitleLanguages(), os.preferredLanguage)}
+          <div class="settings-category" id="settings-guide" data-settings-category="guide">
+            <div class="settings-section">
+              <h3>${t('settings.epg')}</h3>
+              <div class="settings-row">
+                <div class="settings-field wide">
+                  <label>${t('settings.xmltvUrl')}</label>
+                  <input type="text" class="settings-input" data-focusable id="epg-url"
+                         value="${epgUrl}" placeholder="https://example.com/epg.xml">
+                </div>
+              </div>
+              <div class="settings-row settings-toggle-row">
+                <label>${t('settings.timeZone')}</label>
+                ${toggleGroup('tz-mode', [{ value: 'device', label: t('settings.device') }, { value: 'feed', label: t('settings.feed') }], feedTime ? 'feed' : 'device')}
+              </div>
+              <div class="empty-hint">
+                ${tzOffset === null
+                  ? t('settings.timeZoneUnknown')
+                  : t('settings.timeZoneKnown', { offset: formatOffset(tzOffset) })}
+              </div>
             </div>
           </div>
-          <div class="settings-row">
-            <div class="settings-field wide">
-              <label><span class="settings-domain">SubDL.com</span> ${t('settings.apiKey')}</label>
-              <input type="text" class="settings-input" data-focusable id="subdl-key"
-                     value="${os.subdl.apiKey}" placeholder="api_key">
-            </div>
-          </div>
-          <div class="settings-row">
-            <div class="settings-field wide">
-              <label><span class="settings-domain">Assrt.net</span> ${t('settings.assrtToken')}</label>
-              <input type="text" class="settings-input" data-focusable id="assrt-key"
-                     value="${os.assrt.apiKey}" placeholder="token">
-            </div>
-          </div>
-          <div class="settings-row">
-            <div class="settings-field">
-              <label><span class="settings-domain">OpenSubtitles.com</span> ${t('settings.apiKey')}</label>
-              <input type="text" class="settings-input" data-focusable id="os-key"
-                     value="${os.opensubtitles.apiKey}" placeholder="api_key">
-            </div>
-            <div class="settings-field">
-              <label>${t('settings.username')}</label>
-              <input type="text" class="settings-input" data-focusable id="os-user"
-                     value="${os.opensubtitles.username}" placeholder="username">
-            </div>
-            <div class="settings-field">
-              <label>${t('settings.password')}</label>
-              <input type="password" class="settings-input" data-focusable id="os-pass"
-                     value="${os.opensubtitles.password}" placeholder="password">
-            </div>
-          </div>
-        </div>
 
-        <div class="settings-section">
-          <h3>${t('settings.dataManagement')}</h3>
-          <div class="settings-row">
-            <button class="btn btn-secondary" data-focusable id="refresh-data">${t('settings.refreshAll')}</button>
-            <button class="btn btn-danger" data-focusable id="clear-cache">${t('settings.clearCache')}</button>
+          <div class="settings-category" id="settings-appearance" data-settings-category="appearance">
+            <div class="settings-section">
+              <h3>${t('settings.appearance')}</h3>
+              <div class="theme-swatch-grid">
+                ${THEMES.map(t => themeSwatch(t, theme))}
+              </div>
+              <div class="settings-row settings-toggle-row">
+                <label>${t('settings.overlayGlass')}</label>
+                ${toggleGroup('overlay-style', overlayStyles, overlayStyle)}
+              </div>
+              <div class="empty-hint">${t('settings.overlayHint')}</div>
+            </div>
           </div>
-        </div>
 
-        <div class="settings-actions">
-          <button class="btn btn-primary btn-large" data-focusable id="save-settings">${t('settings.saveApply')}</button>
-          <button class="btn btn-secondary btn-large" data-focusable id="cancel-settings">${t('common.cancel')}</button>
-        </div>
+          <div class="settings-category" id="settings-playback" data-settings-category="playback">
+            <div class="settings-section">
+              <h3>${t('settings.playback')}</h3>
+              <div class="settings-row settings-toggle-row">
+                <label>${t('settings.autoPlay')}</label>
+                ${toggleGroup('auto-play', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], autoPlay ? 'on' : 'off')}
+              </div>
+            </div>
+          </div>
 
-        <div class="settings-about">
-          ${CONFIG.APP_NAME} v${CONFIG.VERSION}
+          <div class="settings-category" id="settings-subtitles" data-settings-category="subtitles">
+            <div class="settings-section">
+              <h3>${t('settings.onlineSubtitles')}</h3>
+              <div class="settings-row">
+                <div class="settings-field">
+                  <label>${t('settings.preferredSubtitle')}</label>
+                  ${dropdown('os-pref-lang', subtitleLanguages(), os.preferredLanguage)}
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-field wide">
+                  <label><span class="settings-domain">SubDL.com</span> ${t('settings.apiKey')}</label>
+                  <input type="text" class="settings-input" data-focusable id="subdl-key"
+                         value="${os.subdl.apiKey}" placeholder="api_key">
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-field wide">
+                  <label><span class="settings-domain">Assrt.net</span> ${t('settings.assrtToken')}</label>
+                  <input type="text" class="settings-input" data-focusable id="assrt-key"
+                         value="${os.assrt.apiKey}" placeholder="token">
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-field">
+                  <label><span class="settings-domain">OpenSubtitles.com</span> ${t('settings.apiKey')}</label>
+                  <input type="text" class="settings-input" data-focusable id="os-key"
+                         value="${os.opensubtitles.apiKey}" placeholder="api_key">
+                </div>
+                <div class="settings-field">
+                  <label>${t('settings.username')}</label>
+                  <input type="text" class="settings-input" data-focusable id="os-user"
+                         value="${os.opensubtitles.username}" placeholder="username">
+                </div>
+                <div class="settings-field">
+                  <label>${t('settings.password')}</label>
+                  <input type="password" class="settings-input" data-focusable id="os-pass"
+                         value="${os.opensubtitles.password}" placeholder="password">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-category" id="settings-data" data-settings-category="data">
+            <div class="settings-section">
+              <h3>${t('settings.dataManagement')}</h3>
+              <div class="settings-row">
+                <button class="btn btn-secondary" data-focusable id="refresh-data">${t('settings.refreshAll')}</button>
+                <button class="btn btn-danger" data-focusable id="clear-cache">${t('settings.clearCache')}</button>
+              </div>
+              <div class="settings-history-action">
+                <div class="settings-history-copy">
+                  <div class="settings-history-title">${t('channel.recentlyWatched')}</div>
+                  <div class="settings-history-description">
+                    ${t('settings.clearRecentDescription')}
+                  </div>
+                </div>
+                <button class="btn btn-danger" data-focusable id="clear-recently-watched"
+                        aria-label="${t('settings.clearRecentlyWatched')}">${t('settings.clearRecentlyWatched')}</button>
+              </div>
+              ${this.watchlistAccount ? html`
+                <div class="settings-history-action">
+                  <div class="settings-history-copy">
+                    <div class="settings-history-title">${t('common.watchlist')}</div>
+                    <div class="settings-history-description">
+                      ${t('settings.clearWatchlistDescription', { account: this.watchlistAccount.name })}
+                    </div>
+                  </div>
+                  <button class="btn btn-danger" data-focusable id="clear-watchlist"
+                          aria-label="${t('settings.clearWatchlist')}">${t('settings.clearWatchlist')}</button>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+
+          <div class="settings-about">
+            ${CONFIG.APP_NAME} v${CONFIG.VERSION}
+          </div>
+
+          <div class="settings-actions" data-nav-container>
+            <button class="btn btn-secondary btn-large" data-focusable id="cancel-settings">${t('common.cancel')}</button>
+            <button class="btn btn-primary btn-large" data-focusable id="save-settings">${t('settings.saveApply')}</button>
+          </div>
         </div>
       </div>
     `);
@@ -480,9 +591,27 @@ export class Settings {
     switch (action) {
       case 'up':
       case 'down':
-      case 'left':
-      case 'right':
         this.nav.move(action);
+        break;
+
+      case 'right':
+        if (this.nav.focused?.classList.contains('settings-nav-item')) {
+          this.focusCategoryFirst(this.nav.focused.dataset.settingsTarget as SettingsCategory);
+          break;
+        }
+        this.nav.move(action);
+        break;
+
+      case 'left':
+        if (this.nav.focused?.classList.contains('settings-nav-item')) {
+          this.nav.move(action);
+          break;
+        }
+        {
+          const peer = this.leftPeer(this.nav.focused);
+          if (peer) this.nav.focus(peer);
+          else this.focusActiveCategory();
+        }
         break;
 
       case 'select': {
@@ -495,7 +624,9 @@ export class Settings {
   }
 
   private activate(el: HTMLElement): void {
-    if (el.id === 'add-playlist') {
+    if (el.classList.contains('settings-nav-item')) {
+      this.scrollToCategory(el.dataset.settingsTarget as SettingsCategory);
+    } else if (el.id === 'add-playlist') {
       this.addPlaylistEntry();
     } else if (el.classList.contains('remove-playlist')) {
       this.removePlaylistEntry(el);
@@ -570,6 +701,125 @@ export class Settings {
   private onNavFocus(el: HTMLElement | null): void {
     if (el?.dataset.themeId) previewTheme(el.dataset.themeId);
     else previewTheme(this.selectedTheme);
+  }
+
+  private setActiveCategory(category: SettingsCategory): void {
+    this.container.querySelectorAll('.settings-nav-item').forEach((item) => {
+      item.classList.toggle(
+        'active',
+        (item as HTMLElement).dataset.settingsTarget === category,
+      );
+    });
+  }
+
+  private scrollToCategory(category: SettingsCategory): void {
+    const target = this.container.querySelector<HTMLElement>(`#settings-${category}`);
+    if (!target) return;
+    const main = target.closest<HTMLElement>('.settings-main');
+    if (!main) return;
+    this.setActiveCategory(category);
+    this.ignoreCategoryScroll = true;
+    if (this.categoryScrollFrame !== null) {
+      window.cancelAnimationFrame(this.categoryScrollFrame);
+    }
+    const targetScrollTop = Math.max(
+      0,
+      Math.min(
+        main.scrollTop + target.getBoundingClientRect().top - main.getBoundingClientRect().top,
+        main.scrollHeight - main.clientHeight,
+      ),
+    );
+    target.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' });
+    this.watchCategoryScroll(main, category, targetScrollTop);
+  }
+
+  private watchCategoryScroll(
+    main: HTMLElement,
+    category: SettingsCategory,
+    targetScrollTop: number,
+  ): void {
+    let lastScrollTop = main.scrollTop;
+    let moving = false;
+    let stableFrames = 0;
+    const watch = () => {
+      const current = main.scrollTop;
+      const delta = Math.abs(current - lastScrollTop);
+      const reachedTarget = Math.abs(current - targetScrollTop) <= 1;
+      if (delta > 0.5) {
+        moving = true;
+        stableFrames = 0;
+      } else if (moving) {
+        stableFrames++;
+      }
+      lastScrollTop = current;
+
+      if (reachedTarget || stableFrames >= 4) {
+        this.ignoreCategoryScroll = false;
+        this.categoryScrollFrame = null;
+        if (reachedTarget) this.setActiveCategory(category);
+        else this.syncCategoryFromScroll(main);
+        return;
+      }
+      this.categoryScrollFrame = window.requestAnimationFrame(watch);
+    };
+    this.categoryScrollFrame = window.requestAnimationFrame(watch);
+  }
+
+  private leftPeer(el: HTMLElement | null): HTMLElement | null {
+    if (!el) return null;
+    const group = el.closest<HTMLElement>(
+      '.toggle-group, .theme-swatch-grid, .settings-row, .xtream-fields, .xtream-card-foot, .settings-actions',
+    );
+    if (!group) return null;
+    const rect = el.getBoundingClientRect();
+    let best: HTMLElement | null = null;
+    let bestScore = Infinity;
+    for (const candidate of group.querySelectorAll<HTMLElement>(
+      '[data-focusable]:not(.hidden):not([style*="display: none"])',
+    )) {
+      if (candidate === el) continue;
+      const other = candidate.getBoundingClientRect();
+      const overlap = Math.min(rect.bottom, other.bottom) - Math.max(rect.top, other.top);
+      if (other.left >= rect.left - 5 || overlap <= 5) continue;
+      const score = rect.left - other.right
+        + Math.abs((rect.top + rect.bottom) - (other.top + other.bottom));
+      if (score < bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  private focusActiveCategory(): void {
+    const active = this.container.querySelector<HTMLElement>('.settings-nav-item.active')
+      ?? this.container.querySelector<HTMLElement>('.settings-nav-item');
+    if (active) this.nav.focus(active);
+  }
+
+  private focusCategoryFirst(category: SettingsCategory): void {
+    const first = this.container.querySelector<HTMLElement>(
+      `#settings-${category} [data-focusable]:not(.hidden):not([style*="display: none"])`,
+    );
+    if (first) {
+      this.setActiveCategory(category);
+      this.nav.focus(first);
+    }
+  }
+
+  private syncCategoryFromScroll(main: HTMLElement): void {
+    if (main.scrollTop + main.clientHeight >= main.scrollHeight - 2) {
+      this.setActiveCategory(SETTINGS_CATEGORIES[SETTINGS_CATEGORIES.length - 1].id);
+      return;
+    }
+    const threshold = main.getBoundingClientRect().top + 48;
+    let active: SettingsCategory = 'general';
+    for (const category of SETTINGS_CATEGORIES) {
+      const section = this.container.querySelector<HTMLElement>(`#settings-${category.id}`);
+      if (!section || section.getBoundingClientRect().top > threshold) break;
+      active = category.id;
+    }
+    this.setActiveCategory(active);
   }
 
   // OK on a swatch: mark it the pending selection (persisted on Save & Apply;
