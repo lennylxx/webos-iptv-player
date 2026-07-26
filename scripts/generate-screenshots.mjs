@@ -751,6 +751,9 @@ try {
     await page.locator('#view-settings').waitFor({ state: 'visible' });
     await page.locator('.upload-qr').waitFor({ state: 'visible', timeout: 10_000 });
     await page.locator('#upload-entries .settings-row').first().waitFor({ state: 'visible', timeout: 10_000 });
+    await page.locator('#playlist-entries .settings-row:not(.playlist-header-row)').nth(1).evaluate((el) => el.remove());
+    await page.locator('#settings-sources').evaluate((el) =>
+      el.scrollIntoView({ block: 'start' }));
     await clearToasts(page);
     await page.waitForTimeout(300);
     await shoot(page, 'settings.png');

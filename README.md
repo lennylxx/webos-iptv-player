@@ -32,7 +32,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Settings | Theme picker |
 | --- | --- |
-| ![Settings](https://github.com/user-attachments/assets/5997a614-62d2-4634-a65b-14e268204992) | ![Theme picker](https://github.com/user-attachments/assets/19c75a7d-8fe9-4b90-906c-41d219e82d3d) |
+| ![Settings](https://github.com/user-attachments/assets/bfc6c2f3-67b9-420d-b7eb-7f828c830eb9) | ![Theme picker](https://github.com/user-attachments/assets/e2ca8b23-2276-4947-ab6f-1c8046d05832) |
 
 ## Features
 
@@ -54,7 +54,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 **Playback**
 
 - **Native HDR & Dolby passthrough** — the stream goes straight to the TV's decoder, so HDR10, HLG, Dolby Vision®, and Dolby Atmos® pass through untouched ([why](docs/native-vs-hls.js.md))
-- **Audio & subtitle tracks** — pick from the player menu, remembered per channel or VOD item; subtitles cover in-manifest WebVTT (live), in-container / sidecar SRT/WebVTT/ASS (VOD), and online search (SubDL, OpenSubtitles, and Assrt) — with a manual title box to refine the query — when no bundled subtitle fits
+- **Audio & subtitle tracks** — pick from the player menu, remembered per channel or VOD item; subtitles cover in-manifest WebVTT (live), in-container / sidecar SRT/WebVTT/ASS (VOD), and online search (SubDL, OpenSubtitles, and Assrt) — with a manual title box to refine the query — when no bundled subtitle fits; adjust the subtitle offset live when captions are out of sync
 - **On-screen display** — program title, progress, and a live stream-info readout (resolution, HDR, frame rate, codec, audio channels)
 - **Resync A/V** (🔄) — one tap on the playback bar re-locks audio and video that drift apart during a long catch-up or on-demand stream
 
@@ -197,7 +197,8 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Appearance** — preview and select an app-wide color theme, and choose Dark or Frosted glass for player overlays.
 - **Display** — *Program time zone*: show EPG times in your **Device** time zone (default), or the **Feed**'s own time zone (auto-detected from the EPG feed when it loads).
 - **Playback** — toggle auto-play (resume last watched channel on launch).
-- **Data Management** — *Refresh All Data* re-fetches playlists and EPG; *Clear Cache* drops the cached playlist + EPG.
+- **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.
+- **Data Management** — *Refresh All Data* re-fetches playlists and EPG; *Clear Cache* drops the cached playlist + EPG; separate actions clear Recently Watched history or the selected account's Watchlist.
 - **Save & Apply** reloads channels from the new sources. **Cancel** discards edits.
 
 ## Remote Control Mapping
