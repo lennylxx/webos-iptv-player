@@ -49,6 +49,7 @@ import {
   sniffStreamContentType,
   streamMime,
   streamRouteKey,
+  streamUrlMime,
 } from '../utils/url';
 import { StorageService } from '../services/storage-service';
 import { showToast } from './toast';
@@ -1457,6 +1458,16 @@ describe('sniffStreamContentType', () => {
 });
 
 describe('stream routing', () => {
+  it('classifies stream URLs by extension path or query parameter', () => {
+    expect(streamUrlMime('http://host/live/ch1.TS?token=x')).toBe('video/mp2t');
+    expect(streamUrlMime('http://host/live?id=ch1&extension=ts#fragment')).toBe('video/mp2t');
+    expect(streamUrlMime('http://host/live/ch1.FLV#fragment')).toBe('video/x-flv');
+    expect(streamUrlMime('http://host/live?extension=FLV&token=x')).toBe('video/x-flv');
+    expect(streamUrlMime('http://host/live/ch1.m3u8?token=x'))
+      .toBe('application/vnd.apple.mpegurl');
+    expect(streamUrlMime('http://host/live?extension=flv2')).toBe('');
+  });
+
   it('groups extension-less channels by origin and route prefix', () => {
     expect(streamRouteKey('http://host/play/ch1')).toBe('http://host/play');
     expect(streamRouteKey('http://host/play/ch2?token=x')).toBe('http://host/play');

@@ -26,6 +26,7 @@ import {
   sniffStreamContentType,
   streamMime,
   streamRouteKey,
+  streamUrlMime,
 } from '../utils/url';
 import { probeMedia } from '../services/media-probe';
 import { createLogger } from '../utils/logger';
@@ -868,10 +869,10 @@ export class Player {
       this.mpegtsPlayer = null;
     }
 
-    const isTsUrl = url.endsWith('.ts') || url.includes('.ts?') ||
-      /[?&]extension=ts(?:&|$)/i.test(url);
-    const isFlvUrl = url.endsWith('.flv') || url.includes('.flv?');
-    const isHlsUrl = /\.m3u8?(?:[?#]|$)/i.test(url);
+    const urlMime = streamUrlMime(url);
+    const isTsUrl = urlMime === 'video/mp2t';
+    const isFlvUrl = urlMime === 'video/x-flv';
+    const isHlsUrl = urlMime === 'application/vnd.apple.mpegurl';
 
     // webOS: the TV's hardware HLS/TS decoders beat MSE libraries, so play
     // natively. Explicit extensions and previously verified routes avoid a

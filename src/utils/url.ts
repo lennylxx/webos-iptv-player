@@ -26,6 +26,17 @@ export function streamRouteKey(url: string): string {
   }
 }
 
+export function streamUrlMime(url: string): string {
+  if (/\.ts(?:[?#]|$)/i.test(url) || /[?&]extension=ts(?:[&#]|$)/i.test(url)) {
+    return 'video/mp2t';
+  }
+  if (/\.flv(?:[?#]|$)/i.test(url) || /[?&]extension=flv(?:[&#]|$)/i.test(url)) {
+    return 'video/x-flv';
+  }
+  if (/\.m3u8?(?:[?#]|$)/i.test(url)) return 'application/vnd.apple.mpegurl';
+  return '';
+}
+
 export function streamMime(contentType: string): string {
   const type = contentType.toLowerCase().split(';')[0].trim();
   if (type.includes('flv')) return 'video/x-flv';
