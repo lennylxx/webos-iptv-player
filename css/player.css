@@ -445,6 +445,11 @@
   border-right: 1px solid var(--border);
 }
 
+.player-sidebar.hidden {
+  display: flex !important;
+  visibility: hidden;
+}
+
 .player-sidebar.visible {
   transform: translateX(0);
 }
@@ -513,15 +518,22 @@
 }
 
 .player-sidebar .sidebar-channel-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: block;
   padding: 8px;
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none;
+}
+
+.player-sidebar .sidebar-channel-spacer {
+  position: relative;
+  width: 100%;
 }
 
 .player-sidebar .sidebar-ch-item {
+  position: absolute;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
   padding: 14px 20px;

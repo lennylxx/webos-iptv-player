@@ -10,6 +10,9 @@ import { t } from '../i18n';
 type SidebarEntry = { ch: Channel; globalIdx: number };
 
 const AUTO_HIDE_MS = 5000;
+const CHANNEL_ROW_STRIDE = 92;
+const CHANNEL_OVERSCAN = 12;
+const FALLBACK_LIST_HEIGHT = 800;
 
 /**
  * The channel overlay shown on the left edge during playback. Owns its own
@@ -28,6 +31,9 @@ export class Sidebar {
   private searchQuery = ''; // persists across opens (show() doesn't reset it)
   keyboardOn = false; // while on, the sidebar never auto-hides
   private hoverCleared = false; // highlight removed on mouseleave; next hover re-shows it
+  private opening = false;
+  private channelScrollTop = 0;
+  private scrollFrame: number | null = null;
 
   constructor(
     container: HTMLElement,
@@ -48,14 +54,13 @@ export class Sidebar {
     if (this.isVisible) return;
     this.isVisible = true;
     this.keyboardOn = false;
+    this.opening = true;
     this.focusIdx = -1; // highlight the search box, not a channel (no caret yet)
-    this.render();
     if (this.el) {
       this.el.classList.remove('hidden');
-      // Trigger reflow so transform transition plays
-      this.el.offsetHeight;
       this.el.classList.add('visible');
     }
+    this.render();
     this.resetTimer();
   }
 
@@ -63,6 +68,7 @@ export class Sidebar {
     if (!this.isVisible) return;
     this.isVisible = false;
     this.keyboardOn = false;
+    this.opening = false;
     const el = this.el;
     if (el) {
       el.querySelector<HTMLInputElement>('.sidebar-search-input')?.blur(); // dismiss keyboard
@@ -112,8 +118,8 @@ export class Sidebar {
       return;
     }
 
-    const items = this.el.querySelectorAll<HTMLElement>('.sidebar-ch-item');
-    const len = items.length;
+    const entries = this.getChannels();
+    const len = entries.length;
     this.resetTimer();
 
     if (action === 'up' || action === 'channel_up') {
@@ -121,16 +127,15 @@ export class Sidebar {
     } else if (action === 'down' || action === 'channel_down') {
       if (this.focusIdx < len - 1) this.focusIdx += 1;
     } else if (action === 'select') {
-      const item = items[this.focusIdx];
-      const idx = parseInt(item?.dataset.sidebarIndex || '-1', 10);
-      if (idx >= 0) {
-        this.onSelectChannel(idx);
+      const entry = entries[this.focusIdx];
+      if (entry) {
+        this.onSelectChannel(entry.globalIdx);
         this.hide();
       }
       return;
     }
 
-    this.updateFocus(items);
+    this.updateFocus();
   }
 
   private getChannels(): SidebarEntry[] {
@@ -168,6 +173,7 @@ export class Sidebar {
   // Down/Enter: into the list. focusIdx set before blur so keyboard-off keeps it open.
   private exitSearchToList(): void {
     this.focusIdx = 0;
+    this.setChannelScrollTop(0);
     this.updateFocus();
     this.el?.querySelector<HTMLInputElement>('.sidebar-search-input')?.blur();
     this.resetTimer();
@@ -181,18 +187,52 @@ export class Sidebar {
 
   private updateFocus(items?: NodeListOf<HTMLElement>): void {
     this.hoverCleared = false;
+    if (this.ensureFocusVisible()) {
+      this.render();
+      return;
+    }
     if (!items) {
       if (!this.el) return;
       items = this.el.querySelectorAll<HTMLElement>('.sidebar-ch-item');
     }
-    items.forEach((item, i) => {
-      item.classList.toggle('focused', i === this.focusIdx);
+    items.forEach((item) => {
+      item.classList.toggle('focused', parseInt(item.dataset.sidebarPos || '-2', 10) === this.focusIdx);
     });
     this.el?.querySelector('.sidebar-search-input')?.classList.toggle('focused', this.focusIdx === -1);
-    if (this.focusIdx >= 0) items[this.focusIdx]?.scrollIntoView({ block: 'nearest' });
   }
 
-  private render(): void {
+  private ensureFocusVisible(): boolean {
+    if (this.focusIdx < 0 || !this.el) return false;
+    const list = this.el.querySelector<HTMLElement>('.sidebar-channel-list');
+    const viewportHeight = list?.clientHeight || FALLBACK_LIST_HEIGHT;
+    const rowTop = this.focusIdx * CHANNEL_ROW_STRIDE;
+    const rowBottom = rowTop + CHANNEL_ROW_STRIDE;
+    let nextScrollTop = this.channelScrollTop;
+    if (rowTop < nextScrollTop) {
+      nextScrollTop = rowTop;
+    } else if (rowBottom > nextScrollTop + viewportHeight) {
+      nextScrollTop = rowBottom - viewportHeight;
+    }
+    nextScrollTop = Math.max(0, nextScrollTop);
+    if (nextScrollTop === this.channelScrollTop) return false;
+    this.setChannelScrollTop(nextScrollTop);
+    return true;
+  }
+
+  private setChannelScrollTop(scrollTop: number): void {
+    this.channelScrollTop = scrollTop;
+    const list = this.el?.querySelector<HTMLElement>('.sidebar-channel-list');
+    if (list && list.scrollTop !== scrollTop) list.scrollTop = scrollTop;
+  }
+
+  private visibleRange(total: number, viewportHeight: number): { start: number; end: number } {
+    const visibleRows = Math.max(1, Math.ceil(viewportHeight / CHANNEL_ROW_STRIDE));
+    const start = Math.max(0, Math.floor(this.channelScrollTop / CHANNEL_ROW_STRIDE) - CHANNEL_OVERSCAN);
+    const end = Math.min(total, start + visibleRows + CHANNEL_OVERSCAN * 2);
+    return { start, end };
+  }
+
+  private render(measureMarquees = true): void {
     const el = this.el;
     if (!el) return;
 
@@ -201,6 +241,11 @@ export class Sidebar {
     if (this.playlist && !tabs.some(t => t.id === this.playlist)) this.playlist = '';
     const showTabs = tabs.length > 1;
     const entries = this.getChannels();
+    const previousList = el.querySelector<HTMLElement>('.sidebar-channel-list');
+    if (previousList) this.channelScrollTop = previousList.scrollTop;
+    const viewportHeight = previousList?.clientHeight || FALLBACK_LIST_HEIGHT;
+    const range = this.visibleRange(entries.length, viewportHeight);
+    const visibleEntries = entries.slice(range.start, range.end);
     const currentIdx = this.getCurrentIndex();
     const currentTab = tabs.find(t => t.id === this.playlist);
     const searchPlaceholder = currentTab
@@ -224,8 +269,11 @@ export class Sidebar {
           `)}
         </div>
       ` : ''}
-      <div class="sidebar-channel-list">
-        ${entries.map(({ ch, globalIdx }, i) => {
+      <div class="sidebar-channel-list" data-key="channel-list">
+        <div class="sidebar-channel-spacer" data-key="channel-spacer"
+             style="height:${entries.length * CHANNEL_ROW_STRIDE}px">
+        ${visibleEntries.map(({ ch, globalIdx }, offset) => {
+          const i = range.start + offset;
           const epgId = EpgService.findChannelId(ch);
           const nowPlaying = epgId ? EpgService.getNowPlaying(epgId) : null;
           const isPlaying = globalIdx === currentIdx;
@@ -233,7 +281,8 @@ export class Sidebar {
           return html`
             <div class="sidebar-ch-item ${isPlaying ? 'playing' : ''} ${isFocused ? 'focused' : ''}"
                  data-key="ch:${String(globalIdx)}"
-                 data-focusable data-sidebar-index="${globalIdx}" data-sidebar-pos="${i}">
+                 data-focusable data-sidebar-index="${globalIdx}" data-sidebar-pos="${i}"
+                 style="top:${i * CHANNEL_ROW_STRIDE}px">
               <span class="ch-num">${globalIdx + 1}</span>
               ${ch.logo
                 ? html`<img class="ch-logo" src="${ch.logo}" alt="" loading="lazy" onerror="this.style.display='none'">`
@@ -245,14 +294,19 @@ export class Sidebar {
             </div>
           `;
         })}
+        </div>
       </div>
     `);
 
-    // Scroll to the focused channel
-    const focusedEl = el.querySelector('.sidebar-ch-item.focused');
-    if (focusedEl) focusedEl.scrollIntoView({ block: 'center' });
+    const list = el.querySelector<HTMLElement>('.sidebar-channel-list');
+    if (list && list.scrollTop !== this.channelScrollTop) list.scrollTop = this.channelScrollTop;
 
-    // Enable marquee scroll only for overflowing programme names
+    if (!this.opening && measureMarquees) this.measureMarquees();
+  }
+
+  private measureMarquees(): void {
+    const el = this.el;
+    if (!el) return;
     requestAnimationFrame(() => {
       el.querySelectorAll<HTMLElement>('.ch-now').forEach(container => {
         const span = container.querySelector<HTMLElement>('.ch-now-text');
@@ -272,10 +326,17 @@ export class Sidebar {
     const el = this.el;
     if (!el) return;
 
+    el.addEventListener('transitionend', (e: TransitionEvent) => {
+      if (e.target !== el || e.propertyName !== 'transform' || !this.isVisible || !this.opening) return;
+      this.opening = false;
+      this.measureMarquees();
+    });
+
     el.addEventListener('input', (e: Event) => {
       if (!(e.target as HTMLElement).classList.contains('sidebar-search-input')) return;
       this.searchQuery = (e.target as HTMLInputElement).value;
       this.focusIdx = -1;
+      this.setChannelScrollTop(0);
       this.render();
       this.resetTimer();
     });
@@ -321,6 +382,7 @@ export class Sidebar {
       if (tab) {
         this.playlist = tab.dataset.sidebarPlaylist!;
         this.focusIdx = 0;
+        this.setChannelScrollTop(0);
         this.render();
         this.resetTimer();
         return;
@@ -352,6 +414,17 @@ export class Sidebar {
     // Cursor left the sidebar: drop the hover highlight. focusIdx is kept so a
     // later d-pad press or hover re-shows it.
     el.addEventListener('mouseleave', () => this.clearHover());
+
+    el.addEventListener('scroll', (e: Event) => {
+      const list = e.target as HTMLElement;
+      if (!list.classList.contains('sidebar-channel-list')) return;
+      this.channelScrollTop = list.scrollTop;
+      if (this.scrollFrame !== null) return;
+      this.scrollFrame = requestAnimationFrame(() => {
+        this.scrollFrame = null;
+        if (this.isVisible) this.render(false);
+      });
+    }, true);
 
     // Scroll wheel moves focus up/down
     el.addEventListener('wheel', (e: WheelEvent) => {

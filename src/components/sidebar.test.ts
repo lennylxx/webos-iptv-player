@@ -113,6 +113,20 @@ describe('Sidebar', () => {
       sidebar.show();
       expect(items()[1]).toBe(first);
     });
+
+    it('starts the slide transition before rendering channel rows', () => {
+      const target = sidebar as unknown as { render(): void };
+      const render = target.render.bind(sidebar);
+      let visibleDuringRender = false;
+      vi.spyOn(target, 'render').mockImplementation(() => {
+        visibleDuringRender = el.classList.contains('visible');
+        render();
+      });
+
+      sidebar.show();
+
+      expect(visibleDuringRender).toBe(true);
+    });
   });
 
   describe('handleAction', () => {
@@ -269,8 +283,10 @@ describe('Sidebar', () => {
 
     it('wheel down / up moves the focus highlight', () => {
       // Opens on the search box (focusIdx -1); first wheel-down enters the list.
-      el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+      const wheel = new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true });
+      el.dispatchEvent(wheel);
       expect(items()[0].classList.contains('focused')).toBe(true);
+      expect(wheel.defaultPrevented).toBe(false);
       el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
       expect(items()[1].classList.contains('focused')).toBe(true);
       el.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }));
@@ -284,6 +300,61 @@ describe('Sidebar', () => {
       sidebar.show(); // re-render #3
       items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
       expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('virtual channel list', () => {
+    let originalChannels: Channel[];
+
+    beforeEach(() => {
+      originalChannels = channels.splice(0);
+      for (let i = 0; i < 1200; i++) {
+        channels.push({
+          ...originalChannels[0],
+          id: `ch${String(i)}`,
+          name: `Channel ${String(i + 1)}`,
+          playlistIds: ['PL1'],
+        });
+      }
+    });
+
+    afterEach(() => {
+      channels.splice(0, channels.length, ...originalChannels);
+    });
+
+    it('renders only the visible rows with overscan', () => {
+      sidebar.show();
+
+      expect(items()).toHaveLength(33);
+      expect(el.querySelector<HTMLElement>('.sidebar-channel-spacer')?.style.height).toBe('110400px');
+    });
+
+    it('keeps remote focus and selection on global channel positions', () => {
+      sidebar.show();
+      sidebar.handleAction('down'); // search -> channel 0
+      for (let i = 0; i < 30; i++) sidebar.handleAction('down');
+
+      const focused = el.querySelector<HTMLElement>('.sidebar-ch-item.focused');
+      expect(focused?.dataset.sidebarPos).toBe('30');
+      expect(items().length).toBeLessThan(40);
+
+      sidebar.handleAction('select');
+      expect(onSelect).toHaveBeenCalledWith(30);
+    });
+
+    it('updates the rendered window when the list scrolls', () => {
+      sidebar.show();
+      sidebar.handleAction('down');
+      const list = el.querySelector<HTMLElement>('.sidebar-channel-list')!;
+      Object.defineProperty(list, 'clientHeight', { value: 460, configurable: true });
+      list.scrollTop = 2300;
+      list.dispatchEvent(new Event('scroll'));
+      vi.advanceTimersByTime(20);
+
+      const positions = items().map(item => parseInt(item.dataset.sidebarPos!, 10));
+      expect(positions).toContain(25);
+      expect(positions).not.toContain(0);
+      expect(positions.length).toBeLessThan(30);
     });
   });
 
