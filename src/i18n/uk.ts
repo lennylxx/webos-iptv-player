@@ -13,6 +13,7 @@ export const UK_MESSAGES = {
   'common.resume': 'Продовжити',
   'common.watchlist': 'Переглянути пізніше',
   'common.channels': 'Канали',
+  'common.groups': 'Групи',
   'common.movies': 'Фільми',
   'common.series': 'Серіали',
   'common.settings': 'Налаштування',

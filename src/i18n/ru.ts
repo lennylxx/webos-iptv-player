@@ -13,6 +13,7 @@ export const RU_MESSAGES = {
   'common.resume': 'Продолжить',
   'common.watchlist': 'Смотреть позже',
   'common.channels': 'Каналы',
+  'common.groups': 'Группы',
   'common.movies': 'Фильмы',
   'common.series': 'Сериалы',
   'common.settings': 'Настройки',

@@ -731,7 +731,7 @@ class App {
     if (action === 'back') {
       if (currentView === 'player') {
         if (this.sidebar.visible) {
-          this.sidebar.hide();
+          if (!this.sidebar.handleBack()) this.sidebar.hide();
         } else if (this.menu.visible) {
           // Let the menu step out of its audio sub-menu before closing.
           if (!this.menu.handleBack()) this.menu.hide();
@@ -800,10 +800,10 @@ class App {
         }
         if (action === 'left') {
           if (this.menu.visible) this.menu.hide();
-          else if (this.sidebar.visible) this.sidebar.hide();
+          else if (this.sidebar.visible) this.sidebar.handleAction(action);
           else this.sidebar.show();
         } else if (action === 'right') {
-          if (this.sidebar.visible) this.sidebar.hide();
+          if (this.sidebar.visible) this.sidebar.handleAction(action);
           else if (this.menu.visible) this.menu.hide();
           else this.menu.show();
         } else if (this.sidebar.visible && (
@@ -852,11 +852,12 @@ class App {
       // Left sidebar (channels)
       if (!vod && e.clientX < 80 && !this.menu.visible) {
         this.sidebar.show();
+        this.sidebar.handlePointerMove(e.clientX, false);
       } else if (this.sidebar.visible) {
         const overSidebar = !!(e.target as HTMLElement).closest('.player-sidebar');
-        if (overSidebar) {
-          this.sidebar.resetTimer();
-        } else if (e.clientX > 460 && !this.sidebar.keyboardOn) {
+        const delayingDismiss = this.sidebar.handlePointerMove(e.clientX, overSidebar);
+        if (!delayingDismiss && !overSidebar
+            && e.clientX > this.sidebar.pointerDismissX && !this.sidebar.keyboardOn) {
           // Never dismiss while the keyboard is on — the pointer naturally
           // leaves the sidebar on its way to the on-screen keyboard.
           this.sidebar.hide();
@@ -905,6 +906,7 @@ class App {
       ? t('channel.favoriteAdded', { name: ch.name })
       : t('channel.favoriteRemoved', { name: ch.name }));
     this.channelList.render();
+    this.sidebar.refresh();
   }
 
 

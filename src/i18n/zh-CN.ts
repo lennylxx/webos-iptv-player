@@ -13,6 +13,7 @@ export const ZH_CN_MESSAGES = {
   'common.resume': '继续播放',
   'common.watchlist': '稍后观看',
   'common.channels': '频道',
+  'common.groups': '分组',
   'common.movies': '电影',
   'common.series': '剧集',
   'common.settings': '设置',

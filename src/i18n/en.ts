@@ -16,6 +16,7 @@ export const EN_MESSAGES = {
   'common.resume': 'Resume',
   'common.watchlist': 'Watchlist',
   'common.channels': 'Channels',
+  'common.groups': 'Groups',
   'common.movies': 'Movies',
   'common.series': 'Series',
   'common.settings': 'Settings',

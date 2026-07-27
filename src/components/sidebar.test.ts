@@ -12,9 +12,9 @@ const { channels } = vi.hoisted(() => {
   }
   return {
     channels: [
-      makeChannel({ id: 'a', name: 'Alpha', playlistIds: ['PL1'] }),
-      makeChannel({ id: 'b', name: 'Bravo', playlistIds: ['PL1'] }),
-      makeChannel({ id: 'c', name: 'Charlie', playlistIds: ['PL2'] }),
+      makeChannel({ id: 'a', name: 'Alpha', group: 'News', playlistIds: ['PL1'] }),
+      makeChannel({ id: 'b', name: 'Bravo', group: 'News', playlistIds: ['PL1'], favorite: true }),
+      makeChannel({ id: 'c', name: 'Charlie', group: 'Sports', playlistIds: ['PL2'] }),
     ] as Channel[],
   };
 });
@@ -24,6 +24,17 @@ vi.mock('../services/playlist-service', () => ({
     channels,
     playlistTabs: [{ id: 'PL1', name: 'PL1' }, { id: 'PL2', name: 'PL2' }],
     getByIndex: (i: number) => channels[i],
+    indexOf: (channel: Channel) => channels.indexOf(channel),
+    getGroupsForPlaylist: (playlist?: string) => {
+      const source = playlist ? channels.filter(ch => ch.playlistIds.includes(playlist)) : channels;
+      return Array.from(new Set(source.map(ch => ch.group)));
+    },
+    getByGroup: (group: string, playlist?: string) => {
+      let source = playlist ? channels.filter(ch => ch.playlistIds.includes(playlist)) : channels;
+      if (group === 'builtin:favorites') source = source.filter(ch => ch.favorite);
+      else if (group.startsWith('source:')) source = source.filter(ch => ch.group === group.slice(7));
+      return source;
+    },
   },
 }));
 
@@ -68,36 +79,47 @@ function items(): HTMLElement[] {
   return Array.from(el.querySelectorAll<HTMLElement>('.sidebar-ch-item'));
 }
 
+function groupItems(): HTMLElement[] {
+  return Array.from(el.querySelectorAll<HTMLElement>('.sidebar-group-item'));
+}
+
+function highlightSearch(): void {
+  sidebar.handleAction('up');
+  sidebar.handleAction('up');
+}
+
 describe('Sidebar', () => {
   describe('show / hide', () => {
-    it('highlights the search box on open without taking the caret', () => {
+    it('highlights the current channel on open', () => {
       sidebar.show();
       expect(sidebar.visible).toBe(true);
       expect(items()).toHaveLength(3);
       const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
-      expect(search.classList.contains('focused')).toBe(true);
-      expect(items().some(i => i.classList.contains('focused'))).toBe(false);
-      expect(document.activeElement).not.toBe(search); // no caret until OK
+      expect(search.classList.contains('focused')).toBe(false);
+      expect(items()[1].classList.contains('focused')).toBe(true);
+      expect(document.activeElement).not.toBe(search);
       expect(el.classList.contains('hidden')).toBe(false);
       expect(el.classList.contains('visible')).toBe(true);
+      expect(el.classList.contains('channels-only')).toBe(true);
     });
 
-    it('OK on the highlighted search box gives it the caret at the end', () => {
+    it('OK on the search box gives it the caret at the end', () => {
       const search = () => el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
       sidebar.show();
+      highlightSearch();
       sidebar.handleAction('select'); // OK on the search box
       search().value = 'char';
       search().dispatchEvent(new Event('input', { bubbles: true }));
       sidebar.hide();
       sidebar.show();
-      // Reopen highlights but does not grab the caret; OK does, at the end.
+      expect(search().value).toBe('');
+      highlightSearch();
       expect(document.activeElement).not.toBe(search());
       sidebar.handleAction('select');
       const s = search();
-      expect(s.value).toBe('char');
       expect(document.activeElement).toBe(s);
       expect(s.selectionStart).toBe(s.value.length);
-      expect(items().map(i => i.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
+      expect(items()).toHaveLength(3);
     });
 
     it('hide() removes the visible class and reports not visible', () => {
@@ -130,32 +152,27 @@ describe('Sidebar', () => {
   });
 
   describe('handleAction', () => {
-    // Opens highlighting the search box; Down enters the list at the first channel.
-    beforeEach(() => {
-      sidebar.show();
-      sidebar.handleAction('down');
-    });
+    beforeEach(() => sidebar.show());
 
-    it('enters the list at the top channel', () => {
-      expect(items()[0].classList.contains('focused')).toBe(true);
+    it('starts on the current channel', () => {
+      expect(items()[1].classList.contains('focused')).toBe(true);
     });
 
     it('down then up moves the focus highlight', () => {
-      sidebar.handleAction('down'); // 0 -> 1
+      sidebar.handleAction('down'); // 1 -> 2
+      expect(items()[2].classList.contains('focused')).toBe(true);
+      sidebar.handleAction('up'); // 2 -> 1
       expect(items()[1].classList.contains('focused')).toBe(true);
-      sidebar.handleAction('up'); // 1 -> 0
-      expect(items()[0].classList.contains('focused')).toBe(true);
     });
 
     it('channel_up / channel_down behave like up / down', () => {
-      sidebar.handleAction('channel_down'); // 0 -> 1
+      sidebar.handleAction('channel_down'); // 1 -> 2
+      expect(items()[2].classList.contains('focused')).toBe(true);
+      sidebar.handleAction('channel_up'); // 2 -> 1
       expect(items()[1].classList.contains('focused')).toBe(true);
-      sidebar.handleAction('channel_up'); // 1 -> 0
-      expect(items()[0].classList.contains('focused')).toBe(true);
     });
 
     it('clamps at the bottom end', () => {
-      sidebar.handleAction('down'); // 0 -> 1
       sidebar.handleAction('down'); // 1 -> 2 (last)
       sidebar.handleAction('down'); // stays 2
       expect(items()[2].classList.contains('focused')).toBe(true);
@@ -163,6 +180,7 @@ describe('Sidebar', () => {
 
     it('up from the top channel highlights the search box (no caret)', () => {
       const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
+      sidebar.handleAction('up'); // 1 -> 0
       sidebar.handleAction('up'); // from 0 -> search box
       expect(items().some(i => i.classList.contains('focused'))).toBe(false);
       expect(search.classList.contains('focused')).toBe(true);
@@ -186,11 +204,126 @@ describe('Sidebar', () => {
     });
 
     it('select fires onSelectChannel with the global index and hides', () => {
-      sidebar.handleAction('down'); // 0 -> 1
       sidebar.handleAction('down'); // 1 -> 2 (global 2)
       sidebar.handleAction('select');
       expect(onSelect).toHaveBeenCalledWith(2);
       expect(sidebar.visible).toBe(false);
+    });
+  });
+
+  describe('group panel', () => {
+    beforeEach(() => sidebar.show());
+
+    it('expands on Left and focuses the selected group', () => {
+      sidebar.handleAction('left');
+
+      expect(el.classList.contains('groups-expanded')).toBe(true);
+      expect(groupItems()).toHaveLength(4);
+      expect(groupItems()[0].classList.contains('active')).toBe(true);
+      expect(groupItems()[0].classList.contains('focused')).toBe(true);
+      expect(sidebar.pointerDismissX).toBe(720);
+    });
+
+    it('selects a group, filters channels, and returns focus to channels', () => {
+      sidebar.handleAction('left');
+      sidebar.handleAction('down');
+      sidebar.handleAction('down');
+      sidebar.handleAction('down');
+      sidebar.handleAction('select');
+
+      expect(items().map(item => item.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
+      expect(el.querySelector('.sidebar-channel-title')?.textContent?.trim()).toBe('Sports');
+      expect(items()[0].classList.contains('focused')).toBe(true);
+      expect(el.classList.contains('groups-expanded')).toBe(true);
+    });
+
+    it('Left from expanded channels returns focus to the active group', () => {
+      sidebar.handleAction('left');
+      sidebar.handleAction('select'); // All, focus moves to channels
+      sidebar.handleAction('left');
+
+      expect(groupItems()[0].classList.contains('focused')).toBe(true);
+      expect(items().some(item => item.classList.contains('focused'))).toBe(false);
+    });
+
+    it('Right and Back collapse groups before closing the channel panel', () => {
+      sidebar.handleAction('left');
+      sidebar.handleAction('right');
+      expect(sidebar.visible).toBe(true);
+      expect(el.classList.contains('channels-only')).toBe(true);
+
+      sidebar.handleAction('left');
+      expect(sidebar.handleBack()).toBe(true);
+      expect(sidebar.visible).toBe(true);
+      expect(sidebar.handleBack()).toBe(false);
+    });
+
+    it('falls back to All on reopen when the current channel is outside the retained group', () => {
+      sidebar.handleAction('left');
+      sidebar.handleAction('down');
+      sidebar.handleAction('down');
+      sidebar.handleAction('down');
+      sidebar.handleAction('select'); // Sports
+      sidebar.hide();
+      sidebar.show(); // current channel is Bravo in News
+
+      expect(items()).toHaveLength(3);
+      expect(el.querySelector('.sidebar-channel-title')?.textContent?.trim()).toBe('All');
+      expect(items()[1].classList.contains('focused')).toBe(true);
+    });
+
+    it('drops playlist scope on reopen when it excludes the current channel', () => {
+      el.querySelector<HTMLElement>('[data-sidebar-playlist="PL1"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      sidebar.hide();
+      getCurrentIndex.mockReturnValue(2);
+      sidebar.show();
+
+      expect(items()).toHaveLength(3);
+      expect(el.querySelector('[data-sidebar-playlist=""]')?.classList.contains('active')).toBe(true);
+      expect(items()[2].classList.contains('focused')).toBe(true);
+    });
+
+    it('refreshes a visible Favorites group after its membership changes', () => {
+      sidebar.handleAction('left');
+      sidebar.handleAction('down');
+      sidebar.handleAction('select');
+      expect(items().map(item => item.querySelector('.ch-name')?.textContent)).toEqual(['Bravo']);
+
+      channels[1].favorite = false;
+      sidebar.refresh();
+      expect(items()).toHaveLength(0);
+      channels[1].favorite = true;
+    });
+
+    it('retains the selected group after tuning within it', () => {
+      sidebar.handleAction('left');
+      sidebar.handleAction('down');
+      sidebar.handleAction('down');
+      sidebar.handleAction('down');
+      sidebar.handleAction('select'); // Sports
+      items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      getCurrentIndex.mockReturnValue(2);
+      sidebar.show();
+
+      expect(items()).toHaveLength(1);
+      expect(el.querySelector('.sidebar-channel-title')?.textContent?.trim()).toBe('Sports');
+      expect(items()[0].classList.contains('focused')).toBe(true);
+    });
+
+    it('toggles groups from the channel title and selects a group by pointer', () => {
+      const picker = el.querySelector<HTMLElement>('[data-open-groups]')!;
+      expect(picker.querySelector('.sidebar-picker-arrow svg')).not.toBeNull();
+      picker.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(el.classList.contains('groups-expanded')).toBe(true);
+
+      picker.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(el.classList.contains('channels-only')).toBe(true);
+
+      picker.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      groupItems()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(items().map(item => item.querySelector('.ch-name')?.textContent))
+        .toEqual(['Alpha', 'Bravo']);
     });
   });
 
@@ -225,6 +358,47 @@ describe('Sidebar', () => {
 
   describe('pointer interaction', () => {
     beforeEach(() => sidebar.show());
+
+    it('expands groups after the pointer dwells at the left edge', () => {
+      sidebar.handlePointerMove(30, true);
+      vi.advanceTimersByTime(349);
+      expect(el.classList.contains('groups-expanded')).toBe(false);
+
+      vi.advanceTimersByTime(1);
+      expect(el.classList.contains('groups-expanded')).toBe(true);
+    });
+
+    it('cancels group expansion when the pointer leaves the edge', () => {
+      sidebar.handlePointerMove(30, true);
+      vi.advanceTimersByTime(200);
+      sidebar.handlePointerMove(100, true);
+      vi.advanceTimersByTime(200);
+
+      expect(el.classList.contains('groups-expanded')).toBe(false);
+    });
+
+    it('collapses groups before closing after an outside dwell', () => {
+      sidebar.handleAction('left');
+      expect(sidebar.handlePointerMove(721, false)).toBe(true);
+      expect(el.classList.contains('channels-only')).toBe(true);
+      expect(sidebar.visible).toBe(true);
+
+      vi.advanceTimersByTime(499);
+      expect(sidebar.visible).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(sidebar.visible).toBe(false);
+    });
+
+    it('cancels the pending close when the pointer returns to channels', () => {
+      sidebar.handleAction('left');
+      sidebar.handlePointerMove(721, false);
+      vi.advanceTimersByTime(250);
+      expect(sidebar.handlePointerMove(300, false)).toBe(true);
+      vi.advanceTimersByTime(500);
+
+      expect(sidebar.visible).toBe(true);
+      expect(el.classList.contains('channels-only')).toBe(true);
+    });
 
     it('clicking a channel item selects it', () => {
       items()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -270,27 +444,26 @@ describe('Sidebar', () => {
 
     it('hover only re-highlights when the position changes', () => {
       const spy = vi.spyOn(sidebar as unknown as { updateFocus: () => void }, 'updateFocus');
-      const row = items()[1];
+      const row = items()[2];
       row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       expect(spy).toHaveBeenCalledTimes(1);
       // Sweeping across a child of the same row must not re-run updateFocus.
       row.querySelector('.ch-name')!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       expect(spy).toHaveBeenCalledTimes(1);
       // A different row does.
-      items()[2].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      items()[0].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       expect(spy).toHaveBeenCalledTimes(2);
     });
 
     it('wheel down / up moves the focus highlight', () => {
-      // Opens on the search box (focusIdx -1); first wheel-down enters the list.
       const wheel = new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true });
       el.dispatchEvent(wheel);
-      expect(items()[0].classList.contains('focused')).toBe(true);
+      expect(items()[2].classList.contains('focused')).toBe(true);
       expect(wheel.defaultPrevented).toBe(false);
       el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
-      expect(items()[1].classList.contains('focused')).toBe(true);
+      expect(items()[2].classList.contains('focused')).toBe(true);
       el.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }));
-      expect(items()[0].classList.contains('focused')).toBe(true);
+      expect(items()[1].classList.contains('focused')).toBe(true);
     });
 
     it('does not stack listeners across re-renders (single select per click)', () => {
@@ -307,6 +480,7 @@ describe('Sidebar', () => {
     let originalChannels: Channel[];
 
     beforeEach(() => {
+      getCurrentIndex.mockReturnValue(0);
       originalChannels = channels.splice(0);
       for (let i = 0; i < 1200; i++) {
         channels.push({
@@ -331,7 +505,6 @@ describe('Sidebar', () => {
 
     it('keeps remote focus and selection on global channel positions', () => {
       sidebar.show();
-      sidebar.handleAction('down'); // search -> channel 0
       for (let i = 0; i < 30; i++) sidebar.handleAction('down');
 
       const focused = el.querySelector<HTMLElement>('.sidebar-ch-item.focused');
@@ -344,7 +517,6 @@ describe('Sidebar', () => {
 
     it('updates the rendered window when the list scrolls', () => {
       sidebar.show();
-      sidebar.handleAction('down');
       const list = el.querySelector<HTMLElement>('.sidebar-channel-list')!;
       Object.defineProperty(list, 'clientHeight', { value: 460, configurable: true });
       list.scrollTop = 2300;
@@ -368,6 +540,7 @@ describe('Sidebar', () => {
     // Keyboard on → never auto-hide, wherever the mouse is.
     it('stays open while the keyboard is on (OK pressed)', () => {
       sidebar.show();
+      highlightSearch();
       sidebar.handleAction('select'); // OK → keyboard on
       expect(sidebar.keyboardOn).toBe(true);
       vi.advanceTimersByTime(5000);
@@ -387,6 +560,7 @@ describe('Sidebar', () => {
     // Cancel/Back → keyboard off → hide (pointer not over the sidebar).
     it('Cancel (Escape) on the search box turns the keyboard off and hides', () => {
       sidebar.show();
+      highlightSearch();
       sidebar.handleAction('select');
       el.querySelector<HTMLInputElement>('.sidebar-search-input')!
         .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -396,6 +570,7 @@ describe('Sidebar', () => {
 
     it('Back on the search box turns the keyboard off and hides', () => {
       sidebar.show();
+      highlightSearch();
       sidebar.handleAction('select');
       el.querySelector<HTMLInputElement>('.sidebar-search-input')!
         .dispatchEvent(new KeyboardEvent('keydown', { keyCode: CONFIG.KEYS.BACK, bubbles: true }));
@@ -405,6 +580,7 @@ describe('Sidebar', () => {
     // The real webOS fix: keyboard dismissed while the input keeps the caret.
     it('hides on keyboardStateChange:false even if the box keeps focus', () => {
       sidebar.show();
+      highlightSearch();
       sidebar.handleAction('select'); // focus → keyboard on
       expect(sidebar.keyboardOn).toBe(true);
       // webOS dismiss: keyboard off, but the input is NOT blurred (caret stays).
@@ -415,6 +591,7 @@ describe('Sidebar', () => {
 
     it('Down moves into the list (keyboard off) without hiding', () => {
       sidebar.show();
+      highlightSearch();
       sidebar.handleAction('select'); // keyboard on
       el.querySelector<HTMLInputElement>('.sidebar-search-input')!
         .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
@@ -427,6 +604,7 @@ describe('Sidebar', () => {
   describe('search ranking', () => {
     it('a search result reports its global channel index, not the filtered position', () => {
       sidebar.show();
+      highlightSearch();
       sidebar.handleAction('select'); // focus the search box
       const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
       search.value = 'charlie';

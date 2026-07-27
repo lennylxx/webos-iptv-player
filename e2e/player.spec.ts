@@ -11,6 +11,22 @@ import {
 
 // The player view: playback start, sidebar, action menu, OSD, and live DVR.
 
+async function gotoGroupedPlayer(page: Page): Promise<void> {
+  await routePlaylist(page, SEARCH_M3U);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await expect(page.locator('.channel-main .channel-item.focused')).toContainText('Alpha News');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter'); // Beta News
+  await expect(page.locator('#view-player')).toBeVisible();
+}
+
+async function pressRemoteBack(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
+}
+
 test('remote arrow keys move focus and Enter starts playback', async ({ page }) => {
   await routePlaylist(page);
   await seedPlaylist(page);
@@ -34,7 +50,7 @@ test('remote arrow keys move focus and Enter starts playback', async ({ page }) 
   await expect(page.locator('#view-player')).toBeVisible();
 });
 
-test('player sidebar highlights its search box on open; OK then filters', async ({ page }) => {
+test('player sidebar focuses the playing channel; search still filters', async ({ page }) => {
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
@@ -49,14 +65,128 @@ test('player sidebar highlights its search box on open; OK then filters', async 
   const sidebar = page.locator('#player-sidebar');
   await expect(sidebar).toBeVisible();
   const search = page.locator('.sidebar-search-input');
-  await expect(search).toHaveClass(/focused/);
+  await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Beta News');
+  await expect(search).not.toHaveClass(/focused/);
   await expect(search).not.toBeFocused();
 
-  // OK gives it the caret, then typing filters.
+  // Up from the first channel reaches search; OK gives it the caret.
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
   await page.keyboard.press('Enter');
   await expect(search).toBeFocused();
   await search.fill('alpha');
   await expect(sidebar.locator('.sidebar-ch-item')).toHaveCount(2);
+});
+
+test('player sidebar expands groups and retains a selected group after tuning', async ({ page }) => {
+  await routePlaylist(page, SEARCH_M3U);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await expect(page.locator('.channel-main .channel-item.focused')).toContainText('Alpha News');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter'); // Beta News
+  await expect(page.locator('#view-player')).toBeVisible();
+
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  const sidebar = page.locator('#player-sidebar');
+  await expect(sidebar).toHaveClass(/groups-expanded/);
+  await expect(sidebar.locator('.sidebar-group-panel')).toBeVisible();
+  await expect(sidebar.locator('.sidebar-group-item.focused')).toContainText('All');
+
+  await page.keyboard.press('ArrowDown'); // Favorites
+  await page.keyboard.press('ArrowDown'); // News
+  await page.keyboard.press('Enter');
+  await expect(sidebar.locator('.sidebar-ch-item')).toHaveCount(2);
+  await expect(sidebar.locator('.sidebar-channel-title')).toHaveText('News');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Enter'); // Alpha News
+  await expect(sidebar).not.toBeVisible();
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebar.locator('.sidebar-channel-title')).toHaveText('News');
+  await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Alpha News');
+});
+
+test('player sidebar collapses the group panel before closing', async ({ page }) => {
+  await gotoGroupedPlayer(page);
+  const sidebar = page.locator('#player-sidebar');
+
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebar).toHaveClass(/groups-expanded/);
+
+  await page.keyboard.press('ArrowRight');
+  await expect(sidebar).toHaveClass(/channels-only/);
+  await expect(sidebar).not.toHaveClass(/groups-expanded/);
+  await expect(sidebar).toBeVisible();
+
+  await page.keyboard.press('ArrowLeft');
+  await pressRemoteBack(page);
+  await expect(sidebar).toHaveClass(/channels-only/);
+  await expect(sidebar).toBeVisible();
+
+  await pressRemoteBack(page);
+  await expect(sidebar).not.toBeVisible();
+});
+
+test('player sidebar falls back to All after playback leaves the retained group', async ({ page }) => {
+  await gotoGroupedPlayer(page);
+  const sidebar = page.locator('#player-sidebar');
+
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowDown'); // Favorites
+  await page.keyboard.press('ArrowDown'); // News
+  await page.keyboard.press('Enter');
+  await expect(sidebar.locator('.sidebar-channel-title')).toHaveText('News');
+  await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Beta News');
+  await page.keyboard.press('Enter'); // Tune Beta News and close.
+  await expect(page.locator('.osd-channel-name')).toHaveText('Beta News');
+
+  await page.keyboard.press('ArrowUp'); // Tune Alpha Movies outside News.
+  await expect(page.locator('.osd-channel-name')).toHaveText('Alpha Movies');
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebar.locator('.sidebar-channel-title')).toHaveText('All');
+  await expect(sidebar.locator('.sidebar-ch-item')).toHaveCount(4);
+  await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Alpha Movies');
+});
+
+test('Magic Remote pointer opens groups and filters the channel panel', async ({ page }) => {
+  await gotoGroupedPlayer(page);
+  await page.keyboard.press('ArrowLeft');
+  const sidebar = page.locator('#player-sidebar');
+
+  await sidebar.locator('[data-open-groups]').click();
+  await expect(sidebar).toHaveClass(/groups-expanded/);
+  await sidebar.locator('.sidebar-group-item').filter({ hasText: 'Sports' }).click();
+
+  await expect(sidebar).toHaveClass(/groups-expanded/);
+  await expect(sidebar.locator('.sidebar-channel-title')).toHaveText('Sports');
+  await expect(sidebar.locator('.sidebar-ch-item')).toHaveCount(1);
+  await expect(sidebar.locator('.sidebar-ch-item')).toContainText('Delta Sports');
+});
+
+test('Magic Remote dwell expands groups and stages pointer dismissal', async ({ page }) => {
+  await gotoGroupedPlayer(page);
+  const sidebar = page.locator('#player-sidebar');
+
+  await page.mouse.move(30, 540);
+  await expect(sidebar).toHaveClass(/groups-expanded/);
+
+  await page.mouse.move(800, 540);
+  await expect(sidebar).toHaveClass(/channels-only/);
+  await expect(sidebar).toBeVisible();
+  await page.mouse.move(300, 540);
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 550)));
+  await expect(sidebar).toBeVisible();
+
+  await page.mouse.move(30, 540);
+  await expect(sidebar).toHaveClass(/groups-expanded/);
+  await page.mouse.move(800, 540);
+  await expect(sidebar).toHaveClass(/channels-only/);
+  await expect(sidebar).not.toBeVisible();
 });
 
 test('the right-edge player menu opens and lists its color actions', async ({ page }) => {

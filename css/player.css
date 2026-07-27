@@ -432,15 +432,15 @@
   position: absolute;
   top: 0;
   left: 0;
-  width: 420px;
+  width: 680px;
   height: 1080px;
   background: rgba(10, 10, 15, 0.92);
   backdrop-filter: blur(12px);
   z-index: 70;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   overflow: hidden;
-  transform: translateX(-100%);
+  transform: translateX(-680px);
   transition: transform 0.25s ease;
   border-right: 1px solid var(--border);
 }
@@ -450,8 +450,30 @@
   visibility: hidden;
 }
 
-.player-sidebar.visible {
+.player-sidebar.visible.channels-only {
+  transform: translateX(-260px);
+}
+
+.player-sidebar.visible.groups-expanded {
   transform: translateX(0);
+}
+
+.player-sidebar .sidebar-group-panel,
+.player-sidebar .sidebar-channel-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.player-sidebar .sidebar-group-panel {
+  width: 260px;
+  border-right: 1px solid var(--border);
+}
+
+.player-sidebar .sidebar-channel-panel {
+  width: 420px;
 }
 
 .player-sidebar .sidebar-title {
@@ -460,6 +482,143 @@
   font-weight: 600;
   color: var(--accent);
   border-bottom: 1px solid var(--border);
+}
+
+.player-sidebar .sidebar-channel-title {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: inherit;
+  text-align: left;
+  background: rgb(var(--accent-rgb) / 0.06);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+
+.player-sidebar .sidebar-channel-title:hover {
+  background: rgb(var(--accent-rgb) / 0.12);
+}
+
+.player-sidebar .sidebar-picker-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-sidebar .sidebar-picker-arrow {
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: transform 180ms ease, color 160ms ease;
+}
+
+.player-sidebar .sidebar-picker-arrow svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.player-sidebar.visible.channels-only .sidebar-picker-arrow svg {
+  animation: group-picker-nudge 800ms ease-in-out infinite;
+}
+
+.player-sidebar.groups-expanded .sidebar-picker-arrow {
+  color: var(--accent);
+  transform: rotate(180deg);
+}
+
+.player-sidebar.groups-expanded .sidebar-picker-arrow svg {
+  animation: none;
+}
+
+@keyframes group-picker-nudge {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(-6px); }
+}
+
+.player-sidebar .sidebar-group-list {
+  flex: 1;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.player-sidebar .sidebar-group-item {
+  height: 64px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.player-sidebar .sidebar-group-item.active {
+  background: rgb(var(--accent-rgb) / 0.1);
+  border-color: var(--accent-dim);
+}
+
+.player-sidebar .sidebar-group-item.focused {
+  border-color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.player-sidebar .sidebar-group-item.active.focused {
+  border-color: var(--accent);
+  background: rgb(var(--accent-rgb) / 0.2);
+}
+
+.player-sidebar .sidebar-group-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 22px;
+  color: var(--accent);
+  background: transparent;
+}
+
+.player-sidebar .sidebar-group-icon .group-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.player-sidebar .sidebar-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 22px;
+  color: var(--text-primary);
+}
+
+.player-sidebar .sidebar-group-count {
+  min-width: 32px;
+  padding: 2px 6px;
+  color: var(--text-secondary);
+  background: var(--overlay-chip);
+  border-radius: 10px;
+  font-size: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .player-sidebar .sidebar-search-input {

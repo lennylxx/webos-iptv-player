@@ -13,6 +13,7 @@ export const PT_BR_MESSAGES = {
   'common.resume': 'Continuar',
   'common.watchlist': 'Minha lista',
   'common.channels': 'Canais',
+  'common.groups': 'Grupos',
   'common.movies': 'Filmes',
   'common.series': 'Séries',
   'common.settings': 'Configurações',
