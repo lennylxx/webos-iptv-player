@@ -96,6 +96,7 @@ test('player sidebar expands groups and retains a selected group after tuning', 
   await expect(sidebar.locator('.sidebar-group-item.focused')).toContainText('All');
 
   await page.keyboard.press('ArrowDown'); // Favorites
+  await page.keyboard.press('ArrowDown'); // Recently Watched
   await page.keyboard.press('ArrowDown'); // News
   await page.keyboard.press('Enter');
   await expect(sidebar.locator('.sidebar-ch-item')).toHaveCount(2);
@@ -138,6 +139,7 @@ test('player sidebar falls back to All after playback leaves the retained group'
   await page.keyboard.press('ArrowLeft');
   await page.keyboard.press('ArrowLeft');
   await page.keyboard.press('ArrowDown'); // Favorites
+  await page.keyboard.press('ArrowDown'); // Recently Watched
   await page.keyboard.press('ArrowDown'); // News
   await page.keyboard.press('Enter');
   await expect(sidebar.locator('.sidebar-channel-title')).toHaveText('News');
