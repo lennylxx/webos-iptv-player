@@ -10,11 +10,15 @@ import { XtreamArchiveService } from '../services/xtream-archive';
 import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { showToast } from './toast';
 import { formatTime, formatDayLabel, displayDayKey, startOfDisplayDay, addDisplayDays, formatDuration } from '../utils/time';
-import { bellIcon, REPLAY_ICON } from './icons';
+import { rankByName } from '../utils/channel-search';
+import { CONFIG } from '../config';
+import { bellIcon, CHEVRON_LEFT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
 import { t, tp } from '../i18n';
 
-type FocusCol = 'playlists' | 'channels' | 'dates' | 'programmes';
+type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'programmes';
+type FilterFocus = 'group' | 'search';
 type VisibleChannel = { channel: Channel; globalIndex: number };
+type GroupOption = { id: string; label: string; count: number };
 
 export class EpgGrid {
   private container: HTMLElement;
@@ -22,6 +26,11 @@ export class EpgGrid {
   private selectedChannelIdx = 0;
   private selectedPlaylist = '';
   private playlistFocusIdx = 0;
+  private selectedGroup = '';
+  private groupOpen = false;
+  private groupFocusIdx = 0;
+  private filterFocus: FilterFocus = 'group';
+  private searchQuery = '';
   private selectedDay = 0;
   private dayInitialized = false;
   private focusCol: FocusCol = 'channels';
@@ -49,9 +58,18 @@ export class EpgGrid {
     return this.resumePrompt.visible;
   }
 
+  get isFilterOpen(): boolean {
+    return this.groupOpen || this.searchInputFocused();
+  }
+
   /** Dismiss the catch-up resume prompt if it is open. */
   dismissPrompt(): void {
     if (this.resumePrompt.visible) this.resumePrompt.hide();
+  }
+
+  deactivateFilters(): void {
+    this.groupOpen = false;
+    this.container.querySelector<HTMLInputElement>('.epg-search-input')?.blur();
   }
 
   private getDateOptions(): Date[] {
@@ -110,18 +128,81 @@ export class EpgGrid {
     const playlist = this.selectedPlaylist;
     const visible: VisibleChannel[] = [];
     PlaylistService.channels.forEach((channel, globalIndex) => {
-      if (!playlist || channel.playlistIds.includes(playlist)) {
+      if ((!playlist || channel.playlistIds.includes(playlist))
+          && (!this.selectedGroup || channel.group === this.selectedGroup)) {
         visible.push({ channel, globalIndex });
       }
     });
-    return visible;
+    const query = this.searchQuery.trim();
+    if (!query) return visible;
+    const ranked = rankByName(visible.map(item => item.channel), query);
+    const byChannel = new Map(visible.map(item => [item.channel, item]));
+    return ranked.map(channel => byChannel.get(channel)!);
+  }
+
+  private getGroupOptions(): GroupOption[] {
+    const playlist = this.selectedPlaylist || undefined;
+    const sourceChannels = PlaylistService.channels.filter(channel =>
+      !playlist || channel.playlistIds.includes(playlist));
+    const groups = PlaylistService.getGroupsForPlaylist(playlist);
+    return [
+      { id: '', label: t('common.all'), count: sourceChannels.length },
+      ...groups.map(group => ({
+        id: group,
+        label: group,
+        count: sourceChannels.filter(channel => channel.group === group).length,
+      })),
+    ];
   }
 
   private selectPlaylist(id: string): void {
     this.selectedPlaylist = id;
+    this.selectedGroup = '';
+    this.groupOpen = false;
     const visible = this.getVisibleChannels();
     this.selectedChannelIdx = visible[0]?.globalIndex ?? -1;
     this.focusProg = 0;
+  }
+
+  private selectGroup(id: string): void {
+    this.selectedGroup = id;
+    this.groupOpen = false;
+    const visible = this.getVisibleChannels();
+    this.selectedChannelIdx = visible[0]?.globalIndex ?? -1;
+    this.focusProg = 0;
+  }
+
+  private openGroupMenu(): void {
+    const groups = this.getGroupOptions();
+    this.groupFocusIdx = Math.max(0, groups.findIndex(group => group.id === this.selectedGroup));
+    this.groupOpen = true;
+    this.focusCol = 'filters';
+    this.filterFocus = 'group';
+    this.render();
+  }
+
+  private openSearchInput(): void {
+    this.groupOpen = false;
+    this.focusCol = 'filters';
+    this.filterFocus = 'search';
+    this.render();
+    const input = this.container.querySelector<HTMLInputElement>('.epg-search-input');
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  private exitSearchToChannels(): void {
+    this.container.querySelector<HTMLInputElement>('.epg-search-input')?.blur();
+    const visible = this.getVisibleChannels();
+    this.focusCol = visible.length ? 'channels' : 'filters';
+    if (visible.length && this.selectedChannelIdx < 0) {
+      this.selectedChannelIdx = visible[0].globalIndex;
+    }
+    this.render();
+  }
+
+  private searchInputFocused(): boolean {
+    return this.container.querySelector('.epg-search-input') === document.activeElement;
   }
 
   render(): void {
@@ -132,12 +213,17 @@ export class EpgGrid {
     const showTabs = tabs.length > 1;
     const tabIds = ['', ...tabs.map(tab => tab.id)];
     this.playlistFocusIdx = Math.max(0, Math.min(this.playlistFocusIdx, tabIds.length - 1));
+    const groups = this.getGroupOptions();
+    if (this.selectedGroup && !groups.some(group => group.id === this.selectedGroup)) {
+      this.selectedGroup = '';
+    }
+    this.groupFocusIdx = Math.max(0, Math.min(this.groupFocusIdx, groups.length - 1));
     const visibleChannels = this.getVisibleChannels();
     if (!visibleChannels.some(item => item.globalIndex === this.selectedChannelIdx)) {
       this.selectedChannelIdx = visibleChannels[0]?.globalIndex ?? -1;
       this.focusProg = 0;
     }
-    if (!showTabs && this.focusCol === 'playlists') this.focusCol = 'channels';
+    if (!showTabs && this.focusCol === 'playlists') this.focusCol = 'filters';
 
     const channel = PlaylistService.channels[this.selectedChannelIdx];
     const dateOptions = this.getDateOptions();
@@ -178,7 +264,7 @@ export class EpgGrid {
           `)}
         </div>
         <div class="epg-main">
-          <div class="epg-channels-pane ${this.focusCol === 'channels' || this.focusCol === 'playlists' ? 'pane-focused' : ''}">
+          <div class="epg-channels-pane ${this.focusCol === 'channels' || this.focusCol === 'playlists' || this.focusCol === 'filters' ? 'pane-focused' : ''}">
             ${showTabs ? html`
               <div class="playlist-tabs epg-playlist-tabs" id="epg-playlists">
                 <div class="playlist-tab ${!this.selectedPlaylist ? 'active' : ''} ${this.focusCol === 'playlists' && this.playlistFocusIdx === 0 ? 'focused' : ''}"
@@ -191,6 +277,39 @@ export class EpgGrid {
                 `)}
               </div>
             ` : ''}
+            <div class="epg-filter-bar">
+              <div class="epg-group-control">
+                <button type="button"
+                        class="epg-filter-control epg-group-button ${this.focusCol === 'filters' && this.filterFocus === 'group' ? 'focused' : ''} ${this.selectedGroup ? 'active' : ''}"
+                        data-key="epg-group-button" data-epg-group-toggle
+                        aria-expanded="${this.groupOpen ? 'true' : 'false'}">
+                  <span class="epg-group-button-prefix">${t('common.groups')}:</span>
+                  <span class="epg-group-button-label">${this.selectedGroup || t('common.all')}</span>
+                  <span class="epg-group-button-arrow">${raw(CHEVRON_LEFT_ICON)}</span>
+                </button>
+                ${this.groupOpen ? html`
+                  <div class="epg-group-menu" data-key="epg-group-menu">
+                    <div class="epg-group-menu-title">${t('common.groups')}</div>
+                    <div class="epg-group-options">
+                      ${groups.map((group, i) => html`
+                        <div class="epg-group-option ${group.id === this.selectedGroup ? 'active' : ''} ${i === this.groupFocusIdx ? 'focused' : ''}"
+                             data-key="epg-group:${group.id}"
+                             data-epg-group="${group.id}" data-group-index="${i}">
+                          <span class="epg-group-option-label">${group.label}</span>
+                          <span class="epg-group-option-count">${group.count}</span>
+                        </div>
+                      `)}
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+              <label class="epg-search-wrap ${this.focusCol === 'filters' && this.filterFocus === 'search' ? 'focused' : ''}">
+                <span class="epg-search-icon">${raw(SEARCH_ICON)}</span>
+                <input type="text" class="epg-search-input" data-key="epg-search"
+                       aria-label="${t('search.ariaChannels')}"
+                       placeholder="${t('common.search')}" value="${this.searchQuery}">
+              </label>
+            </div>
             <div class="epg-channel-pane-header">
               <span class="epg-channel-pane-count">${tp('channel.count', visibleChannels.length)}</span>
             </div>
@@ -281,8 +400,28 @@ export class EpgGrid {
     // reusing nodes across renders, per-render addEventListener would stack up.
     this.container.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
+      const groupToggle = target.closest('[data-epg-group-toggle]');
+      if (groupToggle) {
+        if (this.groupOpen) {
+          this.groupOpen = false;
+          this.render();
+        } else {
+          this.openGroupMenu();
+        }
+        return;
+      }
+      const groupItem = target.closest<HTMLElement>('[data-epg-group]');
+      if (groupItem) {
+        this.groupFocusIdx = parseInt(groupItem.dataset.groupIndex!, 10);
+        this.selectGroup(groupItem.dataset.epgGroup!);
+        this.focusCol = 'filters';
+        this.filterFocus = 'group';
+        this.render();
+        return;
+      }
       const playlistItem = target.closest<HTMLElement>('#epg-playlists [data-playlist]');
       if (playlistItem) {
+        this.groupOpen = false;
         this.playlistFocusIdx = parseInt(playlistItem.dataset.playlistIndex!, 10);
         this.selectPlaylist(playlistItem.dataset.playlist!);
         this.focusCol = 'playlists';
@@ -291,6 +430,7 @@ export class EpgGrid {
       }
       const channelItem = target.closest<HTMLElement>('#epg-channels [data-channel-idx]');
       if (channelItem) {
+        this.groupOpen = false;
         const idx = parseInt(channelItem.dataset.channelIdx!, 10);
         if (idx === this.selectedChannelIdx && this.focusCol === 'channels') {
           this.onChannelSelect(idx);
@@ -304,6 +444,7 @@ export class EpgGrid {
       }
       const dateItem = target.closest<HTMLElement>('#epg-dates [data-day-index]');
       if (dateItem) {
+        this.groupOpen = false;
         this.selectedDay = parseInt(dateItem.dataset.dayIndex!, 10);
         this.focusCol = 'dates';
         this.focusProg = 0;
@@ -312,16 +453,74 @@ export class EpgGrid {
       }
       const progItem = target.closest<HTMLElement>('#epg-programmes [data-prog-idx]');
       if (progItem) {
+        this.groupOpen = false;
         this.focusProg = parseInt(progItem.dataset.progIdx!, 10);
         this.focusCol = 'programmes';
+        this.render();
         this.activateFocusedProgramme();
+        return;
+      }
+      if (this.groupOpen) {
+        this.groupOpen = false;
+        this.render();
       }
     });
 
     this.container.addEventListener('mouseover', (e: MouseEvent) => {
-      const item = (e.target as HTMLElement).closest<HTMLElement>('#epg-programmes [data-prog-idx]');
+      const target = e.target as HTMLElement;
+      const groupItem = target.closest<HTMLElement>('[data-epg-group]');
+      if (groupItem) {
+        const idx = parseInt(groupItem.dataset.groupIndex!, 10);
+        if (idx !== this.groupFocusIdx) {
+          this.groupFocusIdx = idx;
+          this.render();
+        }
+        return;
+      }
+      if (this.groupOpen) return;
+      const item = target.closest<HTMLElement>('#epg-programmes [data-prog-idx]');
       if (!item) return;
       this.setProgFocusLight(parseInt(item.dataset.progIdx!, 10));
+    });
+
+    this.container.addEventListener('input', (e: Event) => {
+      const input = e.target as HTMLInputElement;
+      if (!input.classList.contains('epg-search-input')) return;
+      this.searchQuery = input.value;
+      this.focusCol = 'filters';
+      this.filterFocus = 'search';
+      this.groupOpen = false;
+      this.render();
+    });
+
+    this.container.addEventListener('focusin', (e: FocusEvent) => {
+      if (!(e.target as HTMLElement).classList.contains('epg-search-input')) return;
+      const menuWasOpen = this.groupOpen;
+      this.groupOpen = false;
+      this.focusCol = 'filters';
+      this.filterFocus = 'search';
+      if (menuWasOpen) {
+        this.render();
+      } else {
+        this.container.querySelector('.epg-group-button')?.classList.remove('focused');
+        this.container.querySelector('.epg-search-wrap')?.classList.add('focused');
+      }
+    });
+
+    this.container.addEventListener('keydown', (e: KeyboardEvent) => {
+      const input = e.target as HTMLElement;
+      if (!input.classList.contains('epg-search-input')) return;
+      if (e.key === 'Enter' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.exitSearchToChannels();
+      } else if (e.key === 'Escape' || e.keyCode === CONFIG.KEYS.BACK) {
+        e.preventDefault();
+        e.stopPropagation();
+        (input as HTMLInputElement).blur();
+        this.focusCol = 'filters';
+        this.render();
+      }
     });
   }
 
@@ -338,8 +537,14 @@ export class EpgGrid {
   }
 
   private scrollFocusedIntoView(): void {
+    if (this.groupOpen) {
+      this.container.querySelector<HTMLElement>('.epg-group-option.focused')
+        ?.scrollIntoView({ block: 'nearest' });
+      return;
+    }
     const map: Record<FocusCol, string> = {
       playlists: '.epg-playlist-tabs .playlist-tab.focused',
+      filters: '.epg-filter-bar .focused',
       channels: '.epg-channel-item.focused',
       dates: '.epg-date-item.focused',
       programmes: '.epg-programme-item.focused',
@@ -457,6 +662,49 @@ export class EpgGrid {
       return;
     }
 
+    if (this.groupOpen) {
+      const groups = this.getGroupOptions();
+      switch (action) {
+        case 'up':
+          if (this.groupFocusIdx > 0) {
+            this.groupFocusIdx--;
+            this.render();
+          }
+          break;
+        case 'down':
+          if (this.groupFocusIdx < groups.length - 1) {
+            this.groupFocusIdx++;
+            this.render();
+          }
+          break;
+        case 'select':
+          this.selectGroup(groups[this.groupFocusIdx]?.id ?? '');
+          this.render();
+          break;
+        case 'back':
+        case 'left':
+          this.groupOpen = false;
+          this.render();
+          break;
+        case 'yellow':
+          this.openSearchInput();
+          break;
+      }
+      return;
+    }
+
+    if (action === 'yellow') {
+      this.openSearchInput();
+      return;
+    }
+
+    if (action === 'back' && this.searchInputFocused()) {
+      this.container.querySelector<HTMLInputElement>('.epg-search-input')?.blur();
+      this.focusCol = 'filters';
+      this.render();
+      return;
+    }
+
     const tabs = PlaylistService.playlistTabs;
     const showTabs = tabs.length > 1;
     const tabIds = ['', ...tabs.map(tab => tab.id)];
@@ -473,11 +721,15 @@ export class EpgGrid {
             this.selectedChannelIdx = visibleChannels[selectedVisibleIdx - 1].globalIndex;
             this.focusProg = 0;
             this.render();
-          } else if (showTabs) {
-            this.playlistFocusIdx = Math.max(0, tabIds.indexOf(this.selectedPlaylist));
-            this.focusCol = 'playlists';
+          } else {
+            this.focusCol = 'filters';
+            this.filterFocus = 'group';
             this.render();
           }
+        } else if (this.focusCol === 'filters' && showTabs) {
+          this.playlistFocusIdx = Math.max(0, tabIds.indexOf(this.selectedPlaylist));
+          this.focusCol = 'playlists';
+          this.render();
         } else if (this.focusCol === 'programmes') {
           if (this.focusProg > 0) {
             this.focusProg--;
@@ -491,10 +743,12 @@ export class EpgGrid {
 
       case 'down':
         if (this.focusCol === 'playlists') {
-          if (visibleChannels.length) {
-            this.focusCol = 'channels';
-            this.render();
-          }
+          this.focusCol = 'filters';
+          this.filterFocus = 'group';
+          this.render();
+        } else if (this.focusCol === 'filters') {
+          if (visibleChannels.length) this.focusCol = 'channels';
+          this.render();
         } else if (this.focusCol === 'channels') {
           if (selectedVisibleIdx >= 0 && selectedVisibleIdx < visibleChannels.length - 1) {
             this.selectedChannelIdx = visibleChannels[selectedVisibleIdx + 1].globalIndex;
@@ -519,6 +773,15 @@ export class EpgGrid {
             this.playlistFocusIdx--;
             this.render();
           }
+        } else if (this.focusCol === 'filters') {
+          if (this.filterFocus === 'search') {
+            this.filterFocus = 'group';
+            this.render();
+          } else {
+            this.openGroupMenu();
+          }
+        } else if (this.focusCol === 'channels') {
+          this.openGroupMenu();
         } else if (this.focusCol === 'dates') {
           if (this.selectedDay > 0) {
             this.selectedDay--;
@@ -535,6 +798,11 @@ export class EpgGrid {
         if (this.focusCol === 'playlists') {
           if (this.playlistFocusIdx < tabIds.length - 1) {
             this.playlistFocusIdx++;
+            this.render();
+          }
+        } else if (this.focusCol === 'filters') {
+          if (this.filterFocus === 'group') {
+            this.filterFocus = 'search';
             this.render();
           }
         } else if (this.focusCol === 'channels') {
@@ -581,6 +849,9 @@ export class EpgGrid {
         if (this.focusCol === 'playlists') {
           this.selectPlaylist(tabIds[this.playlistFocusIdx] ?? '');
           this.render();
+        } else if (this.focusCol === 'filters') {
+          if (this.filterFocus === 'group') this.openGroupMenu();
+          else this.openSearchInput();
         } else if (this.focusCol === 'channels') {
           if (this.selectedChannelIdx < 0) break;
           this.onChannelSelect(this.selectedChannelIdx);

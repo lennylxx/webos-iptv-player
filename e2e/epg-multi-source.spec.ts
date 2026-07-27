@@ -4,10 +4,10 @@ test.use({ timezoneId: 'UTC' });
 
 const NOW = new Date('2024-03-09T12:00:00Z');
 
-function playlist(name: string, stream: string, epgUrl = ''): string {
+function playlist(name: string, stream: string, epgUrl = '', group = 'News'): string {
   return [
     epgUrl ? `#EXTM3U url-tvg="${epgUrl}"` : '#EXTM3U',
-    `#EXTINF:-1 tvg-id="shared" group-title="News",${name}`,
+    `#EXTINF:-1 tvg-id="shared" group-title="${group}",${name}`,
     stream,
   ].join('\n');
 }
@@ -34,7 +34,7 @@ async function setup(page: Page): Promise<void> {
       status: 200,
       contentType: 'application/x-mpegurl',
       body: second
-        ? playlist('Charlie', 'http://host/c.m3u8')
+        ? playlist('Charlie', 'http://host/c.m3u8', '', 'Sports')
         : playlist('Bravo', 'http://host/b.m3u8'),
     });
   });
@@ -86,4 +86,75 @@ test('each playlist channel uses its own EPG when XMLTV ids collide', async ({ p
   await channels.filter({ hasText: 'Charlie' }).click();
   await expect(page.locator('#epg-programmes')).toContainText('Charlie Program');
   await expect(page.locator('#epg-programmes')).not.toContainText('Bravo Program');
+});
+
+test('filters EPG channels by source, group, and channel name', async ({ page }) => {
+  await setup(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
+  await expect(page.locator('#view-epg')).toBeVisible();
+
+  await page.locator('#epg-playlists [data-playlist="x2"]').click();
+  await expect(page.locator('#epg-channels .epg-channel-item')).toHaveCount(1);
+  await expect(page.locator('#epg-channels')).toContainText('Charlie');
+
+  await page.locator('#epg-playlists [data-playlist=""]').click();
+  await page.locator('[data-epg-group-toggle]').click();
+  await page.locator('[data-epg-group="Sports"]').click();
+  await expect(page.locator('#epg-channels .epg-channel-item')).toHaveCount(1);
+  await expect(page.locator('#epg-channels')).toContainText('Charlie');
+
+  await page.locator('[data-epg-group-toggle]').click();
+  await page.locator('[data-epg-group=""]').click();
+  await page.locator('.epg-search-input').fill('Bravo');
+  await expect(page.locator('#epg-channels .epg-channel-item')).toHaveCount(1);
+  await expect(page.locator('#epg-channels')).toContainText('Bravo');
+});
+
+test('Back closes EPG filters before leaving the guide', async ({ page }) => {
+  await setup(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
+  await expect(page.locator('#view-epg')).toBeVisible();
+
+  await page.locator('[data-epg-group-toggle]').click();
+  await expect(page.locator('.epg-group-menu')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.epg-group-menu')).toHaveCount(0);
+  await expect(page.locator('#view-epg')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#view-channels')).toBeVisible();
+});
+
+test('Blue leaves EPG search without stale keyboard focus', async ({ page }) => {
+  await setup(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
+  await expect(page.locator('#view-epg')).toBeVisible();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 405, bubbles: true })));
+  await expect(page.locator('.epg-search-input')).toBeFocused();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 406, bubbles: true })));
+  await expect(page.locator('#view-settings')).toBeVisible();
+  await expect(page.locator('.epg-search-input')).not.toBeFocused();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
+  await expect(page.locator('#view-epg')).toBeVisible();
+  await expect(page.locator('.epg-group-menu')).toHaveCount(0);
+  await expect(page.locator('.epg-search-input')).not.toBeFocused();
 });

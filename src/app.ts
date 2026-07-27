@@ -711,6 +711,7 @@ class App {
       return;
     }
     if (action === 'blue' && currentView !== 'settings') {
+      if (currentView === 'epg') this.epgGrid.deactivateFilters();
       this.sidebar.hide();
       this.menu.hide();
       this.player.stop();
@@ -743,7 +744,18 @@ class App {
       if (currentView === 'movies') { this.movies.handleAction('back'); return; }
       if (currentView === 'series') { this.series.handleAction('back'); return; }
       if (currentView === 'search') { this.search.handleAction('back'); return; }
-      if (currentView === 'epg' || currentView === 'settings') {
+      if (currentView === 'epg') {
+        if (this.epgGrid.isFilterOpen) {
+          this.epgGrid.handleAction('back');
+          return;
+        }
+        this.epgGrid.deactivateFilters();
+        this.tabBar.setActive('live');
+        this.channelList.render();
+        this.showView('channels');
+        return;
+      }
+      if (currentView === 'settings') {
         this.tabBar.setActive('live');
         this.channelList.render();
         this.showView('channels');
@@ -821,12 +833,7 @@ class App {
         }
         break;
       case 'epg':
-        if (action === 'blue' || action === 'back') {
-          this.channelList.render();
-          this.showView('channels');
-        } else {
-          this.epgGrid.handleAction(action, event);
-        }
+        this.epgGrid.handleAction(action, event);
         break;
       case 'settings':
         if (action === 'back') {

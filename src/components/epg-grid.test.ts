@@ -12,6 +12,12 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
     playlistMock: {
       get channels() { return state.channels; },
       get playlistTabs() { return state.playlistTabs; },
+      getGroupsForPlaylist(playlist?: string) {
+        return Array.from(new Set(state.channels
+          .filter(ch => !playlist || ch.playlistIds?.includes(playlist))
+          .map(ch => ch.group)
+          .filter(Boolean)));
+      },
     },
     epgMock: {
       get programmes() { return state.programmes; },
@@ -68,8 +74,8 @@ beforeEach(() => {
   vi.setSystemTime(new Date(Y, M, D, 12, 0, 0));
   Element.prototype.scrollIntoView = vi.fn();
   state.channels = [
-    { name: 'Chan A', url: 'http://host/a', playlistIds: ['p1'] },
-    { name: 'Chan B', url: 'http://host/b', playlistIds: ['p2'] },
+    { name: 'Chan A', group: 'News', url: 'http://host/a', playlistIds: ['p1'] },
+    { name: 'Chan B', group: 'Sports', url: 'http://host/b', playlistIds: ['p2'] },
   ];
   state.playlistTabs = [];
   state.programmes = {
@@ -233,11 +239,13 @@ describe('EpgGrid playlist tabs', () => {
     expect(container.querySelector('[data-channel-idx="1"]')).not.toBeNull();
 
     grid.handleAction('down');
+    grid.handleAction('down');
     grid.handleAction('select');
     expect(onSelect).toHaveBeenCalledWith(1);
   });
 
   it('supports remote navigation and activation of source tabs', () => {
+    grid.handleAction('up');
     grid.handleAction('up');
     grid.handleAction('right');
     grid.handleAction('right');
@@ -247,6 +255,109 @@ describe('EpgGrid playlist tabs', () => {
       .classList.contains('active')).toBe(true);
     expect(channelItems()).toHaveLength(1);
     expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
+  });
+});
+
+describe('EpgGrid group and channel filters', () => {
+  beforeEach(() => grid.render());
+
+  it('opens a source-aware group menu and filters with global channel indices', () => {
+    container.querySelector<HTMLElement>('[data-epg-group-toggle]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    const labels = Array.from(container.querySelectorAll('.epg-group-option-label'))
+      .map(item => item.textContent);
+    expect(labels).toEqual(['All', 'News', 'Sports']);
+
+    container.querySelector<HTMLElement>('[data-epg-group="Sports"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(channelItems()).toHaveLength(1);
+    expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
+    expect(container.querySelector('[data-channel-idx="1"]')).not.toBeNull();
+  });
+
+  it('composes playlist and group filters', () => {
+    state.playlistTabs = [
+      { id: 'p1', name: 'Playlist 1' },
+      { id: 'p2', name: 'Xtream 1' },
+    ];
+    grid.render();
+    container.querySelector<HTMLElement>('[data-playlist="p1"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    container.querySelector<HTMLElement>('[data-epg-group-toggle]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    const labels = Array.from(container.querySelectorAll('.epg-group-option-label'))
+      .map(item => item.textContent);
+    expect(labels).toEqual(['All', 'News']);
+  });
+
+  it('searches channel names and preserves global indices', () => {
+    const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
+    input.value = 'Chan B';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(channelItems()).toHaveLength(1);
+    expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
+    expect(container.querySelector('[data-channel-idx="1"]')).not.toBeNull();
+  });
+
+  it('applies search inside the selected group and shows an empty state', () => {
+    container.querySelector<HTMLElement>('[data-epg-group-toggle]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    container.querySelector<HTMLElement>('[data-epg-group="News"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
+    input.value = 'Chan B';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(channelItems()).toHaveLength(0);
+    expect(container.querySelector('.epg-no-channels')!.textContent).toBe('No channels found');
+  });
+
+  it('opens groups with Left and selects a group with the remote', () => {
+    grid.handleAction('left');
+    expect(grid.isFilterOpen).toBe(true);
+
+    grid.handleAction('down');
+    grid.handleAction('down');
+    grid.handleAction('select');
+
+    expect(grid.isFilterOpen).toBe(false);
+    expect(channelItems()).toHaveLength(1);
+    expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
+  });
+
+  it('focuses search with Yellow and exits to results with ArrowDown', () => {
+    grid.handleAction('yellow');
+    const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
+    expect(document.activeElement).toBe(input);
+    expect(grid.isFilterOpen).toBe(true);
+
+    input.value = 'Chan B';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowDown',
+      bubbles: true,
+    }));
+
+    expect(document.activeElement).not.toBe(input);
+    grid.handleAction('select');
+    expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  it('deactivates an open filter before leaving the EPG view', () => {
+    grid.handleAction('yellow');
+    expect(grid.isFilterOpen).toBe(true);
+
+    grid.deactivateFilters();
+
+    expect(grid.isFilterOpen).toBe(false);
+    expect(document.activeElement).not.toBe(
+      container.querySelector<HTMLInputElement>('.epg-search-input'),
+    );
   });
 });
 
