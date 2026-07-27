@@ -13,12 +13,15 @@ import { formatTime, formatDayLabel, displayDayKey, startOfDisplayDay, addDispla
 import { bellIcon, REPLAY_ICON } from './icons';
 import { t, tp } from '../i18n';
 
-type FocusCol = 'channels' | 'dates' | 'programmes';
+type FocusCol = 'playlists' | 'channels' | 'dates' | 'programmes';
+type VisibleChannel = { channel: Channel; globalIndex: number };
 
 export class EpgGrid {
   private container: HTMLElement;
   private onChannelSelect: (index: number, catchup?: CatchupInfo) => void;
   private selectedChannelIdx = 0;
+  private selectedPlaylist = '';
+  private playlistFocusIdx = 0;
   private selectedDay = 0;
   private dayInitialized = false;
   private focusCol: FocusCol = 'channels';
@@ -103,9 +106,40 @@ export class EpgGrid {
       .filter(p => p.start.getTime() >= from && p.start.getTime() < dayEnd);
   }
 
+  private getVisibleChannels(): VisibleChannel[] {
+    const playlist = this.selectedPlaylist;
+    const visible: VisibleChannel[] = [];
+    PlaylistService.channels.forEach((channel, globalIndex) => {
+      if (!playlist || channel.playlistIds.includes(playlist)) {
+        visible.push({ channel, globalIndex });
+      }
+    });
+    return visible;
+  }
+
+  private selectPlaylist(id: string): void {
+    this.selectedPlaylist = id;
+    const visible = this.getVisibleChannels();
+    this.selectedChannelIdx = visible[0]?.globalIndex ?? -1;
+    this.focusProg = 0;
+  }
+
   render(): void {
-    const channels = PlaylistService.channels;
-    const channel = channels[this.selectedChannelIdx];
+    const tabs = PlaylistService.playlistTabs;
+    if (this.selectedPlaylist && !tabs.some(tab => tab.id === this.selectedPlaylist)) {
+      this.selectedPlaylist = '';
+    }
+    const showTabs = tabs.length > 1;
+    const tabIds = ['', ...tabs.map(tab => tab.id)];
+    this.playlistFocusIdx = Math.max(0, Math.min(this.playlistFocusIdx, tabIds.length - 1));
+    const visibleChannels = this.getVisibleChannels();
+    if (!visibleChannels.some(item => item.globalIndex === this.selectedChannelIdx)) {
+      this.selectedChannelIdx = visibleChannels[0]?.globalIndex ?? -1;
+      this.focusProg = 0;
+    }
+    if (!showTabs && this.focusCol === 'playlists') this.focusCol = 'channels';
+
+    const channel = PlaylistService.channels[this.selectedChannelIdx];
     const dateOptions = this.getDateOptions();
     if (dateOptions.length > 0) {
       if (!this.dayInitialized) {
@@ -144,19 +178,36 @@ export class EpgGrid {
           `)}
         </div>
         <div class="epg-main">
-          <div class="epg-channels-pane ${this.focusCol === 'channels' ? 'pane-focused' : ''}" id="epg-channels">
-            ${channels.map((ch, i) => {
-              const sel = i === this.selectedChannelIdx;
+          <div class="epg-channels-pane ${this.focusCol === 'channels' || this.focusCol === 'playlists' ? 'pane-focused' : ''}">
+            ${showTabs ? html`
+              <div class="playlist-tabs epg-playlist-tabs" id="epg-playlists">
+                <div class="playlist-tab ${!this.selectedPlaylist ? 'active' : ''} ${this.focusCol === 'playlists' && this.playlistFocusIdx === 0 ? 'focused' : ''}"
+                     data-key="epg-tab:"
+                     data-playlist="" data-playlist-index="0">${t('common.all')}</div>
+                ${tabs.map((tab, i) => html`
+                  <div class="playlist-tab ${tab.id === this.selectedPlaylist ? 'active' : ''} ${this.focusCol === 'playlists' && this.playlistFocusIdx === i + 1 ? 'focused' : ''}"
+                       data-key="epg-tab:${tab.id}"
+                       data-playlist="${tab.id}" data-playlist-index="${i + 1}">${tab.name}</div>
+                `)}
+              </div>
+            ` : ''}
+            <div class="epg-channel-pane-header">
+              <span class="epg-channel-pane-count">${tp('channel.count', visibleChannels.length)}</span>
+            </div>
+            <div class="epg-channel-list" id="epg-channels">
+            ${visibleChannels.length ? visibleChannels.map(({ channel: ch, globalIndex }) => {
+              const sel = globalIndex === this.selectedChannelIdx;
               const foc = sel && this.focusCol === 'channels';
               return html`
                 <div class="epg-channel-item ${sel ? 'selected' : ''} ${foc ? 'focused' : ''}"
                      data-key="${channelKey(ch)}"
-                     data-channel-idx="${i}">
-                  <span class="epg-ch-num">${i + 1}</span>
+                     data-channel-idx="${globalIndex}">
+                  <span class="epg-ch-num">${globalIndex + 1}</span>
                   <span class="epg-ch-name">${ch.name}</span>
                 </div>
               `;
-            })}
+            }) : html`<div class="epg-no-channels">${t('channel.empty')}</div>`}
+            </div>
           </div>
           <div class="epg-right-pane">
             <div class="epg-date-bar ${this.focusCol === 'dates' ? 'pane-focused' : ''}" id="epg-dates">
@@ -230,6 +281,14 @@ export class EpgGrid {
     // reusing nodes across renders, per-render addEventListener would stack up.
     this.container.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
+      const playlistItem = target.closest<HTMLElement>('#epg-playlists [data-playlist]');
+      if (playlistItem) {
+        this.playlistFocusIdx = parseInt(playlistItem.dataset.playlistIndex!, 10);
+        this.selectPlaylist(playlistItem.dataset.playlist!);
+        this.focusCol = 'playlists';
+        this.render();
+        return;
+      }
       const channelItem = target.closest<HTMLElement>('#epg-channels [data-channel-idx]');
       if (channelItem) {
         const idx = parseInt(channelItem.dataset.channelIdx!, 10);
@@ -280,6 +339,7 @@ export class EpgGrid {
 
   private scrollFocusedIntoView(): void {
     const map: Record<FocusCol, string> = {
+      playlists: '.epg-playlist-tabs .playlist-tab.focused',
       channels: '.epg-channel-item.focused',
       dates: '.epg-date-item.focused',
       programmes: '.epg-programme-item.focused',
@@ -397,15 +457,25 @@ export class EpgGrid {
       return;
     }
 
-    const channelCount = PlaylistService.channels.length;
+    const tabs = PlaylistService.playlistTabs;
+    const showTabs = tabs.length > 1;
+    const tabIds = ['', ...tabs.map(tab => tab.id)];
+    const visibleChannels = this.getVisibleChannels();
+    const selectedVisibleIdx = visibleChannels.findIndex(
+      item => item.globalIndex === this.selectedChannelIdx,
+    );
     const progCount = this.getCurrentProgrammes().length;
 
     switch (action) {
       case 'up':
         if (this.focusCol === 'channels') {
-          if (this.selectedChannelIdx > 0) {
-            this.selectedChannelIdx--;
+          if (selectedVisibleIdx > 0) {
+            this.selectedChannelIdx = visibleChannels[selectedVisibleIdx - 1].globalIndex;
             this.focusProg = 0;
+            this.render();
+          } else if (showTabs) {
+            this.playlistFocusIdx = Math.max(0, tabIds.indexOf(this.selectedPlaylist));
+            this.focusCol = 'playlists';
             this.render();
           }
         } else if (this.focusCol === 'programmes') {
@@ -420,9 +490,14 @@ export class EpgGrid {
         break;
 
       case 'down':
-        if (this.focusCol === 'channels') {
-          if (this.selectedChannelIdx < channelCount - 1) {
-            this.selectedChannelIdx++;
+        if (this.focusCol === 'playlists') {
+          if (visibleChannels.length) {
+            this.focusCol = 'channels';
+            this.render();
+          }
+        } else if (this.focusCol === 'channels') {
+          if (selectedVisibleIdx >= 0 && selectedVisibleIdx < visibleChannels.length - 1) {
+            this.selectedChannelIdx = visibleChannels[selectedVisibleIdx + 1].globalIndex;
             this.focusProg = 0;
             this.render();
           }
@@ -439,7 +514,12 @@ export class EpgGrid {
         break;
 
       case 'left':
-        if (this.focusCol === 'dates') {
+        if (this.focusCol === 'playlists') {
+          if (this.playlistFocusIdx > 0) {
+            this.playlistFocusIdx--;
+            this.render();
+          }
+        } else if (this.focusCol === 'dates') {
           if (this.selectedDay > 0) {
             this.selectedDay--;
             this.focusProg = 0;
@@ -452,7 +532,12 @@ export class EpgGrid {
         break;
 
       case 'right':
-        if (this.focusCol === 'channels') {
+        if (this.focusCol === 'playlists') {
+          if (this.playlistFocusIdx < tabIds.length - 1) {
+            this.playlistFocusIdx++;
+            this.render();
+          }
+        } else if (this.focusCol === 'channels') {
           this.focusCol = 'programmes';
           this.focusProg = 0;
           this.render();
@@ -468,8 +553,11 @@ export class EpgGrid {
 
       case 'channel_up':
         if (this.focusCol === 'channels') {
-          this.selectedChannelIdx = Math.max(0, this.selectedChannelIdx - 10);
-          this.focusProg = 0;
+          const next = Math.max(0, selectedVisibleIdx - 10);
+          if (visibleChannels[next]) {
+            this.selectedChannelIdx = visibleChannels[next].globalIndex;
+            this.focusProg = 0;
+          }
         } else if (this.focusCol === 'programmes') {
           this.focusProg = Math.max(0, this.focusProg - 10);
         }
@@ -478,8 +566,11 @@ export class EpgGrid {
 
       case 'channel_down':
         if (this.focusCol === 'channels') {
-          this.selectedChannelIdx = Math.min(channelCount - 1, this.selectedChannelIdx + 10);
-          this.focusProg = 0;
+          const next = Math.min(visibleChannels.length - 1, selectedVisibleIdx + 10);
+          if (visibleChannels[next]) {
+            this.selectedChannelIdx = visibleChannels[next].globalIndex;
+            this.focusProg = 0;
+          }
         } else if (this.focusCol === 'programmes') {
           this.focusProg = Math.min(progCount - 1, this.focusProg + 10);
         }
@@ -487,7 +578,11 @@ export class EpgGrid {
         break;
 
       case 'select':
-        if (this.focusCol === 'channels') {
+        if (this.focusCol === 'playlists') {
+          this.selectPlaylist(tabIds[this.playlistFocusIdx] ?? '');
+          this.render();
+        } else if (this.focusCol === 'channels') {
+          if (this.selectedChannelIdx < 0) break;
           this.onChannelSelect(this.selectedChannelIdx);
         } else if (this.focusCol === 'programmes') {
           void this.activateFocusedProgramme();

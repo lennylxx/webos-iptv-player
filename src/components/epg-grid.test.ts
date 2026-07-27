@@ -4,12 +4,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
   const state = {
     channels: [] as any[],
+    playlistTabs: [] as any[],
     programmes: {} as Record<string, any[]>,
   };
   return {
     state,
     playlistMock: {
       get channels() { return state.channels; },
+      get playlistTabs() { return state.playlistTabs; },
     },
     epgMock: {
       get programmes() { return state.programmes; },
@@ -65,7 +67,11 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(Y, M, D, 12, 0, 0));
   Element.prototype.scrollIntoView = vi.fn();
-  state.channels = [{ name: 'Chan A', url: 'http://host/a' }, { name: 'Chan B', url: 'http://host/b' }];
+  state.channels = [
+    { name: 'Chan A', url: 'http://host/a', playlistIds: ['p1'] },
+    { name: 'Chan B', url: 'http://host/b', playlistIds: ['p2'] },
+  ];
+  state.playlistTabs = [];
   state.programmes = {
     'Chan A': [
       prog(10, 0, 11, 0, 'Morning'),
@@ -200,6 +206,47 @@ describe('EpgGrid.handleAction', () => {
     expect(dateItems()[1].classList.contains('selected')).toBe(true);
     grid.handleAction('green');
     expect(dateItems()[0].classList.contains('selected')).toBe(true);
+  });
+});
+
+describe('EpgGrid playlist tabs', () => {
+  beforeEach(() => {
+    state.playlistTabs = [
+      { id: 'p1', name: 'Playlist 1' },
+      { id: 'p2', name: 'Xtream 1' },
+    ];
+    grid.render();
+  });
+
+  it('renders All and each configured source', () => {
+    const labels = Array.from(container.querySelectorAll('.epg-playlist-tabs .playlist-tab'))
+      .map(item => item.textContent);
+    expect(labels).toEqual(['All', 'Playlist 1', 'Xtream 1']);
+  });
+
+  it('filters channels by source while preserving global playback indices', () => {
+    container.querySelector<HTMLElement>('[data-playlist="p2"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(channelItems().map(item => item.querySelector('.epg-ch-name')!.textContent))
+      .toEqual(['Chan B']);
+    expect(container.querySelector('[data-channel-idx="1"]')).not.toBeNull();
+
+    grid.handleAction('down');
+    grid.handleAction('select');
+    expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  it('supports remote navigation and activation of source tabs', () => {
+    grid.handleAction('up');
+    grid.handleAction('right');
+    grid.handleAction('right');
+    grid.handleAction('select');
+
+    expect(container.querySelector<HTMLElement>('[data-playlist="p2"]')!
+      .classList.contains('active')).toBe(true);
+    expect(channelItems()).toHaveLength(1);
+    expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
   });
 });
 
