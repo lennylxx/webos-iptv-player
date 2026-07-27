@@ -83,7 +83,7 @@ class App {
     this.sidebar = new Sidebar(
       this.views.player,
       () => this.player.getCurrentIndex(),
-      (idx) => this.playChannel(idx),
+      (idx, catchup) => this.playChannel(idx, catchup),
     );
     this.menu = new PlayerMenu(
       this.views.player,

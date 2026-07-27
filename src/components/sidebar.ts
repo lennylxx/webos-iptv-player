@@ -1,15 +1,18 @@
-import type { Action, BuiltinChannelGroup, Channel, ChannelGroupId } from '../types';
+import type { Action, BuiltinChannelGroup, CatchupInfo, Channel, ChannelGroupId } from '../types';
 import { CONFIG } from '../config';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
+import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { $, html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { rankChannels } from '../utils/channel-search';
+import { formatPosition } from '../utils/time';
 import { t } from '../i18n';
 import { groupIcon } from './group-icon';
 import { CHEVRON_LEFT_ICON } from './icons';
+import { showToast } from './toast';
 
-type SidebarEntry = { ch: Channel; globalIdx: number };
+type SidebarEntry = { ch: Channel; globalIdx: number; recent?: RecentlyWatchedItem };
 type SidebarPane = 'channels' | 'groups';
 type SidebarGroup = {
   id: ChannelGroupId;
@@ -19,7 +22,7 @@ type SidebarGroup = {
 };
 
 const AUTO_HIDE_MS = 5000;
-const GROUP_PANEL_WIDTH = 260;
+const GROUP_PANEL_MIN_WIDTH = 260;
 const CHANNEL_PANEL_WIDTH = 420;
 const POINTER_MARGIN = 40;
 const GROUP_DWELL_EDGE = 48;
@@ -38,7 +41,7 @@ const FALLBACK_LIST_HEIGHT = 800;
 export class Sidebar {
   private el: HTMLElement | null;
   private getCurrentIndex: () => number;
-  private onSelectChannel: (index: number) => void;
+  private onSelectChannel: (index: number, catchup?: CatchupInfo) => void;
   private isVisible = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private activePane: SidebarPane = 'channels';
@@ -60,7 +63,7 @@ export class Sidebar {
   constructor(
     container: HTMLElement,
     getCurrentIndex: () => number,
-    onSelectChannel: (index: number) => void,
+    onSelectChannel: (index: number, catchup?: CatchupInfo) => void,
   ) {
     this.getCurrentIndex = getCurrentIndex;
     this.onSelectChannel = onSelectChannel;
@@ -73,7 +76,9 @@ export class Sidebar {
   }
 
   get pointerDismissX(): number {
-    return (this.groupsExpanded ? GROUP_PANEL_WIDTH + CHANNEL_PANEL_WIDTH : CHANNEL_PANEL_WIDTH)
+    const groupWidth = this.el?.querySelector<HTMLElement>('.sidebar-group-panel')
+      ?.getBoundingClientRect().width || GROUP_PANEL_MIN_WIDTH;
+    return (this.groupsExpanded ? groupWidth + CHANNEL_PANEL_WIDTH : CHANNEL_PANEL_WIDTH)
       + POINTER_MARGIN;
   }
 
@@ -233,10 +238,7 @@ export class Sidebar {
       if (this.channelFocusIdx < len - 1) this.channelFocusIdx += 1;
     } else if (action === 'select') {
       const entry = entries[this.channelFocusIdx];
-      if (entry) {
-        this.onSelectChannel(entry.globalIdx);
-        this.hide();
-      }
+      if (entry) this.selectEntry(entry);
       return;
     }
 
@@ -266,6 +268,22 @@ export class Sidebar {
 
   private getChannels(): SidebarEntry[] {
     const playlist = this.playlist || undefined;
+    if (this.group === 'builtin:recently-watched') {
+      let items = RecentlyWatchedService.getItems(playlist);
+      const q = this.searchQuery.trim();
+      if (q) {
+        const folded = q.toLocaleLowerCase();
+        items = items.filter(item =>
+          rankChannels([item.channel], q).length > 0 ||
+          (item.kind === 'catchup' && (item.progress.title ?? '').toLocaleLowerCase().includes(folded)),
+        );
+      }
+      return items.map(item => ({
+        ch: item.channel,
+        globalIdx: item.channelIndex,
+        recent: item,
+      }));
+    }
     let channels = PlaylistService.getByGroup(this.group, playlist);
     const q = this.searchQuery.trim();
     if (q) channels = rankChannels(channels, q);
@@ -373,6 +391,12 @@ export class Sidebar {
         label: t('channel.favorites'),
         count: PlaylistService.getByGroup('builtin:favorites', playlist).length,
         builtin: 'favorites',
+      },
+      {
+        id: 'builtin:recently-watched',
+        label: t('channel.recentlyWatched'),
+        count: RecentlyWatchedService.getItems(playlist).length,
+        builtin: 'recently-watched',
       },
     ];
     const channels = PlaylistService.getByGroup('builtin:all', playlist);
@@ -523,15 +547,25 @@ export class Sidebar {
         <div class="sidebar-channel-list" data-key="channel-list">
           <div class="sidebar-channel-spacer" data-key="channel-spacer"
                style="height:${entries.length * CHANNEL_ROW_STRIDE}px">
-          ${visibleEntries.map(({ ch, globalIdx }, offset) => {
+          ${visibleEntries.map(({ ch, globalIdx, recent }, offset) => {
             const i = range.start + offset;
             const epgId = EpgService.findChannelId(ch);
             const nowPlaying = epgId ? EpgService.getNowPlaying(epgId) : null;
             const isPlaying = globalIdx === currentIdx;
             const isFocused = this.activePane === 'channels' && i === this.channelFocusIdx;
+            const catchup = recent?.kind === 'catchup' ? recent : null;
+            const title = catchup ? catchup.progress.title ?? ch.name : ch.name;
+            const subtitle = catchup
+              ? t('channel.resumeAt', {
+                  channel: ch.name,
+                  position: formatPosition(catchup.progress.position),
+                })
+              : nowPlaying?.title;
             return html`
               <div class="sidebar-ch-item ${isPlaying ? 'playing' : ''} ${isFocused ? 'focused' : ''}"
-                   data-key="ch:${String(globalIdx)}"
+                   data-key="${catchup
+                     ? `recent:catchup:${String(globalIdx)}:${String(catchup.progress.progStart)}`
+                     : `ch:${String(globalIdx)}`}"
                    data-focusable data-sidebar-index="${globalIdx}" data-sidebar-pos="${i}"
                    style="top:${i * CHANNEL_ROW_STRIDE}px">
                 <span class="ch-num">${globalIdx + 1}</span>
@@ -539,9 +573,10 @@ export class Sidebar {
                   ? html`<img class="ch-logo" src="${ch.logo}" alt="" loading="lazy" onerror="this.style.display='none'">`
                   : html`<div class="ch-logo-placeholder">${ch.name.charAt(0)}</div>`}
                 <div class="ch-info">
-                  <span class="ch-name">${ch.name}</span>
-                  ${nowPlaying ? html`<span class="ch-now"><span class="ch-now-text">${nowPlaying.title}</span></span>` : ''}
+                  <span class="ch-name">${title}</span>
+                  ${subtitle ? html`<span class="ch-now"><span class="ch-now-text">${subtitle}</span></span>` : ''}
                 </div>
+                ${catchup ? html`<span class="sidebar-recent-kind">${t('common.catchup')}</span>` : ''}
               </div>
             `;
           })}
@@ -658,9 +693,9 @@ export class Sidebar {
       }
       const chItem = target.closest<HTMLElement>('[data-sidebar-index]');
       if (chItem) {
-        const idx = parseInt(chItem.dataset.sidebarIndex!, 10);
-        this.onSelectChannel(idx);
-        this.hide();
+        const position = parseInt(chItem.dataset.sidebarPos!, 10);
+        const entry = this.getChannels()[position];
+        if (entry) this.selectEntry(entry);
       }
     });
 
@@ -726,5 +761,27 @@ export class Sidebar {
       this.updateFocus();
       this.resetTimer();
     }, { passive: false });
+  }
+
+  private selectEntry(entry: SidebarEntry): void {
+    if (entry.recent?.kind === 'catchup') {
+      void this.playRecentCatchup(entry.recent);
+      return;
+    }
+    this.onSelectChannel(entry.globalIdx);
+    this.hide();
+  }
+
+  private async playRecentCatchup(
+    item: Extract<RecentlyWatchedItem, { kind: 'catchup' }>,
+  ): Promise<void> {
+    const catchup = await RecentlyWatchedService.catchupInfo(item);
+    if (!catchup) {
+      showToast(t('channel.catchupUnavailable'));
+      this.render();
+      return;
+    }
+    this.onSelectChannel(item.channelIndex, catchup);
+    this.hide();
   }
 }

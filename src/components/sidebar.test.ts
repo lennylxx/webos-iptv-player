@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Channel } from '../types';
+import type { RecentlyWatchedItem } from '../services/recently-watched';
 import { CONFIG } from '../config';
 
-const { channels } = vi.hoisted(() => {
+const { channels, recentMock, toastMock } = vi.hoisted(() => {
   function makeChannel(over: Partial<Channel>): Channel {
     return {
       id: '', name: '', logo: '', group: '', url: '', extras: null,
@@ -16,6 +17,12 @@ const { channels } = vi.hoisted(() => {
       makeChannel({ id: 'b', name: 'Bravo', group: 'News', playlistIds: ['PL1'], favorite: true }),
       makeChannel({ id: 'c', name: 'Charlie', group: 'Sports', playlistIds: ['PL2'] }),
     ] as Channel[],
+    recentMock: {
+      items: [] as RecentlyWatchedItem[],
+      getItems: vi.fn(() => recentMock.items),
+      catchupInfo: vi.fn(),
+    },
+    toastMock: vi.fn(),
   };
 });
 
@@ -45,6 +52,9 @@ vi.mock('../services/epg-service', () => ({
   },
 }));
 
+vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentMock }));
+vi.mock('./toast', () => ({ showToast: toastMock }));
+
 import { Sidebar } from './sidebar';
 
 let container: HTMLElement;
@@ -67,6 +77,10 @@ beforeEach(() => {
 
   getCurrentIndex = vi.fn(() => 1);
   onSelect = vi.fn();
+  recentMock.items = [];
+  recentMock.getItems.mockClear();
+  recentMock.catchupInfo.mockReset();
+  toastMock.mockClear();
   sidebar = new Sidebar(container, getCurrentIndex, onSelect);
 });
 
@@ -218,14 +232,25 @@ describe('Sidebar', () => {
       sidebar.handleAction('left');
 
       expect(el.classList.contains('groups-expanded')).toBe(true);
-      expect(groupItems()).toHaveLength(4);
+      expect(groupItems()).toHaveLength(5);
       expect(groupItems()[0].classList.contains('active')).toBe(true);
       expect(groupItems()[0].classList.contains('focused')).toBe(true);
       expect(sidebar.pointerDismissX).toBe(720);
     });
 
+    it('uses the fitted group width for the pointer dismissal boundary', () => {
+      sidebar.handleAction('left');
+      el.querySelector<HTMLElement>('.sidebar-group-panel')!.getBoundingClientRect = () => ({
+        x: 0, y: 0, top: 0, right: 360, bottom: 1080, left: 0,
+        width: 360, height: 1080, toJSON: () => ({}),
+      });
+
+      expect(sidebar.pointerDismissX).toBe(820);
+    });
+
     it('selects a group, filters channels, and returns focus to channels', () => {
       sidebar.handleAction('left');
+      sidebar.handleAction('down');
       sidebar.handleAction('down');
       sidebar.handleAction('down');
       sidebar.handleAction('down');
@@ -260,6 +285,7 @@ describe('Sidebar', () => {
 
     it('falls back to All on reopen when the current channel is outside the retained group', () => {
       sidebar.handleAction('left');
+      sidebar.handleAction('down');
       sidebar.handleAction('down');
       sidebar.handleAction('down');
       sidebar.handleAction('down');
@@ -301,6 +327,7 @@ describe('Sidebar', () => {
       sidebar.handleAction('down');
       sidebar.handleAction('down');
       sidebar.handleAction('down');
+      sidebar.handleAction('down');
       sidebar.handleAction('select'); // Sports
       items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
       getCurrentIndex.mockReturnValue(2);
@@ -321,9 +348,66 @@ describe('Sidebar', () => {
       expect(el.classList.contains('channels-only')).toBe(true);
 
       picker.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      groupItems()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      groupItems()[3].dispatchEvent(new MouseEvent('click', { bubbles: true }));
       expect(items().map(item => item.querySelector('.ch-name')?.textContent))
         .toEqual(['Alpha', 'Bravo']);
+    });
+
+    it('shows Recently Watched and selects a recent live channel', () => {
+      recentMock.items = [{
+        kind: 'live',
+        channel: channels[2],
+        channelIndex: 2,
+        updatedAt: 1000,
+      }];
+      sidebar.refresh();
+      sidebar.handleAction('left');
+
+      expect(groupItems()[2].querySelector('.sidebar-group-count')?.textContent).toBe('1');
+      groupItems()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(items().map(item => item.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
+
+      items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(onSelect).toHaveBeenCalledWith(2);
+    });
+
+    it('resumes a recent catch-up programme', async () => {
+      const recent: RecentlyWatchedItem = {
+        kind: 'catchup',
+        channel: channels[0],
+        channelIndex: 0,
+        updatedAt: 1000,
+        progress: {
+          channelKey: 'a',
+          progStart: 1000,
+          progEnd: 61000,
+          position: 30,
+          duration: 60,
+          updatedAt: 1000,
+          title: 'Programme Alpha',
+          completed: false,
+        },
+      };
+      const catchup = {
+        start: 1,
+        end: 61,
+        title: 'Programme Alpha',
+        description: '',
+        icon: '',
+        resumeSecs: 30,
+      };
+      recentMock.items = [recent];
+      recentMock.catchupInfo.mockResolvedValue(catchup);
+      sidebar.refresh();
+      sidebar.handleAction('left');
+      groupItems()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+      expect(items()[0].querySelector('.ch-name')?.textContent).toBe('Programme Alpha');
+      items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+
+      expect(onSelect).toHaveBeenCalledWith(0, catchup);
+      expect(sidebar.visible).toBe(false);
     });
   });
 
