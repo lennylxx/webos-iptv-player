@@ -97,6 +97,12 @@ function groupItems(): HTMLElement[] {
   return Array.from(el.querySelectorAll<HTMLElement>('.sidebar-group-item'));
 }
 
+function finishOpening(): void {
+  const event = new Event('transitionend', { bubbles: true });
+  Object.defineProperty(event, 'propertyName', { value: 'transform' });
+  el.dispatchEvent(event);
+}
+
 function highlightSearch(): void {
   sidebar.handleAction('up');
   sidebar.handleAction('up');
@@ -443,9 +449,13 @@ describe('Sidebar', () => {
   describe('pointer interaction', () => {
     beforeEach(() => sidebar.show());
 
-    it('expands groups after the pointer dwells at the left edge', () => {
+    it('starts the group dwell after the channel panel finishes opening', () => {
       sidebar.handlePointerMove(30, true);
-      vi.advanceTimersByTime(349);
+      vi.advanceTimersByTime(1000);
+      expect(el.classList.contains('groups-expanded')).toBe(false);
+
+      finishOpening();
+      vi.advanceTimersByTime(499);
       expect(el.classList.contains('groups-expanded')).toBe(false);
 
       vi.advanceTimersByTime(1);
@@ -454,9 +464,10 @@ describe('Sidebar', () => {
 
     it('cancels group expansion when the pointer leaves the edge', () => {
       sidebar.handlePointerMove(30, true);
+      finishOpening();
       vi.advanceTimersByTime(200);
       sidebar.handlePointerMove(100, true);
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(500);
 
       expect(el.classList.contains('groups-expanded')).toBe(false);
     });

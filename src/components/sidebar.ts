@@ -26,7 +26,7 @@ const GROUP_PANEL_MIN_WIDTH = 260;
 const CHANNEL_PANEL_WIDTH = 420;
 const POINTER_MARGIN = 40;
 const GROUP_DWELL_EDGE = 48;
-const GROUP_DWELL_MS = 350;
+const GROUP_DWELL_MS = 500;
 const POINTER_EXIT_DWELL_MS = 500;
 const CHANNEL_ROW_STRIDE = 92;
 const CHANNEL_OVERSCAN = 12;
@@ -57,6 +57,7 @@ export class Sidebar {
   private channelScrollTop = 0;
   private scrollFrame: number | null = null;
   private groupDwellTimer: ReturnType<typeof setTimeout> | null = null;
+  private pointerAtGroupEdge = false;
   private pointerExitTimer: ReturnType<typeof setTimeout> | null = null;
   private pointerExitPending = false;
 
@@ -91,22 +92,16 @@ export class Sidebar {
 
   handlePointerMove(clientX: number, overSidebar: boolean): boolean {
     if (!this.isVisible || this.keyboardOn) {
+      this.pointerAtGroupEdge = false;
       this.clearGroupDwell();
       return false;
     }
 
     if (overSidebar) this.resetTimer();
 
-    if (!this.groupsExpanded && clientX <= GROUP_DWELL_EDGE) {
-      if (!this.groupDwellTimer) {
-        this.groupDwellTimer = setTimeout(() => {
-          this.groupDwellTimer = null;
-          if (this.isVisible && !this.groupsExpanded && !this.keyboardOn) {
-            this.openGroups();
-            this.resetTimer();
-          }
-        }, GROUP_DWELL_MS);
-      }
+    this.pointerAtGroupEdge = clientX <= GROUP_DWELL_EDGE;
+    if (!this.groupsExpanded && this.pointerAtGroupEdge && !this.opening) {
+      this.startGroupDwell();
     } else {
       this.clearGroupDwell();
     }
@@ -137,6 +132,7 @@ export class Sidebar {
     this.activePane = 'channels';
     this.groupsExpanded = false;
     this.searchQuery = '';
+    this.pointerAtGroupEdge = false;
     this.clearGroupDwell();
     this.clearPointerExit();
     this.focusCurrentChannel(true);
@@ -154,6 +150,7 @@ export class Sidebar {
     this.isVisible = false;
     this.keyboardOn = false;
     this.opening = false;
+    this.pointerAtGroupEdge = false;
     this.clearGroupDwell();
     this.clearPointerExit();
     const el = this.el;
@@ -474,6 +471,18 @@ export class Sidebar {
     this.groupDwellTimer = null;
   }
 
+  private startGroupDwell(): void {
+    if (this.groupDwellTimer) return;
+    this.groupDwellTimer = setTimeout(() => {
+      this.groupDwellTimer = null;
+      if (this.isVisible && !this.groupsExpanded && !this.keyboardOn
+          && this.pointerAtGroupEdge) {
+        this.openGroups();
+        this.resetTimer();
+      }
+    }, GROUP_DWELL_MS);
+  }
+
   private clearPointerExit(): void {
     this.pointerExitPending = false;
     if (!this.pointerExitTimer) return;
@@ -618,6 +627,7 @@ export class Sidebar {
     el.addEventListener('transitionend', (e: TransitionEvent) => {
       if (e.target !== el || e.propertyName !== 'transform' || !this.isVisible || !this.opening) return;
       this.opening = false;
+      if (this.pointerAtGroupEdge) this.startGroupDwell();
       this.measureMarquees();
     });
 
