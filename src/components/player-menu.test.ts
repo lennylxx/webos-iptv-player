@@ -109,6 +109,27 @@ describe('PlayerMenu', () => {
       expect(items()[3].classList.contains('focused')).toBe(true);
     });
 
+    it('scrolls only the menu list to reveal the focused row', () => {
+      const list = el.querySelector<HTMLElement>('.menu-items')!;
+      const second = items()[1];
+      const scrollIntoView = vi.fn();
+      second.scrollIntoView = scrollIntoView;
+      Object.defineProperty(list, 'scrollTop', {
+        value: 0, writable: true, configurable: true,
+      });
+      list.getBoundingClientRect = () => ({
+        top: 100, bottom: 300,
+      }) as DOMRect;
+      second.getBoundingClientRect = () => ({
+        top: 280, bottom: 340,
+      }) as DOMRect;
+
+      menu.handleAction('down');
+
+      expect(list.scrollTop).toBe(40);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
     it('select emits the focused action and hides the menu', () => {
       menu.handleAction('down'); // focus "green"
       menu.handleAction('select');

@@ -157,7 +157,17 @@ export class PlayerMenu {
   // viewport of a long track list. (Magic-Remote wheel scrolling is native — the
   // wheel handler lets `.menu-items` scroll itself; see key-handler.ts.)
   private scrollFocusedIntoView(): void {
-    this.el?.querySelector<HTMLElement>('.menu-item.focused')?.scrollIntoView?.({ block: 'nearest' });
+    const list = this.el?.querySelector<HTMLElement>('.menu-items');
+    const focused = list?.querySelector<HTMLElement>('.menu-item.focused');
+    if (!list || !focused) return;
+
+    const listRect = list.getBoundingClientRect();
+    const focusedRect = focused.getBoundingClientRect();
+    if (focusedRect.top < listRect.top) {
+      list.scrollTop -= listRect.top - focusedRect.top;
+    } else if (focusedRect.bottom > listRect.bottom) {
+      list.scrollTop += focusedRect.bottom - listRect.bottom;
+    }
   }
 
   /** Route a selected/clicked row by its data-menu-action. */
