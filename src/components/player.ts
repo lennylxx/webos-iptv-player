@@ -66,6 +66,7 @@ export class Player {
   private container: HTMLElement;
   private onBack: () => void;
   private onTvPlaybackChanged: (channelIndex: number, catchupStart: number | null) => void;
+  private canAutoRevealOsd: () => boolean;
   private videoEl: HTMLVideoElement | null = null;
   private hls: InstanceType<HlsType> | null = null;
   private mpegtsPlayer: { destroy(): void } | null = null;
@@ -127,10 +128,12 @@ export class Player {
     container: HTMLElement,
     onBack: () => void,
     onTvPlaybackChanged: (channelIndex: number, catchupStart: number | null) => void = () => {},
+    canAutoRevealOsd: () => boolean = () => true,
   ) {
     this.container = container;
     this.onBack = onBack;
     this.onTvPlaybackChanged = onTvPlaybackChanged;
+    this.canAutoRevealOsd = canAutoRevealOsd;
     this.stallWatchdog = new StallWatchdog({
       probe: (): StallProbe => {
         const v = this.videoEl;
@@ -164,7 +167,8 @@ export class Player {
         this.pointerY = e.clientY;
         // An active cursor reveals the OSD (and its controls) so there's
         // something to aim at; keep it up while the cursor keeps moving.
-        if (this.osdVisible) this.resetOsdTimer(); else this.showOSD();
+        if (this.osdVisible) this.resetOsdTimer();
+        else if (this.canAutoRevealOsd()) this.showOSD();
       });
       this.container.addEventListener('click', (e: MouseEvent) => this.onPointerRelease(e.clientX, e.clientY));
 

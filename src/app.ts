@@ -74,7 +74,8 @@ class App {
     this.player = new Player(this.views.player, () => {
       this.channelList.render();
       this.showView('channels');
-    }, (idx, catchupStart) => this.channelList.setPlaying(idx, catchupStart));
+    }, (idx, catchupStart) => this.channelList.setPlaying(idx, catchupStart),
+    () => !this.sidebar.visible && !this.menu.visible);
     this.epgGrid = new EpgGrid(this.views.epg, (idx, catchup) => this.playChannel(idx, catchup));
     this.settings = new Settings(this.views.settings, (action) => this.onSettingsSaved(action));
 
@@ -851,13 +852,19 @@ class App {
       const currentView = this.viewStack[this.viewStack.length - 1];
       if (currentView !== 'player') return;
 
+      const osd = $('#player-osd', this.views.player);
+      const osdRect = osd?.getBoundingClientRect();
+      const overOsd = !!osd && !osd.classList.contains('hidden') && !!osdRect
+        && e.clientY >= osdRect.top;
+
       // VOD (movies/series) has no channels and no live menu — only the OSD
       // (title + seek bar) is pointer-revealable; suppress the channel sidebar
       // and the live player menu.
       const vod = this.player.isVod();
 
-      // Left sidebar (channels)
-      if (!vod && e.clientX < 80 && !this.menu.visible) {
+      // Protect the full-width area beside and below the OSD too: its edge
+      // controls sit next to margins where an imprecise cursor can open a panel.
+      if (!overOsd && !vod && e.clientX < 80 && !this.menu.visible) {
         this.sidebar.show();
         this.sidebar.handlePointerMove(e.clientX, false);
       } else if (this.sidebar.visible) {
@@ -874,7 +881,7 @@ class App {
       // Right menu. Live/catch-up and VOD alike; for VOD it shows the VOD action
       // set (Info, Settings) plus any audio/subtitle tracks — the channel rows
       // are hidden, so it's never empty.
-      if (e.clientX > 1840 && !this.sidebar.visible) {
+      if (!overOsd && e.clientX > 1840 && !this.sidebar.visible) {
         this.menu.show();
       } else if (this.menu.visible) {
         const overMenu = !!(e.target as HTMLElement).closest('.player-menu');

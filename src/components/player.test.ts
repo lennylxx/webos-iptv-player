@@ -135,6 +135,7 @@ function fakeLiveVideo(start: number, end: number, currentTime = 0) {
 let container: HTMLElement;
 let player: Player;
 let video: HTMLVideoElement;
+let allowAutoRevealOsd: boolean;
 
 // The desktop path probes the stream's Content-Type before routing; stub it so
 // tests stay offline and deterministic (HLS → hls.js fallback sets video.src).
@@ -154,7 +155,8 @@ beforeEach(() => {
   document.body.appendChild(container);
   playlistMock.getByIndex.mockReturnValue(CHANNEL);
   vi.mocked(probeMedia).mockResolvedValue(null);
-  player = new Player(container, vi.fn());
+  allowAutoRevealOsd = true;
+  player = new Player(container, vi.fn(), undefined, () => allowAutoRevealOsd);
   video = fakeVideo(120);
   player.init(video);
 });
@@ -165,6 +167,26 @@ afterEach(() => {
 
 const bar = () => container.querySelector('.osd-progress-bar') as HTMLElement;
 const elapsed = () => container.querySelector('.osd-time-current')!.textContent;
+
+describe('Player pointer OSD reveal', () => {
+  it('does not reveal a hidden OSD while a player overlay is open', () => {
+    player.hideOSD();
+    allowAutoRevealOsd = false;
+
+    container.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+
+    expect(container.querySelector('#player-osd')?.classList.contains('hidden')).toBe(true);
+  });
+
+  it('keeps an already visible OSD visible while a player overlay is open', () => {
+    player.showOSD();
+    allowAutoRevealOsd = false;
+
+    container.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+
+    expect(container.querySelector('#player-osd')?.classList.contains('hidden')).toBe(false);
+  });
+});
 
 describe('Player catch-up seeking', () => {
   beforeEach(() => player.play(0, CATCHUP)); // catch-up → OSD shown, seekable

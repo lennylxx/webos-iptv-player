@@ -216,6 +216,69 @@ test('the right-edge player menu opens and lists its color actions', async ({ pa
   await expect(menu.locator('.menu-item').nth(1)).toHaveClass(/focused/);
 });
 
+test('the OSD band keeps its edge controls ahead of pointer-triggered panels', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await routePlaylist(page);
+  await routeLiveManifest(page);
+  await neuterVideo(page);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.keyboard.press('Enter');
+
+  const osd = page.locator('#player-osd');
+  await expect(osd).toBeVisible();
+  const box = await osd.boundingBox();
+  if (!box) throw new Error('player OSD has no bounding box');
+
+  await page.mouse.move(2, box.y + box.height / 2);
+  await expect(page.locator('#player-sidebar')).not.toBeVisible();
+
+  await page.mouse.move(1918, 1078);
+  await expect(page.locator('#player-menu')).not.toBeVisible();
+});
+
+test('pointer-opened player panels do not reveal or hide the OSD', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await routePlaylist(page);
+  await routeLiveManifest(page);
+  await neuterVideo(page);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.keyboard.press('Enter');
+
+  const osd = page.locator('#player-osd');
+  await expect(osd).toBeVisible();
+  await page.mouse.move(1890, 1000);
+  await page.keyboard.press('Enter');
+  await expect(osd).not.toBeVisible();
+
+  await page.mouse.move(1891, 1000);
+  const menu = page.locator('#player-menu');
+  await expect(menu).toBeVisible();
+  await expect(osd).not.toBeVisible();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 405, bubbles: true })));
+  await expect(menu).toBeVisible();
+  await expect(osd).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+
+  await page.mouse.move(30, 1000);
+  await page.keyboard.press('Enter');
+  await expect(osd).not.toBeVisible();
+  await page.mouse.move(29, 1000);
+  const sidebar = page.locator('#player-sidebar');
+  await expect(sidebar).toBeVisible();
+  await expect(osd).not.toBeVisible();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 405, bubbles: true })));
+  await expect(sidebar).toBeVisible();
+  await expect(osd).toBeVisible();
+});
+
 test('keeps pseudo-localized player menu labels within the panel', async ({ page }) => {
   await routePlaylist(page);
   await routeLiveManifest(page);
