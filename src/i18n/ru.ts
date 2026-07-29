@@ -171,6 +171,8 @@ export const RU_MESSAGES = {
   'settings.overlayDark': 'Тёмный',
   'settings.overlayFrosted': 'Матовый',
   'settings.overlayHint': 'Тёмный стиль лучше читается поверх видео. Матовый лучше подходит для светлых тем.',
+  'settings.textSize': 'Размер текста',
+  'settings.textSizeDefault': '{percent} % (по умолчанию)',
   'settings.display': 'Отображение',
   'settings.timeZone': 'Часовой пояс телепрограммы',
   'settings.device': 'Устройство',

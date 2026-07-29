@@ -213,6 +213,53 @@ test.describe('Settings navigation', () => {
 
     expect(rowCounts).toEqual([5, 5, 5]);
   });
+
+  test('the text size picker scales only fonts and persists', async ({ page }) => {
+    await routePlaylist(page);
+    await seedPlaylist(page);
+    await page.goto('/');
+    await enterTab(page, 'settings');
+    await expect(page.locator('#view-settings')).toBeVisible();
+
+    const title = page.locator('.settings-title');
+    const fontSize = () => title.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    const base = await fontSize();
+
+    await page.locator('[data-settings-target="appearance"]').click();
+    await page.locator('#text-size .dropdown-trigger').click();
+    const option = page.locator('#text-size .dropdown-option[data-dropdown-value="130"]');
+    await expect(option).toBeVisible();
+    await option.click();
+    // Live preview: the scale applies before saving.
+    expect(await fontSize()).toBeCloseTo(base * 1.3, 1);
+
+    await page.locator('#save-settings').click();
+    await expect(page.locator('#view-channels')).toBeVisible();
+
+    // Persisted across a relaunch and applied outside Settings, without
+    // changing the dimensions of controls.
+    await page.reload();
+    await expect(page.locator('#view-channels')).toBeVisible();
+    const row = page.locator('.channel-item').first();
+    const metrics = () => row.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return {
+        font: parseFloat(getComputedStyle(el.querySelector('.channel-name')!).fontSize),
+        height: parseFloat(cs.height),
+        padding: parseFloat(cs.paddingLeft),
+        logo: parseFloat(getComputedStyle(el.querySelector('.channel-logo-wrap')!).width),
+      };
+    });
+    const scaled = await metrics();
+    // Same measurements at the default size, from a clean load.
+    await page.evaluate(() => localStorage.removeItem('iptv_text_size'));
+    await page.reload();
+    await expect(page.locator('#view-channels')).toBeVisible();
+    const unscaled = await metrics();
+    expect(scaled.font).toBeCloseTo(unscaled.font * 1.3, 1);
+    for (const key of ['height', 'padding', 'logo'] as const)
+      expect(scaled[key], key).toBeCloseTo(unscaled[key], 1);
+  });
 });
 
 test.describe('Settings playlists', () => {

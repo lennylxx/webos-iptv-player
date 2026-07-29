@@ -171,6 +171,8 @@ export const UK_MESSAGES = {
   'settings.overlayDark': 'Темний',
   'settings.overlayFrosted': 'Матовий',
   'settings.overlayHint': 'Темний стиль легше читати поверх відео. Матовий найкраще підходить для світлих тем.',
+  'settings.textSize': 'Розмір тексту',
+  'settings.textSizeDefault': '{percent} % (за замовчуванням)',
   'settings.display': 'Відображення',
   'settings.timeZone': 'Часовий пояс телепрограми',
   'settings.device': 'Пристрій',

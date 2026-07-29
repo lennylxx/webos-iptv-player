@@ -9,8 +9,8 @@ import { createXtreamClient } from '../services/xtream-client';
 import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
 import { genPlaylistId } from '../utils/playlist-id';
 import { CONFIG } from '../config';
-import { THEMES, OVERLAY_STYLES, type ThemeMeta, type OverlayStyle } from '../config/themes';
-import { previewTheme } from '../services/theme-service';
+import { THEMES, OVERLAY_STYLES, TEXT_SIZES, DEFAULT_TEXT_SIZE, type ThemeMeta, type OverlayStyle, type TextSize } from '../config/themes';
+import { previewTheme, applyTextSize } from '../services/theme-service';
 import { showToast } from './toast';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import qrcode from 'qrcode-generator';
@@ -348,10 +348,15 @@ export class Settings {
     const theme = StorageService.getTheme();
     this.selectedTheme = theme;
     const overlayStyle = StorageService.getOverlayStyle();
+    const textSize = StorageService.getTextSize();
     const localePreference = StorageService.getLocalePreference();
     const overlayStyles = OVERLAY_STYLES.map(option => ({
       value: option.value,
       label: t(option.value === 'dark' ? 'settings.overlayDark' : 'settings.overlayFrosted'),
+    }));
+    const textSizes = TEXT_SIZES.map(size => ({
+      value: size,
+      label: size === DEFAULT_TEXT_SIZE ? t('settings.textSizeDefault', { percent: size }) : `${size}%`,
     }));
 
     this.container.innerHTML = String(html`
@@ -481,6 +486,10 @@ export class Settings {
                 <div class="settings-item-title">${t('settings.overlayGlass')}</div>
                 ${toggleGroup('overlay-style', overlayStyles, overlayStyle)}
                 <div class="settings-item-hint">${t('settings.overlayHint')}</div>
+              </div>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.textSize')}</div>
+                ${dropdown('text-size', textSizes, textSize)}
               </div>
             </div>
           </div>
@@ -878,6 +887,9 @@ export class Settings {
     const cur = dd.querySelector('.dropdown-current');
     if (cur) cur.textContent = el.textContent;
     dd.classList.remove('open');
+    // Text size previews live so the choice can be judged at its own scale;
+    // showView() reverts it if Settings closes without saving.
+    if (dd.id === 'text-size') applyTextSize(dd.dataset.value ?? '');
     const trigger = dd.querySelector<HTMLElement>('.dropdown-trigger');
     if (trigger) this.nav.focus(trigger);
   }
@@ -1097,6 +1109,9 @@ export class Settings {
 
     const overlayBtn = $('#overlay-style .toggle-option.active', this.container);
     if (overlayBtn?.dataset.value) StorageService.setOverlayStyle(overlayBtn.dataset.value as OverlayStyle);
+
+    const textSize = ($('#text-size', this.container) as HTMLElement | null)?.dataset.value;
+    if (textSize) StorageService.setTextSize(textSize as TextSize);
 
     const locale = ($('#app-language', this.container) as HTMLElement | null)?.dataset.value as LocalePreference | undefined;
     if (locale) StorageService.setLocalePreference(locale);

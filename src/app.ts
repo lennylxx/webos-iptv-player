@@ -19,7 +19,7 @@ import { showToast } from './components/toast';
 import { ReminderService } from './services/reminder-service';
 import { ReminderPrompt } from './components/reminder-prompt';
 import { setDisplayTz } from './utils/time';
-import { initTheme, applyTheme, applyOverlayStyle } from './services/theme-service';
+import { initTheme, applyTheme, applyOverlayStyle, applyTextSize } from './services/theme-service';
 import { channelKey } from './utils/channel';
 import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
@@ -477,6 +477,7 @@ class App {
     // while keeping a just-saved theme, since save() persists before this runs.
     applyTheme(StorageService.getTheme());
     applyOverlayStyle(StorageService.getOverlayStyle());
+    applyTextSize(StorageService.getTextSize());
     this.player.closeSubtitleSearch(); // never let the subtitle overlay linger across a view change
     this.player.closeSubtitleOffset(); // never let the subtitle-sync overlay linger across a view change
     this.epgGrid.dismissPrompt(); // never let the catch-up prompt linger across a view change

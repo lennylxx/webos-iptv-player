@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { THEMES, DEFAULT_THEME, isValidTheme } from './themes';
+import { THEMES, DEFAULT_THEME, TEXT_SIZES, DEFAULT_TEXT_SIZE, isValidTheme, isValidTextSize } from './themes';
 
 // Parse the shipped stylesheet directly so a theme that's registered but missing
 // a `[data-theme]` block (or a variable) fails the build instead of the TV.
 // Strip comments first so the header's example selectors aren't parsed as blocks.
 const css = readFileSync(join(process.cwd(), 'css/themes.css'), 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '');
+
+const mainCss = readFileSync(join(process.cwd(), 'css/main.css'), 'utf8')
   .replace(/\/\*[\s\S]*?\*\//g, '');
 
 const REQUIRED_VARS = [
@@ -45,5 +48,29 @@ describe('theme registry', () => {
     for (const id of new Set(declared)) {
       expect(isValidTheme(id), `themes.css declares unregistered theme "${id}"`).toBe(true);
     }
+  });
+});
+
+describe('text size registry', () => {
+  it('has a valid default and rejects unknown ids', () => {
+    expect(isValidTextSize(DEFAULT_TEXT_SIZE)).toBe(true);
+    expect(isValidTextSize('100')).toBe(true);
+    expect(isValidTextSize('huge')).toBe(false);
+    expect(isValidTextSize('115')).toBe(false);
+    expect(isValidTextSize(null)).toBe(false);
+  });
+
+  it('defines a --font-scale for every non-default size in main.css', () => {
+    for (const size of TEXT_SIZES) {
+      if (size === DEFAULT_TEXT_SIZE) continue;
+      const m = new RegExp(`\\[data-text-size="${size}"\\]\\s*\\{([^}]*)\\}`).exec(mainCss);
+      expect(m, `missing [data-text-size="${size}"] block in main.css`).not.toBeNull();
+      expect(m![1]).toContain('--font-scale:');
+    }
+  });
+
+  it('leaves the default size on the :root --font-scale of 1', () => {
+    expect(/:root\s*\{[^}]*--font-scale:\s*1;/.test(mainCss)).toBe(true);
+    expect(new RegExp(`\\[data-text-size="${DEFAULT_TEXT_SIZE}"\\]`).test(mainCss)).toBe(false);
   });
 });

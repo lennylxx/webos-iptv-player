@@ -8,6 +8,7 @@
     // Anti-FOUC (Flash of Unstyled Content): apply the saved theme before first paint.
     // StorageService JSON-encodes values, so the stored id is a quoted string.
     try { var t = JSON.parse(localStorage.getItem('iptv_theme')); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    try { var s = JSON.parse(localStorage.getItem('iptv_text_size')); if (s) document.documentElement.dataset.textSize = s; } catch (e) {}
   </script>
   <link rel="stylesheet" href="css/main.css">
   <link rel="stylesheet" href="css/themes.css">

@@ -46,3 +46,15 @@ export const OVERLAY_STYLES: { value: OverlayStyle; label: string }[] = [
 export function isValidOverlayStyle(v: string | null | undefined): v is OverlayStyle {
   return v === 'dark' || v === 'frosted';
 }
+
+// App-wide text size, as a percentage id. The scale factors live in
+// `css/main.css` as `[data-text-size="<id>"]` blocks driving `--font-scale`,
+// which PostCSS multiplies into pixel `font-size` declarations at build time.
+// 100 is the baseline and needs no block.
+export const TEXT_SIZES = ['80', '90', '100', '110', '120', '130', '140', '150'] as const;
+export type TextSize = typeof TEXT_SIZES[number];
+export const DEFAULT_TEXT_SIZE: TextSize = '100';
+
+export function isValidTextSize(v: string | null | undefined): v is TextSize {
+  return TEXT_SIZES.indexOf(v as TextSize) !== -1;
+}

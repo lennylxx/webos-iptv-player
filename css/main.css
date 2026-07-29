@@ -24,7 +24,18 @@
   --focus-ring: var(--accent);
   --radius: 8px;
   --transition: 0.2s ease;
+  --font-scale: 1;
 }
+
+/* App-wide font size. The ids are percentages (see TEXT_SIZES in
+   src/config/themes.ts); 100 uses the default multiplier above. */
+[data-text-size="80"] { --font-scale: 0.8; }
+[data-text-size="90"] { --font-scale: 0.9; }
+[data-text-size="110"] { --font-scale: 1.1; }
+[data-text-size="120"] { --font-scale: 1.2; }
+[data-text-size="130"] { --font-scale: 1.3; }
+[data-text-size="140"] { --font-scale: 1.4; }
+[data-text-size="150"] { --font-scale: 1.5; }
 
 *, *::before, *::after {
   margin: 0;

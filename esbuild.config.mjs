@@ -40,6 +40,23 @@ function generateGapFallback(srcDir) {
   return `\n/* AUTO-GENERATED from source \`gap\` declarations (esbuild.config.mjs) — do not edit. */\n@supports not (inset: 0) {\n${rules.join('\n')}\n}\n`;
 }
 
+// Apply the app-wide text scale while keeping source styles in pixels.
+function scaleFontSizes(outDir) {
+  for (const file of readdirSync(outDir)) {
+    if (!file.endsWith('.css')) continue;
+    const path = `${outDir}/${file}`;
+    const root = postcss.parse(readFileSync(path, 'utf8'));
+    root.walkDecls('font-size', (decl) => {
+      if (decl.parent.type === 'rule' && decl.parent.selector.includes('::cue')) return;
+      decl.value = decl.value.replace(
+        /(-?\d*\.?\d+)px\b/g,
+        (px) => `calc(${px} * var(--font-scale))`,
+      );
+    });
+    writeFileSync(path, root.toString());
+  }
+}
+
 // Copy static assets to dist. The source HTML is the production/webOS version;
 // preview builds swap only the platform library at build time.
 mkdirSync('dist', { recursive: true });
@@ -57,6 +74,7 @@ cpSync('resources', 'dist/resources', { recursive: true });
 cpSync('css', 'dist/css', { recursive: true });
 // Append the generated flex-`gap` fallback to legacy-webos.css (loaded last).
 appendFileSync('dist/css/legacy-webos.css', generateGapFallback('css'));
+scaleFontSizes('dist/css');
 cpSync('webOSjs/webOS.js', 'dist/webOSjs/webOS.js');
 cpSync('assets/icon80.png', 'dist/icon.png');
 cpSync('assets/icon130.png', 'dist/largeIcon.png');

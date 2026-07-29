@@ -17,6 +17,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
     autoPlay: false,
     theme: 'midnight' as string,
     overlayStyle: 'dark' as string,
+    textSize: '100' as string,
     tzMode: 'device' as TzMode,
     tzOffset: null as number | null,
     locale: 'system' as const,
@@ -29,13 +30,14 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
   };
   return {
     state,
-    themeMock: { previewTheme: vi.fn(), applyTheme: vi.fn(), initTheme: vi.fn() },
+    themeMock: { previewTheme: vi.fn(), applyTheme: vi.fn(), initTheme: vi.fn(), applyTextSize: vi.fn() },
     storageMock: {
       getPlaylists: vi.fn(() => state.playlists),
       getEpgUrl: vi.fn(() => state.epg),
       getAutoPlay: vi.fn(() => state.autoPlay),
       getTheme: vi.fn(() => state.theme),
       getOverlayStyle: vi.fn(() => state.overlayStyle),
+      getTextSize: vi.fn(() => state.textSize),
       getTzMode: vi.fn(() => state.tzMode),
       getEpgTzOffset: vi.fn(() => state.tzOffset),
       getLocalePreference: vi.fn(() => state.locale),
@@ -46,6 +48,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
       setAutoPlay: vi.fn(),
       setTheme: vi.fn((id: string) => { state.theme = id; }),
       setOverlayStyle: vi.fn((s: string) => { state.overlayStyle = s; }),
+      setTextSize: vi.fn((s: string) => { state.textSize = s; }),
       setTzMode: vi.fn(),
       setLocalePreference: vi.fn(),
       setOnlineSubtitleConfig: vi.fn((cfg: any) => { state.onlineSubtitles = cfg; }),
@@ -100,6 +103,7 @@ beforeEach(() => {
   state.autoPlay = false;
   state.theme = 'midnight';
   state.overlayStyle = 'dark';
+  state.textSize = '100';
   storageMock.getSelectedXtreamAccountId.mockReturnValue(null);
   state.onlineSubtitles = {
     preferredLanguage: '',
@@ -256,6 +260,31 @@ describe('Settings theme picker', () => {
     click('#overlay-style .toggle-option[data-value="frosted"]');
     click('#save-settings');
     expect(storageMock.setOverlayStyle).toHaveBeenCalledWith('frosted');
+  });
+
+  it('reflects the saved text size on the dropdown', () => {
+    state.textSize = '120';
+    settings.render();
+    const dd = container.querySelector('#text-size')!;
+    expect(dd.getAttribute('data-value')).toBe('120');
+    expect(dd.querySelector('.dropdown-current')!.textContent).toBe('120%');
+  });
+
+  it('offers every percentage step and marks 100% as the default', () => {
+    settings.render();
+    const labels = Array.from(container.querySelectorAll('#text-size .dropdown-option'))
+      .map(o => o.getAttribute('data-dropdown-value'));
+    expect(labels).toEqual(['80', '90', '100', '110', '120', '130', '140', '150']);
+    expect(container.querySelector('#text-size .dropdown-option[data-dropdown-value="100"]')!.textContent)
+      .toBe('100% (Default)');
+  });
+
+  it('previews the text size immediately and persists it on Save & Apply', () => {
+    click('#text-size .dropdown-option[data-dropdown-value="130"]');
+    expect(themeMock.applyTextSize).toHaveBeenCalledWith('130');
+    expect(storageMock.setTextSize).not.toHaveBeenCalled();
+    click('#save-settings');
+    expect(storageMock.setTextSize).toHaveBeenCalledWith('130');
   });
 });
 

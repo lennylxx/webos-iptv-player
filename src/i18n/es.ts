@@ -165,6 +165,8 @@ export const ES_MESSAGES = {
   'settings.overlayDark': 'Oscuro',
   'settings.overlayFrosted': 'Esmerilado',
   'settings.overlayHint': 'El modo oscuro facilita la lectura sobre el video. El esmerilado funciona mejor con temas claros.',
+  'settings.textSize': 'Tamaño del texto',
+  'settings.textSizeDefault': '{percent} % (Predeterminado)',
   'settings.display': 'Pantalla',
   'settings.timeZone': 'Zona horaria de la guía',
   'settings.device': 'Dispositivo',

@@ -165,6 +165,8 @@ export const PT_BR_MESSAGES = {
   'settings.overlayDark': 'Escuro',
   'settings.overlayFrosted': 'Fosco',
   'settings.overlayHint': 'O estilo escuro facilita a leitura sobre o vídeo. O fosco funciona melhor com temas claros.',
+  'settings.textSize': 'Tamanho do texto',
+  'settings.textSizeDefault': '{percent}% (Padrão)',
   'settings.display': 'Exibição',
   'settings.timeZone': 'Fuso horário do guia',
   'settings.device': 'Dispositivo',
