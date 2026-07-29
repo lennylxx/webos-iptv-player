@@ -157,6 +157,7 @@ export const ZH_CN_MESSAGES = {
   'settings.epg': '节目指南（EPG）',
   'settings.xmltvUrl': 'XMLTV 网址',
   'settings.appearance': '外观',
+  'settings.theme': '主题',
   'settings.overlayGlass': '播放器浮层样式',
   'settings.overlayDark': '深色',
   'settings.overlayFrosted': '毛玻璃',

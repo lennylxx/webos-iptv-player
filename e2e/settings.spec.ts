@@ -17,6 +17,52 @@ test.describe('Settings navigation', () => {
     await expect(page.locator('.playlist-url').first()).toHaveValue(PLAYLIST_URL);
   });
 
+  test('an open dropdown closes on an outside click or Back before leaving Settings', async ({ page }) => {
+    await page.goto('/');
+    const dropdown = page.locator('#app-language');
+    const trigger = dropdown.locator('.dropdown-trigger');
+
+    await trigger.click();
+    await expect(dropdown).toHaveClass(/open/);
+    await page.locator('[data-settings-target="appearance"]').click();
+    await expect(dropdown).not.toHaveClass(/open/);
+
+    await trigger.click();
+    await expect(dropdown).toHaveClass(/open/);
+    await page.keyboard.press('Escape');
+    await expect(dropdown).not.toHaveClass(/open/);
+    await expect(page.locator('#view-settings')).toBeVisible();
+  });
+
+  test('keeps dropdown spacing aligned with adjacent settings', async ({ page }) => {
+    await page.goto('/');
+
+    const gaps = await page.evaluate(() => {
+      const titleGap = (selector: string): number => {
+        const control = document.querySelector<HTMLElement>(selector)!;
+        const title = control.closest('.settings-item')!
+          .querySelector<HTMLElement>('.settings-item-title')!;
+        return control.getBoundingClientRect().top - title.getBoundingClientRect().bottom;
+      };
+      const rows = Array.from(document.querySelectorAll<HTMLElement>(
+        '#settings-subtitles .settings-row',
+      ));
+      return {
+        dropdownTitle: titleGap('#os-pref-lang'),
+        toggleTitle: titleGap('#overlay-style'),
+        dropdownToNextTitle: rows[0].querySelector('label')!.getBoundingClientRect().top
+          - document.querySelector('#os-pref-lang')!.getBoundingClientRect().bottom,
+        inputToNextTitle: rows[1].querySelector('label')!.getBoundingClientRect().top
+          - document.querySelector('#subdl-key')!.getBoundingClientRect().bottom,
+      };
+    });
+
+    expect(gaps.dropdownTitle).toBe(gaps.toggleTitle);
+    expect(gaps.dropdownTitle).toBe(10);
+    expect(gaps.dropdownToNextTitle).toBe(gaps.inputToNextTitle);
+    expect(gaps.dropdownToNextTitle).toBe(12);
+  });
+
   test('clicking Cancel in settings (opened via the tab bar) returns to the channel list, not the player', async ({ page }) => {
     await routePlaylist(page);
     await seedPlaylist(page);

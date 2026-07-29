@@ -160,6 +160,7 @@ export const IT_MESSAGES = {
   'settings.epg': 'Guida TV (EPG)',
   'settings.xmltvUrl': 'URL XMLTV',
   'settings.appearance': 'Aspetto',
+  'settings.theme': 'Tema',
   'settings.overlayGlass': 'Stile dei controlli del player',
   'settings.overlayDark': 'Scuro',
   'settings.overlayFrosted': 'Satinato',

@@ -163,6 +163,7 @@ export const EN_MESSAGES = {
   'settings.epg': 'Program Guide (EPG)',
   'settings.xmltvUrl': 'XMLTV URL',
   'settings.appearance': 'Appearance',
+  'settings.theme': 'Theme',
   'settings.overlayGlass': 'Player overlay style',
   'settings.overlayDark': 'Dark',
   'settings.overlayFrosted': 'Frosted',

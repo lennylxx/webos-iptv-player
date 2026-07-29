@@ -166,6 +166,7 @@ export const UK_MESSAGES = {
   'settings.epg': 'Телепрограма (EPG)',
   'settings.xmltvUrl': 'URL XMLTV',
   'settings.appearance': 'Вигляд',
+  'settings.theme': 'Тема',
   'settings.overlayGlass': 'Стиль меню програвача',
   'settings.overlayDark': 'Темний',
   'settings.overlayFrosted': 'Матовий',

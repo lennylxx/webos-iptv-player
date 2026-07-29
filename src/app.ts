@@ -757,6 +757,7 @@ class App {
         return;
       }
       if (currentView === 'settings') {
+        if (this.settings.dismissDropdown()) return;
         this.tabBar.setActive('live');
         this.channelList.render();
         this.showView('channels');

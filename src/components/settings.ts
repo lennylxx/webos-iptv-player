@@ -197,6 +197,9 @@ function dropdown(id: string, options: { value: string; label: string }[], activ
   const current = options.find(o => o.value === active) ?? options[0];
   return html`
     <div class="dropdown" id="${id}" data-value="${active}">
+      <span class="dropdown-sizer" aria-hidden="true">
+        ${options.map(o => html`<span>${o.label}</span>`)}
+      </span>
       <button class="dropdown-trigger" data-focusable data-dropdown-trigger>
         <span class="dropdown-current">${current.label}</span>
         <span class="dropdown-caret"></span>
@@ -282,7 +285,12 @@ export class Settings {
     // (this local handler is the "OK" action).
     this.container.setAttribute('data-self-activate', '');
     this.container.addEventListener('click', (e: MouseEvent) => {
-      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-focusable]');
+      const target = e.target as HTMLElement;
+      const openDropdown = this.container.querySelector<HTMLElement>('.dropdown.open');
+      if (openDropdown && target.closest('.dropdown') !== openDropdown) {
+        this.closeDropdown(openDropdown);
+      }
+      const el = target.closest<HTMLElement>('[data-focusable]');
       if (!el) return;
       this.nav.focus(el);
       this.activate(el);
@@ -368,19 +376,17 @@ export class Settings {
         <div class="settings-main">
           <div class="settings-category" id="settings-general" data-settings-category="general">
             <div class="settings-section">
-              <h3>${languageHeading()}</h3>
-              <div class="settings-row">
-                <div class="settings-field">
-                  ${dropdown('app-language', languageOptions(), localePreference)}
-                </div>
+              <h3 class="settings-section-title">${languageHeading()}</h3>
+              <div class="settings-item">
+                ${dropdown('app-language', languageOptions(), localePreference)}
+                <div class="settings-item-hint">${t('settings.languageHint')}</div>
               </div>
-              <div class="empty-hint">${t('settings.languageHint')}</div>
             </div>
           </div>
 
           <div class="settings-category" id="settings-sources" data-settings-category="sources">
             <div class="settings-section">
-              <h3>${t('settings.xtreamAccount')}</h3>
+              <h3 class="settings-section-title">${t('settings.xtreamAccount')}</h3>
               <div class="xtream-entries" id="xtream-entries">
                 ${accounts.length
                   ? html`${accounts.map((pl) => xtreamCard(pl))}`
@@ -390,7 +396,7 @@ export class Settings {
             </div>
 
             <div class="settings-section">
-              <h3>${t('settings.playlists')}</h3>
+              <h3 class="settings-section-title">${t('settings.playlists')}</h3>
               <div class="playlist-entries" id="playlist-entries">
                 ${playlists.length
                   ? html`
@@ -420,7 +426,7 @@ export class Settings {
             </div>
 
             <div class="settings-section">
-              <h3>${t('settings.uploadPlaylist')}</h3>
+              <h3 class="settings-section-title">${t('settings.uploadPlaylist')}</h3>
               <div class="upload-section">
                 <div class="upload-box upload-box-info" id="upload-info">${t('settings.checkingUpload')}</div>
                 <div class="upload-box upload-box-list">
@@ -444,45 +450,46 @@ export class Settings {
 
           <div class="settings-category" id="settings-guide" data-settings-category="guide">
             <div class="settings-section">
-              <h3>${t('settings.epg')}</h3>
-              <div class="settings-row">
-                <div class="settings-field wide">
-                  <label>${t('settings.xmltvUrl')}</label>
-                  <input type="text" class="settings-input" data-focusable id="epg-url"
-                         value="${epgUrl}" placeholder="https://example.com/epg.xml">
-                </div>
+              <h3 class="settings-section-title">${t('settings.epg')}</h3>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.xmltvUrl')}</div>
+                <input type="text" class="settings-input" data-focusable id="epg-url"
+                       value="${epgUrl}" placeholder="https://example.com/epg.xml">
               </div>
-              <div class="settings-row settings-toggle-row">
-                <label>${t('settings.timeZone')}</label>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.timeZone')}</div>
                 ${toggleGroup('tz-mode', [{ value: 'device', label: t('settings.device') }, { value: 'feed', label: t('settings.feed') }], feedTime ? 'feed' : 'device')}
-              </div>
-              <div class="empty-hint">
-                ${tzOffset === null
-                  ? t('settings.timeZoneUnknown')
-                  : t('settings.timeZoneKnown', { offset: formatOffset(tzOffset) })}
+                <div class="settings-item-hint">
+                  ${tzOffset === null
+                    ? t('settings.timeZoneUnknown')
+                    : t('settings.timeZoneKnown', { offset: formatOffset(tzOffset) })}
+                </div>
               </div>
             </div>
           </div>
 
           <div class="settings-category" id="settings-appearance" data-settings-category="appearance">
             <div class="settings-section">
-              <h3>${t('settings.appearance')}</h3>
-              <div class="theme-swatch-grid">
-                ${THEMES.map(t => themeSwatch(t, theme))}
+              <h3 class="settings-section-title">${t('settings.appearance')}</h3>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.theme')}</div>
+                <div class="theme-swatch-grid">
+                  ${THEMES.map(t => themeSwatch(t, theme))}
+                </div>
               </div>
-              <div class="settings-row settings-toggle-row">
-                <label>${t('settings.overlayGlass')}</label>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.overlayGlass')}</div>
                 ${toggleGroup('overlay-style', overlayStyles, overlayStyle)}
+                <div class="settings-item-hint">${t('settings.overlayHint')}</div>
               </div>
-              <div class="empty-hint">${t('settings.overlayHint')}</div>
             </div>
           </div>
 
           <div class="settings-category" id="settings-playback" data-settings-category="playback">
             <div class="settings-section">
-              <h3>${t('settings.playback')}</h3>
-              <div class="settings-row settings-toggle-row">
-                <label>${t('settings.autoPlay')}</label>
+              <h3 class="settings-section-title">${t('settings.playback')}</h3>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.autoPlay')}</div>
                 ${toggleGroup('auto-play', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], autoPlay ? 'on' : 'off')}
               </div>
             </div>
@@ -490,12 +497,10 @@ export class Settings {
 
           <div class="settings-category" id="settings-subtitles" data-settings-category="subtitles">
             <div class="settings-section">
-              <h3>${t('settings.onlineSubtitles')}</h3>
-              <div class="settings-row">
-                <div class="settings-field">
-                  <label>${t('settings.preferredSubtitle')}</label>
-                  ${dropdown('os-pref-lang', subtitleLanguages(), os.preferredLanguage)}
-                </div>
+              <h3 class="settings-section-title">${t('settings.onlineSubtitles')}</h3>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.preferredSubtitle')}</div>
+                ${dropdown('os-pref-lang', subtitleLanguages(), os.preferredLanguage)}
               </div>
               <div class="settings-row">
                 <div class="settings-field wide">
@@ -533,33 +538,29 @@ export class Settings {
 
           <div class="settings-category" id="settings-data" data-settings-category="data">
             <div class="settings-section">
-              <h3>${t('settings.dataManagement')}</h3>
-              <div class="settings-row">
+              <h3 class="settings-section-title">${t('settings.dataManagement')}</h3>
+              <div class="settings-item settings-item--action">
+                <div class="settings-item-title">${t('channel.recentlyWatched')}</div>
+                <button class="btn btn-danger" data-focusable id="clear-recently-watched"
+                        aria-label="${t('settings.clearRecentlyWatched')}">${t('settings.clearRecentlyWatched')}</button>
+                <div class="settings-item-hint">
+                  ${t('settings.clearRecentDescription')}
+                </div>
+              </div>
+              ${this.watchlistAccount ? html`
+                <div class="settings-item settings-item--action">
+                  <div class="settings-item-title">${t('common.watchlist')}</div>
+                  <button class="btn btn-danger" data-focusable id="clear-watchlist"
+                          aria-label="${t('settings.clearWatchlist')}">${t('settings.clearWatchlist')}</button>
+                  <div class="settings-item-hint">
+                    ${t('settings.clearWatchlistDescription', { account: this.watchlistAccount.name })}
+                  </div>
+                </div>
+              ` : ''}
+              <div class="settings-maintenance">
                 <button class="btn btn-secondary" data-focusable id="refresh-data">${t('settings.refreshAll')}</button>
                 <button class="btn btn-danger" data-focusable id="clear-cache">${t('settings.clearCache')}</button>
               </div>
-              <div class="settings-history-action">
-                <div class="settings-history-copy">
-                  <div class="settings-history-title">${t('channel.recentlyWatched')}</div>
-                  <div class="settings-history-description">
-                    ${t('settings.clearRecentDescription')}
-                  </div>
-                </div>
-                <button class="btn btn-danger" data-focusable id="clear-recently-watched"
-                        aria-label="${t('settings.clearRecentlyWatched')}">${t('settings.clearRecentlyWatched')}</button>
-              </div>
-              ${this.watchlistAccount ? html`
-                <div class="settings-history-action">
-                  <div class="settings-history-copy">
-                    <div class="settings-history-title">${t('common.watchlist')}</div>
-                    <div class="settings-history-description">
-                      ${t('settings.clearWatchlistDescription', { account: this.watchlistAccount.name })}
-                    </div>
-                  </div>
-                  <button class="btn btn-danger" data-focusable id="clear-watchlist"
-                          aria-label="${t('settings.clearWatchlist')}">${t('settings.clearWatchlist')}</button>
-                </div>
-              ` : ''}
             </div>
           </div>
 
@@ -608,6 +609,8 @@ export class Settings {
           break;
         }
         {
+          const openDropdown = this.nav.focused?.closest<HTMLElement>('.dropdown.open');
+          if (openDropdown) this.closeDropdown(openDropdown);
           const peer = this.leftPeer(this.nav.focused);
           if (peer) this.nav.focus(peer);
           else this.focusActiveCategory();
@@ -838,12 +841,30 @@ export class Settings {
   private toggleDropdown(dd: HTMLElement | null): void {
     if (!dd) return;
     const open = !dd.classList.contains('open');
+    const current = this.container.querySelector<HTMLElement>('.dropdown.open');
+    if (current && current !== dd) this.closeDropdown(current);
+    if (!open) {
+      this.closeDropdown(dd);
+      return;
+    }
     dd.classList.toggle('open', open);
     dd.querySelectorAll('.dropdown-option').forEach(o => o.classList.toggle('hidden', !open));
-    if (open) {
-      const opt = dd.querySelector<HTMLElement>('.dropdown-option.active') ?? dd.querySelector<HTMLElement>('.dropdown-option');
-      if (opt) this.nav.focus(opt);
-    }
+    const opt = dd.querySelector<HTMLElement>('.dropdown-option.active') ?? dd.querySelector<HTMLElement>('.dropdown-option');
+    if (opt) this.nav.focus(opt);
+  }
+
+  private closeDropdown(dd: HTMLElement): void {
+    dd.classList.remove('open');
+    dd.querySelectorAll('.dropdown-option').forEach(o => o.classList.add('hidden'));
+    const trigger = dd.querySelector<HTMLElement>('.dropdown-trigger');
+    if (trigger) this.nav.focus(trigger);
+  }
+
+  dismissDropdown(): boolean {
+    const open = this.container.querySelector<HTMLElement>('.dropdown.open');
+    if (!open) return false;
+    this.closeDropdown(open);
+    return true;
   }
 
   // Commit a dropdown option: record it on the root's data-value, update the

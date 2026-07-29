@@ -144,6 +144,8 @@ describe('Settings.render', () => {
 
   it('groups language and time zone under General, with autoplay under Playback', () => {
     settings.render();
+    expect(container.querySelectorAll('.settings-section > .settings-section-title'))
+      .toHaveLength(container.querySelectorAll('.settings-section').length);
     expect(container.querySelector('#app-language')?.closest('[data-settings-category]')
       ?.getAttribute('data-settings-category')).toBe('general');
     expect(container.querySelector('#tz-mode')?.closest('[data-settings-category]')
@@ -234,6 +236,20 @@ describe('Settings theme picker', () => {
     state.overlayStyle = 'frosted';
     settings.render();
     expect(container.querySelector('#overlay-style .toggle-option.active')!.getAttribute('data-value')).toBe('frosted');
+  });
+
+  it('labels the theme swatches as a child setting', () => {
+    settings.render();
+    expect(container.querySelector('#settings-appearance .settings-item-title')?.textContent)
+      .toBe('Theme');
+  });
+
+  it('renders preferred subtitles as a child setting', () => {
+    settings.render();
+    const item = container.querySelector('#os-pref-lang')?.closest('.settings-item');
+    expect(item?.querySelector('.settings-item-title')?.textContent)
+      .toBe('Preferred subtitle language');
+    expect(item?.closest('.settings-row')).toBeNull();
   });
 
   it('persists the overlay style on Save & Apply', () => {
@@ -387,10 +403,23 @@ describe('Settings Recently Watched clearing', () => {
   beforeEach(() => settings.render());
 
   it('groups the scope explanation and clear action in one setting', () => {
-    const action = container.querySelector('.settings-history-action');
+    const action = container.querySelector('.settings-item--action');
     expect(action?.textContent).toContain('Recently Watched');
     expect(action?.textContent).toContain('Clear recent live channels and catch-up progress');
     expect(action?.querySelector('#clear-recently-watched')).not.toBeNull();
+    expect(Array.from(action?.children ?? []).map(child => child.className)).toEqual([
+      'settings-item-title',
+      'btn btn-danger',
+      'settings-item-hint',
+    ]);
+  });
+
+  it('places maintenance actions after history settings', () => {
+    const section = container.querySelector('#settings-data .settings-section')!;
+    const recent = section.querySelector('.settings-item--action')!;
+    const maintenance = section.querySelector('.settings-maintenance')!;
+    expect(recent.compareDocumentPosition(maintenance) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
   });
 
   describe('Settings Watchlist clearing', () => {
@@ -416,7 +445,7 @@ describe('Settings Recently Watched clearing', () => {
     });
 
     it('shows the selected account in the Watchlist clear setting', () => {
-      const action = container.querySelector('#clear-watchlist')?.closest('.settings-history-action');
+      const action = container.querySelector('#clear-watchlist')?.closest('.settings-item--action');
       expect(action?.textContent).toContain('Watchlist');
       expect(action?.textContent).toContain('Account Bravo');
     });
@@ -559,6 +588,39 @@ describe('Settings.save', () => {
 });
 
 describe('Settings.handleAction', () => {
+  it('dismisses an open dropdown and restores focus to its trigger', () => {
+    settings.render();
+    click('#app-language [data-dropdown-trigger]');
+    expect(container.querySelector('#app-language')?.classList.contains('open')).toBe(true);
+
+    expect(settings.dismissDropdown()).toBe(true);
+    expect(container.querySelector('#app-language')?.classList.contains('open')).toBe(false);
+    expect(container.querySelector('#app-language .dropdown-option:not(.hidden)')).toBeNull();
+    expect(container.querySelector('#app-language .dropdown-trigger')?.classList.contains('focused'))
+      .toBe(true);
+    expect(settings.dismissDropdown()).toBe(false);
+  });
+
+  it('closes an open dropdown when clicking elsewhere in Settings', () => {
+    settings.render();
+    click('#app-language [data-dropdown-trigger]');
+    click('.settings-title');
+    expect(container.querySelector('#app-language')?.classList.contains('open')).toBe(false);
+    expect(container.querySelector('#app-language .dropdown-option:not(.hidden)')).toBeNull();
+  });
+
+  it('closes an open dropdown before moving left to the category sidebar', () => {
+    settings.render();
+    click('#app-language [data-dropdown-trigger]');
+
+    settings.handleAction('left');
+
+    expect(container.querySelector('#app-language')?.classList.contains('open')).toBe(false);
+    expect(container.querySelector('[data-settings-target="general"]')
+      ?.classList.contains('focused')).toBe(true);
+    expect(settings.dismissDropdown()).toBe(false);
+  });
+
   it('select activates the focused control (remote OK)', () => {
     state.playlists = [{ name: 'P1', url: 'http://a' }];
     settings.render();
@@ -885,7 +947,7 @@ describe('Settings Xtream section', () => {
 
   it('renders Language first and keeps Xtream Accounts above Playlists', () => {
     settings.render();
-    const heads = Array.from(container.querySelectorAll('.settings-section h3'))
+    const heads = Array.from(container.querySelectorAll('.settings-section-title'))
       .map((h) => h.textContent);
     expect(heads[0]).toBe('Language');
     expect(heads.indexOf('Xtream Accounts')).toBeLessThan(heads.indexOf('Playlists'));
