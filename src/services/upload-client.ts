@@ -10,7 +10,7 @@ const log = createLogger('Upload');
 const TIMEOUT = 4000;
 
 // The upload service binds to an OS-assigned port at startup and reports it
-// back via the Luna `start` response (see app.ts → startUploadService). Until
+// back via the Luna `start` response (see app.ts → startBundledService). Until
 // setServicePort() has been called with that value, base() returns null and
 // every method here no-ops as if the service were unreachable. This matches
 // dev / e2e environments where Luna is unavailable and no service runs.
@@ -134,9 +134,9 @@ class UploadClientImpl {
     const manual = existing.filter((p) => p.source !== 'upload');
     const prevUpload = existing.filter((p) => p.source === 'upload');
     const uploadEntries: PlaylistEntry[] = uploads.map((u) => ({
-      // Keep the same id across reconciles (match by URL) so the upload's tab and
-      // channel membership stay stable; mint one for a newly-seen upload.
-      id: prevUpload.find((p) => p.url === u.url)?.id ?? genPlaylistId(),
+      // The HTTP port can change after a service restart, so preserve identity
+      // by the stable upload path id rather than the full serve URL.
+      id: prevUpload.find((p) => uploadIdFromUrl(p.url) === u.id)?.id ?? genPlaylistId(),
       name: u.name,
       url: u.url,
       source: 'upload',

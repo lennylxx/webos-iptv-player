@@ -142,6 +142,24 @@ describe('UploadClient.reconcile', () => {
     expect(storageMock.remove).not.toHaveBeenCalled();
   });
 
+  it('preserves the playlist id when the service port changes', async () => {
+    storageMock.playlists = [
+      { id: 'stable', name: 'P1', url: 'http://127.0.0.1:8890/uploads/p1.m3u',
+        source: 'upload', count: 5 },
+    ];
+    fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse([
+      { id: 'p1', name: 'P1', count: 5, createdAt: 1,
+        url: 'http://127.0.0.1:8891/uploads/p1.m3u' },
+    ]));
+
+    await UploadClient.reconcile();
+
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      { id: 'stable', name: 'P1', url: 'http://127.0.0.1:8891/uploads/p1.m3u',
+        source: 'upload', count: 5 },
+    ]);
+  });
+
   it('rewrites storage when only the channel count changed (re-upload of same name)', async () => {
     storageMock.playlists = [
       { name: 'P1', url: 'http://127.0.0.1:8890/uploads/p1.m3u', source: 'upload', count: 5 },

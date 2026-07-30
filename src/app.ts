@@ -4,7 +4,7 @@ import { KeyHandler } from './navigation/key-handler';
 import { PlaylistService } from './services/playlist-service';
 import { EpgService } from './services/epg-service';
 import { StorageService } from './services/storage-service';
-import { UploadClient, setServicePort } from './services/upload-client';
+import { setServicePort } from './services/upload-client';
 import { ChannelList } from './components/channel-list';
 import { Player } from './components/player';
 import { EpgGrid } from './components/epg-grid';
@@ -48,6 +48,9 @@ class App {
   private movies!: Movies;
   private series!: Series;
   private lastSearchQuery = '';
+  private enterChannelsAfterUploadSync = false;
+  private remindersInitialized = false;
+  private bundledServiceStarting = false;
 
   async init(): Promise<void> {
     const done = log.time('init');
@@ -157,15 +160,19 @@ class App {
     this.initSidebarTrigger();
 
     done();
-    await this.startUploadService();
-    this.subscribeToUploadEvents();
-    this.bindUploadServiceLifecycle();
+    this.enterChannelsAfterUploadSync = StorageService.getPlaylists().length === 0;
+    const bundledServiceReady = this.startBundledService();
+    this.bindBundledServiceLifecycle();
     this.bindReminderLifecycle();
-    await this.queryDevMode();
+    // Register a retail-safe callback immediately. If Developer Mode is
+    // detected below, the same named activities are replaced with alerts.
     ReminderService.reschedulePending();
     await this.loadData();
     // Cold launch from a "Watch now" alert: channels are loaded now, so tune.
     this.handleLaunchParams(this.coldLaunchParams());
+    void bundledServiceReady
+      .then((started) => started ? this.finishBundledServiceInit() : undefined)
+      .catch(err => log.error('Bundled service initialization failed:', err));
   }
 
   /**
@@ -178,20 +185,23 @@ class App {
    * visibilitychange is reliable on this firmware (verified empirically; the
    * Player module's suspend/resume listens to the same event).
    */
-  private bindUploadServiceLifecycle(): void {
+  private bindBundledServiceLifecycle(): void {
+    let lastVisibility = document.visibilityState;
     document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === lastVisibility) return;
+      lastVisibility = document.visibilityState;
       if (document.visibilityState === 'hidden') {
         log.info('App backgrounded — stopping bundled service');
-        this.stopUploadService();
+        this.stopBundledService();
       } else if (document.visibilityState === 'visible') {
+        if (this.bundledServiceStarting) {
+          log.info('App foregrounded while bundled service start is pending');
+          return;
+        }
         log.info('App foregrounded — restarting bundled service');
-        void (async () => {
-          await this.startUploadService();
-          this.subscribeToUploadEvents();
-          // Settings may be the visible view; refresh the QR + upload list
-          // so they reflect the new port and current upload set.
-          void this.settings.refreshUploads();
-        })();
+        void this.startBundledService()
+          .then((started) => started ? this.finishBundledServiceInit() : undefined)
+          .catch(err => log.error('Bundled service restart failed:', err));
       }
     });
   }
@@ -202,7 +212,7 @@ class App {
    * and lets the Node process exit so neither the port nor the process
    * persists in the background.
    */
-  private stopUploadService(): void {
+  private stopBundledService(): void {
     type LunaService = { request: (uri: string, opts: unknown) => void };
     const w = window as unknown as { webOS?: { service?: LunaService } };
     const request = w.webOS?.service?.request;
@@ -215,7 +225,7 @@ class App {
         onFailure: (err: unknown) => log.warn('Bundled service stop onFailure:', JSON.stringify(err)),
       });
     } catch (e) {
-      log.warn('stopUploadService threw:', e);
+      log.warn('stopBundledService threw:', e);
     }
     // Forget the runtime port — next start will set it again via setServicePort.
     setServicePort(null);
@@ -229,24 +239,28 @@ class App {
    * We log onSuccess/onFailure explicitly so device logs (ares-inspect or
    * ares-monitor-log) show what happened, instead of guessing from silence.
    */
-  private async startUploadService(): Promise<void> {
+  private async startBundledService(): Promise<boolean> {
+    if (this.bundledServiceStarting) return false;
+    this.bundledServiceStarting = true;
     type LunaService = { request: (uri: string, opts: unknown) => void };
     const w = window as unknown as { webOS?: { service?: LunaService } };
     const request = w.webOS?.service?.request;
     if (!request) {
+      this.bundledServiceStarting = false;
       log.debug('webOS Luna service bus not available — skipping bundled service start');
-      return;
+      return false;
     }
     log.info('Calling luna://' + CONFIG.SERVICE_ID + '/start ...');
-    await new Promise<void>((resolve) => {
+    return new Promise<boolean>((resolve) => {
       let settled = false;
-      const finish = (why: string): void => {
+      const finish = (started: boolean, why: string): void => {
         if (settled) return;
         settled = true;
-        log.info('startUploadService settled:', why);
-        resolve();
+        this.bundledServiceStarting = false;
+        log.info('startBundledService settled:', why);
+        resolve(started);
       };
-      const timer = setTimeout(() => finish('timeout after 3s'), 3000);
+      const timer = setTimeout(() => finish(false, 'timeout after 3s'), 3000);
       // NOTE: no trailing '/' on the URI — the shim appends '/' + method,
       // so a trailing slash here produces 'luna://.../service//start' (double
       // slash) which Luna treats as a missing method and returns onFailure.
@@ -256,25 +270,56 @@ class App {
           parameters: {},
           onSuccess: (resp: unknown) => {
             clearTimeout(timer);
+            const lateSuccess = settled;
+            if (document.visibilityState === 'hidden') {
+              log.info('Bundled service started after app was hidden — stopping it');
+              this.stopBundledService();
+              finish(false, 'stopped after app hidden');
+              return;
+            }
             if (resp && typeof resp === 'object' && 'port' in resp) {
               const p = (resp as { port?: unknown }).port;
               if (typeof p === 'number') setServicePort(p);
             }
             log.info('Bundled service start onSuccess:', JSON.stringify(resp));
-            finish('onSuccess');
+            finish(true, 'onSuccess');
+            if (lateSuccess) {
+              void this.finishBundledServiceInit()
+                .catch(err => log.error('Late bundled service initialization failed:', err));
+            }
           },
           onFailure: (err: unknown) => {
             clearTimeout(timer);
             log.error('Bundled service start onFailure:', JSON.stringify(err));
-            finish('onFailure');
+            finish(false, 'onFailure');
           },
         });
       } catch (e) {
         clearTimeout(timer);
         log.error('Bundled service start threw:', e);
-        finish('threw');
+        finish(false, 'threw');
       }
     });
+  }
+
+  private async finishBundledServiceInit(): Promise<void> {
+    if (document.visibilityState === 'hidden') return;
+    this.subscribeToUploadEvents();
+    if (!this.remindersInitialized) {
+      const initialized = await this.queryDevMode();
+      ReminderService.reschedulePending();
+      this.remindersInitialized = initialized;
+    }
+    await this.settings.refreshUploads();
+    await this.loadChannelsAfterFirstUpload();
+  }
+
+  private async loadChannelsAfterFirstUpload(): Promise<void> {
+    if (this.enterChannelsAfterUploadSync &&
+        StorageService.getPlaylists().length > 0) {
+      this.enterChannelsAfterUploadSync = false;
+      await this.loadData();
+    }
   }
 
   /**
@@ -283,39 +328,54 @@ class App {
    * prompt. Guarded: with no Luna bus (desktop/e2e) dev-mode stays false and we
    * keep the retail in-app path.
    */
-  private async queryDevMode(): Promise<void> {
+  private async queryDevMode(): Promise<boolean> {
     type LunaService = { request: (uri: string, opts: unknown) => void };
     const w = window as unknown as { webOS?: { service?: LunaService } };
     const request = w.webOS?.service?.request;
+    ReminderService.setDevMode(false);
     if (!request) {
       log.debug('Luna unavailable — dev-mode alert disabled, using in-app prompt');
-      return;
+      return false;
     }
-    await new Promise<void>((resolve) => {
+    return new Promise<boolean>((resolve) => {
       let settled = false;
-      const finish = (): void => { if (!settled) { settled = true; resolve(); } };
-      const timer = setTimeout(finish, 3000);
+      const finish = (initialized: boolean): void => {
+        if (!settled) {
+          settled = true;
+          resolve(initialized);
+        }
+      };
+      const timer = setTimeout(() => finish(false), 3000);
       try {
         request(`luna://${CONFIG.SERVICE_ID}`, {
           method: 'getDevMode',
           parameters: {},
           onSuccess: (resp: unknown) => {
             clearTimeout(timer);
+            const lateSuccess = settled;
+            if (document.visibilityState === 'hidden') {
+              finish(false);
+              return;
+            }
             const dev = !!(resp && typeof resp === 'object' && (resp as { devmode?: unknown }).devmode);
             ReminderService.setDevMode(dev);
             log.info('getDevMode:', dev);
-            finish();
+            finish(true);
+            if (lateSuccess) {
+              this.remindersInitialized = true;
+              ReminderService.reschedulePending();
+            }
           },
           onFailure: (err: unknown) => {
             clearTimeout(timer);
             log.warn('getDevMode onFailure:', JSON.stringify(err));
-            finish();
+            finish(false);
           },
         });
       } catch (e) {
         clearTimeout(timer);
         log.warn('getDevMode threw:', e);
-        finish();
+        finish(false);
       }
     });
   }
@@ -347,10 +407,11 @@ class App {
         parameters: {},
         onSuccess: (resp: unknown) => {
           log.info('uploadEvents push:', JSON.stringify(resp));
-          // First response confirms the subscription (`{subscribed:true}`);
-          // subsequent responses are change notifications. Either way, a
-          // refresh is cheap and correct.
-          void this.settings.refreshUploads();
+          if (resp && typeof resp === 'object' &&
+              (resp as { subscribed?: unknown }).subscribed === true) return;
+          void this.settings.refreshUploads()
+            .then(() => this.loadChannelsAfterFirstUpload())
+            .catch(err => log.error('Upload event refresh failed:', err));
         },
         onFailure: (err: unknown) => {
           log.warn('uploadEvents subscription failed:', JSON.stringify(err));
@@ -390,10 +451,6 @@ class App {
     this.epgGrid.resetDay(); // re-pick today; a tz change invalidates the remembered day index
 
     try {
-      // Pull in uploaded playlists from the local bundled service before we
-      // read the configured playlist list. Reconcile is a no-op if the
-      // service is unreachable, so this never blocks data load on device.
-      await UploadClient.reconcile();
       const playlists = StorageService.getPlaylists();
       log.info('Configured playlists:', playlists.length);
       if (!playlists.length) {
@@ -458,7 +515,7 @@ class App {
             this.search.refreshPrograms();
           })
           .catch(err => log.error('EPG refresh failed:', err)),
-          CONFIG.EPG_REFRESH_INTERVAL);
+        CONFIG.EPG_REFRESH_INTERVAL);
       }
     } catch (err) {
       log.error('loadData failed:', err);

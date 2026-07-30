@@ -148,6 +148,31 @@ describe('ReminderService scheduling', () => {
     expect((opts as { parameters: { activity: { name: string } } }).parameters.activity.name)
       .toBe(`iptvReminder-${keyA}-5000`);
   });
+
+  it('replaces a retail fallback with a dev-mode alert', () => {
+    const request = mockLuna();
+    const future = rem({ startMs: 5000, stopMs: 6000 });
+    ReminderService.add(future);
+    request.mockClear();
+
+    ReminderService.reschedulePending(3000);
+    ReminderService.setDevMode(true);
+    ReminderService.reschedulePending(3000);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    const first = request.mock.calls[0][1] as {
+      parameters: { activity: { name: string; callback: { method: string } }; replace: boolean };
+    };
+    const second = request.mock.calls[1][1] as typeof first;
+    expect(first.parameters.activity.name).toBe(second.parameters.activity.name);
+    expect(first.parameters.replace).toBe(true);
+    expect(second.parameters.replace).toBe(true);
+    expect(first.parameters.activity.callback.method)
+      .toBe('luna://com.webos.notification/createToast');
+    expect(second.parameters.activity.callback.method)
+      .toBe(`luna://${CONFIG.SERVICE_ID}/fireReminderAlert`);
+    ReminderService.setDevMode(false);
+  });
 });
 
 describe('ReminderService launch params', () => {
