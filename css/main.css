@@ -15,6 +15,10 @@
   --success: #2ed573;
   --warning: #ffa502;
   --warning-rgb: 255 165 2;
+  --remote-key-red: #e74c3c;
+  --remote-key-green: #2ecc71;
+  --remote-key-yellow: #f1c40f;
+  --remote-key-blue: #3498db;
   --border: #2a2a3e;
   --catalog-surface: #14161c;
   --catalog-control: #23262f;

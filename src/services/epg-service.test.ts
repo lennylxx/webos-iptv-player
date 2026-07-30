@@ -89,6 +89,15 @@ describe('EpgService multi-source matching', () => {
     expect(EpgService.getNowPlaying(id!)?.title).toBe('Matched');
   });
 
+  it('matches a locally renamed channel through its source name', async () => {
+    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.6', 'Alpha', 'Matched'));
+    await EpgService.load([source('http://a', ['a'])]);
+
+    const id = EpgService.findChannelId(
+      channel({ id: 'missing', name: 'My Alpha', sourceName: 'Alpha', playlistIds: ['a'] }));
+    expect(EpgService.getNowPlaying(id!)?.title).toBe('Matched');
+  });
+
   it('does not match a channel against an unrelated playlist feed', async () => {
     vi.mocked(parseXMLTV).mockReturnValue(parsed('same', 'Alpha', 'Wrong source'));
     await EpgService.load([source('http://a', ['a'])]);

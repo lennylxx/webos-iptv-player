@@ -77,12 +77,15 @@ class EpgServiceImpl {
     }
 
     const name = channel.name.toLowerCase();
-    if (!name) return null;
+    const sourceName = (channel.sourceName ?? '').toLowerCase();
+    if (!name && !sourceName) return null;
     for (const source of candidates) {
       const state = this.states.get(source.url);
       if (!state) continue;
       for (const id in state.data.channels) {
-        if (state.data.channels[id].name.toLowerCase() !== name) continue;
+        const epgName = state.data.channels[id].name.toLowerCase();
+        // A renamed channel keeps matching through its source name.
+        if (epgName !== name && epgName !== sourceName) continue;
         const key = this.channelKey(source.url, id);
         if (this.programmes[key]?.length) return key;
       }

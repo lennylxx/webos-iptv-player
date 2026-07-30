@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const { playlistMock, subtitleSearchServiceMock } = vi.hoisted(() => {
   let mockIsAvailable = false;
   return {
-    playlistMock: { channels: [] as unknown[], getByIndex: vi.fn() },
+    playlistMock: { channels: [] as unknown[], getByIndex: vi.fn(), indexOf: vi.fn() },
     subtitleSearchServiceMock: {
       isAvailable: () => mockIsAvailable,
       preferredLanguage: () => '',
@@ -21,7 +21,8 @@ vi.mock('../services/epg-service', () => ({
 }));
 vi.mock('../services/storage-service', () => ({
   StorageService: {
-    setLastChannel: vi.fn(), getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
+    setLastChannel: vi.fn(), setLastChannelKey: vi.fn(), setLastChannelStreamKey: vi.fn(),
+    getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
     getAudioPref: vi.fn(), setAudioPref: vi.fn(),
     getStreamMime: vi.fn(() => null), setStreamMime: vi.fn(),
     setResume: vi.fn(), clearResume: vi.fn(),
@@ -154,6 +155,7 @@ beforeEach(() => {
   container.appendChild(osd);
   document.body.appendChild(container);
   playlistMock.getByIndex.mockReturnValue(CHANNEL);
+  playlistMock.indexOf.mockReturnValue(0);
   vi.mocked(probeMedia).mockResolvedValue(null);
   allowAutoRevealOsd = true;
   player = new Player(container, vi.fn(), undefined, () => allowAutoRevealOsd);
@@ -402,6 +404,20 @@ describe('Player live playback', () => {
     player.play(0); // live, no catch-up
     expect(player.canSeek()).toBe(false);
     expect(container.querySelector('[data-seekbar]')).toBeNull();
+  });
+
+  it('clears the visible index when the playing channel is hidden', () => {
+    const onPlaybackChanged = vi.fn();
+    player = new Player(container, vi.fn(), onPlaybackChanged);
+    player.init(video);
+    player.play(0);
+    playlistMock.indexOf.mockReturnValue(-1);
+
+    player.syncCurrentIndex();
+
+    expect(player.getCurrentIndex()).toBe(-1);
+    expect(player.getCurrentChannel()).toBe(CHANNEL);
+    expect(onPlaybackChanged).toHaveBeenLastCalledWith(-1, null);
   });
 
   it('aborts the previous manifest probe when a new one starts', async () => {

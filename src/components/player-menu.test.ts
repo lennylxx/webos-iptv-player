@@ -27,7 +27,7 @@ const MENU_ACTIONS = 4;
 
 let container: HTMLElement;
 let el: HTMLElement;
-let getCurrentIndex: ReturnType<typeof vi.fn>;
+let getCurrentChannel: ReturnType<typeof vi.fn>;
 let onAction: ReturnType<typeof vi.fn>;
 let getAudioTracks: ReturnType<typeof vi.fn>;
 let selectAudioTrack: ReturnType<typeof vi.fn>;
@@ -48,7 +48,7 @@ beforeEach(() => {
   container.appendChild(el);
   document.body.appendChild(container);
 
-  getCurrentIndex = vi.fn(() => 0);
+  getCurrentChannel = vi.fn(() => channels[0] ?? null);
   onAction = vi.fn();
   audioTracks = [];
   getAudioTracks = vi.fn(() => audioTracks);
@@ -59,7 +59,7 @@ beforeEach(() => {
   getSubtitleOffsetState = vi.fn(() => ({ available: false, label: '0.00 s' }));
   openSubtitleOffset = vi.fn();
   menu = new PlayerMenu(
-    container, getCurrentIndex, onAction,
+    container, getCurrentChannel, onAction,
     getAudioTracks, selectAudioTrack,
     getSubtitleTracks, selectSubtitleTrack,
     getSubtitleOffsetState, openSubtitleOffset,
@@ -379,7 +379,7 @@ describe('PlayerMenu', () => {
   });
 
   describe('VOD mode (no channel)', () => {
-    beforeEach(() => getCurrentIndex.mockReturnValue(-1));
+    beforeEach(() => getCurrentChannel.mockReturnValue(null));
 
     it('keeps only the Info and Settings color rows, dropping Program Guide / Toggle Favorite', () => {
       audioTracks = [

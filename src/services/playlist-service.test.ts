@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { Channel } from '../types';
+import type { Channel, ChannelCustomization } from '../types';
 
 const { storageMock, fetchTextMock } = vi.hoisted(() => ({
   storageMock: {
@@ -8,6 +8,10 @@ const { storageMock, fetchTextMock } = vi.hoisted(() => ({
     setCachedPlaylist: vi.fn(),
     getFavorites: vi.fn(() => [] as string[]),
     migrateFavoriteKeys: vi.fn(),
+    getShowHiddenChannels: vi.fn(() => false),
+    getChannelCustomization: vi.fn(() => null),
+    setChannelCustomization: vi.fn(),
+    clearChannelCustomization: vi.fn(),
   },
   fetchTextMock: vi.fn(),
 }));
@@ -16,7 +20,9 @@ vi.mock('./storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../utils/fetch-helper', () => ({ fetchText: fetchTextMock }));
 
 import { PlaylistService } from './playlist-service';
-import { channelKey } from '../utils/channel';
+import { channelCustomizationKey, channelKey, channelStreamKey } from '../utils/channel';
+import { ChannelCustomizationService } from './channel-customization';
+import { CONFIG } from '../config';
 
 function channel(over: Partial<Channel>): Channel {
   return {
@@ -40,6 +46,7 @@ http://stream/u3`;
 beforeEach(() => {
   vi.clearAllMocks();
   storageMock.getFavorites.mockReturnValue([]);
+  PlaylistService.allChannels = [];
   PlaylistService.channels = [];
   PlaylistService.groups = [];
   PlaylistService.playlistTabs = [];
@@ -175,6 +182,7 @@ describe('PlaylistService.refresh', () => {
     );
     const channels = await PlaylistService.refresh();
     expect(channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
+    expect(storageMock.setCachedPlaylist).not.toHaveBeenCalled();
   });
 });
 
@@ -287,7 +295,8 @@ describe('PlaylistService.load', () => {
     const epgSources = [{ url: 'http://e', playlistIds: ['P1'], kind: 'm3u' }];
     storageMock.getCachedPlaylist.mockReturnValue({ channels: cached, epgSources });
     const result = await PlaylistService.load();
-    expect(result).toBe(cached);
+    expect(result).toEqual(cached);
+    expect(PlaylistService.allChannels).toBe(cached);
     expect(PlaylistService.groups).toEqual(['News']);
     expect(PlaylistService.epgSources).toEqual(epgSources);
     expect(fetchTextMock).not.toHaveBeenCalled();
@@ -464,5 +473,175 @@ describe('PlaylistService.search', () => {
 
   it('scopes to a single playlist when given', () => {
     expect(PlaylistService.search('alpha', 'b').map(c => c.name)).toEqual(['Alpha HD']);
+  });
+});
+
+describe('PlaylistService customization', () => {
+  const KEY_A = channelCustomizationKey({ url: 'http://stream/u1' } as Channel);
+  const KEY_B = channelCustomizationKey({ url: 'http://stream/u2' } as Channel);
+
+  function record(over: Partial<ChannelCustomization> = {}): ChannelCustomization {
+    return {
+      version: CONFIG.CHANNEL_CUSTOMIZATION_VERSION,
+      overrides: {}, order: [], groupOrder: [], groupOverrides: {}, customGroups: [], ...over,
+    };
+  }
+
+  function useRecord(data: ChannelCustomization | null): void {
+    storageMock.getChannelCustomization.mockReturnValue(data);
+    ChannelCustomizationService.reload();
+  }
+
+  beforeEach(() => {
+    storageMock.getPlaylists.mockReturnValue([{ id: 'a', name: 'P1', url: 'http://host1/p1.m3u' }]);
+    fetchTextMock.mockResolvedValue(P1);
+    useRecord(null);
+  });
+
+  it('keeps the raw parse on allChannels and the customized view on channels', async () => {
+    useRecord(record({ overrides: { [KEY_B]: { hidden: true } }, order: [KEY_B, KEY_A] }));
+    await PlaylistService.refresh();
+
+    expect(PlaylistService.allChannels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha']);
+    // The raw parse is cached, so an edit never forces a re-fetch.
+    expect(storageMock.setCachedPlaylist).toHaveBeenCalledWith(
+      PlaylistService.allChannels, PlaylistService.epgSources);
+  });
+
+  it('re-derives indices after an edit so index-based consumers follow', async () => {
+    await PlaylistService.refresh();
+    expect(PlaylistService.indexOf(PlaylistService.channels[0])).toBe(0);
+
+    useRecord(record({ order: [KEY_B, KEY_A] }));
+    PlaylistService.applyCustomization();
+
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo', 'Alpha']);
+    expect(PlaylistService.indexOfCustomizationKey(KEY_A)).toBe(1);
+    expect(PlaylistService.indexOfCustomizationKey(KEY_B)).toBe(0);
+    expect(PlaylistService.indexOfCustomizationKey('missing')).toBe(-1);
+    expect(PlaylistService.getByIndex(0)?.name).toBe('Bravo');
+  });
+
+  it('prefers the precise stream key and uses the legacy index only without keys', async () => {
+    await PlaylistService.refresh();
+    const savedKey = channelKey(PlaylistService.channels[1]);
+    const streamKey = channelCustomizationKey(PlaylistService.channels[1]);
+
+    expect(PlaylistService.resolveLastChannelIndex(streamKey, savedKey, 0)).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex('missing', savedKey, 0)).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex('', 'missing', 0)).toBe(-1);
+    expect(PlaylistService.resolveLastChannelIndex('', '', 1)).toBe(1);
+  });
+
+  it('resolves query-distinguished streams precisely for autoplay', () => {
+    PlaylistService.channels = [
+      channel({ url: 'http://host/stream?id=1' }),
+      channel({ url: 'http://host/stream?id=2' }),
+    ];
+
+    const second = channelCustomizationKey(PlaylistService.channels[1]);
+    expect(PlaylistService.resolveLastChannelIndex(second, channelKey(PlaylistService.channels[1]), 0))
+      .toBe(1);
+  });
+
+  it('uses a stable query identity after a stream token rotates', () => {
+    PlaylistService.channels = [
+      channel({ url: 'http://host/stream?id=1&token=B' }),
+      channel({ url: 'http://host/stream?id=2&token=B' }),
+    ];
+    const old = channel({ url: 'http://host/stream?id=2&token=A' });
+
+    expect(PlaylistService.resolveLastChannelIndex(
+      channelStreamKey(old),
+      channelKey(old),
+      0,
+    )).toBe(1);
+  });
+
+  it('does not use an ambiguous legacy autoplay key', () => {
+    PlaylistService.channels = [
+      channel({ url: 'http://host/stream?id=1' }),
+      channel({ url: 'http://host/stream?id=2' }),
+    ];
+
+    expect(PlaylistService.resolveLastChannelIndex(
+      '',
+      channelKey(PlaylistService.channels[1]),
+      0,
+    )).toBe(-1);
+  });
+
+  it('keeps empty custom groups in global navigation only', async () => {
+    useRecord(record({ customGroups: ['Empty'] }));
+    await PlaylistService.refresh();
+
+    expect(PlaylistService.groups).toContain('Empty');
+    expect(PlaylistService.getGroupsForPlaylist()).toContain('Empty');
+    expect(PlaylistService.getGroupsForPlaylist('a')).not.toContain('Empty');
+  });
+
+  it('reveals hidden channels while edit mode asks for them', async () => {
+    useRecord(record({ overrides: { [KEY_B]: { hidden: true } } }));
+    await PlaylistService.refresh();
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha']);
+
+    PlaylistService.setIncludeHidden(true);
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    PlaylistService.setIncludeHidden(false);
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha']);
+  });
+
+  it('reveals hidden channels when the show-hidden setting is on', async () => {
+    useRecord(record({ overrides: { [KEY_B]: { hidden: true } } }));
+    storageMock.getShowHiddenChannels.mockReturnValue(true);
+    try {
+      await PlaylistService.refresh();
+      expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    } finally {
+      storageMock.getShowHiddenChannels.mockReturnValue(false);
+    }
+  });
+
+  it('applies renames and group assignments and orders the groups', async () => {
+    useRecord(record({
+      overrides: { [KEY_A]: { name: 'Alpha Two', group: 'Custom' } },
+      groupOrder: ['Uncategorized', 'Custom'],
+      customGroups: ['Custom'],
+    }));
+    await PlaylistService.refresh();
+
+    const alpha = PlaylistService.channels[0];
+    expect(alpha.name).toBe('Alpha Two');
+    expect(alpha.sourceName).toBe('Alpha');
+    expect(alpha.group).toBe('Custom');
+    expect(alpha.sourceGroup).toBe('News');
+    expect(PlaylistService.groups).toEqual(['Uncategorized', 'Custom']);
+    expect(PlaylistService.getGroupsForPlaylist('a')).toEqual(['Uncategorized', 'Custom']);
+  });
+
+  it('applies customization to a cached playlist without a fetch', async () => {
+    const cached = [
+      channel({ name: 'Alpha', url: 'http://stream/u1', group: 'News', playlistIds: ['a'] }),
+      channel({ name: 'Bravo', url: 'http://stream/u2', group: 'News', playlistIds: ['a'] }),
+    ];
+    storageMock.getCachedPlaylist.mockReturnValue({ channels: cached, epgSources: [] });
+    useRecord(record({ order: [KEY_B, KEY_A] }));
+
+    const result = await PlaylistService.load();
+    expect(result.map(c => c.name)).toEqual(['Bravo', 'Alpha']);
+    expect(fetchTextMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps channels added by a later refresh behind the arranged block', async () => {
+    useRecord(record({ order: [KEY_B, KEY_A] }));
+    await PlaylistService.refresh();
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo', 'Alpha']);
+
+    fetchTextMock.mockResolvedValue(`${P1}
+#EXTINF:-1 tvg-id="d",Delta
+http://stream/u4`);
+    await PlaylistService.refresh();
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo', 'Alpha', 'Delta']);
   });
 });

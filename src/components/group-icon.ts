@@ -10,8 +10,8 @@
 // (non-Latin); adding a language is a one-line edit to GROUP_ICON_RULES below.
 //
 // Icons are Twemoji artwork (https://github.com/jdecked/twemoji), licensed
-// under CC-BY 4.0 (https://creativecommons.org/licenses/by/4.0/); each is a
-// file in assets/group-icons/<name>.svg.
+// under CC-BY 4.0 (https://creativecommons.org/licenses/by/4.0/); assets live
+// in assets/group-icons/ and assets/icons/.
 
 const GROUP_ICON_DIR = 'assets/group-icons';
 

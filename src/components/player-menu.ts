@@ -1,5 +1,4 @@
-import type { Action, AudioTrackOption, SubtitleTrackOption } from '../types';
-import { PlaylistService } from '../services/playlist-service';
+import type { Action, AudioTrackOption, Channel, SubtitleTrackOption } from '../types';
 import { $, html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SUBTITLE_ICON } from './icons';
@@ -38,7 +37,7 @@ const OPEN_OFFSET = '__subs_offset__';
  */
 export class PlayerMenu {
   private el: HTMLElement | null;
-  private getCurrentIndex: () => number;
+  private getCurrentChannel: () => Channel | null;
   private onAction: (action: Action) => void;
   private getAudioTracks: () => AudioTrackOption[];
   private selectAudioTrack: (index: number) => void;
@@ -53,7 +52,7 @@ export class PlayerMenu {
 
   constructor(
     container: HTMLElement,
-    getCurrentIndex: () => number,
+    getCurrentChannel: () => Channel | null,
     onAction: (action: Action) => void,
     getAudioTracks: () => AudioTrackOption[],
     selectAudioTrack: (index: number) => void,
@@ -62,7 +61,7 @@ export class PlayerMenu {
     getSubtitleOffsetState: () => { available: boolean; label: string },
     openSubtitleOffset: () => void,
   ) {
-    this.getCurrentIndex = getCurrentIndex;
+    this.getCurrentChannel = getCurrentChannel;
     this.onAction = onAction;
     this.getAudioTracks = getAudioTracks;
     this.selectAudioTrack = selectAudioTrack;
@@ -233,10 +232,9 @@ export class PlayerMenu {
     const el = this.el;
     if (!el) return;
 
-    const ch = PlaylistService.getByIndex(this.getCurrentIndex());
+    const ch = this.getCurrentChannel();
     const chName = ch?.name || '';
-    // VOD (no channel, index < 0) swaps in its own action set for the channel one.
-    const rows = this.getCurrentIndex() < 0 ? VOD_MENU_ITEMS : MENU_ITEMS;
+    const rows = ch ? MENU_ITEMS : VOD_MENU_ITEMS;
     const tracks = this.getAudioTracks();
     const activeTrack = tracks.find(t => t.active);
     const subtitles = this.getSubtitleTracks();

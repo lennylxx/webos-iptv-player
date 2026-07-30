@@ -880,10 +880,10 @@
   flex-shrink: 0;
 }
 
-.menu-dot.red { background: #e74c3c; }
-.menu-dot.green { background: #2ecc71; }
-.menu-dot.yellow { background: #f1c40f; }
-.menu-dot.blue { background: #3498db; }
+.menu-dot.red { background: var(--remote-key-red); }
+.menu-dot.green { background: var(--remote-key-green); }
+.menu-dot.yellow { background: var(--remote-key-yellow); }
+.menu-dot.blue { background: var(--remote-key-blue); }
 
 /* Glyph in the colour-dot slot */
 .menu-icon {

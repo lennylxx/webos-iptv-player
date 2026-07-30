@@ -73,6 +73,7 @@ class App {
     this.channelList = new ChannelList(
       this.views.channels,
       (idx, catchup) => this.playChannel(idx, catchup),
+      () => this.player.syncCurrentIndex(),
     );
     this.player = new Player(this.views.player, () => {
       this.channelList.render();
@@ -80,7 +81,11 @@ class App {
     }, (idx, catchupStart) => this.channelList.setPlaying(idx, catchupStart),
     () => !this.sidebar.visible && !this.menu.visible);
     this.epgGrid = new EpgGrid(this.views.epg, (idx, catchup) => this.playChannel(idx, catchup));
-    this.settings = new Settings(this.views.settings, (action) => this.onSettingsSaved(action));
+    this.settings = new Settings(
+      this.views.settings,
+      (action) => this.onSettingsSaved(action),
+      () => this.player.syncCurrentIndex(),
+    );
 
     this.player.init($('#video-player') as HTMLVideoElement);
 
@@ -91,7 +96,7 @@ class App {
     );
     this.menu = new PlayerMenu(
       this.views.player,
-      () => this.player.getCurrentIndex(),
+      () => this.player.getCurrentChannel(),
       (action) => this.onMenuAction(action),
       () => this.player.getAudioTracks(),
       (index) => this.player.selectAudioTrack(index),
@@ -493,7 +498,13 @@ class App {
       this.scanReminders();
 
       if (StorageService.getAutoPlay()) {
-        const lastCh = StorageService.getLastChannel();
+        // Prefer the per-stream key: a customization (or a provider reshuffle)
+        // moves the index, but not the channel it points at.
+        const lastCh = PlaylistService.resolveLastChannelIndex(
+          StorageService.getLastChannelStreamKey(),
+          StorageService.getLastChannelKey(),
+          StorageService.getLastChannel(),
+        );
         if (lastCh >= 0 && lastCh < PlaylistService.channels.length) {
           log.info('Auto-play resuming last channel index', lastCh);
           this.playChannel(lastCh);
@@ -529,6 +540,7 @@ class App {
   }
 
   private showView(name: ViewName): void {
+    if (name !== 'channels' && this.channelList.isEditing) this.channelList.exitEditMode();
     // Re-assert the persisted theme on every view transition. This reverts any
     // unsaved live preview when Settings closes (Back / section switch / Cancel)
     // while keeping a just-saved theme, since save() persists before this runs.
@@ -570,6 +582,7 @@ class App {
 
   // Map a tab-bar section to its view and show it (Live = the channels view).
   private switchSection(section: Section): void {
+    if (section !== 'live' && this.channelList.isEditing) this.channelList.exitEditMode();
     // Leaving the player via the tab bar (the pointer can reveal it over the
     // player) must tear down playback, like Back / red / blue do.
     this.player.stop();
@@ -755,7 +768,9 @@ class App {
     }
 
     // Global shortcuts
-    if (action === 'red' && currentView !== 'epg') {
+    // While the channel list is in edit mode the color keys belong to the editor.
+    const editingChannels = currentView === 'channels' && this.channelList.isEditing;
+    if (action === 'red' && currentView !== 'epg' && !editingChannels) {
       this.sidebar.hide();
       this.menu.hide();
       this.player.stop();
@@ -769,7 +784,7 @@ class App {
       });
       return;
     }
-    if (action === 'blue' && currentView !== 'settings') {
+    if (action === 'blue' && currentView !== 'settings' && !editingChannels) {
       if (currentView === 'epg') this.epgGrid.deactivateFilters();
       this.sidebar.hide();
       this.menu.hide();
@@ -822,6 +837,7 @@ class App {
         return;
       }
       if (currentView === 'channels') {
+        if (this.channelList.handleBack()) return;
         const now = Date.now();
         if (now - this.backPressTime < 3000) {
           const webOS = (window as unknown as Record<string, { platformBack?: () => void }>).webOS;
@@ -969,9 +985,7 @@ class App {
   }
 
   private togglePlayingFavorite(): void {
-    const idx = this.player.getCurrentIndex();
-    if (idx < 0) return;
-    const ch = PlaylistService.getByIndex(idx);
+    const ch = this.player.getCurrentChannel();
     if (!ch) return;
     const key = channelKey(ch);
     StorageService.toggleFavorite(key);
@@ -984,6 +998,13 @@ class App {
 
 
   private async onSettingsSaved(action: SaveAction): Promise<void> {
+    if (action === 'edit-channels') {
+      this.tabBar.setActive('live');
+      this.showView('channels');
+      this.channelList.render();
+      this.channelList.enterEditMode();
+      return;
+    }
     if (action !== 'cancel') {
       const locale = resolveLocale(StorageService.getLocalePreference());
       if (locale !== getLocale()) {

@@ -19,6 +19,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
     overlayStyle: 'dark' as string,
     textSize: '100' as string,
     tzMode: 'device' as TzMode,
+    showHidden: false,
     tzOffset: null as number | null,
     locale: 'system' as const,
     onlineSubtitles: {
@@ -43,6 +44,11 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
       getLocalePreference: vi.fn(() => state.locale),
       getOnlineSubtitleConfig: vi.fn(() => state.onlineSubtitles),
       getSelectedXtreamAccountId: vi.fn(() => null),
+      getShowHiddenChannels: vi.fn(() => state.showHidden),
+      setShowHiddenChannels: vi.fn((v: boolean) => { state.showHidden = v; }),
+      getChannelCustomization: vi.fn(() => null),
+      setChannelCustomization: vi.fn(),
+      clearChannelCustomization: vi.fn(),
       setPlaylists: vi.fn(),
       setEpgUrl: vi.fn(),
       setAutoPlay: vi.fn(),
@@ -94,6 +100,7 @@ import { setLocale } from '../i18n';
 
 let container: HTMLElement;
 let onSave: ReturnType<typeof vi.fn>;
+let onChannelsChanged: ReturnType<typeof vi.fn>;
 let settings: Settings;
 
 beforeEach(() => {
@@ -116,7 +123,8 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   onSave = vi.fn();
-  settings = new Settings(container, onSave);
+  onChannelsChanged = vi.fn();
+  settings = new Settings(container, onSave, onChannelsChanged);
 });
 
 function click(selector: string): void {
@@ -432,7 +440,7 @@ describe('Settings Recently Watched clearing', () => {
   beforeEach(() => settings.render());
 
   it('groups the scope explanation and clear action in one setting', () => {
-    const action = container.querySelector('.settings-item--action');
+    const action = container.querySelector('#settings-data .settings-item--action');
     expect(action?.textContent).toContain('Recently Watched');
     expect(action?.textContent).toContain('Clear recent live channels and catch-up progress');
     expect(action?.querySelector('#clear-recently-watched')).not.toBeNull();
@@ -505,6 +513,25 @@ describe('Settings Recently Watched clearing', () => {
     expect(storageMock.clearRecentlyWatched).toHaveBeenCalledTimes(1);
     expect(toastMock.showToast).toHaveBeenCalledWith('Recently Watched cleared');
     expect(settings.isPromptVisible).toBe(false);
+  });
+
+  it('notifies playback after resetting channel customization', () => {
+    settings.render();
+    click('#reset-customization');
+    settings.handleAction('left');
+    settings.handleAction('select');
+
+    expect(onChannelsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies playback when changing hidden-channel visibility', () => {
+    state.showHidden = true;
+    settings.render();
+    click('#show-hidden [data-value="off"]');
+    click('#edit-channel-list');
+
+    expect(state.showHidden).toBe(false);
+    expect(onChannelsChanged).toHaveBeenCalledTimes(1);
   });
 
   it('cancels without clearing', () => {

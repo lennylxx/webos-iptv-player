@@ -11,6 +11,7 @@ export const PAUSE_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d=
 // Magnifier (tab bar search).
 export const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>';
 export const CHEVRON_LEFT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5 8 12l7 7"/></svg>';
+export const BACK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 8-5 4 5 4"/><path d="M5 12h9a4 4 0 0 1 4 4v1a4 4 0 0 1-4 4h-4"/></svg>';
 
 // Settings sidebar categories. Stroke/fill styling is supplied by settings.css.
 export const GLOBE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>';

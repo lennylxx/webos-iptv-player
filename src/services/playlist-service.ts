@@ -9,20 +9,25 @@ import {
   xtreamLiveStreamId,
   type XtreamCredentials,
 } from '../utils/xtream-url';
-import { channelKey } from '../utils/channel';
+import { channelCustomizationKey, channelKey, channelStreamKey } from '../utils/channel';
 import { rankChannels } from '../utils/channel-search';
 import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
+import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
 import { createXtreamClient } from './xtream-client';
 
 const log = createLogger('Playlist');
 
 class PlaylistServiceImpl {
+  /** Every parsed channel, hidden ones included. Edit mode reads this. */
+  allChannels: Channel[] = [];
+  /** Visible channels in effective (customized) order. Everything else reads this. */
   channels: Channel[] = [];
   groups: string[] = [];
   playlistTabs: PlaylistTab[] = [];
   epgSources: EpgSource[] = [];
   private indexMap = new Map<Channel, number>(); // channel -> global index, O(1) indexOf
+  private includeHidden = false;
 
   /**
    * Clear all in-memory state. Called when the user removes every configured
@@ -30,6 +35,7 @@ class PlaylistServiceImpl {
    * list view.
    */
   reset(): void {
+    this.allChannels = [];
     this.channels = [];
     this.groups = [];
     this.playlistTabs = [];
@@ -40,10 +46,10 @@ class PlaylistServiceImpl {
   async load(): Promise<Channel[]> {
     const cached = StorageService.getCachedPlaylist();
     if (cached) {
-      this.channels = cached.channels;
+      this.allChannels = cached.channels;
       this.epgSources = cached.epgSources;
-      log.info('Cache hit:', this.channels.length, 'channels,', this.epgSources.length, 'epg sources');
-      this.buildGroups();
+      log.info('Cache hit:', this.allChannels.length, 'channels,', this.epgSources.length, 'epg sources');
+      this.applyCustomization();
       this.buildPlaylistTabs();
       StorageService.migrateFavoriteKeys(this.channels);
       return this.channels;
@@ -64,6 +70,7 @@ class PlaylistServiceImpl {
     const allChannels: Channel[] = [];
     const byUrl = new Map<string, Channel>();
     const epgSources: EpgSource[] = [];
+    let allPlaylistsLoaded = true;
     const addEpgSource = (url: string, playlistId: string, kind: EpgSource['kind']): void => {
       const existing = epgSources.find((source) => source.url === url);
       if (existing) {
@@ -130,20 +137,27 @@ class PlaylistServiceImpl {
           addEpgSource(epg, plKey, 'm3u');
         }
       } catch (err) {
+        allPlaylistsLoaded = false;
         log.error(`Failed to load playlist '${pl.name || pl.url}':`, err);
       }
       plDone();
     }
 
-    this.channels = allChannels;
+    this.allChannels = allChannels;
     this.epgSources = epgSources;
-    this.buildGroups();
+    // Cache the raw parse: customization is a view over it, so an edit re-sorts
+    // memory instead of forcing a re-fetch.
+    if (allPlaylistsLoaded) {
+      StorageService.setCachedPlaylist(allChannels, epgSources);
+    } else {
+      log.warn('Skipping cache write because one or more playlists failed');
+    }
+    this.applyCustomization();
     this.buildPlaylistTabs();
     StorageService.migrateFavoriteKeys(this.channels);
-    StorageService.setCachedPlaylist(allChannels, epgSources);
     log.info('Refresh complete:', allChannels.length, 'total channels,', epgSources.length, 'epg sources');
     done();
-    return allChannels;
+    return this.channels;
   }
 
   private async applyXtreamCatchup(
@@ -179,6 +193,25 @@ class PlaylistServiceImpl {
     log.info('Enabled Xtream catch-up for', enabled, 'channels');
   }
 
+  /**
+   * Rebuild `channels` from `allChannels` through the user's customization:
+   * hidden channels drop out, the rest take the custom order, and renames and
+   * group assignments are applied to the channel objects. Cheap enough to re-run
+   * after every edit — no network, no re-parse.
+   */
+  applyCustomization(): void {
+    const includeHidden = this.includeHidden || StorageService.getShowHiddenChannels();
+    this.channels = ChannelCustomizationService.applyTo(this.allChannels, includeHidden);
+    this.buildGroups();
+  }
+
+  /** Edit mode reveals hidden channels so they can be un-hidden again. */
+  setIncludeHidden(include: boolean): void {
+    if (this.includeHidden === include) return;
+    this.includeHidden = include;
+    this.applyCustomization();
+  }
+
   private buildGroups(): void {
     const groupSet = new Set<string>();
     this.indexMap = new Map();
@@ -187,7 +220,29 @@ class PlaylistServiceImpl {
       this.indexMap.set(ch, i);
       if (ch.group) groupSet.add(ch.group);
     }
-    this.groups = Array.from(groupSet);
+    for (const key of ChannelCustomizationService.customGroups) {
+      groupSet.add(ChannelCustomizationService.groupLabel(key));
+    }
+    this.groups = this.orderGroups(Array.from(groupSet));
+  }
+
+  /** Sort display group names into the custom group order (keyed by group key). */
+  private orderGroups(displayNames: string[]): string[] {
+    const keyOf = new Map<string, string>();
+    for (const key of ChannelCustomizationService.customGroups) {
+      keyOf.set(ChannelCustomizationService.groupLabel(key), key);
+    }
+    for (const ch of this.channels) {
+      if (ch.group && !keyOf.has(ch.group)) keyOf.set(ch.group, groupKeyOf(ch));
+    }
+    return displayNames
+      .map((name, index) => ({
+        name,
+        rank: ChannelCustomizationService.groupRank(keyOf.get(name) ?? name, index),
+        index,
+      }))
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map((entry) => entry.name);
   }
 
   private buildPlaylistTabs(): void {
@@ -227,7 +282,12 @@ class PlaylistServiceImpl {
     for (const ch of channels) {
       if (ch.group) groupSet.add(ch.group);
     }
-    return Array.from(groupSet);
+    if (!playlist) {
+      for (const key of ChannelCustomizationService.customGroups) {
+        groupSet.add(ChannelCustomizationService.groupLabel(key));
+      }
+    }
+    return this.orderGroups(Array.from(groupSet));
   }
 
   getByIndex(index: number): Channel | null {
@@ -236,6 +296,51 @@ class PlaylistServiceImpl {
 
   indexOf(channel: Channel): number {
     return this.indexMap.get(channel) ?? -1;
+  }
+
+  /** Index of the channel carrying this per-stream key, or -1. Used to re-resolve
+   *  the playing channel after a customization changes the ordering. */
+  indexOfKey(key: string): number {
+    if (!key) return -1;
+    for (let i = 0; i < this.channels.length; i++) {
+      if (channelKey(this.channels[i]) === key) return i;
+    }
+    return -1;
+  }
+
+  indexOfCustomizationKey(key: string): number {
+    if (!key) return -1;
+    for (let i = 0; i < this.channels.length; i++) {
+      if (channelCustomizationKey(this.channels[i]) === key) return i;
+    }
+    return -1;
+  }
+
+  indexOfStreamKey(key: string): number {
+    if (!key) return -1;
+    for (let i = 0; i < this.channels.length; i++) {
+      if (channelStreamKey(this.channels[i]) === key) return i;
+    }
+    return -1;
+  }
+
+  private indexOfUniqueKey(key: string): number {
+    let match = -1;
+    for (let i = 0; i < this.channels.length; i++) {
+      if (channelKey(this.channels[i]) !== key) continue;
+      if (match >= 0) return -1;
+      match = i;
+    }
+    return match;
+  }
+
+  resolveLastChannelIndex(streamKey: string, stableKey: string, legacyIndex: number): number {
+    if (streamKey) {
+      const precise = this.indexOfStreamKey(streamKey);
+      if (precise >= 0) return precise;
+    }
+    if (!stableKey) return legacyIndex;
+    return this.indexOfUniqueKey(stableKey);
   }
 }
 

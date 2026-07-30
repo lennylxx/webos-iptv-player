@@ -170,6 +170,10 @@ export function rankByName<T extends { name: string }>(items: T[], query: string
   return scored.map(result => result.item);
 }
 
-export function rankChannels<T extends { name: string; group: string }>(items: T[], query: string): T[] {
-  return rankByFields(items, query, item => [item.name, item.group]);
+export function rankChannels<T extends { name: string; group: string; sourceName?: string }>(
+  items: T[],
+  query: string,
+): T[] {
+  // A renamed channel stays findable under its source name too.
+  return rankByFields(items, query, item => [item.name, item.group, item.sourceName ?? '']);
 }

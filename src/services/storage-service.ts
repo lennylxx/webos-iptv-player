@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, EpgSource, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, EpgSource, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist-id';
@@ -13,7 +13,7 @@ const PREFIX = CONFIG.STORAGE_PREFIX;
 
 // Versioned playlist cache schema. Bump when its channel or EPG-source shape
 // changes so an older payload is treated as a miss and re-fetched.
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 interface StreamMimeEntry {
   mime: string;
@@ -72,7 +72,9 @@ export const StorageService = {
     return list;
   },
   setPlaylists(playlists: PlaylistEntry[]): void {
-    set('playlists', playlists);
+    const previous = get<PlaylistEntry[]>('playlists', []);
+    if (JSON.stringify(previous) === JSON.stringify(playlists)) return;
+    if (set('playlists', playlists)) evictCache();
   },
 
   getStreamMime(routeKey: string): string | null {
@@ -113,6 +115,42 @@ export const StorageService = {
   },
   setLastChannel(index: number): void {
     set('last_channel', index);
+  },
+
+  // Companion to last_channel: the channelKey survives a reorder or a provider
+  // reshuffle, where the index does not. The index stays as the fallback for an
+  // install that predates this key.
+  getLastChannelKey(): string {
+    return get<string>('last_channel_key', '');
+  },
+  setLastChannelKey(key: string): void {
+    set('last_channel_key', key);
+  },
+  getLastChannelStreamKey(): string {
+    return get<string>('last_channel_stream_key', '');
+  },
+  setLastChannelStreamKey(key: string): void {
+    set('last_channel_stream_key', key);
+  },
+
+  getChannelCustomization(): ChannelCustomization | null {
+    const data = get<ChannelCustomization | null>('channel_custom', null);
+    if (!data || data.version !== CONFIG.CHANNEL_CUSTOMIZATION_VERSION) return null;
+    return data;
+  },
+  setChannelCustomization(data: ChannelCustomization): void {
+    set('channel_custom', data);
+  },
+  clearChannelCustomization(): void {
+    remove('channel_custom');
+  },
+
+  // Reveal hidden channels in the normal lists (dimmed), for recovery.
+  getShowHiddenChannels(): boolean {
+    return get<boolean>('show_hidden_channels', false);
+  },
+  setShowHiddenChannels(val: boolean): void {
+    set('show_hidden_channels', val);
   },
 
   getRecentlyWatchedLive(): RecentlyWatchedLiveEntry[] {

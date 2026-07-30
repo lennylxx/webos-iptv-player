@@ -3,6 +3,8 @@ import { $, $$, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SpatialNav } from '../navigation/spatial-nav';
 import { StorageService } from '../services/storage-service';
+import { ChannelCustomizationService } from '../services/channel-customization';
+import { PlaylistService } from '../services/playlist-service';
 import { clearCachedEpg } from '../services/idb-cache';
 import { UploadClient, uploadIdFromUrl } from '../services/upload-client';
 import { createXtreamClient } from '../services/xtream-client';
@@ -259,12 +261,14 @@ function formatExpiry(expiresAt: number | null): string {
 }
 
 /** What the app does after Settings closes: reload = re-fetch playlist/EPG;
- *  apply = re-render for display-only changes; cancel = discard. */
-export type SaveAction = 'reload' | 'apply' | 'cancel';
+ *  apply = re-render for display-only changes; edit-channels = open the channel
+ *  list in edit mode; cancel = discard. */
+export type SaveAction = 'reload' | 'apply' | 'cancel' | 'edit-channels';
 
 export class Settings {
   private container: HTMLElement;
   private onSave: (action: SaveAction) => void;
+  private onChannelsChanged: () => void;
   private nav: SpatialNav;
   // Pending theme selection (persisted on Save; live-previewed while browsing).
   private selectedTheme = '';
@@ -274,9 +278,14 @@ export class Settings {
   private categoryScrollFrame: number | null = null;
   private categorySyncFrame: number | null = null;
 
-  constructor(container: HTMLElement, onSave: (action: SaveAction) => void) {
+  constructor(
+    container: HTMLElement,
+    onSave: (action: SaveAction) => void,
+    onChannelsChanged: () => void = () => {},
+  ) {
     this.container = container;
     this.onSave = onSave;
+    this.onChannelsChanged = onChannelsChanged;
     this.nav = new SpatialNav(container, (el) => this.onNavFocus(el));
 
     // Mouse/pointer support: clicking a focusable element behaves like remote OK.
@@ -342,6 +351,7 @@ export class Settings {
     const uploads = allPlaylists.filter(pl => pl.source === 'upload');
     const epgUrl = StorageService.getEpgUrl();
     const autoPlay = StorageService.getAutoPlay();
+    const showHidden = StorageService.getShowHiddenChannels();
     const feedTime = StorageService.getTzMode() === 'feed';
     const tzOffset = StorageService.getEpgTzOffset();
     const os = StorageService.getOnlineSubtitleConfig();
@@ -449,6 +459,27 @@ export class Settings {
                       : html`<div class="empty-hint">${t('settings.noUploads')}</div>`}
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div class="settings-section" id="channel-customization-settings">
+              <h3 class="settings-section-title">${t('settings.channels')}</h3>
+              <div class="settings-item settings-item--action">
+                <div class="settings-item-title">${t('settings.editChannelList')}</div>
+                <button class="btn btn-secondary" data-focusable id="edit-channel-list"
+                        aria-label="${t('settings.editChannelList')}">${t('settings.editChannelList')}</button>
+                <div class="settings-item-hint">${t('settings.editChannelListHint')}</div>
+              </div>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.showHidden')}</div>
+                ${toggleGroup('show-hidden', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], showHidden ? 'on' : 'off')}
+                <div class="settings-item-hint">${t('settings.showHiddenHint')}</div>
+              </div>
+              <div class="settings-item settings-item--action">
+                <div class="settings-item-title">${t('settings.resetCustomization')}</div>
+                <button class="btn btn-danger" data-focusable id="reset-customization"
+                        aria-label="${t('settings.resetCustomization')}">${t('settings.resetCustomization')}</button>
+                <div class="settings-item-hint">${t('settings.resetCustomizationHint')}</div>
               </div>
             </div>
           </div>
@@ -670,6 +701,23 @@ export class Settings {
       StorageService.remove('cached_playlist');
       void clearCachedEpg();
       showToast(t('settings.cacheCleared'));
+    } else if (el.id === 'edit-channel-list') {
+      this.saveShowHidden();
+      this.onSave('edit-channels');
+    } else if (el.id === 'reset-customization') {
+      this.confirmationPrompt.show({
+        title: t('settings.resetCustomizationTitle'),
+        message: t('settings.resetCustomizationMessage'),
+        confirmLabel: t('common.reset'),
+        cancelLabel: t('common.cancel'),
+        onConfirm: () => {
+          ChannelCustomizationService.reset();
+          PlaylistService.applyCustomization();
+          this.onChannelsChanged();
+          showToast(t('settings.customizationReset'));
+        },
+        onCancel: () => {},
+      });
     } else if (el.id === 'clear-recently-watched') {
       this.confirmationPrompt.show({
         title: t('settings.clearRecentTitle'),
@@ -700,8 +748,19 @@ export class Settings {
     }
   }
 
-  get isPromptVisible(): boolean {
-    return this.confirmationPrompt.visible;
+  // Applied on its own (not only on Save) so leaving through "Edit channel list"
+  // still honors the toggle.
+  private saveShowHidden(): void {
+    const btn = $('#show-hidden .toggle-option.active', this.container);
+    if (!btn) return;
+    const show = btn.dataset.value === 'on';
+    if (show === StorageService.getShowHiddenChannels()) return;
+    StorageService.setShowHiddenChannels(show);
+    PlaylistService.applyCustomization();
+    this.onChannelsChanged();
+  }
+
+  get isPromptVisible(): boolean {    return this.confirmationPrompt.visible;
   }
 
   dismissPrompt(): void {
@@ -1101,6 +1160,8 @@ export class Settings {
 
     const autoPlayBtn = $('#auto-play .toggle-option.active', this.container);
     if (autoPlayBtn) StorageService.setAutoPlay(autoPlayBtn.dataset.value === 'on');
+
+    this.saveShowHidden();
 
     const tzModeBtn = $('#tz-mode .toggle-option.active', this.container);
     if (tzModeBtn?.dataset.value) StorageService.setTzMode(tzModeBtn.dataset.value as TzMode);

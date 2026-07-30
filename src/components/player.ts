@@ -2,7 +2,7 @@ import type { Action, Channel, CatchupInfo, AudioTrackOption, AudioOption, Audio
   SubtitleTrackOption, SubtitleOption, SubtitlePref, ManifestSubtitle, ManifestClosedCaption, VodPlayback, VodQueueItem, SidecarSubtitle } from '../types';
 import { formatXtreamCatchupStart } from '../utils/xtream-url';
 import { $, show, hide, html, raw, Safe } from '../utils/dom';
-import { channelKey } from '../utils/channel';
+import { channelKey, channelStreamKey } from '../utils/channel';
 import { morph } from '../utils/morph';
 import { dvrWindow, dvrState, type DvrWindow, type DvrState } from '../utils/dvr';
 import { fetchLimitedText } from '../utils/fetch-helper';
@@ -72,6 +72,7 @@ export class Player {
   private mpegtsPlayer: { destroy(): void } | null = null;
   private currentChannel: Channel | null = null;
   private currentIndex = -1;
+  private currentIndexAnchor = -1;
   private catchupInfo: CatchupInfo | null = null;
   private vod: VodPlayback | null = null;
   private upNextSeconds = 0;
@@ -299,7 +300,7 @@ export class Player {
     if (!this.videoEl || !this.currentChannel) return;
     if (this.wasPlayingBeforeHide) {
       this.wasPlayingBeforeHide = false;
-      this.play(this.currentIndex, this.catchupInfo || undefined);
+      this.playResolved(this.currentChannel, this.currentIndex, this.catchupInfo || undefined);
     }
   }
 
@@ -359,12 +360,17 @@ export class Player {
   }
 
   play(channelIndex: number, catchup?: CatchupInfo): void {
-    this.stallWatchdog.stop();
     const channel = PlaylistService.getByIndex(channelIndex);
     if (!channel || !this.videoEl) {
       log.warn('play() ignored — no channel or video element', { channelIndex, hasChannel: !!channel });
       return;
     }
+    this.playResolved(channel, channelIndex, catchup);
+  }
+
+  private playResolved(channel: Channel, channelIndex: number, catchup?: CatchupInfo): void {
+    if (!this.videoEl) return;
+    this.stallWatchdog.stop();
     this.startPlaybackGeneration();
 
     // Save progress for the outgoing catch-up session (channel switch, stopping catch-up).
@@ -384,13 +390,16 @@ export class Player {
     log.info('play index', channelIndex, '|', channel.name, catchup ? '(catchup)' : '');
     this.currentChannel = channel;
     this.currentIndex = channelIndex;
+    if (channelIndex >= 0) this.currentIndexAnchor = channelIndex;
     this.catchupInfo = catchup || null;
     this.onTvPlaybackChanged(channelIndex, catchup ? catchup.start * 1000 : null);
     this.catchupFallbackActive = false;
     this.vod = null;
     this.catchupCheckpointAt = Date.now(); // reset periodic-save timer for the new session
     this.failedIcons.clear(); // fresh icon-load attempts per channel/programme visit
-    StorageService.setLastChannel(channelIndex);
+    if (channelIndex >= 0) StorageService.setLastChannel(channelIndex);
+    StorageService.setLastChannelKey(channelKey(channel));
+    StorageService.setLastChannelStreamKey(channelStreamKey(channel));
 
     const url = this.resolveStreamUrl(channel, catchup || null);
     if (catchup) log.debug('catchup URL:', url);
@@ -725,7 +734,7 @@ export class Player {
   // pipeline) and reload the current channel WITHOUT going through play() — that
   // would reset the watchdog's reload budget and prevent escalation.
   private reloadCurrentStream(): void {
-    if (!this.currentChannel || this.currentIndex < 0) return;
+    if (!this.currentChannel) return;
     log.warn('stall watchdog — reloading current stream:', this.currentChannel.name);
     this.updateOSDMessage(t('player.reconnecting'));
     this.recreateVideoEl();
@@ -758,13 +767,14 @@ export class Player {
       v.onBack();
       return;
     }
-    if (this.catchupInfo && this.currentIndex >= 0) {
+    if (this.catchupInfo && this.currentChannel) {
       log.info('catch-up ended — resuming live');
       this.saveCatchupProgress({ completed: true });
       const idx = this.currentIndex;
+      const channel = this.currentChannel;
       this.catchupInfo = null; // clear before play() so it doesn't re-save with pos=0
       this.recreateVideoEl();
-      this.play(idx);
+      this.playResolved(channel, idx);
     }
   }
 
@@ -1585,7 +1595,7 @@ export class Player {
 
     morph(osd, html`
       <div class="osd-channel">
-        <div class="osd-channel-number">${this.currentIndex + 1}</div>
+        <div class="osd-channel-number">${this.currentIndexAnchor + 1}</div>
         ${ch.logo ? html`<img class="osd-channel-logo" src="${ch.logo}" alt="">` : ''}
         <div class="osd-channel-name">${ch.name}</div>
         ${streamInfoHtml}
@@ -1608,17 +1618,42 @@ export class Player {
   channelUp(): void {
     const len = PlaylistService.channels.length;
     if (!len) return;
-    this.play((this.currentIndex + 1) % len);
+    const next = this.currentIndex >= 0
+      ? (this.currentIndex + 1) % len
+      : Math.min(this.currentIndexAnchor, len - 1);
+    this.play(next);
   }
 
   channelDown(): void {
     const len = PlaylistService.channels.length;
     if (!len) return;
-    this.play((this.currentIndex - 1 + len) % len);
+    const next = this.currentIndex >= 0
+      ? (this.currentIndex - 1 + len) % len
+      : Math.max(0, Math.min(this.currentIndexAnchor - 1, len - 1));
+    this.play(next);
   }
 
   getCurrentIndex(): number {
     return this.currentIndex;
+  }
+
+  getCurrentChannel(): Channel | null {
+    return this.currentChannel;
+  }
+
+  /** Re-point the playing index after a customization reordered the channel list.
+   *  Playback itself is untouched — only the index the UI reports changes. */
+  syncCurrentIndex(): void {
+    if (!this.currentChannel) return;
+    const idx = PlaylistService.indexOf(this.currentChannel);
+    if (idx >= 0) {
+      this.currentIndex = idx;
+      this.currentIndexAnchor = idx;
+      this.onTvPlaybackChanged(idx, this.catchupInfo ? this.catchupInfo.start * 1000 : null);
+    } else {
+      this.currentIndex = -1;
+      this.onTvPlaybackChanged(-1, this.catchupInfo ? this.catchupInfo.start * 1000 : null);
+    }
   }
 
   /**

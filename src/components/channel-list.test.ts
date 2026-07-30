@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
 import type { RecentlyWatchedItem } from '../services/recently-watched';
 
-const { data, playlistMock, epgMock, storageMock, recentMock, toastMock } = vi.hoisted(() => {
+const { data, customization, playlistMock, epgMock, storageMock, recentMock, toastMock } = vi.hoisted(() => {
   const mk = (o: Partial<Channel>): Channel => ({
     id: '', name: '', logo: '', group: '', url: '', extras: null,
     playlistIds: [], catchup: '', catchupSource: '', catchupDays: 0, ...o,
@@ -13,7 +13,9 @@ const { data, playlistMock, epgMock, storageMock, recentMock, toastMock } = vi.h
     mk({ id: 'b', name: 'Bravo', group: 'Sports', url: 'http://host/b' }),
     mk({ id: 'c', name: 'Charlie', group: 'News', url: 'http://host/c' }),
   ];
-  const data = { channels, favorites: [] as string[] };
+  const raw = channels.slice();
+  const data = { channels, raw, favorites: [] as string[], includeHidden: false };
+  const customization = { record: null as unknown };
 
   const getByGroup = (group: string, _playlist?: string): Channel[] => {
     if (group === 'builtin:all' || group === 'builtin:recently-watched') return channels;
@@ -23,18 +25,26 @@ const { data, playlistMock, epgMock, storageMock, recentMock, toastMock } = vi.h
 
   return {
     data,
+    customization,
     playlistMock: {
       channels,
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
       getByGroup,
       indexOf: (ch: Channel) => channels.indexOf(ch),
+      indexOfCustomizationKey: (_key: string) => -1,
       getByIndex: (i: number) => channels[i] ?? null,
+      applyCustomization: vi.fn(),
+      setIncludeHidden: vi.fn(),
     },
     epgMock: { findChannelId: () => null, getNowPlaying: () => null },
     storageMock: {
       getFavorites: () => data.favorites,
       toggleFavorite: vi.fn(),
+      getShowHiddenChannels: () => false,
+      getChannelCustomization: () => customization.record,
+      setChannelCustomization: vi.fn((d: unknown) => { customization.record = d; }),
+      clearChannelCustomization: vi.fn(() => { customization.record = null; }),
     },
     recentMock: {
       items: [] as RecentlyWatchedItem[],
@@ -52,7 +62,39 @@ vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentM
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 
 import { ChannelList } from './channel-list';
-import { channelKey } from '../utils/channel';
+import { channelCustomizationKey, channelKey } from '../utils/channel';
+import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
+
+playlistMock.indexOfCustomizationKey = (key: string) => data.channels
+  .findIndex(ch => channelCustomizationKey(ch) === key);
+
+// Mirror PlaylistService: re-derive the visible list from the customization record.
+playlistMock.applyCustomization = vi.fn(() => {
+  const next = ChannelCustomizationService.applyTo(data.raw, data.includeHidden);
+  data.channels.splice(0, data.channels.length, ...next);
+});
+playlistMock.setIncludeHidden = vi.fn((on: boolean) => {
+  if (data.includeHidden === on) return;
+  data.includeHidden = on;
+  playlistMock.applyCustomization();
+});
+playlistMock.getGroupsForPlaylist = (playlist?: string) => {
+  const keys: string[] = [];
+  const channels = playlist
+    ? data.channels.filter(ch => ch.playlistIds.includes(playlist))
+    : data.channels;
+  for (const ch of channels) {
+    const key = groupKeyOf(ch);
+    if (key && keys.indexOf(key) < 0) keys.push(key);
+  }
+  if (!playlist) {
+    for (const key of ChannelCustomizationService.customGroups) {
+      if (keys.indexOf(key) < 0) keys.push(key);
+    }
+  }
+  return ChannelCustomizationService.sortGroupKeys(keys)
+    .map(key => ChannelCustomizationService.groupLabel(key));
+};
 
 let container: HTMLElement;
 let onSelect: ReturnType<typeof vi.fn>;
@@ -61,12 +103,21 @@ let list: ChannelList;
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   data.favorites = [];
+  data.includeHidden = false;
+  data.raw.forEach(ch => { ch.playlistIds = []; });
+  data.raw[2].group = 'News';
+  delete data.raw[2].sourceGroup;
+  delete data.raw[2].groupKey;
+  customization.record = null;
+  ChannelCustomizationService.reload();
+  playlistMock.applyCustomization();
   recentMock.items = [];
   recentMock.getItems.mockClear();
   recentMock.catchupInfo.mockReset();
   toastMock.showToast.mockClear();
   playlistMock.playlistTabs = [];
   storageMock.toggleFavorite.mockClear();
+  storageMock.setChannelCustomization.mockClear();
   container = document.createElement('div');
   document.body.appendChild(container);
   onSelect = vi.fn();
@@ -98,6 +149,16 @@ describe('ChannelList.render', () => {
     expect(container.querySelector('.channel-count')?.textContent).toBe('3 channels');
     expect(channelItems()).toHaveLength(3);
     expect(container.textContent).toContain('Alpha');
+  });
+
+  it('opens channel editing from the pencil button', () => {
+    list.render();
+    const edit = container.querySelector<HTMLElement>('.channel-edit-btn');
+    expect(edit?.querySelector('img')?.getAttribute('src')).toBe('assets/icons/pencil.svg');
+    hover(edit!);
+    list.handleAction('select');
+    expect(list.isEditing).toBe(true);
+    expect(container.querySelector('.channel-edit-btn')).toBeNull();
   });
 
   it('uses the singular channel count for a one-channel playlist', () => {
@@ -399,5 +460,444 @@ describe('ChannelList morph lifecycle', () => {
     list.render();
     // Same DOM node, .focused re-applied via prevFocusedKey lookup.
     expect(channelItems()[1].classList.contains('focused')).toBe(true);
+  });
+});
+
+describe('ChannelList edit mode', () => {
+  function names(): string[] {
+    return channelItems().map(el => el.querySelector('.channel-name')?.textContent?.trim() ?? '');
+  }
+
+  function enterEdit(): void {
+    list.render();
+    list.handleAction('yellow');
+  }
+
+  it('yellow enters edit mode and yellow again leaves it', () => {
+    enterEdit();
+    expect(list.isEditing).toBe(true);
+    expect(container.querySelector('.edit-hints')).not.toBeNull();
+    list.handleAction('yellow');
+    expect(list.isEditing).toBe(false);
+    expect(container.querySelector('.edit-hints')).toBeNull();
+  });
+
+  it('back leaves edit mode and is not consumed outside it', () => {
+    list.render();
+    expect(list.handleBack()).toBe(false);
+    enterEdit();
+    expect(list.handleBack()).toBe(true);
+    expect(list.isEditing).toBe(false);
+  });
+
+  it('back completes edit mode even while an item is selected', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    expect(container.querySelector('.grabbed')).not.toBeNull();
+    expect(list.handleBack()).toBe(true);
+    expect(list.isEditing).toBe(false);
+  });
+
+  it('shows Back as another way to complete editing', () => {
+    enterEdit();
+    const back = container.querySelector('.edit-key.key-back');
+    expect(back?.querySelector('svg')).not.toBeNull();
+    expect(back?.textContent).toBe('');
+    expect(back?.parentElement?.textContent).toContain('Done');
+    expect(back?.parentElement?.querySelector('.key-yellow')).not.toBeNull();
+    expect(back?.parentElement?.querySelector('.edit-key-separator')?.textContent).toBe('/');
+  });
+
+  it('green stays the favorite toggle outside edit mode', () => {
+    list.render();
+    hover(channelItems()[0]);
+    list.handleAction('green');
+    expect(storageMock.toggleFavorite).toHaveBeenCalledTimes(1);
+    expect(ChannelCustomizationService.customized).toBe(false);
+  });
+
+  it('select grabs a channel and up/down reorders and persists it', () => {
+    enterEdit();
+    hover(channelItems()[2]);
+    list.handleAction('select');
+    expect(channelItems()[2].classList.contains('grabbed')).toBe(true);
+
+    expect(list.handleAction('up')).toBe(true);
+    list.handleAction('up');
+    expect(names()).toEqual(['Charlie', 'Alpha', 'Bravo']);
+    expect(storageMock.setChannelCustomization).toHaveBeenCalled();
+
+    // Focus follows the grabbed row so a second move continues from there.
+    expect(channelItems()[0].classList.contains('grabbed')).toBe(true);
+    list.handleAction('select');
+    expect(container.querySelector('.grabbed')).toBeNull();
+  });
+
+  it('drags a channel with the Magic Remote mouse sequence', () => {
+    enterEdit();
+    const originalElementFromPoint = document.elementFromPoint;
+    let hit = channelItems()[2];
+    document.elementFromPoint = () => hit;
+    channelItems()[2].dispatchEvent(new MouseEvent('mousedown', {
+      button: 0, clientX: 100, clientY: 250, bubbles: true,
+    }));
+
+    hit = channelItems()[0];
+    hit.getBoundingClientRect = () => ({
+      top: 0, bottom: 84, left: 0, right: 600, width: 600, height: 84, x: 0, y: 0,
+      toJSON: () => ({}),
+    });
+    container.dispatchEvent(new MouseEvent('mousemove', {
+      clientX: 100, clientY: 10, bubbles: true,
+    }));
+    container.dispatchEvent(new MouseEvent('mouseup', {
+      button: 0, clientX: 100, clientY: 10, bubbles: true,
+    }));
+    container.dispatchEvent(new MouseEvent('click', {
+      button: 0, clientX: 100, clientY: 10, bubbles: true,
+    }));
+    document.elementFromPoint = originalElementFromPoint;
+
+    expect(names()).toEqual(['Charlie', 'Alpha', 'Bravo']);
+    expect(container.querySelector('.grabbed')).toBeNull();
+    expect(storageMock.setChannelCustomization).toHaveBeenCalled();
+  });
+
+  it('does not move a grabbed channel past the ends of the list', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('up');
+    expect(names()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  });
+
+  it('up/down navigates instead of reordering while nothing is grabbed', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('down');
+    expect(names()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect(storageMock.setChannelCustomization).not.toHaveBeenCalled();
+  });
+
+  it('green hides the selected channel, which stays visible but marked while editing', () => {
+    enterEdit();
+    hover(channelItems()[1]);
+    list.handleAction('select');
+    list.handleAction('green');
+    expect(channelItems()).toHaveLength(3);
+    expect(channelItems()[1].classList.contains('hidden-entry')).toBe(true);
+    expect(ChannelCustomizationService.isHidden(channelCustomizationKey(data.raw[1]))).toBe(true);
+
+    list.handleAction('yellow');
+    expect(names()).toEqual(['Alpha', 'Charlie']);
+  });
+
+  it('shows a toast instead of hiding the hovered channel when none is selected', () => {
+    enterEdit();
+    hover(channelItems()[1]);
+    list.handleAction('green');
+    expect(ChannelCustomizationService.isHidden(channelCustomizationKey(data.raw[1]))).toBe(false);
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Select a channel or group first.');
+  });
+
+  it('does not rename or regroup a hovered channel when none is selected', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('blue');
+    expect(container.querySelector('.edit-text-input')).toBeNull();
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Select a channel or group first.');
+
+    list.handleAction('red');
+    expect(container.querySelector('.group-picker')).toBeNull();
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Select a channel or group first.');
+  });
+
+  it('opens rename from the clickable edit toolbar', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    const rename = container.querySelector<HTMLElement>('[data-edit-action="blue"]')!;
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = () => rename;
+    container.dispatchEvent(new MouseEvent('click', {
+      clientX: 100, clientY: 100, bubbles: true,
+    }));
+    document.elementFromPoint = originalElementFromPoint;
+    expect(container.querySelector('.edit-text-input')).not.toBeNull();
+  });
+
+  it('blue renames the focused channel and an empty value restores the source name', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('blue');
+    const input = container.querySelector<HTMLInputElement>('.edit-text-input');
+    expect(input).not.toBeNull();
+    input!.value = 'Alpha Two';
+    list.handleAction('select');
+    expect(names()[0]).toBe('Alpha Two');
+    expect(data.raw[0].sourceName).toBe('Alpha');
+
+    hover(channelItems()[0]);
+    list.handleAction('blue');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = '';
+    list.handleAction('select');
+    expect(names()[0]).toBe('Alpha');
+    expect(data.raw[0].sourceName).toBeUndefined();
+  });
+
+  it('does not commit a rename when the Magic Remote clicks inside the input', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('blue');
+    const input = container.querySelector<HTMLInputElement>('.edit-text-input')!;
+    input.value = 'Alpha Two';
+
+    input.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(container.querySelector('.edit-text-input')).toBe(input);
+    expect(data.raw[0].sourceName).toBeUndefined();
+  });
+
+  it('commits a rename when Enter originates from the focused input', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('blue');
+    const input = container.querySelector<HTMLInputElement>('.edit-text-input')!;
+    input.value = 'Alpha Two';
+
+    input.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter',
+      keyCode: 13,
+      bubbles: true,
+    }));
+
+    expect(container.querySelector('.edit-text-input')).toBeNull();
+    expect(names()[0]).toBe('Alpha Two');
+  });
+
+  it('back cancels an open rename without changing the name', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('blue');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'Nope';
+    expect(list.handleBack()).toBe(true);
+    expect(names()[0]).toBe('Alpha');
+    expect(list.isEditing).toBe(true);
+  });
+
+  it('red moves the focused channel into an existing group', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('red');
+    const options = Array.from(container.querySelectorAll<HTMLElement>('.group-picker-option'));
+    const sports = options.find(el => el.dataset.groupChoice === 'Sports');
+    expect(sports).toBeDefined();
+    hover(sports!);
+    list.handleAction('select');
+    expect(data.raw[0].group).toBe('Sports');
+    expect(data.raw[0].sourceGroup).toBe('News');
+  });
+
+  it('red can create a new group for the focused channel', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('red');
+    const newOption = Array.from(container.querySelectorAll<HTMLElement>('.group-picker-option'))
+      .find(el => el.dataset.groupChoice === 'new');
+    hover(newOption!);
+    list.handleAction('select');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'Custom';
+    list.handleAction('select');
+    expect(data.raw[0].group).toBe('Custom');
+    expect(ChannelCustomizationService.customGroups).toEqual(['Custom']);
+    expect(container.querySelector('.group-picker')).toBeNull();
+  });
+
+  it('keeps new-group input open when its name already exists', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('red');
+    const newOption = Array.from(container.querySelectorAll<HTMLElement>('.group-picker-option'))
+      .find(el => el.dataset.groupChoice === 'new');
+    hover(newOption!);
+    list.handleAction('select');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'sports';
+
+    list.handleAction('select');
+
+    expect(container.querySelector('.edit-text-input')).not.toBeNull();
+    expect(data.raw[0].group).toBe('News');
+    expect(toastMock.showToast).toHaveBeenLastCalledWith(
+      'A group with that name already exists.',
+    );
+  });
+
+  it('the source-group option clears a group override', () => {
+    ChannelCustomizationService.setGroup(channelCustomizationKey(data.raw[0]), 'Custom');
+    playlistMock.applyCustomization();
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('red');
+    const source = Array.from(container.querySelectorAll<HTMLElement>('.group-picker-option'))
+      .find(el => el.dataset.groupChoice === 'source');
+    hover(source!);
+    list.handleAction('select');
+    expect(data.raw[0].group).toBe('News');
+    expect(data.raw[0].sourceGroup).toBeUndefined();
+  });
+
+  it('reorders a grabbed source group', () => {
+    enterEdit();
+    const sports = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:Sports');
+    hover(sports!);
+    list.handleAction('select');
+    list.handleAction('up');
+    const groups = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .map(el => el.dataset.group);
+    expect(groups.slice(-2)).toEqual(['source:Sports', 'source:News']);
+  });
+
+  it('preserves other playlists groups when reordering within one playlist', () => {
+    data.raw[0].playlistIds = ['a'];
+    data.raw[1].playlistIds = ['b'];
+    data.raw[2].playlistIds = ['a'];
+    data.raw[2].group = 'Movies';
+    playlistMock.playlistTabs = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    list.render();
+    const playlistA = container.querySelector<HTMLElement>('[data-playlist="a"]')!;
+    hover(playlistA);
+    list.handleAction('select');
+    enterEdit();
+    const news = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:News');
+    hover(news!);
+    list.handleAction('select');
+
+    list.handleAction('down');
+
+    expect(playlistMock.getGroupsForPlaylist()).toEqual(['Sports', 'Movies', 'News']);
+  });
+
+  it('renames a source group without changing its channels', () => {
+    enterEdit();
+    const news = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:News');
+    hover(news!);
+    list.handleAction('select');
+    list.handleAction('blue');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'Headlines';
+    list.handleAction('select');
+    expect(data.raw[0].group).toBe('Headlines');
+    expect(data.raw[0].sourceGroup).toBe('News');
+    expect(ChannelCustomizationService.groupLabel('News')).toBe('Headlines');
+  });
+
+  it('keeps the stable key when renaming an empty custom group again', () => {
+    ChannelCustomizationService.addCustomGroup('Custom');
+    ChannelCustomizationService.renameGroup('Custom', 'Renamed');
+    playlistMock.applyCustomization();
+    list.render();
+    enterEdit();
+    const renamed = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:Renamed');
+    hover(renamed!);
+    list.handleAction('select');
+    list.handleAction('blue');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'Again';
+
+    list.handleAction('select');
+
+    expect(ChannelCustomizationService.groupLabel('Custom')).toBe('Again');
+    expect(ChannelCustomizationService.groupLabel('Renamed')).toBe('Renamed');
+  });
+
+  it('keeps group rename open when the name belongs to another group', () => {
+    enterEdit();
+    const news = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:News');
+    hover(news!);
+    list.handleAction('select');
+    list.handleAction('blue');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'Sports';
+
+    list.handleAction('select');
+
+    expect(container.querySelector('.edit-text-input')).not.toBeNull();
+    expect(data.raw[0].group).toBe('News');
+    expect(toastMock.showToast).toHaveBeenLastCalledWith(
+      'A group with that name already exists.',
+    );
+  });
+
+  it('rejects a group name used only by another playlist', () => {
+    data.raw[0].playlistIds = ['a'];
+    data.raw[1].playlistIds = ['b'];
+    data.raw[2].playlistIds = ['a'];
+    playlistMock.playlistTabs = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    list.render();
+    const playlistA = container.querySelector<HTMLElement>('[data-playlist="a"]')!;
+    hover(playlistA);
+    list.handleAction('select');
+    enterEdit();
+    const news = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:News');
+    hover(news!);
+    list.handleAction('select');
+    list.handleAction('blue');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'Sports';
+
+    list.handleAction('select');
+
+    expect(container.querySelector('.edit-text-input')).not.toBeNull();
+    expect(data.raw[0].group).toBe('News');
+  });
+
+  it('falls back to All when the active group is renamed', () => {
+    list.render();
+    const news = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:News');
+    hover(news!);
+    list.handleAction('select');
+    enterEdit();
+    const selectedNews = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:News');
+    hover(selectedNews!);
+    list.handleAction('select');
+    list.handleAction('blue');
+    container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'Headlines';
+
+    list.handleAction('select');
+
+    expect(container.querySelector<HTMLElement>('.group-item.active')?.dataset.group)
+      .toBe('builtin:all');
+    expect(names()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  });
+
+  it('green hides a source group', () => {
+    enterEdit();
+    const news = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+      .find(el => el.dataset.group === 'source:News');
+    hover(news!);
+    list.handleAction('select');
+    list.handleAction('green');
+    expect(ChannelCustomizationService.isGroupHidden('News')).toBe(true);
+    list.handleAction('yellow');
+    expect(names()).toEqual(['Bravo']);
   });
 });

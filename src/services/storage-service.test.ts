@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
 import { StorageService } from './storage-service';
 import { channelKey } from '../utils/channel';
+import { CONFIG } from '../config';
 
 const ch = (over: Partial<Channel>): Channel => ({
   id: '', name: '', logo: '', group: '', url: '', extras: null,
@@ -30,6 +31,12 @@ describe('StorageService', () => {
     expect(StorageService.getPlaylists()[0].id).toBe(got[0].id);
   });
 
+  it('invalidates the channel cache when playlist configuration changes', () => {
+    StorageService.setCachedPlaylist([], []);
+    StorageService.setPlaylists([{ id: 'p1', name: 'A', url: 'http://host/a' }]);
+    expect(StorageService.getCachedPlaylist()).toBeNull();
+  });
+
   it('defaults the EPG url to an empty string and round-trips it', () => {
     expect(StorageService.getEpgUrl()).toBe('');
     StorageService.setEpgUrl('http://epg/guide.xml');
@@ -54,6 +61,14 @@ describe('StorageService', () => {
       version: 1,
       channels,
       epgUrls: ['http://host/epg.xml'],
+      timestamp: Date.now(),
+    });
+    expect(StorageService.getCachedPlaylist()).toBeNull();
+
+    StorageService.set('cached_playlist', {
+      version: 2,
+      channels,
+      epgSources: [],
       timestamp: Date.now(),
     });
     expect(StorageService.getCachedPlaylist()).toBeNull();
@@ -608,5 +623,48 @@ describe('StorageService catchup progress store', () => {
     expect(StorageService.getAllCatchupProgress(baseNow)).toEqual([]);
     expect(StorageService.getResume('x1', 'vod', '10')).not.toBeNull();
     expect(StorageService.getFavorites()).toEqual(['ch1']);
+  });
+});
+
+describe('StorageService channel customization store', () => {
+  beforeEach(() => localStorage.clear());
+
+  const record = () => ({
+    version: CONFIG.CHANNEL_CUSTOMIZATION_VERSION,
+    overrides: { k1: { hidden: true, name: 'Renamed' } },
+    order: ['k1', 'k2'],
+    groupOrder: ['News'],
+    groupOverrides: { News: { name: 'Headlines' } },
+    customGroups: ['Custom'],
+  });
+
+  it('round-trips the customization record', () => {
+    StorageService.setChannelCustomization(record());
+    expect(StorageService.getChannelCustomization()).toEqual(record());
+  });
+
+  it('returns null by default and after a clear', () => {
+    expect(StorageService.getChannelCustomization()).toBeNull();
+    StorageService.setChannelCustomization(record());
+    StorageService.clearChannelCustomization();
+    expect(StorageService.getChannelCustomization()).toBeNull();
+  });
+
+  it('ignores a record written by another version', () => {
+    StorageService.setChannelCustomization({ ...record(), version: 99 });
+    expect(StorageService.getChannelCustomization()).toBeNull();
+  });
+
+  it('round-trips the last channel keys and the show-hidden toggle', () => {
+    expect(StorageService.getLastChannelKey()).toBe('');
+    StorageService.setLastChannelKey('k1');
+    expect(StorageService.getLastChannelKey()).toBe('k1');
+    expect(StorageService.getLastChannelStreamKey()).toBe('');
+    StorageService.setLastChannelStreamKey('s1');
+    expect(StorageService.getLastChannelStreamKey()).toBe('s1');
+
+    expect(StorageService.getShowHiddenChannels()).toBe(false);
+    StorageService.setShowHiddenChannels(true);
+    expect(StorageService.getShowHiddenChannels()).toBe(true);
   });
 });

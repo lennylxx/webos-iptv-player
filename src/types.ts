@@ -5,6 +5,13 @@ export interface Channel {
   group: string;
   url: string;
   extras: Record<string, string> | null;
+  /** The name as delivered by the source, kept when a rename overrides `name`. */
+  sourceName?: string;
+  /** The group as delivered by the source, kept when a customization changes `group`. */
+  sourceGroup?: string;
+  /** The customization key of the effective group, kept when a group rename makes
+   *  the displayed `group` differ from the key user data is stored under. */
+  groupKey?: string;
   /** The stable `id` of every configured playlist this channel appears in (dedup
    *  keeps one channel object, but it can belong to several overlapping playlists). */
   playlistIds: string[];
@@ -79,6 +86,36 @@ export interface PlaylistEntry {
   xtream?: { username: string; password: string };
   /** Channel count, populated for 'upload' entries by reconcile() from UploadMeta. */
   count?: number;
+}
+
+/** A per-channel display customization, keyed by `channelCustomizationKey(ch)`. */
+export interface ChannelOverride {
+  /** Display name replacing the source name. Absent = use the source name. */
+  name?: string;
+  /** Target group key. Absent = the source group. */
+  group?: string;
+  hidden?: boolean;
+}
+
+/** A per-group customization, keyed by the group's customization key. */
+export interface GroupOverride {
+  name?: string;
+  hidden?: boolean;
+}
+
+/** The local channel customization record (reorder / hide / rename / regroup).
+ *  Keyed by channelCustomizationKey and group key, so it survives a provider
+ *  reordering or renaming channels. */
+export interface ChannelCustomization {
+  version: number;
+  overrides: Record<string, ChannelOverride>;
+  /** Explicit channel order (channelCustomizationKey list). Empty until the first move. */
+  order: string[];
+  /** Explicit group order (group keys). Empty until the first move. */
+  groupOrder: string[];
+  groupOverrides: Record<string, GroupOverride>;
+  /** User-created groups, so an empty one still lists and keeps its position. */
+  customGroups: string[];
 }
 
 export interface CatchupInfo {

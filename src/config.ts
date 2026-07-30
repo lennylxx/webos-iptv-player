@@ -5,6 +5,10 @@ export const CONFIG = {
 
   STORAGE_PREFIX: 'iptv_',
 
+  // Versioned channel customization record (reorder / hide / rename / regroup).
+  // Bump when its shape changes so an older payload is ignored, not misapplied.
+  CHANNEL_CUSTOMIZATION_VERSION: 1,
+
   // Bundled webOS JS service (see bundled-service/src/upload) for LAN playlist uploads.
   SERVICE_ID: __SERVICE_ID__,
   SERVICE_HOST: '127.0.0.1',
