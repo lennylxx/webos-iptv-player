@@ -42,6 +42,7 @@ export class ChannelList {
   private pointerClickReset: ReturnType<typeof setTimeout> | null = null;
   private lastDragPlacement = '';
   private editActionTarget: EditTarget | null = null;
+  private failedLogos = new Set<string>();
 
   constructor(
     container: HTMLElement,
@@ -88,6 +89,16 @@ export class ChannelList {
       }
       this.onPointerRelease(e.clientX, e.clientY);
     });
+    this.container.addEventListener('error', (e: Event) => {
+      const target = e.target;
+      if (!(target instanceof HTMLImageElement)
+          || !target.classList.contains('channel-logo')) return;
+      const src = target.getAttribute('src');
+      if (src && !this.failedLogos.has(src)) {
+        this.failedLogos.add(src);
+        this.render();
+      }
+    }, true);
   }
 
   private onPointerRelease(x: number, y: number): void {
@@ -822,11 +833,16 @@ export class ChannelList {
   }
 
   private renderLogo(ch: Channel): Safe {
+    let logo: Safe | string = '';
+    if (!ch.logo) {
+      logo = html`<div class="channel-logo-placeholder">${ch.name.charAt(0)}</div>`;
+    } else if (!this.failedLogos.has(ch.logo)) {
+      logo = html`<img class="channel-logo" src="${ch.logo}" alt="" loading="lazy">`;
+    }
+
     return html`
       <div class="channel-logo-wrap">
-        ${ch.logo
-          ? html`<img class="channel-logo" src="${ch.logo}" alt="" loading="lazy" onerror="this.style.display='none'">`
-          : html`<div class="channel-logo-placeholder">${ch.name.charAt(0)}</div>`}
+        ${logo}
       </div>
     `;
   }

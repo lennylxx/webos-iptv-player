@@ -261,6 +261,25 @@ describe('ChannelList.render', () => {
       playlistMock.channels[0].name = 'Alpha';
     }
   });
+
+  it('removes a failed channel logo and does not restore it on later renders', () => {
+    playlistMock.channels[0].logo = 'http://host/broken.png';
+    try {
+      list.render();
+      const logo = container.querySelector<HTMLImageElement>('.channel-logo');
+      expect(logo).not.toBeNull();
+
+      logo!.dispatchEvent(new Event('error'));
+      const failedRow = channelItems()[0];
+      expect(failedRow.querySelector('.channel-logo')).toBeNull();
+      expect(failedRow.querySelector('.channel-logo-placeholder')).toBeNull();
+
+      list.render();
+      expect(channelItems()[0].querySelector('.channel-logo')).toBeNull();
+    } finally {
+      playlistMock.channels[0].logo = '';
+    }
+  });
 });
 
 describe('ChannelList interaction', () => {
