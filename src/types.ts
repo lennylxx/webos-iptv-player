@@ -88,7 +88,7 @@ export interface PlaylistEntry {
   count?: number;
 }
 
-/** A per-channel display customization, keyed by `channelCustomizationKey(ch)`. */
+/** A per-channel display customization, keyed by `channelKey(ch)`. */
 export interface ChannelOverride {
   /** Display name replacing the source name. Absent = use the source name. */
   name?: string;
@@ -104,12 +104,12 @@ export interface GroupOverride {
 }
 
 /** The local channel customization record (reorder / hide / rename / regroup).
- *  Keyed by channelCustomizationKey and group key, so it survives a provider
+ *  Keyed by channelKey and group key, so it survives a provider
  *  reordering or renaming channels. */
 export interface ChannelCustomization {
   version: number;
   overrides: Record<string, ChannelOverride>;
-  /** Explicit channel order (channelCustomizationKey list). Empty until the first move. */
+  /** Explicit channel order (channelKey list). Empty until the first move. */
   order: string[];
   /** Explicit group order (group keys). Empty until the first move. */
   groupOrder: string[];

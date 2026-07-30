@@ -2,7 +2,7 @@ import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
 import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, EpgSource, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist-id';
 import { createLogger } from '../utils/logger';
 import { isLocalePreference, type LocalePreference } from '../i18n';
@@ -13,7 +13,7 @@ const PREFIX = CONFIG.STORAGE_PREFIX;
 
 // Versioned playlist cache schema. Bump when its channel or EPG-source shape
 // changes so an older payload is treated as a miss and re-fetched.
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 2;
 
 interface StreamMimeEntry {
   mime: string;
@@ -130,13 +130,6 @@ export const StorageService = {
   setLastChannelKey(key: string): void {
     set('last_channel_key', key);
   },
-  getLastChannelStreamKey(): string {
-    return get<string>('last_channel_stream_key', '');
-  },
-  setLastChannelStreamKey(key: string): void {
-    set('last_channel_stream_key', key);
-  },
-
   getChannelCustomization(): ChannelCustomization | null {
     const data = get<ChannelCustomization | null>('channel_custom', null);
     if (!data || data.version !== CONFIG.CHANNEL_CUSTOMIZATION_VERSION) return null;
@@ -172,8 +165,8 @@ export const StorageService = {
   getFavorites(): string[] {
     return get<string[]>('favorites', []);
   },
-  setFavorites(favs: string[]): void {
-    set('favorites', favs);
+  setFavorites(favs: string[]): boolean {
+    return set('favorites', favs);
   },
 
   toggleFavorite(channelId: string): boolean {
@@ -188,24 +181,27 @@ export const StorageService = {
     return idx < 0; // true = added
   },
 
-  // Favorites were originally keyed by `id || name`; re-key them once to the
-  // per-stream channelKey. Needs the loaded channels to map old keys to URLs, so
-  // it no-ops (without marking done) until channels are available.
-  //
-  // TODO(cleanup, post-1.2.0): one-time migration. A couple of releases after the
-  // one that ships it, delete this method, its two PlaylistService call sites, and
-  // its tests. (The `fav_url_keyed` flag then just lingers harmlessly in storage.)
+  // Favorites have used both `id || name` and the query-stripped channelKey.
+  // Re-key every match so migration never silently discards a saved favorite.
+  // TODO(cleanup, post-1.9.0): after a couple of releases, remove this method,
+  // its PlaylistService call sites, and its tests; the flags can remain inert.
   migrateFavoriteKeys(channels: Channel[]): void {
-    if (get<boolean>('fav_url_keyed', false)) return;
+    if (get<boolean>('fav_stream_keyed', false)) return;
     if (!channels.length) return;
-    const old = new Set(this.getFavorites());
-    if (old.size) {
-      const migrated = channels
-        .filter(ch => old.has(ch.id || ch.name))
-        .map(ch => channelKey(ch));
-      this.setFavorites([...new Set(migrated)]);
+    const urlKeyed = get<boolean>('fav_url_keyed', false);
+    const migrated: string[] = [];
+    for (const oldKey of new Set(this.getFavorites())) {
+      if (channels.some(ch => channelKey(ch) === oldKey)) {
+        migrated.push(oldKey);
+        continue;
+      }
+      const matches = channels.filter(ch =>
+        urlKeyed ? legacyChannelKey(ch) === oldKey : (ch.id || ch.name) === oldKey);
+      migrated.push(...matches.map(channelKey));
     }
-    set('fav_url_keyed', true);
+    if (!this.setFavorites([...new Set(migrated)])) return;
+    if (!set('fav_url_keyed', true)) return;
+    set('fav_stream_keyed', true);
   },
 
   getAutoPlay(): boolean {
@@ -249,9 +245,10 @@ export const StorageService = {
   },
 
   // Preferred audio track per channel (keyed by channelKey). Absent = follow the stream's default.
-  getAudioPref(channelId: string): AudioPref | null {
+  getAudioPref(channelId: string, legacyChannelId = ''): AudioPref | null {
     if (!channelId) return null;
-    return get<Record<string, AudioPref>>('audio_prefs', {})[channelId] ?? null;
+    const all = get<Record<string, AudioPref>>('audio_prefs', {});
+    return all[channelId] ?? all[legacyChannelId] ?? null;
   },
   setAudioPref(channelId: string, pref: AudioPref): void {
     if (!channelId) return;
@@ -262,9 +259,10 @@ export const StorageService = {
 
   // Preferred subtitle per channel (keyed by channelKey). Absent = follow the
   // stream's default (forced subtitle, else off); a stored `off` keeps them off.
-  getSubtitlePref(channelId: string): SubtitlePref | null {
+  getSubtitlePref(channelId: string, legacyChannelId = ''): SubtitlePref | null {
     if (!channelId) return null;
-    return get<Record<string, SubtitlePref>>('subtitle_prefs', {})[channelId] ?? null;
+    const all = get<Record<string, SubtitlePref>>('subtitle_prefs', {});
+    return all[channelId] ?? all[legacyChannelId] ?? null;
   },
   setSubtitlePref(channelId: string, pref: SubtitlePref): void {
     if (!channelId) return;
@@ -275,9 +273,10 @@ export const StorageService = {
 
   // Per-stream subtitle timing offset in seconds (keyed by channelPrefKey, same as the
   // subtitle pref). Absent or 0 = no shift.
-  getSubtitleOffset(channelId: string): number {
+  getSubtitleOffset(channelId: string, legacyChannelId = ''): number {
     if (!channelId) return 0;
-    return get<Record<string, number>>('subtitle_offsets', {})[channelId] ?? 0;
+    const all = get<Record<string, number>>('subtitle_offsets', {});
+    return all[channelId] ?? all[legacyChannelId] ?? 0;
   },
   setSubtitleOffset(channelId: string, seconds: number): void {
     if (!channelId) return;
@@ -424,7 +423,12 @@ export const StorageService = {
   // Keyed `${channelKey}|${progStart}` inside a single 'catchup_progress' map.
   // Each stored blob extends CatchupProgressEntry with a pre-computed expiresAt
   // so the prune sweep never needs per-entry catchupDays.
-  getCatchupProgress(chKey: string, progStart: number, now?: number): CatchupProgressEntry | null {
+  getCatchupProgress(
+    chKey: string,
+    progStart: number,
+    now?: number,
+    legacyChKey = '',
+  ): CatchupProgressEntry | null {
     const n = now ?? Date.now();
     const all = get<Record<string, CatchupProgressEntry & { expiresAt: number }>>('catchup_progress', {});
     let pruned = false;
@@ -432,7 +436,8 @@ export const StorageService = {
       if (all[k].expiresAt <= n) { delete all[k]; pruned = true; }
     }
     if (pruned) set('catchup_progress', all);
-    const stored = all[`${chKey}|${progStart}`];
+    const stored = all[`${chKey}|${progStart}`]
+      ?? (legacyChKey ? all[`${legacyChKey}|${progStart}`] : undefined);
     if (!stored) return null;
     const { expiresAt: _x, ...entry } = stored;
     return entry;
@@ -467,7 +472,11 @@ export const StorageService = {
     set('catchup_progress', all);
   },
 
-  getCatchupProgressList(chKey: string, now?: number): CatchupProgressEntry[] {
+  getCatchupProgressList(
+    chKey: string,
+    now?: number,
+    legacyChKey = '',
+  ): CatchupProgressEntry[] {
     const n = now ?? Date.now();
     const all = get<Record<string, CatchupProgressEntry & { expiresAt: number }>>('catchup_progress', {});
     let pruned = false;
@@ -475,15 +484,18 @@ export const StorageService = {
       if (all[k].expiresAt <= n) { delete all[k]; pruned = true; }
     }
     if (pruned) set('catchup_progress', all);
-    const prefix = `${chKey}|`;
-    const result: CatchupProgressEntry[] = [];
-    for (const k of Object.keys(all)) {
-      if (k.startsWith(prefix)) {
-        const { expiresAt: _x, ...entry } = all[k];
-        result.push(entry);
+    const prefixes = [`${chKey}|`];
+    if (legacyChKey && legacyChKey !== chKey) prefixes.push(`${legacyChKey}|`);
+    const byStart = new Map<number, CatchupProgressEntry>();
+    for (const prefix of prefixes) {
+      for (const k of Object.keys(all)) {
+        if (k.startsWith(prefix)) {
+          const { expiresAt: _x, ...entry } = all[k];
+          if (!byStart.has(entry.progStart)) byStart.set(entry.progStart, entry);
+        }
       }
     }
-    return result;
+    return [...byStart.values()];
   },
 
   getAllCatchupProgress(now?: number): CatchupProgressEntry[] {

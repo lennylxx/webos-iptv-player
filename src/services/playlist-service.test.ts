@@ -20,7 +20,10 @@ vi.mock('./storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../utils/fetch-helper', () => ({ fetchText: fetchTextMock }));
 
 import { PlaylistService } from './playlist-service';
-import { channelCustomizationKey, channelKey, channelStreamKey } from '../utils/channel';
+import {
+  channelKey,
+  legacyChannelKey,
+} from '../utils/channel';
 import { ChannelCustomizationService } from './channel-customization';
 import { CONFIG } from '../config';
 
@@ -383,6 +386,15 @@ describe('PlaylistService.getByGroup', () => {
     storageMock.getFavorites.mockReturnValue([channelKey(PlaylistService.channels[1])]);
     expect(PlaylistService.getByGroup('builtin:favorites').map(c => c.name)).toEqual(['Bravo']);
   });
+
+  it('keeps query-identified streams separate in Favorites', () => {
+    const first = channel({ name: 'Alpha', url: 'http://host/a?id=1' });
+    const second = channel({ name: 'Bravo', url: 'http://host/a?id=2' });
+    PlaylistService.channels = [first, second];
+    storageMock.getFavorites.mockReturnValue([channelKey(first)]);
+
+    expect(PlaylistService.getByGroup('builtin:favorites').map(c => c.name)).toEqual(['Alpha']);
+  });
 });
 
 describe('PlaylistService.search', () => {
@@ -477,8 +489,8 @@ describe('PlaylistService.search', () => {
 });
 
 describe('PlaylistService customization', () => {
-  const KEY_A = channelCustomizationKey({ url: 'http://stream/u1' } as Channel);
-  const KEY_B = channelCustomizationKey({ url: 'http://stream/u2' } as Channel);
+  const KEY_A = channelKey({ url: 'http://stream/u1' } as Channel);
+  const KEY_B = channelKey({ url: 'http://stream/u2' } as Channel);
 
   function record(over: Partial<ChannelCustomization> = {}): ChannelCustomization {
     return {
@@ -517,21 +529,19 @@ describe('PlaylistService customization', () => {
     PlaylistService.applyCustomization();
 
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo', 'Alpha']);
-    expect(PlaylistService.indexOfCustomizationKey(KEY_A)).toBe(1);
-    expect(PlaylistService.indexOfCustomizationKey(KEY_B)).toBe(0);
-    expect(PlaylistService.indexOfCustomizationKey('missing')).toBe(-1);
+    expect(PlaylistService.indexOfKey(KEY_A)).toBe(1);
+    expect(PlaylistService.indexOfKey(KEY_B)).toBe(0);
+    expect(PlaylistService.indexOfKey('missing')).toBe(-1);
     expect(PlaylistService.getByIndex(0)?.name).toBe('Bravo');
   });
 
-  it('prefers the precise stream key and uses the legacy index only without keys', async () => {
+  it('prefers the channel key and uses the legacy index only without one', async () => {
     await PlaylistService.refresh();
     const savedKey = channelKey(PlaylistService.channels[1]);
-    const streamKey = channelCustomizationKey(PlaylistService.channels[1]);
 
-    expect(PlaylistService.resolveLastChannelIndex(streamKey, savedKey, 0)).toBe(1);
-    expect(PlaylistService.resolveLastChannelIndex('missing', savedKey, 0)).toBe(1);
-    expect(PlaylistService.resolveLastChannelIndex('', 'missing', 0)).toBe(-1);
-    expect(PlaylistService.resolveLastChannelIndex('', '', 1)).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex(savedKey, 0)).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex('missing', 0)).toBe(-1);
+    expect(PlaylistService.resolveLastChannelIndex('', 1)).toBe(1);
   });
 
   it('resolves query-distinguished streams precisely for autoplay', () => {
@@ -540,9 +550,8 @@ describe('PlaylistService customization', () => {
       channel({ url: 'http://host/stream?id=2' }),
     ];
 
-    const second = channelCustomizationKey(PlaylistService.channels[1]);
-    expect(PlaylistService.resolveLastChannelIndex(second, channelKey(PlaylistService.channels[1]), 0))
-      .toBe(1);
+    const second = channelKey(PlaylistService.channels[1]);
+    expect(PlaylistService.resolveLastChannelIndex(second, 0)).toBe(1);
   });
 
   it('uses a stable query identity after a stream token rotates', () => {
@@ -552,11 +561,7 @@ describe('PlaylistService customization', () => {
     ];
     const old = channel({ url: 'http://host/stream?id=2&token=A' });
 
-    expect(PlaylistService.resolveLastChannelIndex(
-      channelStreamKey(old),
-      channelKey(old),
-      0,
-    )).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex(channelKey(old), 0)).toBe(1);
   });
 
   it('does not use an ambiguous legacy autoplay key', () => {
@@ -566,8 +571,7 @@ describe('PlaylistService customization', () => {
     ];
 
     expect(PlaylistService.resolveLastChannelIndex(
-      '',
-      channelKey(PlaylistService.channels[1]),
+      legacyChannelKey(PlaylistService.channels[1]),
       0,
     )).toBe(-1);
   });

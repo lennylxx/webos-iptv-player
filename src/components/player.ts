@@ -2,7 +2,7 @@ import type { Action, Channel, CatchupInfo, AudioTrackOption, AudioOption, Audio
   SubtitleTrackOption, SubtitleOption, SubtitlePref, ManifestSubtitle, ManifestClosedCaption, VodPlayback, VodQueueItem, SidecarSubtitle } from '../types';
 import { formatXtreamCatchupStart } from '../utils/xtream-url';
 import { $, show, hide, html, raw, Safe } from '../utils/dom';
-import { channelKey, channelStreamKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { morph } from '../utils/morph';
 import { dvrWindow, dvrState, type DvrWindow, type DvrState } from '../utils/dvr';
 import { fetchLimitedText } from '../utils/fetch-helper';
@@ -399,7 +399,6 @@ export class Player {
     this.failedIcons.clear(); // fresh icon-load attempts per channel/programme visit
     if (channelIndex >= 0) StorageService.setLastChannel(channelIndex);
     StorageService.setLastChannelKey(channelKey(channel));
-    StorageService.setLastChannelStreamKey(channelStreamKey(channel));
 
     const url = this.resolveStreamUrl(channel, catchup || null);
     if (catchup) log.debug('catchup URL:', url);
@@ -615,7 +614,10 @@ export class Player {
 
   // Load the saved offset for the current stream and apply it (called on tune-in).
   private loadSubtitleOffset(): void {
-    this.subtitleOffsetS = StorageService.getSubtitleOffset(this.channelPrefKey());
+    this.subtitleOffsetS = StorageService.getSubtitleOffset(
+      this.channelPrefKey(),
+      this.legacyChannelPrefKey(),
+    );
     this.applySubtitleOffset();
   }
 
@@ -1775,6 +1777,11 @@ export class Player {
     return this.currentChannel ? channelKey(this.currentChannel) : '';
   }
 
+  private legacyChannelPrefKey(): string {
+    if (this.vod) return '';
+    return this.currentChannel ? legacyChannelKey(this.currentChannel) : '';
+  }
+
   private rememberAudio(opt: AudioOption): void {
     const key = this.channelPrefKey();
     if (key) StorageService.setAudioPref(key, { name: opt.name, lang: opt.lang });
@@ -1798,7 +1805,7 @@ export class Player {
     if (!this.hls) return;
     const options = this.audioOptions();
     if (options.length < 2) return;
-    const pref = StorageService.getAudioPref(this.channelPrefKey());
+    const pref = StorageService.getAudioPref(this.channelPrefKey(), this.legacyChannelPrefKey());
     const idx = chooseAudioIndex(options, pref);
     this.logAudioChoice('hls', options, pref, idx);
     if (idx >= 0 && idx !== this.hls.audioTrack) this.hls.audioTrack = idx;
@@ -1809,7 +1816,7 @@ export class Player {
     const list = this.videoEl?.audioTracks;
     if (!list || list.length < 2) return;
     const options = this.audioOptions();
-    const pref = StorageService.getAudioPref(this.channelPrefKey());
+    const pref = StorageService.getAudioPref(this.channelPrefKey(), this.legacyChannelPrefKey());
     const idx = chooseAudioIndex(options, pref);
     this.logAudioChoice('native', options, pref, idx);
     if (idx < 0 || list[idx].enabled) return; // already active — don't disturb playback
@@ -1988,7 +1995,7 @@ export class Player {
   // rendition once subtitles are on. A saved CC pick is applied separately.
   private applySelfRenderSelection(): void {
     if (this.hls) return;
-    const pref = StorageService.getSubtitlePref(this.channelPrefKey());
+    const pref = StorageService.getSubtitlePref(this.channelPrefKey(), this.legacyChannelPrefKey());
     this.loadSubtitleOffset();
     if (pref?.cc) { this.applySubtitleChoice(-1); return; } // CC path owns it
     const options = manifestSubtitleOptions(this.manifestSubtitles, this.selfRenderIndex);
@@ -2022,7 +2029,7 @@ export class Player {
     if (!this.hls) return;
     const options = this.subtitleOptions();
     if (!options.length) return;
-    const pref = StorageService.getSubtitlePref(this.channelPrefKey());
+    const pref = StorageService.getSubtitlePref(this.channelPrefKey(), this.legacyChannelPrefKey());
     const idx = chooseSubtitleIndex(options, pref);
     this.logSubtitleChoice('hls', options, pref, idx);
     this.hls.subtitleDisplay = idx >= 0;
@@ -2036,7 +2043,7 @@ export class Player {
   // live/catch-up WebVTT is handled by applySelfRenderSelection, CC below.
   private applyNativeSubtitleSelection(): void {
     if (this.hls) return; // hls.js owns the rendition and its native text tracks
-    const pref = StorageService.getSubtitlePref(this.channelPrefKey());
+    const pref = StorageService.getSubtitlePref(this.channelPrefKey(), this.legacyChannelPrefKey());
     if (this.vod) {
       const options = this.subtitleOptions();
       if (!options.length) return;

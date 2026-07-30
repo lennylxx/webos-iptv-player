@@ -2,7 +2,7 @@ import type { Reminder } from '../types';
 import { CONFIG } from '../config';
 import { StorageService } from './storage-service';
 import { PlaylistService } from './playlist-service';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { truncate } from '../utils/text';
 import { t } from '../i18n';
 import { createLogger } from '../utils/logger';
@@ -37,7 +37,7 @@ class ReminderServiceImpl {
   }
 
   has(chKey: string, startMs: number): boolean {
-    return this.list().some(r => r.channelKey === chKey && r.startMs === startMs);
+    return this.list().some(r => this.matchesChannel(r, chKey) && r.startMs === startMs);
   }
 
   add(reminder: Reminder): void {
@@ -50,9 +50,10 @@ class ReminderServiceImpl {
   }
 
   remove(chKey: string, startMs: number): void {
-    const list = this.list().filter(r => !(r.channelKey === chKey && r.startMs === startMs));
-    StorageService.setReminders(list);
-    this.cancelSchedule(chKey, startMs);
+    const list = this.list();
+    const removed = list.filter(r => this.matchesChannel(r, chKey) && r.startMs === startMs);
+    StorageService.setReminders(list.filter(r => !removed.includes(r)));
+    for (const reminder of removed) this.cancelSchedule(reminder.channelKey, startMs);
   }
 
   markAnswered(chKey: string, startMs: number): void {
@@ -64,7 +65,27 @@ class ReminderServiceImpl {
   }
 
   resolveChannelIndex(chKey: string): number {
-    return PlaylistService.channels.findIndex(ch => channelKey(ch) === chKey);
+    const exact = PlaylistService.channels.findIndex(ch => channelKey(ch) === chKey);
+    if (exact >= 0) return exact;
+    let legacyMatch = -1;
+    for (let i = 0; i < PlaylistService.channels.length; i++) {
+      if (legacyChannelKey(PlaylistService.channels[i]) !== chKey) continue;
+      if (legacyMatch >= 0) return -1;
+      legacyMatch = i;
+    }
+    return legacyMatch;
+  }
+
+  private matchesChannel(reminder: Reminder, chKey: string): boolean {
+    if (reminder.channelKey === chKey) return true;
+    const target = PlaylistService.channels.find(ch => channelKey(ch) === chKey);
+    if (!target || legacyChannelKey(target) !== reminder.channelKey) return false;
+    const legacyMatches = PlaylistService.channels
+      .filter(ch => legacyChannelKey(ch) === reminder.channelKey);
+    if (legacyMatches.length === 1) return legacyMatches[0] === target;
+    const named = legacyMatches.filter(ch =>
+      ch.name === reminder.channelName || ch.sourceName === reminder.channelName);
+    return named.length === 1 && named[0] === target;
   }
 
   // Parse a reminderChannelKey out of a launch param (JSON string on cold

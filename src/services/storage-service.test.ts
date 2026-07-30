@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
 import { StorageService } from './storage-service';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { CONFIG } from '../config';
 
 const ch = (over: Partial<Channel>): Channel => ({
@@ -80,7 +80,7 @@ describe('StorageService', () => {
       epgSources: [],
       timestamp: Date.now(),
     });
-    expect(StorageService.getCachedPlaylist()).toBeNull();
+    expect(StorageService.getCachedPlaylist()).toEqual({ channels, epgSources: [] });
 
     const epgSources = [{ url: 'http://host/epg.xml', playlistIds: ['p1'], kind: 'm3u' as const }];
     StorageService.setCachedPlaylist(channels, epgSources);
@@ -136,7 +136,10 @@ describe('StorageService', () => {
       StorageService.setFavorites(['fav1', 'fav2']); // legacy keys
       const channels = [ch({ id: 'fav1', url: 'http://host/a' }), ch({ name: 'fav2', url: 'http://host/b' })];
       StorageService.migrateFavoriteKeys(channels);
-      expect(StorageService.getFavorites()).toEqual([channelKey(channels[0]), channelKey(channels[1])]);
+      expect(StorageService.getFavorites()).toEqual([
+        channelKey(channels[0]),
+        channelKey(channels[1]),
+      ]);
 
       // A second call must not touch favorites again (flag set).
       StorageService.setFavorites(['untouched']);
@@ -159,6 +162,39 @@ describe('StorageService', () => {
       StorageService.migrateFavoriteKeys([ch({ id: 'fav1', url: 'http://host/a' })]);
       expect(StorageService.getFavorites()).toEqual([]);
     });
+
+    it('migrates a unique query-stripped key to the query-aware stream key', () => {
+      const channel = ch({ url: 'http://host/a?id=1' });
+      StorageService.setFavorites([legacyChannelKey(channel)]);
+      StorageService.set('fav_url_keyed', true);
+
+      StorageService.migrateFavoriteKeys([channel]);
+
+      expect(StorageService.getFavorites()).toEqual([channelKey(channel)]);
+    });
+
+    it('preserves every channel matched by an ambiguous query-stripped key', () => {
+      const channels = [
+        ch({ url: 'http://host/a?id=1' }),
+        ch({ url: 'http://host/a?id=2' }),
+      ];
+      StorageService.setFavorites([legacyChannelKey(channels[0])]);
+      StorageService.set('fav_url_keyed', true);
+
+      StorageService.migrateFavoriteKeys(channels);
+
+      expect(StorageService.getFavorites()).toEqual(channels.map(channelKey));
+    });
+
+    it('preserves already-migrated keys when the completion flag is missing', () => {
+      const channel = ch({ url: 'http://host/a?id=1' });
+      StorageService.setFavorites([channelKey(channel)]);
+      StorageService.set('fav_url_keyed', true);
+
+      StorageService.migrateFavoriteKeys([channel]);
+
+      expect(StorageService.getFavorites()).toEqual([channelKey(channel)]);
+    });
   });
 
   describe('audio preferences', () => {
@@ -179,6 +215,15 @@ describe('StorageService', () => {
       // A fresh read goes back to localStorage — no in-memory cache.
       expect(StorageService.getAudioPref('ch1')).toEqual({ name: 'Track 2', lang: 'l1' });
       expect(localStorage.getItem('iptv_audio_prefs')).toContain('Track 2');
+    });
+
+    it('reads a legacy channel key without rewriting it', () => {
+      StorageService.setAudioPref('old', { name: 'Track 1', lang: 'l1' });
+
+      expect(StorageService.getAudioPref('new', 'old')).toEqual({ name: 'Track 1', lang: 'l1' });
+      expect(JSON.parse(localStorage.getItem('iptv_audio_prefs') ?? '{}')).toEqual({
+        old: { name: 'Track 1', lang: 'l1' },
+      });
     });
 
     it('ignores an empty channel id', () => {
@@ -207,6 +252,16 @@ describe('StorageService', () => {
       expect(localStorage.getItem('iptv_subtitle_prefs')).toContain('Track 2');
     });
 
+    it('prefers the current key and falls back to a legacy key without rewriting', () => {
+      StorageService.setSubtitlePref('old', { off: true, name: '', lang: '' });
+      expect(StorageService.getSubtitlePref('new', 'old')).toEqual({ off: true, name: '', lang: '' });
+
+      StorageService.setSubtitlePref('new', { off: false, name: 'Track 1', lang: 'l1' });
+      expect(StorageService.getSubtitlePref('new', 'old'))
+        .toEqual({ off: false, name: 'Track 1', lang: 'l1' });
+      expect(JSON.parse(localStorage.getItem('iptv_subtitle_prefs') ?? '{}')).toHaveProperty('old');
+    });
+
     it('ignores an empty channel id', () => {
       StorageService.setSubtitlePref('', { off: true, name: '', lang: '' });
       expect(StorageService.getSubtitlePref('')).toBeNull();
@@ -226,6 +281,14 @@ describe('StorageService', () => {
       StorageService.setSubtitleOffset('ch1', 0);
       expect(StorageService.getSubtitleOffset('ch1')).toBe(0);
       expect(localStorage.getItem('iptv_subtitle_offsets')).not.toContain('ch1');
+    });
+    it('prefers the current key and falls back to a legacy key without rewriting', () => {
+      StorageService.setSubtitleOffset('old', 1.5);
+      expect(StorageService.getSubtitleOffset('new', 'old')).toBe(1.5);
+
+      StorageService.setSubtitleOffset('new', -0.5);
+      expect(StorageService.getSubtitleOffset('new', 'old')).toBe(-0.5);
+      expect(JSON.parse(localStorage.getItem('iptv_subtitle_offsets') ?? '{}')).toHaveProperty('old');
     });
     it('ignores an empty key', () => {
       StorageService.setSubtitleOffset('', 2);
@@ -560,6 +623,27 @@ describe('StorageService catchup progress store', () => {
       expect(StorageService.getCatchupProgressList('ck1', baseNow)).toEqual([]);
     });
 
+    it('reads a legacy key without rewriting and prefers current-key progress', () => {
+      const progStart = baseNow - HOUR;
+      StorageService.setCatchupProgress(
+        mkEntry({ channelKey: 'old', progStart, position: 60 }),
+        7,
+        baseNow,
+      );
+      expect(StorageService.getCatchupProgressList('new', baseNow, 'old')[0]?.position).toBe(60);
+
+      StorageService.setCatchupProgress(
+        mkEntry({ channelKey: 'new', progStart, position: 120 }),
+        7,
+        baseNow,
+      );
+      const list = StorageService.getCatchupProgressList('new', baseNow, 'old');
+      expect(list).toHaveLength(1);
+      expect(list[0].position).toBe(120);
+      expect(JSON.parse(localStorage.getItem('iptv_catchup_progress') ?? '{}'))
+        .toHaveProperty(`old|${progStart}`);
+    });
+
     it('excludes expired entries', () => {
       const progEnd = baseNow + HOUR;
       StorageService.setCatchupProgress(mkEntry({ progEnd }), 1, baseNow);
@@ -668,9 +752,6 @@ describe('StorageService channel customization store', () => {
     expect(StorageService.getLastChannelKey()).toBe('');
     StorageService.setLastChannelKey('k1');
     expect(StorageService.getLastChannelKey()).toBe('k1');
-    expect(StorageService.getLastChannelStreamKey()).toBe('');
-    StorageService.setLastChannelStreamKey('s1');
-    expect(StorageService.getLastChannelStreamKey()).toBe('s1');
 
     expect(StorageService.getShowHiddenChannels()).toBe(false);
     StorageService.setShowHiddenChannels(true);

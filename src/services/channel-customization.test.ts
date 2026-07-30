@@ -12,7 +12,7 @@ const { storageMock } = vi.hoisted(() => ({
 vi.mock('./storage-service', () => ({ StorageService: storageMock }));
 
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
-import { channelCustomizationKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 
 function channel(name: string, url: string, group = ''): Channel {
   return {
@@ -29,9 +29,9 @@ function fixture(): Channel[] {
   ];
 }
 
-const KEY_A = channelCustomizationKey(channel('Alpha', 'http://host/a'));
-const KEY_B = channelCustomizationKey(channel('Bravo', 'http://host/b'));
-const KEY_C = channelCustomizationKey(channel('Charlie', 'http://host/c'));
+const KEY_A = channelKey(channel('Alpha', 'http://host/a'));
+const KEY_B = channelKey(channel('Bravo', 'http://host/b'));
+const KEY_C = channelKey(channel('Charlie', 'http://host/c'));
 
 function names(channels: Channel[]): string[] {
   return channels.map((ch) => ch.name);

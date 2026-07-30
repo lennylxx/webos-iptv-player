@@ -1,7 +1,7 @@
 import type { Action, NumberEvent, CatchupInfo, CatchupProgressEntry, Channel, Programme } from '../types';
 import { html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
@@ -244,7 +244,11 @@ export class EpgGrid {
     let progressMap: Map<number, CatchupProgressEntry> | undefined;
     if (hasCatchup && channel) {
       const chKey = channelKey(channel);
-      const entries = StorageService.getCatchupProgressList(chKey);
+      const entries = StorageService.getCatchupProgressList(
+        chKey,
+        undefined,
+        legacyChannelKey(channel),
+      );
       progressMap = new Map(entries.map(e => [e.progStart, e]));
     }
 
@@ -615,7 +619,11 @@ export class EpgGrid {
     if (isPast && channel?.catchupSource) {
       const chKey = channelKey(channel);
       const startMs = prog.start.getTime();
-      const entries = StorageService.getCatchupProgressList(chKey);
+      const entries = StorageService.getCatchupProgressList(
+        chKey,
+        undefined,
+        legacyChannelKey(channel),
+      );
       const entry = entries.find(e => e.progStart === startMs);
       if (entry && !entry.completed) {
         // Partial entry — show resume prompt

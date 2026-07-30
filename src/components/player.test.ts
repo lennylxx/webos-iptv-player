@@ -21,7 +21,7 @@ vi.mock('../services/epg-service', () => ({
 }));
 vi.mock('../services/storage-service', () => ({
   StorageService: {
-    setLastChannel: vi.fn(), setLastChannelKey: vi.fn(), setLastChannelStreamKey: vi.fn(),
+    setLastChannel: vi.fn(), setLastChannelKey: vi.fn(),
     getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
     getAudioPref: vi.fn(), setAudioPref: vi.fn(),
     getStreamMime: vi.fn(() => null), setStreamMime: vi.fn(),
@@ -57,7 +57,7 @@ import { showToast } from './toast';
 import { probeMedia } from '../services/media-probe';
 import { getCachedSubtitle, setCachedSubtitle } from '../services/idb-cache';
 import { CONFIG } from '../config';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 
 const CHANNEL = {
   id: 'c1', name: 'Chan', logo: '', group: '', url: 'http://host/play/c1', extras: null,
@@ -892,6 +892,26 @@ describe('Player VOD audio/subtitle track selection (native, in-container)', () 
     vi.mocked(StorageService.getAudioPref).mockReturnValue({ name: 'Track 2', lang: 'l2' });
     applyAudio();
     expect(audio.map((t) => t.enabled)).toEqual([false, true]);
+  });
+
+  it('reads live preferences with current and legacy channel keys', () => {
+    const audio = [
+      audioTrack(true, { label: 'Track 1', language: 'l1' }),
+      audioTrack(false, { label: 'Track 2', language: 'l2' }),
+    ];
+    setup({ audio });
+    const live = { ...CHANNEL, url: 'http://host/play?stid=1&key=A' };
+    const state = player as unknown as {
+      vod: unknown;
+      currentChannel: typeof live;
+    };
+    state.vod = null;
+    state.currentChannel = live;
+
+    applyAudio();
+
+    expect(StorageService.getAudioPref)
+      .toHaveBeenCalledWith(channelKey(live), legacyChannelKey(live));
   });
 
   it('reports the offset row available and clamps/persists/shifts on setSubtitleOffset', () => {

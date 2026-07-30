@@ -1,32 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import type { Channel } from '../types';
-import { channelCustomizationKey, channelKey, channelStreamKey } from './channel';
+import {
+  channelKey,
+  legacyChannelKey,
+} from './channel';
 
 const ch = (url: string): Channel => ({
   id: '', name: '', logo: '', group: '', url, extras: null,
   playlistIds: [], catchup: '', catchupSource: '', catchupDays: 0,
-});
-
-describe('channelCustomizationKey', () => {
-  it('distinguishes streams whose identity is in the query string', () => {
-    expect(channelCustomizationKey(ch('http://host/stream?id=1')))
-      .not.toBe(channelCustomizationKey(ch('http://host/stream?id=2')));
-  });
-
-  it('ignores fragments', () => {
-    expect(channelCustomizationKey(ch('http://host/a?id=1#frag')))
-      .toBe(channelCustomizationKey(ch('http://host/a?id=1')));
-  });
-
-  it('uses the exact stream identity', () => {
-    expect(channelCustomizationKey(ch('http://host/a?id=1')))
-      .toBe(channelStreamKey(ch('http://host/a?id=1')));
-  });
-
-  it('survives rotating authentication parameters', () => {
-    expect(channelCustomizationKey(ch('http://host/a?id=1&token=A&expires=1')))
-      .toBe(channelCustomizationKey(ch('http://host/a?id=1&token=B&expires=2')));
-  });
 });
 
 describe('channelKey', () => {
@@ -40,9 +21,16 @@ describe('channelKey', () => {
     expect(a).toBe(b);
   });
 
-  it('leaves existing query-stripped persisted keys unchanged', () => {
+  it('keeps query channel identity while ignoring provider credentials', () => {
+    expect(channelKey(ch('http://host/a?stid=1&mac=A&key=A')))
+      .toBe(channelKey(ch('http://host/a?stid=1&mac=B&key=B')));
+    expect(channelKey(ch('http://host/a?stid=1&mac=A&key=A')))
+      .not.toBe(channelKey(ch('http://host/a?stid=2&mac=A&key=A')));
+  });
+
+  it('distinguishes streams whose identity is in the query string', () => {
     expect(channelKey(ch('http://host/a?id=1')))
-      .toBe(channelKey(ch('http://host/a?id=2')));
+      .not.toBe(channelKey(ch('http://host/a?id=2')));
   });
 
   it('ignores the fragment', () => {
@@ -59,5 +47,12 @@ describe('channelKey', () => {
 
   it('handles an empty URL without throwing', () => {
     expect(channelKey(ch(''))).toMatch(/^[0-9a-f]{8}$/);
+  });
+});
+
+describe('legacyChannelKey', () => {
+  it('reproduces query-stripped persisted keys for migration', () => {
+    expect(legacyChannelKey(ch('http://host/a?id=1')))
+      .toBe(legacyChannelKey(ch('http://host/a?id=2')));
   });
 });

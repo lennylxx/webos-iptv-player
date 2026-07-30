@@ -38,7 +38,7 @@ vi.mock('./epg-service', () => ({ EpgService: epgMock }));
 vi.mock('./xtream-archive', () => ({ XtreamArchiveService: archiveMock }));
 
 import { RecentlyWatchedService } from './recently-watched';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 
 const channel = (over: Partial<Channel> = {}): Channel => ({
   id: 'ch1',
@@ -92,6 +92,37 @@ describe('RecentlyWatchedService.getItems', () => {
 
     expect(items.map(item => item.kind)).toEqual(['catchup', 'live']);
     expect(items.map(item => item.channelIndex)).toEqual([1, 0]);
+  });
+
+  it('resolves an unambiguous legacy channel key', () => {
+    const ch = channel({ url: 'http://host/a?id=1' });
+    data.channels.push(ch);
+    data.live.push({ channelKey: legacyChannelKey(ch), updatedAt: 3000 });
+
+    expect(RecentlyWatchedService.getItems()[0]?.channel).toBe(ch);
+  });
+
+  it('does not guess an ambiguous legacy channel key', () => {
+    const first = channel({ url: 'http://host/a?id=1' });
+    const second = channel({ id: 'ch2', url: 'http://host/a?id=2' });
+    data.channels.push(first, second);
+    data.live.push({ channelKey: legacyChannelKey(first), updatedAt: 3000 });
+
+    expect(RecentlyWatchedService.getItems()).toEqual([]);
+  });
+
+  it('deduplicates legacy and current live entries after the channel is watched again', () => {
+    const ch = channel({ url: 'http://host/a?id=1' });
+    data.channels.push(ch);
+    data.live.push(
+      { channelKey: legacyChannelKey(ch), updatedAt: 2000 },
+      { channelKey: channelKey(ch), updatedAt: 3000 },
+    );
+
+    const items = RecentlyWatchedService.getItems();
+
+    expect(items).toHaveLength(1);
+    expect(items[0].updatedAt).toBe(3000);
   });
 
   it('filters both item types by playlist membership without changing order', () => {

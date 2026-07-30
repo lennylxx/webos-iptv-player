@@ -21,6 +21,8 @@ const VOLATILE_QUERY_PARAMS = new Set([
   'expiry',
   'hdnea',
   'hdnts',
+  'key',
+  'mac',
   'signature',
   'sig',
   'token',
@@ -49,16 +51,13 @@ function stableStreamUrl(url: string): string {
   return query ? `${base}?${query}` : base;
 }
 
-/** Existing token-stable identity used by released persisted channel data. */
-export function channelKey(ch: Channel): string {
+// TODO(cleanup, post-1.9.0): remove after the released query-stripped keys no
+// longer need migration or compatibility lookup.
+export function legacyChannelKey(ch: Channel): string {
   return fnv1a((ch.url || '').split('#')[0].split('?')[0]);
 }
 
-/** Query-aware identity for channel editing and precise autoplay restoration. */
-export function channelStreamKey(ch: Channel): string {
+/** Stable per-stream identity used by all channel-scoped data. */
+export function channelKey(ch: Channel): string {
   return fnv1a(stableStreamUrl(ch.url || ''));
-}
-
-export function channelCustomizationKey(ch: Channel): string {
-  return channelStreamKey(ch);
 }

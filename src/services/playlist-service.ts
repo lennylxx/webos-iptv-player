@@ -9,7 +9,10 @@ import {
   xtreamLiveStreamId,
   type XtreamCredentials,
 } from '../utils/xtream-url';
-import { channelCustomizationKey, channelKey, channelStreamKey } from '../utils/channel';
+import {
+  channelKey,
+  legacyChannelKey,
+} from '../utils/channel';
 import { rankChannels } from '../utils/channel-search';
 import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
@@ -308,37 +311,18 @@ class PlaylistServiceImpl {
     return -1;
   }
 
-  indexOfCustomizationKey(key: string): number {
-    if (!key) return -1;
-    for (let i = 0; i < this.channels.length; i++) {
-      if (channelCustomizationKey(this.channels[i]) === key) return i;
-    }
-    return -1;
-  }
-
-  indexOfStreamKey(key: string): number {
-    if (!key) return -1;
-    for (let i = 0; i < this.channels.length; i++) {
-      if (channelStreamKey(this.channels[i]) === key) return i;
-    }
-    return -1;
-  }
-
   private indexOfUniqueKey(key: string): number {
     let match = -1;
     for (let i = 0; i < this.channels.length; i++) {
-      if (channelKey(this.channels[i]) !== key) continue;
+      const channel = this.channels[i];
+      if (channelKey(channel) !== key && legacyChannelKey(channel) !== key) continue;
       if (match >= 0) return -1;
       match = i;
     }
     return match;
   }
 
-  resolveLastChannelIndex(streamKey: string, stableKey: string, legacyIndex: number): number {
-    if (streamKey) {
-      const precise = this.indexOfStreamKey(streamKey);
-      if (precise >= 0) return precise;
-    }
+  resolveLastChannelIndex(stableKey: string, legacyIndex: number): number {
     if (!stableKey) return legacyIndex;
     return this.indexOfUniqueKey(stableKey);
   }

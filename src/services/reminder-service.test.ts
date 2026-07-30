@@ -8,7 +8,7 @@ const { state, playlistMock } = vi.hoisted(() => {
 vi.mock('./playlist-service', () => ({ PlaylistService: playlistMock }));
 
 import { ReminderService } from './reminder-service';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { CONFIG } from '../config';
 import { setLocale } from '../i18n';
 
@@ -40,6 +40,29 @@ describe('ReminderService store', () => {
   it('resolves a channelKey to its playlist index (-1 if gone)', () => {
     expect(ReminderService.resolveChannelIndex(keyA)).toBe(0);
     expect(ReminderService.resolveChannelIndex('nope')).toBe(-1);
+  });
+
+  it('resolves only unambiguous legacy channel keys', () => {
+    const legacy = legacyChannelKey(chan('http://host/a?id=1', 'A') as never);
+    state.channels = [chan('http://host/a?id=1', 'A')] as never[];
+    expect(ReminderService.resolveChannelIndex(legacy)).toBe(0);
+
+    state.channels.push(chan('http://host/a?id=2', 'B') as never);
+    expect(ReminderService.resolveChannelIndex(legacy)).toBe(-1);
+  });
+
+  it('detects and removes the correct legacy reminder after query keys diverge', () => {
+    const first = chan('http://host/a?id=1', 'A');
+    const second = chan('http://host/a?id=2', 'B');
+    state.channels = [first, second] as never[];
+    const oldKey = legacyChannelKey(first as never);
+    ReminderService.add(rem({ channelKey: oldKey, channelName: 'A', startMs: 5000 }));
+
+    expect(ReminderService.has(channelKey(first as never), 5000)).toBe(true);
+    expect(ReminderService.has(channelKey(second as never), 5000)).toBe(false);
+
+    ReminderService.remove(channelKey(first as never), 5000);
+    expect(ReminderService.list()).toEqual([]);
   });
 
   it('dueNow returns only on-air, unanswered, resolvable reminders', () => {

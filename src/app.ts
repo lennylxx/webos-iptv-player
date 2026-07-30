@@ -499,10 +499,8 @@ class App {
       this.scanReminders();
 
       if (StorageService.getAutoPlay()) {
-        // Prefer the per-stream key: a customization (or a provider reshuffle)
-        // moves the index, but not the channel it points at.
+        // The per-stream key survives customization and provider reshuffles.
         const lastCh = PlaylistService.resolveLastChannelIndex(
-          StorageService.getLastChannelStreamKey(),
           StorageService.getLastChannelKey(),
           StorageService.getLastChannel(),
         );

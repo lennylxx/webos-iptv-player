@@ -1,5 +1,5 @@
 import type { Channel, ChannelCustomization, ChannelOverride, GroupOverride } from '../types';
-import { channelCustomizationKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { createLogger } from '../utils/logger';
 import { CONFIG } from '../config';
 import { StorageService } from './storage-service';
@@ -21,7 +21,7 @@ function emptyRecord(): ChannelCustomization {
  * Local channel customization: reorder, hide, rename, and regroup channels and
  * groups without touching the source playlists.
  *
- * Everything is keyed by `channelCustomizationKey(ch)` (per stream) and by a
+ * Everything is keyed by `channelKey(ch)` (per stream) and by a
  * group key (the source group name, or a user-created one), so a provider
  * reordering or renaming channels never re-points a customization.
  */
@@ -70,7 +70,7 @@ class ChannelCustomizationServiceImpl {
 
   /** True when the channel is hidden itself or sits in a hidden group. */
   isChannelHidden(ch: Channel): boolean {
-    return this.isHidden(channelCustomizationKey(ch)) || this.isGroupHidden(groupKeyOf(ch));
+    return this.isHidden(channelKey(ch)) || this.isGroupHidden(groupKeyOf(ch));
   }
 
   toggleHidden(key: string): boolean {
@@ -179,7 +179,7 @@ class ChannelCustomizationServiceImpl {
     const kept: { ch: Channel; rank: number; index: number }[] = [];
     for (let i = 0; i < channels.length; i++) {
       const ch = channels[i];
-      const key = channelCustomizationKey(ch);
+      const key = channelKey(ch);
       const ov = d.overrides[key];
 
       const srcName = ch.sourceName ?? ch.name;

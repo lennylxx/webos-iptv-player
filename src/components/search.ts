@@ -9,7 +9,7 @@ import { StorageService } from '../services/storage-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
 import { loadAllVodStreams, loadAllSeries } from '../services/xtream-catalog';
 import { prepareSearchItems, rankByName, rankPrepared, type PreparedSearchItem } from '../utils/channel-search';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { formatDayLabel, formatTime } from '../utils/time';
 import { showToast } from './toast';
 import { CatchupResumePrompt } from './catchup-resume-prompt';
@@ -305,7 +305,11 @@ export class Search {
         XtreamArchiveService.isAvailable(channel, programme.start.getTime())) {
       const key = channelKey(channel);
       const startMs = programme.start.getTime();
-      const progress = StorageService.getCatchupProgressList(key)
+      const progress = StorageService.getCatchupProgressList(
+        key,
+        undefined,
+        legacyChannelKey(channel),
+      )
         .find(entry => entry.progStart === startMs && !entry.completed);
       if (progress) {
         this.resumePrompt.show(programme.title, progress.position, {

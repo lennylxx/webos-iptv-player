@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import type { CatchupInfo, CatchupProgressEntry, Channel } from '../types';
-import { channelKey } from '../utils/channel';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { EpgService } from './epg-service';
 import { PlaylistService } from './playlist-service';
 import { StorageService } from './storage-service';
@@ -23,9 +23,16 @@ export type RecentlyWatchedItem =
 
 function channelMap(): Map<string, { channel: Channel; channelIndex: number }> {
   const result = new Map<string, { channel: Channel; channelIndex: number }>();
+  const legacy = new Map<string, { channel: Channel; channelIndex: number } | null>();
   for (let i = 0; i < PlaylistService.channels.length; i++) {
     const channel = PlaylistService.channels[i];
-    result.set(channelKey(channel), { channel, channelIndex: i });
+    const resolved = { channel, channelIndex: i };
+    result.set(channelKey(channel), resolved);
+    const oldKey = legacyChannelKey(channel);
+    legacy.set(oldKey, legacy.has(oldKey) ? null : resolved);
+  }
+  for (const [key, resolved] of legacy) {
+    if (resolved && !result.has(key)) result.set(key, resolved);
   }
   return result;
 }
@@ -90,7 +97,16 @@ export const RecentlyWatchedService = {
       });
     }
 
-    return items
+    const deduped = new Map<string, RecentlyWatchedItem>();
+    for (const item of items) {
+      const key = item.kind === 'live'
+        ? `live:${channelKey(item.channel)}`
+        : `catchup:${channelKey(item.channel)}:${item.progress.progStart}`;
+      const existing = deduped.get(key);
+      if (!existing || item.updatedAt > existing.updatedAt) deduped.set(key, item);
+    }
+
+    return [...deduped.values()]
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, CONFIG.RECENTLY_WATCHED.MAX_VISIBLE_ITEMS);
   },

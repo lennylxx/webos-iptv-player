@@ -32,7 +32,7 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
       getGroupsForPlaylist: () => ['News', 'Sports'],
       getByGroup,
       indexOf: (ch: Channel) => channels.indexOf(ch),
-      indexOfCustomizationKey: (_key: string) => -1,
+      indexOfKey: (_key: string) => -1,
       getByIndex: (i: number) => channels[i] ?? null,
       applyCustomization: vi.fn(),
       setIncludeHidden: vi.fn(),
@@ -62,11 +62,11 @@ vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentM
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 
 import { ChannelList } from './channel-list';
-import { channelCustomizationKey, channelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
 
-playlistMock.indexOfCustomizationKey = (key: string) => data.channels
-  .findIndex(ch => channelCustomizationKey(ch) === key);
+playlistMock.indexOfKey = (key: string) => data.channels
+  .findIndex(ch => channelKey(ch) === key);
 
 // Mirror PlaylistService: re-derive the visible list from the customization record.
 playlistMock.applyCustomization = vi.fn(() => {
@@ -587,7 +587,7 @@ describe('ChannelList edit mode', () => {
     list.handleAction('green');
     expect(channelItems()).toHaveLength(3);
     expect(channelItems()[1].classList.contains('hidden-entry')).toBe(true);
-    expect(ChannelCustomizationService.isHidden(channelCustomizationKey(data.raw[1]))).toBe(true);
+    expect(ChannelCustomizationService.isHidden(channelKey(data.raw[1]))).toBe(true);
 
     list.handleAction('yellow');
     expect(names()).toEqual(['Alpha', 'Charlie']);
@@ -597,7 +597,7 @@ describe('ChannelList edit mode', () => {
     enterEdit();
     hover(channelItems()[1]);
     list.handleAction('green');
-    expect(ChannelCustomizationService.isHidden(channelCustomizationKey(data.raw[1]))).toBe(false);
+    expect(ChannelCustomizationService.isHidden(channelKey(data.raw[1]))).toBe(false);
     expect(toastMock.showToast).toHaveBeenLastCalledWith('Select a channel or group first.');
   });
 
@@ -741,7 +741,7 @@ describe('ChannelList edit mode', () => {
   });
 
   it('the source-group option clears a group override', () => {
-    ChannelCustomizationService.setGroup(channelCustomizationKey(data.raw[0]), 'Custom');
+    ChannelCustomizationService.setGroup(channelKey(data.raw[0]), 'Custom');
     playlistMock.applyCustomization();
     enterEdit();
     hover(channelItems()[0]);

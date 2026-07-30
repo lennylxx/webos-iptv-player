@@ -2,7 +2,7 @@ import type { Action, BuiltinChannelGroup, CatchupInfo, Channel, ChannelGroupId,
 import { SpatialNav } from '../navigation/spatial-nav';
 import { html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { channelCustomizationKey, channelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { formatPosition } from '../utils/time';
 import { PlaylistService } from '../services/playlist-service';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
@@ -455,7 +455,7 @@ export class ChannelList {
     if (el.dataset.recentIndex !== undefined) return null;
     if (el.dataset.channelIndex !== undefined) {
       const ch = PlaylistService.getByIndex(parseInt(el.dataset.channelIndex, 10));
-      return ch ? { kind: 'channel', key: channelCustomizationKey(ch) } : null;
+      return ch ? { kind: 'channel', key: channelKey(ch) } : null;
     }
     const group = el.dataset.group;
     if (group && group.indexOf('source:') === 0) {
@@ -488,17 +488,17 @@ export class ChannelList {
 
     if (grabbed.kind === 'channel') {
       const list = PlaylistService.getByGroup(this.currentGroup, this.currentPlaylist || undefined);
-      const pos = list.findIndex(ch => channelCustomizationKey(ch) === grabbed.key);
+      const pos = list.findIndex(ch => channelKey(ch) === grabbed.key);
       const target = list[pos + delta];
       if (pos < 0 || !target) return;
       ChannelCustomizationService.moveChannel(
-        PlaylistService.channels.map(channelCustomizationKey),
+        PlaylistService.channels.map(channelKey),
         grabbed.key,
-        channelCustomizationKey(target),
+        channelKey(target),
         delta > 0,
       );
       this.applyEdit();
-      this.refocus = `ch:${PlaylistService.indexOfCustomizationKey(grabbed.key)}`;
+      this.refocus = `ch:${PlaylistService.indexOfKey(grabbed.key)}`;
       this.render();
       return;
     }
@@ -524,7 +524,7 @@ export class ChannelList {
 
     if (grabbed.kind === 'channel' && target.kind === 'channel') {
       ChannelCustomizationService.moveChannel(
-        PlaylistService.channels.map(channelCustomizationKey),
+        PlaylistService.channels.map(channelKey),
         grabbed.key,
         target.key,
         after,
@@ -544,7 +544,7 @@ export class ChannelList {
 
   private setDragRefocus(target: EditTarget): void {
     if (target.kind === 'channel') {
-      this.refocus = `ch:${PlaylistService.indexOfCustomizationKey(target.key)}`;
+      this.refocus = `ch:${PlaylistService.indexOfKey(target.key)}`;
     }
   }
 
@@ -558,7 +558,7 @@ export class ChannelList {
     else ChannelCustomizationService.toggleGroupHidden(target.key);
     this.applyEdit();
     if (target.kind === 'channel') {
-      this.refocus = `ch:${PlaylistService.indexOfCustomizationKey(target.key)}`;
+      this.refocus = `ch:${PlaylistService.indexOfKey(target.key)}`;
     }
     this.render();
   }
@@ -586,7 +586,7 @@ export class ChannelList {
       this.groupPickerFor = null;
       if (key && value.trim()) ChannelCustomizationService.setGroup(key, value);
       this.applyEdit();
-      if (key) this.refocus = `ch:${PlaylistService.indexOfCustomizationKey(key)}`;
+      if (key) this.refocus = `ch:${PlaylistService.indexOfKey(key)}`;
       this.render();
       return;
     }
@@ -602,7 +602,7 @@ export class ChannelList {
       else ChannelCustomizationService.renameGroup(target.key, value);
       this.applyEdit();
       if (target.kind === 'channel') {
-        this.refocus = `ch:${PlaylistService.indexOfCustomizationKey(target.key)}`;
+        this.refocus = `ch:${PlaylistService.indexOfKey(target.key)}`;
       }
     }
     this.render();
@@ -638,7 +638,7 @@ export class ChannelList {
     ChannelCustomizationService.setGroup(key, choice === 'source' ? '' : choice);
     this.groupPickerFor = null;
     this.applyEdit();
-    this.refocus = `ch:${PlaylistService.indexOfCustomizationKey(key)}`;
+    this.refocus = `ch:${PlaylistService.indexOfKey(key)}`;
     this.render();
   }
 
@@ -746,7 +746,7 @@ export class ChannelList {
     const epgId = EpgService.findChannelId(ch);
     const nowPlaying = epgId ? EpgService.getNowPlaying(epgId) : null;
     const isPlaying = globalIdx === this.playingIndex && this.playingCatchupStart === null;
-    const customizationKey = channelCustomizationKey(ch);
+    const customizationKey = channelKey(ch);
     const isFav = favs.includes(channelKey(ch));
     const hidden = ChannelCustomizationService.isChannelHidden(ch);
     const grabbed = this.grabbed?.kind === 'channel' && this.grabbed.key === customizationKey;
