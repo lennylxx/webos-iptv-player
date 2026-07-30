@@ -423,6 +423,12 @@
   margin-top: 28px;
 }
 
+.settings-reset {
+  margin-top: 28px;
+  padding-top: 28px;
+  border-top: 1px solid var(--border);
+}
+
 .toggle-option {
   display: inline-flex;
   align-items: center;

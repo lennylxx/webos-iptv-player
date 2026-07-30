@@ -19,6 +19,15 @@ describe('StorageService', () => {
     expect(StorageService.getPlaylists()).toEqual([]);
   });
 
+  it('clears all local storage when resetting the app', () => {
+    StorageService.set('theme', 'light');
+    localStorage.setItem('unrelated', 'value');
+
+    StorageService.clearAll();
+
+    expect(localStorage.length).toBe(0);
+  });
+
   it('round-trips playlists and backfills a stable id for legacy entries', () => {
     StorageService.setPlaylists([{ id: 'keep', name: 'A', url: 'http://a' }]);
     expect(StorageService.getPlaylists()).toEqual([{ id: 'keep', name: 'A', url: 'http://a' }]);

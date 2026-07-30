@@ -261,9 +261,9 @@ function formatExpiry(expiresAt: number | null): string {
 }
 
 /** What the app does after Settings closes: reload = re-fetch playlist/EPG;
- *  apply = re-render for display-only changes; edit-channels = open the channel
- *  list in edit mode; cancel = discard. */
-export type SaveAction = 'reload' | 'apply' | 'cancel' | 'edit-channels';
+ *  apply = re-render for display-only changes; reset = erase local app data;
+ *  edit-channels = open the channel list in edit mode; cancel = discard. */
+export type SaveAction = 'reload' | 'apply' | 'reset' | 'cancel' | 'edit-channels';
 
 export class Settings {
   private container: HTMLElement;
@@ -601,6 +601,12 @@ export class Settings {
                 <button class="btn btn-secondary" data-focusable id="refresh-data">${t('settings.refreshAll')}</button>
                 <button class="btn btn-danger" data-focusable id="clear-cache">${t('settings.clearCache')}</button>
               </div>
+              <div class="settings-item settings-item--action settings-reset">
+                <div class="settings-item-title">${t('settings.resetApp')}</div>
+                <button class="btn btn-danger" data-focusable id="reset-app"
+                        aria-label="${t('settings.resetApp')}">${t('settings.resetApp')}</button>
+                <div class="settings-item-hint">${t('settings.resetAppDescription')}</div>
+              </div>
             </div>
           </div>
 
@@ -698,9 +704,27 @@ export class Settings {
     } else if (el.id === 'refresh-data') {
       this.onSave('reload');
     } else if (el.id === 'clear-cache') {
-      StorageService.remove('cached_playlist');
-      void clearCachedEpg();
-      showToast(t('settings.cacheCleared'));
+      this.confirmationPrompt.show({
+        title: t('settings.clearCacheTitle'),
+        message: t('settings.clearCacheMessage'),
+        confirmLabel: t('common.clear'),
+        cancelLabel: t('common.cancel'),
+        onConfirm: () => {
+          StorageService.remove('cached_playlist');
+          void clearCachedEpg();
+          showToast(t('settings.cacheCleared'));
+        },
+        onCancel: () => {},
+      });
+    } else if (el.id === 'reset-app') {
+      this.confirmationPrompt.show({
+        title: t('settings.resetAppTitle'),
+        message: t('settings.resetAppMessage'),
+        confirmLabel: t('common.reset'),
+        cancelLabel: t('common.cancel'),
+        onConfirm: () => this.onSave('reset'),
+        onCancel: () => {},
+      });
     } else if (el.id === 'edit-channel-list') {
       this.saveShowHidden();
       this.onSave('edit-channels');

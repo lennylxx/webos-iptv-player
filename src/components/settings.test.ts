@@ -421,11 +421,31 @@ describe('Settings editing', () => {
     expect(activeVal()).toBe('on');
   });
 
-  it('clears the playlist and EPG caches and shows a toast', () => {
+  it('explains the cache scope and requires confirmation before clearing', () => {
     click('#clear-cache');
+    expect(document.querySelector('.confirmation-title')?.textContent).toBe('Clear cache?');
+    expect(document.querySelector('.confirmation-message')?.textContent)
+      .toContain('Accounts, settings, favorites, and viewing history are kept.');
+    expect(storageMock.remove).not.toHaveBeenCalled();
+    expect(clearCachedEpg).not.toHaveBeenCalled();
+
+    settings.handleAction('left');
+    settings.handleAction('select');
+
     expect(storageMock.remove).toHaveBeenCalledWith('cached_playlist');
     expect(clearCachedEpg).toHaveBeenCalled();
     expect(toastMock.showToast).toHaveBeenCalledWith('Cache cleared');
+  });
+
+  it('requires confirmation before requesting a full app reset', () => {
+    click('#reset-app');
+    expect(document.querySelector('.confirmation-title')?.textContent).toBe('Reset the app?');
+    expect(onSave).not.toHaveBeenCalledWith('reset');
+
+    settings.handleAction('left');
+    settings.handleAction('select');
+
+    expect(onSave).toHaveBeenCalledWith('reset');
   });
 
   it('cancel discards; refresh reloads', () => {

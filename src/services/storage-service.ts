@@ -60,6 +60,10 @@ export const StorageService = {
   set,
   remove,
 
+  clearAll(): void {
+    localStorage.clear();
+  },
+
   getPlaylists(): PlaylistEntry[] {
     const list = get<PlaylistEntry[]>('playlists', []);
     // A legacy entry predates the stable id; backfill one and persist so it

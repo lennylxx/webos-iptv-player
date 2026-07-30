@@ -4,6 +4,7 @@ import { KeyHandler } from './navigation/key-handler';
 import { PlaylistService } from './services/playlist-service';
 import { EpgService } from './services/epg-service';
 import { StorageService } from './services/storage-service';
+import { clearAllCachedData } from './services/idb-cache';
 import { setServicePort } from './services/upload-client';
 import { ChannelList } from './components/channel-list';
 import { Player } from './components/player';
@@ -1003,6 +1004,12 @@ class App {
       this.showView('channels');
       this.channelList.render();
       this.channelList.enterEditMode();
+      return;
+    }
+    if (action === 'reset') {
+      StorageService.clearAll();
+      await clearAllCachedData();
+      location.reload();
       return;
     }
     if (action !== 'cancel') {

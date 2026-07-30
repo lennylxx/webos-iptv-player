@@ -98,6 +98,24 @@ export async function clearCachedEpg(): Promise<void> {
   });
 }
 
+export async function clearAllCachedData(): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction([EPG_STORE, CATALOG_STORE, SUBTITLE_STORE], 'readwrite');
+      tx.objectStore(EPG_STORE).clear();
+      tx.objectStore(CATALOG_STORE).clear();
+      tx.objectStore(SUBTITLE_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
 // Generic catalog cache: any JSON-serializable payload keyed by an arbitrary
 // string (Xtream uses `${accountId}|action[|param]`). Freshness (TTL) is the
 // caller's concern — this layer just stores the write timestamp.
