@@ -8,7 +8,7 @@
   pointer-events: auto;
 }
 
-/* Subtitle cues — Blink draws these on both the preview and native on-device (it honours
+/* Subtitle cues — Blink draws these on both the preview and native on-device (it honors
    ::cue). White text on a translucent dark box; ui-monospace gives the system mono (the TV
    ignores it and uses "Droid Sans Mono"), with per-script fallback for CJK etc. */
 #video-player::cue {
@@ -18,9 +18,9 @@
   font-family: ui-monospace, "SFMono-Regular", "Droid Sans Mono", monospace;
 }
 
-/* WebVTT <c.class> speaker colours — the teletext palette (white default +
+/* WebVTT <c.class> speaker colors — the teletext palette (white default +
    red/green/yellow/blue/magenta/cyan). Render on both paths — the desktop preview
-   and native on-device (Blink draws the cues and honours ::cue). red/blue are softened
+   and native on-device (Blink draws the cues and honors ::cue). red/blue are softened
    from pure for legibility on the dark cue background. */
 #video-player::cue(.cyan) { color: #00ffff; }
 #video-player::cue(.yellow) { color: #ffff00; }
@@ -772,7 +772,6 @@
   font-size: 24px;
   line-height: 1.25;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -784,11 +783,13 @@
   white-space: nowrap;
 }
 
+.player-sidebar .sidebar-ch-item .ch-name .ch-name-text,
 .player-sidebar .sidebar-ch-item .ch-now .ch-now-text {
   display: inline-block;
   white-space: nowrap;
 }
 
+.player-sidebar .sidebar-ch-item .ch-name .ch-name-text.scrolling,
 .player-sidebar .sidebar-ch-item .ch-now .ch-now-text.scrolling {
   animation: marquee-bounce 6s ease-in-out infinite;
 }
@@ -893,7 +894,7 @@
 .menu-dot.yellow { background: var(--remote-key-yellow); }
 .menu-dot.blue { background: var(--remote-key-blue); }
 
-/* Glyph in the colour-dot slot */
+/* Glyph in the color-dot slot */
 .menu-icon {
   width: 14px;
   flex-shrink: 0;

@@ -4,7 +4,7 @@ import type { Channel } from '../types';
 import type { RecentlyWatchedItem } from '../services/recently-watched';
 import { CONFIG } from '../config';
 
-const { channels, recentMock, toastMock } = vi.hoisted(() => {
+const { channels, epgMock, recentMock, toastMock } = vi.hoisted(() => {
   function makeChannel(over: Partial<Channel>): Channel {
     return {
       id: '', name: '', logo: '', group: '', url: '', extras: null,
@@ -17,6 +17,9 @@ const { channels, recentMock, toastMock } = vi.hoisted(() => {
       makeChannel({ id: 'b', name: 'Bravo', group: 'News', playlistIds: ['PL1'], favorite: true }),
       makeChannel({ id: 'c', name: 'Charlie', group: 'Sports', playlistIds: ['PL2'] }),
     ] as Channel[],
+    epgMock: {
+      nowPlaying: null as { title: string } | null,
+    },
     recentMock: {
       items: [] as RecentlyWatchedItem[],
       getItems: vi.fn(() => recentMock.items),
@@ -47,8 +50,8 @@ vi.mock('../services/playlist-service', () => ({
 
 vi.mock('../services/epg-service', () => ({
   EpgService: {
-    findChannelId: () => null,
-    getNowPlaying: () => null,
+    findChannelId: () => epgMock.nowPlaying ? 'epg' : null,
+    getNowPlaying: () => epgMock.nowPlaying,
   },
 }));
 
@@ -80,6 +83,7 @@ beforeEach(() => {
   recentMock.items = [];
   recentMock.getItems.mockClear();
   recentMock.catchupInfo.mockReset();
+  epgMock.nowPlaying = null;
   toastMock.mockClear();
   sidebar = new Sidebar(container, getCurrentIndex, onSelect);
 });
@@ -227,6 +231,46 @@ describe('Sidebar', () => {
       expect(document.activeElement).not.toBe(search);
     });
 
+    it('scrolls only channel names that overflow', () => {
+      sidebar.show();
+      const names = el.querySelectorAll<HTMLElement>('.ch-name');
+      const texts = el.querySelectorAll<HTMLElement>('.ch-name-text');
+      Object.defineProperty(names[0], 'offsetWidth', { value: 100, configurable: true });
+      Object.defineProperty(texts[0], 'offsetWidth', { value: 160, configurable: true });
+      Object.defineProperty(names[1], 'offsetWidth', { value: 100 });
+      Object.defineProperty(texts[1], 'offsetWidth', { value: 100 });
+
+      (sidebar as unknown as { measureMarquees: () => void }).measureMarquees();
+      vi.advanceTimersByTime(20);
+
+      expect(texts[0].classList.contains('scrolling')).toBe(true);
+      expect(texts[0].style.getPropertyValue('--scroll-dist')).toBe('-60px');
+      expect(texts[1].classList.contains('scrolling')).toBe(false);
+      expect(texts[1].style.getPropertyValue('--scroll-dist')).toBe('');
+
+      Object.defineProperty(texts[0], 'offsetWidth', { value: 100 });
+      (sidebar as unknown as { measureMarquees: () => void }).measureMarquees();
+      vi.advanceTimersByTime(20);
+
+      expect(texts[0].classList.contains('scrolling')).toBe(false);
+      expect(texts[0].style.getPropertyValue('--scroll-dist')).toBe('');
+    });
+
+    it('keeps the existing program-name marquee behavior', () => {
+      epgMock.nowPlaying = { title: 'Program Alpha' };
+      sidebar.refresh();
+      const container = el.querySelector<HTMLElement>('.ch-now')!;
+      const text = container.querySelector<HTMLElement>('.ch-now-text')!;
+      Object.defineProperty(container, 'offsetWidth', { value: 100 });
+      Object.defineProperty(text, 'offsetWidth', { value: 160 });
+
+      (sidebar as unknown as { measureMarquees: () => void }).measureMarquees();
+      vi.advanceTimersByTime(20);
+
+      expect(text.classList.contains('scrolling')).toBe(true);
+      expect(text.style.getPropertyValue('--scroll-dist')).toBe('-60px');
+    });
+
     it('typing in the search box filters channels across playlists', () => {
       const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
       search.value = 'char';
@@ -286,6 +330,49 @@ describe('Sidebar', () => {
       expect(el.querySelector('.sidebar-channel-title')?.textContent?.trim()).toBe('Sports');
       expect(items()[0].classList.contains('focused')).toBe(true);
       expect(el.classList.contains('groups-expanded')).toBe(true);
+    });
+
+    it('keeps channel marquees through a delayed scroll render', () => {
+      recentMock.items = [{
+        kind: 'live',
+        channel: channels[0],
+        channelIndex: 0,
+        updatedAt: 1000,
+      }];
+
+      sidebar.handleAction('left');
+      sidebar.handleAction('select'); // All
+      sidebar.handleAction('left');
+      sidebar.handleAction('down');
+      sidebar.handleAction('down');
+      sidebar.handleAction('select'); // Recently Watched
+
+      const name = el.querySelector<HTMLElement>('.ch-name')!;
+      const text = name.querySelector<HTMLElement>('.ch-name-text')!;
+      Object.defineProperty(name, 'offsetWidth', { value: 100 });
+      Object.defineProperty(text, 'offsetWidth', { value: 160 });
+      const target = sidebar as unknown as { measureMarquees: () => void };
+      const measure = vi.spyOn(target, 'measureMarquees');
+
+      vi.advanceTimersByTime(20);
+      expect(measure).not.toHaveBeenCalled();
+      expect(text.classList.contains('scrolling')).toBe(false);
+
+      finishOpening();
+      vi.advanceTimersByTime(20);
+
+      expect(measure).toHaveBeenCalledTimes(1);
+      expect(text.classList.contains('scrolling')).toBe(true);
+      expect(text.style.getPropertyValue('--scroll-dist')).toBe('-60px');
+
+      measure.mockClear();
+      el.querySelector<HTMLElement>('.sidebar-channel-list')!
+        .dispatchEvent(new Event('scroll'));
+      vi.advanceTimersByTime(20);
+
+      expect(text.classList.contains('scrolling')).toBe(true);
+      expect(text.style.getPropertyValue('--scroll-dist')).toBe('-60px');
+      expect(measure).not.toHaveBeenCalled();
     });
 
     it('Left from expanded channels returns focus to the active group', () => {
@@ -397,7 +484,7 @@ describe('Sidebar', () => {
       expect(onSelect).toHaveBeenCalledWith(2);
     });
 
-    it('resumes a recent catch-up programme', async () => {
+    it('resumes a recent catch-up program', async () => {
       const recent: RecentlyWatchedItem = {
         kind: 'catchup',
         channel: channels[0],
@@ -410,14 +497,14 @@ describe('Sidebar', () => {
           position: 30,
           duration: 60,
           updatedAt: 1000,
-          title: 'Programme Alpha',
+          title: 'Program Alpha',
           completed: false,
         },
       };
       const catchup = {
         start: 1,
         end: 61,
-        title: 'Programme Alpha',
+        title: 'Program Alpha',
         description: '',
         icon: '',
         resumeSecs: 30,
@@ -428,7 +515,7 @@ describe('Sidebar', () => {
       sidebar.handleAction('left');
       groupItems()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
-      expect(items()[0].querySelector('.ch-name')?.textContent).toBe('Programme Alpha');
+      expect(items()[0].querySelector('.ch-name')?.textContent).toBe('Program Alpha');
       items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await Promise.resolve();
 

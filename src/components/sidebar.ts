@@ -495,6 +495,10 @@ export class Sidebar {
     const el = this.el;
     if (!el) return;
 
+    const scrolling = measureMarquees
+      ? []
+      : Array.from(el.querySelectorAll<HTMLElement>('.ch-name-text.scrolling, .ch-now-text.scrolling'))
+        .map(span => ({ span, dist: span.style.getPropertyValue('--scroll-dist') }));
     const tabs = PlaylistService.playlistTabs;
     if (this.playlist && !tabs.some(t => t.id === this.playlist)) this.playlist = '';
     const showTabs = tabs.length > 1;
@@ -581,7 +585,7 @@ export class Sidebar {
                 <span class="ch-num">${globalIdx + 1}</span>
                 ${this.renderLogo(ch)}
                 <div class="ch-info">
-                  <span class="ch-name">${title}</span>
+                  <span class="ch-name"><span class="ch-name-text">${title}</span></span>
                   ${subtitle ? html`<span class="ch-now"><span class="ch-now-text">${subtitle}</span></span>` : ''}
                 </div>
                 ${catchup ? html`<span class="sidebar-recent-kind">${t('common.catchup')}</span>` : ''}
@@ -598,6 +602,11 @@ export class Sidebar {
     const search = el.querySelector<HTMLInputElement>('.sidebar-search-input');
     if (search && search.value !== this.searchQuery) search.value = this.searchQuery;
 
+    scrolling.forEach(({ span, dist }) => {
+      if (!el.contains(span)) return;
+      span.style.setProperty('--scroll-dist', dist);
+      span.classList.add('scrolling');
+    });
     if (!this.opening && measureMarquees) this.measureMarquees();
   }
 
@@ -616,8 +625,8 @@ export class Sidebar {
     const el = this.el;
     if (!el) return;
     requestAnimationFrame(() => {
-      el.querySelectorAll<HTMLElement>('.ch-now').forEach(container => {
-        const span = container.querySelector<HTMLElement>('.ch-now-text');
+      el.querySelectorAll<HTMLElement>('.ch-name, .ch-now').forEach(container => {
+        const span = container.querySelector<HTMLElement>('.ch-name-text, .ch-now-text');
         if (!span) return;
         const textWidth = span.offsetWidth;
         const containerWidth = container.offsetWidth;
@@ -625,6 +634,9 @@ export class Sidebar {
           const dist = containerWidth - textWidth;
           span.style.setProperty('--scroll-dist', `${dist}px`);
           span.classList.add('scrolling');
+        } else {
+          span.style.removeProperty('--scroll-dist');
+          span.classList.remove('scrolling');
         }
       });
     });
