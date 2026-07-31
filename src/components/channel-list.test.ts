@@ -17,12 +17,6 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
   const data = { channels, raw, favorites: [] as string[], includeHidden: false };
   const customization = { record: null as unknown };
 
-  const getByGroup = (group: string, _playlist?: string): Channel[] => {
-    if (group === 'builtin:all' || group === 'builtin:recently-watched') return channels;
-    if (group === 'builtin:favorites') return channels.filter(c => data.favorites.includes(c.id || c.name));
-    return channels.filter(c => c.group === group.slice('source:'.length));
-  };
-
   return {
     data,
     customization,
@@ -30,7 +24,7 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
       channels,
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
-      getByGroup,
+      getByGroup: (_group: string, _playlist?: string): Channel[] => channels,
       indexOf: (ch: Channel) => channels.indexOf(ch),
       indexOfKey: (_key: string) => -1,
       getByIndex: (i: number) => channels[i] ?? null,
@@ -40,7 +34,16 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
     epgMock: { findChannelId: () => null, getNowPlaying: () => null },
     storageMock: {
       getFavorites: () => data.favorites,
-      toggleFavorite: vi.fn(),
+      setFavorites: vi.fn((favorites: string[]) => {
+        data.favorites = favorites;
+        return true;
+      }),
+      toggleFavorite: vi.fn((key: string) => {
+        const index = data.favorites.indexOf(key);
+        if (index >= 0) data.favorites.splice(index, 1);
+        else data.favorites.push(key);
+        return index < 0;
+      }),
       getShowHiddenChannels: () => false,
       getChannelCustomization: () => customization.record,
       setChannelCustomization: vi.fn((d: unknown) => { customization.record = d; }),
@@ -67,6 +70,16 @@ import { ChannelCustomizationService, groupKeyOf } from '../services/channel-cus
 
 playlistMock.indexOfKey = (key: string) => data.channels
   .findIndex(ch => channelKey(ch) === key);
+playlistMock.getByGroup = (group: string, playlist?: string): Channel[] => {
+  const channels = playlist
+    ? data.channels.filter(channel => channel.playlistIds.includes(playlist))
+    : data.channels;
+  if (group === 'builtin:all' || group === 'builtin:recently-watched') return channels;
+  if (group === 'builtin:favorites') {
+    return channels.filter(channel => data.favorites.includes(channelKey(channel)));
+  }
+  return channels.filter(channel => channel.group === group.slice('source:'.length));
+};
 
 // Mirror PlaylistService: re-derive the visible list from the customization record.
 playlistMock.applyCustomization = vi.fn(() => {
@@ -117,6 +130,7 @@ beforeEach(() => {
   toastMock.showToast.mockClear();
   playlistMock.playlistTabs = [];
   storageMock.toggleFavorite.mockClear();
+  storageMock.setFavorites.mockClear();
   storageMock.setChannelCustomization.mockClear();
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -248,6 +262,28 @@ describe('ChannelList.render', () => {
     hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
     list.handleAction('select');
     expect(container.querySelector('.empty-state')?.textContent).toBe('Nothing watched yet');
+  });
+
+  it('disables channel editing in Recently Watched', () => {
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
+    list.handleAction('select');
+    expect(container.querySelector('.channel-edit-btn')).toBeNull();
+    expect(container.querySelector('.channel-edit-btn-spacer')).not.toBeNull();
+    list.handleAction('yellow');
+    expect(list.isEditing).toBe(false);
+    expect(container.querySelector('.edit-hints')).toBeNull();
+  });
+
+  it('opens Settings-driven channel editing in All', () => {
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
+    list.handleAction('select');
+    list.enterEditMode('builtin:all');
+    expect(list.isEditing).toBe(true);
+    expect(container.querySelector('[data-group="builtin:all"]')?.classList.contains('active'))
+      .toBe(true);
+    expect(channelItems()).toHaveLength(3);
   });
 
   it('escapes a malicious channel name instead of rendering live HTML (XSS)', () => {
@@ -407,6 +443,7 @@ describe('ChannelList interaction', () => {
   });
 
   it('green toggles the focused channel as a favorite', () => {
+    expect(container.querySelector('.channel-hints')).toBeNull();
     hover(channelItems()[0]);
     list.handleAction('green');
     expect(storageMock.toggleFavorite).toHaveBeenCalledWith(channelKey(data.channels[0]));
@@ -496,9 +533,159 @@ describe('ChannelList edit mode', () => {
     enterEdit();
     expect(list.isEditing).toBe(true);
     expect(container.querySelector('.edit-hints')).not.toBeNull();
+    expect(container.querySelector('.channel-edit-btn')).toBeNull();
+    expect(container.querySelector('.channel-edit-btn-spacer')).not.toBeNull();
     list.handleAction('yellow');
     expect(list.isEditing).toBe(false);
-    expect(container.querySelector('.edit-hints')).toBeNull();
+    expect(container.querySelector('.favorite-hints')).toBeNull();
+    expect(container.querySelector('.channel-hints')).toBeNull();
+  });
+
+  describe('ChannelList favorite management', () => {
+    function openFavorites(): void {
+      data.favorites = data.channels.map(channelKey);
+      list.render();
+      hover(container.querySelector<HTMLElement>('[data-group="builtin:favorites"]')!);
+      list.handleAction('select');
+    }
+
+    function manageFavorites(): void {
+      openFavorites();
+      hover(container.querySelector<HTMLElement>('[data-favorite-manage]')!);
+      list.handleAction('select');
+    }
+
+    it('plays a favorite outside management mode', () => {
+      openFavorites();
+      expect(list.isEditing).toBe(false);
+      expect(container.querySelector('.favorite-checkbox')).toBeNull();
+      expect(container.querySelector('[data-favorite-manage]')).not.toBeNull();
+      expect(container.querySelector('[data-favorite-manage] .key-ok')).toBeNull();
+      expect(channelItems().every(item =>
+        !item.querySelector('.channel-name')?.textContent?.startsWith('★'))).toBe(true);
+      hover(channelItems()[0]);
+      list.handleAction('select');
+      expect(onSelect).toHaveBeenCalledWith(0);
+    });
+
+    it('uses a multi-select mode when editing favorites', () => {
+      manageFavorites();
+      expect(list.isEditing).toBe(true);
+      expect(container.querySelector('.favorite-hints')?.textContent).toContain('Select all');
+      expect(container.querySelectorAll('.favorite-checkbox')).toHaveLength(3);
+      expect(container.querySelector('.favorite-hints .key-green')).toBeNull();
+      expect(container.querySelector('.favorite-hints .key-red')).not.toBeNull();
+
+      hover(channelItems()[0]);
+      list.handleAction('select');
+      hover(channelItems()[1]);
+      list.handleAction('select');
+      expect(container.querySelectorAll('.favorite-selected')).toHaveLength(2);
+      expect(container.querySelector('.favorite-hints')?.textContent)
+        .toContain('Remove selected (2)');
+
+      list.handleAction('red');
+      expect(storageMock.setFavorites).toHaveBeenCalledWith([channelKey(data.channels[2])]);
+      expect(channelItems()).toHaveLength(1);
+    });
+
+    it('blue selects all favorites and toggles back to none', () => {
+      manageFavorites();
+      list.handleAction('blue');
+      expect(container.querySelectorAll('.favorite-selected')).toHaveLength(3);
+      expect(container.querySelector('.favorite-hints')?.textContent)
+        .toContain('Deselect all');
+      list.handleAction('blue');
+      expect(container.querySelectorAll('.favorite-selected')).toHaveLength(0);
+      expect(container.querySelector('.favorite-hints')?.textContent).toContain('Select all');
+    });
+
+    it('keeps the management footer after removing every favorite', () => {
+      manageFavorites();
+      list.handleAction('blue');
+      list.handleAction('red');
+      expect(channelItems()).toHaveLength(0);
+      expect(container.querySelector('.empty-state')).not.toBeNull();
+      expect(container.querySelector('.favorite-hints')).not.toBeNull();
+      expect(container.querySelector('[data-favorite-action="yellow"]')).not.toBeNull();
+      expect(container.querySelector('.channel-view')?.classList.contains('has-channel-hints'))
+        .toBe(true);
+    });
+
+    it('navigates favorites with the channel up and down keys', () => {
+      manageFavorites();
+      const items = channelItems();
+      items.forEach((item, index) => {
+        const top = index * 100;
+        item.getBoundingClientRect = () => ({
+          x: 400, y: top, top, bottom: top + 84,
+          left: 400, right: 1000, width: 600, height: 84,
+          toJSON: () => ({}),
+        });
+      });
+      hover(items[1]);
+      list.handleAction('channel_up');
+      expect(items[0].classList.contains('focused')).toBe(true);
+      list.handleAction('channel_down');
+      expect(items[1].classList.contains('focused')).toBe(true);
+    });
+
+    it('requires a selection before removing favorites', () => {
+      manageFavorites();
+      list.handleAction('red');
+      expect(storageMock.setFavorites).not.toHaveBeenCalled();
+      expect(toastMock.showToast).toHaveBeenCalledWith(
+        'Select at least one favorite first.',
+      );
+    });
+
+    it('keeps the selection when favorites cannot be saved', () => {
+      manageFavorites();
+      hover(channelItems()[0]);
+      list.handleAction('select');
+      storageMock.setFavorites.mockReturnValueOnce(false);
+      list.handleAction('red');
+      expect(container.querySelectorAll('.favorite-selected')).toHaveLength(1);
+      expect(channelItems()).toHaveLength(3);
+    });
+
+    it('removes only the selected query-identified favorite', () => {
+      const originalUrls = data.raw.map(channel => channel.url);
+      try {
+        data.raw[0].url = 'http://host/a?id=1';
+        data.raw[1].url = 'http://host/a?id=2';
+        data.favorites = [channelKey(data.raw[0]), channelKey(data.raw[1])];
+        list.render();
+        hover(container.querySelector<HTMLElement>('[data-group="builtin:favorites"]')!);
+        list.handleAction('select');
+        hover(container.querySelector<HTMLElement>('[data-favorite-manage]')!);
+        list.handleAction('select');
+        hover(channelItems()[0]);
+        list.handleAction('select');
+        list.handleAction('red');
+        expect(data.favorites).toEqual([channelKey(data.raw[1])]);
+      } finally {
+        data.raw.forEach((channel, index) => { channel.url = originalUrls[index]; });
+      }
+    });
+
+    it('keeps the pencil for channel editing', () => {
+      openFavorites();
+      const pencil = container.querySelector<HTMLElement>('.channel-edit-btn');
+      expect(pencil).not.toBeNull();
+      hover(pencil!);
+      list.handleAction('select');
+      expect(container.querySelector('.favorite-hints')).toBeNull();
+      expect(container.querySelector('.edit-hints')).not.toBeNull();
+    });
+
+    it('keeps the yellow-key channel editor shortcut in Favorites', () => {
+      openFavorites();
+      list.handleAction('yellow');
+      expect(list.isEditing).toBe(true);
+      expect(container.querySelector('.favorite-hints')).toBeNull();
+      expect(container.querySelector('[data-edit-action="green"]')).not.toBeNull();
+    });
   });
 
   it('back leaves edit mode and is not consumed outside it', () => {

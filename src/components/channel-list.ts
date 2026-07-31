@@ -10,7 +10,7 @@ import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { groupIcon } from './group-icon';
-import { BACK_ICON } from './icons';
+import { BACK_ICON, CHECK_ICON } from './icons';
 import { showToast } from './toast';
 import { t, tp } from '../i18n';
 import { CONFIG } from '../config';
@@ -31,6 +31,7 @@ export class ChannelList {
   private playingCatchupStart: number | null = null;
   private recentItems: RecentlyWatchedItem[] = [];
   private editing = false;
+  private favoriteSelection: Set<string> | null = null;
   private grabbed: EditTarget | null = null;
   private renaming: EditTarget | null = null;
   private groupPickerFor: string | null = null; // customization key awaiting a group choice
@@ -109,7 +110,7 @@ export class ChannelList {
   }
 
   private onPointerDown(event: MouseEvent): void {
-    if (!this.editing || event.button !== 0 || this.renaming
+    if (!this.editing || this.favoriteSelection || event.button !== 0 || this.renaming
         || this.groupPickerFor || this.newGroupOpen) return;
     const el = this.focusableAt(event.clientX, event.clientY);
     const target = el ? this.editTargetForElement(el) : null;
@@ -190,6 +191,7 @@ export class ChannelList {
       : PlaylistService.channels.length;
     const favs = StorageService.getFavorites();
     const editing = this.editing;
+    const managingFavorites = this.favoriteSelection !== null;
 
     // Capture the current focus key before morph so we can restore it on a
     // reused node. morph treats `class` as authoritative — it will remove the
@@ -198,17 +200,24 @@ export class ChannelList {
     const prevFocusedKey = this.nav.focused?.getAttribute('data-key') ?? null;
 
     morph(this.container, html`
-      <div class="channel-view ${editing ? 'editing' : ''}">
+      <div class="channel-view ${editing && !managingFavorites ? 'editing' : ''} ${
+        managingFavorites ? 'favorite-managing' : ''} ${
+        !editing && this.currentGroup === 'builtin:favorites'
+          && (managingFavorites || filteredChannels.length)
+          ? 'has-channel-hints'
+          : ''}">
         <div class="sidebar" data-nav-container>
           <div class="sidebar-header">
             <div class="channel-count">${tp('channel.count', totalChannels)}</div>
-            ${editing ? '' : html`
-              <button class="channel-edit-btn"
-                      data-key="edit-channels"
-                      data-focusable data-edit-channels
-                      aria-label="${t('settings.editChannelList')}"
-                      title="${t('settings.editChannelList')}"><img src="assets/icons/pencil.svg" alt=""></button>
-            `}
+            ${editing || showingRecent
+              ? html`<div class="channel-edit-btn-spacer" aria-hidden="true"></div>`
+              : html`
+                <button class="channel-edit-btn"
+                        data-key="edit-channels"
+                        data-focusable data-edit-channels
+                        aria-label="${t('settings.editChannelList')}"
+                        title="${t('settings.editChannelList')}"><img src="assets/icons/pencil.svg" alt=""></button>
+              `}
           </div>
           ${showTabs ? html`
             <div class="playlist-tabs">
@@ -237,7 +246,13 @@ export class ChannelList {
                   : html`<div class="empty-state">${t('channel.empty')}</div>`)}
           </div>
         </div>
-        ${editing ? this.renderEditHints() : ''}
+        ${editing
+          ? this.renderEditHints()
+          : (managingFavorites
+              ? this.renderFavoriteHints()
+              : (this.currentGroup === 'builtin:favorites' && filteredChannels.length
+                  ? this.renderFavoriteManageHint()
+                  : ''))}
         ${this.groupPickerFor ? this.renderGroupPicker() : ''}
       </div>
     `);
@@ -282,11 +297,13 @@ export class ChannelList {
   // --- Edit mode
 
   get isEditing(): boolean {
-    return this.editing;
+    return this.editing || this.favoriteSelection !== null;
   }
 
-  enterEditMode(): void {
-    if (this.editing) return;
+  enterEditMode(group: ChannelGroupId = this.currentGroup): void {
+    if (this.editing || group === 'builtin:recently-watched') return;
+    this.currentGroup = group;
+    this.favoriteSelection = null;
     this.editActionTarget = this.nav.focused
       ? this.editTargetForElement(this.nav.focused)
       : null;
@@ -300,15 +317,19 @@ export class ChannelList {
   }
 
   exitEditMode(): void {
-    if (!this.editing) return;
+    if (!this.editing && !this.favoriteSelection) return;
+    const wasEditingChannels = this.editing;
     this.editing = false;
+    this.favoriteSelection = null;
     this.grabbed = null;
     this.renaming = null;
     this.groupPickerFor = null;
     this.newGroupOpen = false;
     this.editActionTarget = null;
-    PlaylistService.setIncludeHidden(false);
-    this.onChannelsChanged();
+    if (wasEditingChannels) {
+      PlaylistService.setIncludeHidden(false);
+      this.onChannelsChanged();
+    }
     this.render();
   }
 
@@ -329,6 +350,10 @@ export class ChannelList {
       this.render();
       return true;
     }
+    if (this.favoriteSelection) {
+      this.exitFavoriteManagement();
+      return true;
+    }
     if (this.editing) {
       this.exitEditMode();
       return true;
@@ -337,6 +362,7 @@ export class ChannelList {
   }
 
   handleAction(action: Action, event?: NumberEvent): boolean {
+    if (this.favoriteSelection && this.handleFavoriteAction(action)) return true;
     if (this.editing && this.handleEditAction(action)) return true;
 
     switch (action) {
@@ -360,6 +386,8 @@ export class ChannelList {
 
         if (focused.dataset.editChannels !== undefined) {
           this.enterEditMode();
+        } else if (focused.dataset.favoriteManage !== undefined) {
+          this.enterFavoriteManagement();
         } else if (focused.dataset.playlist !== undefined) {
           this.currentPlaylist = focused.dataset.playlist;
           this.currentGroup = 'builtin:all';
@@ -384,20 +412,12 @@ export class ChannelList {
       }
 
       case 'green': {
-        const focused = this.nav.focused;
-        if (focused?.dataset.channelIndex !== undefined) {
-          const idx = parseInt(focused.dataset.channelIndex, 10);
-          const ch = PlaylistService.getByIndex(idx);
-          if (ch) {
-            StorageService.toggleFavorite(channelKey(ch));
-            this.render();
-          }
-        }
+        this.toggleFocusedFavorite();
         break;
       }
 
       case 'yellow':
-        this.enterEditMode();
+        if (this.currentGroup !== 'builtin:recently-watched') this.enterEditMode();
         break;
 
       case 'number': {
@@ -453,6 +473,122 @@ export class ChannelList {
       default:
         return false;
     }
+  }
+
+  private handleFavoriteAction(action: Action): boolean {
+    const buttonAction = this.nav.focused?.dataset.favoriteAction as Action | undefined;
+    if (action === 'select' && buttonAction) return this.handleFavoriteAction(buttonAction);
+
+    switch (action) {
+      case 'up':
+      case 'down':
+      case 'left':
+      case 'right':
+        this.nav.move(action);
+        return true;
+      case 'channel_up':
+        this.nav.move('up');
+        return true;
+      case 'channel_down':
+        this.nav.move('down');
+        return true;
+      case 'select':
+        this.activateFavoriteTarget();
+        return true;
+      case 'blue':
+        this.selectAllFavorites();
+        return true;
+      case 'red':
+        this.removeSelectedFavorites();
+        return true;
+      case 'yellow':
+        this.exitFavoriteManagement();
+        return true;
+      default:
+        return true;
+    }
+  }
+
+  private enterFavoriteManagement(): void {
+    if (this.editing || this.favoriteSelection) return;
+    this.favoriteSelection = new Set();
+    this.render();
+  }
+
+  private exitFavoriteManagement(): void {
+    if (!this.favoriteSelection) return;
+    this.favoriteSelection = null;
+    this.render();
+  }
+
+  private activateFavoriteTarget(): void {
+    const focused = this.nav.focused;
+    if (!focused) return;
+    if (focused.dataset.editChannels !== undefined) {
+      this.enterEditMode();
+    } else if (focused.dataset.playlist !== undefined) {
+      this.currentPlaylist = focused.dataset.playlist;
+      this.currentGroup = 'builtin:all';
+      this.favoriteSelection = null;
+      this.render();
+    } else if (focused.dataset.group !== undefined) {
+      this.currentGroup = focused.dataset.group as ChannelGroupId;
+      this.favoriteSelection = null;
+      this.render();
+    } else {
+      this.toggleFavoriteSelection();
+    }
+  }
+
+  private toggleFocusedFavorite(): void {
+    const focused = this.nav.focused;
+    if (focused?.dataset.channelIndex === undefined) return;
+    const channel = PlaylistService.getByIndex(parseInt(focused.dataset.channelIndex, 10));
+    if (!channel) return;
+    StorageService.toggleFavorite(channelKey(channel));
+    this.favoriteSelection?.delete(channelKey(channel));
+    this.render();
+  }
+
+  private toggleFavoriteSelection(): void {
+    const focused = this.nav.focused;
+    if (!this.favoriteSelection || focused?.dataset.channelIndex === undefined) return;
+    const channel = PlaylistService.getByIndex(parseInt(focused.dataset.channelIndex, 10));
+    if (!channel) return;
+    const key = channelKey(channel);
+    if (this.favoriteSelection.has(key)) this.favoriteSelection.delete(key);
+    else this.favoriteSelection.add(key);
+    this.render();
+  }
+
+  private selectAllFavorites(): void {
+    const selection = this.favoriteSelection;
+    if (!selection) return;
+    const favorites = PlaylistService.getByGroup(
+      'builtin:favorites',
+      this.currentPlaylist || undefined,
+    );
+    const allSelected = favorites.length > 0
+      && favorites.every(channel => selection.has(channelKey(channel)));
+    selection.clear();
+    if (!allSelected) {
+      for (const channel of favorites) selection.add(channelKey(channel));
+    }
+    this.render();
+  }
+
+  private removeSelectedFavorites(): void {
+    if (!this.favoriteSelection?.size) {
+      showToast(t('channel.favoriteSelectFirst'));
+      return;
+    }
+    const selected = this.favoriteSelection;
+    const saved = StorageService.setFavorites(
+      StorageService.getFavorites().filter(key => !selected.has(key)),
+    );
+    if (!saved) return;
+    selected.clear();
+    this.render();
   }
 
   /** The edit target under focus: a channel row, or a source group row. */
@@ -718,6 +854,47 @@ export class ChannelList {
     `;
   }
 
+  private renderFavoriteHints(): Safe {
+    const selected = this.favoriteSelection?.size ?? 0;
+    const total = PlaylistService.getByGroup(
+      'builtin:favorites',
+      this.currentPlaylist || undefined,
+    ).length;
+    const selectAllLabel = total > 0 && selected === total
+      ? t('channel.favoriteDeselectAll')
+      : t('channel.favoriteSelectAll');
+    return html`
+      <div class="edit-hints favorite-hints">
+        <span class="edit-hint"><span class="edit-key key-ok">OK</span>${
+          t('channel.favoriteSelect')}</span>
+        <button class="edit-hint edit-action" data-key="favorite:blue" data-focusable
+                data-favorite-action="blue"><span class="edit-key key-blue"></span>${
+                  selectAllLabel}</button>
+        <button class="edit-hint edit-action" data-key="favorite:red" data-focusable
+                data-favorite-action="red"><span class="edit-key key-red"></span>${
+                  t('channel.favoriteRemoveSelected', { count: selected })}</button>
+        <button class="edit-hint edit-action" data-key="favorite:yellow" data-focusable
+                data-favorite-action="yellow">
+          <span class="edit-key key-yellow"></span>
+          <span class="edit-key-separator">/</span>
+          <span class="edit-key key-back">${raw(BACK_ICON)}</span>
+          ${t('channel.editDone')}
+        </button>
+      </div>
+    `;
+  }
+
+  private renderFavoriteManageHint(): Safe {
+    return html`
+      <div class="edit-hints favorite-manage-hint">
+        <button class="edit-hint edit-action" data-key="favorite:manage"
+                data-focusable data-favorite-manage>
+          ${t('channel.favoriteManage')}
+        </button>
+      </div>
+    `;
+  }
+
   private renderGroup(g: { id: ChannelGroupId; label: string; builtin?: BuiltinChannelGroup }): Safe {
     const isSource = g.id.indexOf('source:') === 0;
     const key = isSource ? this.groupKeyForDisplay(g.label) : '';
@@ -759,13 +936,16 @@ export class ChannelList {
     const isPlaying = globalIdx === this.playingIndex && this.playingCatchupStart === null;
     const customizationKey = channelKey(ch);
     const isFav = favs.includes(channelKey(ch));
+    const showFavoriteStar = isFav && this.currentGroup !== 'builtin:favorites';
+    const selectedFavorite = this.favoriteSelection?.has(channelKey(ch)) ?? false;
     const hidden = ChannelCustomizationService.isChannelHidden(ch);
     const grabbed = this.grabbed?.kind === 'channel' && this.grabbed.key === customizationKey;
     const renaming = this.editing && this.renaming?.kind === 'channel'
       && this.renaming.key === customizationKey;
 
     return html`
-      <div class="channel-item ${isPlaying ? 'playing' : ''} ${hidden ? 'hidden-entry' : ''} ${grabbed ? 'grabbed' : ''}"
+      <div class="channel-item ${isPlaying ? 'playing' : ''} ${hidden ? 'hidden-entry' : ''} ${
+        grabbed ? 'grabbed' : ''} ${selectedFavorite ? 'favorite-selected' : ''}"
            data-key="ch:${String(globalIdx)}"
            data-focusable data-channel-index="${globalIdx}">
         <div class="channel-number">${globalIdx + 1}</div>
@@ -773,12 +953,15 @@ export class ChannelList {
         <div class="channel-info">
           ${renaming
             ? html`<input class="edit-text-input" type="text" value="${ch.name}">`
-            : html`<div class="channel-name">${isFav ? raw('&#9733; ') : ''}${ch.name}</div>`}
+            : html`<div class="channel-name">${showFavoriteStar ? raw('&#9733; ') : ''}${ch.name}</div>`}
           ${this.editing && ch.sourceName
             ? html`<div class="channel-now channel-source-name">${ch.sourceName}</div>`
             : (nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : '')}
         </div>
         ${hidden ? html`<div class="hidden-badge">${t('channel.editHidden')}</div>` : ''}
+        ${this.favoriteSelection
+          ? html`<div class="favorite-checkbox">${selectedFavorite ? raw(CHECK_ICON) : ''}</div>`
+          : ''}
         ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
       </div>
     `;
