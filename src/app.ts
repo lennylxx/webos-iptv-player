@@ -94,6 +94,7 @@ class App {
       this.views.player,
       () => this.player.getCurrentIndex(),
       (idx, catchup) => this.playChannel(idx, catchup),
+      () => this.player.getCurrentCatchupStart(),
     );
     this.menu = new PlayerMenu(
       this.views.player,

@@ -63,6 +63,7 @@ import { Sidebar } from './sidebar';
 let container: HTMLElement;
 let el: HTMLElement;
 let getCurrentIndex: ReturnType<typeof vi.fn>;
+let getCurrentCatchupStart: ReturnType<typeof vi.fn>;
 let onSelect: ReturnType<typeof vi.fn>;
 let sidebar: Sidebar;
 
@@ -79,13 +80,14 @@ beforeEach(() => {
   document.body.appendChild(container);
 
   getCurrentIndex = vi.fn(() => 1);
+  getCurrentCatchupStart = vi.fn(() => null);
   onSelect = vi.fn();
   recentMock.items = [];
   recentMock.getItems.mockClear();
   recentMock.catchupInfo.mockReset();
   epgMock.nowPlaying = null;
   toastMock.mockClear();
-  sidebar = new Sidebar(container, getCurrentIndex, onSelect);
+  sidebar = new Sidebar(container, getCurrentIndex, onSelect, getCurrentCatchupStart);
 });
 
 afterEach(() => {
@@ -521,6 +523,54 @@ describe('Sidebar', () => {
 
       expect(onSelect).toHaveBeenCalledWith(0, catchup);
       expect(sidebar.visible).toBe(false);
+    });
+
+    it('marks only the exact recent playback as playing', () => {
+      getCurrentCatchupStart.mockReturnValue(2000);
+      recentMock.items = [
+        {
+          kind: 'catchup',
+          channel: channels[1],
+          channelIndex: 1,
+          updatedAt: 3000,
+          progress: {
+            channelKey: 'b',
+            progStart: 1000,
+            progEnd: 61000,
+            position: 30,
+            duration: 60,
+            updatedAt: 3000,
+            completed: false,
+          },
+        },
+        {
+          kind: 'catchup',
+          channel: channels[1],
+          channelIndex: 1,
+          updatedAt: 3000,
+          progress: {
+            channelKey: 'b',
+            progStart: 2000,
+            progEnd: 62000,
+            position: 30,
+            duration: 60,
+            updatedAt: 3000,
+            completed: false,
+          },
+        },
+        {
+          kind: 'live',
+          channel: channels[1],
+          channelIndex: 1,
+          updatedAt: 3000,
+        },
+      ];
+      sidebar.refresh();
+      sidebar.handleAction('left');
+      groupItems()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+      expect(items().map(item => item.classList.contains('playing')))
+        .toEqual([false, true, false]);
     });
   });
 

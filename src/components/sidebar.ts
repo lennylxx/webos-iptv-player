@@ -42,6 +42,7 @@ export class Sidebar {
   private el: HTMLElement | null;
   private getCurrentIndex: () => number;
   private onSelectChannel: (index: number, catchup?: CatchupInfo) => void;
+  private getCurrentCatchupStart: () => number | null;
   private isVisible = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private activePane: SidebarPane = 'channels';
@@ -66,9 +67,11 @@ export class Sidebar {
     container: HTMLElement,
     getCurrentIndex: () => number,
     onSelectChannel: (index: number, catchup?: CatchupInfo) => void,
+    getCurrentCatchupStart: () => number | null = () => null,
   ) {
     this.getCurrentIndex = getCurrentIndex;
     this.onSelectChannel = onSelectChannel;
+    this.getCurrentCatchupStart = getCurrentCatchupStart;
     this.el = $('#player-sidebar', container);
     this.bindEvents();
   }
@@ -514,6 +517,7 @@ export class Sidebar {
     const range = this.visibleRange(entries.length, viewportHeight);
     const visibleEntries = entries.slice(range.start, range.end);
     const currentIdx = this.getCurrentIndex();
+    const currentCatchupStart = this.getCurrentCatchupStart();
     const currentTab = tabs.find(t => t.id === this.playlist);
     const activeGroup = groups.find(item => item.id === this.group) || groups[0];
     const searchPlaceholder = currentTab
@@ -565,9 +569,11 @@ export class Sidebar {
             const i = range.start + offset;
             const epgId = EpgService.findChannelId(ch);
             const nowPlaying = epgId ? EpgService.getNowPlaying(epgId) : null;
-            const isPlaying = globalIdx === currentIdx;
             const isFocused = this.activePane === 'channels' && i === this.channelFocusIdx;
             const catchup = recent?.kind === 'catchup' ? recent : null;
+            const isPlaying = globalIdx === currentIdx && (catchup
+              ? catchup.progress.progStart === currentCatchupStart
+              : currentCatchupStart === null);
             const title = catchup ? catchup.progress.title ?? ch.name : ch.name;
             const subtitle = catchup
               ? t('channel.resumeAt', {

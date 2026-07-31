@@ -1693,6 +1693,10 @@ export class Player {
     return this.currentIndex;
   }
 
+  getCurrentCatchupStart(): number | null {
+    return this.catchupInfo ? this.catchupInfo.start * 1000 : null;
+  }
+
   getCurrentChannel(): Channel | null {
     return this.currentChannel;
   }
