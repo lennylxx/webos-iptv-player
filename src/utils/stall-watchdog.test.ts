@@ -10,9 +10,9 @@ function scriptedProbe(states: StallProbe[]): () => StallProbe {
 }
 
 const playing = (t: number, readyState = 4): StallProbe =>
-  ({ currentTime: t, readyState, paused: false, seeking: false });
+  ({ currentTime: t, readyState, networkState: 2, paused: false, seeking: false });
 const frozen = (t: number, readyState = 1): StallProbe =>
-  ({ currentTime: t, readyState, paused: false, seeking: false });
+  ({ currentTime: t, readyState, networkState: 2, paused: false, seeking: false });
 
 const OPTS = { pollMs: 1000, freezeTicks: 3, maxReloads: 2 };
 
@@ -75,14 +75,14 @@ describe('StallWatchdog', () => {
   });
 
   it('treats paused as not-a-stall', () => {
-    const paused = { currentTime: 5, readyState: 1, paused: true, seeking: false };
+    const paused = { currentTime: 5, readyState: 1, networkState: 2, paused: true, seeking: false };
     run(scriptedProbe([playing(5), paused]), 20);
     expect(onReload).not.toHaveBeenCalled();
     expect(onEscalate).not.toHaveBeenCalled();
   });
 
   it('treats seeking as not-a-stall', () => {
-    const seeking = { currentTime: 5, readyState: 1, paused: false, seeking: true };
+    const seeking = { currentTime: 5, readyState: 1, networkState: 2, paused: false, seeking: true };
     run(scriptedProbe([playing(5), seeking]), 20);
     expect(onReload).not.toHaveBeenCalled();
     expect(onEscalate).not.toHaveBeenCalled();
@@ -101,6 +101,16 @@ describe('StallWatchdog', () => {
     vi.advanceTimersByTime(OPTS.pollMs * 20);
     expect(onReload).not.toHaveBeenCalled();
     expect(onEscalate).not.toHaveBeenCalled();
+  });
+
+  it('reports the frozen media state and recovery attempt', () => {
+    run(scriptedProbe([playing(5), frozen(5), frozen(5), frozen(5)]), 4);
+    expect(onReload).toHaveBeenCalledWith({
+      probe: frozen(5),
+      frozenMs: 3000,
+      reloadCount: 1,
+      maxReloads: 2,
+    });
   });
 
   it('keeps a restarting onEscalate\'s watchdog alive (escalation must not kill the next channel)', () => {

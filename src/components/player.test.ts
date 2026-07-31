@@ -46,6 +46,7 @@ vi.mock('../services/idb-cache', () => ({
 import { Player, ASS_SUBTITLE_BASE } from './player';
 import {
   containerMime,
+  diagnosticStreamUrl,
   extFromUrl,
   sniffStreamContentType,
   streamMime,
@@ -1531,6 +1532,17 @@ describe('stream routing', () => {
     expect(streamRouteKey('http://host/play/ch2?token=x')).toBe('http://host/play');
     expect(streamRouteKey('http://host/catchup/ch1')).toBe('http://host/catchup');
     expect(streamRouteKey('not a url')).toBe('');
+  });
+
+  it('redacts stream credentials while retaining diagnostic routing data', () => {
+    expect(diagnosticStreamUrl(
+      'http://user:pass@host/timeshift/u1/p1/60/start/42.ts?token=x&start=10&end=20',
+    )).toBe(
+      'http://***:***@host/timeshift/***/***/60/start/42.ts?token=***&start=10&end=20',
+    );
+    expect(diagnosticStreamUrl(
+      'http://host/catchup/ch1.m3u8?start=10&end=20&auth=secret',
+    )).toBe('http://host/catchup/ch1.m3u8?start=10&end=20&auth=***');
   });
 
   it('maps detected content types to native MIME values', () => {

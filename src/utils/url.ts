@@ -26,6 +26,31 @@ export function streamRouteKey(url: string): string {
   }
 }
 
+export function diagnosticStreamUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.username) parsed.username = '***';
+    if (parsed.password) parsed.password = '***';
+
+    const parts = parsed.pathname.split('/');
+    const route = parts[1]?.toLowerCase();
+    if (route === 'live' || route === 'movie' || route === 'series' || route === 'timeshift') {
+      if (parts.length > 2) parts[2] = '***';
+      if (parts.length > 3) parts[3] = '***';
+      parsed.pathname = parts.join('/');
+    }
+
+    parsed.searchParams.forEach((_, key) => {
+      if (!/^(?:start|end|duration|extension|stream)$/i.test(key)) {
+        parsed.searchParams.set(key, '***');
+      }
+    });
+    return parsed.toString();
+  } catch {
+    return '(invalid URL)';
+  }
+}
+
 export function streamUrlMime(url: string): string {
   if (/\.ts(?:[?#]|$)/i.test(url) || /[?&]extension=ts(?:[&#]|$)/i.test(url)) {
     return 'video/mp2t';

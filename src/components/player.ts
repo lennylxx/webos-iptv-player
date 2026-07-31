@@ -18,11 +18,12 @@ import { getCachedSubtitle, setCachedSubtitle } from '../services/idb-cache';
 import { CONFIG } from '../config';
 import { formatTime, formatPosition, formatDuration, getProgress } from '../utils/time';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
-import { StallWatchdog, type StallProbe } from '../utils/stall-watchdog';
+import { StallWatchdog, type StallProbe, type StallRecovery } from '../utils/stall-watchdog';
 import { resolutionBadge, hdrLabel, frameRateLabel, parseVariants, pickVariant, codecName, audioSummary, subtitleSummary, type StreamVariant, type MediaInfo } from '../utils/stream-info';
 import {
   extFromUrl,
   containerMime,
+  diagnosticStreamUrl,
   sniffStreamContentType,
   streamMime,
   streamRouteKey,
@@ -89,6 +90,7 @@ export class Player {
   // re-requesting a broken image (which would thrash the OSD layout).
   private failedIcons = new Set<string>();
   private loadToken = 0;
+  private videoLoadLabels = new WeakMap<HTMLVideoElement, string>();
   private hlsRecoveries = 0; // fatal hls.js errors recovered since the last good fragment
   private manifestAudio: ManifestAudio[] = []; // real track names parsed from the HLS master (webOS)
   private manifestSubtitles: ManifestSubtitle[] = []; // subtitle names parsed from the HLS master (webOS)
@@ -139,11 +141,23 @@ export class Player {
       probe: (): StallProbe => {
         const v = this.videoEl;
         // No element -> report "paused" so a stray tick is a no-op.
-        if (!v) return { currentTime: 0, readyState: 0, paused: true, seeking: false };
-        return { currentTime: v.currentTime, readyState: v.readyState, paused: v.paused, seeking: v.seeking };
+        if (!v) return { currentTime: 0, readyState: 0, networkState: 0, paused: true, seeking: false };
+        return {
+          currentTime: v.currentTime,
+          readyState: v.readyState,
+          networkState: v.networkState,
+          paused: v.paused,
+          seeking: v.seeking,
+        };
       },
-      onReload: () => this.reloadCurrentStream(),
-      onEscalate: () => this.channelUp(),
+      onReload: recovery => {
+        log.warn('watchdog reload', this.playbackLabel(), this.recoveryState(recovery));
+        this.reloadCurrentStream();
+      },
+      onEscalate: recovery => {
+        log.error('watchdog escalate', this.playbackLabel(), this.recoveryState(recovery));
+        this.channelUp();
+      },
       pollMs: CONFIG.PLAYER.STALL_POLL_MS,
       freezeTicks: CONFIG.PLAYER.STALL_FREEZE_TICKS,
       maxReloads: CONFIG.PLAYER.STALL_MAX_RELOADS,
@@ -210,9 +224,13 @@ export class Player {
   private bindVideoEvents(el: HTMLVideoElement): void {
     el.addEventListener('error', () => this.onError());
     el.addEventListener('loadedmetadata', () => {
-      log.info('loadedmetadata', el.videoWidth + 'x' + el.videoHeight, '| duration:', el.duration);
+      log.info('loadedmetadata', this.videoLabel(el), el.videoWidth + 'x' + el.videoHeight,
+        this.mediaState(el), '| pendingResume:', this.pendingResumeSecs);
       if ((this.vod || this.catchupInfo) && this.pendingResumeSecs > 0 && Number.isFinite(el.duration) && el.duration > 0) {
-        el.currentTime = Math.min(this.pendingResumeSecs, el.duration - 1);
+        const target = Math.min(this.pendingResumeSecs, el.duration - 1);
+        log.info('resume seek', this.videoLabel(el), '| requested:', this.pendingResumeSecs,
+          '| target:', target, '| duration:', el.duration);
+        el.currentTime = target;
         this.pendingResumeSecs = 0;
       }
       this.applyNativeAudioSelection();
@@ -228,22 +246,47 @@ export class Player {
     el.audioTracks?.addEventListener?.('addtrack', () => this.applyNativeAudioSelection());
     el.textTracks?.addEventListener?.('addtrack', () => this.applyNativeSubtitleSelection());
     el.addEventListener('playing', () => {
-      log.info('playing');
+      log.info('playing', this.videoLabel(el), this.mediaState(el));
       if (this.resyncing) this.endResync();
       this.confirmLiveHistory(el);
       if (this.osdVisible) this.resetOsdTimer();
     });
     el.addEventListener('waiting', () => {
-      log.debug('waiting (buffering)');
+      log.debug('waiting', this.videoLabel(el), this.mediaState(el));
       this.cancelLiveHistoryTimer();
     });
     el.addEventListener('stalled', () => {
-      log.warn('stalled');
+      log.debug('stalled event', this.videoLabel(el), this.mediaState(el));
       this.cancelLiveHistoryTimer();
     });
     el.addEventListener('timeupdate', () => this.refreshProgress());
-    el.addEventListener('seeked', () => { if (this.catchupInfo) this.saveCatchupProgress(); });
+    el.addEventListener('seeked', () => {
+      log.info('seeked', this.videoLabel(el), this.mediaState(el));
+      if (this.catchupInfo) this.saveCatchupProgress();
+    });
     el.addEventListener('ended', () => this.onEnded());
+  }
+
+  private playbackLabel(load = this.loadToken): string {
+    return `session=${String(this.playbackGeneration)} load=${String(load)}`;
+  }
+
+  private videoLabel(el: HTMLVideoElement): string {
+    return this.videoLoadLabels.get(el) ?? this.playbackLabel();
+  }
+
+  private mediaState(el: HTMLVideoElement): string {
+    return `t=${el.currentTime.toFixed(3)} duration=${String(el.duration)}` +
+      ` ready=${String(el.readyState)} network=${String(el.networkState)}` +
+      ` paused=${String(el.paused)} seeking=${String(el.seeking)}`;
+  }
+
+  private recoveryState(recovery: StallRecovery): string {
+    const p = recovery.probe;
+    return `frozen=${String(recovery.frozenMs)}ms reloads=${String(recovery.reloadCount)}` +
+      `/${String(recovery.maxReloads)} t=${p.currentTime.toFixed(3)}` +
+      ` ready=${String(p.readyState)} network=${String(p.networkState)}` +
+      ` paused=${String(p.paused)} seeking=${String(p.seeking)}`;
   }
 
   suspend(): void {
@@ -401,7 +444,7 @@ export class Player {
     StorageService.setLastChannelKey(channelKey(channel));
 
     const url = this.resolveStreamUrl(channel, catchup || null);
-    if (catchup) log.debug('catchup URL:', url);
+    if (catchup) log.debug('catchup URL:', diagnosticStreamUrl(url));
 
     this.videoEl.classList.add('active');
     this.loadStream(url, channel.extras);
@@ -737,7 +780,6 @@ export class Player {
   // would reset the watchdog's reload budget and prevent escalation.
   private reloadCurrentStream(): void {
     if (!this.currentChannel) return;
-    log.warn('stall watchdog — reloading current stream:', this.currentChannel.name);
     this.updateOSDMessage(t('player.reconnecting'));
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
@@ -866,6 +908,8 @@ export class Player {
   private loadStream(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
     if (!this.videoEl) return;
     const token = ++this.loadToken;
+    this.videoLoadLabels.set(this.videoEl, this.playbackLabel(token));
+    const safeUrl = diagnosticStreamUrl(url);
     this.cancelManifestTracks();
     this.manifestAudio = [];
     this.manifestSubtitles = [];
@@ -896,7 +940,8 @@ export class Player {
     if (isWebOS) {
       if (opts?.direct) {
         const mime = containerMime(url);
-        log.info('loadStream url=', url, '| webOS native VOD | MIME', mime);
+        log.info('loadStream', this.playbackLabel(token), 'url=', safeUrl,
+          '| webOS native VOD | MIME', mime);
         this.playNative(url, mime);
         return;
       }
@@ -904,18 +949,20 @@ export class Player {
         const mime = isFlvUrl ? 'video/x-flv'
           : isTsUrl ? 'video/mp2t'
           : 'application/vnd.apple.mpegurl';
-        log.info('loadStream url=', url, '| webOS native | catchup:', !!this.catchupInfo, '| MIME', mime);
-        if (isHlsUrl) void this.loadManifestTracks(url, this.manifestSeq);
+        log.info('loadStream', this.playbackLabel(token), 'url=', safeUrl,
+          '| webOS native | catchup:', !!this.catchupInfo, '| MIME', mime);
+        if (isHlsUrl) void this.loadManifestTracks(url, this.manifestSeq, token);
         this.playNative(url, mime);
         return;
       }
       const routeKey = streamRouteKey(url);
       const cachedMime = StorageService.getStreamMime(routeKey);
       if (cachedMime) {
-        log.info('loadStream url=', url, '| webOS native | cached MIME', cachedMime,
+        log.info('loadStream', this.playbackLabel(token), 'url=', safeUrl,
+          '| webOS native | cached MIME', cachedMime,
           '| catchup:', !!this.catchupInfo);
         if (cachedMime === 'application/vnd.apple.mpegurl') {
-          void this.loadManifestTracks(url, this.manifestSeq);
+          void this.loadManifestTracks(url, this.manifestSeq, token);
         }
         this.playNative(url, cachedMime);
         return;
@@ -927,10 +974,11 @@ export class Player {
             contentType.split(';')[0].trim() !== 'application/octet-stream') {
           StorageService.setStreamMime(routeKey, mime);
         }
-        log.info('loadStream url=', url, '| webOS native | content-type:', contentType || '(none)',
+        log.info('loadStream', this.playbackLabel(token), 'url=', safeUrl,
+          '| webOS native | content-type:', contentType || '(none)',
           '| catchup:', !!this.catchupInfo, '| MIME', mime || '(auto)');
         if (mime === 'application/vnd.apple.mpegurl') {
-          void this.loadManifestTracks(url, this.manifestSeq);
+          void this.loadManifestTracks(url, this.manifestSeq, token);
         }
         this.playNative(url, mime);
       });
@@ -942,7 +990,7 @@ export class Player {
     // serve HLS with no .m3u8 suffix — so classify by the server's Content-Type,
     // falling back to the URL and defaulting to HLS.
     if (opts?.direct) {
-      log.info('loadStream url=', url, '| desktop direct VOD');
+      log.info('loadStream', this.playbackLabel(token), 'url=', safeUrl, '| desktop direct VOD');
       this.videoEl.src = url;
       this.videoEl.play().catch(e => log.warn('Direct play() rejected:', e));
       return;
@@ -953,7 +1001,8 @@ export class Player {
       const isTs = isTsUrl || ct.includes('mp2t');
       const isDirect = !isTs && !isFlv && /^(?:video|audio)\//.test(ct);
       const isHls = !isTs && !isFlv && !isDirect; // proxied / extension-less ⇒ HLS
-      log.info('loadStream url=', url, '| content-type:', ct || '(none)', '| catchup:', !!this.catchupInfo,
+      log.info('loadStream', this.playbackLabel(token), 'url=', safeUrl,
+        '| content-type:', ct || '(none)', '| catchup:', !!this.catchupInfo,
         '| isHls:', isHls, '| isTs:', isTs, '| isFlv:', isFlv);
       if (isTs || isFlv) {
         log.info('Using mpegts.js');
@@ -1022,7 +1071,9 @@ export class Player {
     if (mime) source.type = mime;
     this.videoEl.appendChild(source);
     this.videoEl.load();
-    this.videoEl.play().catch(e => log.warn('Native play() rejected:', e));
+    const el = this.videoEl;
+    el.play().catch(e => log.warn('Native play() rejected', this.videoLabel(el),
+      this.mediaState(el), e));
   }
 
   private loadWithHls(url: string, extras: Record<string, string> | null): void {
@@ -1145,8 +1196,11 @@ export class Player {
     }
     const v = this.videoEl;
     if (this.errorAdvanceTimer !== null) return;
-    log.error('video error', v?.error ? { code: v.error.code, message: v.error.message } : 'no error info',
-      '| channel:', this.currentChannel?.name, '| url:', this.currentChannel?.url);
+    log.error('video error', this.playbackLabel(),
+      v ? this.mediaState(v) : 'no video element',
+      v?.error ? { code: v.error.code, message: v.error.message } : 'no error info',
+      '| channel:', this.currentChannel?.name,
+      '| url:', diagnosticStreamUrl(v?.currentSrc || this.currentChannel?.url || ''));
     this.updateOSDMessage(t('player.streamError'));
     this.errorAdvanceTimer = setTimeout(() => {
       this.errorAdvanceTimer = null;
@@ -1676,8 +1730,9 @@ export class Player {
   // "Audio 2" / "Subtitle 2". Native audio/text tracks carry no usable
   // name/language on webOS, so this is the only source. Re-applies the saved
   // picks once names are known; degrades to generic labels on a fetch failure.
-  private async loadManifestTracks(url: string, seq: number): Promise<void> {
+  private async loadManifestTracks(url: string, seq: number, loadToken: number): Promise<void> {
     const controller = new AbortController();
+    const started = Date.now();
     this.manifestController?.abort();
     this.manifestController = controller;
     try {
@@ -1689,6 +1744,8 @@ export class Player {
         '#EXTM3U',
       );
       if (seq !== this.manifestSeq) return;
+      log.debug('manifest fetched', this.playbackLabel(loadToken),
+        `bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
       const audio = parseAudioRenditions(text);
       if (audio.length >= 2) {
         this.manifestAudio = audio;
@@ -1717,7 +1774,8 @@ export class Player {
       }
     } catch (e) {
       if (controller.signal.aborted) return;
-      log.warn('manifest tracks fetch failed:', e);
+      log.warn('manifest fetch failed', this.playbackLabel(loadToken),
+        `elapsed=${String(Date.now() - started)}ms`, e);
     } finally {
       if (this.manifestController === controller) this.manifestController = null;
     }

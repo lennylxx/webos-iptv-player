@@ -5,14 +5,22 @@
 export interface StallProbe {
   currentTime: number;
   readyState: number; // HTMLMediaElement.readyState
+  networkState: number; // HTMLMediaElement.networkState
   paused: boolean;
   seeking: boolean;
 }
 
+export interface StallRecovery {
+  probe: StallProbe;
+  frozenMs: number;
+  reloadCount: number;
+  maxReloads: number;
+}
+
 export interface StallWatchdogOptions {
   probe: () => StallProbe;
-  onReload: () => void;
-  onEscalate: () => void;
+  onReload: (recovery: StallRecovery) => void;
+  onEscalate: (recovery: StallRecovery) => void;
   pollMs: number;
   freezeTicks: number;
   maxReloads: number;
@@ -25,8 +33,8 @@ const HAVE_FUTURE_DATA = 3;
 
 export class StallWatchdog {
   private readonly probe: () => StallProbe;
-  private readonly onReload: () => void;
-  private readonly onEscalate: () => void;
+  private readonly onReload: (recovery: StallRecovery) => void;
+  private readonly onEscalate: (recovery: StallRecovery) => void;
   private readonly pollMs: number;
   private readonly freezeTicks: number;
   private readonly maxReloads: number;
@@ -93,15 +101,22 @@ export class StallWatchdog {
     if (this.frozenTicks < this.freezeTicks) return;
 
     this.frozenTicks = 0;
+    const recovery = {
+      probe: p,
+      frozenMs: this.freezeTicks * this.pollMs,
+      reloadCount: this.reloadCount,
+      maxReloads: this.maxReloads,
+    };
     if (this.reloadCount < this.maxReloads) {
       this.reloadCount++;
-      this.onReload();
+      recovery.reloadCount = this.reloadCount;
+      this.onReload(recovery);
     } else {
       // onEscalate (channelUp → play) synchronously starts a fresh watchdog for
       // the next channel, so tear down THIS run first — stopping after would
       // clear the timer the escalation just created.
       this.stop();
-      this.onEscalate();
+      this.onEscalate(recovery);
     }
   }
 }
