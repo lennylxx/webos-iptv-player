@@ -23,6 +23,23 @@ function assrtLang(desc: string): string {
 
 const strip = (u: string): string => u.split('?')[0].split('#')[0];
 
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+// Assrt is a free-text match over the release name. A movie's release name
+// carries its own year, so title+year narrows well. A series' release name
+// carries the *season's* year, not the series' first-air year, so passing the
+// series year matches nothing at all — episodes search by "SxxEyy" instead.
+function buildQuery(q: SubtitleQuery): string {
+  if (q.manualQuery) return q.manualQuery.trim();
+  const parts: string[] = [q.title];
+  if (q.type === 'episode') {
+    if (q.season != null) parts.push(q.episode != null ? `S${pad2(q.season)}E${pad2(q.episode)}` : `S${pad2(q.season)}`);
+  } else if (q.year) {
+    parts.push(String(q.year));
+  }
+  return parts.filter(Boolean).join(' ').trim();
+}
+
 export function createAssrtProvider(getApiKey: () => string): SubtitleProvider {
   const token = (): string => getApiKey().trim() || DEFAULT_ASSRT_TOKEN;
 
@@ -32,7 +49,7 @@ export function createAssrtProvider(getApiKey: () => string): SubtitleProvider {
     isConfigured: () => true, // a token always exists (default), so Assrt is always available
 
     async search(q: SubtitleQuery): Promise<OnlineSubtitleResult[]> {
-      const query = (q.manualQuery || [q.title, q.year].filter(Boolean).join(' ')).trim();
+      const query = buildQuery(q);
       if (query.length < 3) return [];
       try {
         const url = `${BASE}/sub/search?token=${encodeURIComponent(token())}&cnt=15&q=${encodeURIComponent(query)}`;

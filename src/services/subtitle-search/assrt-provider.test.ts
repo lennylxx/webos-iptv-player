@@ -21,7 +21,7 @@ describe('assrt provider', () => {
     expect(String(spy.mock.calls[0][0])).toContain(`token=${DEFAULT_ASSRT_TOKEN}`);
   });
 
-  it('builds a title+year query and maps language + downloads', async () => {
+  it('builds a title+year query for a movie and maps language + downloads', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
       status: 0,
       sub: { subs: [
@@ -35,6 +35,26 @@ describe('assrt provider', () => {
     expect(url).toContain('cnt=15');
     expect(out[0]).toMatchObject({ providerId: 'assrt', id: '594897', language: 'zh-CN', releaseName: 'Alpha One', downloads: 7 });
     expect(out[1].language).toBe('en');
+  });
+
+  it('builds a zero-padded SxxEyy query for an episode and drops the series year', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ status: 0, sub: { subs: [] } }));
+    await provider.search({ type: 'episode', title: 'Alpha', year: 2008, season: 2, episode: 5 });
+    const url = String(spy.mock.calls[0][0]);
+    expect(url).toContain('q=Alpha%20S02E05');
+    expect(url).not.toContain('2008');
+  });
+
+  it('falls back to the season alone when the episode number is unknown', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ status: 0, sub: { subs: [] } }));
+    await provider.search({ type: 'episode', title: 'Alpha', year: 2008, season: 10 });
+    expect(String(spy.mock.calls[0][0])).toContain('q=Alpha%20S10');
+  });
+
+  it('keeps a manual query verbatim', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ status: 0, sub: { subs: [] } }));
+    await provider.search({ type: 'episode', title: 'Alpha', year: 2008, season: 2, episode: 5, manualQuery: 'Bravo S01E01' });
+    expect(String(spy.mock.calls[0][0])).toContain('q=Bravo%20S01E01');
   });
 
   it('falls back to videoname when native_name is an empty string (not just missing)', async () => {
