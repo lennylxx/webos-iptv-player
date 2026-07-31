@@ -156,6 +156,26 @@ describe('Sidebar', () => {
       expect(items()[1]).toBe(first);
     });
 
+    it('removes a failed channel logo and does not restore it on later renders', () => {
+      channels[0].logo = 'http://host/broken.png';
+      try {
+        sidebar.show();
+        const logo = items()[0].querySelector<HTMLImageElement>('.ch-logo');
+        expect(logo).not.toBeNull();
+
+        logo!.dispatchEvent(new Event('error'));
+        expect(items()[0].querySelector('.ch-logo')).toBeNull();
+        expect(items()[0].querySelector('.ch-logo-placeholder')).toBeNull();
+        expect(items()[0].querySelector('.ch-logo-wrap')).not.toBeNull();
+
+        sidebar.refresh();
+        expect(items()[0].querySelector('.ch-logo')).toBeNull();
+        expect(items()[0].querySelector('.ch-logo-wrap')).not.toBeNull();
+      } finally {
+        channels[0].logo = '';
+      }
+    });
+
     it('starts the slide transition before rendering channel rows', () => {
       const target = sidebar as unknown as { render(): void };
       const render = target.render.bind(sidebar);

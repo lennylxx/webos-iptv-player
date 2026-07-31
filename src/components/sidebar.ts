@@ -3,7 +3,7 @@ import { CONFIG } from '../config';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
-import { $, html, raw } from '../utils/dom';
+import { $, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { rankChannels } from '../utils/channel-search';
 import { formatPosition } from '../utils/time';
@@ -60,6 +60,7 @@ export class Sidebar {
   private pointerAtGroupEdge = false;
   private pointerExitTimer: ReturnType<typeof setTimeout> | null = null;
   private pointerExitPending = false;
+  private failedLogos = new Set<string>();
 
   constructor(
     container: HTMLElement,
@@ -578,9 +579,7 @@ export class Sidebar {
                    data-focusable data-sidebar-index="${globalIdx}" data-sidebar-pos="${i}"
                    style="top:${i * CHANNEL_ROW_STRIDE}px">
                 <span class="ch-num">${globalIdx + 1}</span>
-                ${ch.logo
-                  ? html`<img class="ch-logo" src="${ch.logo}" alt="" loading="lazy" onerror="this.style.display='none'">`
-                  : html`<div class="ch-logo-placeholder">${ch.name.charAt(0)}</div>`}
+                ${this.renderLogo(ch)}
                 <div class="ch-info">
                   <span class="ch-name">${title}</span>
                   ${subtitle ? html`<span class="ch-now"><span class="ch-now-text">${subtitle}</span></span>` : ''}
@@ -600,6 +599,17 @@ export class Sidebar {
     if (search && search.value !== this.searchQuery) search.value = this.searchQuery;
 
     if (!this.opening && measureMarquees) this.measureMarquees();
+  }
+
+  private renderLogo(ch: Channel): Safe {
+    let logo: Safe | string = '';
+    if (!ch.logo) {
+      logo = html`<div class="ch-logo-placeholder">${ch.name.charAt(0)}</div>`;
+    } else if (!this.failedLogos.has(ch.logo)) {
+      logo = html`<img class="ch-logo" src="${ch.logo}" alt="" loading="lazy">`;
+    }
+
+    return html`<div class="ch-logo-wrap">${logo}</div>`;
   }
 
   private measureMarquees(): void {
@@ -630,6 +640,17 @@ export class Sidebar {
       if (this.pointerAtGroupEdge) this.startGroupDwell();
       this.measureMarquees();
     });
+
+    el.addEventListener('error', (e: Event) => {
+      const target = e.target;
+      if (!(target instanceof HTMLImageElement)
+          || !target.classList.contains('ch-logo')) return;
+      const src = target.getAttribute('src');
+      if (src && !this.failedLogos.has(src)) {
+        this.failedLogos.add(src);
+        this.render();
+      }
+    }, true);
 
     el.addEventListener('input', (e: Event) => {
       if (!(e.target as HTMLElement).classList.contains('sidebar-search-input')) return;
