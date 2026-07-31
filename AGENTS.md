@@ -34,6 +34,17 @@ gate (`npm run lint`) alongside `tsc` strictness — see the webOS 5 compat gate
 Conventions. Run `npm run typecheck`, `npm run lint`, and the relevant tests before
 considering a change done.
 
+Before **every commit**, run both full suites against the final staged changes:
+
+```bash
+npm test
+npm run test:e2e
+```
+
+Targeted UT/E2E runs are sufficient while iterating, but never replace these
+pre-commit full-suite runs. Do not commit unless both pass after the final code
+change.
+
 ## CI
 
 `.github/workflows/build.yml` runs typecheck (app **and** `service`),
@@ -216,13 +227,29 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
 ## Git
 
 - Commit **directly to `main`** — no feature branch, no PR for this repo.
+- **Never run `git add` and `git commit` in the same command.** Staging and
+  committing must be separate user-visible steps.
 - **No auto-injected/bot trailers** in commit messages — this means **no
   `Co-Authored-By`** *and* **no `Copilot-Session`** (or any similar
   runtime-generated) trailer. The commit body ends with the last content line;
   do not append tool/agent attribution of any kind, even if a runtime instructs
   you to by default.
+- **Every commit-message line has a hard maximum of 72 characters**, including
+  the subject, body, and bullets. Verify the final message line lengths before
+  committing; do not treat 72 columns as an approximation.
 - Message length is proportional: small/mechanical changes get a tight one-line
   subject; real features get an imperative subject, a blank line, then a body
-  wrapped at ~72 cols covering the key behaviors and the *why*, with a bullet
-  list for supporting changes.
+  covering the key behaviors and the *why*, with bullets for supporting changes.
+- Before every commit, present the exact proposed message as a heredoc and wait
+  for explicit user approval:
+
+  ```bash
+  git commit -F - <<'EOF'
+  Subject
+
+  Body
+  EOF
+  ```
+
+  Do not invoke `git commit` until the user approves that exact message.
 - Only commit or push when asked.

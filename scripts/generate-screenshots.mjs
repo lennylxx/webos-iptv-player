@@ -752,8 +752,12 @@ try {
     await page.locator('.upload-qr').waitFor({ state: 'visible', timeout: 10_000 });
     await page.locator('#upload-entries .settings-row').first().waitFor({ state: 'visible', timeout: 10_000 });
     await page.locator('#playlist-entries .settings-row:not(.playlist-header-row)').nth(1).evaluate((el) => el.remove());
-    await page.locator('#settings-sources').evaluate((el) =>
-      el.scrollIntoView({ block: 'start' }));
+    await page.locator('.settings-main').evaluate((el) => {
+      const sources = el.querySelector('#settings-sources');
+      if (!(sources instanceof HTMLElement)) return;
+      el.style.scrollBehavior = 'auto';
+      el.scrollTop = sources.offsetTop + 30;
+    });
     await clearToasts(page);
     await page.waitForTimeout(300);
     await shoot(page, 'settings.png');
@@ -779,9 +783,9 @@ try {
     await context.close();
   }
 
-  // 4) Playback overlays — channel switcher (left) + action menu (right), no OSD.
+  // 4) Playback overlays — grouped channel switcher (left) + action menu (right), no OSD.
   {
-    const { context, page } = await newPage({ fakeStream: true });
+    const { context, page } = await newPage({ fakeStream: true, recently: true });
     await gotoChannels(page, base);
     // hls.js requests the (aborted) media playlists only after parsing the master, so
     // this confirms the audio/subtitle track lists are populated before the menu opens
@@ -799,6 +803,8 @@ try {
     await page.keyboard.press('ArrowLeft');  // ...open the channel switcher
     await page.locator('#player-sidebar.visible').waitFor({ state: 'visible' });
     await page.keyboard.press('ArrowDown');  // highlight the playing channel
+    await page.keyboard.press('ArrowLeft');  // expand and focus the group panel
+    await page.locator('#player-sidebar.groups-expanded').waitFor({ state: 'visible' });
     await page.evaluate((bg) => {
       const v = document.getElementById('video-player');
       if (v) { v.classList.remove('active'); try { v.pause(); } catch { /* ignore */ } }

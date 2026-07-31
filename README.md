@@ -8,15 +8,15 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Channel list | Recently watched |
 | --- | --- |
-| ![Channel list](https://github.com/user-attachments/assets/83e195ef-dc72-4e04-b9a3-4fb3b2515d21) | ![Recently watched](https://github.com/user-attachments/assets/2040d2f1-e263-4b75-8ff5-c3b43ea6341b) |
+| ![Channel list](https://github.com/user-attachments/assets/1e0bf500-3077-46c9-973f-7e5691db6da1) | ![Recently watched](https://github.com/user-attachments/assets/2040d2f1-e263-4b75-8ff5-c3b43ea6341b) |
 
 | Program guide | Catch-up resume |
 | --- | --- |
-| ![Program guide](https://github.com/user-attachments/assets/8a66bd03-8dde-4cde-9601-06b6a8f34696) | ![Catch-up resume](https://github.com/user-attachments/assets/ec9a1247-a9d7-489b-be1e-d12f93d94d3b) |
+| ![Program guide](https://github.com/user-attachments/assets/ee5123fa-775a-4bfc-a48c-10df9cdeaa26) | ![Catch-up resume](https://github.com/user-attachments/assets/c969b7ba-35ab-46f4-9832-cd29bf46c0e3) |
 
 | Channel info | Playback overlays |
 | --- | --- |
-| ![Channel info](https://github.com/user-attachments/assets/9b77591d-ac4f-4746-bf69-5d4527f6ce8c) | ![Playback overlays](https://github.com/user-attachments/assets/fd74f4cc-a0a0-4357-add6-2ce2e691af99) |
+| ![Channel info](https://github.com/user-attachments/assets/9b77591d-ac4f-4746-bf69-5d4527f6ce8c) | ![Playback overlays](https://github.com/user-attachments/assets/4d88a64d-7004-4481-aa64-0ebcf5355987) |
 
 | Subtitles | Subtitle search |
 | --- | --- |
@@ -32,7 +32,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Settings | Theme picker |
 | --- | --- |
-| ![Settings](https://github.com/user-attachments/assets/bfc6c2f3-67b9-420d-b7eb-7f828c830eb9) | ![Theme picker](https://github.com/user-attachments/assets/e2ca8b23-2276-4947-ab6f-1c8046d05832) |
+| ![Settings](https://github.com/user-attachments/assets/90ea0f6d-a472-4bbc-9425-781327767c51) | ![Theme picker](https://github.com/user-attachments/assets/4bf0b902-e29e-4dbf-b35f-285d21b88932) |
 
 ## Features
 
@@ -61,10 +61,12 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 **Navigation**
 
 - **Search** — across channels, EPG programs, movies, and series, with direct live, catch-up, and reminder actions
-- **Channel sidebar** — switch channels over the video with current-program info
-- **Favorites, auto-play, and genre group icons** for faster browsing
+- **Channel sidebar** — switch channels over the video with current-program info, organized by group
+- **Channel customization** — reorder, hide, rename, regroup, and manage favorites
+- **Auto-play and genre group icons** for faster browsing
 - **Full remote & Magic Remote** — spatial D-pad navigation and pointer control across every view
 - **Color themes** — choose from light and dark app-wide themes with live previews, plus Dark or Frosted player overlays; selections persist across launches
+- **Adjustable text size** — scale text from 80%–150% without resizing controls
 - **Multilingual interface** — available in English, Deutsch, Español, Français, Italiano, Português (Brasil), Русский, Українська, and 简体中文; follows the TV language by default or can be selected explicitly in Settings
 
 **Development**
@@ -193,12 +195,12 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Xtream Account** — add, edit, or remove Xtream Codes accounts (portal URL + username + password). The playlist and EPG are derived from your credentials on Save.
 - **Playlists** — add, edit, or remove M3U URLs. Re-applied on Save.
 - **Upload Playlist** — QR code + LAN URL on the left, list of currently uploaded playlists on the right. Scan the QR from a phone/laptop on the same network to upload `.m3u` files; they appear in this list within milliseconds via Luna push.
-- **EPG (Electronic Program Guide)** — set the XMLTV URL (also auto-detected from `x-tvg-url` in M3U).
-- **Appearance** — preview and select an app-wide color theme, and choose Dark or Frosted glass for player overlays.
-- **Display** — *Program time zone*: show EPG times in your **Device** time zone (default), or the **Feed**'s own time zone (auto-detected from the EPG feed when it loads).
+- **Channels** — reorder, hide, rename, or regroup entries; show hidden channels or reset customizations.
+- **Program Guide** — set the XMLTV URL (also auto-detected from `x-tvg-url` in M3U) and show times in the TV's **Device** time zone or the guide **Feed** time zone.
+- **Appearance** — preview an app-wide color theme, choose Dark or Frosted player overlays, and adjust text from 80% to 150%.
 - **Playback** — toggle auto-play (resume last watched channel on launch).
 - **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.
-- **Data Management** — *Refresh All Data* re-fetches playlists and EPG; *Clear Cache* drops the cached playlist + EPG; separate actions clear Recently Watched history or the selected account's Watchlist.
+- **Data Management** — refresh data, clear caches or viewing lists, or reset the app.
 - **Save & Apply** reloads channels from the new sources. **Cancel** discards edits.
 
 ## Remote Control Mapping
@@ -206,13 +208,13 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 | Key | Player | Channel List | EPG |
 |-----|--------|-------------|-----|
 | Up/Down | Channel +/- | Navigate | Navigate within pane |
-| Left | Open sidebar / seek −30s (catch-up or live DVR) | — | Back to channels / previous day |
-| Right | Open menu / seek +30s (catch-up or live DVR) | — | To programs / next day |
-| OK/Enter | Toggle OSD (pause/resume on live DVR) | Select channel | Play channel / program (catch-up if past) |
-| Back | Stop & return | Exit app (press twice) | Close guide |
+| Left | Open sidebar, then groups; seek −30s when available | — | Back to channels; previous day |
+| Right | Open menu; seek +30s when available | — | To programs; next day |
+| OK/Enter | Toggle OSD; pause/resume; activate overlay | Select channel | Play channel / program (catch-up if past) |
+| Back | Back out of sidebar/menu; stop & return | Exit app (press twice) | Close guide |
 | Red | Open EPG | Open EPG | — |
 | Blue | Open settings | Open settings | Close guide |
-| Yellow | Show OSD | — | — |
+| Yellow | Show OSD | Edit channel list | — |
 | Green | Toggle favorite (in sidebar/menu) | Toggle favorite (on focused channel) | Jump to today |
 | Play/Pause | Pause/resume (live DVR) | — | — |
 | Rewind/Fast-Forward | To oldest / Go to live (live DVR) | — | — |
