@@ -190,6 +190,7 @@ export const DE_MESSAGES = {
   'settings.noUploads': 'Keine hochgeladenen Wiedergabelisten',
   'settings.epg': 'Programmübersicht (EPG)',
   'settings.xmltvUrl': 'XMLTV-URL',
+  'settings.xmltvUrlHint': 'XMLTV-URLs werden standardmäßig aus Ihren Wiedergabelisten übernommen. Eine hier eingegebene URL wird zuerst verwendet.',
   'settings.appearance': 'Darstellung',
   'settings.theme': 'Design',
   'settings.overlayGlass': 'Stil der Player-Einblendung',

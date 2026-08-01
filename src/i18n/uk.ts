@@ -196,6 +196,7 @@ export const UK_MESSAGES = {
   'settings.noUploads': 'Немає завантажених плейлистів',
   'settings.epg': 'Телепрограма (EPG)',
   'settings.xmltvUrl': 'URL XMLTV',
+  'settings.xmltvUrlHint': 'За замовчуванням URL XMLTV беруться з плейлистів. Указаний тут URL використовуватиметься першим.',
   'settings.appearance': 'Вигляд',
   'settings.theme': 'Тема',
   'settings.overlayGlass': 'Стиль меню програвача',

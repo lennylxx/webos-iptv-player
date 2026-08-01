@@ -491,6 +491,7 @@ export class Settings {
                 <div class="settings-item-title">${t('settings.xmltvUrl')}</div>
                 <input type="text" class="settings-input" data-focusable id="epg-url"
                        value="${epgUrl}" placeholder="https://example.com/epg.xml">
+                <div class="settings-item-hint">${t('settings.xmltvUrlHint')}</div>
               </div>
               <div class="settings-item">
                 <div class="settings-item-title">${t('settings.timeZone')}</div>

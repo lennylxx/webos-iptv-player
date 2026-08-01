@@ -196,6 +196,7 @@ export const RU_MESSAGES = {
   'settings.noUploads': 'Нет загруженных плейлистов',
   'settings.epg': 'Телепрограмма (EPG)',
   'settings.xmltvUrl': 'URL XMLTV',
+  'settings.xmltvUrlHint': 'По умолчанию URL XMLTV берутся из плейлистов. Указанный здесь URL будет использоваться первым.',
   'settings.appearance': 'Оформление',
   'settings.theme': 'Тема',
   'settings.overlayGlass': 'Стиль меню плеера',

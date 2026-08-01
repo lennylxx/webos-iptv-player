@@ -193,6 +193,7 @@ export const EN_MESSAGES = {
   'settings.noUploads': 'No uploaded playlists',
   'settings.epg': 'Program Guide (EPG)',
   'settings.xmltvUrl': 'XMLTV URL',
+  'settings.xmltvUrlHint': 'XMLTV URLs are discovered from your playlists by default. A URL entered here will be used first.',
   'settings.appearance': 'Appearance',
   'settings.theme': 'Theme',
   'settings.overlayGlass': 'Player overlay style',

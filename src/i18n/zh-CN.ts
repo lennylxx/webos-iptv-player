@@ -187,6 +187,7 @@ export const ZH_CN_MESSAGES = {
   'settings.noUploads': '暂无已上传的播放列表',
   'settings.epg': '节目指南（EPG）',
   'settings.xmltvUrl': 'XMLTV 网址',
+  'settings.xmltvUrlHint': '默认会从播放列表中自动获取 XMLTV 网址。在此处设置后，将优先使用该网址。',
   'settings.appearance': '外观',
   'settings.theme': '主题',
   'settings.overlayGlass': '播放器浮层样式',

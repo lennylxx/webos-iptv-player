@@ -190,6 +190,7 @@ export const FR_MESSAGES = {
   'settings.noUploads': 'Aucune liste importée',
   'settings.epg': 'Guide des programmes (EPG)',
   'settings.xmltvUrl': 'URL XMLTV',
+  'settings.xmltvUrlHint': 'Par défaut, les URL XMLTV sont récupérées depuis vos listes. Une URL saisie ici sera utilisée en premier.',
   'settings.appearance': 'Apparence',
   'settings.theme': 'Thème',
   'settings.overlayGlass': 'Style de superposition du lecteur',

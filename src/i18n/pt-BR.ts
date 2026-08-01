@@ -190,6 +190,7 @@ export const PT_BR_MESSAGES = {
   'settings.noUploads': 'Nenhuma lista enviada',
   'settings.epg': 'Guia de programação (EPG)',
   'settings.xmltvUrl': 'URL do XMLTV',
+  'settings.xmltvUrlHint': 'Por padrão, os URLs XMLTV são obtidos das suas listas. Um URL informado aqui será usado primeiro.',
   'settings.appearance': 'Aparência',
   'settings.theme': 'Tema',
   'settings.overlayGlass': 'Estilo da sobreposição do player',

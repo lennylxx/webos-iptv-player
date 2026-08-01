@@ -190,6 +190,7 @@ export const IT_MESSAGES = {
   'settings.noUploads': 'Nessuna playlist caricata',
   'settings.epg': 'Guida TV (EPG)',
   'settings.xmltvUrl': 'URL XMLTV',
+  'settings.xmltvUrlHint': 'Per impostazione predefinita, gli URL XMLTV vengono rilevati dalle playlist. Un URL inserito qui verrà usato per primo.',
   'settings.appearance': 'Aspetto',
   'settings.theme': 'Tema',
   'settings.overlayGlass': 'Stile dei controlli del player',
