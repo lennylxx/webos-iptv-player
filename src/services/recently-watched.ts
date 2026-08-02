@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import type { CatchupInfo, CatchupProgressEntry, Channel } from '../types';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { EpgService } from './epg-service';
 import { PlaylistService } from './playlist-service';
 import { StorageService } from './storage-service';
@@ -20,22 +20,6 @@ export type RecentlyWatchedItem =
       progress: CatchupProgressEntry;
       updatedAt: number;
     };
-
-function channelMap(): Map<string, { channel: Channel; channelIndex: number }> {
-  const result = new Map<string, { channel: Channel; channelIndex: number }>();
-  const legacy = new Map<string, { channel: Channel; channelIndex: number } | null>();
-  for (let i = 0; i < PlaylistService.channels.length; i++) {
-    const channel = PlaylistService.channels[i];
-    const resolved = { channel, channelIndex: i };
-    result.set(channelKey(channel), resolved);
-    const oldKey = legacyChannelKey(channel);
-    legacy.set(oldKey, legacy.has(oldKey) ? null : resolved);
-  }
-  for (const [key, resolved] of legacy) {
-    if (resolved && !result.has(key)) result.set(key, resolved);
-  }
-  return result;
-}
 
 function matchesPlaylist(channel: Channel, playlistId?: string): boolean {
   return !playlistId || channel.playlistIds.includes(playlistId);
@@ -66,11 +50,10 @@ function removeUnavailable(progress: CatchupProgressEntry): void {
 
 export const RecentlyWatchedService = {
   getItems(playlistId?: string): RecentlyWatchedItem[] {
-    const channels = channelMap();
     const items: RecentlyWatchedItem[] = [];
 
     for (const entry of StorageService.getRecentlyWatchedLive()) {
-      const resolved = channels.get(entry.channelKey);
+      const resolved = PlaylistService.resolveChannelKey(entry.channelKey);
       if (!resolved || !matchesPlaylist(resolved.channel, playlistId)) continue;
       items.push({
         kind: 'live',
@@ -81,7 +64,7 @@ export const RecentlyWatchedService = {
 
     for (const stored of StorageService.getAllCatchupProgress()) {
       if (stored.completed || stored.position < CONFIG.CATCHUP.RESUME_MIN_SECS) continue;
-      const resolved = channels.get(stored.channelKey);
+      const resolved = PlaylistService.resolveChannelKey(stored.channelKey);
       if (!resolved || !matchesPlaylist(resolved.channel, playlistId)) continue;
       if (!XtreamArchiveService.isAvailable(resolved.channel, stored.progStart)) {
         removeUnavailable(stored);

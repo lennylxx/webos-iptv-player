@@ -1,4 +1,12 @@
-import type { Action, NumberEvent, CatchupInfo, CatchupProgressEntry, Channel, Programme } from '../types';
+import type {
+  Action,
+  NumberEvent,
+  CatchupInfo,
+  CatchupProgressEntry,
+  Channel,
+  ChannelGroupId,
+  Programme,
+} from '../types';
 import { html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { channelKey, legacyChannelKey } from '../utils/channel';
@@ -14,11 +22,20 @@ import { rankByName } from '../utils/channel-search';
 import { CONFIG } from '../config';
 import { bellIcon, CHEVRON_LEFT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
 import { t, tp } from '../i18n';
+import { VirtualList } from '../utils/virtual-list';
+import { VirtualScrollGuard } from '../utils/virtual-scroll';
 
 type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'programmes';
 type FilterFocus = 'group' | 'search';
 type VisibleChannel = { channel: Channel; globalIndex: number };
 type GroupOption = { id: string; label: string; count: number };
+
+const CHANNEL_ROW_SIZE = 72;
+const GROUP_ROW_SIZE = 44;
+const PROGRAMME_ROW_ESTIMATE = 80;
+const PROGRAMME_WITH_DESCRIPTION_ESTIMATE = 108;
+const VIRTUAL_OVERSCAN = 8;
+const EPG_VIEWPORT_FALLBACK = 900;
 
 export class EpgGrid {
   private container: HTMLElement;
@@ -37,6 +54,28 @@ export class EpgGrid {
   private focusProg = 0;
   private resumePrompt = new CatchupResumePrompt();
   private archiveLoadingKey = '';
+  private readonly channelVirtualizer = new VirtualList({
+    itemSize: CHANNEL_ROW_SIZE,
+    overscan: VIRTUAL_OVERSCAN,
+    fallbackViewportSize: EPG_VIEWPORT_FALLBACK,
+  });
+  private readonly programmeVirtualizer = new VirtualList({
+    overscan: VIRTUAL_OVERSCAN,
+    fallbackViewportSize: EPG_VIEWPORT_FALLBACK,
+  });
+  private readonly groupVirtualizer = new VirtualList({
+    itemSize: GROUP_ROW_SIZE,
+    overscan: VIRTUAL_OVERSCAN,
+    fallbackViewportSize: 400,
+  });
+  private groupOptions: GroupOption[] = [];
+  private groupOptionsChannels: Channel[] | null = null;
+  private groupOptionsPlaylist = '';
+  private groupOptionsRevision = -1;
+  private programmeSource: Programme[] | null = null;
+  private programmeSizeKey = '';
+  private scrollFrame: number | null = null;
+  private readonly scrollGuard = new VirtualScrollGuard();
 
   constructor(container: HTMLElement, onChannelSelect: (index: number, catchup?: CatchupInfo) => void) {
     this.container = container;
@@ -125,14 +164,16 @@ export class EpgGrid {
   }
 
   private getVisibleChannels(): VisibleChannel[] {
-    const playlist = this.selectedPlaylist;
-    const visible: VisibleChannel[] = [];
-    PlaylistService.channels.forEach((channel, globalIndex) => {
-      if ((!playlist || channel.playlistIds.includes(playlist))
-          && (!this.selectedGroup || channel.group === this.selectedGroup)) {
-        visible.push({ channel, globalIndex });
-      }
-    });
+    const group: ChannelGroupId = this.selectedGroup
+      ? `source:${this.selectedGroup}`
+      : 'builtin:all';
+    const visible = PlaylistService.getByGroup(
+      group,
+      this.selectedPlaylist || undefined,
+    ).map(channel => ({
+      channel,
+      globalIndex: PlaylistService.indexOf(channel),
+    }));
     const query = this.searchQuery.trim();
     if (!query) return visible;
     const ranked = rankByName(visible.map(item => item.channel), query);
@@ -141,18 +182,29 @@ export class EpgGrid {
   }
 
   private getGroupOptions(): GroupOption[] {
+    if (this.groupOptionsChannels === PlaylistService.channels
+        && this.groupOptionsPlaylist === this.selectedPlaylist
+        && this.groupOptionsRevision === PlaylistService.groupsRevision) {
+      return this.groupOptions;
+    }
     const playlist = this.selectedPlaylist || undefined;
-    const sourceChannels = PlaylistService.channels.filter(channel =>
-      !playlist || channel.playlistIds.includes(playlist));
     const groups = PlaylistService.getGroupsForPlaylist(playlist);
-    return [
-      { id: '', label: t('common.all'), count: sourceChannels.length },
+    this.groupOptionsChannels = PlaylistService.channels;
+    this.groupOptionsPlaylist = this.selectedPlaylist;
+    this.groupOptionsRevision = PlaylistService.groupsRevision;
+    this.groupOptions = [
+      {
+        id: '',
+        label: t('common.all'),
+        count: PlaylistService.getGroupCount('builtin:all', playlist),
+      },
       ...groups.map(group => ({
         id: group,
         label: group,
-        count: sourceChannels.filter(channel => channel.group === group).length,
+        count: PlaylistService.getGroupCount(`source:${group}`, playlist),
       })),
     ];
+    return this.groupOptions;
   }
 
   private selectPlaylist(id: string): void {
@@ -175,6 +227,7 @@ export class EpgGrid {
   private openGroupMenu(): void {
     const groups = this.getGroupOptions();
     this.groupFocusIdx = Math.max(0, groups.findIndex(group => group.id === this.selectedGroup));
+    this.groupVirtualizer.centerOn(this.groupFocusIdx, 400);
     this.groupOpen = true;
     this.focusCol = 'filters';
     this.filterFocus = 'group';
@@ -205,7 +258,7 @@ export class EpgGrid {
     return this.container.querySelector('.epg-search-input') === document.activeElement;
   }
 
-  render(): void {
+  render(ensureFocus = true): void {
     const tabs = PlaylistService.playlistTabs;
     if (this.selectedPlaylist && !tabs.some(tab => tab.id === this.selectedPlaylist)) {
       this.selectedPlaylist = '';
@@ -237,7 +290,60 @@ export class EpgGrid {
     }
     const todayMs = startOfDisplayDay(new Date()).getTime();
     const programmes = this.getCurrentProgrammes();
+    const epgId = channel ? EpgService.findChannelId(channel) : null;
+    const programmeSource = epgId ? EpgService.programmes[epgId] ?? null : null;
+    if (programmeSource !== this.programmeSource) {
+      this.programmeSource = programmeSource;
+      this.programmeSizeKey = '';
+    }
+    const programmeSizeKey = [
+      this.selectedChannelIdx,
+      this.selectedDay,
+      programmes.length,
+      programmes[0]?.start.getTime() ?? '',
+      programmes[programmes.length - 1]?.start.getTime() ?? '',
+    ].join(':');
+    if (programmeSizeKey !== this.programmeSizeKey) {
+      this.programmeSizeKey = programmeSizeKey;
+      this.programmeVirtualizer.setItemSizes(programmes.map(programme =>
+        programme.description
+          ? PROGRAMME_WITH_DESCRIPTION_ESTIMATE
+          : PROGRAMME_ROW_ESTIMATE));
+    }
     this.loadArchiveAvailability(channel);
+    const previousChannelList = this.container.querySelector<HTMLElement>('.epg-channel-list');
+    const previousProgrammeList = this.container.querySelector<HTMLElement>('.epg-programmes-pane');
+    const previousGroupList = this.container.querySelector<HTMLElement>('.epg-group-options');
+    if (previousChannelList) {
+      this.channelVirtualizer.setScrollOffset(previousChannelList.scrollTop);
+    }
+    if (previousProgrammeList) {
+      this.programmeVirtualizer.setScrollOffset(previousProgrammeList.scrollTop);
+    }
+    if (previousGroupList) {
+      this.groupVirtualizer.setScrollOffset(previousGroupList.scrollTop);
+    }
+    const channelViewport = previousChannelList?.clientHeight || EPG_VIEWPORT_FALLBACK;
+    const programmeViewport = previousProgrammeList?.clientHeight || EPG_VIEWPORT_FALLBACK;
+    const selectedVisibleIdx = visibleChannels.findIndex(
+      item => item.globalIndex === this.selectedChannelIdx,
+    );
+    if (ensureFocus && this.focusCol === 'channels') {
+      this.channelVirtualizer.ensureVisible(selectedVisibleIdx, channelViewport);
+    }
+    if (ensureFocus && this.focusCol === 'programmes') {
+      this.programmeVirtualizer.ensureVisible(this.focusProg, programmeViewport);
+    }
+    const channelRange = this.channelVirtualizer.getRange(
+      visibleChannels.length,
+      channelViewport,
+    );
+    const programmeRange = this.programmeVirtualizer.getRange(programmes.length, programmeViewport);
+    const groupViewport = previousGroupList?.clientHeight || 400;
+    if (this.groupOpen && ensureFocus) {
+      this.groupVirtualizer.ensureVisible(this.groupFocusIdx, groupViewport);
+    }
+    const groupRange = this.groupVirtualizer.getRange(groups.length, groupViewport);
 
     // Load catch-up progress once per render for the current channel.
     const hasCatchup = !!(channel && channel.catchupSource);
@@ -295,14 +401,21 @@ export class EpgGrid {
                   <div class="epg-group-menu" data-key="epg-group-menu">
                     <div class="epg-group-menu-title">${t('common.groups')}</div>
                     <div class="epg-group-options">
-                      ${groups.map((group, i) => html`
+                      <div class="epg-group-options-spacer"
+                           style="height:${this.groupVirtualizer.getTotalSize(groups.length)}px">
+                      ${groups.slice(groupRange.start, groupRange.end).map((group, offset) => {
+                        const i = groupRange.start + offset;
+                        return html`
                         <div class="epg-group-option ${group.id === this.selectedGroup ? 'active' : ''} ${i === this.groupFocusIdx ? 'focused' : ''}"
                              data-key="epg-group:${group.id}"
-                             data-epg-group="${group.id}" data-group-index="${i}">
+                             data-epg-group="${group.id}" data-group-index="${i}"
+                             style="top:${this.groupVirtualizer.getItemOffset(i)}px">
                           <span class="epg-group-option-label">${group.label}</span>
                           <span class="epg-group-option-count">${group.count}</span>
                         </div>
-                      `)}
+                      `;
+                      })}
+                      </div>
                     </div>
                   </div>
                 ` : ''}
@@ -318,18 +431,27 @@ export class EpgGrid {
               <span class="epg-channel-pane-count">${tp('channel.count', visibleChannels.length)}</span>
             </div>
             <div class="epg-channel-list" id="epg-channels">
-            ${visibleChannels.length ? visibleChannels.map(({ channel: ch, globalIndex }) => {
+            ${visibleChannels.length ? html`
+              <div class="epg-virtual-spacer"
+                   style="height:${this.channelVirtualizer.getTotalSize(visibleChannels.length)}px">
+              ${visibleChannels.slice(channelRange.start, channelRange.end)
+                .map(({ channel: ch, globalIndex }, offset) => {
+              const itemIndex = channelRange.start + offset;
               const sel = globalIndex === this.selectedChannelIdx;
               const foc = sel && this.focusCol === 'channels';
               return html`
                 <div class="epg-channel-item ${sel ? 'selected' : ''} ${foc ? 'focused' : ''}"
                      data-key="${channelKey(ch)}"
-                     data-channel-idx="${globalIndex}">
+                     data-channel-idx="${globalIndex}"
+                     data-channel-pos="${itemIndex}"
+                     style="top:${this.channelVirtualizer.getItemOffset(itemIndex)}px">
                   <span class="epg-ch-num">${globalIndex + 1}</span>
                   <span class="epg-ch-name">${ch.name}</span>
                 </div>
               `;
-            }) : html`<div class="epg-no-channels">${t('channel.empty')}</div>`}
+            })}
+              </div>
+            ` : html`<div class="epg-no-channels">${t('channel.empty')}</div>`}
             </div>
           </div>
           <div class="epg-right-pane">
@@ -353,7 +475,11 @@ export class EpgGrid {
             <div class="epg-programmes-pane ${this.focusCol === 'programmes' ? 'pane-focused' : ''}" id="epg-programmes">
               ${programmes.length === 0
                 ? html`<div class="epg-no-data">${t('epg.noData')}</div>`
-                : programmes.map((p, i) => {
+                : html`
+                  <div class="epg-virtual-spacer"
+                       style="height:${this.programmeVirtualizer.getTotalSize(programmes.length)}px">
+                  ${programmes.slice(programmeRange.start, programmeRange.end).map((p, offset) => {
+                    const i = programmeRange.start + offset;
                     const foc = i === this.focusProg && this.focusCol === 'programmes';
                     const now = Date.now();
                     const startMs = p.start.getTime();
@@ -367,9 +493,11 @@ export class EpgGrid {
                       : false;
                     const progress = catchupAvailable && hasCatchup ? progressMap!.get(startMs) : undefined;
                     return html`
-                      <div class="epg-programme-item state-${state} ${current ? 'current' : ''} ${foc ? 'focused' : ''}"
+                      <div class="epg-programme-item ${p.description ? 'has-description' : ''}
+                                  state-${state} ${current ? 'current' : ''} ${foc ? 'focused' : ''}"
                            data-key="${String(p.start.getTime())}"
-                           data-prog-idx="${i}">
+                           data-prog-idx="${i}"
+                           style="top:${this.programmeVirtualizer.getItemOffset(i)}px">
                         <div class="epg-prog-time-col">
                           <span class="epg-prog-time">${formatTime(p.start)}</span>
                           <span class="epg-prog-dur">${state === 'past'
@@ -388,7 +516,9 @@ export class EpgGrid {
                         </div>
                       </div>
                     `;
-                  })
+                  })}
+                  </div>
+                `
               }
             </div>
           </div>
@@ -396,7 +526,27 @@ export class EpgGrid {
       </div>
     `);
 
-    this.scrollFocusedIntoView();
+    const channelList = this.container.querySelector<HTMLElement>('.epg-channel-list');
+    const programmeList = this.container.querySelector<HTMLElement>('.epg-programmes-pane');
+    if (channelList) {
+      this.scrollGuard.syncOffset(
+        channelList,
+        'vertical',
+        this.channelVirtualizer.scrollOffset,
+      );
+    }
+    if (programmeList) {
+      this.scrollGuard.syncOffset(
+        programmeList,
+        'vertical',
+        this.programmeVirtualizer.scrollOffset,
+      );
+    }
+    const groupList = this.container.querySelector<HTMLElement>('.epg-group-options');
+    if (groupList) {
+      this.scrollGuard.syncOffset(groupList, 'vertical', this.groupVirtualizer.scrollOffset);
+    }
+    if (ensureFocus) this.scrollFocusedIntoView();
   }
 
   private bindEvents(): void {
@@ -526,6 +676,26 @@ export class EpgGrid {
         this.render();
       }
     });
+
+    this.container.addEventListener('scroll', (e: Event) => {
+      const target = e.target as HTMLElement;
+      const offset = this.scrollGuard.readUserOffset(target, 'vertical');
+      if (offset === null) return;
+      if (target.classList.contains('epg-channel-list')) {
+        this.channelVirtualizer.setScrollOffset(offset);
+      } else if (target.classList.contains('epg-programmes-pane')) {
+        this.programmeVirtualizer.setScrollOffset(offset);
+      } else if (target.classList.contains('epg-group-options')) {
+        this.groupVirtualizer.setScrollOffset(offset);
+      } else {
+        return;
+      }
+      if (this.scrollFrame !== null) return;
+      this.scrollFrame = requestAnimationFrame(() => {
+        this.scrollFrame = null;
+        this.render(false);
+      });
+    }, true);
   }
 
   private setProgFocusLight(idx: number): void {

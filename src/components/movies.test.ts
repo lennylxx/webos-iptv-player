@@ -173,6 +173,69 @@ describe('Movies browse + grid', () => {
     expect(handlers.onBack).not.toHaveBeenCalled();
   });
 
+  it('virtualizes 50,000 categories and a 50,000-item grid', async () => {
+    const cats = Array.from(
+      { length: 50_000 },
+      (_, i) => ({ id: String(i + 1), name: `Category ${String(i + 1)}` }),
+    );
+    const streams = Array.from(
+      { length: 50_000 },
+      (_, i) => vod(String(i), `Movie ${String(i)}`, '7'),
+    );
+    const { view } = await openWith(cats, streams);
+
+    expect(container.querySelectorAll('.catalog-category-rail-cell').length).toBeLessThan(20);
+    expect(container.querySelector<HTMLElement>('.catalog-category-rail-spacer')?.style.width)
+      .toBe(`${String((50_000 - 6) * 320)}px`);
+
+    const category = container.querySelector<HTMLElement>(
+      '.catalog-cat[data-category-id="7"]',
+    )!;
+    category.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelectorAll('.catalog-grid-cell').length).toBeLessThan(60);
+    expect(container.querySelector<HTMLElement>('.catalog-grid-track')?.style.height)
+      .toBe('2821485px');
+  });
+
+  it('snaps free grid scrolling to the nearest row after it stops', async () => {
+    const cats = Array.from(
+      { length: 7 },
+      (_, index) => ({ id: String(index + 1), name: `Cat ${String(index + 1)}` }),
+    );
+    const streams = Array.from(
+      { length: 50 },
+      (_, index) => vod(String(index), `Movie ${String(index)}`, '7'),
+    );
+    const { view } = await openWith(cats, streams);
+    const category = container.querySelector<HTMLElement>(
+      '.catalog-cat[data-category-id="7"]',
+    )!;
+    category.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    vi.useFakeTimers();
+    try {
+      const grid = container.querySelector<HTMLElement>('.catalog-grid')!;
+      const track = container.querySelector<HTMLElement>('.catalog-grid-track')!;
+      Object.defineProperty(grid, 'clientHeight', { value: 900, configurable: true });
+      grid.getBoundingClientRect = () => ({ top: 0 } as DOMRect);
+      track.getBoundingClientRect = () => ({ top: 126 - grid.scrollTop } as DOMRect);
+      grid.scrollTop = 577;
+      grid.dispatchEvent(new Event('scroll', { bubbles: true }));
+      vi.advanceTimersByTime(100);
+
+      expect(grid.scrollTop).toBe(521);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('goes back to Live from the browse top level', async () => {
     const { view, handlers } = await openWith();
     view.handleAction('back');

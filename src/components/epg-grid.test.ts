@@ -10,6 +10,7 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
   return {
     state,
     playlistMock: {
+      groupsRevision: 0,
       get channels() { return state.channels; },
       get playlistTabs() { return state.playlistTabs; },
       getGroupsForPlaylist(playlist?: string) {
@@ -17,6 +18,17 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
           .filter(ch => !playlist || ch.playlistIds?.includes(playlist))
           .map(ch => ch.group)
           .filter(Boolean)));
+      },
+      getByGroup(group: string, playlist?: string) {
+        return state.channels.filter(ch =>
+          (!playlist || ch.playlistIds?.includes(playlist))
+          && (group === 'builtin:all' || ch.group === group.slice(7)));
+      },
+      getGroupCount(group: string, playlist?: string) {
+        return this.getByGroup(group, playlist).length;
+      },
+      indexOf(channel: unknown) {
+        return state.channels.indexOf(channel);
       },
     },
     epgMock: {
@@ -144,6 +156,69 @@ describe('EpgGrid.render', () => {
     const now = container.querySelector('.epg-programme-item.current');
     expect(now!.querySelector('.epg-now-badge')).not.toBeNull();
     expect(now!.querySelector('.epg-prog-title')!.textContent).toContain('Noon Show');
+  });
+
+  it('rebuilds row sizes when refreshed programme data changes descriptions', () => {
+    expect(container.querySelector<HTMLElement>(
+      '#epg-programmes .epg-virtual-spacer',
+    )?.style.height).toBe('324px');
+
+    state.programmes['Chan A'] = state.programmes['Chan A'].map(programme => ({
+      ...programme,
+      description: '',
+    }));
+    grid.render();
+
+    expect(container.querySelector<HTMLElement>(
+      '#epg-programmes .epg-virtual-spacer',
+    )?.style.height).toBe('240px');
+  });
+
+  it('renders bounded windows for 50,000 channels and programs', () => {
+    state.channels = Array.from({ length: 50_000 }, (_, index) => ({
+      name: `Channel ${String(index)}`,
+      group: 'Group A',
+      url: `http://host/${String(index)}`,
+      playlistIds: [],
+    }));
+    state.programmes = {
+      'Channel 0': Array.from({ length: 50_000 }, (_, index) => ({
+        ...prog(0, 0, 0, 1, `Program ${String(index)}`),
+        start: new Date(Y, M, D, 0, 0, 0, index),
+        stop: new Date(Y, M, D, 0, 1, 0, index),
+      })),
+    };
+
+    grid.render();
+
+    expect(channelItems().length).toBeLessThan(50);
+    expect(progItems().length).toBeLessThan(40);
+    expect(container.querySelector<HTMLElement>(
+      '#epg-channels .epg-virtual-spacer',
+    )?.style.height).toBe('3600000px');
+    expect(container.querySelector<HTMLElement>(
+      '#epg-programmes .epg-virtual-spacer',
+    )?.style.height).toBe('5400000px');
+  });
+
+  it('renders a bounded group menu for 50,000 groups', () => {
+    const originalGroups = playlistMock.getGroupsForPlaylist;
+    const originalCount = playlistMock.getGroupCount;
+    playlistMock.getGroupsForPlaylist = () =>
+      Array.from({ length: 50_000 }, (_, index) => `Group ${String(index)}`);
+    playlistMock.getGroupCount = () => 1;
+    playlistMock.groupsRevision++;
+    try {
+      grid.render();
+      grid.handleAction('left');
+      expect(container.querySelectorAll('.epg-group-option').length).toBeLessThan(60);
+      expect(container.querySelector<HTMLElement>('.epg-group-options-spacer')?.style.height)
+        .toBe('2200044px');
+    } finally {
+      playlistMock.getGroupsForPlaylist = originalGroups;
+      playlistMock.getGroupCount = originalCount;
+      playlistMock.groupsRevision++;
+    }
   });
 });
 

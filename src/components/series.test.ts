@@ -196,6 +196,43 @@ async function openDetail(view: Series) {
 }
 
 describe('Series detail', () => {
+  it('renders a bounded episode window for a 50,000-item season', async () => {
+    const episodes = Array.from({ length: 50_000 }, (_, index) => ({
+      id: `e${String(index)}`,
+      title: `Episode ${String(index)}`,
+      season: 1,
+      episode: index + 1,
+      containerExtension: 'mp4',
+      durationSecs: 1500,
+      plot: '',
+      poster: '',
+      subtitles: [],
+    }));
+    catalogMock.loadSeriesInfo.mockResolvedValue({
+      seasons: [1],
+      episodesBySeason: { 1: episodes },
+    });
+    const { view } = await openWith();
+    await openDetail(view);
+
+    expect(container.querySelectorAll('.episode-row').length).toBeLessThan(20);
+    expect(container.querySelector<HTMLElement>('.series-episodes-spacer')?.style.height)
+      .toBe('6900000px');
+
+    const episodeList = container.querySelector<HTMLElement>('.series-episodes')!;
+    episodeList.scrollTop = 100 * 138;
+    episodeList.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const episode = container.querySelector<HTMLElement>(
+      '[data-episode-index="100"] .episode-row',
+    )!;
+    episode.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+
+    view.refreshPlaybackState();
+
+    expect(container.querySelector<HTMLElement>('.focused')?.dataset.key).toBe('ep:e100');
+  });
+
   it('adds and removes the series from Watchlist without losing button focus', async () => {
     catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
     const { view } = await openWith();

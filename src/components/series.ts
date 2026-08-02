@@ -1,13 +1,20 @@
-import type { PlaylistEntry, SeriesCategory, SeriesItem, SeriesInfo, Episode, ResumeEntry, ResumeKind, VodQueueItem, WatchlistEntry } from '../types';
+import type { Action, PlaylistEntry, SeriesCategory, SeriesItem, SeriesInfo, Episode, ResumeEntry, ResumeKind, VodQueueItem, WatchlistEntry } from '../types';
 import { html, raw, Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
 import { loadSeriesCategories, loadSeries, loadSeriesInfo } from '../services/xtream-catalog';
 import { xtreamEpisodeUrl, type XtreamCredentials } from '../utils/xtream-url';
-import { CatalogView } from './catalog-view';
+import { CatalogView, type CatalogHandlers } from './catalog-view';
 import { PLAY_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
 import { t } from '../i18n';
+import { VirtualList } from '../utils/virtual-list';
+
+const EPISODE_GAP = 16;
+const EPISODE_NO_PLOT_ESTIMATE = 138;
+const EPISODE_PLOT_ESTIMATE = 216;
+const EPISODE_OVERSCAN = 5;
+const EPISODE_VIEWPORT_FALLBACK = 500;
 
 // The Series section: browse (Continue rail of resumed episodes + per-category
 // rails + an "all categories" drill-in) → per-category poster grid → a detail
@@ -23,6 +30,18 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   private currentInfo: SeriesInfo | null = null;
   private selectedSeason = 0;
   private detailLoading = false;
+  private episodeFocusIndex = 0;
+  private episodeSource: Episode[] | null = null;
+  private measuredEpisodes = new Set<number>();
+  private readonly episodeVirtualizer = new VirtualList({
+    overscan: EPISODE_OVERSCAN,
+    fallbackViewportSize: EPISODE_VIEWPORT_FALLBACK,
+  });
+  private episodeScrollFrame: number | null = null;
+
+  constructor(container: HTMLElement, handlers: CatalogHandlers) {
+    super(container, handlers);
+  }
 
   protected loadCategories(account: PlaylistEntry): Promise<SeriesCategory[]> { return loadSeriesCategories(account); }
   protected loadItems(account: PlaylistEntry, categoryId: string): Promise<SeriesItem[]> { return loadSeries(account, categoryId); }
@@ -99,6 +118,9 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     this.mode = 'detail';
     this.currentInfo = null;
     this.selectedSeason = 0;
+    this.episodeFocusIndex = 0;
+    this.episodeSource = null;
+    this.episodeVirtualizer.setScrollOffset(0);
     this.detailLoading = true;
     this.renderDetail();
     this.currentInfo = await loadSeriesInfo(this.account, series.seriesId);
@@ -111,6 +133,9 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
 
   private selectSeason(season: number): void {
     this.selectedSeason = season;
+    this.episodeFocusIndex = 0;
+    this.episodeSource = null;
+    this.episodeVirtualizer.setScrollOffset(0);
     this.renderDetail();
   }
 
@@ -220,14 +245,36 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     `;
   }
 
-  protected renderDetail(): void {
+  protected renderDetail(restoreFocus = true): void {
     const series = this.currentSeries;
     const a = this.account;
     if (!series || !a) return;
     const info = this.currentInfo;
     const episodes = info ? (info.episodesBySeason[this.selectedSeason] ?? []) : [];
+    if (episodes !== this.episodeSource) {
+      this.episodeSource = episodes;
+      this.measuredEpisodes.clear();
+      this.episodeVirtualizer.setItemSizes(episodes.map(ep =>
+        ep.plot ? EPISODE_PLOT_ESTIMATE : EPISODE_NO_PLOT_ESTIMATE));
+    }
     const prevKey = this.nav.focused?.getAttribute('data-key') ?? null;
     const watchlisted = StorageService.isWatchlisted(a.id, 'series', series.seriesId);
+    const previousEpisodes = this.container.querySelector<HTMLElement>('.series-episodes');
+    if (restoreFocus && previousEpisodes) {
+      this.episodeVirtualizer.setScrollOffset(previousEpisodes.scrollTop);
+    }
+    const episodeViewport = previousEpisodes?.clientHeight || EPISODE_VIEWPORT_FALLBACK;
+    const focusedEpisodeIndex = this.nav.focused
+      ?.closest<HTMLElement>('[data-episode-index]')
+      ?.dataset.episodeIndex;
+    if (restoreFocus && focusedEpisodeIndex !== undefined) {
+      this.episodeFocusIndex = parseInt(focusedEpisodeIndex, 10);
+    }
+    this.episodeFocusIndex = Math.max(0, Math.min(this.episodeFocusIndex, episodes.length - 1));
+    if (restoreFocus && prevKey?.indexOf('ep:') === 0 && episodes.length) {
+      this.episodeVirtualizer.ensureVisible(this.episodeFocusIndex, episodeViewport);
+    }
+    const episodeRange = this.episodeVirtualizer.getRange(episodes.length, episodeViewport);
 
     morph(this.container, html`
       <div class="catalog-view series-detail" data-nav-container>
@@ -262,13 +309,96 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
           <div class="series-episodes">
             ${episodes.length === 0
               ? html`<p class="catalog-hint">${t('catalog.noSeasonEpisodes')}</p>`
-              : episodes.map((ep) => this.episodeRow(a.id, ep))}
+              : html`
+                <div class="series-episodes-spacer"
+                     style="height:${this.episodeVirtualizer.getTotalSize(episodes.length)}px">
+                  ${episodes.slice(episodeRange.start, episodeRange.end).map((ep, offset) => {
+                    const index = episodeRange.start + offset;
+                    return html`
+                      <div class="series-episode-cell"
+                           data-key="episode-cell:${ep.id}"
+                           data-episode-index="${index}"
+                           style="top:${this.episodeVirtualizer.getItemOffset(index)}px">
+                        ${this.episodeRow(a.id, ep)}
+                      </div>
+                    `;
+                  })}
+                </div>
+              `}
           </div>
         ` : ''}
       </div>
     `);
+    const measuredSizes = Array.from(
+      this.container.querySelectorAll<HTMLElement>('.series-episode-cell'),
+    ).map(cell => ({
+      cell,
+      index: parseInt(cell.dataset.episodeIndex || '-1', 10),
+    })).filter(item => item.index >= 0 && !this.measuredEpisodes.has(item.index))
+      .map((item) => {
+        this.measuredEpisodes.add(item.index);
+        const row = item.cell.querySelector<HTMLElement>('.episode-row');
+        return {
+          index: item.index,
+          size: row ? row.getBoundingClientRect().height + EPISODE_GAP : 0,
+        };
+      }).filter(item => item.index >= 0 && item.size > EPISODE_GAP);
+    if (this.episodeVirtualizer.updateItemSizes(measuredSizes)) {
+      this.renderDetail(restoreFocus);
+      return;
+    }
+    const episodeList = this.container.querySelector<HTMLElement>('.series-episodes');
+    if (episodeList) {
+      this.scrollGuard.syncOffset(
+        episodeList,
+        'vertical',
+        this.episodeVirtualizer.scrollOffset,
+      );
+    }
+    if (!restoreFocus) {
+      this.nav.clearDetachedFocus();
+      return;
+    }
     const restore = (prevKey && this.container.querySelector<HTMLElement>(`[data-focusable][data-key="${prevKey}"]`))
       || this.container.querySelector<HTMLElement>('[data-focusable]');
     this.nav.focus(restore);
+  }
+
+  protected moveExtraFocus(action: Action): boolean {
+    if (this.mode !== 'detail' || (action !== 'up' && action !== 'down')) return false;
+    const focused = this.nav.focused;
+    const rawIndex = focused?.closest<HTMLElement>('[data-episode-index]')?.dataset.episodeIndex;
+    if (rawIndex === undefined) return false;
+    const episodes = this.currentInfo?.episodesBySeason[this.selectedSeason] ?? [];
+    const current = parseInt(rawIndex, 10);
+    const next = current + (action === 'up' ? -1 : 1);
+    if (next < 0 || next >= episodes.length) return false;
+    const list = this.container.querySelector<HTMLElement>('.series-episodes');
+    this.episodeFocusIndex = next;
+    this.episodeVirtualizer.ensureVisible(
+      next,
+      list?.clientHeight || EPISODE_VIEWPORT_FALLBACK,
+    );
+    this.renderDetail(false);
+    this.nav.focus(
+      this.container.querySelector<HTMLElement>(
+        `[data-episode-index="${next}"] [data-focusable]`,
+      ),
+    );
+    return true;
+  }
+
+  protected handleExtraScroll(target: HTMLElement): boolean {
+    if (this.mode !== 'detail' || !target.classList.contains('series-episodes')) return false;
+    const offset = this.scrollGuard.readUserOffset(target, 'vertical');
+    if (offset === null) return true;
+    this.episodeVirtualizer.setScrollOffset(offset);
+    if (this.episodeScrollFrame === null) {
+      this.episodeScrollFrame = requestAnimationFrame(() => {
+        this.episodeScrollFrame = null;
+        if (this.mode === 'detail') this.renderDetail(false);
+      });
+    }
+    return true;
   }
 }

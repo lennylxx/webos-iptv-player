@@ -22,9 +22,12 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
     customization,
     playlistMock: {
       channels,
+      groupsRevision: 0,
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
+      getGroupKeyForDisplay: (display: string) => display,
       getByGroup: (_group: string, _playlist?: string): Channel[] => channels,
+      getGroupCount: (_group: string, _playlist?: string): number => channels.length,
       indexOf: (ch: Channel) => channels.indexOf(ch),
       indexOfKey: (_key: string) => -1,
       getByIndex: (i: number) => channels[i] ?? null,
@@ -70,6 +73,15 @@ import { ChannelCustomizationService, groupKeyOf } from '../services/channel-cus
 
 playlistMock.indexOfKey = (key: string) => data.channels
   .findIndex(ch => channelKey(ch) === key);
+playlistMock.getGroupKeyForDisplay = (display: string): string => {
+  for (const key of ChannelCustomizationService.customGroups) {
+    if (ChannelCustomizationService.groupLabel(key) === display) return key;
+  }
+  for (const channel of data.channels) {
+    if (channel.group === display) return groupKeyOf(channel);
+  }
+  return display;
+};
 playlistMock.getByGroup = (group: string, playlist?: string): Channel[] => {
   const channels = playlist
     ? data.channels.filter(channel => channel.playlistIds.includes(playlist))
@@ -80,11 +92,14 @@ playlistMock.getByGroup = (group: string, playlist?: string): Channel[] => {
   }
   return channels.filter(channel => channel.group === group.slice('source:'.length));
 };
+playlistMock.getGroupCount = (group: string, playlist?: string): number =>
+  playlistMock.getByGroup(group, playlist).length;
 
 // Mirror PlaylistService: re-derive the visible list from the customization record.
 playlistMock.applyCustomization = vi.fn(() => {
   const next = ChannelCustomizationService.applyTo(data.raw, data.includeHidden);
   data.channels.splice(0, data.channels.length, ...next);
+  playlistMock.groupsRevision++;
 });
 playlistMock.setIncludeHidden = vi.fn((on: boolean) => {
   if (data.includeHidden === on) return;

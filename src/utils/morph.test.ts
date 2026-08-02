@@ -174,6 +174,15 @@ describe('morph — keyed reconciliation', () => {
     expect(lis[0].hasAttribute('data-key')).toBe(false);
     expect(lis[1]).toBe(keyedLi);
   });
+
+  it('a new keyed node never consumes an unkeyed old node', () => {
+    morph(root, html`<div><div class="spacer"></div></div>`);
+    const spacer = root.querySelector('.spacer');
+
+    morph(root, html`<div><div data-key="row">row</div></div>`);
+
+    expect(root.querySelector('[data-key="row"]')).not.toBe(spacer);
+  });
 });
 
 describe('morph — duplicate keys (defensive)', () => {

@@ -11,8 +11,13 @@ import { t } from '../i18n';
 import { groupIcon } from './group-icon';
 import { CHEVRON_LEFT_ICON } from './icons';
 import { showToast } from './toast';
+import { VirtualList } from '../utils/virtual-list';
+import { VirtualScrollGuard } from '../utils/virtual-scroll';
 
 type SidebarEntry = { ch: Channel; globalIdx: number; recent?: RecentlyWatchedItem };
+type SidebarSource =
+  | { kind: 'channels'; channels: Channel[] }
+  | { kind: 'recent'; items: RecentlyWatchedItem[] };
 type SidebarPane = 'channels' | 'groups';
 type SidebarGroup = {
   id: ChannelGroupId;
@@ -28,7 +33,8 @@ const POINTER_MARGIN = 40;
 const GROUP_DWELL_EDGE = 48;
 const GROUP_DWELL_MS = 500;
 const POINTER_EXIT_DWELL_MS = 500;
-const CHANNEL_ROW_STRIDE = 92;
+const CHANNEL_ROW_STRIDE = 88;
+const GROUP_ROW_STRIDE = 64;
 const CHANNEL_OVERSCAN = 12;
 const FALLBACK_LIST_HEIGHT = 800;
 
@@ -55,13 +61,29 @@ export class Sidebar {
   keyboardOn = false; // while on, the sidebar never auto-hides
   private hoverCleared = false; // highlight removed on mouseleave; next hover re-shows it
   private opening = false;
-  private channelScrollTop = 0;
+  private readonly channelVirtualizer = new VirtualList({
+    itemSize: CHANNEL_ROW_STRIDE,
+    overscan: CHANNEL_OVERSCAN,
+    fallbackViewportSize: FALLBACK_LIST_HEIGHT,
+  });
+  private readonly groupVirtualizer = new VirtualList({
+    itemSize: GROUP_ROW_STRIDE,
+    overscan: CHANNEL_OVERSCAN,
+    fallbackViewportSize: FALLBACK_LIST_HEIGHT,
+  });
   private scrollFrame: number | null = null;
+  private groupScrollFrame: number | null = null;
+  private readonly scrollGuard = new VirtualScrollGuard();
   private groupDwellTimer: ReturnType<typeof setTimeout> | null = null;
   private pointerAtGroupEdge = false;
   private pointerExitTimer: ReturnType<typeof setTimeout> | null = null;
   private pointerExitPending = false;
   private failedLogos = new Set<string>();
+  private channelSource: SidebarSource | null = null;
+  private groupSource: SidebarGroup[] | null = null;
+  private groupSourceChannels: Channel[] | null = null;
+  private groupSourcePlaylist = '';
+  private groupSourceRevision = -1;
 
   constructor(
     container: HTMLElement,
@@ -89,6 +111,8 @@ export class Sidebar {
 
   refresh(): void {
     if (!this.isVisible) return;
+    this.channelSource = null;
+    this.groupSource = null;
     this.focusCurrentChannel(false);
     this.render();
     this.resetTimer();
@@ -136,6 +160,7 @@ export class Sidebar {
     this.activePane = 'channels';
     this.groupsExpanded = false;
     this.searchQuery = '';
+    this.channelSource = null;
     this.pointerAtGroupEdge = false;
     this.clearGroupDwell();
     this.clearPointerExit();
@@ -229,8 +254,7 @@ export class Sidebar {
       return;
     }
 
-    const entries = this.getChannels();
-    const len = entries.length;
+    const len = this.getChannelCount();
     this.resetTimer();
 
     if (action === 'up' || action === 'channel_up') {
@@ -238,7 +262,7 @@ export class Sidebar {
     } else if (action === 'down' || action === 'channel_down') {
       if (this.channelFocusIdx < len - 1) this.channelFocusIdx += 1;
     } else if (action === 'select') {
-      const entry = entries[this.channelFocusIdx];
+      const entry = this.getChannelEntry(this.channelFocusIdx);
       if (entry) this.selectEntry(entry);
       return;
     }
@@ -267,7 +291,9 @@ export class Sidebar {
     this.updateFocus();
   }
 
-  private getChannels(): SidebarEntry[] {
+  private getChannelSource(): SidebarSource {
+    if (this.channelSource) return this.channelSource;
+
     const playlist = this.playlist || undefined;
     if (this.group === 'builtin:recently-watched') {
       let items = RecentlyWatchedService.getItems(playlist);
@@ -279,16 +305,40 @@ export class Sidebar {
           (item.kind === 'catchup' && (item.progress.title ?? '').toLocaleLowerCase().includes(folded)),
         );
       }
-      return items.map(item => ({
-        ch: item.channel,
-        globalIdx: item.channelIndex,
-        recent: item,
-      }));
+      this.channelSource = { kind: 'recent', items };
+      return this.channelSource;
     }
     let channels = PlaylistService.getByGroup(this.group, playlist);
     const q = this.searchQuery.trim();
     if (q) channels = rankChannels(channels, q);
-    return channels.map(ch => ({ ch, globalIdx: PlaylistService.indexOf(ch) }));
+    this.channelSource = { kind: 'channels', channels };
+    return this.channelSource;
+  }
+
+  private getChannelCount(): number {
+    const source = this.getChannelSource();
+    return source.kind === 'channels' ? source.channels.length : source.items.length;
+  }
+
+  private getChannelEntry(position: number): SidebarEntry | null {
+    const source = this.getChannelSource();
+    if (source.kind === 'recent') {
+      const recent = source.items[position];
+      return recent
+        ? { ch: recent.channel, globalIdx: recent.channelIndex, recent }
+        : null;
+    }
+    const ch = source.channels[position];
+    return ch ? { ch, globalIdx: PlaylistService.indexOf(ch) } : null;
+  }
+
+  private findChannelPosition(globalIdx: number): number {
+    const source = this.getChannelSource();
+    if (source.kind === 'recent') {
+      return source.items.findIndex(item => item.channelIndex === globalIdx);
+    }
+    const channel = PlaylistService.getByIndex(globalIdx);
+    return channel ? source.channels.indexOf(channel) : -1;
   }
 
   /** OK: focus the search box (caret at end); focus turns the keyboard on. */
@@ -335,6 +385,10 @@ export class Sidebar {
       this.el?.querySelectorAll('.sidebar-group-item.focused')
         .forEach(item => item.classList.remove('focused'));
     } else {
+      if (this.ensureGroupFocusVisible()) {
+        this.render();
+        return;
+      }
       this.el?.querySelector('.sidebar-search-input')?.classList.remove('focused');
       this.el?.querySelectorAll('.sidebar-ch-item.focused')
         .forEach(item => item.classList.remove('focused'));
@@ -351,46 +405,57 @@ export class Sidebar {
     if (this.channelFocusIdx < 0 || !this.el) return false;
     const list = this.el.querySelector<HTMLElement>('.sidebar-channel-list');
     const viewportHeight = list?.clientHeight || FALLBACK_LIST_HEIGHT;
-    const rowTop = this.channelFocusIdx * CHANNEL_ROW_STRIDE;
-    const rowBottom = rowTop + CHANNEL_ROW_STRIDE;
-    let nextScrollTop = this.channelScrollTop;
-    if (rowTop < nextScrollTop) {
-      nextScrollTop = rowTop;
-    } else if (rowBottom > nextScrollTop + viewportHeight) {
-      nextScrollTop = rowBottom - viewportHeight;
-    }
-    nextScrollTop = Math.max(0, nextScrollTop);
-    if (nextScrollTop === this.channelScrollTop) return false;
-    this.setChannelScrollTop(nextScrollTop);
+    if (!this.channelVirtualizer.ensureVisible(this.channelFocusIdx, viewportHeight)) return false;
+    this.applyChannelScrollOffset();
     return true;
   }
 
   private setChannelScrollTop(scrollTop: number): void {
-    this.channelScrollTop = scrollTop;
-    const list = this.el?.querySelector<HTMLElement>('.sidebar-channel-list');
-    if (list && list.scrollTop !== scrollTop) list.scrollTop = scrollTop;
+    this.channelVirtualizer.setScrollOffset(scrollTop);
+    this.applyChannelScrollOffset();
   }
 
-  private visibleRange(total: number, viewportHeight: number): { start: number; end: number } {
-    const visibleRows = Math.max(1, Math.ceil(viewportHeight / CHANNEL_ROW_STRIDE));
-    const start = Math.max(0, Math.floor(this.channelScrollTop / CHANNEL_ROW_STRIDE) - CHANNEL_OVERSCAN);
-    const end = Math.min(total, start + visibleRows + CHANNEL_OVERSCAN * 2);
-    return { start, end };
+  private applyChannelScrollOffset(): void {
+    const list = this.el?.querySelector<HTMLElement>('.sidebar-channel-list');
+    const offset = this.channelVirtualizer.scrollOffset;
+    if (list) this.scrollGuard.syncOffset(list, 'vertical', offset);
+  }
+
+  private ensureGroupFocusVisible(): boolean {
+    if (!this.el) return false;
+    const list = this.el.querySelector<HTMLElement>('.sidebar-group-list');
+    const viewportHeight = list?.clientHeight || FALLBACK_LIST_HEIGHT;
+    if (!this.groupVirtualizer.ensureVisible(this.groupFocusIdx, viewportHeight)) return false;
+    this.applyGroupScrollOffset();
+    return true;
+  }
+
+  private applyGroupScrollOffset(): void {
+    const list = this.el?.querySelector<HTMLElement>('.sidebar-group-list');
+    if (list) {
+      this.scrollGuard.syncOffset(list, 'vertical', this.groupVirtualizer.scrollOffset);
+    }
   }
 
   private getGroups(): SidebarGroup[] {
+    if (this.groupSource
+        && this.groupSourceChannels === PlaylistService.channels
+        && this.groupSourcePlaylist === this.playlist
+        && this.groupSourceRevision === PlaylistService.groupsRevision) {
+      return this.groupSource;
+    }
     const playlist = this.playlist || undefined;
     const groups: SidebarGroup[] = [
       {
         id: 'builtin:all',
         label: t('common.all'),
-        count: PlaylistService.getByGroup('builtin:all', playlist).length,
+        count: PlaylistService.getGroupCount('builtin:all', playlist),
         builtin: 'all',
       },
       {
         id: 'builtin:favorites',
         label: t('channel.favorites'),
-        count: PlaylistService.getByGroup('builtin:favorites', playlist).length,
+        count: PlaylistService.getGroupCount('builtin:favorites', playlist),
         builtin: 'favorites',
       },
       {
@@ -400,40 +465,38 @@ export class Sidebar {
         builtin: 'recently-watched',
       },
     ];
-    const channels = PlaylistService.getByGroup('builtin:all', playlist);
-    const counts = new Map<string, number>();
-    channels.forEach(ch => counts.set(ch.group, (counts.get(ch.group) || 0) + 1));
     PlaylistService.getGroupsForPlaylist(playlist).forEach(name => {
       groups.push({
         id: `source:${name}`,
         label: name,
-        count: counts.get(name) || 0,
+        count: PlaylistService.getGroupCount(`source:${name}`, playlist),
       });
     });
-    return groups;
+    this.groupSource = groups;
+    this.groupSourceChannels = PlaylistService.channels;
+    this.groupSourcePlaylist = this.playlist;
+    this.groupSourceRevision = PlaylistService.groupsRevision;
+    return this.groupSource;
   }
 
   private focusCurrentChannel(fallbackToAll: boolean): void {
-    let entries = this.getChannels();
     const currentIdx = this.getCurrentIndex();
-    let position = entries.findIndex(entry => entry.globalIdx === currentIdx);
+    let position = this.findChannelPosition(currentIdx);
     if (position < 0 && fallbackToAll && this.group !== 'builtin:all') {
       this.group = 'builtin:all';
-      entries = this.getChannels();
-      position = entries.findIndex(entry => entry.globalIdx === currentIdx);
+      this.channelSource = null;
+      position = this.findChannelPosition(currentIdx);
     }
     if (position < 0 && fallbackToAll && this.playlist) {
       this.playlist = '';
-      entries = this.getChannels();
-      position = entries.findIndex(entry => entry.globalIdx === currentIdx);
+      this.channelSource = null;
+      position = this.findChannelPosition(currentIdx);
     }
-    this.channelFocusIdx = position >= 0 ? position : (entries.length ? 0 : -1);
+    this.channelFocusIdx = position >= 0 ? position : (this.getChannelCount() ? 0 : -1);
     const viewportHeight = this.el?.querySelector<HTMLElement>('.sidebar-channel-list')?.clientHeight
       || FALLBACK_LIST_HEIGHT;
-    this.setChannelScrollTop(Math.max(
-      0,
-      this.channelFocusIdx * CHANNEL_ROW_STRIDE - (viewportHeight - CHANNEL_ROW_STRIDE) / 2,
-    ));
+    this.channelVirtualizer.centerOn(this.channelFocusIdx, viewportHeight);
+    this.applyChannelScrollOffset();
   }
 
   private openGroups(): void {
@@ -443,6 +506,7 @@ export class Sidebar {
     const groups = this.getGroups();
     const selected = groups.findIndex(group => group.id === this.group);
     this.groupFocusIdx = selected >= 0 ? selected : 0;
+    this.groupVirtualizer.centerOn(this.groupFocusIdx, FALLBACK_LIST_HEIGHT);
     this.syncPanelState();
     this.render();
   }
@@ -458,6 +522,7 @@ export class Sidebar {
   private selectGroup(group: ChannelGroupId): void {
     this.group = group;
     this.searchQuery = '';
+    this.channelSource = null;
     this.activePane = 'channels';
     this.focusCurrentChannel(false);
     this.render();
@@ -509,13 +574,25 @@ export class Sidebar {
     if (!groups.some(item => item.id === this.group)) {
       this.group = 'builtin:all';
       this.groupFocusIdx = 0;
+      this.channelSource = null;
     }
-    const entries = this.getChannels();
+    const entryCount = this.getChannelCount();
     const previousList = el.querySelector<HTMLElement>('.sidebar-channel-list');
-    if (previousList) this.channelScrollTop = previousList.scrollTop;
+    const previousGroupList = el.querySelector<HTMLElement>('.sidebar-group-list');
+    if (previousList) this.channelVirtualizer.setScrollOffset(previousList.scrollTop);
+    if (previousGroupList) this.groupVirtualizer.setScrollOffset(previousGroupList.scrollTop);
     const viewportHeight = previousList?.clientHeight || FALLBACK_LIST_HEIGHT;
-    const range = this.visibleRange(entries.length, viewportHeight);
-    const visibleEntries = entries.slice(range.start, range.end);
+    const groupViewportHeight = previousGroupList?.clientHeight || FALLBACK_LIST_HEIGHT;
+    if (this.groupsExpanded && this.activePane === 'groups') {
+      this.groupVirtualizer.ensureVisible(this.groupFocusIdx, groupViewportHeight);
+    }
+    const groupRange = this.groupVirtualizer.getRange(groups.length, groupViewportHeight);
+    const range = this.channelVirtualizer.getRange(entryCount, viewportHeight);
+    const visibleEntries: SidebarEntry[] = [];
+    for (let i = range.start; i < range.end; i++) {
+      const entry = this.getChannelEntry(i);
+      if (entry) visibleEntries.push(entry);
+    }
     const currentIdx = this.getCurrentIndex();
     const currentCatchupStart = this.getCurrentCatchupStart();
     const currentTab = tabs.find(t => t.id === this.playlist);
@@ -528,15 +605,22 @@ export class Sidebar {
       <div class="sidebar-group-panel" data-key="group-panel">
         <div class="sidebar-title">${t('common.groups')}</div>
         <div class="sidebar-group-list">
-          ${groups.map((item, i) => html`
+          <div class="sidebar-group-spacer"
+               style="height:${this.groupVirtualizer.getTotalSize(groups.length)}px">
+          ${groups.slice(groupRange.start, groupRange.end).map((item, offset) => {
+            const i = groupRange.start + offset;
+            return html`
             <div class="sidebar-group-item ${item.id === this.group ? 'active' : ''}
                         ${this.activePane === 'groups' && i === this.groupFocusIdx ? 'focused' : ''}"
-                 data-key="group:${item.id}" data-group-id="${item.id}" data-group-pos="${i}">
+                 data-key="group:${item.id}" data-group-id="${item.id}" data-group-pos="${i}"
+                 style="top:${this.groupVirtualizer.getItemOffset(i)}px">
               <span class="sidebar-group-icon">${raw(groupIcon(item.label, item.builtin))}</span>
               <span class="sidebar-group-name">${item.label}</span>
               <span class="sidebar-group-count">${item.count}</span>
             </div>
-          `)}
+          `;
+          })}
+          </div>
         </div>
       </div>
       <div class="sidebar-channel-panel" data-key="channel-panel">
@@ -564,7 +648,7 @@ export class Sidebar {
         ` : ''}
         <div class="sidebar-channel-list" data-key="channel-list">
           <div class="sidebar-channel-spacer" data-key="channel-spacer"
-               style="height:${entries.length * CHANNEL_ROW_STRIDE}px">
+               style="height:${this.channelVirtualizer.getTotalSize(entryCount)}px">
           ${visibleEntries.map(({ ch, globalIdx, recent }, offset) => {
             const i = range.start + offset;
             const epgId = EpgService.findChannelId(ch);
@@ -587,7 +671,7 @@ export class Sidebar {
                      ? `recent:catchup:${String(globalIdx)}:${String(catchup.progress.progStart)}`
                      : `ch:${String(globalIdx)}`}"
                    data-focusable data-sidebar-index="${globalIdx}" data-sidebar-pos="${i}"
-                   style="top:${i * CHANNEL_ROW_STRIDE}px">
+                   style="top:${this.channelVirtualizer.getItemOffset(i)}px">
                 <span class="ch-num">${globalIdx + 1}</span>
                 ${this.renderLogo(ch)}
                 <div class="ch-info">
@@ -603,8 +687,8 @@ export class Sidebar {
       </div>
     `);
 
-    const list = el.querySelector<HTMLElement>('.sidebar-channel-list');
-    if (list && list.scrollTop !== this.channelScrollTop) list.scrollTop = this.channelScrollTop;
+    this.applyChannelScrollOffset();
+    this.applyGroupScrollOffset();
     const search = el.querySelector<HTMLInputElement>('.sidebar-search-input');
     if (search && search.value !== this.searchQuery) search.value = this.searchQuery;
 
@@ -673,6 +757,7 @@ export class Sidebar {
     el.addEventListener('input', (e: Event) => {
       if (!(e.target as HTMLElement).classList.contains('sidebar-search-input')) return;
       this.searchQuery = (e.target as HTMLInputElement).value;
+      this.channelSource = null;
       this.activePane = 'channels';
       this.channelFocusIdx = -1;
       this.setChannelScrollTop(0);
@@ -735,6 +820,8 @@ export class Sidebar {
         this.playlist = tab.dataset.sidebarPlaylist!;
         this.group = 'builtin:all';
         this.searchQuery = '';
+        this.channelSource = null;
+        this.groupSource = null;
         this.focusCurrentChannel(false);
         this.render();
         this.resetTimer();
@@ -743,7 +830,7 @@ export class Sidebar {
       const chItem = target.closest<HTMLElement>('[data-sidebar-index]');
       if (chItem) {
         const position = parseInt(chItem.dataset.sidebarPos!, 10);
-        const entry = this.getChannels()[position];
+        const entry = this.getChannelEntry(position);
         if (entry) this.selectEntry(entry);
       }
     });
@@ -781,8 +868,21 @@ export class Sidebar {
 
     el.addEventListener('scroll', (e: Event) => {
       const list = e.target as HTMLElement;
+      if (list.classList.contains('sidebar-group-list')) {
+        const offset = this.scrollGuard.readUserOffset(list, 'vertical');
+        if (offset === null) return;
+        this.groupVirtualizer.setScrollOffset(offset);
+        if (this.groupScrollFrame !== null) return;
+        this.groupScrollFrame = requestAnimationFrame(() => {
+          this.groupScrollFrame = null;
+          if (this.isVisible) this.render(false);
+        });
+        return;
+      }
       if (!list.classList.contains('sidebar-channel-list')) return;
-      this.channelScrollTop = list.scrollTop;
+      const offset = this.scrollGuard.readUserOffset(list, 'vertical');
+      if (offset === null) return;
+      this.channelVirtualizer.setScrollOffset(offset);
       if (this.scrollFrame !== null) return;
       this.scrollFrame = requestAnimationFrame(() => {
         this.scrollFrame = null;
@@ -800,7 +900,7 @@ export class Sidebar {
         if (e.deltaY < 0) this.groupFocusIdx = Math.max(0, this.groupFocusIdx - 1);
         else if (e.deltaY > 0) this.groupFocusIdx = Math.min(len - 1, this.groupFocusIdx + 1);
       } else {
-        const len = this.getChannels().length;
+        const len = this.getChannelCount();
         this.activePane = 'channels';
         if (e.deltaY < 0) this.channelFocusIdx = Math.max(0, this.channelFocusIdx - 1);
         else if (e.deltaY > 0) {

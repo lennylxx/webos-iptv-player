@@ -64,9 +64,18 @@
 .catalog-rail { margin-bottom: 28px; }
 .catalog-rail-title { margin: 0 0 12px; font-size: 30px; font-weight: 600; color: var(--text-primary); }
 .catalog-rail-track { display: flex; gap: 20px; overflow-x: auto; padding: 12px 12px 20px; margin: 0 -12px; }
+.catalog-category-rail { height: 152px; display: block; overflow-anchor: none; }
+.catalog-category-rail-spacer { position: relative; height: 120px; }
+.catalog-category-rail-cell {
+  position: absolute;
+  top: 0;
+  width: 300px;
+  height: 120px;
+}
 
 .catalog-grid-title { margin: 0 0 24px; font-size: 44px; font-weight: 700; color: var(--text-primary); }
-.catalog-grid-track { display: flex; flex-wrap: wrap; gap: 24px; }
+.catalog-grid-track { position: relative; width: 100%; }
+.catalog-grid-cell { position: absolute; width: 220px; height: 371px; }
 
 .catalog-tile { width: 220px; flex: 0 0 auto; cursor: pointer; }
 .catalog-poster-wrap {
@@ -135,8 +144,8 @@
 }
 
 /* Series detail: a compact header (poster + season selector) over an episode list. */
-.series-detail { display: block; }
-.series-detail-head { display: flex; gap: 56px; margin-bottom: 32px; }
+.series-detail { display: flex; flex-direction: column; overflow: hidden; }
+.series-detail-head { display: flex; gap: 56px; margin-bottom: 32px; flex-shrink: 0; }
 .series-detail-poster { width: 260px; height: 390px; }
 
 .series-seasons { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
@@ -147,8 +156,11 @@
 .series-season-btn.active { background: var(--accent, #3ea6ff); color: #fff; }
 .series-season-btn.focused { border-color: var(--text-primary); }
 
-.series-episodes { display: flex; flex-direction: column; gap: 16px; }
+.series-episodes { position: relative; flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; }
+.series-episodes-spacer { position: relative; width: 100%; }
+.series-episode-cell { position: absolute; left: 0; right: 0; }
 .episode-row {
+  box-sizing: border-box;
   display: flex; gap: 20px; align-items: flex-start;
   padding: 20px 24px; border-radius: 12px; background: var(--catalog-surface);
   border: 3px solid transparent; cursor: pointer;

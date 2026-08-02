@@ -22,9 +22,12 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
     customization,
     playlistMock: {
       channels,
+      groupsRevision: 0,
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
+      getGroupKeyForDisplay: (display: string) => display,
       getByGroup: (_group: string, _playlist?: string): Channel[] => channels,
+      getGroupCount: (_group: string, _playlist?: string) => channels.length,
       indexOf: (ch: Channel) => channels.indexOf(ch),
       indexOfKey: (_key: string) => -1,
       getByIndex: (i: number) => channels[i] ?? null,
@@ -70,6 +73,15 @@ import { ChannelCustomizationService, groupKeyOf } from '../services/channel-cus
 
 playlistMock.indexOfKey = (key: string) => data.channels
   .findIndex(ch => channelKey(ch) === key);
+playlistMock.getGroupKeyForDisplay = (display: string): string => {
+  for (const key of ChannelCustomizationService.customGroups) {
+    if (ChannelCustomizationService.groupLabel(key) === display) return key;
+  }
+  for (const channel of data.channels) {
+    if (channel.group === display) return groupKeyOf(channel);
+  }
+  return display;
+};
 playlistMock.getByGroup = (group: string, playlist?: string): Channel[] => {
   const channels = playlist
     ? data.channels.filter(channel => channel.playlistIds.includes(playlist))
@@ -85,6 +97,7 @@ playlistMock.getByGroup = (group: string, playlist?: string): Channel[] => {
 playlistMock.applyCustomization = vi.fn(() => {
   const next = ChannelCustomizationService.applyTo(data.raw, data.includeHidden);
   data.channels.splice(0, data.channels.length, ...next);
+  playlistMock.groupsRevision++;
 });
 playlistMock.setIncludeHidden = vi.fn((on: boolean) => {
   if (data.includeHidden === on) return;
@@ -200,6 +213,30 @@ describe('ChannelList.render', () => {
     expect(container.querySelector('.search-icon')).toBeNull();
   });
 
+  it('renders a bounded window for 50,000 channels', () => {
+    const original = data.raw.slice();
+    data.raw.splice(0, data.raw.length);
+    for (let i = 0; i < 50_000; i++) {
+      data.raw.push({
+        ...original[0],
+        id: `ch${String(i)}`,
+        name: `Channel ${String(i)}`,
+        url: `http://host/${String(i)}`,
+      });
+    }
+    try {
+      playlistMock.applyCustomization();
+      list.render();
+
+      expect(channelItems().length).toBeLessThan(50);
+      expect(container.querySelector<HTMLElement>('.channel-list-spacer')?.style.height)
+        .toBe('4400000px');
+    } finally {
+      data.raw.splice(0, data.raw.length, ...original);
+      playlistMock.applyCustomization();
+    }
+  });
+
   it('renders the group list including All, Favorites, and Recently Watched', () => {
     list.render();
     const groups = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
@@ -211,6 +248,22 @@ describe('ChannelList.render', () => {
       'source:News',
       'source:Sports',
     ]);
+  });
+
+  it('renders a bounded group window for 50,000 groups', () => {
+    const original = playlistMock.getGroupsForPlaylist;
+    playlistMock.getGroupsForPlaylist = () =>
+      Array.from({ length: 50_000 }, (_, index) => `Group ${String(index)}`);
+    playlistMock.groupsRevision++;
+    try {
+      list.render();
+      expect(container.querySelectorAll('.group-item').length).toBeLessThan(60);
+      expect(container.querySelector<HTMLElement>('.group-list-spacer')?.style.height)
+        .toBe('3400204px');
+    } finally {
+      playlistMock.getGroupsForPlaylist = original;
+      playlistMock.groupsRevision++;
+    }
   });
 
   it('marks favorites with a star', () => {
@@ -256,14 +309,37 @@ describe('ChannelList.render', () => {
     recentMock.items = [live, catchup];
 
     list.render();
+    const spacer = container.querySelector('.channel-list-spacer');
     hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
     list.handleAction('select');
 
     expect(channelItems()).toHaveLength(2);
+    expect(channelItems()[0]).not.toBe(spacer);
     expect(channelItems()[0].querySelector('.recent-kind-badge')?.textContent).toBe('LIVE');
     expect(channelItems()[1].querySelector('.recent-kind-badge')?.textContent).toBe('CATCH-UP');
     expect(channelItems()[1].textContent).toContain('Program Alpha');
     expect(channelItems()[1].textContent).toContain('Resume at 10:00');
+    expect(container.querySelector('.channel-list-scroll')?.classList.contains('recent-list'))
+      .toBe(true);
+    expect(container.querySelector('.channel-list-spacer')).toBeNull();
+  });
+
+  it('resets a deep channel scroll before showing Recently Watched', () => {
+    recentMock.items = [{
+      kind: 'live',
+      channel: data.channels[0],
+      channelIndex: 0,
+      updatedAt: 1000,
+    }];
+    list.render();
+    const main = container.querySelector<HTMLElement>('.channel-main')!;
+    main.scrollTop = 20_000;
+
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
+    list.handleAction('select');
+
+    expect(main.scrollTop).toBe(0);
+    expect(channelItems()).toHaveLength(1);
   });
 
   it('shows the Recently Watched empty state', () => {
@@ -334,6 +410,15 @@ describe('ChannelList interaction', () => {
     hover(channelItems()[1]);
     list.handleAction('select');
     expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  it('reports virtual moves so Up does not hand focus to the tab bar', () => {
+    expect(list.handleAction('down')).toBe(true);
+    expect(container.querySelector<HTMLElement>('.channel-item.focused')?.dataset.channelIndex)
+      .toBe('1');
+    expect(list.handleAction('up')).toBe(true);
+    list.handleAction('select');
+    expect(onSelect).toHaveBeenCalledWith(0);
   });
 
   it('selecting a recent live row starts live playback', () => {

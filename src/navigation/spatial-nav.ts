@@ -44,6 +44,10 @@ export class SpatialNav {
     this.focused?.classList.remove('focused');
   }
 
+  clearDetachedFocus(): void {
+    if (this.focused && !this.container.contains(this.focused)) this.focus(null);
+  }
+
   focusFirst(): void {
     const items = this.getFocusables();
     if (items.length) this.focus(items[0]);

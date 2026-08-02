@@ -249,7 +249,14 @@
   padding: 6px;
 }
 
+.epg-group-options-spacer {
+  position: relative;
+}
+
 .epg-group-option {
+  position: absolute;
+  left: 6px;
+  right: 6px;
   height: 44px;
   display: flex;
   align-items: center;
@@ -343,6 +350,12 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
+}
+
+.epg-virtual-spacer {
+  position: relative;
+  width: 100%;
 }
 
 .epg-no-channels {
@@ -353,7 +366,10 @@
 }
 
 .epg-channel-item {
-  position: relative;
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
   height: 72px;
   display: flex;
   align-items: center;
@@ -491,11 +507,17 @@
 .epg-programmes-pane {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none;
   background: var(--bg-primary);
 }
 
 .epg-programme-item {
-  position: relative;
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 80px;
+  box-sizing: border-box;
+  overflow: hidden;
   display: flex;
   align-items: flex-start;
   gap: 20px;
@@ -503,6 +525,10 @@
   cursor: pointer;
   border-bottom: 1px solid rgba(42, 42, 62, 0.5);
   transition: background 0.12s;
+}
+
+.epg-programme-item.has-description {
+  height: 108px;
 }
 
 .epg-programme-item::before {

@@ -24,6 +24,34 @@
 .search-results { display: block; }
 .search-empty { margin-top: 40px; }
 
+.search-virtual-section { margin-bottom: 28px; }
+.search-virtual-scroll {
+  position: relative;
+  height: 420px;
+  overflow-y: auto;
+  overflow-anchor: none;
+}
+.search-virtual-list-spacer,
+.search-virtual-rail-spacer {
+  position: relative;
+}
+.search-virtual-list-cell {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+}
+.search-virtual-rail { height: 403px; }
+.search-virtual-rail-spacer {
+  flex: 0 0 auto;
+  height: 371px;
+}
+.search-virtual-rail-cell {
+  position: absolute;
+  top: 0;
+  width: 220px;
+}
+
 /* Channel results carry 16:9-ish logos, not portrait posters — use a landscape
    box and contain the logo so it isn't cropped. */
 .search-channel-tile .catalog-poster-wrap { height: 124px; }

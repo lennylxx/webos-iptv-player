@@ -90,6 +90,35 @@ test('unified search matches channels, movies, and series; a channel result play
   await expect(page.locator('#view-player')).toBeVisible();
 });
 
+test('a wide virtual search rail keeps its full scrollable width', async ({ page }) => {
+  await seedSearch(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterSearch(page);
+  await page.locator('.tab-bar-search-input').fill('one');
+
+  const rail = page.locator('[data-search-virtual="movies"]');
+  await expect(rail.locator('.search-virtual-rail-spacer')).toBeVisible();
+  const metrics = await rail.evaluate((element) => {
+    const spacer = element.querySelector<HTMLElement>('.search-virtual-rail-spacer');
+    if (!spacer) throw new Error('virtual rail spacer not found');
+    spacer.style.width = '12000000px';
+    element.scrollLeft = element.scrollWidth;
+    return {
+      flexShrink: getComputedStyle(spacer).flexShrink,
+      spacerWidth: spacer.getBoundingClientRect().width,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      scrollLeft: element.scrollLeft,
+    };
+  });
+
+  expect(metrics.flexShrink).toBe('0');
+  expect(metrics.spacerWidth).toBe(12_000_000);
+  expect(metrics.scrollWidth).toBeGreaterThanOrEqual(12_000_000);
+  expect(metrics.scrollLeft).toBe(metrics.scrollWidth - metrics.clientWidth);
+});
+
 test('program search shows XMLTV metadata and toggles a future reminder', async ({ page }) => {
   await seedSearch(page);
   await page.goto('/');

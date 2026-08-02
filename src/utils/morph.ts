@@ -58,11 +58,13 @@ function patchChildren(parent: Node, nextChildren: Node[]): void {
     const newChild = nextChildren[i];
     const key = getKey(newChild);
     let match: Node | null = null;
+    let allowUnkeyedFallback = key == null;
 
     if (key != null) {
       if (seenNewKeys.has(key)) {
         // Duplicate new key — treat this one as unkeyed.
         log.warn('duplicate new data-key:', key);
+        allowUnkeyedFallback = true;
       } else {
         seenNewKeys.add(key);
         const candidate = oldByKey.get(key);
@@ -72,7 +74,7 @@ function patchChildren(parent: Node, nextChildren: Node[]): void {
       }
     }
 
-    if (!match) {
+    if (!match && allowUnkeyedFallback) {
       // Unkeyed fallback. Scan from the cursor for the next compatible old node;
       // only advance the cursor when we actually consume one. Skipping on a
       // non-match (e.g. text vs element) would eat real candidates needed by a

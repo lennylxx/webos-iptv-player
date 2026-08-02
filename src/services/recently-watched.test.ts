@@ -28,7 +28,17 @@ const { data, archiveMock, storageMock, epgMock, playlistMock } = vi.hoisted(() 
       }>>,
       findChannelId: vi.fn((): string | null => null),
     },
-    playlistMock: { channels: data.channels },
+    playlistMock: {
+      channels: data.channels,
+      resolveChannelKey: vi.fn((key: string) => {
+        const exact = data.channels.find(ch => channelKey(ch) === key);
+        if (exact) return { channel: exact, channelIndex: data.channels.indexOf(exact) };
+        const legacy = data.channels.filter(ch => legacyChannelKey(ch) === key);
+        return legacy.length === 1
+          ? { channel: legacy[0], channelIndex: data.channels.indexOf(legacy[0]) }
+          : null;
+      }),
+    },
   };
 });
 
@@ -77,6 +87,7 @@ beforeEach(() => {
   epgMock.findChannelId.mockReset().mockReturnValue(null);
   archiveMock.load.mockClear();
   archiveMock.isAvailable.mockClear();
+  playlistMock.resolveChannelKey.mockClear();
   storageMock.clearCatchupProgress.mockClear();
 });
 
@@ -92,6 +103,7 @@ describe('RecentlyWatchedService.getItems', () => {
 
     expect(items.map(item => item.kind)).toEqual(['catchup', 'live']);
     expect(items.map(item => item.channelIndex)).toEqual([1, 0]);
+    expect(playlistMock.resolveChannelKey).toHaveBeenCalledTimes(2);
   });
 
   it('resolves an unambiguous legacy channel key', () => {

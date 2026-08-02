@@ -443,6 +443,44 @@ describe('PlaylistService.getGroupsForPlaylist', () => {
   it('returns all groups when no playlist is given', () => {
     expect(PlaylistService.getGroupsForPlaylist()).toEqual(['News', 'Sports', 'Movies']);
   });
+
+  it('serves group counts from the derived index without rescanning channels', () => {
+    let groupReads = 0;
+    let urlReads = 0;
+    PlaylistService.channels = Array.from({ length: 5000 }, (_, index) => {
+      const item = channel({
+        name: `ch${index}`,
+        playlistIds: [`P${index % 2}`],
+      });
+      Object.defineProperty(item, 'group', {
+        configurable: true,
+        get: () => {
+          groupReads++;
+          return `Group ${index}`;
+        },
+      });
+      Object.defineProperty(item, 'url', {
+        configurable: true,
+        get: () => {
+          urlReads++;
+          return `http://host/${index}`;
+        },
+      });
+      return item;
+    });
+
+    const groups = PlaylistService.getGroupsForPlaylist();
+    groupReads = 0;
+    urlReads = 0;
+    for (const group of groups) {
+      expect(PlaylistService.getGroupCount(`source:${group}`)).toBe(1);
+    }
+
+    expect(groupReads).toBe(0);
+    expect(PlaylistService.getGroupCount('builtin:favorites')).toBe(0);
+    expect(urlReads).toBe(0);
+    expect(PlaylistService.getGroupCount('builtin:all', 'P1')).toBe(2500);
+  });
 });
 
 describe('PlaylistService.reset', () => {

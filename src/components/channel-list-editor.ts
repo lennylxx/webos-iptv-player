@@ -15,6 +15,7 @@ type DragCandidate = { target: EditTarget; x: number; y: number };
 
 interface ChannelListEditorOptions {
   render: () => void;
+  moveListFocus: (delta: number) => boolean;
   onChannelsChanged: () => void;
   getCurrentGroup: () => ChannelGroupId;
   getCurrentPlaylist: () => string;
@@ -203,13 +204,7 @@ export class ChannelListEditor {
   }
 
   groupKeyForDisplay(display: string): string {
-    for (const key of ChannelCustomizationService.customGroups) {
-      if (ChannelCustomizationService.groupLabel(key) === display) return key;
-    }
-    for (const channel of PlaylistService.channels) {
-      if (channel.group === display) return groupKeyOf(channel);
-    }
-    return display;
+    return PlaylistService.getGroupKeyForDisplay(display);
   }
 
   isGroupHidden(key: string): boolean {
@@ -335,13 +330,15 @@ export class ChannelListEditor {
       case 'down':
       case 'left':
       case 'right':
+        if ((action === 'up' || action === 'down')
+            && this.options.moveListFocus(action === 'up' ? -1 : 1)) return true;
         this.nav.move(action);
         return true;
       case 'channel_up':
-        this.nav.move('up');
+        if (!this.options.moveListFocus(-1)) this.nav.move('up');
         return true;
       case 'channel_down':
-        this.nav.move('down');
+        if (!this.options.moveListFocus(1)) this.nav.move('down');
         return true;
       case 'select':
         this.activateFavoriteTarget();

@@ -31,6 +31,7 @@ const { channels, epgMock, recentMock, toastMock } = vi.hoisted(() => {
 
 vi.mock('../services/playlist-service', () => ({
   PlaylistService: {
+    groupsRevision: 0,
     channels,
     playlistTabs: [{ id: 'PL1', name: 'PL1' }, { id: 'PL2', name: 'PL2' }],
     getByIndex: (i: number) => channels[i],
@@ -44,6 +45,9 @@ vi.mock('../services/playlist-service', () => ({
       if (group === 'builtin:favorites') source = source.filter(ch => ch.favorite);
       else if (group.startsWith('source:')) source = source.filter(ch => ch.group === group.slice(7));
       return source;
+    },
+    getGroupCount(group: string, playlist?: string) {
+      return this.getByGroup(group, playlist).length;
     },
   },
 }));
@@ -59,6 +63,7 @@ vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentM
 vi.mock('./toast', () => ({ showToast: toastMock }));
 
 import { Sidebar } from './sidebar';
+import { PlaylistService } from '../services/playlist-service';
 
 let container: HTMLElement;
 let el: HTMLElement;
@@ -211,6 +216,17 @@ describe('Sidebar', () => {
       expect(items()[1].classList.contains('focused')).toBe(true);
     });
 
+    it('does not resolve every channel index during navigation', () => {
+      const indexOf = vi.spyOn(PlaylistService, 'indexOf');
+      indexOf.mockClear();
+
+      sidebar.handleAction('down');
+      expect(indexOf).not.toHaveBeenCalled();
+
+      sidebar.handleAction('select');
+      expect(indexOf).toHaveBeenCalledTimes(1);
+    });
+
     it('channel_up / channel_down behave like up / down', () => {
       sidebar.handleAction('channel_down'); // 1 -> 2
       expect(items()[2].classList.contains('focused')).toBe(true);
@@ -308,6 +324,26 @@ describe('Sidebar', () => {
       expect(groupItems()[0].classList.contains('active')).toBe(true);
       expect(groupItems()[0].classList.contains('focused')).toBe(true);
       expect(sidebar.pointerDismissX).toBe(720);
+    });
+
+    it('renders a bounded group window for 50,000 groups', () => {
+      const originalGroups = PlaylistService.getGroupsForPlaylist;
+      const originalCount = PlaylistService.getGroupCount;
+      PlaylistService.getGroupsForPlaylist = () =>
+        Array.from({ length: 50_000 }, (_, index) => `Group ${String(index)}`);
+      PlaylistService.getGroupCount = () => 1;
+      PlaylistService.groupsRevision++;
+      try {
+        sidebar.refresh();
+        sidebar.handleAction('left');
+        expect(groupItems().length).toBeLessThan(60);
+        expect(el.querySelector<HTMLElement>('.sidebar-group-spacer')?.style.height)
+          .toBe('3200192px');
+      } finally {
+        PlaylistService.getGroupsForPlaylist = originalGroups;
+        PlaylistService.getGroupCount = originalCount;
+        PlaylistService.groupsRevision++;
+      }
     });
 
     it('uses the fitted group width for the pointer dismissal boundary', () => {
@@ -751,8 +787,8 @@ describe('Sidebar', () => {
     it('renders only the visible rows with overscan', () => {
       sidebar.show();
 
-      expect(items()).toHaveLength(33);
-      expect(el.querySelector<HTMLElement>('.sidebar-channel-spacer')?.style.height).toBe('110400px');
+      expect(items()).toHaveLength(34);
+      expect(el.querySelector<HTMLElement>('.sidebar-channel-spacer')?.style.height).toBe('105600px');
     });
 
     it('keeps remote focus and selection on global channel positions', () => {
@@ -778,7 +814,7 @@ describe('Sidebar', () => {
       const positions = items().map(item => parseInt(item.dataset.sidebarPos!, 10));
       expect(positions).toContain(25);
       expect(positions).not.toContain(0);
-      expect(positions.length).toBeLessThan(30);
+      expect(positions.length).toBeLessThan(40);
     });
   });
 

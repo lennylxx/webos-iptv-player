@@ -91,12 +91,16 @@ describe('Search', () => {
     expect(container.querySelector('.catalog-tile[data-series-id="s1"]')?.textContent).toContain('Series One');
   });
 
-  it('caps each result group at SEARCH_RESULT_CAP', async () => {
+  it('keeps 50,000 ranked results in a bounded virtualized rail', async () => {
     const cap = CONFIG.XTREAM.SEARCH_RESULT_CAP;
     const many = Array.from({ length: cap + 5 }, (_, i) => vod(String(i), `Movie ${i}`));
     const { view } = await openWith({ vod: many });
     view.setQuery('movie');
-    expect(container.querySelectorAll('.catalog-tile[data-stream-id]').length).toBe(cap);
+    expect(cap).toBe(50_000);
+    expect(container.querySelectorAll('.catalog-tile[data-stream-id]').length).toBeLessThan(30);
+    expect(container.querySelector<HTMLElement>(
+      '[data-search-virtual="movies"] .search-virtual-rail-spacer',
+    )?.style.width).toBe(`${String(cap * 240)}px`);
   });
 
   it('plays a channel result on select via its playlist index', async () => {
@@ -332,6 +336,9 @@ describe('Search (M3U-only, no account)', () => {
     expect(container.querySelectorAll('.search-channel-row').length).toBe(2);
     expect(container.querySelector('.catalog-rail')).toBeNull();
     expect(container.querySelector('.search-channels .catalog-rail-title')?.textContent).toBe('Channels');
+    const cells = container.querySelectorAll<HTMLElement>('.search-virtual-list-cell');
+    expect(cells[0].style.top).toBe('0px');
+    expect(cells[1].style.top).toBe('88px');
   });
 
   it('plays a channel row on select', async () => {

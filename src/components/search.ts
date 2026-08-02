@@ -16,8 +16,14 @@ import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
+import { VirtualList } from '../utils/virtual-list';
+import { VirtualScrollGuard, type VirtualScrollAxis } from '../utils/virtual-scroll';
 
 const log = createLogger('Search');
+const SEARCH_LIST_VIEWPORT = 420;
+const SEARCH_RAIL_VIEWPORT = 1760;
+const SEARCH_ROW_OVERSCAN = 6;
+const SEARCH_RAIL_OVERSCAN = 4;
 
 export interface SearchHandlers {
   onRevealTabBar: () => void;
@@ -47,8 +53,18 @@ export class Search {
   private allSeries: SeriesItem[] = [];
   private programIndex: PreparedSearchItem<ProgramResult>[] = [];
   private loadedFor: string | null = null;
+  private visibleChannels: Channel[] = [];
   private visiblePrograms: ProgramResult[] = [];
+  private visibleMovies: VodItem[] = [];
+  private visibleSeries: SeriesItem[] = [];
   private resumePrompt = new CatchupResumePrompt();
+  private readonly channelListVirtualizer = this.createVirtualizer(88, SEARCH_ROW_OVERSCAN, SEARCH_LIST_VIEWPORT);
+  private readonly programVirtualizer = this.createVirtualizer(109, SEARCH_ROW_OVERSCAN, SEARCH_LIST_VIEWPORT);
+  private readonly channelRailVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
+  private readonly movieVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
+  private readonly seriesVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
+  private scrollFrame: number | null = null;
+  private readonly scrollGuard = new VirtualScrollGuard();
 
   constructor(private container: HTMLElement, private handlers: SearchHandlers) {
     this.nav = new SpatialNav(container);
@@ -58,6 +74,7 @@ export class Search {
     // so the global click handler skips this subtree and doesn't double-fire.
     this.container.setAttribute('data-self-activate', '');
     this.container.addEventListener('click', (e: MouseEvent) => this.onPointerRelease(e.clientX, e.clientY));
+    this.container.addEventListener('scroll', (e: Event) => this.onVirtualScroll(e), true);
   }
 
   private onPointerRelease(x: number, y: number): void {
@@ -95,6 +112,7 @@ export class Search {
       this.resumePrompt.handleAction(action);
       return;
     }
+    if (this.moveVirtualFocus(action)) return;
     switch (action) {
       case 'up':
         if (!this.nav.move('up')) this.handlers.onRevealTabBar();
@@ -168,11 +186,74 @@ export class Search {
       : html`<div class="catalog-poster catalog-poster-empty">${name.charAt(0)}</div>`;
   }
 
-  private rail(title: string, items: ReturnType<typeof html>[]): ReturnType<typeof html> {
+  private virtualRail<T>(
+    title: string,
+    key: string,
+    items: T[],
+    virtualizer: VirtualList,
+    renderItem: (item: T) => ReturnType<typeof html>,
+  ): ReturnType<typeof html> {
+    const viewport = this.container.querySelector<HTMLElement>(
+      `[data-search-virtual="${key}"]`,
+    )?.clientWidth || SEARCH_RAIL_VIEWPORT;
+    const range = virtualizer.getRange(items.length, viewport);
     return html`
       <div class="catalog-rail">
         <h2 class="catalog-rail-title">${title}</h2>
-        <div class="catalog-rail-track">${items}</div>
+        <div class="catalog-rail-track search-virtual-rail"
+             data-search-virtual="${key}" data-search-axis="horizontal">
+          <div class="search-virtual-rail-spacer"
+               style="width:${virtualizer.getTotalSize(items.length)}px">
+            ${items.slice(range.start, range.end).map((item, offset) => {
+              const index = range.start + offset;
+              return html`
+                <div class="search-virtual-rail-cell"
+                     data-key="${key}:${index}"
+                     data-search-section="${key}" data-search-index="${index}"
+                     style="left:${virtualizer.getItemOffset(index)}px">
+                  ${renderItem(item)}
+                </div>
+              `;
+            })}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private virtualList<T>(
+    title: string,
+    key: string,
+    items: T[],
+    virtualizer: VirtualList,
+    renderItem: (item: T, index: number) => ReturnType<typeof html>,
+  ): ReturnType<typeof html> {
+    const viewport = this.container.querySelector<HTMLElement>(
+      `[data-search-virtual="${key}"]`,
+    )?.clientHeight || SEARCH_LIST_VIEWPORT;
+    const range = virtualizer.getRange(items.length, viewport);
+    return html`
+      <div class="search-virtual-section ${
+        key === 'channels-list' ? 'search-channels' : key === 'programmes' ? 'search-programs' : ''
+      }">
+        <h2 class="catalog-rail-title">${title}</h2>
+        <div class="search-virtual-scroll"
+             data-search-virtual="${key}" data-search-axis="vertical">
+          <div class="search-virtual-list-spacer"
+               style="height:${virtualizer.getTotalSize(items.length)}px">
+            ${items.slice(range.start, range.end).map((item, offset) => {
+              const index = range.start + offset;
+              return html`
+                <div class="search-virtual-list-cell"
+                     data-key="${key}:${index}"
+                     data-search-section="${key}" data-search-index="${index}"
+                     style="top:${virtualizer.getItemOffset(index)}px">
+                  ${renderItem(item, index)}
+                </div>
+              `;
+            })}
+          </div>
+        </div>
       </div>
     `;
   }
@@ -343,47 +424,77 @@ export class Search {
     this.handlers.onPlayChannel(channelIndex, catchup);
   }
 
-  private render(): void {
-    const cap = CONFIG.XTREAM.SEARCH_RESULT_CAP;
+  private render(recompute = true): void {
     const q = this.query.trim();
-    const channels = q ? PlaylistService.search(this.query).slice(0, cap) : [];
     const isXtream = !!this.account;
-    this.visiblePrograms = q ? this.findPrograms(this.query).slice(0, cap) : [];
+    if (recompute) {
+      const cap = CONFIG.XTREAM.SEARCH_RESULT_CAP;
+      this.visibleChannels = q ? PlaylistService.search(this.query).slice(0, cap) : [];
+      this.visiblePrograms = q ? this.findPrograms(this.query).slice(0, cap) : [];
+      this.visibleMovies = isXtream ? rankByName(this.allVod, this.query).slice(0, cap) : [];
+      this.visibleSeries = isXtream ? rankByName(this.allSeries, this.query).slice(0, cap) : [];
+      this.resetVirtualOffsets();
+    }
 
-    // Xtream: horizontal poster rails for catalog results. M3U-only channels and
-    // EPG programs use compact rows so their metadata remains readable.
-    const movies = isXtream ? rankByName(this.allVod, this.query).slice(0, cap) : [];
-    const series = isXtream ? rankByName(this.allSeries, this.query).slice(0, cap) : [];
-    const hasResults = channels.length > 0 || this.visiblePrograms.length > 0 || movies.length > 0 || series.length > 0;
-    const channelSection = channels.length
-      ? html`
-          <div class="search-channels">
-            <h2 class="catalog-rail-title">${t('common.channels')}</h2>
-            <div class="search-list">${channels.map((ch) => this.channelRow(ch))}</div>
-          </div>
-        `
+    const hasResults = this.visibleChannels.length > 0 || this.visiblePrograms.length > 0
+      || this.visibleMovies.length > 0 || this.visibleSeries.length > 0;
+    const channelSection = this.visibleChannels.length
+      ? this.virtualList(
+          t('common.channels'),
+          'channels-list',
+          this.visibleChannels,
+          this.channelListVirtualizer,
+          (ch) => this.channelRow(ch),
+        )
       : '';
     const programSection = this.visiblePrograms.length
-      ? html`
-          <div class="search-programs">
-            <h2 class="catalog-rail-title">${t('search.programs')}</h2>
-            <div class="search-program-list">${this.visiblePrograms.map((result, index) => this.programRow(result, index))}</div>
-          </div>
-        `
+      ? this.virtualList(
+          t('search.programs'),
+          'programmes',
+          this.visiblePrograms,
+          this.programVirtualizer,
+          (result, index) => this.programRow(result, index),
+        )
       : '';
 
     // The results view is only shown while a query is typed (App.handleSearchQuery),
     // so the empty-query case renders nothing.
+    // Xtream: horizontal poster rails for catalog results. M3U-only channels and
+    // EPG programs use compact rows so their metadata remains readable.
     const resultsBody = !q
       ? html``
       : !hasResults
         ? html`<p class="catalog-hint search-empty">${t('search.empty')}</p>`
         : isXtream
           ? html`
-                ${channels.length ? this.rail(t('common.channels'), channels.map((ch) => this.channelTile(ch))) : ''}
+                ${this.visibleChannels.length
+                  ? this.virtualRail(
+                      t('common.channels'),
+                      'channels-rail',
+                      this.visibleChannels,
+                      this.channelRailVirtualizer,
+                      (ch) => this.channelTile(ch),
+                    )
+                  : ''}
                 ${programSection}
-                ${movies.length ? this.rail(t('common.movies'), movies.map((v) => this.movieTile(v))) : ''}
-                ${series.length ? this.rail(t('common.series'), series.map((s) => this.seriesTile(s))) : ''}
+                ${this.visibleMovies.length
+                  ? this.virtualRail(
+                      t('common.movies'),
+                      'movies',
+                      this.visibleMovies,
+                      this.movieVirtualizer,
+                      (v) => this.movieTile(v),
+                    )
+                  : ''}
+                ${this.visibleSeries.length
+                  ? this.virtualRail(
+                      t('common.series'),
+                      'series',
+                      this.visibleSeries,
+                      this.seriesVirtualizer,
+                      (s) => this.seriesTile(s),
+                    )
+                  : ''}
               `
           : html`
               ${channelSection}
@@ -396,5 +507,104 @@ export class Search {
         <div class="search-results">${resultsBody}</div>
       </div>
     `);
+    this.restoreVirtualOffsets();
+    if (!recompute) this.nav.clearDetachedFocus();
+  }
+
+  private createVirtualizer(
+    itemSize: number,
+    overscan: number,
+    viewport: number,
+  ): VirtualList {
+    return new VirtualList({
+      itemSize,
+      overscan,
+      fallbackViewportSize: viewport,
+    });
+  }
+
+  private virtualizers(): Record<string, VirtualList> {
+    return {
+      'channels-list': this.channelListVirtualizer,
+      programmes: this.programVirtualizer,
+      'channels-rail': this.channelRailVirtualizer,
+      movies: this.movieVirtualizer,
+      series: this.seriesVirtualizer,
+    };
+  }
+
+  private resetVirtualOffsets(): void {
+    const virtualizers = this.virtualizers();
+    Object.keys(virtualizers).forEach(key => virtualizers[key].setScrollOffset(0));
+    this.container.querySelectorAll<HTMLElement>('[data-search-virtual]').forEach((el) => {
+      const axis = el.dataset.searchAxis === 'horizontal' ? 'horizontal' : 'vertical';
+      this.scrollGuard.syncOffset(el, axis, 0);
+    });
+  }
+
+  private restoreVirtualOffsets(): void {
+    const virtualizers = this.virtualizers();
+    Object.keys(virtualizers).forEach((key) => {
+      const el = this.container.querySelector<HTMLElement>(`[data-search-virtual="${key}"]`);
+      if (!el) return;
+      const offset = virtualizers[key].scrollOffset;
+      const axis = el.dataset.searchAxis === 'horizontal' ? 'horizontal' : 'vertical';
+      this.scrollGuard.syncOffset(el, axis, offset);
+    });
+  }
+
+  private onVirtualScroll(event: Event): void {
+    const target = event.target as HTMLElement;
+    const key = target.dataset.searchVirtual;
+    if (!key) return;
+    const virtualizer = this.virtualizers()[key];
+    if (!virtualizer) return;
+    const axis: VirtualScrollAxis = target.dataset.searchAxis === 'horizontal'
+      ? 'horizontal'
+      : 'vertical';
+    const offset = this.scrollGuard.readUserOffset(target, axis);
+    if (offset === null) return;
+    virtualizer.setScrollOffset(offset);
+    if (this.scrollFrame !== null) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = null;
+      this.render(false);
+    });
+  }
+
+  private moveVirtualFocus(action: Action): boolean {
+    const focused = this.nav.focused;
+    const cell = focused?.closest<HTMLElement>('[data-search-section]');
+    const key = cell?.dataset.searchSection;
+    const rawIndex = cell?.dataset.searchIndex;
+    if (!key || rawIndex === undefined) return false;
+    const horizontal = key === 'channels-rail' || key === 'movies' || key === 'series';
+    if ((horizontal && action !== 'left' && action !== 'right')
+        || (!horizontal && action !== 'up' && action !== 'down')) return false;
+    const items = key === 'channels-list' || key === 'channels-rail'
+      ? this.visibleChannels
+      : key === 'programmes'
+        ? this.visiblePrograms
+        : key === 'movies'
+          ? this.visibleMovies
+          : this.visibleSeries;
+    const current = parseInt(rawIndex, 10);
+    const next = current + (action === 'left' || action === 'up' ? -1 : 1);
+    if (next < 0 || next >= items.length) return false;
+    const scroll = this.container.querySelector<HTMLElement>(`[data-search-virtual="${key}"]`);
+    const virtualizer = this.virtualizers()[key];
+    virtualizer.ensureVisible(
+      next,
+      horizontal
+        ? scroll?.clientWidth || SEARCH_RAIL_VIEWPORT
+        : scroll?.clientHeight || SEARCH_LIST_VIEWPORT,
+    );
+    this.render(false);
+    this.nav.focus(
+      this.container.querySelector<HTMLElement>(
+        `[data-search-section="${key}"][data-search-index="${next}"] [data-focusable]`,
+      ),
+    );
+    return true;
   }
 }
