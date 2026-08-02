@@ -1,0 +1,476 @@
+{
+  "version": 1,
+  "target": "desktop-chromium",
+  "generatedAt": "2026-08-02T19:38:56.737Z",
+  "scale": 50000,
+  "keySamples": 30,
+  "querySamples": 5,
+  "cpuRate": 4,
+  "browser": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36",
+  "fixtureSetupMs": 1131,
+  "suites": {
+    "startup": {
+      "readyMs": 1161,
+      "rendered": 36
+    },
+    "channelList": {
+      "rendered": 36,
+      "totalSize": "4_400_000px",
+      "navigation": {
+        "p50": 13.5,
+        "p95": 19.3,
+        "max": 22,
+        "mean": 13,
+        "frame": {
+          "p50": 14.6,
+          "p95": 20.2,
+          "max": 22.1,
+          "mean": 14.8
+        },
+        "framesOver50Ms": 0
+      }
+    },
+    "recentlyWatched": {
+      "rendered": 50,
+      "liveRendered": 25,
+      "catchupRendered": 25,
+      "navigation": {
+        "p50": 23.2,
+        "p95": 26.6,
+        "max": 26.9,
+        "mean": 23.4,
+        "frame": {
+          "p50": 23.6,
+          "p95": 27,
+          "max": 27.6,
+          "mean": 23.9
+        },
+        "framesOver50Ms": 0
+      }
+    },
+    "sidebar": {
+      "openMs": 28.5,
+      "rendered": 34,
+      "totalSize": "4_400_000px",
+      "navigation": {
+        "p50": 8.9,
+        "p95": 10.6,
+        "max": 13.8,
+        "mean": 6.9,
+        "frame": {
+          "p50": 13.8,
+          "p95": 17.4,
+          "max": 30.7,
+          "mean": 13.7
+        },
+        "framesOver50Ms": 0
+      }
+    },
+    "epg": {
+      "openMs": 47,
+      "channelList": {
+        "p50": 18.2,
+        "p95": 29.9,
+        "max": 49.2,
+        "mean": 19.4,
+        "frame": {
+          "p50": 18.7,
+          "p95": 30,
+          "max": 49.2,
+          "mean": 19.8
+        },
+        "framesOver50Ms": 0
+      },
+      "programList": {
+        "p50": 31.6,
+        "p95": 36.4,
+        "max": 40,
+        "mean": 31.6,
+        "frame": {
+          "p50": 32.4,
+          "p95": 37.1,
+          "max": 40.5,
+          "mean": 32.2
+        },
+        "framesOver50Ms": 0
+      },
+      "renderedChannels": 29,
+      "renderedPrograms": 20,
+      "channelTotalSize": "3_600_000px",
+      "programTotalSize": "4_000_000px"
+    },
+    "movies": {
+      "openMs": 82.7,
+      "gridLoadMs": 83.3,
+      "categoryRendered": 14,
+      "categoryTotalSize": "15_998_100px",
+      "rendered": 49,
+      "totalSize": "2_821_480px",
+      "navigation": {
+        "p50": 6.1,
+        "p95": 7.1,
+        "max": 7.3,
+        "mean": 5.9,
+        "frame": {
+          "p50": 14,
+          "p95": 15.4,
+          "max": 15.7,
+          "mean": 13.9
+        },
+        "framesOver50Ms": 0
+      }
+    },
+    "series": {
+      "openMs": 73.3,
+      "gridLoadMs": 75.6,
+      "detailLoadMs": 114.7,
+      "rendered": 49,
+      "totalSize": "2_821_480px",
+      "navigation": {
+        "p50": 6,
+        "p95": 7.1,
+        "max": 7.1,
+        "mean": 5.8,
+        "frame": {
+          "p50": 13.8,
+          "p95": 15.7,
+          "max": 15.8,
+          "mean": 13.6
+        },
+        "framesOver50Ms": 0
+      },
+      "episodes": {
+        "rendered": 9,
+        "totalSize": "6_900_000px",
+        "navigation": {
+          "p50": 4.2,
+          "p95": 4.8,
+          "max": 6.4,
+          "mean": 4.1,
+          "frame": {
+            "p50": 14.8,
+            "p95": 15.7,
+            "max": 16,
+            "mean": 14.3
+          },
+          "framesOver50Ms": 0
+        }
+      }
+    },
+    "search": {
+      "xtream": {
+        "initialOpenMs": 211.2,
+        "open": {
+          "p50": 186,
+          "p95": 187.4,
+          "max": 187.4,
+          "mean": 181.3
+        },
+        "queries": {
+          "channelsBroad": {
+            "p50": 197.3,
+            "p95": 205.4,
+            "max": 205.4,
+            "mean": 196.7
+          },
+          "channelsSparse": {
+            "p50": 218,
+            "p95": 226.4,
+            "max": 226.4,
+            "mean": 219.7
+          },
+          "moviesBroad": {
+            "p50": 312.5,
+            "p95": 332.3,
+            "max": 332.3,
+            "mean": 316
+          },
+          "moviesSparse": {
+            "p50": 211,
+            "p95": 214.6,
+            "max": 214.6,
+            "mean": 211.6
+          },
+          "programsBroad": {
+            "p50": 211.5,
+            "p95": 245.6,
+            "max": 245.6,
+            "mean": 219.9
+          },
+          "programsSparse": {
+            "p50": 209.9,
+            "p95": 211.9,
+            "max": 211.9,
+            "mean": 208.7
+          },
+          "noMatch": {
+            "p50": 274.5,
+            "p95": 278,
+            "max": 278,
+            "mean": 275.4
+          }
+        },
+        "renderedPrograms": 16,
+        "programTotalSize": "5_450_000px"
+      },
+      "m3u": {
+        "initialOpenMs": 225.6,
+        "open": {
+          "p50": 180.5,
+          "p95": 185.6,
+          "max": 185.6,
+          "mean": 180.8
+        },
+        "queries": {
+          "channelsBroad": {
+            "p50": 153.6,
+            "p95": 166.2,
+            "max": 166.2,
+            "mean": 156.3
+          },
+          "channelsSparse": {
+            "p50": 180.7,
+            "p95": 186.3,
+            "max": 186.3,
+            "mean": 181.4
+          },
+          "programsBroad": {
+            "p50": 172.8,
+            "p95": 223.8,
+            "max": 223.8,
+            "mean": 181.3
+          },
+          "programsSparse": {
+            "p50": 179.5,
+            "p95": 186.3,
+            "max": 186.3,
+            "mean": 180.9
+          },
+          "noMatch": {
+            "p50": 241.1,
+            "p95": 247.5,
+            "max": 247.5,
+            "mean": 239.1
+          }
+        },
+        "renderedChannels": 0,
+        "renderedPrograms": 16,
+        "sparseSearch": {
+          "channels": 1,
+          "programs": 1
+        },
+        "renderedCatalogSections": 0
+      }
+    },
+    "interactions": {
+      "wheelToDpad": {
+        "rendered": 36,
+        "focusedConnected": true
+      },
+      "groupSwitching": {
+        "p50": 33.2,
+        "p95": 35.4,
+        "max": 35.4,
+        "mean": 33.5,
+        "states": [
+          {
+            "group": "builtin:all",
+            "rendered": 36,
+            "totalSize": "4_400_000px",
+            "channels": 50000
+          },
+          {
+            "group": "source:Group 1",
+            "rendered": 36,
+            "totalSize": "44_000px",
+            "channels": 500
+          },
+          {
+            "group": "source:Small Group",
+            "rendered": 1,
+            "totalSize": "88px",
+            "channels": 1
+          },
+          {
+            "group": "builtin:all",
+            "rendered": 36,
+            "totalSize": "4_400_000px",
+            "channels": 50000
+          },
+          {
+            "group": "source:Group 1",
+            "rendered": 36,
+            "totalSize": "44_000px",
+            "channels": 500
+          },
+          {
+            "group": "source:Small Group",
+            "rendered": 1,
+            "totalSize": "88px",
+            "channels": 1
+          },
+          {
+            "group": "builtin:all",
+            "rendered": 36,
+            "totalSize": "4_400_000px",
+            "channels": 50000
+          },
+          {
+            "group": "source:Group 1",
+            "rendered": 36,
+            "totalSize": "44_000px",
+            "channels": 500
+          },
+          {
+            "group": "source:Small Group",
+            "rendered": 1,
+            "totalSize": "88px",
+            "channels": 1
+          }
+        ]
+      },
+      "epgChannelTransition": {
+        "selected": true,
+        "renderedPrograms": 1
+      },
+      "epgDateTitles": [
+        "Transition 1",
+        "LIVE\n                            Transition 2",
+        "Transition 3"
+      ],
+      "sparseSearch": {
+        "channels": 1,
+        "movies": 1,
+        "programs": 1
+      },
+      "magicRemote": {
+        "events": [
+          {
+            "name": "pointerdown",
+            "trusted": true
+          },
+          {
+            "name": "mousedown",
+            "trusted": true
+          },
+          {
+            "name": "pointerup",
+            "trusted": true
+          },
+          {
+            "name": "mouseup",
+            "trusted": true
+          },
+          {
+            "name": "click",
+            "trusted": true
+          }
+        ],
+        "activeGroup": true,
+        "channels": 500,
+        "rendered": 36,
+        "documentAlive": true
+      }
+    },
+    "stress": {
+      "watchdogIntervalMs": 100,
+      "heartbeats": 109,
+      "maxEventLoopGapMs": 569.2,
+      "freezeThresholdMs": 5000,
+      "documentAlive": true
+    },
+    "longTasks": {
+      "count": 52,
+      "totalMs": 11740,
+      "maxMs": 524
+    },
+    "nodes": 1617,
+    "parsers": {
+      "m3u": {
+        "durationMs": 165.9,
+        "bytes": 4111677,
+        "channels": 50000,
+        "groups": 100
+      },
+      "xmltv": {
+        "durationMs": 845.2,
+        "bytes": 7577851,
+        "channels": 1,
+        "programmes": 50000
+      }
+    },
+    "groups": {
+      "channelList": {
+        "rendered": 38,
+        "totalSize": "3_400_200px",
+        "navigation": {
+          "p50": 21.6,
+          "p95": 29.7,
+          "max": 38.8,
+          "mean": 22.7,
+          "frame": {
+            "p50": 22.5,
+            "p95": 30.7,
+            "max": 42.2,
+            "mean": 23.7
+          },
+          "framesOver50Ms": 0
+        }
+      },
+      "sidebar": {
+        "rendered": 40,
+        "totalSize": "3_200_190px",
+        "navigation": {
+          "p50": 1.2,
+          "p95": 8.7,
+          "max": 10.4,
+          "mean": 1.8,
+          "frame": {
+            "p50": 16.6,
+            "p95": 19.5,
+            "max": 21.5,
+            "mean": 14.7
+          },
+          "framesOver50Ms": 0
+        }
+      },
+      "epg": {
+        "rendered": 26,
+        "totalSize": "2_200_040px",
+        "navigation": {
+          "p50": 15.5,
+          "p95": 19.6,
+          "max": 20.1,
+          "mean": 15.9,
+          "frame": {
+            "p50": 30.3,
+            "p95": 43,
+            "max": 43,
+            "mean": 25.2
+          },
+          "framesOver50Ms": 0
+        }
+      },
+      "startupMs": 3609
+    },
+    "coldLoad": {
+      "readyMs": 892,
+      "rendered": 35,
+      "channels": 50000
+    },
+    "memory": {
+      "usedHeapMiB": 82.9,
+      "totalHeapMiB": 84.8,
+      "retained": {
+        "cycles": 3,
+        "beforeMiB": 95.6,
+        "samplesMiB": [
+          81.6,
+          82.9,
+          82.9
+        ],
+        "growthMiB": 1.3
+      }
+    }
+  }
+}
