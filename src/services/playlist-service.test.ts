@@ -17,7 +17,10 @@ const { storageMock, fetchTextMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('./storage-service', () => ({ StorageService: storageMock }));
-vi.mock('../utils/fetch-helper', () => ({ fetchText: fetchTextMock }));
+vi.mock('../utils/fetch-helper', () => ({
+  fetchPlaylistText: fetchTextMock,
+  fetchText: fetchTextMock,
+}));
 
 import { PlaylistService } from './playlist-service';
 import {
@@ -70,6 +73,18 @@ describe('PlaylistService.refresh', () => {
   it('merges playlists and de-duplicates channels by URL', async () => {
     const channels = await PlaylistService.refresh();
     expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  });
+
+  it('loads every distinct EPG URL declared by a playlist', async () => {
+    fetchTextMock.mockResolvedValue(
+      '#EXTM3U url-tvg="http://host/a.xml,http://host/b.xml"\n'
+      + '#EXTINF:-1,Alpha\nhttp://host/a',
+    );
+    await PlaylistService.refresh();
+    expect(PlaylistService.epgSources.map(source => source.url)).toEqual([
+      'http://host/a.xml',
+      'http://host/b.xml',
+    ]);
   });
 
   it('tags each channel with every source playlist (by id) it appears in', async () => {

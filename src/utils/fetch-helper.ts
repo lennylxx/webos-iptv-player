@@ -28,6 +28,21 @@ export async function fetchText(url: string, timeout = 30000): Promise<string> {
   }
 }
 
+export async function fetchPlaylistText(url: string, timeout = 30000): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const { decodePlaylistBytes } = await import('../parsers/m3u-parser');
+    return decodePlaylistBytes(bytes);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchLimitedText(
   url: string,
   maxBytes: number,

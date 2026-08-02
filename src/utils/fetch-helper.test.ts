@@ -1,6 +1,13 @@
 import { gzipSync, strToU8 } from 'fflate';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { fetchLimitedText, fetchMaybeGzipText, fetchText, fetchWithTimeout, fetchWithRetry } from './fetch-helper';
+import {
+  fetchLimitedText,
+  fetchMaybeGzipText,
+  fetchPlaylistText,
+  fetchText,
+  fetchWithTimeout,
+  fetchWithRetry,
+} from './fetch-helper';
 
 function okResponse(body = 'body'): Response {
   return {
@@ -24,6 +31,38 @@ describe('fetchText / fetchWithTimeout', () => {
   it('returns the response body on success', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => okResponse('hello')));
     await expect(fetchText('http://x')).resolves.toBe('hello');
+  });
+
+  describe('fetchPlaylistText', () => {
+    it('decodes a BOM-marked UTF-16 playlist', async () => {
+      const source = '#EXTM3U\n#EXTINF:-1,Alpha\nhttp://host/a';
+      const bytes = new Uint8Array(source.length * 2 + 2);
+      bytes.set([0xff, 0xfe]);
+      for (let index = 0; index < source.length; index++) {
+        const code = source.charCodeAt(index);
+        bytes[index * 2 + 2] = code & 0xff;
+        bytes[index * 2 + 3] = code >> 8;
+      }
+      vi.stubGlobal('fetch', vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => bytes.buffer,
+      } as unknown as Response)));
+      await expect(fetchPlaylistText('http://host/a')).resolves.toBe(source);
+    });
+
+    it('keeps the timeout active while reading the playlist body', async () => {
+      vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: RequestInit) => ({
+        ok: true,
+        arrayBuffer: () => new Promise<ArrayBuffer>((_resolve, reject) => {
+          opts.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')));
+        }),
+      } as unknown as Response)));
+      const pending = fetchPlaylistText('http://host/a', 5000);
+      const assertion = expect(pending).rejects.toThrow('Aborted');
+      await vi.advanceTimersByTimeAsync(5000);
+      await assertion;
+    });
   });
 
   it('passes an abort signal through to fetch', async () => {

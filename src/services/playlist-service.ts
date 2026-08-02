@@ -1,6 +1,6 @@
 import type { Channel, ChannelGroupId, EpgSource, PlaylistTab } from '../types';
 import { parseM3U } from '../parsers/m3u-parser';
-import { fetchText } from '../utils/fetch-helper';
+import { fetchPlaylistText } from '../utils/fetch-helper';
 import {
   xtreamPlaylistUrl,
   xtreamEpgUrl,
@@ -115,11 +115,15 @@ class PlaylistServiceImpl {
         : pl.url;
       const plDone = log.time(`fetch '${pl.name || pl.url}'`);
       try {
-        const text = await fetchText(fetchUrl, 60000);
+        const text = await fetchPlaylistText(fetchUrl, 60000);
         log.info('Fetched', pl.name || pl.url, '|', text.length, 'bytes');
         const parsed = parseM3U(text, fetchUrl);
         if (pl.source === 'xtream' && pl.xtream) {
           await this.applyXtreamCatchup(parsed.channels, { baseUrl: pl.url, ...pl.xtream }, plKey);
+        }
+        if (parsed.issues.length) {
+          log.warn('Playlist diagnostics:',
+            parsed.issues.slice(0, 5).map(issue => `${issue.code}@${issue.line}`).join(', '));
         }
         log.info('Parsed', parsed.channels.length, 'channels,', parsed.groups.length, 'groups',
           parsed.epgUrl ? `| epg: ${parsed.epgUrl}` : '');
@@ -145,9 +149,9 @@ class PlaylistServiceImpl {
           const epg = xtreamEpgUrl({ baseUrl: pl.url, ...pl.xtream });
           addEpgSource(epg, plKey, 'xtream');
         }
-        if (parsed.epgUrl) {
+        for (const parsedEpgUrl of parsed.epgUrls) {
           // Resolve localhost/127.0.0.1 in embedded EPG URL to the playlist's host
-          let epg = parsed.epgUrl;
+          let epg = parsedEpgUrl;
           try {
             const epgParsed = new URL(epg);
             if (epgParsed.hostname === 'localhost' || epgParsed.hostname === '127.0.0.1') {

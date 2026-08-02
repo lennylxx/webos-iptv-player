@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseM3U } from './m3u-parser';
+import {
+  decodePlaylistBytes,
+  detectPlaylistFormat,
+  parseM3U,
+  parseM3UBytes,
+} from './m3u-parser';
 
 describe('parseM3U', () => {
   it('parses a basic channel with URL', () => {
@@ -21,6 +26,51 @@ describe('parseM3U', () => {
     expect(ch.name).toBe('News HD'); // tvg-name takes precedence over the display title
     expect(ch.logo).toBe('http://logo/1.png');
     expect(ch.group).toBe('News');
+    expect(ch.sourceGroups).toBeUndefined();
+    expect(ch.sourceAttributes).toBeUndefined();
+  });
+
+  it('accepts single-quoted, unquoted and spaced attributes', () => {
+    const m3u = [
+      '#EXTM3U url-tvg = http://host/guide.xml',
+      '#EXTINF:-1 tvg-id = \'ch1\' tvg-name=Alpha group-title = "Local" catchup-days = 7,Display',
+      'http://host/a',
+    ].join('\n');
+    const result = parseM3U(m3u);
+    expect(result.epgUrl).toBe('http://host/guide.xml');
+    expect(result.channels[0]).toMatchObject({
+      id: 'ch1',
+      name: 'Alpha',
+      group: 'Local',
+      catchupDays: 7,
+    });
+  });
+
+  it('keeps commas and equals inside quoted values and the display title', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 tvg-id="ch1" group-title="Alpha, Bravo" catchup-source=\'http://host/a?x=1,y=2\',Display, Name',
+      'http://host/a',
+    ].join('\n');
+    const ch = parseM3U(m3u).channels[0];
+    expect(ch.group).toBe('Alpha, Bravo');
+    expect(ch.catchupSource).toBe('http://host/a?x=1,y=2');
+    expect(ch.name).toBe('Display, Name');
+  });
+
+  it('matches attribute names without regard to case', () => {
+    const m3u = [
+      '#EXTM3U X-TVG-URL="http://host/guide.xml"',
+      '#EXTINF:-1 TVG-ID="ch1" TVG-NAME="Alpha" GROUP-TITLE="Bravo",Display',
+      'http://host/a',
+    ].join('\n');
+    const result = parseM3U(m3u);
+    expect(result.epgUrl).toBe('http://host/guide.xml');
+    expect(result.channels[0]).toMatchObject({
+      id: 'ch1',
+      name: 'Alpha',
+      group: 'Bravo',
+    });
   });
 
   it('falls back to the display title and Uncategorized group', () => {
@@ -48,6 +98,21 @@ describe('parseM3U', () => {
     expect(parseM3U('#EXTM3U x-tvg-url="http://epg/alt.xml"').epgUrl).toBe('http://epg/alt.xml');
   });
 
+  it('collects multiple EPG URLs and preserves all header attributes', () => {
+    const result = parseM3U(
+      '#EXTM3U url-tvg="http://host/a.xml,http://host/b.xml" '
+      + 'tvg-url="http://host/c.xml" max-conn="2" custom-header="v"',
+    );
+    expect(result.epgUrls).toEqual([
+      'http://host/a.xml',
+      'http://host/b.xml',
+      'http://host/c.xml',
+    ]);
+    expect(result.epgUrl).toBe('http://host/a.xml');
+    expect(result.maxConnections).toBe(2);
+    expect(result.headerAttributes['custom-header']).toBe('v');
+  });
+
   it('lets #EXTGRP override the group-title', () => {
     const m3u = [
       '#EXTM3U',
@@ -73,8 +138,62 @@ describe('parseM3U', () => {
     });
   });
 
+  it('preserves unknown attributes and extended channel metadata', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 tvg-id="ch1" group-title="Alpha;Bravo" custom-field="v" '
+        + 'tvg-chno="12" tvg-shift="-1.5" radio="true",Channel',
+      'http://host/a',
+    ].join('\n');
+    const ch = parseM3U(m3u).channels[0];
+    expect(ch.sourceAttributes).toEqual({ 'custom-field': 'v' });
+    expect(ch.sourceGroups).toEqual(['Alpha', 'Bravo']);
+    expect(ch.group).toBe('Alpha');
+    expect(ch.channelNumber).toBe(12);
+    expect(ch.tvgShift).toBe(-1.5);
+    expect(ch.radio).toBe(true);
+  });
+
+  it('parses EXTHTTP headers and maps common playback headers', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1,Channel',
+      '#EXTHTTP:{"User-Agent":"Agent","Referer":"http://host/a","X-Test":"v"}',
+      'http://host/a',
+    ].join('\n');
+    const ch = parseM3U(m3u).channels[0];
+    expect(ch.httpHeaders).toEqual({
+      'User-Agent': 'Agent',
+      Referer: 'http://host/a',
+      'X-Test': 'v',
+    });
+    expect(ch.extras).toMatchObject({
+      'http-user-agent': 'Agent',
+      'http-referrer': 'http://host/a',
+    });
+  });
+
+  it('reports malformed EXTHTTP without dropping the channel', () => {
+    const result = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1,Channel',
+      '#EXTHTTP:{bad',
+      'http://host/a',
+    ].join('\n'));
+    expect(result.channels).toHaveLength(1);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'bad-exthttp',
+      line: 3,
+    }));
+  });
+
   it('ignores blank lines and CRLF line endings', () => {
     const m3u = '#EXTM3U\r\n\r\n#EXTINF:-1,Ch\r\nhttp://e/1\r\n';
+    expect(parseM3U(m3u).channels).toHaveLength(1);
+  });
+
+  it('accepts lone CR line endings', () => {
+    const m3u = '#EXTM3U\r#EXTINF:-1,Ch\rhttp://host/a\r';
     expect(parseM3U(m3u).channels).toHaveLength(1);
   });
 
@@ -84,13 +203,57 @@ describe('parseM3U', () => {
     expect(result.groups).toEqual([]);
   });
 
+  it('accepts a bare URL playlist and reports the missing header', () => {
+    const result = parseM3U('http://host/alpha.ts\nhttp://host/bravo.ts');
+    expect(result.format).toBe('simple-m3u');
+    expect(result.channels.map(channel => channel.name)).toEqual(['alpha', 'bravo']);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'missing-extm3u',
+    }));
+  });
+
+  it('does not turn arbitrary text into a channel', () => {
+    const result = parseM3U('Access denied');
+    expect(result.channels).toEqual([]);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'unrecognized-line',
+      line: 1,
+    }));
+  });
+
+  it('bounds channels and retained issues', () => {
+    const result = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1,Missing',
+      '#EXTINF:-1,Alpha',
+      'http://host/a',
+      '#EXTINF:-1,Bravo',
+      'http://host/b',
+    ].join('\n'), '', { maxChannels: 1, maxIssues: 2 });
+    expect(result.channels).toHaveLength(1);
+    expect(result.issues).toHaveLength(2);
+    expect(result.issues.map(issue => issue.code)).toEqual([
+      'orphan-extinf',
+      'channel-limit',
+    ]);
+  });
+
   it('wraps a bare HLS stream (HLS tags, no #EXTINF) as a single channel from the source URL', () => {
-    const hls = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-STREAM-INF:BANDWIDTH=1000000', 'https://cdn/inner.m3u8'].join('\n');
+    const hls = [
+      '#EXTM3U url-tvg="http://host/guide.xml" custom="v"',
+      '#PLAYLIST:Alpha',
+      '#EXT-X-VERSION:3',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1000000',
+      'https://cdn/inner.m3u8',
+    ].join('\n');
     const result = parseM3U(hls, 'https://example.com/hls/news.m3u8');
     expect(result.channels).toHaveLength(1);
     expect(result.channels[0].url).toBe('https://example.com/hls/news.m3u8'); // the stream URL itself, not the inner variant
     expect(result.channels[0].name).toBe('news');
     expect(result.groups).toEqual(['Uncategorized']);
+    expect(result.epgUrls).toEqual(['http://host/guide.xml']);
+    expect(result.headerAttributes.custom).toBe('v');
+    expect(result.name).toBe('Alpha');
   });
 
   it('wraps a bare HLS *media* playlist (segments, not channels) as one channel — no "no desc" rows', () => {
@@ -117,4 +280,54 @@ describe('parseM3U', () => {
     expect(result.channels).toHaveLength(1);
     expect(result.channels[0].name).toBe('Ch');
   });
+
+  it('detects playlist, HLS and common wrong-document formats', () => {
+    expect(detectPlaylistFormat('#EXTM3U\n#EXTINF:-1,Ch\nhttp://host/a').format)
+      .toBe('extended-m3u');
+    expect(detectPlaylistFormat('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1').format)
+      .toBe('hls-master');
+    expect(detectPlaylistFormat('#EXTM3U\n#EXT-X-TARGETDURATION:5').format)
+      .toBe('hls-media');
+    expect(detectPlaylistFormat('#extm3u\n#ext-x-endlist').format)
+      .toBe('hls-media');
+    expect(detectPlaylistFormat('<tv></tv>').format).toBe('xmltv');
+    expect(detectPlaylistFormat('<html></html>').format).toBe('html');
+    expect(detectPlaylistFormat('{"error":true}').format).toBe('json');
+  });
+
+  it('rejects a recognized non-playlist document with a structured issue', () => {
+    const result = parseM3U('<html><body>Denied</body></html>');
+    expect(result.channels).toEqual([]);
+    expect(result.issues).toEqual([expect.objectContaining({
+      level: 'error',
+      code: 'wrong-format',
+      line: 1,
+    })]);
+  });
+
+  it('decodes UTF-8 BOM and UTF-16 byte playlists', () => {
+    const source = '#EXTM3U\n#EXTINF:-1,Alpha\nhttp://host/a';
+    const utf8 = new TextEncoder().encode(source);
+    const utf8Bom = new Uint8Array(utf8.length + 3);
+    utf8Bom.set([0xef, 0xbb, 0xbf]);
+    utf8Bom.set(utf8, 3);
+    expect(decodePlaylistBytes(utf8Bom)).toBe(source);
+
+    const utf16Le = encodeUtf16(source, true);
+    const utf16Be = encodeUtf16(source, false);
+    expect(parseM3UBytes(utf16Le).channels[0].name).toBe('Alpha');
+    expect(parseM3UBytes(utf16Be).channels[0].name).toBe('Alpha');
+  });
 });
+
+function encodeUtf16(value: string, littleEndian: boolean): Uint8Array {
+  const bytes = new Uint8Array(value.length * 2 + 2);
+  bytes.set(littleEndian ? [0xff, 0xfe] : [0xfe, 0xff]);
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    const offset = index * 2 + 2;
+    bytes[offset] = littleEndian ? code & 0xff : code >> 8;
+    bytes[offset + 1] = littleEndian ? code >> 8 : code & 0xff;
+  }
+  return bytes;
+}

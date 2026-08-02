@@ -5,6 +5,18 @@ export interface Channel {
   group: string;
   url: string;
   extras: Record<string, string> | null;
+  /** Provider-specific EXTINF attributes not mapped to first-class fields. */
+  sourceAttributes?: Record<string, string>;
+  /** Headers declared by EXTHTTP, preserved for playback backends that support them. */
+  httpHeaders?: Record<string, string>;
+  /** Optional logical channel number declared by the source. */
+  channelNumber?: number;
+  /** EPG shift in hours declared by tvg-shift/timeshift. */
+  tvgShift?: number;
+  /** Source metadata explicitly identifies this entry as radio. */
+  radio?: boolean;
+  /** Every source group when group-title or EXTGRP declares multiple groups. */
+  sourceGroups?: string[];
   /** The name as delivered by the source, kept when a rename overrides `name`. */
   sourceName?: string;
   /** The group as delivered by the source, kept when a customization changes `group`. */
@@ -45,7 +57,38 @@ export interface EpgSource {
 export interface ParsedPlaylist {
   channels: Channel[];
   groups: string[];
+  /** First EPG URL retained for backward compatibility. */
   epgUrl: string;
+  epgUrls: string[];
+  headerAttributes: Record<string, string>;
+  maxConnections?: number;
+  name?: string;
+  format: PlaylistFormat;
+  issues: PlaylistParseIssue[];
+}
+
+export type PlaylistFormat =
+  | 'extended-m3u'
+  | 'hls-master'
+  | 'hls-media'
+  | 'simple-m3u'
+  | 'xmltv'
+  | 'json'
+  | 'html'
+  | 'unknown';
+
+export interface PlaylistFormatDetection {
+  format: PlaylistFormat;
+  confidence: number;
+  reason: string;
+  hadBom: boolean;
+}
+
+export interface PlaylistParseIssue {
+  level: 'warning' | 'error';
+  code: string;
+  message: string;
+  line: number;
 }
 
 export interface Programme {
