@@ -339,7 +339,7 @@ describe('Sidebar', () => {
       expect(groupItems()).toHaveLength(5);
       expect(groupItems()[0].classList.contains('active')).toBe(true);
       expect(groupItems()[0].classList.contains('focused')).toBe(true);
-      expect(sidebar.pointerDismissX).toBe(720);
+      expect(sidebar.pointerDismissX).toBe(740);
     });
 
     it('renders a bounded group window for 50,000 groups', () => {
@@ -683,7 +683,7 @@ describe('Sidebar', () => {
 
     it('collapses groups before closing after an outside dwell', () => {
       sidebar.handleAction('left');
-      expect(sidebar.handlePointerMove(721, false)).toBe(true);
+      expect(sidebar.handlePointerMove(741, false)).toBe(true);
       expect(el.classList.contains('channels-only')).toBe(true);
       expect(sidebar.visible).toBe(true);
 
@@ -695,7 +695,7 @@ describe('Sidebar', () => {
 
     it('cancels the pending close when the pointer returns to channels', () => {
       sidebar.handleAction('left');
-      sidebar.handlePointerMove(721, false);
+      sidebar.handlePointerMove(741, false);
       vi.advanceTimersByTime(250);
       expect(sidebar.handlePointerMove(300, false)).toBe(true);
       vi.advanceTimersByTime(500);

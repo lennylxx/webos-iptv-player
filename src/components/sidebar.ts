@@ -27,7 +27,7 @@ type SidebarGroup = {
 };
 
 const AUTO_HIDE_MS = 5000;
-const GROUP_PANEL_MIN_WIDTH = 260;
+const GROUP_PANEL_MIN_WIDTH = 280;
 const CHANNEL_PANEL_WIDTH = 420;
 const POINTER_MARGIN = 40;
 const GROUP_DWELL_EDGE = 48;
@@ -600,12 +600,19 @@ export class Sidebar {
     const currentCatchupStart = this.getCurrentCatchupStart();
     const currentTab = tabs.find(t => t.id === this.playlist);
     const activeGroup = groups.find(item => item.id === this.group) || groups[0];
+    const widthProbeGroup = groups.reduce((widest, item) =>
+      this.groupWidthScore(item) > this.groupWidthScore(widest) ? item : widest);
     const searchPlaceholder = currentTab
       ? t('search.sidebarPlaylist', { name: currentTab.name })
       : t('search.sidebarAll');
 
     morph(el, html`
       <div class="sidebar-group-panel" data-key="group-panel">
+        <div class="sidebar-group-width-probe" aria-hidden="true">
+          <span class="sidebar-group-icon"></span>
+          <span class="sidebar-group-name">${widthProbeGroup.label}</span>
+          <span class="sidebar-group-count">${widthProbeGroup.count}</span>
+        </div>
         <div class="sidebar-title">${t('common.groups')}</div>
         <div class="sidebar-group-list">
           <div class="sidebar-group-spacer"
@@ -701,6 +708,12 @@ export class Sidebar {
       span.classList.add('scrolling');
     });
     if (!this.opening && measureMarquees) this.measureMarquees();
+  }
+
+  private groupWidthScore(group: SidebarGroup): number {
+    let score = String(group.count).length;
+    for (const char of group.label) score += char.charCodeAt(0) > 0xff ? 2 : 1;
+    return score;
   }
 
   private renderLogo(ch: Channel): Safe {

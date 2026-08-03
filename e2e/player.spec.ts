@@ -94,6 +94,19 @@ test('player sidebar expands groups and retains a selected group after tuning', 
   await expect(sidebar).toHaveClass(/groups-expanded/);
   await expect(sidebar.locator('.sidebar-group-panel')).toBeVisible();
   await expect(sidebar.locator('.sidebar-group-item.focused')).toContainText('All');
+  const groupLayout = await sidebar.locator('.sidebar-group-panel').evaluate((panel) => {
+    const recent = panel.querySelector<HTMLElement>(
+      '[data-group-id="builtin:recently-watched"] .sidebar-group-name',
+    )!;
+    return {
+      width: panel.getBoundingClientRect().width,
+      recentWidth: recent.clientWidth,
+      recentScrollWidth: recent.scrollWidth,
+    };
+  });
+  expect(groupLayout.width).toBeGreaterThan(280);
+  expect(groupLayout.width).toBeLessThanOrEqual(440);
+  expect(groupLayout.recentScrollWidth).toBeLessThanOrEqual(groupLayout.recentWidth);
 
   await page.keyboard.press('ArrowDown'); // Favorites
   await page.keyboard.press('ArrowDown'); // Recently Watched

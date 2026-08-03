@@ -469,9 +469,26 @@
 
 .player-sidebar .sidebar-group-panel {
   width: fit-content;
-  min-width: 260px;
-  max-width: 380px;
+  min-width: 280px;
+  max-width: 440px;
   border-right: 1px solid var(--border);
+}
+
+.player-sidebar .sidebar-group-width-probe {
+  width: max-content;
+  height: 0;
+  padding: 0 30px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  visibility: hidden;
+  overflow: hidden;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.player-sidebar .sidebar-group-width-probe .sidebar-group-name {
+  flex: none;
 }
 
 .player-sidebar .sidebar-channel-panel {
