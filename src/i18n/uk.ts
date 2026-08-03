@@ -238,7 +238,7 @@ export const UK_MESSAGES = {
   'settings.label': 'Назва',
   'settings.serverUrl': 'URL сервера',
   'settings.myProvider': 'Мій провайдер',
-  'settings.streamFormat': 'Формат прямого ефіру',
+  'settings.streamFormat': 'Формат ефіру',
   'settings.streamFormatTs': 'TS (сумісний)',
   'settings.streamFormatHls': 'HLS (m3u8)',
   'settings.streamFormatAuto': 'Автоматично',

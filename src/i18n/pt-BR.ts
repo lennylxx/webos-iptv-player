@@ -232,7 +232,7 @@ export const PT_BR_MESSAGES = {
   'settings.label': 'Nome',
   'settings.serverUrl': 'URL do servidor',
   'settings.myProvider': 'Meu provedor',
-  'settings.streamFormat': 'Formato da transmissão ao vivo',
+  'settings.streamFormat': 'Formato ao vivo',
   'settings.streamFormatTs': 'TS (compatível)',
   'settings.streamFormatHls': 'HLS (m3u8)',
   'settings.streamFormatAuto': 'Automático',

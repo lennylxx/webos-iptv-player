@@ -238,7 +238,7 @@ export const RU_MESSAGES = {
   'settings.label': 'Название',
   'settings.serverUrl': 'URL сервера',
   'settings.myProvider': 'Мой провайдер',
-  'settings.streamFormat': 'Формат прямого эфира',
+  'settings.streamFormat': 'Формат эфира',
   'settings.streamFormatTs': 'TS (совместимый)',
   'settings.streamFormatHls': 'HLS (m3u8)',
   'settings.streamFormatAuto': 'Автоматически',

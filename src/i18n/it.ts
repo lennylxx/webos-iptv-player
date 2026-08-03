@@ -232,7 +232,7 @@ export const IT_MESSAGES = {
   'settings.label': 'Etichetta',
   'settings.serverUrl': 'URL del server',
   'settings.myProvider': 'Il mio provider',
-  'settings.streamFormat': 'Formato streaming live',
+  'settings.streamFormat': 'Formato live',
   'settings.streamFormatTs': 'TS (compatibile)',
   'settings.streamFormatHls': 'HLS (m3u8)',
   'settings.streamFormatAuto': 'Automatico',
