@@ -587,8 +587,10 @@ export async function runM3USearchBenchmark(options) {
       input.value = query;
       const started = performance.now();
       input.dispatchEvent(new Event('input', { bubbles: true }));
-      values.push(performance.now() - started);
-      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(() => {
+        values.push(performance.now() - started);
+        resolve();
+      }));
     }
     return distribution(values);
   };
@@ -915,8 +917,10 @@ export async function runBenchmarkSuites(options) {
         input.value = query;
         const started = performance.now();
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        values.push(performance.now() - started);
-        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await new Promise((resolve) => requestAnimationFrame(() => {
+          values.push(performance.now() - started);
+          resolve();
+        }));
       }
       return distribution(values);
     };

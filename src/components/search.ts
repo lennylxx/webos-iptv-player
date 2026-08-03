@@ -8,7 +8,14 @@ import { ReminderService } from '../services/reminder-service';
 import { StorageService } from '../services/storage-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
 import { loadAllVodStreams, loadAllSeries } from '../services/xtream-catalog';
-import { prepareSearchItems, rankByName, rankPrepared, type PreparedSearchItem } from '../utils/channel-search';
+import {
+  prepareSearchItems,
+  prepareNameSearchItems,
+  rankPreparedNamesTopK,
+  rankPreparedTopK,
+  type PreparedNameSearchIndex,
+  type PreparedSearchItem,
+} from '../utils/channel-search';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { formatDayLabel, formatTime } from '../utils/time';
 import { showToast } from './toast';
@@ -52,6 +59,10 @@ export class Search {
   private allVod: VodItem[] = [];
   private allSeries: SeriesItem[] = [];
   private programIndex: PreparedSearchItem<ProgramResult>[] = [];
+  private vodIndex: PreparedNameSearchIndex<VodItem> = { items: [], values: [] };
+  private seriesIndex: PreparedNameSearchIndex<SeriesItem> = { items: [], values: [] };
+  private indexedChannels: Channel[] | null = null;
+  private indexedProgrammes: Record<string, Programme[]> | null = null;
   private loadedFor: string | null = null;
   private visibleChannels: Channel[] = [];
   private visiblePrograms: ProgramResult[] = [];
@@ -64,6 +75,10 @@ export class Search {
   private readonly movieVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
   private readonly seriesVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
   private scrollFrame: number | null = null;
+  private queryFrame: number | null = null;
+  private queryGeneration = 0;
+  private resultLimit: number = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
+  private hasMoreResults = false;
   private readonly scrollGuard = new VirtualScrollGuard();
 
   constructor(private container: HTMLElement, private handlers: SearchHandlers) {
@@ -85,21 +100,42 @@ export class Search {
   }
 
   async open(account: PlaylistEntry | null): Promise<void> {
+    this.cancelScheduledQuery();
     this.account = account;
     this.query = '';
-    this.buildProgramIndex();
+    this.resultLimit = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
+    this.buildProgramIndex(false);
     this.render();
     if (account) await this.loadCatalog(account);
   }
 
   /** The tab bar's search box drives the query; re-render the results for it. */
   setQuery(query: string): void {
+    this.cancelScheduledQuery();
     this.query = query;
+    this.resultLimit = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
     this.render();
   }
 
+  scheduleQuery(query: string): void {
+    this.query = query;
+    this.resultLimit = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
+    const generation = ++this.queryGeneration;
+    if (this.queryFrame !== null) cancelAnimationFrame(this.queryFrame);
+    if (!query.trim()) {
+      this.queryFrame = null;
+      this.render();
+      return;
+    }
+    this.queryFrame = requestAnimationFrame(() => {
+      this.queryFrame = null;
+      if (generation !== this.queryGeneration) return;
+      this.render();
+    });
+  }
+
   refreshPrograms(): void {
-    this.buildProgramIndex();
+    this.buildProgramIndex(true);
     if (this.query.trim()) this.render();
   }
 
@@ -145,6 +181,8 @@ export class Search {
       if (this.account?.id !== account.id) return;
       this.allVod = vod;
       this.allSeries = series;
+      this.vodIndex = prepareNameSearchItems(vod);
+      this.seriesIndex = prepareNameSearchItems(series);
       this.loadedFor = account.id;
       log.debug('catalog loaded', vod.length, 'movies,', series.length, 'series');
       if (this.query.trim()) this.render();
@@ -176,6 +214,10 @@ export class Search {
   /** Move focus into the first result (called when the tab bar's search box
    *  hands off with Enter / Down). */
   focusFirstResult(): void {
+    if (this.queryFrame !== null) {
+      this.cancelScheduledQuery();
+      this.render();
+    }
     const first = this.container.querySelector<HTMLElement>('.search-results [data-focusable]');
     if (first) this.nav.focus(first);
   }
@@ -301,7 +343,10 @@ export class Search {
     `;
   }
 
-  private buildProgramIndex(): void {
+  private buildProgramIndex(force: boolean): void {
+    if (!force
+        && this.indexedChannels === PlaylistService.channels
+        && this.indexedProgrammes === EpgService.programmes) return;
     const programs: ProgramResult[] = [];
     for (let channelIndex = 0; channelIndex < PlaylistService.channels.length; channelIndex++) {
       const channel = PlaylistService.channels[channelIndex];
@@ -318,10 +363,8 @@ export class Search {
       result.channel.name,
       result.channel.group,
     ]);
-  }
-
-  private findPrograms(query: string): ProgramResult[] {
-    return rankPrepared(this.programIndex, query);
+    this.indexedChannels = PlaylistService.channels;
+    this.indexedProgrammes = EpgService.programmes;
   }
 
   private programRow(result: ProgramResult, index: number): ReturnType<typeof html> {
@@ -428,11 +471,24 @@ export class Search {
     const q = this.query.trim();
     const isXtream = !!this.account;
     if (recompute) {
-      const cap = CONFIG.XTREAM.SEARCH_RESULT_CAP;
-      this.visibleChannels = q ? PlaylistService.search(this.query).slice(0, cap) : [];
-      this.visiblePrograms = q ? this.findPrograms(this.query).slice(0, cap) : [];
-      this.visibleMovies = isXtream ? rankByName(this.allVod, this.query).slice(0, cap) : [];
-      this.visibleSeries = isXtream ? rankByName(this.allSeries, this.query).slice(0, cap) : [];
+      const channels = q
+        ? PlaylistService.searchRanked(this.query, this.resultLimit)
+        : { items: [], hasMore: false };
+      const programs = q
+        ? rankPreparedTopK(this.programIndex, this.query, this.resultLimit)
+        : { items: [], hasMore: false };
+      const movies = q && isXtream
+        ? rankPreparedNamesTopK(this.vodIndex, this.query, this.resultLimit)
+        : { items: [], hasMore: false };
+      const series = q && isXtream
+        ? rankPreparedNamesTopK(this.seriesIndex, this.query, this.resultLimit)
+        : { items: [], hasMore: false };
+      this.visibleChannels = channels.items;
+      this.visiblePrograms = programs.items;
+      this.visibleMovies = movies.items;
+      this.visibleSeries = series.items;
+      this.hasMoreResults = channels.hasMore || programs.hasMore
+        || movies.hasMore || series.hasMore;
       this.resetVirtualOffsets();
     }
 
@@ -568,6 +624,11 @@ export class Search {
     if (this.scrollFrame !== null) return;
     this.scrollFrame = requestAnimationFrame(() => {
       this.scrollFrame = null;
+      const viewport = axis === 'horizontal' ? target.clientWidth : target.clientHeight;
+      const total = virtualizer.getTotalSize(this.resultCount(key));
+      if (offset + viewport >= total - this.resultItemSize(key) * 2) {
+        this.expandResults();
+      }
       this.render(false);
     });
   }
@@ -581,7 +642,7 @@ export class Search {
     const horizontal = key === 'channels-rail' || key === 'movies' || key === 'series';
     if ((horizontal && action !== 'left' && action !== 'right')
         || (!horizontal && action !== 'up' && action !== 'down')) return false;
-    const items = key === 'channels-list' || key === 'channels-rail'
+    let items = key === 'channels-list' || key === 'channels-rail'
       ? this.visibleChannels
       : key === 'programmes'
         ? this.visiblePrograms
@@ -589,7 +650,17 @@ export class Search {
           ? this.visibleMovies
           : this.visibleSeries;
     const current = parseInt(rawIndex, 10);
-    const next = current + (action === 'left' || action === 'up' ? -1 : 1);
+    let next = current + (action === 'left' || action === 'up' ? -1 : 1);
+    if (next >= items.length && this.expandResults()) {
+      items = key === 'channels-list' || key === 'channels-rail'
+        ? this.visibleChannels
+        : key === 'programmes'
+          ? this.visiblePrograms
+          : key === 'movies'
+            ? this.visibleMovies
+            : this.visibleSeries;
+      next = current + 1;
+    }
     if (next < 0 || next >= items.length) return false;
     const scroll = this.container.querySelector<HTMLElement>(`[data-search-virtual="${key}"]`);
     const virtualizer = this.virtualizers()[key];
@@ -606,5 +677,42 @@ export class Search {
       ),
     );
     return true;
+  }
+
+  private resultCount(key: string): number {
+    if (key === 'channels-list' || key === 'channels-rail') return this.visibleChannels.length;
+    if (key === 'programmes') return this.visiblePrograms.length;
+    if (key === 'movies') return this.visibleMovies.length;
+    return this.visibleSeries.length;
+  }
+
+  private resultItemSize(key: string): number {
+    if (key === 'channels-list') return 88;
+    if (key === 'programmes') return 109;
+    return 240;
+  }
+
+  private expandResults(): boolean {
+    if (!this.hasMoreResults || this.resultLimit >= CONFIG.XTREAM.SEARCH_RESULT_CAP) {
+      return false;
+    }
+    this.resultLimit = Math.min(
+      CONFIG.XTREAM.SEARCH_RESULT_CAP,
+      this.resultLimit * CONFIG.XTREAM.SEARCH_EXPANSION_FACTOR,
+    );
+    const offsets = Object.keys(this.virtualizers()).map(key => [
+      key,
+      this.virtualizers()[key].scrollOffset,
+    ] as const);
+    this.render();
+    for (const [key, offset] of offsets) this.virtualizers()[key].setScrollOffset(offset);
+    this.restoreVirtualOffsets();
+    return true;
+  }
+
+  private cancelScheduledQuery(): void {
+    this.queryGeneration++;
+    if (this.queryFrame !== null) cancelAnimationFrame(this.queryFrame);
+    this.queryFrame = null;
   }
 }

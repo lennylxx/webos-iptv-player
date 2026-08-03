@@ -4,7 +4,12 @@ import type { PlaylistEntry, Programme } from '../types';
 
 const { catalogMock, playlistMock, epgMock, reminderMock, storageMock, archiveMock, toastMock } = vi.hoisted(() => ({
   catalogMock: { loadAllVodStreams: vi.fn(), loadAllSeries: vi.fn() },
-  playlistMock: { channels: [] as unknown[], search: vi.fn(() => [] as unknown[]), indexOf: vi.fn(() => 0) },
+  playlistMock: {
+    channels: [] as unknown[],
+    search: vi.fn(() => [] as unknown[]),
+    searchRanked: vi.fn(),
+    indexOf: vi.fn(() => 0),
+  },
   epgMock: {
     programmes: {} as Record<string, Programme[]>,
     findChannelId: vi.fn((channel: { id: string }) => channel.id),
@@ -49,6 +54,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   playlistMock.channels = [];
   playlistMock.search.mockReturnValue([]);
+  playlistMock.searchRanked.mockImplementation((query: string, limit: number) => {
+    const items = playlistMock.search(query);
+    return { items: items.slice(0, limit), hasMore: items.length > limit };
+  });
   playlistMock.indexOf.mockReturnValue(0);
   epgMock.programmes = {};
   epgMock.findChannelId.mockImplementation((channel: { id: string }) => channel.id);
@@ -91,16 +100,49 @@ describe('Search', () => {
     expect(container.querySelector('.catalog-tile[data-series-id="s1"]')?.textContent).toContain('Series One');
   });
 
-  it('keeps 50,000 ranked results in a bounded virtualized rail', async () => {
-    const cap = CONFIG.XTREAM.SEARCH_RESULT_CAP;
-    const many = Array.from({ length: cap + 5 }, (_, i) => vod(String(i), `Movie ${i}`));
+  it('publishes a bounded first batch from 50,000 ranked results', async () => {
+    const initial = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
+    const many = Array.from(
+      { length: CONFIG.XTREAM.SEARCH_RESULT_CAP + 5 },
+      (_, i) => vod(String(i), `Movie ${i}`),
+    );
     const { view } = await openWith({ vod: many });
     view.setQuery('movie');
-    expect(cap).toBe(50_000);
+    expect(initial).toBe(200);
     expect(container.querySelectorAll('.catalog-tile[data-stream-id]').length).toBeLessThan(30);
     expect(container.querySelector<HTMLElement>(
       '[data-search-virtual="movies"] .search-virtual-rail-spacer',
-    )?.style.width).toBe(`${String(cap * 240)}px`);
+    )?.style.width).toBe(`${String(initial * 240)}px`);
+  });
+
+  it('expands the ranked batch near the virtual rail boundary', async () => {
+    const many = Array.from(
+      { length: 2_000 },
+      (_, i) => vod(String(i), `Movie ${i}`),
+    );
+    const { view } = await openWith({ vod: many });
+    view.setQuery('movie');
+    const rail = container.querySelector<HTMLElement>('[data-search-virtual="movies"]')!;
+    rail.scrollLeft = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS * 240;
+    rail.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    expect(container.querySelector<HTMLElement>(
+      '[data-search-virtual="movies"] .search-virtual-rail-spacer',
+    )?.style.width).toBe(
+      `${String(CONFIG.XTREAM.SEARCH_INITIAL_RESULTS
+        * CONFIG.XTREAM.SEARCH_EXPANSION_FACTOR * 240)}px`,
+    );
+  });
+
+  it('publishes only the newest query scheduled in one frame', async () => {
+    playlistMock.search.mockImplementation((query: string) =>
+      query === 'bravo' ? [chan('Bravo')] : [chan('Alpha')]);
+    const { view } = await openWith();
+    view.scheduleQuery('alpha');
+    view.scheduleQuery('bravo');
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    expect(container.textContent).toContain('Bravo');
+    expect(container.textContent).not.toContain('Alpha');
   });
 
   it('plays a channel result on select via its playlist index', async () => {

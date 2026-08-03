@@ -13,7 +13,12 @@ import {
   channelKey,
   legacyChannelKey,
 } from '../utils/channel';
-import { rankChannels } from '../utils/channel-search';
+import {
+  prepareSearchItem,
+  rankPreparedTopK,
+  type PreparedSearchItem,
+  type RankedSearchResult,
+} from '../utils/channel-search';
 import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
@@ -38,6 +43,8 @@ class PlaylistServiceImpl {
   private groupKeyByDisplay = new Map<string, string>();
   private channelByKey = new Map<string, Channel>();
   private channelByLegacyKey = new Map<string, Channel | null>();
+  private channelSearchIndex: PreparedSearchItem<Channel>[] = [];
+  private channelSearchByPlaylist = new Map<string, PreparedSearchItem<Channel>[]>();
   private indexedChannels: Channel[] | null = null;
   private indexedChannelCount = -1;
   private includeHidden = false;
@@ -62,6 +69,8 @@ class PlaylistServiceImpl {
     this.groupKeyByDisplay = new Map();
     this.channelByKey = new Map();
     this.channelByLegacyKey = new Map();
+    this.channelSearchIndex = [];
+    this.channelSearchByPlaylist = new Map();
     this.indexedChannels = null;
     this.indexedChannelCount = -1;
   }
@@ -249,6 +258,8 @@ class PlaylistServiceImpl {
     this.groupKeyByDisplay = new Map();
     this.channelByKey = new Map();
     this.channelByLegacyKey = new Map();
+    this.channelSearchIndex = [];
+    this.channelSearchByPlaylist = new Map();
 
     for (const key of ChannelCustomizationService.customGroups) {
       this.groupKeyByDisplay.set(ChannelCustomizationService.groupLabel(key), key);
@@ -256,6 +267,11 @@ class PlaylistServiceImpl {
 
     for (let i = 0; i < this.channels.length; i++) {
       const ch = this.channels[i];
+      const searchItem = prepareSearchItem(
+        ch,
+        item => [item.name, item.group, item.sourceName ?? ''],
+      );
+      this.channelSearchIndex.push(searchItem);
       this.indexMap.set(ch, i);
       this.channelByKey.set(channelKey(ch), ch);
       const legacyKey = legacyChannelKey(ch);
@@ -272,6 +288,7 @@ class PlaylistServiceImpl {
       }
       for (const playlistId of ch.playlistIds) {
         this.appendIndexed(this.channelsByPlaylist, playlistId, ch);
+        this.appendIndexed(this.channelSearchByPlaylist, playlistId, searchItem);
         if (!ch.group) continue;
         let byGroup = this.channelsByPlaylistGroup.get(playlistId);
         if (!byGroup) {
@@ -302,7 +319,7 @@ class PlaylistServiceImpl {
     this.groupsRevision++;
   }
 
-  private appendIndexed(map: Map<string, Channel[]>, key: string, channel: Channel): void {
+  private appendIndexed<T>(map: Map<string, T[]>, key: string, channel: T): void {
     const existing = map.get(key);
     if (existing) existing.push(channel);
     else map.set(key, [channel]);
@@ -371,8 +388,22 @@ class PlaylistServiceImpl {
   /** Relevance-ranked name/genre search, optionally scoped to one playlist. Empty query → []. */
   search(query: string, playlist?: string): Channel[] {
     this.ensureDerivedIndexes();
-    const pool = playlist ? this.channelsByPlaylist.get(playlist) ?? [] : this.channels;
-    return rankChannels(pool, query);
+    const index = playlist
+      ? this.channelSearchByPlaylist.get(playlist) ?? []
+      : this.channelSearchIndex;
+    return rankPreparedTopK(index, query, index.length).items;
+  }
+
+  searchRanked(
+    query: string,
+    limit: number,
+    playlist?: string,
+  ): RankedSearchResult<Channel> {
+    this.ensureDerivedIndexes();
+    const index = playlist
+      ? this.channelSearchByPlaylist.get(playlist) ?? []
+      : this.channelSearchIndex;
+    return rankPreparedTopK(index, query, limit);
   }
 
   getGroupsForPlaylist(playlist?: string): string[] {

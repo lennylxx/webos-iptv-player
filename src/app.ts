@@ -617,7 +617,7 @@ class App {
   // current one while non-empty; restore the underlying view when cleared.
   private handleSearchQuery(query: string): void {
     this.lastSearchQuery = query;
-    this.search.setQuery(query);
+    this.search.scheduleQuery(query);
     const hasQuery = query.trim().length > 0;
     const onSearch = this.viewStack[this.viewStack.length - 1] === 'search';
     if (hasQuery && !onSearch) this.showView('search');

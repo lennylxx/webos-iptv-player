@@ -51,7 +51,9 @@ export const CONFIG = {
     RAIL_ITEMS: 20,                     // posters shown per rail before the "all categories" drill-in
     RESUME_MIN_SECS: 15,                // below this, treat as "start over" (don't store a resume point)
     RESUME_FINISH_PAD: 30,              // within this of the end = finished (clear the resume point)
-    SEARCH_RESULT_CAP: 50_000,          // max ranked results retained per virtualized Search group
+    SEARCH_INITIAL_RESULTS: 200,        // first ranked results published per Search group
+    SEARCH_EXPANSION_FACTOR: 5,         // grow retained results near a virtual window boundary
+    SEARCH_RESULT_CAP: 50_000,          // final per-group cap after progressive expansion
     ARCHIVE_TTL_MS: 10 * 60 * 1000,     // per-channel get_simple_data_table freshness
     WATCHLIST_MAX_ITEMS: 200,            // per account and content type
   },

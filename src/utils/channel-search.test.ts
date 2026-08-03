@@ -1,7 +1,16 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import type { Channel } from '../types';
-import { rankByName, rankChannels, rankByFields } from './channel-search';
+import {
+  prepareSearchItems,
+  prepareNameSearchItems,
+  rankByName,
+  rankChannels,
+  rankByFields,
+  rankPrepared,
+  rankPreparedNamesTopK,
+  rankPreparedTopK,
+} from './channel-search';
 
 function ch(name: string, id = name): Channel {
   return { id, name, logo: '', group: '', url: '', extras: null,
@@ -52,6 +61,15 @@ describe('rankByName', () => {
     expect(rankByName(items, 'alpha').map(i => i.streamId)).toEqual(['2', '1']); // prefix before mid-word
   });
 
+  it('keeps match position ahead of a large name-length difference in Top-K', () => {
+    const items = [
+      { name: 'xxxxAlpha with an unusually long suffix' },
+      { name: 'xxxxxAlpha' },
+    ];
+    const prepared = prepareNameSearchItems(items);
+    expect(rankPreparedNamesTopK(prepared, 'alpha', 1).items).toEqual([items[0]]);
+  });
+
 });
 
 describe('rankChannels', () => {
@@ -81,5 +99,33 @@ describe('rankByFields', () => {
     ];
     expect(rankByFields(items, 'alpha', item => [item.title, item.category]).map(item => item.title))
       .toEqual(['Alpha', 'Bravo']);
+  });
+
+  it('returns exactly the full ranking prefix for every Top-K size', () => {
+    const items = [
+      { title: 'X Alpha', category: 'Drama' },
+      { title: 'Alpha', category: 'News' },
+      { title: 'Bravo', category: 'Alpha' },
+      { title: 'Alhpa', category: 'Sports' },
+      { title: 'Alpha Two', category: 'Drama' },
+    ];
+    const prepared = prepareSearchItems(items, item => [item.title, item.category]);
+    const full = rankPrepared(prepared, 'alpha');
+    for (let limit = 1; limit <= full.length; limit++) {
+      expect(rankPreparedTopK(prepared, 'alpha', limit).items)
+        .toEqual(full.slice(0, limit));
+    }
+  });
+
+  it('skips fuzzy results when direct matches fill Top-K', () => {
+    const items = [
+      { title: 'Alpha' },
+      { title: 'Alpha Two' },
+      { title: 'Alhpa' },
+    ];
+    const prepared = prepareSearchItems(items, item => [item.title]);
+    const result = rankPreparedTopK(prepared, 'alpha', 2);
+    expect(result.items).toEqual(items.slice(0, 2));
+    expect(result.hasMore).toBe(true);
   });
 });
