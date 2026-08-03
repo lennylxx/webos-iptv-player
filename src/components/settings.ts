@@ -555,6 +555,7 @@ export class Settings {
                   <label><span class="settings-domain">Assrt.net</span> ${t('settings.assrtToken')}</label>
                   <input type="text" class="settings-input" data-focusable id="assrt-key"
                          value="${os.assrt.apiKey}" placeholder="token">
+                  <div class="settings-item-hint">${t('settings.assrtDescription')}</div>
                 </div>
               </div>
               <div class="settings-row">
