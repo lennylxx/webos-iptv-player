@@ -40,10 +40,14 @@ describe('StorageService', () => {
     expect(StorageService.getPlaylists()[0].id).toBe(got[0].id);
   });
 
-  it('invalidates the channel cache when playlist configuration changes', () => {
+  it('invalidates the channel cache and probed stream MIMEs when playlist configuration changes', () => {
     StorageService.setCachedPlaylist([], []);
+    StorageService.setStreamMime('http://host/live', 'video/mp2t');
     StorageService.setPlaylists([{ id: 'p1', name: 'A', url: 'http://host/a' }]);
     expect(StorageService.getCachedPlaylist()).toBeNull();
+    // An account that switches live output keeps its route, so a stale probe
+    // would otherwise pin the new format to the old container.
+    expect(StorageService.getStreamMime('http://host/live')).toBeNull();
   });
 
   it('defaults the EPG url to an empty string and round-trips it', () => {
@@ -460,7 +464,7 @@ describe('StorageService recently watched live store', () => {
     expect(StorageService.getRecentlyWatchedLive()).toEqual([]);
   });
 
-  it('retries after evicting only the playlist cache on a quota error', () => {
+  it('retries after evicting the derived caches on a quota error', () => {
     StorageService.set('cached_playlist', { value: 'cache' });
     const original = Storage.prototype.setItem;
     let rejected = false;

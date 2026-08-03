@@ -7,6 +7,7 @@ import {
   xtreamCatchupSource,
   xtreamCatchupFallbackSource,
   xtreamLiveStreamId,
+  resolveXtreamLiveOutput,
   type XtreamCredentials,
 } from '../utils/xtream-url';
 import {
@@ -119,9 +120,19 @@ class PlaylistServiceImpl {
       const plKey = pl.id;
       // An xtream account derives get.php (playlist) and xmltv.php (EPG) from its
       // credentials; everything downstream is the existing M3U path.
-      const fetchUrl = pl.source === 'xtream' && pl.xtream
-        ? xtreamPlaylistUrl({ baseUrl: pl.url, ...pl.xtream })
-        : pl.url;
+      let fetchUrl = pl.url;
+      if (pl.source === 'xtream' && pl.xtream) {
+        const credentials = { baseUrl: pl.url, ...pl.xtream };
+        let allowedOutputFormats: string[] = [];
+        if (pl.xtream.liveOutput === 'auto') {
+          allowedOutputFormats =
+            (await createXtreamClient(credentials).getAccountInfo())?.allowedOutputFormats ?? [];
+        }
+        fetchUrl = xtreamPlaylistUrl(
+          credentials,
+          resolveXtreamLiveOutput(pl.xtream.liveOutput, allowedOutputFormats),
+        );
+      }
       const plDone = log.time(`fetch '${pl.name || pl.url}'`);
       try {
         const text = await fetchPlaylistText(fetchUrl, 60000);

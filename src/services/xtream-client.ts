@@ -19,6 +19,7 @@ export interface XtreamAccountInfo {
   expiresAt: number | null;
   maxConnections: number;
   activeConnections: number;
+  allowedOutputFormats: string[];
 }
 
 export interface XtreamLiveStream {
@@ -112,6 +113,9 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
           expiresAt: exp === null || exp === undefined || exp === '' ? null : toNumber(exp) || null,
           maxConnections: toNumber(u.max_connections),
           activeConnections: toNumber(u.active_cons),
+          allowedOutputFormats: Array.isArray(u.allowed_output_formats)
+            ? u.allowed_output_formats.filter((format): format is string => typeof format === 'string')
+            : [],
         };
       } catch (err) {
         log.warn('getAccountInfo failed:', err);

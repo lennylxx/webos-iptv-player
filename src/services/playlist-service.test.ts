@@ -233,6 +233,34 @@ http://host:8080/live/u1/p1/102.ts`;
     );
   });
 
+  it('requests HLS for an explicit m3u8 preference', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'x', name: 'Acct', url: 'http://host:8080', source: 'xtream',
+        xtream: { username: 'u1', password: 'p1', liveOutput: 'm3u8' } },
+    ]);
+    await PlaylistService.refresh();
+    const call = fetchTextMock.mock.calls.find(([url]) => url.includes('/get.php?'));
+    expect(new URL(call![0]).searchParams.get('output')).toBe('m3u8');
+  });
+
+  it('auto-prefers HLS when the account advertises it', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'x', name: 'Acct', url: 'http://host:8080', source: 'xtream',
+        xtream: { username: 'u1', password: 'p1', liveOutput: 'auto' } },
+    ]);
+    fetchTextMock.mockImplementation((url: string) => {
+      if (url.includes('action=get_live_streams')) return Promise.resolve('[]');
+      if (url.includes('player_api.php')) return Promise.resolve(JSON.stringify({
+        user_info: { auth: 1, allowed_output_formats: ['ts', 'm3u8'] },
+        server_info: { timezone: 'UTC' },
+      }));
+      return Promise.resolve(XT);
+    });
+    await PlaylistService.refresh();
+    const call = fetchTextMock.mock.calls.find(([url]) => url.includes('/get.php?'));
+    expect(new URL(call![0]).searchParams.get('output')).toBe('m3u8');
+  });
+
   it('parses the channels out of the derived playlist', async () => {
     const channels = await PlaylistService.refresh();
     expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);

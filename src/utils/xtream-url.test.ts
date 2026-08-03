@@ -10,6 +10,8 @@ import {
   xtreamCatchupFallbackSource,
   xtreamLiveStreamId,
   formatXtreamCatchupStart,
+  normalizeXtreamLiveOutputPreference,
+  resolveXtreamLiveOutput,
 } from './xtream-url';
 
 const creds = { baseUrl: 'http://host:8080', username: 'u1', password: 'p1' };
@@ -47,6 +49,11 @@ describe('xtreamPlaylistUrl', () => {
     );
   });
 
+  it('requests HLS output when selected', () => {
+    const url = new URL(xtreamPlaylistUrl(creds, 'm3u8'));
+    expect(url.searchParams.get('output')).toBe('m3u8');
+  });
+
   it('normalizes a scheme-less, trailing-slash base', () => {
     expect(xtreamPlaylistUrl({ ...creds, baseUrl: 'host:8080/' })).toBe(
       'http://host:8080/get.php?username=u1&password=p1&type=m3u_plus&output=ts',
@@ -57,6 +64,24 @@ describe('xtreamPlaylistUrl', () => {
     expect(xtreamPlaylistUrl({ ...creds, baseUrl: 'http://host' })).toBe(
       'http://host/get.php?username=u1&password=p1&type=m3u_plus&output=ts',
     );
+  });
+
+  describe('resolveXtreamLiveOutput', () => {
+    it('normalizes missing and invalid stored preferences to TS', () => {
+      expect(normalizeXtreamLiveOutputPreference(undefined)).toBe('ts');
+      expect(normalizeXtreamLiveOutputPreference('other')).toBe('ts');
+    });
+
+    it('honors explicit preferences', () => {
+      expect(resolveXtreamLiveOutput('ts', ['m3u8'])).toBe('ts');
+      expect(resolveXtreamLiveOutput('m3u8', [])).toBe('m3u8');
+    });
+
+    it('uses advertised HLS for auto and otherwise falls back to TS', () => {
+      expect(resolveXtreamLiveOutput('auto', ['ts', 'm3u8'])).toBe('m3u8');
+      expect(resolveXtreamLiveOutput('auto', ['ts'])).toBe('ts');
+      expect(resolveXtreamLiveOutput(undefined, ['m3u8'])).toBe('ts');
+    });
   });
 
   it('url-encodes credentials with reserved characters', () => {

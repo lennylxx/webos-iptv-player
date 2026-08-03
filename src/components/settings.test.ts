@@ -995,6 +995,7 @@ describe('Settings Xtream section', () => {
     expect(card.querySelector<HTMLInputElement>('.xtream-name')!.value).toBe('My Provider');
     expect(card.querySelector<HTMLInputElement>('.xtream-url')!.value).toBe('http://host:8080');
     expect(card.querySelector<HTMLInputElement>('.xtream-username')!.value).toBe('user1');
+    expect(card.querySelector<HTMLElement>('.xtream-output .dropdown')!.dataset.value).toBe('ts');
     const pw = card.querySelector<HTMLInputElement>('.xtream-password')!;
     expect(pw.value).toBe('pass1');
     expect(pw.type).toBe('password');
@@ -1087,8 +1088,27 @@ describe('Settings Xtream section', () => {
 
     expect(storageMock.setPlaylists).toHaveBeenCalledWith([
       { id: 'p1', name: 'M3U', url: 'http://m3u', source: 'url' },
-      { id, name: 'My Provider', url: 'http://host:8080', source: 'xtream', xtream: { username: 'user1', password: 'pass1' } },
+      {
+        id,
+        name: 'My Provider',
+        url: 'http://host:8080',
+        source: 'xtream',
+        xtream: { username: 'user1', password: 'pass1', liveOutput: 'ts' },
+      },
     ]);
+    expect(onSave).toHaveBeenCalledWith('reload');
+  });
+
+  it('persists an explicit HLS preference', () => {
+    state.playlists = [{
+      id: 'x1', name: 'Acct', url: 'http://host:8080',
+      source: 'xtream', xtream: { username: 'u', password: 'p' },
+    }];
+    settings.render();
+    click('#xtream-output-x1 [data-dropdown-value="m3u8"]');
+    click('#save-settings');
+    const saved = storageMock.setPlaylists.mock.calls.at(-1)![0] as PlaylistEntry[];
+    expect(saved[0].xtream?.liveOutput).toBe('m3u8');
     expect(onSave).toHaveBeenCalledWith('reload');
   });
 
@@ -1128,6 +1148,7 @@ describe('Settings Xtream section', () => {
     settings.render();
     xtreamMock.getAccountInfo.mockResolvedValueOnce({
       auth: true, status: 'Active', expiresAt: 1786000000, maxConnections: 2, activeConnections: 1,
+      allowedOutputFormats: ['ts', 'm3u8'],
     });
     click('#xtream-entries .check-xtream');
     await flush();
@@ -1145,6 +1166,7 @@ describe('Settings Xtream section', () => {
     settings.render();
     xtreamMock.getAccountInfo.mockResolvedValueOnce({
       auth: false, status: '', expiresAt: null, maxConnections: 0, activeConnections: 0,
+      allowedOutputFormats: [],
     });
     click('#xtream-entries .check-xtream');
     await flush();
