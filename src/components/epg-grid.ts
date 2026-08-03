@@ -40,6 +40,7 @@ const EPG_VIEWPORT_FALLBACK = 900;
 export class EpgGrid {
   private container: HTMLElement;
   private onChannelSelect: (index: number, catchup?: CatchupInfo) => void;
+  private onRevealTabBar?: () => void;
   private selectedChannelIdx = 0;
   private selectedPlaylist = '';
   private playlistFocusIdx = 0;
@@ -78,9 +79,14 @@ export class EpgGrid {
   private scrollFrame: number | null = null;
   private readonly scrollGuard = new VirtualScrollGuard();
 
-  constructor(container: HTMLElement, onChannelSelect: (index: number, catchup?: CatchupInfo) => void) {
+  constructor(
+    container: HTMLElement,
+    onChannelSelect: (index: number, catchup?: CatchupInfo) => void,
+    onRevealTabBar?: () => void,
+  ) {
     this.container = container;
     this.onChannelSelect = onChannelSelect;
+    this.onRevealTabBar = onRevealTabBar;
     this.bindEvents();
   }
 
@@ -911,6 +917,8 @@ export class EpgGrid {
           this.playlistFocusIdx = Math.max(0, tabIds.indexOf(this.selectedPlaylist));
           this.focusCol = 'playlists';
           this.render();
+        } else if (this.focusCol === 'filters' || this.focusCol === 'playlists') {
+          this.onRevealTabBar?.(); // topmost row: hand focus to the docked tab bar
         } else if (this.focusCol === 'programmes') {
           if (this.focusProg > 0) {
             this.focusProg--;
@@ -919,6 +927,8 @@ export class EpgGrid {
             this.focusCol = 'dates';
             this.render();
           }
+        } else if (this.focusCol === 'dates') {
+          this.onRevealTabBar?.();
         }
         break;
 

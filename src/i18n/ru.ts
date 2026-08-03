@@ -19,6 +19,7 @@ export const RU_MESSAGES = {
   'common.settings': 'Настройки',
   'common.search': 'Поиск',
   'nav.live': 'Эфир',
+  'nav.epg': 'Телегид',
   'nav.movies': 'Фильмы',
   'nav.series': 'Сериалы',
   'nav.settings': 'Настройки',

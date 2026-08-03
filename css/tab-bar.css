@@ -13,14 +13,15 @@
   border-bottom: 1px solid var(--border);
 }
 
-/* Hidden on the full-screen player / EPG. */
+/* Hidden on the full-screen player. */
 .tab-bar--hidden {
   display: none;
 }
 
 /* When the bar is docked, the section views sit below it (never overlapping);
-   the full-screen player / EPG / loading views keep top:0 / full height. */
+   the full-screen player / loading views keep top:0 / full height. */
 body.tabbar-docked #view-channels,
+body.tabbar-docked #view-epg,
 body.tabbar-docked #view-movies,
 body.tabbar-docked #view-series,
 body.tabbar-docked #view-search,
@@ -29,10 +30,15 @@ body.tabbar-docked #view-settings {
   height: 984px;
 }
 
+/* The guide's own root is fixed-height; shrink it to the docked viewport. */
+body.tabbar-docked #view-epg .epg-view {
+  height: 984px;
+}
+
 .tab-bar-inner {
   display: flex;
   align-items: center;
-  gap: 44px;
+  gap: 32px;
   width: 100%;
 }
 
@@ -43,11 +49,15 @@ body.tabbar-docked #view-settings {
   padding: 4px 2px;
   border-bottom: 3px solid transparent;
   margin-left: -24px;
-  margin-right: 52px;
+  margin-right: 32px;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tab-bar-item {
+  flex-shrink: 0;
   font-family: inherit;
   font-size: 30px;
   font-weight: 700;
@@ -70,6 +80,7 @@ body.tabbar-docked #view-settings {
 }
 
 .tab-bar-search {
+  flex-shrink: 0;
   margin-left: auto;
   display: flex;
   align-items: center;

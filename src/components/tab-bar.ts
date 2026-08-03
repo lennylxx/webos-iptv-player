@@ -13,6 +13,7 @@ export const SEARCH_INPUT_MAX_WIDTH = 600;
 // to, and whether it needs an Xtream account.
 export const SECTIONS = [
   { id: 'live', labelKey: 'nav.live', view: 'channels', xtreamOnly: false },
+  { id: 'epg', labelKey: 'nav.epg', view: 'epg', xtreamOnly: false },
   { id: 'movies', labelKey: 'nav.movies', view: 'movies', xtreamOnly: true },
   { id: 'series', labelKey: 'nav.series', view: 'series', xtreamOnly: true },
   { id: 'settings', labelKey: 'nav.settings', view: 'settings', xtreamOnly: false },
@@ -27,7 +28,7 @@ type SectionDef = typeof SECTIONS[number];
 const FULL_SECTIONS: readonly SectionDef[] = SECTIONS;
 const LITE_SECTIONS: readonly SectionDef[] = SECTIONS.filter((s) => !s.xtreamOnly);
 
-// The section a view belongs to (null for the chromeless player / EPG / loading
+// The section a view belongs to (null for the chromeless player / loading
 // views, which own no tab).
 export function sectionForView(view: string): Section | null {
   return SECTIONS.find((s) => s.view === view)?.id ?? null;

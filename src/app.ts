@@ -81,7 +81,11 @@ class App {
       this.showView('channels');
     }, (idx, catchupStart) => this.channelList.setPlaying(idx, catchupStart),
     () => !this.sidebar.visible && !this.menu.visible);
-    this.epgGrid = new EpgGrid(this.views.epg, (idx, catchup) => this.playChannel(idx, catchup));
+    this.epgGrid = new EpgGrid(
+      this.views.epg,
+      (idx, catchup) => this.playChannel(idx, catchup),
+      () => this.tabBar.focus(),
+    );
     this.settings = new Settings(
       this.views.settings,
       (action) => this.onSettingsSaved(action),
@@ -587,6 +591,7 @@ class App {
     // player) must tear down playback, like Back / red / blue do.
     this.player.stop();
     if (section === 'live') { this.showView('channels'); this.channelList.render(); return; }
+    if (section === 'epg') { this.openEpg(); return; }
     if (section === 'movies') {
       this.showView('movies');
       const account = this.activeXtreamAccount();
@@ -631,6 +636,18 @@ class App {
     const rv = this.viewBeforeSearch ?? 'channels';
     this.viewBeforeSearch = null;
     this.showView(rv);
+  }
+
+  // Show the guide and refresh its data in the background (shared by the EPG
+  // tab and the red-key shortcut).
+  private openEpg(): void {
+    this.showView('epg');
+    this.epgGrid.render();
+    EpgService.refresh().then(() => {
+      this.applyDisplayTz();
+      this.epgGrid.render();
+      this.search.refreshPrograms();
+    });
   }
 
   // Down/Select from the bar: switch to the section and drop focus into content.
@@ -774,14 +791,7 @@ class App {
       this.sidebar.hide();
       this.menu.hide();
       this.player.stop();
-      this.showView('epg');
-      this.epgGrid.render();
-      // Refresh EPG data in background, then re-render
-      EpgService.refresh().then(() => {
-        this.applyDisplayTz();
-        this.epgGrid.render();
-        this.search.refreshPrograms();
-      });
+      this.openEpg();
       return;
     }
     if (action === 'blue' && currentView !== 'settings' && !editingChannels) {

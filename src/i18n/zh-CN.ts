@@ -19,6 +19,7 @@ export const ZH_CN_MESSAGES = {
   'common.settings': '设置',
   'common.search': '搜索',
   'nav.live': '直播',
+  'nav.epg': '节目指南',
   'nav.movies': '电影',
   'nav.series': '剧集',
   'nav.settings': '设置',

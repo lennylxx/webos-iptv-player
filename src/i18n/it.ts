@@ -19,6 +19,7 @@ export const IT_MESSAGES = {
   'common.settings': 'Impostazioni',
   'common.search': 'Cerca',
   'nav.live': 'Diretta',
+  'nav.epg': 'Guida',
   'nav.movies': 'Film',
   'nav.series': 'Serie',
   'nav.settings': 'Impostazioni',

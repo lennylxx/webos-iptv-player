@@ -23,7 +23,7 @@ test('the tab bar is docked (always visible) and offsets the content below it', 
 
   // Always visible on the channels view — no pointer reveal needed.
   await expect(page.locator('.tab-bar')).toBeVisible();
-  await expect(page.locator('.tab-bar-item')).toHaveText(['Live', 'Movies', 'Series', 'Settings', '']);
+  await expect(page.locator('.tab-bar-item')).toHaveText(['Live', 'Guide', 'Movies', 'Series', 'Settings', '']);
   // Search is the far-right magnifier icon (no text label).
   await expect(page.locator('.tab-bar-item[data-section="search"] svg')).toBeVisible();
   // Docked → the view sits below the bar (top offset applied via the body class).
@@ -38,6 +38,26 @@ test('clicking the Movies tab enters the Movies view', async ({ page }) => {
 
   await enterTab(page, 'movies');
   await expect(page.locator('#view-movies')).toBeVisible();
+});
+
+test('the Guide tab opens the EPG below the docked bar, and Back returns to Live', async ({ page }) => {
+  await seedXtream(page);
+  await routeLiveManifest(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  await enterTab(page, 'epg');
+  await expect(page.locator('#view-epg')).toBeVisible();
+  // The guide is a section now: the bar stays docked with Guide active.
+  await expect(page.locator('.tab-bar')).toBeVisible();
+  await expect(page.locator('.tab-bar-item[data-section="epg"].active')).toHaveCount(1);
+  const bar = (await page.locator('.tab-bar').boundingBox())!;
+  const epg = (await page.locator('#view-epg .epg-view').boundingBox())!;
+  expect(epg.y).toBeGreaterThanOrEqual(bar.y + bar.height - 1);
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await expect(page.locator('.tab-bar-item[data-section="live"].active')).toHaveCount(1);
 });
 
 test('the Settings tab (after Series) opens the settings view', async ({ page }) => {
@@ -88,7 +108,7 @@ test('the search box keeps the current view until a query is typed, then covers 
   await expect(page.locator('#view-channels')).toBeVisible();
 });
 
-test('M3U-only shows a docked bar with Live/Settings/Search only (no Movies/Series)', async ({ page }) => {
+test('M3U-only shows a docked bar with Live/Guide/Settings/Search only (no Movies/Series)', async ({ page }) => {
   await page.route('**/playlist.m3u', (route) =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U }));
   await routeLiveManifest(page);
@@ -102,7 +122,7 @@ test('M3U-only shows a docked bar with Live/Settings/Search only (no Movies/Seri
 
   // The bar is docked, but with the reduced M3U section set.
   await expect(page.locator('.tab-bar')).toBeVisible();
-  await expect(page.locator('.tab-bar-item')).toHaveText(['Live', 'Settings', '']);
+  await expect(page.locator('.tab-bar-item')).toHaveText(['Live', 'Guide', 'Settings', '']);
   await expect(page.locator('.tab-bar-item[data-section="movies"]')).toHaveCount(0);
   await expect(page.locator('.tab-bar-item[data-section="series"]')).toHaveCount(0);
   await expect(page.locator('.tab-bar-item[data-section="search"] svg')).toBeVisible();
@@ -116,7 +136,7 @@ test('M3U-only shows a docked bar with Live/Settings/Search only (no Movies/Seri
   expect((inner.x + inner.width) - (icon.x + icon.width)).toBeLessThan(4);
 });
 
-test('no playlist or account configured shows Live/Settings/Search only (no Movies/Series)', async ({ page }) => {
+test('no playlist or account configured shows Live/Guide/Settings/Search only (no Movies/Series)', async ({ page }) => {
   // Seed nothing — first run opens onboarding Settings with the bar docked.
   await page.goto('/');
   await expect(page.locator('#view-settings')).toBeVisible();
@@ -125,7 +145,7 @@ test('no playlist or account configured shows Live/Settings/Search only (no Movi
   await expect(page.locator('.tab-bar')).toBeVisible();
   await expect(page.locator('.tab-bar-item[data-section="movies"]')).toHaveCount(0);
   await expect(page.locator('.tab-bar-item[data-section="series"]')).toHaveCount(0);
-  await expect(page.locator('.tab-bar-item')).toHaveText(['Live', 'Settings', '']);
+  await expect(page.locator('.tab-bar-item')).toHaveText(['Live', 'Guide', 'Settings', '']);
   await expect(page.locator('.account-avatar')).toHaveCount(0);
 });
 

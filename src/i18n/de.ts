@@ -19,6 +19,7 @@ export const DE_MESSAGES = {
   'common.settings': 'Einstellungen',
   'common.search': 'Suchen',
   'nav.live': 'Live',
+  'nav.epg': 'Programm',
   'nav.movies': 'Filme',
   'nav.series': 'Serien',
   'nav.settings': 'Einstellungen',

@@ -82,7 +82,7 @@ export async function seedPlaylist(page: Page, url = PLAYLIST_URL): Promise<void
  *  bar's coordinate hit-test. */
 export async function enterTab(
   page: Page,
-  section: 'live' | 'movies' | 'series' | 'settings' | 'search',
+  section: 'live' | 'epg' | 'movies' | 'series' | 'settings' | 'search',
 ): Promise<void> {
   const tab = page.locator(`.tab-bar-item[data-section="${section}"]`);
   await expect(tab).toBeVisible();

@@ -32,14 +32,14 @@ describe('TabBar', () => {
   it('renders the app title and the full section set for an Xtream account', () => {
     expect(bar.shown).toBe(true);
     expect(document.querySelector('.tab-bar-title')?.textContent).toBe('webOS IPTV Player');
-    expect(items()).toEqual(['Live', 'Movies', 'Series', 'Settings', 'Search']);
+    expect(items()).toEqual(['Live', 'Guide', 'Movies', 'Series', 'Settings', 'Search']);
     expect(focusedLabel()).toBe(null); // shown but not focused → no ring
     expect(document.body.classList.contains('tabbar-docked')).toBe(true);
   });
 
-  it('renders only Live/Settings/Search for an M3U-only account', () => {
+  it('renders only Live/Guide/Settings/Search for an M3U-only account', () => {
     bar.setSections(false);
-    expect(items()).toEqual(['Live', 'Settings', 'Search']);
+    expect(items()).toEqual(['Live', 'Guide', 'Settings', 'Search']);
   });
 
   it('focus() puts the ring on the active tab', () => {
@@ -61,28 +61,30 @@ describe('TabBar', () => {
   it('right/left switch the active section live and call onSwitch, staying focused', () => {
     bar.focus();
     bar.handleAction('right');
-    expect(focusedLabel()).toBe('Movies');
+    expect(focusedLabel()).toBe('Guide');
     expect(bar.focused).toBe(true);
-    expect(onSwitch).toHaveBeenLastCalledWith('movies');
+    expect(onSwitch).toHaveBeenLastCalledWith('epg');
     bar.handleAction('right');
-    expect(onSwitch).toHaveBeenLastCalledWith('series');
-    bar.handleAction('left');
     expect(onSwitch).toHaveBeenLastCalledWith('movies');
+    bar.handleAction('left');
+    expect(onSwitch).toHaveBeenLastCalledWith('epg');
     expect(bar.focused).toBe(true);
   });
 
-  it('right from Live on an M3U account goes to Settings (Movies/Series absent)', () => {
+  it('right from Live on an M3U account skips to Guide then Settings (no Movies/Series)', () => {
     bar.setSections(false);
     bar.focus();
+    bar.handleAction('right');
+    expect(onSwitch).toHaveBeenLastCalledWith('epg');
     bar.handleAction('right');
     expect(onSwitch).toHaveBeenLastCalledWith('settings');
   });
 
   it('down/select enters the active section and drops focus', () => {
     bar.focus();
-    bar.handleAction('right');   // → movies (live switch)
+    bar.handleAction('right');   // → guide (live switch)
     bar.handleAction('select');
-    expect(onEnter).toHaveBeenCalledWith('movies');
+    expect(onEnter).toHaveBeenCalledWith('epg');
     expect(bar.focused).toBe(false);
     expect(focusedLabel()).toBe(null);
   });
@@ -128,7 +130,7 @@ describe('TabBar', () => {
 
   it('enters a tab on a pointer click by coordinate hit-test', () => {
     bar.init();
-    const seriesBtn = document.querySelectorAll('.tab-bar-item')[2] as HTMLElement;
+    const seriesBtn = document.querySelectorAll('.tab-bar-item')[3] as HTMLElement;
     seriesBtn.getBoundingClientRect = () =>
       ({ left: 200, top: 0, width: 100, height: 40, right: 300, bottom: 40, x: 200, y: 0, toJSON() {} }) as DOMRect;
     const origFromPoint = document.elementFromPoint;
@@ -210,7 +212,7 @@ describe('TabBar inline search', () => {
   });
 
   it('caps the expanded box width so it does not span the whole bar (M3U-only leaves a big gap)', () => {
-    bar.setSections(false); // M3U-only: only Live / Settings / Search, so the gap is largest
+    bar.setSections(false); // M3U-only: only Live / Guide / Settings / Search, so the gap is largest
     bar.setActive('search');
     bar.focus();
     bar.handleAction('select'); // expands

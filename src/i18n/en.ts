@@ -23,6 +23,7 @@ export const EN_MESSAGES = {
   'common.settings': 'Settings',
   'common.search': 'Search',
   'nav.live': 'Live',
+  'nav.epg': 'Guide',
   'nav.movies': 'Movies',
   'nav.series': 'Series',
   'nav.settings': 'Settings',
