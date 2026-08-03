@@ -85,6 +85,7 @@ export class Sidebar {
   private groupSourcePlaylist = '';
   private groupSourceRevision = -1;
   private groupSourceLocale: SupportedLocale | null = null;
+  private groupWidthProbe: SidebarGroup | null = null;
 
   constructor(
     container: HTMLElement,
@@ -479,6 +480,8 @@ export class Sidebar {
     this.groupSourcePlaylist = this.playlist;
     this.groupSourceRevision = PlaylistService.groupsRevision;
     this.groupSourceLocale = getLocale();
+    this.groupWidthProbe = groups.reduce((widest, item) =>
+      this.groupWidthScore(item) > this.groupWidthScore(widest) ? item : widest);
     return this.groupSource;
   }
 
@@ -600,8 +603,7 @@ export class Sidebar {
     const currentCatchupStart = this.getCurrentCatchupStart();
     const currentTab = tabs.find(t => t.id === this.playlist);
     const activeGroup = groups.find(item => item.id === this.group) || groups[0];
-    const widthProbeGroup = groups.reduce((widest, item) =>
-      this.groupWidthScore(item) > this.groupWidthScore(widest) ? item : widest);
+    const widthProbeGroup = this.groupWidthProbe ?? groups[0];
     const searchPlaceholder = currentTab
       ? t('search.sidebarPlaylist', { name: currentTab.name })
       : t('search.sidebarAll');

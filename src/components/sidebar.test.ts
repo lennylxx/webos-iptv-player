@@ -372,6 +372,27 @@ describe('Sidebar', () => {
       expect(sidebar.pointerDismissX).toBe(820);
     });
 
+    it('caches the width probe until the group source changes', () => {
+      const target = sidebar as unknown as {
+        groupWidthScore: (group: { label: string; count: number }) => number;
+      };
+      const score = vi.spyOn(target, 'groupWidthScore');
+
+      PlaylistService.groupsRevision++;
+      sidebar.refresh();
+      const initialCalls = score.mock.calls.length;
+      expect(initialCalls).toBeGreaterThan(0);
+
+      sidebar.handleAction('left');
+      sidebar.handleAction('right');
+      sidebar.handleAction('left');
+      expect(score).toHaveBeenCalledTimes(initialCalls);
+
+      PlaylistService.groupsRevision++;
+      sidebar.refresh();
+      expect(score.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
+
     it('selects a group, filters channels, and returns focus to channels', () => {
       sidebar.handleAction('left');
       sidebar.handleAction('down');
