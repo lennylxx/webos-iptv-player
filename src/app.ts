@@ -73,7 +73,7 @@ class App {
 
     this.channelList = new ChannelList(
       this.views.channels,
-      (idx, catchup) => this.playChannel(idx, catchup),
+      (idx, catchup) => this.playChannel(idx, catchup, 'channels'),
       () => this.player.syncCurrentIndex(),
     );
     this.player = new Player(this.views.player, () => {
@@ -81,7 +81,7 @@ class App {
       this.showView('channels');
     }, (idx, catchupStart) => this.channelList.setPlaying(idx, catchupStart),
     () => !this.sidebar.visible && !this.menu.visible);
-    this.epgGrid = new EpgGrid(this.views.epg, (idx, catchup) => this.playChannel(idx, catchup));
+    this.epgGrid = new EpgGrid(this.views.epg, (idx, catchup) => this.playChannel(idx, catchup, 'other'));
     this.settings = new Settings(
       this.views.settings,
       (action) => this.onSettingsSaved(action),
@@ -93,9 +93,10 @@ class App {
     this.sidebar = new Sidebar(
       this.views.player,
       () => this.player.getCurrentIndex(),
-      (idx, catchup) => this.playChannel(idx, catchup),
+      (idx, catchup) => this.playChannel(idx, catchup, 'sidebar'),
       () => this.player.getCurrentCatchupStart(),
     );
+    this.player.setNeighborResolver((delta) => this.sidebar.neighborChannel(delta));
     this.menu = new PlayerMenu(
       this.views.player,
       () => this.player.getCurrentChannel(),
@@ -139,7 +140,7 @@ class App {
     this.search = new Search(this.views.search, {
       onRevealTabBar: () => this.tabBar.focus(),
       onBack: () => this.goLive(),
-      onPlayChannel: (idx, catchup) => { this.tabBar.blur(); this.playChannel(idx, catchup); },
+      onPlayChannel: (idx, catchup) => { this.tabBar.blur(); this.playChannel(idx, catchup, 'other'); },
       onOpenMovie: (account, vod) => {
         this.tabBar.blur();
         this.showView('movies');
@@ -675,7 +676,22 @@ class App {
     }
   }
 
-  private playChannel(index: number, catchup?: CatchupInfo): void {
+  private playChannel(
+    index: number,
+    catchup?: CatchupInfo,
+    from: 'channels' | 'sidebar' | 'other' = 'other',
+  ): void {
+    // CH+/CH− follow the browse filter the user is in. Sync sidebar ↔ channel
+    // list so the zap scope matches Favorites / the active category.
+    if (from === 'channels') {
+      const loc = this.channelList.getLocation();
+      this.sidebar.setLocation(loc.group, loc.playlist);
+    } else if (from === 'sidebar') {
+      const loc = this.sidebar.getLocation();
+      this.channelList.setLocation(loc.group, loc.playlist);
+    } else {
+      this.sidebar.setLocation('builtin:all', '');
+    }
     this.showView('player');
     this.player.play(index, catchup);
   }

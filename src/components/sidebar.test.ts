@@ -940,4 +940,36 @@ describe('Sidebar', () => {
       expect(onSelect).toHaveBeenCalledWith(2); // Charlie is global index 2, not filtered 0
     });
   });
+
+  describe('neighborChannel (CH+/CH− zap scope)', () => {
+    it('walks Favorites by group order, not the global All index', () => {
+      // Fixture already marks Bravo (1) as favorite. Add Charlie (2) so the
+      // favorite list is [Bravo, Charlie] — non-contiguous in the All list.
+      channels[1].favorite = true;
+      channels[2].favorite = true;
+      channels[0].favorite = false;
+      sidebar.setLocation('builtin:favorites');
+      getCurrentIndex.mockReturnValue(1); // playing Bravo (#2 in All)
+      expect(sidebar.neighborChannel(1)).toBe(2); // next favorite = Charlie, not All #3
+      getCurrentIndex.mockReturnValue(2);
+      expect(sidebar.neighborChannel(1)).toBe(1); // wrap within Favorites → Bravo
+      expect(sidebar.neighborChannel(-1)).toBe(1); // previous = Bravo
+      channels[2].favorite = false;
+    });
+
+    it('walks a source group without spilling into All', () => {
+      sidebar.setLocation('source:News');
+      getCurrentIndex.mockReturnValue(0); // Alpha
+      expect(sidebar.neighborChannel(1)).toBe(1); // Bravo (also News)
+      getCurrentIndex.mockReturnValue(1);
+      expect(sidebar.neighborChannel(1)).toBe(0); // wrap, not Charlie/Sports
+    });
+
+    it('enters the active group when the playing channel is outside it', () => {
+      sidebar.setLocation('source:Sports');
+      getCurrentIndex.mockReturnValue(0); // Alpha is News, not Sports
+      expect(sidebar.neighborChannel(1)).toBe(2); // first Sports channel
+      expect(sidebar.neighborChannel(-1)).toBe(2); // last Sports channel
+    });
+  });
 });

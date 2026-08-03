@@ -139,6 +139,16 @@ export class ChannelList {
     return el && this.container.contains(el) ? el : null;
   }
 
+  getLocation(): { group: ChannelGroupId; playlist: string } {
+    return { group: this.currentGroup, playlist: this.currentPlaylist };
+  }
+
+  setLocation(group: ChannelGroupId, playlist = ''): void {
+    if (this.currentGroup === group && this.currentPlaylist === playlist) return;
+    this.currentGroup = group;
+    this.currentPlaylist = playlist;
+  }
+
   render(ensureFocus = true): void {
     const tabs = PlaylistService.playlistTabs;
     // The selected playlist may have just been deleted in settings — fall back to All.

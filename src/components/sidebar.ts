@@ -104,6 +104,44 @@ export class Sidebar {
     return this.isVisible;
   }
 
+  /** Active group + playlist filter (shared with the channel-list view). */
+  getLocation(): { group: ChannelGroupId; playlist: string } {
+    return { group: this.group, playlist: this.playlist };
+  }
+
+  /** Align the sidebar filter with the channel list (or another browse surface). */
+  setLocation(group: ChannelGroupId, playlist = ''): void {
+    if (this.group === group && this.playlist === playlist) return;
+    this.group = group;
+    this.playlist = playlist;
+    this.searchQuery = '';
+    this.channelSource = null;
+    this.groupSource = null;
+    if (this.isVisible) {
+      this.focusCurrentChannel(false);
+      this.render();
+    }
+  }
+
+  /**
+   * Next/previous channel within the active group (and playlist / recent /
+   * search filter). Returns a global playlist index, or null when the filtered
+   * list is empty (caller should fall back to All).
+   */
+  neighborChannel(delta: 1 | -1): number | null {
+    this.channelSource = null;
+    const len = this.getChannelCount();
+    if (!len) return null;
+    const pos = this.findChannelPosition(this.getCurrentIndex());
+    // If the playing channel isn't in this group (e.g. just switched category),
+    // enter the list from the start (CH+) or end (CH−) instead of the All list.
+    const nextPos = pos < 0
+      ? (delta > 0 ? 0 : len - 1)
+      : (pos + delta + len) % len;
+    const entry = this.getChannelEntry(nextPos);
+    return entry ? entry.globalIdx : null;
+  }
+
   get pointerDismissX(): number {
     const groupWidth = this.el?.querySelector<HTMLElement>('.sidebar-group-panel')
       ?.getBoundingClientRect().width || GROUP_PANEL_MIN_WIDTH;

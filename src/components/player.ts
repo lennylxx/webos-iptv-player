@@ -74,6 +74,8 @@ export class Player {
   private manifestVariants: StreamVariant[] = []; // HLS master variants for best-effort codec readout
   private vodInfo: MediaInfo | null = null; // container-header stream info for the active VOD (codec/fps/HDR)
   private stallWatchdog: StallWatchdog;
+  /** Resolve CH+/CH− within the active group; null → fall back to the full list. */
+  private resolveNeighbor: (delta: 1 | -1) => number | null = () => null;
   constructor(
     container: HTMLElement,
     onBack: () => void,
@@ -908,7 +910,17 @@ export class Player {
     };
   }
 
+  /** Wire after Sidebar exists — keeps CH+/CH− inside Favorites / the active group. */
+  setNeighborResolver(resolve: (delta: 1 | -1) => number | null): void {
+    this.resolveNeighbor = resolve;
+  }
+
   channelUp(): void {
+    const scoped = this.resolveNeighbor(1);
+    if (scoped != null) {
+      this.play(scoped);
+      return;
+    }
     const len = PlaylistService.channels.length;
     if (!len) return;
     const next = this.currentIndex >= 0
@@ -918,6 +930,11 @@ export class Player {
   }
 
   channelDown(): void {
+    const scoped = this.resolveNeighbor(-1);
+    if (scoped != null) {
+      this.play(scoped);
+      return;
+    }
     const len = PlaylistService.channels.length;
     if (!len) return;
     const next = this.currentIndex >= 0

@@ -1097,6 +1097,18 @@ describe('Player catch-up save/restore lifecycle', () => {
     );
   });
 
+  it('channelUp prefers the group neighbor resolver over the All list', () => {
+    const other = { ...CHANNEL, id: 'c9', name: 'Other', url: 'http://host/play/c9' };
+    playlistMock.channels = [CHANNEL, other, { ...CHANNEL, id: 'c3' }];
+    playlistMock.getByIndex.mockImplementation((i: number) => playlistMock.channels[i]);
+    player.setNeighborResolver((delta) => (delta > 0 ? 2 : 0));
+    player.play(0);
+    player.channelUp();
+    expect(player.getCurrentIndex()).toBe(2); // skipped global #1
+    player.channelDown();
+    expect(player.getCurrentIndex()).toBe(0);
+  });
+
   it('saves on switching to VOD (playVod)', () => {
     player.play(0, CATCHUP);
     video.currentTime = 90;
