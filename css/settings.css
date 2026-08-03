@@ -476,6 +476,7 @@
 
 .xtream-fields .settings-field { flex: 1 1 220px; }
 .xtream-fields .settings-field.wide { flex: 2 1 320px; }
+.xtream-output .dropdown { min-width: 220px; }
 
 .xtream-card-foot {
   display: flex;

@@ -35,6 +35,7 @@ describe('XtreamClient.getAccountInfo', () => {
       expiresAt: 1700000000,
       maxConnections: 2,
       activeConnections: 1,
+      allowedOutputFormats: [],
     });
   });
 
@@ -58,7 +59,16 @@ describe('XtreamClient.getAccountInfo', () => {
       expiresAt: 1700000000,
       maxConnections: 5,
       activeConnections: 0,
+      allowedOutputFormats: ['ts', 'm3u8', 'rtmp'],
     });
+  });
+
+  it('filters invalid output format entries', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify({
+      user_info: { auth: 1, allowed_output_formats: ['ts', 1, null, 'm3u8'] },
+    }));
+    expect((await createXtreamClient(creds).getAccountInfo())?.allowedOutputFormats)
+      .toEqual(['ts', 'm3u8']);
   });
 
   it('reports auth:0 as a failed login (not null)', async () => {

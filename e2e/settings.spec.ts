@@ -450,6 +450,60 @@ test.describe('Settings Xtream: add -> cancel -> re-enter', () => {
   });
 });
 
+test.describe('Settings Xtream live output', () => {
+  test('saving HLS reloads the account with output=m3u8', async ({ page }) => {
+    await page.route('**/get.php*', (route) => {
+      const output = new URL(route.request().url()).searchParams.get('output');
+      const channel = output === 'm3u8' ? 'HLS Channel' : 'TS Channel';
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/x-mpegurl',
+        body: `#EXTM3U\n#EXTINF:-1,${channel}\nhttp://streams.example.com/live`,
+      });
+    });
+    await page.route('**/xmltv.php*', route =>
+      route.fulfill({ status: 200, contentType: 'application/xml', body: '<tv></tv>' }));
+    await page.route('**/player_api.php*', (route) => {
+      const action = new URL(route.request().url()).searchParams.get('action');
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: action === 'get_live_streams' ? '[]' : '{}',
+      });
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem('iptv_playlists', JSON.stringify([{
+        id: 'x1',
+        name: 'Account 1',
+        url: 'http://host.example.com:8080',
+        source: 'xtream',
+        xtream: { username: 'u1', password: 'p1' },
+      }]));
+    });
+
+    await page.goto('/');
+    await expect(page.locator('.channel-main .channel-item')).toContainText('TS Channel');
+    await enterTab(page, 'settings');
+    await page.locator('[data-settings-target="sources"]').click();
+    await page.locator('#xtream-output-x1 .dropdown-trigger').click();
+    await page.locator('#xtream-output-x1 [data-dropdown-value="m3u8"]').click();
+
+    const hlsRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname.endsWith('/get.php') && url.searchParams.get('output') === 'm3u8';
+    });
+    await page.locator('#save-settings').click();
+    await hlsRequest;
+
+    await expect(page.locator('#view-channels')).toBeVisible();
+    await expect(page.locator('.channel-main .channel-item')).toContainText('HLS Channel');
+    await expect.poll(() => page.evaluate(() => {
+      const playlists = JSON.parse(localStorage.getItem('iptv_playlists') || '[]');
+      return playlists[0]?.xtream?.liveOutput;
+    })).toBe('m3u8');
+  });
+});
+
 test.describe('Settings upload', () => {
   test('Settings shows an uploaded playlist when the upload service pushes a uploadEvents notification', async ({ page }) => {
     // End-to-end coverage for the push-driven upload refresh flow:

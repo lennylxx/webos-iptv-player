@@ -125,8 +125,12 @@ export interface PlaylistEntry {
   /** 'upload' entries are auto-managed by the local bundled service; 'xtream' is an
    *  Xtream Codes account; absent/'url' are user-entered M3U URLs. */
   source?: 'upload' | 'url' | 'xtream';
-  /** Credentials for an 'xtream' entry. */
-  xtream?: { username: string; password: string };
+  /** Credentials and live output preference for an 'xtream' entry. */
+  xtream?: {
+    username: string;
+    password: string;
+    liveOutput?: import('./utils/xtream-url').XtreamLiveOutputPreference;
+  };
   /** Channel count, populated for 'upload' entries by reconcile() from UploadMeta. */
   count?: number;
 }

@@ -10,6 +10,15 @@ export interface XtreamCredentials {
   password: string;
 }
 
+export type XtreamLiveOutput = 'ts' | 'm3u8';
+export type XtreamLiveOutputPreference = XtreamLiveOutput | 'auto';
+
+export function normalizeXtreamLiveOutputPreference(
+  value: unknown,
+): XtreamLiveOutputPreference {
+  return value === 'auto' || value === 'm3u8' || value === 'ts' ? value : 'ts';
+}
+
 /** `scheme://host[:port][/path]` with a default http scheme and no trailing slash. */
 export function normalizeXtreamBaseUrl(input: string): string {
   let s = input.trim();
@@ -21,10 +30,24 @@ function creds({ username, password }: XtreamCredentials): string {
   return `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
 }
 
-/** M3U playlist (live + VOD + series, flattened). `output=ts` keeps live on the
- *  native pipeline; everything downstream is the existing M3U path. */
-export function xtreamPlaylistUrl(c: XtreamCredentials): string {
-  return `${normalizeXtreamBaseUrl(c.baseUrl)}/get.php?${creds(c)}&type=m3u_plus&output=ts`;
+/** Resolve an account preference without changing legacy behavior when the
+ *  provider does not advertise HLS or its capabilities cannot be checked. */
+export function resolveXtreamLiveOutput(
+  preference: XtreamLiveOutputPreference | undefined,
+  allowedOutputFormats: string[],
+): XtreamLiveOutput {
+  const normalized = normalizeXtreamLiveOutputPreference(preference);
+  if (normalized === 'm3u8' || normalized === 'ts') return normalized;
+  return allowedOutputFormats.includes('m3u8') ? 'm3u8' : 'ts';
+}
+
+/** M3U playlist (live + VOD + series, flattened). The output controls the live
+ *  container while everything downstream remains on the existing M3U path. */
+export function xtreamPlaylistUrl(
+  c: XtreamCredentials,
+  output: XtreamLiveOutput = 'ts',
+): string {
+  return `${normalizeXtreamBaseUrl(c.baseUrl)}/get.php?${creds(c)}&type=m3u_plus&output=${output}`;
 }
 
 /** XMLTV EPG feed. */

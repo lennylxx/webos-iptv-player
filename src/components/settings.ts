@@ -8,7 +8,7 @@ import { PlaylistService } from '../services/playlist-service';
 import { clearCachedEpg } from '../services/idb-cache';
 import { UploadClient, uploadIdFromUrl } from '../services/upload-client';
 import { createXtreamClient } from '../services/xtream-client';
-import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
+import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
 import { genPlaylistId } from '../utils/playlist-id';
 import { CONFIG } from '../config';
 import { THEMES, OVERLAY_STYLES, TEXT_SIZES, DEFAULT_TEXT_SIZE, type ThemeMeta, type OverlayStyle, type TextSize } from '../config/themes';
@@ -215,9 +215,10 @@ function dropdown(id: string, options: { value: string; label: string }[], activ
     </div>`;
 }
 
-/** One editable Xtream account: its four credential fields grouped in a card
+/** One editable Xtream account: its fields grouped in a card
  *  keyed by the entry's stable id. Untrusted values interpolate through `html`. */
 function xtreamCard(pl: Partial<PlaylistEntry>) {
+  const liveOutput = normalizeXtreamLiveOutputPreference(pl.xtream?.liveOutput);
   return html`
     <div class="xtream-card" data-id="${pl.id || ''}">
       <div class="xtream-fields">
@@ -240,6 +241,14 @@ function xtreamCard(pl: Partial<PlaylistEntry>) {
           <label>${t('settings.password')}</label>
           <input type="password" class="settings-input xtream-password" data-focusable
                  aria-label="${t('settings.password')}" placeholder="password" value="${pl.xtream?.password || ''}">
+        </div>
+        <div class="settings-field xtream-output">
+          <label>${t('settings.streamFormat')}</label>
+          ${dropdown(`xtream-output-${pl.id || ''}`, [
+            { value: 'ts', label: t('settings.streamFormatTs') },
+            { value: 'm3u8', label: t('settings.streamFormatHls') },
+            { value: 'auto', label: t('settings.streamFormatAuto') },
+          ], liveOutput)}
         </div>
       </div>
       <div class="xtream-card-foot">
@@ -408,6 +417,9 @@ export class Settings {
                   : html`<div class="empty-hint">${t('settings.noXtream')}</div>`}
               </div>
               <button class="btn btn-primary" data-focusable id="add-xtream">${t('settings.addXtream')}</button>
+              <div class="settings-item-hint">
+                <strong>${t('settings.streamFormat')}:</strong> ${t('settings.streamFormatHint')}
+              </div>
             </div>
 
             <div class="settings-section">
@@ -1161,12 +1173,15 @@ export class Settings {
       if (!rawUrl || !username || !password) continue;
       const base = normalizeXtreamBaseUrl(rawUrl);
       const name = card.querySelector<HTMLInputElement>('.xtream-name')!.value.trim();
+      const liveOutput = normalizeXtreamLiveOutputPreference(
+        card.querySelector<HTMLElement>('.xtream-output .dropdown')!.dataset.value,
+      );
       accounts.push({
         id: card.dataset.id || genPlaylistId(),
         name: name || base.replace(/^https?:\/\//i, ''),
         url: base,
         source: 'xtream',
-        xtream: { username, password },
+        xtream: { username, password, liveOutput },
       });
     }
 
@@ -1220,9 +1235,16 @@ export class Settings {
 
     // Only a playlist/account or EPG-URL change needs a re-fetch; display-only
     // settings (time zone, auto-play) just re-render in place. Xtream credentials
-    // are part of the signature so editing a username/password reloads too.
+    // and live output are part of the signature so changing either reloads too.
     const sig = (l: PlaylistEntry[]) =>
-      JSON.stringify(l.map(pl => [pl.id, pl.name, pl.url, pl.xtream?.username, pl.xtream?.password]));
+      JSON.stringify(l.map(pl => [
+        pl.id,
+        pl.name,
+        pl.url,
+        pl.xtream?.username,
+        pl.xtream?.password,
+        pl.xtream ? normalizeXtreamLiveOutputPreference(pl.xtream.liveOutput) : '',
+      ]));
     const dataChanged = epgUrl !== prevEpg || sig(prevNonUpload) !== sig(nonUpload);
     this.onSave(dataChanged ? 'reload' : 'apply');
   }
