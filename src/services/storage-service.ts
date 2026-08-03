@@ -35,7 +35,7 @@ function set(key: string, value: unknown): boolean {
     localStorage.setItem(PREFIX + key, JSON.stringify(value));
     return true;
   } catch {
-    log.warn(`quota hit writing '${key}' — evicting playlist cache`);
+    log.warn(`quota hit writing '${key}' — evicting derived caches`);
     evictCache();
     try {
       localStorage.setItem(PREFIX + key, JSON.stringify(value));
@@ -51,8 +51,13 @@ function remove(key: string): void {
   localStorage.removeItem(PREFIX + key);
 }
 
+// Derived caches, dropped together: both are re-derivable from the playlist
+// config, and a config edit can change what a provider serves — an account that
+// switches live output keeps its stream route but changes container, so a probed
+// MIME from the previous format must not decide how the new one is played.
 function evictCache(): void {
   remove('cached_playlist');
+  remove('stream_mimes');
 }
 
 export const StorageService = {

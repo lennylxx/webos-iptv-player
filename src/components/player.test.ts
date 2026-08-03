@@ -969,6 +969,19 @@ describe('stream routing', () => {
     expect(streamRouteKey('not a url')).toBe('');
   });
 
+  it('separates routes by the requested live output format', () => {
+    // The same route serves a different container per requested format, so a
+    // probe of one must not classify the other.
+    expect(streamRouteKey('http://host/live/ch1?output_format=m3u8'))
+      .toBe('http://host/live?output=m3u8');
+    expect(streamRouteKey('http://host/live/ch1?output_format=ts'))
+      .toBe('http://host/live?output=ts');
+    expect(streamRouteKey('http://host/live/ch1?output=m3u8'))
+      .toBe('http://host/live?output=m3u8');
+    expect(streamRouteKey('http://host/live/ch1?output_format=ts&token=x'))
+      .toBe('http://host/live?output=ts');
+  });
+
   it('redacts stream credentials while retaining diagnostic routing data', () => {
     expect(diagnosticStreamUrl(
       'http://user:pass@host/timeshift/u1/p1/60/start/42.ts?token=x&start=10&end=20',
