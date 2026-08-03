@@ -7,7 +7,7 @@ import { $, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { rankChannels } from '../utils/channel-search';
 import { formatPosition } from '../utils/time';
-import { t } from '../i18n';
+import { getLocale, t, type SupportedLocale } from '../i18n';
 import { groupIcon } from './group-icon';
 import { CHEVRON_LEFT_ICON } from './icons';
 import { showToast } from './toast';
@@ -84,6 +84,7 @@ export class Sidebar {
   private groupSourceChannels: Channel[] | null = null;
   private groupSourcePlaylist = '';
   private groupSourceRevision = -1;
+  private groupSourceLocale: SupportedLocale | null = null;
 
   constructor(
     container: HTMLElement,
@@ -441,7 +442,8 @@ export class Sidebar {
     if (this.groupSource
         && this.groupSourceChannels === PlaylistService.channels
         && this.groupSourcePlaylist === this.playlist
-        && this.groupSourceRevision === PlaylistService.groupsRevision) {
+        && this.groupSourceRevision === PlaylistService.groupsRevision
+        && this.groupSourceLocale === getLocale()) {
       return this.groupSource;
     }
     const playlist = this.playlist || undefined;
@@ -476,6 +478,7 @@ export class Sidebar {
     this.groupSourceChannels = PlaylistService.channels;
     this.groupSourcePlaylist = this.playlist;
     this.groupSourceRevision = PlaylistService.groupsRevision;
+    this.groupSourceLocale = getLocale();
     return this.groupSource;
   }
 

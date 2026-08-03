@@ -68,6 +68,7 @@ vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentM
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 
 import { ChannelList } from './channel-list';
+import { setLocale } from '../i18n';
 import { channelKey } from '../utils/channel';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
 
@@ -248,6 +249,18 @@ describe('ChannelList.render', () => {
       'source:News',
       'source:Sports',
     ]);
+  });
+
+  it('rebuilds cached builtin group labels after a language change', () => {
+    list.render();
+    expect(container.querySelector('[data-group="builtin:recently-watched"] .group-name')?.textContent)
+      .toBe('Recently Watched');
+
+    setLocale('zh-CN');
+    list.render();
+
+    expect(container.querySelector('[data-group="builtin:recently-watched"] .group-name')?.textContent)
+      .toBe('最近观看');
   });
 
   it('renders a bounded group window for 50,000 groups', () => {

@@ -10,7 +10,7 @@ import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { groupIcon } from './group-icon';
 import { showToast } from './toast';
-import { t, tp } from '../i18n';
+import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { ChannelListEditor } from './channel-list-editor';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
@@ -49,6 +49,7 @@ export class ChannelList {
   private groupEntriesChannels: Channel[] | null = null;
   private groupEntriesPlaylist = '';
   private groupEntriesRevision = -1;
+  private groupEntriesLocale: SupportedLocale | null = null;
 
   constructor(
     container: HTMLElement,
@@ -600,12 +601,14 @@ export class ChannelList {
   private getGroupEntries(): { id: ChannelGroupId; label: string; builtin?: BuiltinChannelGroup }[] {
     if (this.groupEntriesChannels === PlaylistService.channels
         && this.groupEntriesPlaylist === this.currentPlaylist
-        && this.groupEntriesRevision === PlaylistService.groupsRevision) {
+        && this.groupEntriesRevision === PlaylistService.groupsRevision
+        && this.groupEntriesLocale === getLocale()) {
       return this.groupEntries;
     }
     this.groupEntriesChannels = PlaylistService.channels;
     this.groupEntriesPlaylist = this.currentPlaylist;
     this.groupEntriesRevision = PlaylistService.groupsRevision;
+    this.groupEntriesLocale = getLocale();
     this.groupEntries = [
       { id: 'builtin:all', label: t('common.all'), builtin: 'all' },
       { id: 'builtin:favorites', label: t('channel.favorites'), builtin: 'favorites' },

@@ -63,6 +63,7 @@ const { storageMock } = vi.hoisted(() => ({
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 
 import { EpgGrid } from './epg-grid';
+import { setLocale } from '../i18n';
 
 const Y = 2024, M = 5, D = 15; // Sat Jun 15 2024, 12:00 local = "now"
 
@@ -403,6 +404,17 @@ describe('EpgGrid group and channel filters', () => {
     expect(grid.isFilterOpen).toBe(false);
     expect(channelItems()).toHaveLength(1);
     expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
+  });
+
+  it('rebuilds cached group labels after a language change', () => {
+    container.querySelector<HTMLElement>('[data-epg-group-toggle]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(container.querySelector('.epg-group-option-label')?.textContent).toBe('All');
+
+    setLocale('zh-CN');
+    grid.render();
+
+    expect(container.querySelector('.epg-group-option-label')?.textContent).toBe('全部');
   });
 
   it('focuses search with Yellow and exits to results with ArrowDown', () => {

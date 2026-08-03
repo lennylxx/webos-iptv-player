@@ -21,7 +21,7 @@ import { formatTime, formatDayLabel, displayDayKey, startOfDisplayDay, addDispla
 import { rankByName } from '../utils/channel-search';
 import { CONFIG } from '../config';
 import { bellIcon, CHEVRON_LEFT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
-import { t, tp } from '../i18n';
+import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 
@@ -72,6 +72,7 @@ export class EpgGrid {
   private groupOptionsChannels: Channel[] | null = null;
   private groupOptionsPlaylist = '';
   private groupOptionsRevision = -1;
+  private groupOptionsLocale: SupportedLocale | null = null;
   private programmeSource: Programme[] | null = null;
   private programmeSizeKey = '';
   private scrollFrame: number | null = null;
@@ -184,7 +185,8 @@ export class EpgGrid {
   private getGroupOptions(): GroupOption[] {
     if (this.groupOptionsChannels === PlaylistService.channels
         && this.groupOptionsPlaylist === this.selectedPlaylist
-        && this.groupOptionsRevision === PlaylistService.groupsRevision) {
+        && this.groupOptionsRevision === PlaylistService.groupsRevision
+        && this.groupOptionsLocale === getLocale()) {
       return this.groupOptions;
     }
     const playlist = this.selectedPlaylist || undefined;
@@ -192,6 +194,7 @@ export class EpgGrid {
     this.groupOptionsChannels = PlaylistService.channels;
     this.groupOptionsPlaylist = this.selectedPlaylist;
     this.groupOptionsRevision = PlaylistService.groupsRevision;
+    this.groupOptionsLocale = getLocale();
     this.groupOptions = [
       {
         id: '',

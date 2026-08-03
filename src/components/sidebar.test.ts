@@ -63,6 +63,7 @@ vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentM
 vi.mock('./toast', () => ({ showToast: toastMock }));
 
 import { Sidebar } from './sidebar';
+import { setLocale } from '../i18n';
 import { PlaylistService } from '../services/playlist-service';
 
 let container: HTMLElement;
@@ -165,6 +166,21 @@ describe('Sidebar', () => {
       const first = items()[1];
       sidebar.show();
       expect(items()[1]).toBe(first);
+    });
+
+    it('rebuilds cached builtin group labels after a language change', () => {
+      sidebar.show();
+      sidebar.handleAction('left');
+      expect(groupItems()[2].querySelector('.sidebar-group-name')?.textContent)
+        .toBe('Recently Watched');
+      sidebar.hide();
+
+      setLocale('zh-CN');
+      sidebar.show();
+      sidebar.handleAction('left');
+
+      expect(groupItems()[2].querySelector('.sidebar-group-name')?.textContent)
+        .toBe('最近观看');
     });
 
     it('removes a failed channel logo and does not restore it on later renders', () => {
