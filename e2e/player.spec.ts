@@ -252,7 +252,6 @@ test('the right-edge player menu opens and lists its color actions', async ({ pa
 });
 
 test('the OSD band keeps its edge controls ahead of pointer-triggered panels', async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
   await routePlaylist(page);
   await routeLiveManifest(page);
   await neuterVideo(page);
@@ -274,7 +273,6 @@ test('the OSD band keeps its edge controls ahead of pointer-triggered panels', a
 });
 
 test('pointer-opened player panels do not reveal or hide the OSD', async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
   await routePlaylist(page);
   await routeLiveManifest(page);
   await neuterVideo(page);
@@ -353,7 +351,6 @@ test('a long player-menu list scrolls with the Magic-Remote wheel, not the chann
   // scroll (overflow-y:auto) and the wheel handler must let it scroll natively instead
   // of zapping the channel. A fake stream can't supply many tracks, so we stub a long
   // list into the same container and drive a real wheel over it.
-  await page.setViewportSize({ width: 1920, height: 1080 }); // panel is 1080px tall
   await routePlaylist(page);
   // Minimal live manifest so hls.js doesn't fatal → no auto-zap to the next channel.
   await routeLiveManifest(page);

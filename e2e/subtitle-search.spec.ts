@@ -103,8 +103,7 @@ async function startVodPlayback(page: Page): Promise<void> {
 // Open the right-edge VOD menu, dive into Subtitles, and pick "Search online…"
 // to raise the search overlay. Leaves the (now redundant) menu open behind it.
 async function openSearchOverlay(page: Page): Promise<void> {
-  await page.evaluate(() =>
-    document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1900, clientY: 540, bubbles: true })));
+  await page.mouse.move(1900, 540);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await page.keyboard.press('ArrowDown'); // Title Info -> Settings

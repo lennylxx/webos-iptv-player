@@ -169,10 +169,8 @@ test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu
 
   // The right edge opens the menu for VOD too, but as the VOD variant: Title
   // Info and Settings only (this VOD exposes no audio/subtitle tracks) — never
-  // the live channel rows or the "Playing:" channel name. The 1920-based edge
-  // coordinate is off the 1280-wide test viewport, so dispatch the pointermove directly.
-  await page.evaluate(() =>
-    document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1900, clientY: 540, bubbles: true })));
+  // the live channel rows or the "Playing:" channel name.
+  await page.mouse.move(1900, 540);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await expect(menu).toContainText('Title Info');
@@ -210,8 +208,7 @@ test('a VOD sidecar subtitle attaches as a native text track and loads its cues 
   expect(attached).toEqual({ count: 1, label: 'Track 1', kind: 'subtitles', mode: 'disabled' });
 
   // Open the right-edge menu into the Subtitles sub-menu; the sidecar is listed.
-  await page.evaluate(() =>
-    document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1900, clientY: 540, bubbles: true })));
+  await page.mouse.move(1900, 540);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await page.keyboard.press('ArrowDown'); // Title Info -> Settings
@@ -254,8 +251,7 @@ test('a VOD ASS sidecar renders through the assjs overlay when selected', async 
 
   // Open the right-edge menu into the Subtitles sub-menu; the ASS sidecar is listed
   // (it never becomes a native <track>, so this proves the synthetic-option path).
-  await page.evaluate(() =>
-    document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1900, clientY: 540, bubbles: true })));
+  await page.mouse.move(1900, 540);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await page.keyboard.press('ArrowDown'); // Title Info -> Settings

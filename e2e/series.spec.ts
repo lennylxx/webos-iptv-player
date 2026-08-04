@@ -139,10 +139,8 @@ test('episode playback suppresses the live channel sidebar and shows a VOD-only 
 
   // The right edge opens the menu for an episode too, but as the VOD variant:
   // Title Info and Settings only (this VOD exposes no audio/subtitle tracks) —
-  // never the live channel rows or the "Playing:" channel name. The 1920-based
-  // edge coordinate is off the 1280-wide test viewport, so dispatch it directly.
-  await page.evaluate(() =>
-    document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1900, clientY: 540, bubbles: true })));
+  // never the live channel rows or the "Playing:" channel name.
+  await page.mouse.move(1900, 540);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await expect(menu).toContainText('Title Info');
