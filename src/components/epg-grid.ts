@@ -28,7 +28,7 @@ import { VirtualScrollGuard } from '../utils/virtual-scroll';
 type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'programmes';
 type FilterFocus = 'group' | 'search';
 type VisibleChannel = { channel: Channel; globalIndex: number };
-type GroupOption = { id: string; label: string; count: number };
+type GroupOption = { id: ChannelGroupId; label: string; count: number };
 
 const CHANNEL_ROW_SIZE = 72;
 const GROUP_ROW_SIZE = 44;
@@ -46,7 +46,7 @@ export class EpgGrid {
   private selectedChannelIdx = 0;
   private selectedPlaylist = '';
   private playlistFocusIdx = 0;
-  private selectedGroup = '';
+  private selectedGroup: ChannelGroupId = 'builtin:all';
   private groupOpen = false;
   private groupFocusIdx = 0;
   private filterFocus: FilterFocus = 'group';
@@ -175,11 +175,8 @@ export class EpgGrid {
   }
 
   private getVisibleChannels(): VisibleChannel[] {
-    const group: ChannelGroupId = this.selectedGroup
-      ? `source:${this.selectedGroup}`
-      : 'builtin:all';
     const visible = PlaylistService.getByGroup(
-      group,
+      this.selectedGroup,
       this.selectedPlaylist || undefined,
     ).map(channel => ({
       channel,
@@ -193,13 +190,13 @@ export class EpgGrid {
   }
 
   private getGroupOptions(): GroupOption[] {
+    const playlist = this.selectedPlaylist || undefined;
     if (this.groupOptionsChannels === PlaylistService.channels
         && this.groupOptionsPlaylist === this.selectedPlaylist
         && this.groupOptionsRevision === PlaylistService.groupsRevision
         && this.groupOptionsLocale === getLocale()) {
       return this.groupOptions;
     }
-    const playlist = this.selectedPlaylist || undefined;
     const groups = PlaylistService.getGroupsForPlaylist(playlist);
     this.groupOptionsChannels = PlaylistService.channels;
     this.groupOptionsPlaylist = this.selectedPlaylist;
@@ -207,12 +204,17 @@ export class EpgGrid {
     this.groupOptionsLocale = getLocale();
     this.groupOptions = [
       {
-        id: '',
+        id: 'builtin:all',
         label: t('common.all'),
         count: PlaylistService.getGroupCount('builtin:all', playlist),
       },
+      {
+        id: 'builtin:favorites',
+        label: t('channel.favorites'),
+        count: PlaylistService.getGroupCount('builtin:favorites', playlist),
+      },
       ...groups.map(group => ({
-        id: group,
+        id: `source:${group}` as const,
         label: group,
         count: PlaylistService.getGroupCount(`source:${group}`, playlist),
       })),
@@ -222,14 +224,14 @@ export class EpgGrid {
 
   private selectPlaylist(id: string): void {
     this.selectedPlaylist = id;
-    this.selectedGroup = '';
+    this.selectedGroup = 'builtin:all';
     this.groupOpen = false;
     const visible = this.getVisibleChannels();
     this.selectedChannelIdx = visible[0]?.globalIndex ?? -1;
     this.focusProg = 0;
   }
 
-  private selectGroup(id: string): void {
+  private selectGroup(id: ChannelGroupId): void {
     this.selectedGroup = id;
     this.groupOpen = false;
     const visible = this.getVisibleChannels();
@@ -239,6 +241,13 @@ export class EpgGrid {
 
   private openGroupMenu(): void {
     const groups = this.getGroupOptions();
+    const favorites = groups.find(group => group.id === 'builtin:favorites');
+    if (favorites) {
+      favorites.count = PlaylistService.getGroupCount(
+        'builtin:favorites',
+        this.selectedPlaylist || undefined,
+      );
+    }
     this.groupFocusIdx = Math.max(0, groups.findIndex(group => group.id === this.selectedGroup));
     this.groupVirtualizer.centerOn(this.groupFocusIdx, 400);
     this.groupOpen = true;
@@ -281,7 +290,7 @@ export class EpgGrid {
     this.playlistFocusIdx = Math.max(0, Math.min(this.playlistFocusIdx, tabIds.length - 1));
     const groups = this.getGroupOptions();
     if (this.selectedGroup && !groups.some(group => group.id === this.selectedGroup)) {
-      this.selectedGroup = '';
+      this.selectedGroup = 'builtin:all';
     }
     this.groupFocusIdx = Math.max(0, Math.min(this.groupFocusIdx, groups.length - 1));
     const visibleChannels = this.getVisibleChannels();
@@ -375,19 +384,6 @@ export class EpgGrid {
 
     morph(this.container, html`
       <div class="epg-view">
-        <div class="epg-header">
-          <h2>${t('epg.title')}</h2>
-          <span class="epg-page-info">${channel?.name ?? ''}${programmes.length
-            ? html` · ${tp('epg.programCount', programmes.length)}`
-            : ''}</span>
-          ${raw(`
-            <div class="epg-legend">
-              <span class="epg-legend-item state-past"><i class="epg-legend-dot"></i>${t('epg.aired')}</span>
-              <span class="epg-legend-item state-future"><i class="epg-legend-dot"></i>${t('epg.upcoming')}</span>
-              <span class="epg-legend-item">${bellIcon(true)}${t('epg.reminder')}</span>
-            </div>
-          `)}
-        </div>
         <div class="epg-main">
           <div class="epg-channels-pane ${this.focusCol === 'channels' || this.focusCol === 'playlists' || this.focusCol === 'filters' ? 'pane-focused' : ''}">
             ${showTabs ? html`
@@ -405,11 +401,13 @@ export class EpgGrid {
             <div class="epg-filter-bar">
               <div class="epg-group-control">
                 <button type="button"
-                        class="epg-filter-control epg-group-button ${this.focusCol === 'filters' && this.filterFocus === 'group' ? 'focused' : ''} ${this.selectedGroup ? 'active' : ''}"
+                        class="epg-filter-control epg-group-button ${this.focusCol === 'filters' && this.filterFocus === 'group' ? 'focused' : ''} ${this.selectedGroup !== 'builtin:all' ? 'active' : ''}"
                         data-key="epg-group-button" data-epg-group-toggle
                         aria-expanded="${this.groupOpen ? 'true' : 'false'}">
                   <span class="epg-group-button-prefix">${t('common.groups')}:</span>
-                  <span class="epg-group-button-label">${this.selectedGroup || t('common.all')}</span>
+                  <span class="epg-group-button-label">${
+                    groups.find(group => group.id === this.selectedGroup)?.label ?? t('common.all')
+                  }</span>
                   <span class="epg-group-button-arrow">${raw(CHEVRON_LEFT_ICON)}</span>
                 </button>
                 ${this.groupOpen ? html`
@@ -444,6 +442,9 @@ export class EpgGrid {
             </div>
             <div class="epg-channel-pane-header">
               <span class="epg-channel-pane-count">${tp('channel.count', visibleChannels.length)}</span>
+              <span class="epg-page-info">${channel?.name ?? ''}${programmes.length
+                ? html` · ${tp('epg.programCount', programmes.length)}`
+                : ''}</span>
             </div>
             <div class="epg-channel-list" id="epg-channels">
             ${visibleChannels.length ? html`
@@ -470,22 +471,33 @@ export class EpgGrid {
             </div>
           </div>
           <div class="epg-right-pane">
-            <div class="epg-date-bar ${this.focusCol === 'dates' ? 'pane-focused' : ''}" id="epg-dates">
-              ${dateOptions.map((d, i) => {
-                const sel = i === this.selectedDay;
-                const foc = sel && this.focusCol === 'dates';
-                const isToday = d.getTime() === todayMs;
-                const dayState = d.getTime() < todayMs ? 'day-past' : d.getTime() > todayMs ? 'day-future' : '';
-                const lbl = formatDayLabel(d);
-                return html`
-                  <div class="epg-date-item ${sel ? 'selected' : ''} ${foc ? 'focused' : ''} ${isToday ? 'today' : ''} ${dayState}"
-                       data-key="${displayDayKey(d)}"
-                       data-day-index="${i}">
-                    <span class="epg-date-weekday">${lbl.weekday}</span>
-                    <span class="epg-date-date">${lbl.date}</span>
-                  </div>
-                `;
-              })}
+            <div class="epg-date-bar">
+              <div class="epg-date-list ${this.focusCol === 'dates' ? 'pane-focused' : ''}" id="epg-dates">
+                ${dateOptions.map((d, i) => {
+                  const sel = i === this.selectedDay;
+                  const foc = sel && this.focusCol === 'dates';
+                  const isToday = d.getTime() === todayMs;
+                  const dayState = d.getTime() < todayMs ? 'day-past' : d.getTime() > todayMs ? 'day-future' : '';
+                  const lbl = formatDayLabel(d);
+                  return html`
+                    <div class="epg-date-item ${sel ? 'selected' : ''} ${foc ? 'focused' : ''} ${isToday ? 'today' : ''} ${dayState}"
+                         data-key="${displayDayKey(d)}"
+                         data-day-index="${i}">
+                      <span class="epg-date-weekday">${lbl.weekday}</span>
+                      <span class="epg-date-date">${lbl.date}</span>
+                    </div>
+                  `;
+                })}
+              </div>
+              <div class="epg-legend">
+                <span class="epg-legend-item state-past">
+                  <i class="epg-legend-dot"></i>${t('epg.aired')}
+                </span>
+                <span class="epg-legend-item state-future">
+                  <i class="epg-legend-dot"></i>${t('epg.upcoming')}
+                </span>
+                <span class="epg-legend-item">${raw(bellIcon(true))}${t('epg.reminder')}</span>
+              </div>
             </div>
             <div class="epg-programmes-pane ${this.focusCol === 'programmes' ? 'pane-focused' : ''}" id="epg-programmes">
               ${programmes.length === 0
@@ -616,7 +628,9 @@ export class EpgGrid {
       const groupItem = target.closest<HTMLElement>('[data-epg-group]');
       if (groupItem) {
         this.groupFocusIdx = parseInt(groupItem.dataset.groupIndex!, 10);
-        this.selectGroup(groupItem.dataset.epgGroup!);
+        const group = this.getGroupOptions()[this.groupFocusIdx];
+        if (!group) return;
+        this.selectGroup(group.id);
         this.focusCol = 'filters';
         this.filterFocus = 'group';
         this.render();
@@ -905,7 +919,7 @@ export class EpgGrid {
           }
           break;
         case 'select':
-          this.selectGroup(groups[this.groupFocusIdx]?.id ?? '');
+          this.selectGroup(groups[this.groupFocusIdx]?.id ?? 'builtin:all');
           this.render();
           break;
         case 'back':

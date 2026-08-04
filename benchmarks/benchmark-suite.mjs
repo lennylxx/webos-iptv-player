@@ -787,7 +787,7 @@ export function assertGroupBenchmarkScale(report, scale) {
   bounded('EPG', report.epg.rendered);
   closeTo(report.channelList.totalSize, (scale + 3) * 68);
   closeTo(report.sidebar.totalSize, (scale + 3) * 64);
-  closeTo(report.epg.totalSize, (scale + 1) * 44);
+  closeTo(report.epg.totalSize, (scale + 2) * 44);
 }
 
 export async function runBenchmarkSuites(options) {

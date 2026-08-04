@@ -22,7 +22,8 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
       getByGroup(group: string, playlist?: string) {
         return state.channels.filter(ch =>
           (!playlist || ch.playlistIds?.includes(playlist))
-          && (group === 'builtin:all' || ch.group === group.slice(7)));
+          && (group === 'builtin:all'
+            || (group === 'builtin:favorites' ? ch.favorite : ch.group === group.slice(7))));
       },
       getGroupCount(group: string, playlist?: string) {
         return this.getByGroup(group, playlist).length;
@@ -149,8 +150,10 @@ describe('EpgGrid.render', () => {
 
   it("shows the selected channel's programs for today", () => {
     expect(progItems()).toHaveLength(3);
+    expect(container.querySelector('.epg-header')).toBeNull();
     expect(container.querySelector('.epg-page-info')!.textContent).toContain('Chan A');
     expect(container.querySelector('.epg-page-info')!.textContent).toContain('3 programs');
+    expect(container.querySelector('.epg-date-bar .epg-legend')).not.toBeNull();
   });
 
   it('flags the currently airing program with a NOW badge', () => {
@@ -237,7 +240,7 @@ describe('EpgGrid.render', () => {
       grid.handleAction('left');
       expect(container.querySelectorAll('.epg-group-option').length).toBeLessThan(60);
       expect(container.querySelector<HTMLElement>('.epg-group-options-spacer')?.style.height)
-        .toBe('2200044px');
+        .toBe('2200088px');
     } finally {
       playlistMock.getGroupsForPlaylist = originalGroups;
       playlistMock.getGroupCount = originalCount;
@@ -366,14 +369,46 @@ describe('EpgGrid group and channel filters', () => {
 
     const labels = Array.from(container.querySelectorAll('.epg-group-option-label'))
       .map(item => item.textContent);
-    expect(labels).toEqual(['All', 'News', 'Sports']);
+    expect(labels).toEqual(['All', 'Favorites', 'News', 'Sports']);
 
-    container.querySelector<HTMLElement>('[data-epg-group="Sports"]')!
+    container.querySelector<HTMLElement>('[data-epg-group="source:Sports"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
     expect(channelItems()).toHaveLength(1);
     expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
     expect(container.querySelector('[data-channel-idx="1"]')).not.toBeNull();
+  });
+
+  it('filters favorites while preserving global channel indices', () => {
+    state.channels[1].favorite = true;
+    grid.render();
+    container.querySelector<HTMLElement>('[data-epg-group-toggle]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    container.querySelector<HTMLElement>('[data-epg-group="builtin:favorites"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(channelItems()).toHaveLength(1);
+    expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
+    expect(container.querySelector('[data-channel-idx="1"]')).not.toBeNull();
+  });
+
+  it('scopes favorites to the selected playlist', () => {
+    state.channels[0].favorite = true;
+    state.channels[1].favorite = true;
+    state.playlistTabs = [
+      { id: 'p1', name: 'Playlist 1' },
+      { id: 'p2', name: 'Xtream 1' },
+    ];
+    grid.render();
+    container.querySelector<HTMLElement>('[data-playlist="p1"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    container.querySelector<HTMLElement>('[data-epg-group-toggle]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    container.querySelector<HTMLElement>('[data-epg-group="builtin:favorites"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(channelItems()).toHaveLength(1);
+    expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan A');
   });
 
   it('composes playlist and group filters', () => {
@@ -389,7 +424,7 @@ describe('EpgGrid group and channel filters', () => {
 
     const labels = Array.from(container.querySelectorAll('.epg-group-option-label'))
       .map(item => item.textContent);
-    expect(labels).toEqual(['All', 'News']);
+    expect(labels).toEqual(['All', 'Favorites', 'News']);
   });
 
   it('searches channel names and preserves global indices', () => {
@@ -405,7 +440,7 @@ describe('EpgGrid group and channel filters', () => {
   it('applies search inside the selected group and shows an empty state', () => {
     container.querySelector<HTMLElement>('[data-epg-group-toggle]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    container.querySelector<HTMLElement>('[data-epg-group="News"]')!
+    container.querySelector<HTMLElement>('[data-epg-group="source:News"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
     const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
@@ -420,6 +455,7 @@ describe('EpgGrid group and channel filters', () => {
     grid.handleAction('left');
     expect(grid.isFilterOpen).toBe(true);
 
+    grid.handleAction('down');
     grid.handleAction('down');
     grid.handleAction('down');
     grid.handleAction('select');

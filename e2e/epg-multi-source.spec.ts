@@ -103,12 +103,12 @@ test('filters EPG channels by source, group, and channel name', async ({ page })
 
   await page.locator('#epg-playlists [data-playlist=""]').click();
   await page.locator('[data-epg-group-toggle]').click();
-  await page.locator('[data-epg-group="Sports"]').click();
+  await page.locator('[data-epg-group="source:Sports"]').click();
   await expect(page.locator('#epg-channels .epg-channel-item')).toHaveCount(1);
   await expect(page.locator('#epg-channels')).toContainText('Charlie');
 
   await page.locator('[data-epg-group-toggle]').click();
-  await page.locator('[data-epg-group=""]').click();
+  await page.locator('[data-epg-group="builtin:all"]').click();
   await page.locator('.epg-search-input').fill('Bravo');
   await expect(page.locator('#epg-channels .epg-channel-item')).toHaveCount(1);
   await expect(page.locator('#epg-channels')).toContainText('Bravo');
