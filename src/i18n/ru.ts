@@ -39,6 +39,7 @@ export const RU_MESSAGES = {
   'search.openChannel': 'Открыть канал',
   'channel.favorites': 'Избранное',
   'channel.recentlyWatched': 'Недавно просмотренные',
+  'channel.uncategorized': 'Без категории',
   'channel.count': {
     one: '{count} канал',
     few: '{count} канала',
@@ -142,6 +143,7 @@ export const RU_MESSAGES = {
   'player.searchOnline': 'Искать в интернете…',
   'player.audioFallback': 'Аудио {number}',
   'player.subtitleFallback': 'Субтитры {number}',
+  'player.closedCaptions': 'Скрытые субтитры',
   'subtitle.online': 'Онлайн-субтитры',
   'subtitle.searchTitle': 'Поиск по названию…',
   'subtitle.searchAria': 'Поиск субтитров',

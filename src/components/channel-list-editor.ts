@@ -1,7 +1,7 @@
 import type { Action, Channel, ChannelGroupId } from '../types';
 import type { SpatialNav } from '../navigation/spatial-nav';
 import { html, raw, type Safe } from '../utils/dom';
-import { channelKey } from '../utils/channel';
+import { channelKey, groupDisplayLabel } from '../utils/channel';
 import { PlaylistService } from '../services/playlist-service';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
 import { StorageService } from '../services/storage-service';
@@ -268,7 +268,7 @@ export class ChannelListEditor {
               ${this.editGroupKeys().map(key => html`
                 <div class="group-picker-option" data-key="gp:${key}" data-focusable
                      data-group-choice="${key}">${
-                       ChannelCustomizationService.groupLabel(key)
+                       groupDisplayLabel(ChannelCustomizationService.groupLabel(key))
                      }</div>
               `)}
               <div class="group-picker-option" data-key="gp:new" data-focusable
@@ -633,7 +633,8 @@ export class ChannelListEditor {
     const normalized = value.trim().toLowerCase();
     if (!normalized) return false;
     return this.editGroupKeys().some((key) => key !== targetKey
-      && ChannelCustomizationService.groupLabel(key).trim().toLowerCase() === normalized);
+      && groupDisplayLabel(ChannelCustomizationService.groupLabel(key))
+        .trim().toLowerCase() === normalized);
   }
 
   private openGroupPicker(): void {

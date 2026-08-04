@@ -70,6 +70,7 @@ vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 import { ChannelList } from './channel-list';
 import { setLocale } from '../i18n';
 import { channelKey } from '../utils/channel';
+import { UNCATEGORIZED_GROUP } from '../types';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
 
 playlistMock.indexOfKey = (key: string) => data.channels
@@ -261,6 +262,32 @@ describe('ChannelList.render', () => {
 
     expect(container.querySelector('[data-group="builtin:recently-watched"] .group-name')?.textContent)
       .toBe('最近观看');
+  });
+
+  it('localizes the ungrouped bucket while leaving provider group names alone', () => {
+    const original = playlistMock.getGroupsForPlaylist;
+    playlistMock.getGroupsForPlaylist = () => ['Uncategorized', UNCATEGORIZED_GROUP];
+    playlistMock.groupsRevision++;
+    try {
+      setLocale('en');
+      list.render();
+      const labels = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+        .filter(g => g.dataset.group?.indexOf('source:') === 0)
+        .map(g => g.querySelector('.group-name')?.textContent);
+      expect(labels).toEqual(['Uncategorized', 'Uncategorized']);
+
+      setLocale('zh-CN');
+      playlistMock.groupsRevision++;
+      list.render();
+      const zh = Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+        .filter(g => g.dataset.group?.indexOf('source:') === 0)
+        .map(g => g.querySelector('.group-name')?.textContent);
+      expect(zh).toEqual(['Uncategorized', '未分类']);
+    } finally {
+      setLocale('en');
+      playlistMock.getGroupsForPlaylist = original;
+      playlistMock.groupsRevision++;
+    }
   });
 
   it('renders a bounded group window for 50,000 groups', () => {

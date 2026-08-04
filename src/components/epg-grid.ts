@@ -9,7 +9,7 @@ import type {
 } from '../types';
 import { html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey, groupDisplayLabel, legacyChannelKey } from '../utils/channel';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
@@ -215,7 +215,7 @@ export class EpgGrid {
       },
       ...groups.map(group => ({
         id: `source:${group}` as const,
-        label: group,
+        label: groupDisplayLabel(group),
         count: PlaylistService.getGroupCount(`source:${group}`, playlist),
       })),
     ];

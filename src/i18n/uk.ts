@@ -39,6 +39,7 @@ export const UK_MESSAGES = {
   'search.openChannel': 'Відкрити канал',
   'channel.favorites': 'Обране',
   'channel.recentlyWatched': 'Нещодавно переглянуті',
+  'channel.uncategorized': 'Без категорії',
   'channel.count': {
     one: '{count} канал',
     few: '{count} канали',
@@ -142,6 +143,7 @@ export const UK_MESSAGES = {
   'player.searchOnline': 'Шукати в інтернеті…',
   'player.audioFallback': 'Аудіо {number}',
   'player.subtitleFallback': 'Субтитри {number}',
+  'player.closedCaptions': 'Приховані субтитри',
   'subtitle.online': 'Онлайн-субтитри',
   'subtitle.searchTitle': 'Пошук за назвою…',
   'subtitle.searchAria': 'Пошук субтитрів',

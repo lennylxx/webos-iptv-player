@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel, ChannelCustomization } from '../types';
+import { UNCATEGORIZED_GROUP } from '../types';
 
 const { storageMock, fetchTextMock } = vi.hoisted(() => ({
   storageMock: {
@@ -102,7 +103,7 @@ describe('PlaylistService.refresh', () => {
 
   it('builds the group set and one tab per loaded playlist', async () => {
     await PlaylistService.refresh();
-    expect(PlaylistService.groups).toEqual(['News', 'Uncategorized', 'Sports']);
+    expect(PlaylistService.groups).toEqual(['News', UNCATEGORIZED_GROUP, 'Sports']);
     expect(PlaylistService.playlistTabs).toEqual([
       { id: 'a', name: 'P1' },
       { id: 'b', name: 'P2' },
@@ -691,7 +692,7 @@ describe('PlaylistService customization', () => {
   it('applies renames and group assignments and orders the groups', async () => {
     useRecord(record({
       overrides: { [KEY_A]: { name: 'Alpha Two', group: 'Custom' } },
-      groupOrder: ['Uncategorized', 'Custom'],
+      groupOrder: [UNCATEGORIZED_GROUP, 'Custom'],
       customGroups: ['Custom'],
     }));
     await PlaylistService.refresh();
@@ -701,8 +702,8 @@ describe('PlaylistService customization', () => {
     expect(alpha.sourceName).toBe('Alpha');
     expect(alpha.group).toBe('Custom');
     expect(alpha.sourceGroup).toBe('News');
-    expect(PlaylistService.groups).toEqual(['Uncategorized', 'Custom']);
-    expect(PlaylistService.getGroupsForPlaylist('a')).toEqual(['Uncategorized', 'Custom']);
+    expect(PlaylistService.groups).toEqual([UNCATEGORIZED_GROUP, 'Custom']);
+    expect(PlaylistService.getGroupsForPlaylist('a')).toEqual([UNCATEGORIZED_GROUP, 'Custom']);
   });
 
   it('applies customization to a cached playlist without a fetch', async () => {

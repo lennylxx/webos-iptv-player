@@ -2,7 +2,7 @@ import type { Action, BuiltinChannelGroup, CatchupInfo, Channel, ChannelGroupId,
 import { SpatialNav } from '../navigation/spatial-nav';
 import { html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { channelKey } from '../utils/channel';
+import { channelKey, groupDisplayLabel } from '../utils/channel';
 import { formatPosition } from '../utils/time';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
@@ -411,7 +411,9 @@ export class ChannelList {
     top: number,
   ): Safe {
     const isSource = g.id.indexOf('source:') === 0;
-    const key = isSource ? this.editor.groupKeyForDisplay(g.label) : '';
+    const key = isSource
+      ? this.editor.groupKeyForDisplay(g.id.slice('source:'.length))
+      : '';
     const hidden = isSource && this.editor.isGroupHidden(key);
     const grabbed = this.editor.isGroupGrabbed(key);
     const renaming = this.editor.isGroupRenaming(key);
@@ -622,7 +624,7 @@ export class ChannelList {
       ...PlaylistService.getGroupsForPlaylist(this.currentPlaylist || undefined)
         .map(name => ({
           id: `source:${name}` as ChannelGroupId,
-          label: name,
+          label: groupDisplayLabel(name),
         })),
     ];
     return this.groupEntries;

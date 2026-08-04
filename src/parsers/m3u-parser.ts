@@ -4,6 +4,7 @@ import type {
   PlaylistFormatDetection,
   PlaylistParseIssue,
 } from '../types';
+import { UNCATEGORIZED_GROUP } from '../types';
 
 export interface M3UParseOptions {
   maxChannels?: number;
@@ -52,7 +53,7 @@ export function parseM3U(
       channel.url = sourceUrl;
       return result(
         [channel],
-        ['Uncategorized'],
+        [UNCATEGORIZED_GROUP],
         epgUrls,
         headerAttributes,
         detection.format,
@@ -334,7 +335,7 @@ function parseExtInf(body: string): Channel {
     attrs['catchup-days'] || attrs['tvg-rec'] || '0',
     10,
   ) || 0;
-  applyGroups(channel, attrs['group-title'] || 'Uncategorized', false);
+  applyGroups(channel, attrs['group-title'] || UNCATEGORIZED_GROUP, false);
 
   const channelNumberRaw = attrs['tvg-chno']
     || attrs['channel-number']
@@ -407,7 +408,7 @@ function emptyChannel(name: string): Channel {
     id: '',
     name,
     logo: '',
-    group: 'Uncategorized',
+    group: UNCATEGORIZED_GROUP,
     url: '',
     extras: null,
     playlistIds: [],
@@ -422,7 +423,7 @@ function applyGroups(channel: Channel, raw: string, override: boolean): void {
   if (!value) return;
   if (value.indexOf(';') < 0) {
     if (override) channel.sourceGroups = undefined;
-    if (override || channel.group === 'Uncategorized') channel.group = value;
+    if (override || channel.group === UNCATEGORIZED_GROUP) channel.group = value;
     return;
   }
 
@@ -430,12 +431,12 @@ function applyGroups(channel: Channel, raw: string, override: boolean): void {
   if (!groups.length) return;
   const existing = override
     ? []
-    : channel.sourceGroups ?? (channel.group === 'Uncategorized' ? [] : [channel.group]);
+    : channel.sourceGroups ?? (channel.group === UNCATEGORIZED_GROUP ? [] : [channel.group]);
   for (const group of groups) {
     if (!existing.includes(group)) existing.push(group);
   }
   channel.sourceGroups = existing;
-  if (override || channel.group === 'Uncategorized') channel.group = groups[0];
+  if (override || channel.group === UNCATEGORIZED_GROUP) channel.group = groups[0];
 }
 
 function preserveUnknownAttributes(

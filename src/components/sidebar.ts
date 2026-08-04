@@ -6,6 +6,7 @@ import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/re
 import { $, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { rankChannels } from '../utils/channel-search';
+import { groupDisplayLabel } from '../utils/channel';
 import { formatPosition } from '../utils/time';
 import { getLocale, t, type SupportedLocale } from '../i18n';
 import { groupIcon } from './group-icon';
@@ -473,7 +474,7 @@ export class Sidebar {
     PlaylistService.getGroupsForPlaylist(playlist).forEach(name => {
       groups.push({
         id: `source:${name}`,
-        label: name,
+        label: groupDisplayLabel(name),
         count: PlaylistService.getGroupCount(`source:${name}`, playlist),
       });
     });

@@ -39,6 +39,7 @@ export const PT_BR_MESSAGES = {
   'search.openChannel': 'Abrir canal',
   'channel.favorites': 'Favoritos',
   'channel.recentlyWatched': 'Assistidos recentemente',
+  'channel.uncategorized': 'Sem categoria',
   'channel.count': {
     one: '{count} canal',
     other: '{count} canais',
@@ -136,6 +137,7 @@ export const PT_BR_MESSAGES = {
   'player.searchOnline': 'Buscar online…',
   'player.audioFallback': 'Áudio {number}',
   'player.subtitleFallback': 'Legenda {number}',
+  'player.closedCaptions': 'Legendas (CC)',
   'subtitle.online': 'Legendas online',
   'subtitle.searchTitle': 'Buscar por título…',
   'subtitle.searchAria': 'Buscar legendas',

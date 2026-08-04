@@ -1,4 +1,11 @@
 import type { Channel } from '../types';
+import { UNCATEGORIZED_GROUP } from '../types';
+import { t } from '../i18n';
+
+// Only the synthetic ungrouped bucket is localized — provider names are data.
+export function groupDisplayLabel(group: string): string {
+  return group === UNCATEGORIZED_GROUP ? t('channel.uncategorized') : group;
+}
 
 // FNV-1a (32-bit) — fast, dependency-free, non-cryptographic. Good enough for a
 // stable short identity key; collisions are negligible at playlist scale.

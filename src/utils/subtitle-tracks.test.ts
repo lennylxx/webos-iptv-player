@@ -235,9 +235,15 @@ describe('parseClosedCaptions', () => {
 });
 
 describe('closedCaptionLabel', () => {
-  it('uses the single declaration name when there is exactly one named entry', () => {
+  it('tags the single declaration name so it stays distinct from a subtitle rendition', () => {
     expect(closedCaptionLabel([{ name: 'Track 1', lang: 'l1', instreamId: 'CC1', isDefault: true }]))
-      .toBe('Track 1');
+      .toBe('Track 1 [CC]');
+  });
+
+  it('stays distinguishable from a TYPE=SUBTITLES rendition sharing the same NAME', () => {
+    const shared = 'Track 1';
+    expect(closedCaptionLabel([{ name: shared, lang: 'l1', instreamId: 'CC1', isDefault: false }]))
+      .not.toBe(subtitleLabel(opt({ index: 0, name: shared, lang: 'l1' })));
   });
 
   it('falls back to a generic label when unnamed or when several are declared', () => {

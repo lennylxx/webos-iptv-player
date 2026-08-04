@@ -5,6 +5,7 @@ import {
   parseM3U,
   parseM3UBytes,
 } from './m3u-parser';
+import { UNCATEGORIZED_GROUP } from '../types';
 
 describe('parseM3U', () => {
   it('parses a basic channel with URL', () => {
@@ -73,11 +74,25 @@ describe('parseM3U', () => {
     });
   });
 
-  it('falls back to the display title and Uncategorized group', () => {
+  it('falls back to the display title and the ungrouped bucket', () => {
     const m3u = ['#EXTM3U', '#EXTINF:-1,Bare Channel', 'http://example.com/bare.m3u8'].join('\n');
     const ch = parseM3U(m3u).channels[0];
     expect(ch.name).toBe('Bare Channel');
-    expect(ch.group).toBe('Uncategorized');
+    expect(ch.group).toBe(UNCATEGORIZED_GROUP);
+  });
+
+  it('keeps a provider group named "Uncategorized" separate from the ungrouped bucket', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 group-title="Uncategorized",One',
+      'http://host/1',
+      '#EXTINF:-1,Two',
+      'http://host/2',
+    ].join('\n');
+    const parsed = parseM3U(m3u);
+    expect(parsed.channels[0].group).toBe('Uncategorized');
+    expect(parsed.channels[1].group).toBe(UNCATEGORIZED_GROUP);
+    expect(parsed.groups).toEqual(['Uncategorized', UNCATEGORIZED_GROUP]);
   });
 
   it('collects the distinct set of groups', () => {
@@ -250,7 +265,7 @@ describe('parseM3U', () => {
     expect(result.channels).toHaveLength(1);
     expect(result.channels[0].url).toBe('https://example.com/hls/news.m3u8'); // the stream URL itself, not the inner variant
     expect(result.channels[0].name).toBe('news');
-    expect(result.groups).toEqual(['Uncategorized']);
+    expect(result.groups).toEqual([UNCATEGORIZED_GROUP]);
     expect(result.epgUrls).toEqual(['http://host/guide.xml']);
     expect(result.headerAttributes.custom).toBe('v');
     expect(result.name).toBe('Alpha');

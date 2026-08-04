@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel, ChannelCustomization } from '../types';
+import { UNCATEGORIZED_GROUP } from '../types';
 
 const { storageMock } = vi.hoisted(() => ({
   storageMock: {
@@ -129,6 +130,19 @@ describe('ChannelCustomizationService', () => {
     expect(channels[0].sourceGroup).toBe('News');
     expect(groupKeyOf(channels[0])).toBe('News');
     expect(ChannelCustomizationService.groupLabel('News')).toBe('Headlines');
+  });
+
+  it('renames and hides the ungrouped bucket like any provider group', () => {
+    const ungrouped = (): Channel[] => [channel('Alpha', 'http://host/a', UNCATEGORIZED_GROUP)];
+
+    ChannelCustomizationService.renameGroup(UNCATEGORIZED_GROUP, 'Everything Else');
+    const renamed = ChannelCustomizationService.applyTo(ungrouped());
+    expect(renamed[0].group).toBe('Everything Else');
+    expect(renamed[0].groupKey).toBe(UNCATEGORIZED_GROUP);
+    expect(groupKeyOf(renamed[0])).toBe(UNCATEGORIZED_GROUP);
+
+    ChannelCustomizationService.toggleGroupHidden(UNCATEGORIZED_GROUP);
+    expect(ChannelCustomizationService.applyTo(ungrouped())).toHaveLength(0);
   });
 
   it('sorts group keys into the custom group order', () => {

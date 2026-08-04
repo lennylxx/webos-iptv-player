@@ -39,6 +39,7 @@ export const IT_MESSAGES = {
   'search.openChannel': 'Apri canale',
   'channel.favorites': 'Preferiti',
   'channel.recentlyWatched': 'Visti di recente',
+  'channel.uncategorized': 'Senza categoria',
   'channel.count': {
     one: '{count} canale',
     other: '{count} canali',
@@ -136,6 +137,7 @@ export const IT_MESSAGES = {
   'player.searchOnline': 'Cerca online…',
   'player.audioFallback': 'Audio {number}',
   'player.subtitleFallback': 'Sottotitolo {number}',
+  'player.closedCaptions': 'Sottotitoli (CC)',
   'subtitle.online': 'Sottotitoli online',
   'subtitle.searchTitle': 'Cerca per titolo…',
   'subtitle.searchAria': 'Cerca sottotitoli',

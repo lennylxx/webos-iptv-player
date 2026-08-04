@@ -43,6 +43,7 @@ export const EN_MESSAGES = {
   'search.openChannel': 'Open channel',
   'channel.favorites': 'Favorites',
   'channel.recentlyWatched': 'Recently Watched',
+  'channel.uncategorized': 'Uncategorized',
   'channel.count': {
     one: '{count} channel',
     other: '{count} channels',
@@ -139,6 +140,7 @@ export const EN_MESSAGES = {
   'player.searchOnline': 'Search online…',
   'player.audioFallback': 'Audio {number}',
   'player.subtitleFallback': 'Subtitle {number}',
+  'player.closedCaptions': 'Closed Captions',
   'subtitle.online': 'Online Subtitles',
   'subtitle.searchTitle': 'Search by title…',
   'subtitle.searchAria': 'Search subtitles',

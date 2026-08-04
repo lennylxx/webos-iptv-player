@@ -407,7 +407,7 @@ export class PlayerOsd {
         ${info.videoCodec ? html`<span class="si-pill">${info.videoCodec}</span>` : ''}
         ${info.audioCodec ? html`<span class="si-pill">${info.audioCodec}</span>` : ''}
         ${info.audio ? html`<span class="si-text">${info.audio}</span>` : ''}
-        ${info.subtitle ? html`<span class="si-text">CC: ${info.subtitle}</span>` : ''}
+        ${info.subtitle ? html`<span class="si-text">${t('player.subtitlesTrack', { name: info.subtitle })}</span>` : ''}
       </div>
     `;
   }

@@ -192,6 +192,11 @@ export type TzMode = 'device' | 'feed';
 export type BuiltinChannelGroup = 'all' | 'favorites' | 'recently-watched';
 export type ChannelGroupId = `builtin:${BuiltinChannelGroup}` | `source:${string}`;
 
+/** Group key for channels the playlist left ungrouped. A key, never a label —
+ *  views translate it, so a provider group literally named "Uncategorized"
+ *  stays its own group instead of merging into this bucket. */
+export const UNCATEGORIZED_GROUP = 'builtin:uncategorized';
+
 export type NavDirection = 'up' | 'down' | 'left' | 'right';
 
 export type Action =

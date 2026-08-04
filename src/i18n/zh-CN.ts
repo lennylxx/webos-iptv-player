@@ -39,6 +39,7 @@ export const ZH_CN_MESSAGES = {
   'search.openChannel': '打开频道',
   'channel.favorites': '收藏',
   'channel.recentlyWatched': '最近观看',
+  'channel.uncategorized': '未分类',
   'channel.count': {
     other: '{count} 个频道',
   },
@@ -133,6 +134,7 @@ export const ZH_CN_MESSAGES = {
   'player.searchOnline': '在线搜索…',
   'player.audioFallback': '音轨 {number}',
   'player.subtitleFallback': '字幕 {number}',
+  'player.closedCaptions': '隐藏式字幕',
   'subtitle.online': '在线字幕',
   'subtitle.searchTitle': '按标题搜索…',
   'subtitle.searchAria': '搜索字幕',

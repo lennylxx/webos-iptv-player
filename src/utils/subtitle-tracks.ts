@@ -146,9 +146,13 @@ export function parseClosedCaptions(manifest: string): ManifestClosedCaption[] {
 
 /** Picker label for the single closed-caption toggle. Channel selection isn't
  *  possible (selectTrack decode-freezes the video on webOS), so several declared
- *  tracks collapse to one on/off entry — named only when there's exactly one. */
+ *  tracks collapse to one on/off entry — named only when there's exactly one.
+ *  The name is tagged because a TYPE=SUBTITLES rendition may carry the same NAME,
+ *  and the two sit side by side in the picker with very different behavior. */
 export function closedCaptionLabel(ccs: ManifestClosedCaption[]): string {
-  return ccs.length === 1 && ccs[0].name ? ccs[0].name : 'Closed Captions';
+  return ccs.length === 1 && ccs[0].name
+    ? `${ccs[0].name} [CC]`
+    : t('player.closedCaptions');
 }
 
 /** Clamp an offset to the configured range and quantize to the step. Non-finite input
