@@ -219,9 +219,9 @@ describe('Series detail', () => {
     expect(container.querySelector<HTMLElement>('.series-episodes-spacer')?.style.height)
       .toBe('6900000px');
 
-    const episodeList = container.querySelector<HTMLElement>('.series-episodes')!;
-    episodeList.scrollTop = 100 * 138;
-    episodeList.dispatchEvent(new Event('scroll', { bubbles: true }));
+    const detail = container.querySelector<HTMLElement>('.series-detail')!;
+    detail.scrollTop = 100 * 138;
+    detail.dispatchEvent(new Event('scroll', { bubbles: true }));
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     const episode = container.querySelector<HTMLElement>(
       '[data-episode-index="100"] .episode-row',

@@ -143,9 +143,11 @@
   stroke-linejoin: round;
 }
 
-/* Series detail: a compact header (poster + season selector) over an episode list. */
-.series-detail { display: flex; flex-direction: column; overflow: hidden; }
-.series-detail-head { display: flex; gap: 56px; margin-bottom: 32px; flex-shrink: 0; }
+/* Series detail: a compact header (poster + season selector) over an episode list.
+   The whole page scrolls in .catalog-view (like the movie detail), so the header
+   scrolls away with the episodes; the virtualizer treats it as leading size. */
+.series-detail { display: block; }
+.series-detail-head { display: flex; gap: 56px; margin-bottom: 32px; }
 .series-detail-poster { width: 260px; height: 390px; }
 
 .series-seasons { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
@@ -156,7 +158,7 @@
 .series-season-btn.active { background: var(--accent, #3ea6ff); color: #fff; }
 .series-season-btn.focused { border-color: var(--text-primary); }
 
-.series-episodes { position: relative; flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; }
+.series-episodes { position: relative; overflow-anchor: none; }
 .series-episodes-spacer { position: relative; width: 100%; }
 .series-episode-cell { position: absolute; left: 0; right: 0; }
 .episode-row {

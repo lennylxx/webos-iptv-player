@@ -242,7 +242,9 @@ export class Search {
     return html`
       <div class="catalog-rail">
         <h2 class="catalog-rail-title">${title}</h2>
-        <div class="catalog-rail-track search-virtual-rail"
+        <div class="catalog-rail-track search-virtual-rail ${
+               key === 'channels-rail' ? 'search-channel-rail' : ''
+             }"
              data-search-virtual="${key}" data-search-axis="horizontal">
           <div class="search-virtual-rail-spacer"
                style="width:${virtualizer.getTotalSize(items.length)}px">
@@ -559,7 +561,7 @@ export class Search {
 
     // The query box lives in the tab bar; this view renders results only.
     morph(this.container, html`
-      <div class="search-view" data-nav-container>
+      <div class="search-view ${isXtream ? '' : 'search-lists'}" data-nav-container>
         <div class="search-results">${resultsBody}</div>
       </div>
     `);

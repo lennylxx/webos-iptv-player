@@ -14,7 +14,9 @@ const EPISODE_GAP = 16;
 const EPISODE_NO_PLOT_ESTIMATE = 138;
 const EPISODE_PLOT_ESTIMATE = 216;
 const EPISODE_OVERSCAN = 5;
-const EPISODE_VIEWPORT_FALLBACK = 500;
+// The whole detail page scrolls, so the fallback is the page viewport, not the
+// space left under the header.
+const EPISODE_VIEWPORT_FALLBACK = 984;
 
 // The Series section: browse (Continue rail of resumed episodes + per-category
 // rails + an "all categories" drill-in) → per-category poster grid → a detail
@@ -259,11 +261,15 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     }
     const prevKey = this.nav.focused?.getAttribute('data-key') ?? null;
     const watchlisted = StorageService.isWatchlisted(a.id, 'series', series.seriesId);
+    const previousScroller = this.container.querySelector<HTMLElement>('.series-detail');
     const previousEpisodes = this.container.querySelector<HTMLElement>('.series-episodes');
-    if (restoreFocus && previousEpisodes) {
-      this.episodeVirtualizer.setScrollOffset(previousEpisodes.scrollTop);
+    this.episodeVirtualizer.setLeadingSize(
+      this.episodeListStart(previousScroller, previousEpisodes),
+    );
+    if (restoreFocus && previousScroller) {
+      this.episodeVirtualizer.setScrollOffset(previousScroller.scrollTop);
     }
-    const episodeViewport = previousEpisodes?.clientHeight || EPISODE_VIEWPORT_FALLBACK;
+    const episodeViewport = previousScroller?.clientHeight || EPISODE_VIEWPORT_FALLBACK;
     const focusedEpisodeIndex = this.nav.focused
       ?.closest<HTMLElement>('[data-episode-index]')
       ?.dataset.episodeIndex;
@@ -348,9 +354,11 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       return;
     }
     const episodeList = this.container.querySelector<HTMLElement>('.series-episodes');
-    if (episodeList) {
+    const scroller = this.container.querySelector<HTMLElement>('.series-detail');
+    if (scroller) {
+      this.episodeVirtualizer.setLeadingSize(this.episodeListStart(scroller, episodeList));
       this.scrollGuard.syncOffset(
-        episodeList,
+        scroller,
         'vertical',
         this.episodeVirtualizer.scrollOffset,
       );
@@ -373,7 +381,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     const current = parseInt(rawIndex, 10);
     const next = current + (action === 'up' ? -1 : 1);
     if (next < 0 || next >= episodes.length) return false;
-    const list = this.container.querySelector<HTMLElement>('.series-episodes');
+    const list = this.container.querySelector<HTMLElement>('.series-detail');
     this.episodeFocusIndex = next;
     this.episodeVirtualizer.ensureVisible(
       next,
@@ -389,7 +397,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   }
 
   protected handleExtraScroll(target: HTMLElement): boolean {
-    if (this.mode !== 'detail' || !target.classList.contains('series-episodes')) return false;
+    if (this.mode !== 'detail' || !target.classList.contains('series-detail')) return false;
     const offset = this.scrollGuard.readUserOffset(target, 'vertical');
     if (offset === null) return true;
     this.episodeVirtualizer.setScrollOffset(offset);
@@ -400,5 +408,20 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       });
     }
     return true;
+  }
+
+  // Where the episode list starts inside the scrolling detail page, i.e. the
+  // header the virtualizer has to skip before item 0. Both share an
+  // offsetParent (the page is statically positioned), so the difference is the
+  // in-content distance and stays correct while the page is scrolled.
+  private episodeListStart(
+    scroller: HTMLElement | null,
+    list: HTMLElement | null,
+  ): number {
+    if (!scroller || !list) return 0;
+    const top = list.offsetParent === scroller
+      ? list.offsetTop
+      : list.offsetTop - scroller.offsetTop;
+    return Math.max(0, top);
   }
 }

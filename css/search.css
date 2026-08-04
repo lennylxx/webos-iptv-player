@@ -25,11 +25,37 @@
 .search-empty { margin-top: 40px; }
 
 .search-virtual-section { margin-bottom: 28px; }
+
+/* The section height comes from the virtual spacer (sized inline to the full
+   list), capped here — a short result set must not reserve a full-height box. */
 .search-virtual-scroll {
   position: relative;
-  height: 420px;
+  max-height: 420px;
   overflow-y: auto;
   overflow-anchor: none;
+}
+
+/* M3U-only results are one or two vertical lists that own the whole view, so
+   they share its height and bottom padding instead of stopping at the cap
+   above: a lone Channels list fills the screen, and with Programs alongside
+   it the two shrink in proportion to their contents. */
+.search-view.search-lists { padding-bottom: 0; }
+.search-lists .search-results {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.search-lists .search-virtual-section {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+.search-lists .search-virtual-section:last-child { margin-bottom: 0; }
+.search-lists .search-virtual-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 .search-virtual-list-spacer,
 .search-virtual-rail-spacer {
@@ -41,11 +67,14 @@
   right: 0;
   box-sizing: border-box;
 }
-.search-virtual-rail { height: 403px; }
+/* Rail cells are absolutely positioned, so the spacer carries the row height:
+   poster tile (330 + 10 margin + 31 name line) by default, and the shorter
+   landscape channel tile (124 logo) for the channel rail. */
 .search-virtual-rail-spacer {
   flex: 0 0 auto;
   height: 371px;
 }
+.search-channel-rail .search-virtual-rail-spacer { height: 165px; }
 .search-virtual-rail-cell {
   position: absolute;
   top: 0;

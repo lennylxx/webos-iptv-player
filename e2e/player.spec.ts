@@ -6,6 +6,7 @@ import {
   routeLiveManifest,
   seedPlaylist,
   neuterVideo,
+  measureRowTextFit,
   SEARCH_M3U,
 } from './helpers';
 
@@ -76,6 +77,27 @@ test('player sidebar focuses the playing channel; search still filters', async (
   await expect(search).toBeFocused();
   await search.fill('alpha');
   await expect(sidebar.locator('.sidebar-ch-item')).toHaveCount(2);
+});
+
+// The row has a fixed height because the list is virtualized, so its two text
+// lines can overflow into the neighbouring row instead of growing the row.
+test('player sidebar channel rows fit both text lines in their fixed box', async ({ page }) => {
+  await routePlaylist(page, SEARCH_M3U);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-player')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+
+  const fit = await measureRowTextFit(
+    page,
+    '#player-sidebar .sidebar-ch-item',
+    'ch-info',
+    'ch-now',
+  );
+  expect(fit.needed).toBeLessThanOrEqual(fit.available);
 });
 
 test('player sidebar expands groups and retains a selected group after tuning', async ({ page }) => {

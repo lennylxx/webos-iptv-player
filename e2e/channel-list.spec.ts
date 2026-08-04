@@ -1,4 +1,13 @@
-import { test, expect, routePlaylist, seedPlaylist, SEARCH_M3U, enterTab, routeLiveManifest } from './helpers';
+import {
+  test,
+  expect,
+  routePlaylist,
+  seedPlaylist,
+  SEARCH_M3U,
+  enterTab,
+  routeLiveManifest,
+  measureRowTextFit,
+} from './helpers';
 
 // The channel list: rendering safety (XSS), group filtering, and the fact that
 // search + settings now live in the docked tab bar (not the sidebar).
@@ -88,4 +97,47 @@ test('M3U-only Search: a pointer click plays the channel', async ({ page }) => {
     }));
   });
   await expect(page.locator('#view-player')).toBeVisible();
+});
+
+// The row has a fixed height because the list is virtualized, so its two text
+// lines can overflow into the neighbouring row instead of growing the row.
+test('channel rows fit both text lines in their fixed box', async ({ page }) => {
+  await routePlaylist(page, SEARCH_M3U);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  const fit = await measureRowTextFit(
+    page,
+    '.channel-main .channel-item',
+    'channel-info',
+    'channel-now',
+  );
+  expect(fit.needed).toBeLessThanOrEqual(fit.available);
+});
+
+// Each result section has its own scroll box, so a lone Channels list has to
+// fill the view rather than stop at the height a second section would need.
+test('M3U-only Search fills the view when Channels is the only section', async ({ page }) => {
+  const many = ['#EXTM3U'];
+  for (let i = 0; i < 12; i++) {
+    many.push(`#EXTINF:-1 group-title="News",Alpha ${i}`, `http://streams.example.com/${i}.m3u8`);
+  }
+  await routePlaylist(page, many.join('\n'));
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  await enterTab(page, 'search');
+  await page.locator('.tab-bar-search-input').fill('alpha');
+  await expect(page.locator('#view-search')).toBeVisible();
+
+  const fill = await page.locator('.search-virtual-scroll').evaluate((el) => {
+    const view = el.closest('.search-view') as HTMLElement;
+    const available = view.clientHeight
+      - (el.getBoundingClientRect().top - view.getBoundingClientRect().top)
+      - parseFloat(getComputedStyle(view).paddingBottom);
+    return { height: el.getBoundingClientRect().height, available };
+  });
+  expect(fill.height).toBeGreaterThan(fill.available - 4);
 });

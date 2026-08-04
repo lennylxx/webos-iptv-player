@@ -15,6 +15,8 @@ import { ChannelListEditor } from './channel-list-editor';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 
+// Row strides mirror the fixed row geometry in css/channel-list.css:
+// .channel-item is 88px, .group-item is 60px plus its 8px vertical margin.
 const CHANNEL_ROW_STRIDE = 88;
 const GROUP_ROW_STRIDE = 68;
 const CHANNEL_OVERSCAN = 12;

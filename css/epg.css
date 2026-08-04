@@ -515,9 +515,7 @@
   position: absolute;
   left: 0;
   right: 0;
-  height: 80px;
   box-sizing: border-box;
-  overflow: hidden;
   display: flex;
   align-items: flex-start;
   gap: 20px;
@@ -525,10 +523,6 @@
   cursor: pointer;
   border-bottom: 1px solid rgba(42, 42, 62, 0.5);
   transition: background 0.12s;
-}
-
-.epg-programme-item.has-description {
-  height: 108px;
 }
 
 .epg-programme-item::before {

@@ -33,6 +33,8 @@ const POINTER_MARGIN = 40;
 const GROUP_DWELL_EDGE = 48;
 const GROUP_DWELL_MS = 500;
 const POINTER_EXIT_DWELL_MS = 500;
+// Row strides mirror the fixed row geometry in css/player.css: .sidebar-ch-item
+// is 84px plus a 4px gap, .sidebar-group-item is 64px.
 const CHANNEL_ROW_STRIDE = 88;
 const GROUP_ROW_STRIDE = 64;
 const CHANNEL_OVERSCAN = 12;

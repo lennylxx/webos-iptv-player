@@ -11,6 +11,7 @@ export interface VirtualRange {
 
 export class VirtualList {
   private offset = 0;
+  private leading = 0;
   private readonly itemSize: number | null;
   private sizes = new Float64Array(0);
   private offsets = new Float64Array(1);
@@ -38,6 +39,21 @@ export class VirtualList {
     this.offset = Math.max(0, offset);
   }
 
+  // Height of the content rendered above item 0 inside the same scroll
+  // container (a detail header, a grid title). Item offsets stay in list
+  // coordinates while the scroll offset stays in container coordinates, so a
+  // caller can hand the container's raw scrollTop straight to
+  // setScrollOffset and write scrollOffset straight back.
+  setLeadingSize(size: number): void {
+    this.leading = Math.max(0, size);
+  }
+
+  // Where the viewport starts in list coordinates; negative while the leading
+  // content is still (partly) on screen.
+  private get viewStart(): number {
+    return this.offset - this.leading;
+  }
+
   setItemSizes(sizes: number[]): void {
     if (this.itemSize !== null) {
       throw new Error('setItemSizes is only available for variable-size lists');
@@ -55,16 +71,16 @@ export class VirtualList {
     if (this.itemSize !== null) {
       throw new Error('updateItemSizes is only available for variable-size lists');
     }
-    let changed = false;
+    let changedFrom = -1;
     for (const update of updates) {
       if (update.index < 0 || update.index >= this.sizes.length) continue;
       if (update.size <= 0) throw new RangeError('item sizes must be greater than zero');
       if (Math.abs(this.sizes[update.index] - update.size) < 0.1) continue;
       this.sizes[update.index] = update.size;
-      changed = true;
+      if (changedFrom < 0 || update.index < changedFrom) changedFrom = update.index;
     }
-    if (changed) this.rebuildOffsets();
-    return changed;
+    if (changedFrom >= 0) this.rebuildOffsets(changedFrom);
+    return changedFrom >= 0;
   }
 
   getTotalSize(itemCount: number): number {
@@ -78,7 +94,7 @@ export class VirtualList {
     const visibleItems = Math.max(1, Math.ceil(viewportSize / this.itemSize));
     const requestedStart = Math.max(
       0,
-      Math.floor(this.offset / this.itemSize) - this.overscan,
+      Math.floor(this.viewStart / this.itemSize) - this.overscan,
     );
     const start = Math.min(requestedStart, Math.max(0, count - visibleItems));
     const end = Math.min(count, start + visibleItems + this.overscan * 2);
@@ -97,11 +113,15 @@ export class VirtualList {
       ? itemStart + this.itemSize
       : this.getItemOffset(index + 1);
     if (itemEnd <= itemStart) return false;
+    // Compare in container coordinates so the leading content counts against
+    // the viewport instead of leaving rows it covers inside the range.
+    const start = this.leading + itemStart;
+    const end = this.leading + itemEnd;
     let nextOffset = this.offset;
-    if (itemStart < nextOffset) {
-      nextOffset = itemStart;
-    } else if (itemEnd > nextOffset + viewportSize) {
-      nextOffset = itemEnd - viewportSize;
+    if (start < nextOffset) {
+      nextOffset = start;
+    } else if (end > nextOffset + viewportSize) {
+      nextOffset = end - viewportSize;
     }
     nextOffset = Math.max(0, nextOffset);
     if (nextOffset === this.offset) return false;
@@ -117,7 +137,7 @@ export class VirtualList {
     if (index < 0 || itemEnd <= itemStart) return;
     this.offset = Math.max(
       0,
-      itemStart - (viewportSize - (itemEnd - itemStart)) / 2,
+      this.leading + itemStart - (viewportSize - (itemEnd - itemStart)) / 2,
     );
   }
 
@@ -125,8 +145,11 @@ export class VirtualList {
     const count = Math.min(Math.max(0, itemCount), this.offsets.length - 1);
     if (count === 0) return { start: 0, end: 0 };
 
-    const first = this.itemAtOffset(Math.min(this.offset, this.offsets[count]), count);
-    const visibleEnd = this.firstOffsetAtOrAfter(this.offset + viewportSize, count);
+    const first = this.itemAtOffset(
+      Math.min(Math.max(0, this.viewStart), this.offsets[count]),
+      count,
+    );
+    const visibleEnd = this.firstOffsetAtOrAfter(this.viewStart + viewportSize, count);
     return {
       start: Math.max(0, first - this.overscan),
       end: Math.min(count, Math.max(first + 1, visibleEnd) + this.overscan),
@@ -155,11 +178,17 @@ export class VirtualList {
     return low;
   }
 
-  private rebuildOffsets(): void {
-    const offsets = new Float64Array(this.sizes.length + 1);
-    for (let index = 0; index < this.sizes.length; index++) {
-      offsets[index + 1] = offsets[index] + this.sizes[index];
+  // Offsets are a running sum, so a size change only invalidates the entries
+  // after it — rebuilding in place from there keeps re-measurement allocation
+  // free on very large lists.
+  private rebuildOffsets(from = 0): void {
+    let start = from;
+    if (this.offsets.length !== this.sizes.length + 1) {
+      this.offsets = new Float64Array(this.sizes.length + 1);
+      start = 0;
     }
-    this.offsets = offsets;
+    for (let index = start; index < this.sizes.length; index++) {
+      this.offsets[index + 1] = this.offsets[index] + this.sizes[index];
+    }
   }
 }

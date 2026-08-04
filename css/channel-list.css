@@ -102,6 +102,8 @@
   position: relative;
 }
 
+/* Fixed height: the group list is virtualized, so GROUP_ROW_STRIDE in
+   channel-list.ts must stay this height plus the 8px vertical margin. */
 .group-item {
   position: absolute;
   left: 0;
@@ -187,6 +189,9 @@
   width: 100%;
 }
 
+/* Fixed height: the channel list is virtualized, so CHANNEL_ROW_STRIDE in
+   channel-list.ts must stay this height plus the 4px row gap. The two text
+   lines only just fit, so check this box before growing either font. */
 .channel-item {
   position: absolute;
   left: 0;

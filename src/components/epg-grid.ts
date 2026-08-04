@@ -32,6 +32,8 @@ type GroupOption = { id: string; label: string; count: number };
 
 const CHANNEL_ROW_SIZE = 72;
 const GROUP_ROW_SIZE = 44;
+// Seed sizes only: rows are content-sized (a one-line description is shorter
+// than a two-line one), so the real heights are measured after each render.
 const PROGRAMME_ROW_ESTIMATE = 80;
 const PROGRAMME_WITH_DESCRIPTION_ESTIMATE = 108;
 const VIRTUAL_OVERSCAN = 8;
@@ -76,6 +78,8 @@ export class EpgGrid {
   private groupOptionsLocale: SupportedLocale | null = null;
   private programmeSource: Programme[] | null = null;
   private programmeSizeKey = '';
+  private programmeCount = 0;
+  private measuredProgrammes = new Set<number>();
   private scrollFrame: number | null = null;
   private readonly scrollGuard = new VirtualScrollGuard();
 
@@ -299,6 +303,7 @@ export class EpgGrid {
     }
     const todayMs = startOfDisplayDay(new Date()).getTime();
     const programmes = this.getCurrentProgrammes();
+    this.programmeCount = programmes.length;
     const epgId = channel ? EpgService.findChannelId(channel) : null;
     const programmeSource = epgId ? EpgService.programmes[epgId] ?? null : null;
     if (programmeSource !== this.programmeSource) {
@@ -314,6 +319,7 @@ export class EpgGrid {
     ].join(':');
     if (programmeSizeKey !== this.programmeSizeKey) {
       this.programmeSizeKey = programmeSizeKey;
+      this.measuredProgrammes.clear();
       this.programmeVirtualizer.setItemSizes(programmes.map(programme =>
         programme.description
           ? PROGRAMME_WITH_DESCRIPTION_ESTIMATE
@@ -502,7 +508,7 @@ export class EpgGrid {
                       : false;
                     const progress = catchupAvailable && hasCatchup ? progressMap!.get(startMs) : undefined;
                     return html`
-                      <div class="epg-programme-item ${p.description ? 'has-description' : ''}
+                      <div class="epg-programme-item
                                   state-${state} ${current ? 'current' : ''} ${foc ? 'focused' : ''}"
                            data-key="${String(p.start.getTime())}"
                            data-prog-idx="${i}"
@@ -535,6 +541,8 @@ export class EpgGrid {
       </div>
     `);
 
+    if (this.measureProgrammeRows()) this.applyProgrammeRowOffsets();
+
     const channelList = this.container.querySelector<HTMLElement>('.epg-channel-list');
     const programmeList = this.container.querySelector<HTMLElement>('.epg-programmes-pane');
     if (channelList) {
@@ -556,6 +564,38 @@ export class EpgGrid {
       this.scrollGuard.syncOffset(groupList, 'vertical', this.groupVirtualizer.scrollOffset);
     }
     if (ensureFocus) this.scrollFocusedIntoView();
+  }
+
+  /** Programme rows are content-sized — a one-line description is shorter than a
+   *  two-line one — so the seeded estimates are replaced by real heights once a
+   *  row has been rendered. Returns true when a size changed. */
+  private measureProgrammeRows(): boolean {
+    const updates: Array<{ index: number; size: number }> = [];
+    this.container.querySelectorAll<HTMLElement>('.epg-programme-item').forEach((row) => {
+      const index = parseInt(row.dataset.progIdx || '-1', 10);
+      if (index < 0 || this.measuredProgrammes.has(index)) return;
+      const size = row.getBoundingClientRect().height;
+      if (size <= 0) return;
+      this.measuredProgrammes.add(index);
+      updates.push({ index, size });
+    });
+    return this.programmeVirtualizer.updateItemSizes(updates);
+  }
+
+  /** Re-place the rendered rows after a measurement instead of rendering again:
+   *  the rows themselves are unchanged, only their offsets moved. */
+  private applyProgrammeRowOffsets(): void {
+    const spacer = this.container.querySelector<HTMLElement>(
+      '#epg-programmes .epg-virtual-spacer',
+    );
+    if (!spacer) return;
+    const rows = this.container.querySelectorAll<HTMLElement>('.epg-programme-item');
+    spacer.style.height = `${this.programmeVirtualizer.getTotalSize(this.programmeCount)}px`;
+    rows.forEach((row) => {
+      const index = parseInt(row.dataset.progIdx || '-1', 10);
+      if (index < 0) return;
+      row.style.top = `${this.programmeVirtualizer.getItemOffset(index)}px`;
+    });
   }
 
   private bindEvents(): void {

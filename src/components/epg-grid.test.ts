@@ -175,6 +175,29 @@ describe('EpgGrid.render', () => {
     )?.style.height).toBe('240px');
   });
 
+  it('replaces the seeded row estimates with measured row heights', () => {
+    expect(container.querySelector<HTMLElement>(
+      '#epg-programmes .epg-virtual-spacer',
+    )?.style.height).toBe('324px');
+
+    const original = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function getRect(this: Element) {
+      return this.classList.contains('epg-programme-item')
+        ? { height: 85 } as DOMRect
+        : original.call(this);
+    };
+    try {
+      grid.render();
+      expect(container.querySelector<HTMLElement>(
+        '#epg-programmes .epg-virtual-spacer',
+      )?.style.height).toBe('255px');
+      expect(progItems().map(el => (el as HTMLElement).style.top))
+        .toEqual(['0px', '85px', '170px']);
+    } finally {
+      Element.prototype.getBoundingClientRect = original;
+    }
+  });
+
   it('renders bounded windows for 50,000 channels and programs', () => {
     state.channels = Array.from({ length: 50_000 }, (_, index) => ({
       name: `Channel ${String(index)}`,

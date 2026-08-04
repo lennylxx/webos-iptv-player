@@ -715,6 +715,9 @@
   width: 100%;
 }
 
+/* Fixed height: the channel list is virtualized, so CHANNEL_ROW_STRIDE in
+   sidebar.ts must stay this height plus the 4px row gap. The two text lines
+   only just fit, so check this box before growing either font. */
 .player-sidebar .sidebar-ch-item {
   position: absolute;
   left: 0;

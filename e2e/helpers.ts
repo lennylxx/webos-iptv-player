@@ -93,6 +93,40 @@ export async function enterTab(
   await page.mouse.up();
 }
 
+// Both channel rows have a fixed height because their lists are virtualized, so
+// their two text lines overflow into the neighbouring row instead of growing it.
+// Returns the row's inner height and the height its text actually needs, adding
+// the secondary line first when the fixture has no EPG data for it.
+export async function measureRowTextFit(
+  page: Page,
+  rowSelector: string,
+  infoClass: string,
+  secondLineClass: string,
+): Promise<{ available: number; needed: number }> {
+  const row = page.locator(rowSelector).first();
+  await expect(row).toBeVisible();
+  return row.evaluate(
+    (el: HTMLElement, [info, second]) => {
+      const box = el.querySelector<HTMLElement>(`.${info}`);
+      if (!box) throw new Error(`row has no .${info}`);
+      if (!box.querySelector(`.${second}`)) {
+        const line = document.createElement('div');
+        line.className = second;
+        line.textContent = 'Programme';
+        box.appendChild(line);
+      }
+      const style = getComputedStyle(el);
+      const chrome = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+        + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+      return {
+        available: el.getBoundingClientRect().height - chrome,
+        needed: box.scrollHeight,
+      };
+    },
+    [infoClass, secondLineClass],
+  );
+}
+
 // Every spec imports `test` from here; it auto-stubs the service probe
 // before each test so no file has to repeat it.
 export const test = base.extend({
