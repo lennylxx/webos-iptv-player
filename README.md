@@ -8,15 +8,15 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Channel list | Recently watched |
 | --- | --- |
-| ![Channel list](https://github.com/user-attachments/assets/1e0bf500-3077-46c9-973f-7e5691db6da1) | ![Recently watched](https://github.com/user-attachments/assets/2040d2f1-e263-4b75-8ff5-c3b43ea6341b) |
+| ![Channel list](https://github.com/user-attachments/assets/99dfb28e-0f47-461c-92d6-70c9fb285b7b) | ![Recently watched](https://github.com/user-attachments/assets/d28e6147-03c8-402e-b697-70ac524dc1d9) |
 
 | Program guide | Catch-up resume |
 | --- | --- |
-| ![Program guide](https://github.com/user-attachments/assets/ee5123fa-775a-4bfc-a48c-10df9cdeaa26) | ![Catch-up resume](https://github.com/user-attachments/assets/c969b7ba-35ab-46f4-9832-cd29bf46c0e3) |
+| ![Program guide](https://github.com/user-attachments/assets/b5a3c75b-bfc4-4413-aa41-ed981c657130) | ![Catch-up resume](https://github.com/user-attachments/assets/a55843ab-723a-4ef1-9add-491d694fd215) |
 
 | Channel info | Playback overlays |
 | --- | --- |
-| ![Channel info](https://github.com/user-attachments/assets/9b77591d-ac4f-4746-bf69-5d4527f6ce8c) | ![Playback overlays](https://github.com/user-attachments/assets/4d88a64d-7004-4481-aa64-0ebcf5355987) |
+| ![Channel info](https://github.com/user-attachments/assets/87744996-4e94-45fe-b3ba-103ff7b2ddb9) | ![Playback overlays](https://github.com/user-attachments/assets/b1734ae5-637e-4759-ae88-227d832294e4) |
 
 | Subtitles | Subtitle search |
 | --- | --- |
@@ -24,15 +24,15 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Movies | Movie detail |
 | --- | --- |
-| ![Movies](https://github.com/user-attachments/assets/143c7505-f09f-44f6-9543-bcc56c485635) | ![Movie detail](https://github.com/user-attachments/assets/0876fd43-19af-41c1-bc0b-bc3785d7b447) |
+| ![Movies](https://github.com/user-attachments/assets/a6b09baf-0342-4e02-9d7e-5cf7677d1ecf) | ![Movie detail](https://github.com/user-attachments/assets/820d768b-0ed2-42fa-b2bc-5caee70d4a1c) |
 
 | Series detail | Search |
 | --- | --- |
-| ![Series detail](https://github.com/user-attachments/assets/26eff63b-50dd-4a17-acf0-65f7e5ba3128) | ![Search](https://github.com/user-attachments/assets/9dbb9b5e-f8cf-4c5b-8a09-07f728444191) |
+| ![Series detail](https://github.com/user-attachments/assets/05810327-7066-4202-94d0-7cb08e87168e) | ![Search](https://github.com/user-attachments/assets/008383a1-64c5-49f9-8cc6-877a0ebbae08) |
 
 | Settings | Theme picker |
 | --- | --- |
-| ![Settings](https://github.com/user-attachments/assets/90ea0f6d-a472-4bbc-9425-781327767c51) | ![Theme picker](https://github.com/user-attachments/assets/4bf0b902-e29e-4dbf-b35f-285d21b88932) |
+| ![Settings](https://github.com/user-attachments/assets/a50a7179-07c7-4d92-821f-d16aa544f7f9) | ![Theme picker](https://github.com/user-attachments/assets/48eb438f-3b61-4508-80fe-0775ab729027) |
 
 ## Features
 
