@@ -365,11 +365,6 @@ async function runTvBenchmark() {
         userAgent: navigator.userAgent,
       };
     });
-    const commit = execFileSync(
-      'git',
-      ['rev-parse', '--short', 'HEAD'],
-      { encoding: 'utf8' },
-    ).trim();
     const report = {
       version: 1,
       target: 'webos-tv',
@@ -380,7 +375,6 @@ async function runTvBenchmark() {
       cpuRate: 'native',
       appVersion: build.appVersion,
       bundleSha256: build.bundleSha256,
-      commit,
       browser: device.userAgent,
       device,
       fixtureSetupMs,
