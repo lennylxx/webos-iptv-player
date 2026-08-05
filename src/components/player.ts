@@ -123,11 +123,15 @@ export class Player {
         };
       },
       onReload: recovery => {
-        log.warn('watchdog reload', this.playbackLabel(), this.recoveryState(recovery));
+        log.warn('Watchdog reloading a stalled stream',
+          'event=playback.stall.reload', this.playbackLabel(),
+          this.recoveryState(recovery));
         this.reloadCurrentStream();
       },
       onEscalate: recovery => {
-        log.error('watchdog escalate', this.playbackLabel(), this.recoveryState(recovery));
+        log.error('Watchdog recovery exhausted; advancing channel',
+          'event=playback.stall.exhausted', this.playbackLabel(),
+          this.recoveryState(recovery));
         this.channelUp();
       },
       pollMs: CONFIG.PLAYER.STALL_POLL_MS,
@@ -664,7 +668,8 @@ export class Player {
     if (this.vod) {
       const v = this.vod;
       this.vod = null;            // so stop() won't overwrite/wipe the resume point on error
-      log.warn('VOD playback error:', v.title);
+      log.warn('VOD playback error', 'event=playback.vod.error',
+        this.playbackLabel(), v.title);
       this.stop();
       showToast(t('player.unableToPlay'));
       v.onBack();
@@ -673,7 +678,9 @@ export class Player {
     if (this.catchupInfo && this.currentChannel?.catchup === 'xtream' &&
         this.currentChannel.catchupFallbackSource && !this.catchupFallbackActive) {
       this.catchupFallbackActive = true;
-      log.warn('Xtream catch-up path failed — trying legacy endpoint');
+      log.warn('Xtream catch-up failed; trying the legacy endpoint',
+        'event=playback.catchup.fallback', this.playbackLabel(),
+        'reason=xtream-path-failed');
       this.osd.updateMessage(t('player.retryingCatchup'));
       this.recreateVideoEl();
       this.videoEl?.classList.add('active');
@@ -685,7 +692,8 @@ export class Player {
     }
     const v = this.videoEl;
     if (this.errorAdvanceTimer !== null) return;
-    log.error('video error', this.playbackLabel(),
+    log.error('Video playback error', 'event=playback.video.error',
+      this.playbackLabel(),
       v ? this.mediaState(v) : 'no video element',
       v?.error ? { code: v.error.code, message: v.error.message } : 'no error info',
       '| channel:', this.currentChannel?.name,

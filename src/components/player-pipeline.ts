@@ -134,7 +134,9 @@ export class PlayerPipeline {
     if (isWebOS) {
       if (opts?.direct) {
         const mime = containerMime(url);
-        log.info('loadStream', this.callbacks.playbackLabel(token), 'url=', safeUrl,
+        log.info('Selected webOS native playback', 'event=playback.path.native',
+          this.callbacks.playbackLabel(token),
+          'reason=direct', 'url=', safeUrl,
           '| webOS native VOD | MIME', mime);
         this.playNative(url, mime);
         return;
@@ -143,7 +145,9 @@ export class PlayerPipeline {
         const mime = isFlvUrl ? 'video/x-flv'
           : isTsUrl ? 'video/mp2t'
           : 'application/vnd.apple.mpegurl';
-        log.info('loadStream', this.callbacks.playbackLabel(token), 'url=', safeUrl,
+        log.info('Selected webOS native playback', 'event=playback.path.native',
+          this.callbacks.playbackLabel(token),
+          'reason=url', 'url=', safeUrl,
           '| webOS native | catchup:', this.callbacks.isCatchup(), '| MIME', mime);
         if (isHlsUrl) void this.loadManifest(url, this.manifestSeq, token);
         this.playNative(url, mime);
@@ -152,7 +156,9 @@ export class PlayerPipeline {
       const routeKey = streamRouteKey(url);
       const cachedMime = StorageService.getStreamMime(routeKey);
       if (cachedMime) {
-        log.info('loadStream', this.callbacks.playbackLabel(token), 'url=', safeUrl,
+        log.info('Selected webOS native playback', 'event=playback.path.native',
+          this.callbacks.playbackLabel(token),
+          'reason=cache', 'url=', safeUrl,
           '| webOS native | cached MIME', cachedMime,
           '| catchup:', this.callbacks.isCatchup());
         if (cachedMime === 'application/vnd.apple.mpegurl') {
@@ -161,14 +167,16 @@ export class PlayerPipeline {
         this.playNative(url, cachedMime);
         return;
       }
-      void this.detectContentType(url).then(contentType => {
+      void this.detectContentType(url, token).then(contentType => {
         if (token !== this.loadToken || !this.videoEl) return;
         const mime = streamMime(contentType);
         if (routeKey && contentType &&
             contentType.split(';')[0].trim() !== 'application/octet-stream') {
           StorageService.setStreamMime(routeKey, mime);
         }
-        log.info('loadStream', this.callbacks.playbackLabel(token), 'url=', safeUrl,
+        log.info('Selected webOS native playback', 'event=playback.path.native',
+          this.callbacks.playbackLabel(token),
+          'reason=probe', 'url=', safeUrl,
           '| webOS native | content-type:', contentType || '(none)',
           '| catchup:', this.callbacks.isCatchup(), '| MIME', mime || '(auto)');
         if (mime === 'application/vnd.apple.mpegurl') {
@@ -184,12 +192,16 @@ export class PlayerPipeline {
     // serve HLS with no .m3u8 suffix — so classify by the server's Content-Type,
     // falling back to the URL and defaulting to HLS.
     if (opts?.direct) {
-      log.info('loadStream', this.callbacks.playbackLabel(token), 'url=', safeUrl, '| desktop direct VOD');
+      log.info('Selected direct playback', 'event=playback.path.direct',
+        this.callbacks.playbackLabel(token),
+        'reason=direct', 'url=', safeUrl, '| desktop direct VOD');
       videoEl.src = url;
-      videoEl.play().catch(e => log.warn('Direct play() rejected:', e));
+      videoEl.play().catch(e => log.warn('Direct play() rejected',
+        'event=playback.play.rejected',
+        this.callbacks.playbackLabel(token), 'path=direct', e));
       return;
     }
-    void this.detectContentType(url).then(ct => {
+    void this.detectContentType(url, token).then(ct => {
       if (token !== this.loadToken || !this.videoEl) return;
       const isFlv = isFlvUrl || ct.includes('flv');
       const isTs = isTsUrl || ct.includes('mp2t');
@@ -199,15 +211,23 @@ export class PlayerPipeline {
         '| content-type:', ct || '(none)', '| catchup:', this.callbacks.isCatchup(),
         '| isHls:', isHls, '| isTs:', isTs, '| isFlv:', isFlv);
       if (isTs || isFlv) {
-        log.info('Using mpegts.js');
-        this.loadWithMpegts(url, isFlv);
+        log.info('Selected mpegts.js playback', 'event=playback.path.mpegts',
+          this.callbacks.playbackLabel(token),
+          'reason=probe');
+        this.loadWithMpegts(url, isFlv, token);
       } else if (isDirect) {
-        log.info('Using direct video src');
+        log.info('Selected direct playback', 'event=playback.path.direct',
+          this.callbacks.playbackLabel(token),
+          'reason=probe');
         this.videoEl.src = url;
-        this.videoEl.play().catch(e => log.warn('Direct play() rejected:', e));
+        this.videoEl.play().catch(e => log.warn('Direct play() rejected',
+          'event=playback.play.rejected',
+          this.callbacks.playbackLabel(token), 'path=direct', e));
       } else {
-        log.info('Using hls.js');
-        this.loadWithHls(url, extras);
+        log.info('Selected hls.js playback', 'event=playback.path.hls',
+          this.callbacks.playbackLabel(token),
+          'reason=probe');
+        this.loadWithHls(url, extras, token);
       }
     });
   }
@@ -236,7 +256,7 @@ export class PlayerPipeline {
   // unreliable for proxied/extension-less streams, so the response header is the
   // real signal. Headers are enough, so cancel the body. Returns '' on a
   // CORS/network failure, leaving the caller on its URL heuristic (default HLS).
-  private async detectContentType(url: string): Promise<string> {
+  private async detectContentType(url: string, loadToken: number): Promise<string> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CONFIG.PLAYER.MANIFEST_TIMEOUT);
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -265,7 +285,10 @@ export class PlayerPipeline {
         offset += chunk.length;
       }
       return sniffStreamContentType(ct, prefix);
-    } catch {
+    } catch (error) {
+      log.warn('Content-type classification failed', 'event=playback.classify.failed',
+        this.callbacks.playbackLabel(loadToken),
+        error instanceof Error ? error.name : 'Error');
       return '';
     } finally {
       if (reader) void reader.cancel().catch(() => {});
@@ -285,15 +308,23 @@ export class PlayerPipeline {
     if (mime) source.type = mime;
     videoEl.appendChild(source);
     videoEl.load();
-    videoEl.play().catch(e => log.warn('Native play() rejected', this.videoLabel(videoEl),
-      this.callbacks.mediaState(videoEl), e));
+    videoEl.play().catch(e => log.warn('Native play() rejected',
+      'event=playback.play.rejected',
+      this.videoLabel(videoEl), 'path=native', this.callbacks.mediaState(videoEl), e));
   }
 
-  private loadWithHls(url: string, extras: Record<string, string> | null): void {
+  private loadWithHls(
+    url: string,
+    extras: Record<string, string> | null,
+    loadToken: number,
+  ): void {
     if (!this.videoEl) return;
     const Hls = win.__Hls as HlsType | undefined;
     try {
       if (!Hls?.isSupported()) {
+        log.warn('hls.js unsupported; using direct playback',
+            'event=playback.path.direct', this.callbacks.playbackLabel(loadToken),
+            'reason=hls-unsupported');
         this.videoEl.src = url;
         this.videoEl.play().catch(() => {});
         return;
@@ -323,7 +354,9 @@ export class PlayerPipeline {
       hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, this.callbacks.onAudioTracksUpdated);
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, this.callbacks.onSubtitleTracksUpdated);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        log.info('hls.js MANIFEST_PARSED — starting playback');
+        log.info('hls.js manifest parsed; starting playback',
+          'event=playback.manifest.parsed', this.callbacks.playbackLabel(loadToken),
+          'path=hls');
         this.videoEl?.play().catch(e => log.warn('hls play() rejected:', e));
       });
       // A good fragment played: the stream recovered, so refill the retry budget.
@@ -332,7 +365,9 @@ export class PlayerPipeline {
       // re-fetches) a few times, but give up on a genuinely dead stream so it
       // zaps to the next channel instead of retrying forever.
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        log.warn('hls.js error', { type: data.type, details: data.details, fatal: data.fatal });
+        log.warn('hls.js error', 'event=playback.hls.error',
+          this.callbacks.playbackLabel(loadToken),
+          { type: data.type, details: data.details, fatal: data.fatal });
         if (!data.fatal) return;
         if (this.hlsRecoveries >= CONFIG.PLAYER.HLS_MAX_RECOVERIES) {
           this.callbacks.onError();
@@ -341,27 +376,36 @@ export class PlayerPipeline {
         this.hlsRecoveries++;
         const n = `${this.hlsRecoveries}/${CONFIG.PLAYER.HLS_MAX_RECOVERIES}`;
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          log.info(`hls.js fatal network error — restarting load (${n})`);
+          log.info('Restarting hls.js after a fatal network error',
+            'event=playback.hls.recover.network',
+            this.callbacks.playbackLabel(loadToken), n);
           this.hls?.startLoad();
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          log.info(`hls.js fatal media error — recovering (${n})`);
+          log.info('Recovering hls.js after a fatal media error',
+            'event=playback.hls.recover.media',
+            this.callbacks.playbackLabel(loadToken), n);
           this.hls?.recoverMediaError();
         } else {
           this.callbacks.onError();
         }
       });
-    } catch {
+    } catch (error) {
+      log.warn('hls.js initialization failed; using direct playback',
+        'event=playback.hls.init.failed', this.callbacks.playbackLabel(loadToken), error);
       this.videoEl.src = url;
       this.videoEl.play().catch(() => {});
     }
   }
 
-  private loadWithMpegts(url: string, isFlv: boolean): void {
+  private loadWithMpegts(url: string, isFlv: boolean, loadToken: number): void {
     if (!this.videoEl) return;
     const mpegts = win.__mpegts as MpegtsType | undefined;
     try {
       if (!mpegts?.isSupported()) {
-        this.videoEl.src = url;
+      log.warn('mpegts.js unsupported; using direct playback',
+        'event=playback.path.direct', this.callbacks.playbackLabel(loadToken),
+        'reason=mpegts-unsupported');
+      this.videoEl.src = url;
         this.videoEl.play().catch(() => {});
         return;
       }
@@ -374,8 +418,14 @@ export class PlayerPipeline {
       player.attachMediaElement(this.videoEl);
       player.load();
       player.play();
-      player.on(mpegts.Events.ERROR, this.callbacks.onError);
-    } catch {
+      player.on(mpegts.Events.ERROR, () => {
+        log.error('mpegts.js playback error', 'event=playback.mpegts.error',
+          this.callbacks.playbackLabel(loadToken));
+        this.callbacks.onError();
+      });
+    } catch (error) {
+      log.warn('mpegts.js initialization failed; using direct playback',
+        'event=playback.mpegts.init.failed', this.callbacks.playbackLabel(loadToken), error);
       this.videoEl.src = url;
       this.videoEl.play().catch(() => {});
     }
@@ -400,7 +450,8 @@ export class PlayerPipeline {
         '#EXTM3U',
       );
       if (seq !== this.manifestSeq) return;
-      log.debug('manifest fetched', this.callbacks.playbackLabel(loadToken),
+      log.debug('Manifest fetched', 'event=playback.manifest.fetched',
+        this.callbacks.playbackLabel(loadToken),
         `bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
       const audio = parseAudioRenditions(text);
       const subtitles = parseSubtitleRenditions(text);
@@ -426,7 +477,8 @@ export class PlayerPipeline {
       });
     } catch (e) {
       if (controller.signal.aborted) return;
-      log.warn('manifest fetch failed', this.callbacks.playbackLabel(loadToken),
+      log.warn('Manifest fetch failed', 'event=playback.manifest.failed',
+        this.callbacks.playbackLabel(loadToken),
         `elapsed=${String(Date.now() - started)}ms`, e);
     } finally {
       if (this.manifestController === controller) this.manifestController = null;
