@@ -170,8 +170,7 @@ export class EpgGrid {
     const from = dayStart.getTime();
     // Bucket each program by the day it STARTS, so one spanning midnight shows
     // on its start day only — not as a stray previous-day entry atop the next day.
-    return (EpgService.programmes[epgId] ?? [])
-      .filter(p => p.start.getTime() >= from && p.start.getTime() < dayEnd);
+    return EpgService.getProgrammesStartingInRange(epgId, from, dayEnd);
   }
 
   private getVisibleChannels(): VisibleChannel[] {

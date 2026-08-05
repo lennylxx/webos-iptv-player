@@ -35,6 +35,10 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
     epgMock: {
       get programmes() { return state.programmes; },
       findChannelId: vi.fn((ch: any) => (state.programmes[ch.name] ? ch.name : null)),
+      getProgrammesStartingInRange(id: string, from: number, to: number) {
+        return (state.programmes[id] ?? [])
+          .filter(programme => programme.start.getTime() >= from && programme.start.getTime() < to);
+      },
     },
     archiveMock: {
       getCached: vi.fn(() => null as Set<number> | null | undefined),

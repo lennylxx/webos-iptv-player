@@ -59,6 +59,12 @@ describe('EpgService programme lookup', () => {
   it('returns the current and capped upcoming programmes', () => {
     expect(EpgService.getNowPlaying('ch1')?.title).toBe('Now');
     expect(EpgService.getUpcoming('ch1', 1).map((item) => item.title)).toEqual(['A']);
+    expect(EpgService.getUpcoming('ch1', 0)).toEqual([]);
+    expect(EpgService.getProgrammesStartingInRange('ch1', h(-1).getTime(), h(2).getTime())
+      .map(item => item.title)).toEqual(['Now', 'A']);
+    expect(EpgService.getProgrammesIntersectingRange('ch1', h(0).getTime(), h(1).getTime())
+      .map(item => item.title)).toEqual(['Now']);
+    expect(EpgService.getProgrammeAtStart('ch1', h(1).getTime())?.title).toBe('A');
   });
 
   it('returns empty results for an unknown channel', () => {

@@ -32,9 +32,7 @@ function resolveLegacyProgress(
   if (progress.title !== undefined) return progress;
   const epgId = EpgService.findChannelId(channel);
   if (!epgId) return null;
-  const programme = EpgService.programmes[epgId]?.find(
-    item => item.start.getTime() === progress.progStart,
-  );
+  const programme = EpgService.getProgrammeAtStart(epgId, progress.progStart);
   if (!programme) return null;
   return {
     ...progress,

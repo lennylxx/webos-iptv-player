@@ -27,6 +27,11 @@ const { data, archiveMock, storageMock, epgMock, playlistMock } = vi.hoisted(() 
         icon: string;
       }>>,
       findChannelId: vi.fn((): string | null => null),
+      getProgrammeAtStart: vi.fn(function (this: {
+        programmes: Record<string, Array<{ start: Date }>>;
+      }, id: string, timestamp: number) {
+        return this.programmes[id]?.find(item => item.start.getTime() === timestamp) ?? null;
+      }),
     },
     playlistMock: {
       channels: data.channels,

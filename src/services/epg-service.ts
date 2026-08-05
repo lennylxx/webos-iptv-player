@@ -2,6 +2,7 @@ import type { Channel, EpgChannel, EpgSource, ParsedEpg, Programme } from '../ty
 import { parseXMLTV } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
+import { EpgTimeIndex } from '../utils/epg-time-index';
 import { CONFIG } from '../config';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
 
@@ -20,6 +21,7 @@ class EpgServiceImpl {
   loaded = false;
   private sources: EpgSource[] = [];
   private states = new Map<string, SourceState>();
+  private timeIndexes = new Map<string, { source: Programme[]; index: EpgTimeIndex }>();
 
   /**
    * Clear all in-memory state. Called when the user removes every configured
@@ -32,6 +34,7 @@ class EpgServiceImpl {
     this.loaded = false;
     this.sources = [];
     this.states.clear();
+    this.timeIndexes.clear();
   }
 
   async load(sources: EpgSource[]): Promise<void> {
@@ -52,17 +55,23 @@ class EpgServiceImpl {
   }
 
   getNowPlaying(channelId: string): Programme | null {
-    const progs = this.programmes[channelId];
-    if (!progs) return null;
-    const now = Date.now();
-    return progs.find((p) => p.start.getTime() <= now && p.stop.getTime() > now) ?? null;
+    return this.getTimeIndex(channelId)?.currentAt(Date.now()) ?? null;
   }
 
   getUpcoming(channelId: string, count = 5): Programme[] {
-    const progs = this.programmes[channelId];
-    if (!progs) return [];
-    const now = Date.now();
-    return progs.filter((p) => p.start.getTime() > now).slice(0, count);
+    return this.getTimeIndex(channelId)?.upcomingAfter(Date.now(), count) ?? [];
+  }
+
+  getProgrammesStartingInRange(channelId: string, from: number, to: number): Programme[] {
+    return this.getTimeIndex(channelId)?.startingInRange(from, to) ?? [];
+  }
+
+  getProgrammesIntersectingRange(channelId: string, from: number, to: number): Programme[] {
+    return this.getTimeIndex(channelId)?.intersectingRange(from, to) ?? [];
+  }
+
+  getProgrammeAtStart(channelId: string, timestamp: number): Programme | null {
+    return this.getTimeIndex(channelId)?.atStart(timestamp) ?? null;
   }
 
   findChannelId(channel: Channel): string | null {
@@ -158,6 +167,7 @@ class EpgServiceImpl {
   private rebuildIndexes(): void {
     this.channels = {};
     this.programmes = {};
+    this.timeIndexes.clear();
     this.tzOffsetMinutes = null;
     for (const source of this.sources) {
       const data = this.states.get(source.url)?.data;
@@ -169,9 +179,22 @@ class EpgServiceImpl {
         this.channels[this.channelKey(source.url, id)] = data.channels[id];
       }
       for (const id in data.programmes) {
-        this.programmes[this.channelKey(source.url, id)] = data.programmes[id];
+        const key = this.channelKey(source.url, id);
+        const programmes = data.programmes[id];
+        this.programmes[key] = programmes;
+        this.timeIndexes.set(key, { source: programmes, index: new EpgTimeIndex(programmes) });
       }
     }
+  }
+
+  private getTimeIndex(channelId: string): EpgTimeIndex | null {
+    const programmes = this.programmes[channelId];
+    if (!programmes) return null;
+    const cached = this.timeIndexes.get(channelId);
+    if (cached?.source === programmes) return cached.index;
+    const index = new EpgTimeIndex(programmes);
+    this.timeIndexes.set(channelId, { source: programmes, index });
+    return index;
   }
 
   private channelKey(url: string, id: string): string {
