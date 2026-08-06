@@ -1116,12 +1116,20 @@ export class Settings {
     this.setXtreamStatus(id, html`${t('settings.checking')}`, '');
     const info = await createXtreamClient({ baseUrl: url, username, password }).getAccountInfo();
     if (!info) {
-      log.warn('Xtream verify failed — server unreachable or non-JSON');
+      log.warn(
+        'Xtream verify failed — server unreachable or non-JSON',
+        'event=xtream.verify.failed',
+        'reason=request_failed',
+      );
       this.setXtreamStatus(id, html`${t('settings.verifyFailed')}`, 'err');
       return;
     }
     if (!info.auth) {
-      log.warn('Xtream verify rejected — credentials not accepted (auth 0)');
+      log.warn(
+        'Xtream verify rejected — credentials not accepted (auth 0)',
+        'event=xtream.verify.rejected',
+        'reason=credentials',
+      );
       this.setXtreamStatus(id, html`${t('settings.loginFailed')}`, 'err');
       return;
     }

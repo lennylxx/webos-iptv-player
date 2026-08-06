@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const { fetchTextMock } = vi.hoisted(() => ({ fetchTextMock: vi.fn() }));
-vi.mock('../utils/fetch-helper', () => ({ fetchText: fetchTextMock }));
+vi.mock('../utils/fetch-helper', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../utils/fetch-helper')>(),
+  fetchLimitedText: fetchTextMock,
+}));
 
+import { FetchTextError } from '../utils/fetch-helper';
+import { CONFIG } from '../config';
 import { createXtreamClient } from './xtream-client';
 
 const creds = { baseUrl: 'http://host:8080', username: 'u1', password: 'p1' };
@@ -16,6 +21,8 @@ describe('XtreamClient.getAccountInfo', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       'http://host:8080/player_api.php?username=u1&password=p1',
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
   });
 
@@ -116,6 +123,8 @@ describe('XtreamClient live archive metadata', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringContaining('action=get_live_streams'),
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
   });
 
@@ -157,6 +166,8 @@ describe('XtreamClient program archive listings', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringMatching(/action=get_simple_data_table.*stream_id=101/),
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
   });
 
@@ -191,6 +202,8 @@ describe('XtreamClient VOD', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringContaining('action=get_vod_categories'),
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
     expect(cats).toEqual([{ id: '1', name: 'Cat A' }]);
   });
@@ -204,6 +217,8 @@ describe('XtreamClient VOD', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringMatching(/action=get_vod_streams.*category_id=1/),
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
     expect(items).toEqual([{
       accountId: 'acc1', streamId: '10', name: 'Movie One', poster: 'http://host/a.png',
@@ -229,6 +244,8 @@ describe('XtreamClient VOD', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringMatching(/action=get_vod_info.*vod_id=10/),
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
     expect(info).toEqual({
       plot: 'A plot', cast: 'Actor', director: 'Dir', genre: 'Drama',
@@ -237,11 +254,55 @@ describe('XtreamClient VOD', () => {
     });
   });
 
-  it('returns [] / null on malformed JSON, not throwing', async () => {
+  it('classifies malformed catalog JSON instead of returning an empty catalog', async () => {
     fetchTextMock.mockResolvedValue('<html>not json</html>');
-    expect(await createXtreamClient(creds).getVodCategories()).toEqual([]);
-    expect(await createXtreamClient(creds).getVodStreams()).toEqual([]);
-    expect(await createXtreamClient(creds).getVodInfo('10')).toBeNull();
+    await expect(createXtreamClient(creds).getVodCategories())
+      .rejects.toMatchObject({ code: 'invalid_json' });
+    await expect(createXtreamClient(creds).getVodStreams())
+      .rejects.toMatchObject({ code: 'invalid_json' });
+    await expect(createXtreamClient(creds).getVodInfo('10'))
+      .rejects.toMatchObject({ code: 'invalid_json' });
+  });
+
+  it('bounds catalog responses and forwards cancellation', async () => {
+    const controller = new AbortController();
+    fetchTextMock.mockResolvedValue('[]');
+
+    await createXtreamClient(creds).getVodStreams('1', controller.signal);
+
+    expect(fetchTextMock).toHaveBeenCalledWith(
+      expect.stringContaining('action=get_vod_streams'),
+      CONFIG.XTREAM.CATALOG_MAX_BYTES,
+      expect.any(Number),
+      controller.signal,
+    );
+  });
+
+  it('classifies oversized and cancelled catalog requests', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    fetchTextMock.mockRejectedValueOnce(
+      new FetchTextError('too_large', 'Response exceeds limit'),
+    );
+    await expect(createXtreamClient(creds).getVodStreams())
+      .rejects.toMatchObject({ code: 'too_large' });
+    expect(warn).toHaveBeenCalledWith(
+      '[Xtream]',
+      'Xtream request failed',
+      'event=xtream.request.failed',
+      'endpoint=get_vod_streams',
+      'code=too_large',
+      'timeoutMs=30000',
+      `limitBytes=${CONFIG.XTREAM.CATALOG_MAX_BYTES}`,
+    );
+
+    warn.mockClear();
+    fetchTextMock.mockRejectedValueOnce(
+      new FetchTextError('aborted', 'Request was cancelled'),
+    );
+    await expect(createXtreamClient(creds).getVodStreams())
+      .rejects.toMatchObject({ code: 'cancelled' });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('parses VOD sidecar subtitles, keeping only http(s)-URL entries', async () => {
@@ -289,6 +350,8 @@ describe('XtreamClient Series', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringContaining('action=get_series_categories'),
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
     expect(cats).toEqual([{ id: '2', name: 'Cat B' }]);
   });
@@ -301,6 +364,8 @@ describe('XtreamClient Series', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringMatching(/action=get_series.*category_id=2/),
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
     expect(items).toEqual([{
       accountId: 'acc1', seriesId: '7', name: 'Series One', poster: 'http://host/c.png',
@@ -322,6 +387,8 @@ describe('XtreamClient Series', () => {
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringMatching(/action=get_series_info.*series_id=7/),
       expect.any(Number),
+      expect.any(Number),
+      undefined,
     );
     expect(info!.seasons).toEqual([1, 2]);
     expect(info!.episodesBySeason[1]).toEqual([{
@@ -331,11 +398,14 @@ describe('XtreamClient Series', () => {
     expect(info!.episodesBySeason[2][0].id).toBe('201');
   });
 
-  it('returns [] / null on malformed JSON, not throwing', async () => {
+  it('classifies malformed series JSON instead of returning an empty catalog', async () => {
     fetchTextMock.mockResolvedValue('nope');
-    expect(await createXtreamClient(creds).getSeriesCategories()).toEqual([]);
-    expect(await createXtreamClient(creds).getSeries()).toEqual([]);
-    expect(await createXtreamClient(creds).getSeriesInfo('7')).toBeNull();
+    await expect(createXtreamClient(creds).getSeriesCategories())
+      .rejects.toMatchObject({ code: 'invalid_json' });
+    await expect(createXtreamClient(creds).getSeries())
+      .rejects.toMatchObject({ code: 'invalid_json' });
+    await expect(createXtreamClient(creds).getSeriesInfo('7'))
+      .rejects.toMatchObject({ code: 'invalid_json' });
   });
 
   it('getSeriesInfo returns empty seasons when episodes is absent', async () => {

@@ -46,6 +46,17 @@ interface ProgramResult {
   programme: Programme;
 }
 
+type CatalogLoadResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: unknown };
+
+function captureCatalogLoad<T>(promise: Promise<T>): Promise<CatalogLoadResult<T>> {
+  return promise.then(
+    (data) => ({ ok: true, data }),
+    (error: unknown) => ({ ok: false, error }),
+  );
+}
+
 // The Search section: one query box over Channels / Programs / Movies / Series.
 // Results are relevance-ranked and capped; movies and series match the account's
 // full catalogs, loaded once on open and cached.
@@ -77,6 +88,7 @@ export class Search {
   private scrollFrame: number | null = null;
   private queryFrame: number | null = null;
   private queryGeneration = 0;
+  private catalogController: AbortController | null = null;
   private resultLimit: number = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
   private hasMoreResults = false;
   private readonly scrollGuard = new VirtualScrollGuard();
@@ -101,12 +113,24 @@ export class Search {
 
   async open(account: PlaylistEntry | null): Promise<void> {
     this.cancelScheduledQuery();
+    this.catalogController?.abort();
+    this.catalogController = null;
+    if (this.loadedFor !== account?.id) {
+      this.allVod = [];
+      this.allSeries = [];
+      this.vodIndex = { items: [], values: [] };
+      this.seriesIndex = { items: [], values: [] };
+      this.loadedFor = null;
+    }
     this.account = account;
     this.query = '';
     this.resultLimit = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
     this.buildProgramIndex(false);
     this.render();
-    if (account) await this.loadCatalog(account);
+    if (account) {
+      this.catalogController = new AbortController();
+      await this.loadCatalog(account, this.catalogController.signal);
+    }
   }
 
   /** The tab bar's search box drives the query; re-render the results for it. */
@@ -143,6 +167,11 @@ export class Search {
     this.resumePrompt.hide();
   }
 
+  deactivate(): void {
+    this.catalogController?.abort();
+    this.catalogController = null;
+  }
+
   handleAction(action: Action): void {
     if (this.resumePrompt.visible) {
       this.resumePrompt.handleAction(action);
@@ -172,23 +201,48 @@ export class Search {
   // Load the whole catalogs once per account (cached in IndexedDB), guarding
   // against account-switch races so a stale in-flight load can't clobber the
   // current account's catalog. Non-blocking: open() already rendered the box.
-  private async loadCatalog(account: PlaylistEntry): Promise<void> {
+  private async loadCatalog(account: PlaylistEntry, signal: AbortSignal): Promise<void> {
     if (this.loadedFor === account.id) return;
-    try {
-      const [vod, series] = await Promise.all([loadAllVodStreams(account), loadAllSeries(account)]);
-      // A newer open() (account switch) superseded this load — discard the stale
-      // result instead of clobbering the current account's catalog.
-      if (this.account?.id !== account.id) return;
-      this.allVod = vod;
-      this.allSeries = series;
-      this.vodIndex = prepareNameSearchItems(vod);
-      this.seriesIndex = prepareNameSearchItems(series);
-      this.loadedFor = account.id;
-      log.debug('catalog loaded', vod.length, 'movies,', series.length, 'series');
-      if (this.query.trim()) this.render();
-    } catch (err) {
-      log.error('catalog load failed:', err);
+    const [vod, series] = await Promise.all([
+      captureCatalogLoad(loadAllVodStreams(account, signal)),
+      captureCatalogLoad(loadAllSeries(account, signal)),
+    ]);
+    // A newer open() (account switch) superseded this load — discard the stale
+    // result instead of clobbering the current account's catalog.
+    if (signal.aborted || this.account?.id !== account.id) return;
+    if (vod.ok) {
+      this.allVod = vod.data;
+      this.vodIndex = prepareNameSearchItems(vod.data);
+    } else {
+      log.error(
+        'Movie search catalog load failed',
+        'event=xtream.search.load.failed',
+        'resource=movies',
+        vod.error,
+      );
     }
+    if (series.ok) {
+      this.allSeries = series.data;
+      this.seriesIndex = prepareNameSearchItems(series.data);
+    } else {
+      log.error(
+        'Series search catalog load failed',
+        'event=xtream.search.load.failed',
+        'resource=series',
+        series.error,
+      );
+    }
+    if (vod.ok && series.ok) {
+      this.loadedFor = account.id;
+      log.debug(
+        'catalog loaded',
+        vod.data.length,
+        'movies,',
+        series.data.length,
+        'series',
+      );
+    }
+    if (this.query.trim()) this.render();
   }
 
   private onSelect(): void {

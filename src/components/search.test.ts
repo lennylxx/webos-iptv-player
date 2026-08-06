@@ -318,6 +318,15 @@ describe('Search', () => {
     expect(handlers.onBack).toHaveBeenCalled();
   });
 
+  it('cancels the catalog request session when deactivated', async () => {
+    const { view } = await openWith();
+    const signal = catalogMock.loadAllVodStreams.mock.calls[0][1] as AbortSignal;
+
+    view.deactivate();
+
+    expect(signal.aborted).toBe(true);
+  });
+
   it('a superseded a1 load cannot clobber a2 catalog (account-switch race)', async () => {
     const a1: PlaylistEntry = { id: 'a1', name: 'A1', url: 'http://host/a', source: 'xtream', xtream: { username: 'u1', password: 'p1' } };
     const a2: PlaylistEntry = { id: 'a2', name: 'A2', url: 'http://host/a', source: 'xtream', xtream: { username: 'u2', password: 'p2' } };
@@ -338,7 +347,10 @@ describe('Search', () => {
 
     // Start both opens concurrently; neither load has resolved yet.
     const p1 = view.open(a1);
+    const a1Signal = catalogMock.loadAllVodStreams.mock.calls[0][1] as AbortSignal;
     const p2 = view.open(a2);
+    expect(a1Signal.aborted).toBe(true);
+    expect(catalogMock.loadAllVodStreams.mock.calls[1][1]).toBeInstanceOf(AbortSignal);
 
     // Resolve a2's load first — it should commit as the current account.
     resolveA2Vod([vod('v2', 'Bravo Movie')]);
@@ -353,6 +365,35 @@ describe('Search', () => {
     view.setQuery('movie');
     expect(container.textContent).toContain('Bravo Movie');
     expect(container.textContent).not.toContain('Alpha Movie');
+  });
+
+  it('does not retain the previous account catalog when the next load fails', async () => {
+    const { view } = await openWith({ vod: [vod('v1', 'Alpha Movie')] });
+    const a2: PlaylistEntry = {
+      id: 'a2',
+      name: 'A2',
+      url: 'http://host/a',
+      source: 'xtream',
+      xtream: { username: 'u2', password: 'p2' },
+    };
+    catalogMock.loadAllVodStreams.mockRejectedValue(new Error('failed'));
+    catalogMock.loadAllSeries.mockRejectedValue(new Error('failed'));
+
+    await view.open(a2);
+    view.setQuery('movie');
+
+    expect(container.textContent).not.toContain('Alpha Movie');
+  });
+
+  it('keeps movie search available when the series catalog fails', async () => {
+    catalogMock.loadAllVodStreams.mockResolvedValue([vod('v1', 'Alpha Movie')]);
+    catalogMock.loadAllSeries.mockRejectedValue(new Error('failed'));
+    const view = new Search(container, mkHandlers());
+
+    await view.open(account);
+    view.setQuery('movie');
+
+    expect(container.textContent).toContain('Alpha Movie');
   });
 });
 

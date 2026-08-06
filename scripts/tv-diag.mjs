@@ -303,6 +303,37 @@ export function extractPlaybackTimeline(logs) {
   return timeline;
 }
 
+export function extractXtreamTimeline(logs) {
+  const timeline = [];
+  for (const entry of logs) {
+    const event = entry.text.match(/\bevent=(xtream\.[a-z0-9_.-]+)/i)?.[1];
+    if (!event) continue;
+    const endpoint = entry.text.match(/\bendpoint=([a-z0-9_-]+)/i)?.[1] ?? '';
+    const code = entry.text.match(/\bcode=([a-z0-9_-]+)/i)?.[1] ?? '';
+    const operation = entry.text.match(/\boperation=([a-z0-9_-]+)/i)?.[1] ?? '';
+    const resource = entry.text.match(/\bresource=([a-z0-9_-]+)/i)?.[1] ?? '';
+    const reason = entry.text.match(/\breason=([a-z0-9_-]+)/i)?.[1] ?? '';
+    const items = Number(entry.text.match(/\bitems=(\d+)/)?.[1] ?? NaN);
+    const timeoutMs = Number(entry.text.match(/\btimeoutMs=(\d+)/)?.[1] ?? NaN);
+    const limitBytes = Number(entry.text.match(/\blimitBytes=(\d+)/)?.[1] ?? NaN);
+    timeline.push({
+      observedAt: entry.observedAt,
+      event,
+      endpoint,
+      code,
+      operation,
+      resource,
+      reason,
+      items: Number.isFinite(items) ? items : null,
+      timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : null,
+      limitBytes: Number.isFinite(limitBytes) ? limitBytes : null,
+      level: entry.level,
+      text: entry.text,
+    });
+  }
+  return timeline;
+}
+
 export function assembleDiagnosticReport({
   capturedAt,
   full,
@@ -376,6 +407,7 @@ export function assembleDiagnosticReport({
     nativeMetrics,
     playlists,
     playback: extractPlaybackTimeline(safeLogs),
+    xtream: extractXtreamTimeline(safeLogs),
     logs: safeLogs,
     network: normalizeNetworkRecords(networkEvents, redactor),
   };
@@ -441,6 +473,19 @@ export function formatDiagnosticSummary(report) {
     lines.push(
       `- ${event.code} session=${String(event.session ?? '?')} load=${String(event.load ?? '?')}`,
     );
+  }
+  lines.push(`Xtream events: ${String(report.xtream?.length ?? 0)}`);
+  for (const event of report.xtream ?? []) {
+    const fields = [];
+    if (event.endpoint) fields.push(`endpoint=${event.endpoint}`);
+    if (event.operation) fields.push(`operation=${event.operation}`);
+    if (event.resource) fields.push(`resource=${event.resource}`);
+    if (event.reason) fields.push(`reason=${event.reason}`);
+    if (event.code) fields.push(`code=${event.code}`);
+    if (event.items != null) fields.push(`items=${String(event.items)}`);
+    if (event.timeoutMs != null) fields.push(`timeoutMs=${String(event.timeoutMs)}`);
+    if (event.limitBytes != null) fields.push(`limitBytes=${String(event.limitBytes)}`);
+    lines.push(`- ${event.event}${fields.length ? ` ${fields.join(' ')}` : ''}`);
   }
   lines.push(`Network requests: ${String(report.network?.length ?? 0)}`);
   lines.push(

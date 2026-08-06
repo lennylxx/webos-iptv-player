@@ -449,7 +449,10 @@ describe('Movies account-switch race', () => {
 
     // Start both opens concurrently; neither has resolved yet.
     const p1 = view.open(a1);
+    const a1Signal = catalogMock.loadVodCategories.mock.calls[0][1] as AbortSignal;
     const p2 = view.open(a2);
+    expect(a1Signal.aborted).toBe(true);
+    expect(catalogMock.loadVodCategories.mock.calls[1][1]).toBeInstanceOf(AbortSignal);
 
     // Resolve a2's categories; wait for open(a2) to resume and call loadVodStreams.
     resolveA2Cats([{ id: 'c2', name: 'Cat Bravo' }]);

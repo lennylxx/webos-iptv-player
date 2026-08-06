@@ -13,7 +13,10 @@ const { clientMock, cacheStore } = vi.hoisted(() => ({
   cacheStore: new Map<string, { key: string; timestamp: number; data: unknown }>(),
 }));
 
-vi.mock('./xtream-client', () => ({ createXtreamClient: () => clientMock }));
+vi.mock('./xtream-client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./xtream-client')>(),
+  createXtreamClient: () => clientMock,
+}));
 vi.mock('./idb-cache', () => ({
   getCachedCatalog: vi.fn(async (key: string) => cacheStore.get(key) ?? null),
   setCachedCatalog: vi.fn(async (key: string, data: unknown) => {
@@ -24,6 +27,7 @@ vi.mock('./idb-cache', () => ({
 import { loadVodCategories, loadVodStreams, loadVodInfo, loadSeriesCategories, loadSeries, loadSeriesInfo, loadAllVodStreams, loadAllSeries } from './xtream-catalog';
 import { getCachedCatalog, setCachedCatalog } from './idb-cache';
 import { CONFIG } from '../config';
+import { XtreamRequestError } from './xtream-client';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -60,12 +64,22 @@ describe('xtream-catalog', () => {
   });
 
   it('falls back to stale cache when a stale re-fetch returns empty', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const stale = Date.now() - CONFIG.XTREAM.CATALOG_TTL_MS - 1;
     cacheStore.set('x1|vod_streams|1', { key: 'x1|vod_streams|1', timestamp: stale, data: [{ accountId: 'x1', streamId: '10' }] });
     clientMock.getVodStreams.mockResolvedValue([]);
     const out = await loadVodStreams(account, '1');
     expect(out).toEqual([{ accountId: 'x1', streamId: '10' }]);
     expect(setCachedCatalog).not.toHaveBeenCalled(); // an empty re-fetch must not overwrite the stale copy
+    expect(warn).toHaveBeenCalledWith(
+      '[Catalog]',
+      'Catalog refresh was empty; serving stale data',
+      'event=xtream.catalog.stale',
+      'resource=vod_streams',
+      'reason=empty',
+      'items=1',
+    );
+    warn.mockRestore();
   });
 
   it('falls back to stale VOD info when a stale re-fetch returns null', async () => {
@@ -93,6 +107,51 @@ describe('xtream-catalog', () => {
     clientMock.getVodCategories.mockResolvedValue([]);
     await loadVodCategories(account);
     expect(getCachedCatalog).toHaveBeenCalledWith('x1|vod_categories');
+  });
+
+  it('serves stale data after a failed refresh but surfaces cold-cache failures', async () => {
+    const stale = Date.now() - CONFIG.XTREAM.CATALOG_TTL_MS - 1;
+    cacheStore.set('x1|vod_categories', {
+      key: 'x1|vod_categories',
+      timestamp: stale,
+      data: [{ id: 'old', name: 'Old' }],
+    });
+    clientMock.getVodCategories.mockRejectedValue(new XtreamRequestError(
+      'too_large',
+      'Xtream response exceeded its size limit',
+    ));
+
+    await expect(loadVodCategories(account)).resolves.toEqual([{ id: 'old', name: 'Old' }]);
+    cacheStore.clear();
+    await expect(loadVodCategories(account)).rejects.toMatchObject({ code: 'too_large' });
+  });
+
+  it('propagates cancellation and never writes the cancelled response', async () => {
+    const controller = new AbortController();
+    clientMock.getVodCategories.mockImplementation(async (signal: AbortSignal) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort();
+      return [{ id: '1', name: 'Cat A' }];
+    });
+
+    await expect(loadVodCategories(account, controller.signal))
+      .rejects.toMatchObject({ code: 'cancelled' });
+    expect(setCachedCatalog).not.toHaveBeenCalled();
+  });
+
+  it('does not turn cancellation into a stale-cache success', async () => {
+    const stale = Date.now() - CONFIG.XTREAM.CATALOG_TTL_MS - 1;
+    cacheStore.set('x1|vod_categories', {
+      key: 'x1|vod_categories',
+      timestamp: stale,
+      data: [{ id: 'old', name: 'Old' }],
+    });
+    clientMock.getVodCategories.mockRejectedValue(new XtreamRequestError(
+      'cancelled',
+      'Xtream request was cancelled',
+    ));
+
+    await expect(loadVodCategories(account)).rejects.toMatchObject({ code: 'cancelled' });
   });
 });
 
@@ -164,7 +223,7 @@ describe('xtream-catalog whole-catalog (search)', () => {
     clientMock.getVodStreams.mockResolvedValue([{ accountId: 'x1', streamId: '10', name: 'Movie One' }]);
     const out = await loadAllVodStreams(account);
     expect(out).toEqual([{ accountId: 'x1', streamId: '10', name: 'Movie One' }]);
-    expect(clientMock.getVodStreams).toHaveBeenCalledWith();
+    expect(clientMock.getVodStreams).toHaveBeenCalledWith(undefined, undefined);
     expect(setCachedCatalog).toHaveBeenCalledWith('x1|vod_all', out);
   });
 
@@ -197,7 +256,7 @@ describe('xtream-catalog whole-catalog (search)', () => {
     clientMock.getSeries.mockResolvedValue([{ accountId: 'x1', seriesId: 's1', name: 'Series One' }]);
     const out = await loadAllSeries(account);
     expect(out).toEqual([{ accountId: 'x1', seriesId: 's1', name: 'Series One' }]);
-    expect(clientMock.getSeries).toHaveBeenCalledWith();
+    expect(clientMock.getSeries).toHaveBeenCalledWith(undefined, undefined);
     expect(setCachedCatalog).toHaveBeenCalledWith('x1|series_all', out);
   });
 

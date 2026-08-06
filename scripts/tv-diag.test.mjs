@@ -4,6 +4,7 @@ import {
   DiagnosticRedactor,
   assembleDiagnosticReport,
   extractPlaybackTimeline,
+  extractXtreamTimeline,
   normalizeNetworkRecords,
   parseNativeMetricOutput,
   parseDiagnosticArgs,
@@ -306,6 +307,37 @@ describe('diagnostic report assembly', () => {
     })]);
   });
 
+  it('extracts structured Xtream request failures from natural-language logs', () => {
+    const timeline = extractXtreamTimeline([
+      {
+        observedAt: '2026-01-01T00:00:00.000Z',
+        source: 'console',
+        level: 'warning',
+        text: '[Xtream] Xtream request failed event=xtream.request.failed'
+          + ' endpoint=get_vod_streams operation=browse resource=vod_streams'
+          + ' reason=request_failed code=too_large items=12'
+          + ' timeoutMs=30000 limitBytes=33554432',
+      },
+      {
+        observedAt: '2026-01-01T00:00:01.000Z',
+        source: 'console',
+        level: 'log',
+        text: '[Xtream] ordinary log',
+      },
+    ]);
+    expect(timeline).toEqual([expect.objectContaining({
+      event: 'xtream.request.failed',
+      endpoint: 'get_vod_streams',
+      operation: 'browse',
+      resource: 'vod_streams',
+      reason: 'request_failed',
+      code: 'too_large',
+      items: 12,
+      timeoutMs: 30000,
+      limitBytes: 33554432,
+    })]);
+  });
+
   it('does not leak probe secrets into the assembled report', () => {
     const report = assembleDiagnosticReport({
       capturedAt: '2026-01-01T00:00:00.000Z',
@@ -346,6 +378,12 @@ describe('diagnostic report assembly', () => {
         source: 'console',
         level: 'log',
         text: 'Selected native playback event=playback.path.native session=1 load=1',
+      }, {
+        observedAt: '2026-01-01T00:00:02.000Z',
+        source: 'console',
+        level: 'warning',
+        text: 'Xtream request failed event=xtream.request.failed'
+          + ' endpoint=get_series code=timeout timeoutMs=30000 limitBytes=33554432',
       }],
       networkEvents: [],
     });
@@ -356,6 +394,10 @@ describe('diagnostic report assembly', () => {
     const summary = formatDiagnosticSummary(report);
     expect(summary).toContain('webview=200');
     expect(summary).toContain('playback.path.native');
+    expect(summary).toContain(
+      'xtream.request.failed endpoint=get_series code=timeout'
+        + ' timeoutMs=30000 limitBytes=33554432',
+    );
     expect(summary).toContain('Media: playing');
   });
 

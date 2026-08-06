@@ -1,7 +1,8 @@
-import { fetchText } from '../utils/fetch-helper';
+import { FetchTextError, fetchLimitedText } from '../utils/fetch-helper';
 import { xtreamPlayerApi, type XtreamCredentials } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
 import type { VodCategory, VodItem, VodInfo, SeriesCategory, SeriesItem, SeriesInfo, Episode, SidecarSubtitle } from '../types';
+import { CONFIG } from '../config';
 
 const log = createLogger('Xtream');
 
@@ -9,6 +10,27 @@ const log = createLogger('Xtream');
 const ACCOUNT_INFO_TIMEOUT = 15000;
 // Catalog calls can be large; use the default network timeout.
 const CATALOG_TIMEOUT = 30000;
+
+export type XtreamRequestErrorCode =
+  | 'cancelled'
+  | 'timeout'
+  | 'too_large'
+  | 'invalid_json'
+  | 'request_failed';
+
+export class XtreamRequestError extends Error {
+  constructor(
+    public readonly code: XtreamRequestErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'XtreamRequestError';
+  }
+}
+
+export function isXtreamRequestCancelled(err: unknown): boolean {
+  return err instanceof XtreamRequestError && err.code === 'cancelled';
+}
 
 /** Account status from the portal's `user_info`, normalized for display. */
 export interface XtreamAccountInfo {
@@ -48,12 +70,83 @@ function toStr(v: unknown): string {
   return v === null || v === undefined ? '' : String(v);
 }
 
-// Fetch + parse JSON, tolerant: returns null on network or parse failure.
-async function fetchJson(url: string, timeout: number): Promise<unknown> {
+function mapFetchError(err: unknown): XtreamRequestError {
+  if (err instanceof XtreamRequestError) return err;
+  if (err instanceof FetchTextError) {
+    if (err.code === 'aborted') {
+      return new XtreamRequestError('cancelled', 'Xtream request was cancelled');
+    }
+    if (err.code === 'timeout') {
+      return new XtreamRequestError('timeout', 'Xtream request timed out');
+    }
+    if (err.code === 'too_large') {
+      return new XtreamRequestError('too_large', 'Xtream response exceeded its size limit');
+    }
+  }
+  return new XtreamRequestError('request_failed', 'Xtream request failed');
+}
+
+function diagnosticEndpoint(url: string): string {
   try {
-    return JSON.parse(await fetchText(url, timeout));
+    return new URL(url).searchParams.get('action') || 'account_info';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function logRequestFailure(
+  url: string,
+  error: XtreamRequestError,
+  timeout: number,
+  maxBytes: number,
+): void {
+  if (error.code === 'cancelled') return;
+  log.warn(
+    'Xtream request failed',
+    'event=xtream.request.failed',
+    `endpoint=${diagnosticEndpoint(url)}`,
+    `code=${error.code}`,
+    `timeoutMs=${timeout}`,
+    `limitBytes=${maxBytes}`,
+  );
+}
+
+async function fetchJsonStrict(
+  url: string,
+  timeout: number,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  let text: string;
+  try {
+    text = await fetchLimitedText(url, maxBytes, timeout, signal);
   } catch (err) {
-    log.warn('fetchJson failed:', err);
+    const requestError = mapFetchError(err);
+    logRequestFailure(url, requestError, timeout, maxBytes);
+    throw requestError;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    const requestError =
+      new XtreamRequestError('invalid_json', 'Xtream response was not valid JSON');
+    logRequestFailure(url, requestError, timeout, maxBytes);
+    throw requestError;
+  }
+}
+
+// Metadata calls remain tolerant because their callers already model unsupported
+// endpoints as null/empty. Cancellation still propagates to the request owner.
+async function fetchJson(
+  url: string,
+  timeout: number,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  try {
+    return await fetchJsonStrict(url, timeout, maxBytes, signal);
+  } catch (err) {
+    if (isXtreamRequestCancelled(err)) throw err;
     return null;
   }
 }
@@ -100,31 +193,35 @@ function parseServerOffset(server: Record<string, unknown>): number | null {
 export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
   return {
     /** Account status, or null when the panel is unreachable / returns non-JSON. */
-    async getAccountInfo(): Promise<XtreamAccountInfo | null> {
-      try {
-        const text = await fetchText(xtreamPlayerApi(creds), ACCOUNT_INFO_TIMEOUT);
-        const data = JSON.parse(text) as { user_info?: Record<string, unknown> };
-        const u = data.user_info;
-        if (!u) return null;
-        const exp = u.exp_date;
-        return {
-          auth: u.auth === 1 || u.auth === '1' || u.auth === true,
-          status: typeof u.status === 'string' ? u.status : '',
-          expiresAt: exp === null || exp === undefined || exp === '' ? null : toNumber(exp) || null,
-          maxConnections: toNumber(u.max_connections),
-          activeConnections: toNumber(u.active_cons),
-          allowedOutputFormats: Array.isArray(u.allowed_output_formats)
-            ? u.allowed_output_formats.filter((format): format is string => typeof format === 'string')
-            : [],
-        };
-      } catch (err) {
-        log.warn('getAccountInfo failed:', err);
-        return null;
-      }
+    async getAccountInfo(signal?: AbortSignal): Promise<XtreamAccountInfo | null> {
+      const data = await fetchJson(
+        xtreamPlayerApi(creds),
+        ACCOUNT_INFO_TIMEOUT,
+        CONFIG.XTREAM.ACCOUNT_MAX_BYTES,
+        signal,
+      ) as { user_info?: Record<string, unknown> } | null;
+      const u = data?.user_info;
+      if (!u) return null;
+      const exp = u.exp_date;
+      return {
+        auth: u.auth === 1 || u.auth === '1' || u.auth === true,
+        status: typeof u.status === 'string' ? u.status : '',
+        expiresAt: exp === null || exp === undefined || exp === '' ? null : toNumber(exp) || null,
+        maxConnections: toNumber(u.max_connections),
+        activeConnections: toNumber(u.active_cons),
+        allowedOutputFormats: Array.isArray(u.allowed_output_formats)
+          ? u.allowed_output_formats.filter((format): format is string => typeof format === 'string')
+          : [],
+      };
     },
 
-    async getLiveStreams(): Promise<XtreamLiveStream[]> {
-      const arr = asArray(await fetchJson(xtreamPlayerApi(creds, 'get_live_streams'), CATALOG_TIMEOUT));
+    async getLiveStreams(signal?: AbortSignal): Promise<XtreamLiveStream[]> {
+      const arr = asArray(await fetchJson(
+        xtreamPlayerApi(creds, 'get_live_streams'),
+        CATALOG_TIMEOUT,
+        CONFIG.XTREAM.CATALOG_MAX_BYTES,
+        signal,
+      ));
       return arr
         .map((stream) => ({
           streamId: toStr(stream.stream_id),
@@ -134,8 +231,13 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         .filter(stream => stream.streamId !== '');
     },
 
-    async getServerClock(): Promise<XtreamServerClock | null> {
-      const data = await fetchJson(xtreamPlayerApi(creds), ACCOUNT_INFO_TIMEOUT);
+    async getServerClock(signal?: AbortSignal): Promise<XtreamServerClock | null> {
+      const data = await fetchJson(
+        xtreamPlayerApi(creds),
+        ACCOUNT_INFO_TIMEOUT,
+        CONFIG.XTREAM.ACCOUNT_MAX_BYTES,
+        signal,
+      );
       if (!data || typeof data !== 'object') return null;
       const server = (data as { server_info?: unknown }).server_info;
       if (!server || typeof server !== 'object') return null;
@@ -146,10 +248,15 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
       };
     },
 
-    async getArchiveListings(streamId: string): Promise<XtreamArchiveListing[] | null> {
+    async getArchiveListings(
+      streamId: string,
+      signal?: AbortSignal,
+    ): Promise<XtreamArchiveListing[] | null> {
       const data = await fetchJson(
         xtreamPlayerApi(creds, 'get_simple_data_table', { stream_id: streamId }),
         CATALOG_TIMEOUT,
+        CONFIG.XTREAM.DETAIL_MAX_BYTES,
+        signal,
       );
       if (!data || typeof data !== 'object') return null;
       const raw = (data as { epg_listings?: unknown }).epg_listings;
@@ -170,16 +277,26 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         .filter(listing => listing.start > 0 && listing.stop > listing.start);
     },
 
-    async getVodCategories(): Promise<VodCategory[]> {
-      const arr = asArray(await fetchJson(xtreamPlayerApi(creds, 'get_vod_categories'), CATALOG_TIMEOUT));
+    async getVodCategories(signal?: AbortSignal): Promise<VodCategory[]> {
+      const arr = asArray(await fetchJsonStrict(
+        xtreamPlayerApi(creds, 'get_vod_categories'),
+        CATALOG_TIMEOUT,
+        CONFIG.XTREAM.CATEGORY_MAX_BYTES,
+        signal,
+      ));
       return arr
         .map((c) => ({ id: toStr(c.category_id), name: toStr(c.category_name) }))
         .filter((c) => c.id !== '');
     },
 
-    async getVodStreams(categoryId?: string): Promise<VodItem[]> {
+    async getVodStreams(categoryId?: string, signal?: AbortSignal): Promise<VodItem[]> {
       const params = categoryId ? { category_id: categoryId } : undefined;
-      const arr = asArray(await fetchJson(xtreamPlayerApi(creds, 'get_vod_streams', params), CATALOG_TIMEOUT));
+      const arr = asArray(await fetchJsonStrict(
+        xtreamPlayerApi(creds, 'get_vod_streams', params),
+        CATALOG_TIMEOUT,
+        CONFIG.XTREAM.CATALOG_MAX_BYTES,
+        signal,
+      ));
       return arr
         .map((s) => ({
           accountId,
@@ -193,8 +310,13 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         .filter((v) => v.streamId !== '');
     },
 
-    async getVodInfo(vodId: string): Promise<VodInfo | null> {
-      const data = await fetchJson(xtreamPlayerApi(creds, 'get_vod_info', { vod_id: vodId }), CATALOG_TIMEOUT);
+    async getVodInfo(vodId: string, signal?: AbortSignal): Promise<VodInfo | null> {
+      const data = await fetchJsonStrict(
+        xtreamPlayerApi(creds, 'get_vod_info', { vod_id: vodId }),
+        CATALOG_TIMEOUT,
+        CONFIG.XTREAM.DETAIL_MAX_BYTES,
+        signal,
+      );
       if (!data || typeof data !== 'object') return null;
       const info = (data as { info?: unknown }).info;
       if (!info || typeof info !== 'object') return null;
@@ -214,16 +336,26 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
       };
     },
 
-    async getSeriesCategories(): Promise<SeriesCategory[]> {
-      const arr = asArray(await fetchJson(xtreamPlayerApi(creds, 'get_series_categories'), CATALOG_TIMEOUT));
+    async getSeriesCategories(signal?: AbortSignal): Promise<SeriesCategory[]> {
+      const arr = asArray(await fetchJsonStrict(
+        xtreamPlayerApi(creds, 'get_series_categories'),
+        CATALOG_TIMEOUT,
+        CONFIG.XTREAM.CATEGORY_MAX_BYTES,
+        signal,
+      ));
       return arr
         .map((c) => ({ id: toStr(c.category_id), name: toStr(c.category_name) }))
         .filter((c) => c.id !== '');
     },
 
-    async getSeries(categoryId?: string): Promise<SeriesItem[]> {
+    async getSeries(categoryId?: string, signal?: AbortSignal): Promise<SeriesItem[]> {
       const params = categoryId ? { category_id: categoryId } : undefined;
-      const arr = asArray(await fetchJson(xtreamPlayerApi(creds, 'get_series', params), CATALOG_TIMEOUT));
+      const arr = asArray(await fetchJsonStrict(
+        xtreamPlayerApi(creds, 'get_series', params),
+        CATALOG_TIMEOUT,
+        CONFIG.XTREAM.CATALOG_MAX_BYTES,
+        signal,
+      ));
       return arr
         .map((s) => ({
           accountId,
@@ -236,8 +368,13 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         .filter((s) => s.seriesId !== '');
     },
 
-    async getSeriesInfo(seriesId: string): Promise<SeriesInfo | null> {
-      const data = await fetchJson(xtreamPlayerApi(creds, 'get_series_info', { series_id: seriesId }), CATALOG_TIMEOUT);
+    async getSeriesInfo(seriesId: string, signal?: AbortSignal): Promise<SeriesInfo | null> {
+      const data = await fetchJsonStrict(
+        xtreamPlayerApi(creds, 'get_series_info', { series_id: seriesId }),
+        CATALOG_TIMEOUT,
+        CONFIG.XTREAM.DETAIL_MAX_BYTES,
+        signal,
+      );
       if (!data || typeof data !== 'object') return null;
       const episodesRaw = (data as { episodes?: unknown }).episodes;
       const episodesBySeason: Record<number, Episode[]> = {};

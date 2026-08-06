@@ -21,16 +21,34 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
   private currentVod: VodItem | null = null;
   private currentInfo: VodInfo | null = null;
   private openedFromWatchlist = false;
+  private detailController: AbortController | null = null;
 
-  protected loadCategories(account: PlaylistEntry): Promise<VodCategory[]> { return loadVodCategories(account); }
-  protected loadItems(account: PlaylistEntry, categoryId: string): Promise<VodItem[]> { return loadVodStreams(account, categoryId); }
+  protected loadCategories(
+    account: PlaylistEntry,
+    signal: AbortSignal,
+  ): Promise<VodCategory[]> {
+    return loadVodCategories(account, signal);
+  }
+  protected loadItems(
+    account: PlaylistEntry,
+    categoryId: string,
+    signal: AbortSignal,
+  ): Promise<VodItem[]> {
+    return loadVodStreams(account, categoryId, signal);
+  }
   protected itemId(v: VodItem): string { return v.streamId; }
   protected itemName(v: VodItem): string { return v.name; }
   protected itemPoster(v: VodItem): string { return v.poster; }
   protected itemCategoryId(v: VodItem): string { return v.categoryId; }
   protected clearDetail(): void {
+    this.detailController?.abort();
+    this.detailController = null;
     this.currentVod = null;
     this.openedFromWatchlist = false;
+  }
+  protected onRequestSessionReset(): void {
+    this.detailController?.abort();
+    this.detailController = null;
   }
 
   // Continue and Watchlist tiles may not be in a preloaded category, so
@@ -129,13 +147,22 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
   }
 
   protected async openDetail(vod: VodItem, fromWatchlist = false): Promise<void> {
-    if (!this.account) return;
+    const account = this.account;
+    if (!account || !this.requestSignal) return;
+    this.detailController?.abort();
+    this.detailController = new AbortController();
+    const signal = this.detailController.signal;
     this.openedFromWatchlist = fromWatchlist;
     this.currentVod = vod;
     this.mode = 'detail';
     this.currentInfo = null;
     this.renderDetail();
-    this.currentInfo = await loadVodInfo(this.account, vod.streamId);
+    try {
+      this.currentInfo = await loadVodInfo(account, vod.streamId, signal);
+    } catch (err) {
+      if (!this.requestFailed('Movie detail load', err, signal)) return;
+      this.currentInfo = null;
+    }
     if (this.mode === 'detail' && this.currentVod === vod) this.renderDetail();
   }
 

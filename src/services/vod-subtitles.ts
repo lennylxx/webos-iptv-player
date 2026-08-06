@@ -51,7 +51,11 @@ export class VodSubtitles {
       log.info('loaded', cues.length, 'cues from', entry.url);
     } catch (e) {
       entry.loaded = false; // allow a retry on the next show
-      log.warn('sidecar load failed:', e);
+      log.warn(
+        'VOD sidecar subtitle load failed',
+        'event=xtream.subtitle.load.failed',
+        e,
+      );
     }
   }
 

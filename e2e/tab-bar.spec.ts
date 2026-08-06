@@ -108,6 +108,55 @@ test('the search box keeps the current view until a query is typed, then covers 
   await expect(page.locator('#view-channels')).toBeVisible();
 });
 
+test('opening Search does not cancel the catalog loading underneath it', async ({ page }) => {
+  await seedXtream(page);
+  await routeLiveManifest(page);
+  let releaseCategories = () => {};
+  let markCategoriesRequested = () => {};
+  const categoriesRequested = new Promise<void>((resolve) => {
+    markCategoriesRequested = resolve;
+  });
+  const categoryGate = new Promise<void>((resolve) => {
+    releaseCategories = resolve;
+  });
+  await page.route('**/player_api.php*', async (route) => {
+    const action = new URL(route.request().url()).searchParams.get('action');
+    if (action === 'get_vod_categories') {
+      markCategoriesRequested();
+      await categoryGate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{ category_id: '1', category_name: 'Cat A' }]),
+      });
+      return;
+    }
+    if (action === 'get_vod_streams') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          stream_id: '10',
+          name: 'Movie One',
+          category_id: '1',
+          container_extension: 'mp4',
+        }]),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  await enterTab(page, 'movies');
+  await categoriesRequested;
+  await enterTab(page, 'search');
+  releaseCategories();
+
+  await expect(page.locator('#view-movies')).toContainText('Movie One');
+});
+
 test('M3U-only shows a docked bar with Live/Guide/Settings/Search only (no Movies/Series)', async ({ page }) => {
   await page.route('**/playlist.m3u', (route) =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U }));

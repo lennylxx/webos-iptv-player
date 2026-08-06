@@ -35,6 +35,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   private episodeFocusIndex = 0;
   private episodeSource: Episode[] | null = null;
   private measuredEpisodes = new Set<number>();
+  private detailController: AbortController | null = null;
   private readonly episodeVirtualizer = new VirtualList({
     overscan: EPISODE_OVERSCAN,
     fallbackViewportSize: EPISODE_VIEWPORT_FALLBACK,
@@ -45,13 +46,32 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     super(container, handlers);
   }
 
-  protected loadCategories(account: PlaylistEntry): Promise<SeriesCategory[]> { return loadSeriesCategories(account); }
-  protected loadItems(account: PlaylistEntry, categoryId: string): Promise<SeriesItem[]> { return loadSeries(account, categoryId); }
+  protected loadCategories(
+    account: PlaylistEntry,
+    signal: AbortSignal,
+  ): Promise<SeriesCategory[]> {
+    return loadSeriesCategories(account, signal);
+  }
+  protected loadItems(
+    account: PlaylistEntry,
+    categoryId: string,
+    signal: AbortSignal,
+  ): Promise<SeriesItem[]> {
+    return loadSeries(account, categoryId, signal);
+  }
   protected itemId(s: SeriesItem): string { return s.seriesId; }
   protected itemName(s: SeriesItem): string { return s.name; }
   protected itemPoster(s: SeriesItem): string { return s.poster; }
   protected itemCategoryId(s: SeriesItem): string { return s.categoryId; }
-  protected clearDetail(): void { this.currentSeries = null; }
+  protected clearDetail(): void {
+    this.detailController?.abort();
+    this.detailController = null;
+    this.currentSeries = null;
+  }
+  protected onRequestSessionReset(): void {
+    this.detailController?.abort();
+    this.detailController = null;
+  }
 
   protected continueRail(): Safe | '' {
     return this.resume.length
@@ -115,7 +135,11 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   }
 
   protected async openDetail(series: SeriesItem): Promise<void> {
-    if (!this.account) return;
+    const account = this.account;
+    if (!account || !this.requestSignal) return;
+    this.detailController?.abort();
+    this.detailController = new AbortController();
+    const signal = this.detailController.signal;
     this.currentSeries = series;
     this.mode = 'detail';
     this.currentInfo = null;
@@ -125,7 +149,12 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     this.episodeVirtualizer.setScrollOffset(0);
     this.detailLoading = true;
     this.renderDetail();
-    this.currentInfo = await loadSeriesInfo(this.account, series.seriesId);
+    try {
+      this.currentInfo = await loadSeriesInfo(account, series.seriesId, signal);
+    } catch (err) {
+      if (!this.requestFailed('Series detail load', err, signal)) return;
+      this.currentInfo = null;
+    }
     if (this.mode === 'detail' && this.currentSeries === series) {
       this.detailLoading = false;
       this.selectedSeason = this.currentInfo?.seasons[0] ?? 0;

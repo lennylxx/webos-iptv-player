@@ -8,6 +8,9 @@ import { t } from '../i18n';
 import { VirtualGrid } from '../utils/virtual-grid';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('Catalog');
 
 const CATALOG_GRID_COLUMN_STRIDE = 244;
 const CATALOG_GRID_ROW_STRIDE = 395;
@@ -59,6 +62,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
   private categoryScrollFrame: number | null = null;
   protected readonly scrollGuard = new VirtualScrollGuard();
   private gridSnapTimer: ReturnType<typeof setTimeout> | null = null;
+  private requestController: AbortController | null = null;
 
   constructor(protected container: HTMLElement, protected handlers: CatalogHandlers) {
     this.nav = new SpatialNav(container, (el) => this.onFocusChanged(el));
@@ -99,8 +103,15 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
   protected abstract readonly resumeKind: ResumeKind;     // which resume entries this section owns
   protected abstract readonly emptyMessage: string;       // no catalog on the account
   protected abstract readonly gridEmptyMessage: string;   // empty category grid
-  protected abstract loadCategories(account: PlaylistEntry): Promise<C[]>;
-  protected abstract loadItems(account: PlaylistEntry, categoryId: string): Promise<I[]>;
+  protected abstract loadCategories(
+    account: PlaylistEntry,
+    signal: AbortSignal,
+  ): Promise<C[]>;
+  protected abstract loadItems(
+    account: PlaylistEntry,
+    categoryId: string,
+    signal: AbortSignal,
+  ): Promise<I[]>;
   protected abstract itemId(item: I): string;
   protected abstract itemName(item: I): string;
   protected abstract itemPoster(item: I): string;
@@ -112,6 +123,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
   protected abstract selectExtra(el: HTMLElement): boolean;
   protected moveExtraFocus(_action: Action): boolean { return false; }
   protected handleExtraScroll(_target: HTMLElement): boolean { return false; }
+  protected onRequestSessionReset(): void {}
   // The Continue Watching rail (or '' when there is nothing to resume).
   protected abstract continueRail(): Safe | '';
   // The Watchlist rail (or '' when it is empty).
@@ -121,38 +133,89 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
   // Hero when no rail item exists (Movies falls back to a resumed item); default none.
   protected heroFallback(): I | null { return null; }
 
-  setAccount(account: PlaylistEntry): void { this.account = account; }
+  setAccount(account: PlaylistEntry): void {
+    if (this.account?.id !== account.id) {
+      this.requestController?.abort();
+      this.onRequestSessionReset();
+    }
+    this.account = account;
+  }
+
+  protected get requestSignal(): AbortSignal | null {
+    return this.requestController?.signal ?? null;
+  }
+
+  protected requestFailed(context: string, err: unknown, signal: AbortSignal): boolean {
+    if (signal.aborted) return false;
+    log.error(
+      `${context} failed`,
+      'event=xtream.view.load.failed',
+      `operation=${context.toLowerCase().replace(/\s+/g, '_')}`,
+      err,
+    );
+    return true;
+  }
+
+  private beginRequests(): AbortSignal {
+    this.requestController?.abort();
+    this.onRequestSessionReset();
+    this.requestController = new AbortController();
+    return this.requestController.signal;
+  }
 
   refreshPlaybackState(): void {
     if (this.mode === 'detail') this.renderDetail();
   }
 
+  deactivate(): void {
+    this.requestController?.abort();
+    this.requestController = null;
+    this.onRequestSessionReset();
+  }
+
   async open(account: PlaylistEntry): Promise<void> {
+    const signal = this.beginRequests();
     this.account = account;
     this.deepLinkBack = null;
     this.mode = 'browse';
+    this.categories = [];
+    this.railGroups = [];
     this.itemsByCategory = {};
+    this.gridCategory = null;
     this.categoryVirtualizer.setScrollOffset(0);
     this.gridVirtualizer.setScrollOffset(0);
     this.resume = StorageService.getResumeList(account.id).filter((e) => e.kind === this.resumeKind);
     this.renderLoading();
-    const categories = await this.loadCategories(account);
-    // A newer open() (account switch) superseded this load — discard it.
-    if (this.account?.id !== account.id) return;
-    this.categories = categories;
-    const railCats = this.categories.slice(0, CONFIG.XTREAM.RAIL_CATEGORIES);
-    const loaded = await Promise.all(railCats.map((c) => this.loadItems(account, c.id)));
-    if (this.account?.id !== account.id) return;
-    this.railGroups = railCats.map((category, i) => {
-      this.itemsByCategory[category.id] = loaded[i];
-      return { category, items: loaded[i].slice(0, CONFIG.XTREAM.RAIL_ITEMS) };
-    });
-    this.renderBrowse();
+    try {
+      const categories = await this.loadCategories(account, signal);
+      if (signal.aborted || this.account?.id !== account.id) return;
+      this.categories = categories;
+      const railCats = this.categories.slice(0, CONFIG.XTREAM.RAIL_CATEGORIES);
+      const loaded = await Promise.all(
+        railCats.map((c) => this.loadItems(account, c.id, signal)),
+      );
+      if (signal.aborted || this.account?.id !== account.id) return;
+      this.railGroups = railCats.map((category, i) => {
+        this.itemsByCategory[category.id] = loaded[i];
+        return { category, items: loaded[i].slice(0, CONFIG.XTREAM.RAIL_ITEMS) };
+      });
+      this.renderBrowse();
+    } catch (err) {
+      if (signal.aborted) return;
+      log.error(
+        'Catalog browse load failed',
+        'event=xtream.view.load.failed',
+        'operation=browse',
+        err,
+      );
+      if (this.account?.id === account.id) this.renderBrowse();
+    }
   }
 
   // Deep-link entry (from Search): open this item's detail directly. Back returns
   // to the caller via onDetailBack (no browse is loaded underneath).
   async openItem(account: PlaylistEntry, item: I, onDetailBack: () => void): Promise<void> {
+    this.beginRequests();
     this.account = account;
     this.deepLinkBack = onDetailBack;
     await this.openDetail(item);
@@ -191,6 +254,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
   private onBack(): void {
     if (this.mode === 'detail') {
       if (this.deepLinkBack) { const back = this.deepLinkBack; this.deepLinkBack = null; this.clearDetail(); back(); return; }
+      this.clearDetail();
       this.gridCategory ? this.renderGrid() : this.renderBrowse();
       return;
     }
@@ -247,10 +311,29 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
 
   private async openGrid(categoryId: string): Promise<void> {
     if (!this.account) return;
+    const account = this.account;
+    const signal = this.requestSignal;
+    if (!signal || signal.aborted) return;
     this.gridCategory = this.categories.find((c) => c.id === categoryId) ?? null;
     if (!this.itemsByCategory[categoryId]) {
       this.renderLoading();
-      this.itemsByCategory[categoryId] = await this.loadItems(this.account, categoryId);
+      try {
+        this.itemsByCategory[categoryId] = await this.loadItems(
+          account,
+          categoryId,
+          signal,
+        );
+      } catch (err) {
+        if (signal.aborted) return;
+        log.error(
+          'Catalog category load failed',
+          'event=xtream.view.load.failed',
+          'operation=category',
+          err,
+        );
+        this.itemsByCategory[categoryId] = [];
+      }
+      if (signal.aborted || this.account?.id !== account.id) return;
     }
     this.gridFocusIndex = 0;
     this.gridVirtualizer.setScrollOffset(0);

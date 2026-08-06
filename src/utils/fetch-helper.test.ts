@@ -122,6 +122,19 @@ describe('fetchLimitedText', () => {
     expect(cancel).toHaveBeenCalled();
   });
 
+  it('rejects a declared oversized response before reading its body', async () => {
+    const read = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ 'content-length': '9' }),
+      body: { getReader: () => ({ read, cancel: vi.fn() }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://x', 8, 5000))
+      .rejects.toMatchObject({ code: 'too_large' });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('cancels binary MPEG-TS data as soon as it cannot be an HLS manifest', async () => {
     const cancel = vi.fn(async () => {});
     const read = vi.fn()
@@ -148,8 +161,22 @@ describe('fetchLimitedText', () => {
     ));
 
     const p = fetchLimitedText('http://x', 1024, 5000, controller.signal);
-    const assertion = expect(p).rejects.toThrow('Aborted');
+    const assertion = expect(p).rejects.toMatchObject({ code: 'aborted' });
     controller.abort();
+    await assertion;
+  });
+
+  it('distinguishes its timeout from an external cancellation', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string, opts: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        opts.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')));
+      }),
+    ));
+
+    const pending = fetchLimitedText('http://x', 1024, 5000);
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+    await vi.advanceTimersByTimeAsync(5000);
     await assertion;
   });
 });

@@ -18,9 +18,11 @@ const { storageMock, fetchTextMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('./storage-service', () => ({ StorageService: storageMock }));
-vi.mock('../utils/fetch-helper', () => ({
+vi.mock('../utils/fetch-helper', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../utils/fetch-helper')>(),
   fetchPlaylistText: fetchTextMock,
   fetchText: fetchTextMock,
+  fetchLimitedText: fetchTextMock,
 }));
 
 import { PlaylistService } from './playlist-service';

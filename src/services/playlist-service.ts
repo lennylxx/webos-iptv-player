@@ -185,7 +185,15 @@ class PlaylistServiceImpl {
         }
       } catch (err) {
         allPlaylistsLoaded = false;
-        log.error(`Failed to load playlist '${pl.name || pl.url}':`, err);
+        if (pl.source === 'xtream') {
+          log.error(
+            `Failed to load Xtream playlist '${pl.name || pl.url}'`,
+            'event=xtream.playlist.load.failed',
+            err,
+          );
+        } else {
+          log.error(`Failed to load playlist '${pl.name || pl.url}':`, err);
+        }
       }
       plDone();
     }

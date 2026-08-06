@@ -144,15 +144,29 @@ export interface CachedCatalogEntry<T = unknown> {
 
 export async function getCachedCatalog<T = unknown>(key: string): Promise<CachedCatalogEntry<T> | null> {
   const db = await openDb();
-  if (!db) return null;
+  if (!db) {
+    log.warn(
+      'Catalog cache is unavailable',
+      'event=xtream.cache.unavailable',
+      'operation=read',
+    );
+    return null;
+  }
   return new Promise((resolve) => {
     try {
       const tx = db.transaction(CATALOG_STORE, 'readonly');
       const req = tx.objectStore(CATALOG_STORE).get(key);
       req.onsuccess = () => resolve((req.result as CachedCatalogEntry<T> | undefined) ?? null);
-      req.onerror = () => resolve(null);
+      req.onerror = () => {
+        log.warn(
+          'Catalog cache read failed',
+          'event=xtream.cache.read.failed',
+          req.error,
+        );
+        resolve(null);
+      };
     } catch (err) {
-      log.warn('Catalog read failed:', err);
+      log.warn('Catalog cache read failed', 'event=xtream.cache.read.failed', err);
       resolve(null);
     }
   });
@@ -160,16 +174,29 @@ export async function getCachedCatalog<T = unknown>(key: string): Promise<Cached
 
 export async function setCachedCatalog(key: string, data: unknown): Promise<void> {
   const db = await openDb();
-  if (!db) return;
+  if (!db) {
+    log.warn(
+      'Catalog cache is unavailable',
+      'event=xtream.cache.unavailable',
+      'operation=write',
+    );
+    return;
+  }
   return new Promise((resolve) => {
     try {
       const tx = db.transaction(CATALOG_STORE, 'readwrite');
       tx.objectStore(CATALOG_STORE).put({ key, timestamp: Date.now(), data } satisfies CachedCatalogEntry);
       tx.oncomplete = () => resolve();
-      tx.onerror = () => { log.warn('Catalog write failed:', tx.error); resolve(); };
-      tx.onabort = () => { log.warn('Catalog write aborted:', tx.error); resolve(); };
+      tx.onerror = () => {
+        log.warn('Catalog cache write failed', 'event=xtream.cache.write.failed', tx.error);
+        resolve();
+      };
+      tx.onabort = () => {
+        log.warn('Catalog cache write aborted', 'event=xtream.cache.write.aborted', tx.error);
+        resolve();
+      };
     } catch (err) {
-      log.warn('Catalog write failed:', err);
+      log.warn('Catalog cache write failed', 'event=xtream.cache.write.failed', err);
       resolve();
     }
   });

@@ -147,12 +147,24 @@ class App {
       onOpenMovie: (account, vod) => {
         this.tabBar.blur();
         this.showView('movies');
-        this.movies.openItem(account, vod, () => this.showView('search')).catch((err) => log.error('Open movie failed:', err));
+        this.movies.openItem(account, vod, () => this.showView('search'))
+          .catch((err) => log.error(
+            'Open movie failed',
+            'event=xtream.view.open.failed',
+            'operation=movie_detail',
+            err,
+          ));
       },
       onOpenSeries: (account, series) => {
         this.tabBar.blur();
         this.showView('series');
-        this.series.openItem(account, series, () => this.showView('search')).catch((err) => log.error('Open series failed:', err));
+        this.series.openItem(account, series, () => this.showView('search'))
+          .catch((err) => log.error(
+            'Open series failed',
+            'event=xtream.view.open.failed',
+            'operation=series_detail',
+            err,
+          ));
       },
     });
     this.tabBar = new TabBar({
@@ -587,6 +599,9 @@ class App {
   // Map a tab-bar section to its view and show it (Live = the channels view).
   private switchSection(section: Section): void {
     if (section !== 'live' && this.channelList.isEditing) this.channelList.exitEditMode();
+    if (section !== 'movies' && section !== 'search') this.movies.deactivate();
+    if (section !== 'series' && section !== 'search') this.series.deactivate();
+    if (section !== 'search') this.search.deactivate();
     // Leaving the player via the tab bar (the pointer can reveal it over the
     // player) must tear down playback, like Back / red / blue do.
     this.player.stop();
@@ -595,13 +610,29 @@ class App {
     if (section === 'movies') {
       this.showView('movies');
       const account = this.activeXtreamAccount();
-      if (account) this.movies.open(account).catch((err) => log.error('Movies open failed:', err));
+      if (account) {
+        this.movies.open(account)
+          .catch((err) => log.error(
+            'Movies open failed',
+            'event=xtream.view.open.failed',
+            'operation=movies',
+            err,
+          ));
+      }
       return;
     }
     if (section === 'series') {
       this.showView('series');
       const seriesAccount = this.activeXtreamAccount();
-      if (seriesAccount) this.series.open(seriesAccount).catch((err) => log.error('Series open failed:', err));
+      if (seriesAccount) {
+        this.series.open(seriesAccount)
+          .catch((err) => log.error(
+            'Series open failed',
+            'event=xtream.view.open.failed',
+            'operation=series',
+            err,
+          ));
+      }
       return;
     }
     if (section === 'settings') {
@@ -615,7 +646,13 @@ class App {
       this.viewBeforeSearch = this.viewStack[this.viewStack.length - 1];
     }
     // Prep the results (loads the catalog once) into the still-hidden search view.
-    this.search.open(this.activeXtreamAccount()).catch((err) => log.error('Search open failed:', err));
+    this.search.open(this.activeXtreamAccount())
+      .catch((err) => log.error(
+        'Search open failed',
+        'event=xtream.view.open.failed',
+        'operation=search',
+        err,
+      ));
   }
 
   // The tab bar's search box query changed: show the results view over the
@@ -632,6 +669,7 @@ class App {
   // The search box was closed: clear it and return to the view it opened from
   // (showView re-syncs the active tab, since the box is already collapsed).
   private handleSearchClose(): void {
+    this.search.deactivate();
     this.search.setQuery('');
     const rv = this.viewBeforeSearch ?? 'channels';
     this.viewBeforeSearch = null;
@@ -657,6 +695,9 @@ class App {
   }
 
   private goLive(): void {
+    this.movies.deactivate();
+    this.series.deactivate();
+    this.search.deactivate();
     this.player.stop();
     this.tabBar.setActive('live');
     this.showView('channels');
@@ -682,13 +723,30 @@ class App {
     );
     const current = this.viewStack[this.viewStack.length - 1];
     if (current === 'movies') {
-      this.movies.open(account).catch((err) => log.error('Movies reopen failed:', err));
+      this.movies.open(account)
+        .catch((err) => log.error(
+          'Movies reopen failed',
+          'event=xtream.view.open.failed',
+          'operation=movies_reopen',
+          err,
+        ));
     } else if (current === 'series') {
-      this.series.open(account).catch((err) => log.error('Series reopen failed:', err));
+      this.series.open(account)
+        .catch((err) => log.error(
+          'Series reopen failed',
+          'event=xtream.view.open.failed',
+          'operation=series_reopen',
+          err,
+        ));
     } else if (current === 'search') {
       this.search.open(account)
         .then(() => this.search.setQuery(this.lastSearchQuery))
-        .catch((err) => log.error('Search reopen failed:', err));
+        .catch((err) => log.error(
+          'Search reopen failed',
+          'event=xtream.view.open.failed',
+          'operation=search_reopen',
+          err,
+        ));
     }
   }
 
