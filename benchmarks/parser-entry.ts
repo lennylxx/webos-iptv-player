@@ -1,15 +1,23 @@
 import { parseM3U } from '../src/parsers/m3u-parser';
-import { parseXMLTV } from '../src/parsers/xmltv-parser';
+import { parseXMLTVWithStats } from '../src/parsers/xmltv-parser';
 
 interface BenchmarkParseResult {
   channels: number;
   groups?: number;
   programmes?: number;
+  programmesSeen?: number;
+  /** The parsed data itself, so a caller can hold it and measure retained heap. */
+  retained?: unknown;
+}
+
+interface BenchmarkXMLTVOptions {
+  channelIds?: string[];
+  channelNames?: string[];
 }
 
 interface BenchmarkParserApi {
   parseM3U(text: string): BenchmarkParseResult;
-  parseXMLTV(text: string): BenchmarkParseResult;
+  parseXMLTV(text: string, options?: BenchmarkXMLTVOptions): BenchmarkParseResult;
 }
 
 declare global {
@@ -28,13 +36,16 @@ window.__IPTV_BENCHMARK__ = {
       groups: parsed.groups.length,
     };
   },
-  parseXMLTV(text) {
-    const parsed = parseXMLTV(text);
-    let programmes = 0;
-    for (const list of Object.values(parsed.programmes)) programmes += list.length;
+  parseXMLTV(text, options) {
+    const { data, stats } = parseXMLTVWithStats(text, {
+      channelIds: options?.channelIds ? new Set(options.channelIds) : undefined,
+      channelNames: options?.channelNames ? new Set(options.channelNames) : undefined,
+    });
     return {
-      channels: Object.keys(parsed.channels).length,
-      programmes,
+      channels: Object.keys(data.channels).length,
+      programmes: stats.programmesKept,
+      programmesSeen: stats.programmesSeen,
+      retained: data,
     };
   },
 };

@@ -1,16 +1,24 @@
 import type { Channel, EpgChannel, EpgSource, ParsedEpg, Programme } from '../types';
-import { parseXMLTV } from '../parsers/xmltv-parser';
+import { parseXMLTVWithStats } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
 import { EpgTimeIndex } from '../utils/epg-time-index';
 import { CONFIG } from '../config';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
+import type { CachedEpgFilter } from './idb-cache';
 
 const log = createLogger('EPG');
 
 interface SourceState {
   data: ParsedEpg;
   timestamp: number;
+  needsRefresh: boolean;
+}
+
+/** The playlist channels a source is parsed down to. */
+interface SourceFilter {
+  ids: Set<string>;
+  names: Set<string>;
 }
 
 class EpgServiceImpl {
@@ -22,6 +30,7 @@ class EpgServiceImpl {
   private sources: EpgSource[] = [];
   private states = new Map<string, SourceState>();
   private timeIndexes = new Map<string, { source: Programme[]; index: EpgTimeIndex }>();
+  private playlistChannels: Channel[] | null = null;
 
   /**
    * Clear all in-memory state. Called when the user removes every configured
@@ -35,9 +44,11 @@ class EpgServiceImpl {
     this.sources = [];
     this.states.clear();
     this.timeIndexes.clear();
+    this.playlistChannels = null;
   }
 
-  async load(sources: EpgSource[]): Promise<void> {
+  async load(sources: EpgSource[], channels?: Channel[]): Promise<void> {
+    this.playlistChannels = channels ?? null;
     this.setSources(sources);
     await Promise.all(this.sources.map((source) => this.loadSource(source)));
     this.rebuildIndexes();
@@ -47,7 +58,8 @@ class EpgServiceImpl {
   async refresh(): Promise<void> {
     await Promise.all(this.sources.map(async (source) => {
       const state = this.states.get(source.url);
-      if (state && Date.now() - state.timestamp < CONFIG.EPG_REFRESH_INTERVAL) return;
+      if (state && !state.needsRefresh
+        && Date.now() - state.timestamp < CONFIG.EPG_REFRESH_INTERVAL) return;
       await this.fetchSource(source);
     }));
     this.rebuildIndexes();
@@ -92,9 +104,8 @@ class EpgServiceImpl {
       const state = this.states.get(source.url);
       if (!state) continue;
       for (const id in state.data.channels) {
-        const epgName = state.data.channels[id].name.toLowerCase();
         // A renamed channel keeps matching through its source name.
-        if (epgName !== name && epgName !== sourceName) continue;
+        if (!matchesChannelName(state.data.channels[id], name, sourceName)) continue;
         const key = this.channelKey(source.url, id);
         if (this.programmes[key]?.length) return key;
       }
@@ -124,14 +135,33 @@ class EpgServiceImpl {
   }
 
   private async loadSource(source: EpgSource): Promise<void> {
+    const filter = this.filterFor(source);
+    if (filter && isEmptyFilter(filter)) {
+      this.states.delete(source.url);
+      return;
+    }
     try {
       const cached = await getCachedEpg(source.url);
       if (cached) {
-        this.states.set(source.url, { data: cached.data, timestamp: cached.timestamp });
         const age = Date.now() - cached.timestamp;
         const hasTzField = 'tzOffsetMinutes' in cached.data;
-        if (age < CONFIG.EPG_REFRESH_INTERVAL && hasTzField) {
-          log.info('Loaded cache:', source.url, '|', Object.keys(cached.data.programmes).length,
+        const covered = covers(cached.filter, filter);
+        const filtered = filterParsedEpg(cached.data, filter);
+        this.states.set(source.url, {
+          data: filtered.data,
+          timestamp: cached.timestamp,
+          needsRefresh: !hasTzField || !covered,
+        });
+        if (age < CONFIG.EPG_REFRESH_INTERVAL && hasTzField && covered) {
+          if (filtered.changed || !filtersEqual(cached.filter, filter)) {
+            await setCachedEpg(
+              source.url,
+              filtered.data,
+              serializeFilter(filter),
+              cached.timestamp,
+            );
+          }
+          log.info('Loaded cache:', source.url, '|', Object.keys(filtered.data.programmes).length,
             'channels with programmes, age', Math.round(age / 60000), 'min');
           return;
         }
@@ -139,22 +169,37 @@ class EpgServiceImpl {
     } catch (err) {
       log.warn('Cache read failed:', source.url, err);
     }
-    await this.fetchSource(source);
+    await this.fetchSource(source, filter);
   }
 
-  private async fetchSource(source: EpgSource): Promise<void> {
+  private async fetchSource(source: EpgSource, filter = this.filterFor(source)): Promise<void> {
+    if (filter && isEmptyFilter(filter)) {
+      this.states.delete(source.url);
+      return;
+    }
     const done = log.time(`fetch '${source.url}'`);
     try {
       const text = await fetchMaybeGzipText(source.url, 120000);
-      const result = parseXMLTV(text);
-      const programmeCount = Object.values(result.programmes).reduce((n, list) => n + list.length, 0);
-      this.states.set(source.url, { data: result, timestamp: Date.now() });
+      const { data: result, stats } = parseXMLTVWithStats(text, filter
+        ? { channelIds: filter.ids, channelNames: filter.names }
+        : {});
+      const programmeCount = stats.programmesKept;
+      // An empty parse is usually a transient upstream response; neither cache
+      // it nor let it replace programmes already loaded for this source.
+      if (programmeCount === 0 && this.hasProgrammes(source.url)) {
+        log.warn('EPG has 0 programmes — keeping the previous data:', source.url);
+        done();
+        return;
+      }
+      this.states.set(source.url, {
+        data: result,
+        timestamp: Date.now(),
+        needsRefresh: false,
+      });
       log.info('Loaded', source.url, '|', Object.keys(result.channels).length, 'channels,',
-        programmeCount, 'programmes');
-      // Don't cache an empty feed: it may be a transient upstream response, and
-      // persisting it would hide valid programme data until the cache expires.
+        programmeCount, 'programmes', filter ? `(of ${String(stats.programmesSeen)} seen)` : '');
       if (programmeCount > 0) {
-        await setCachedEpg(source.url, result);
+        await setCachedEpg(source.url, result, serializeFilter(filter));
       } else {
         log.warn('EPG has 0 programmes — not caching:', source.url);
       }
@@ -162,6 +207,35 @@ class EpgServiceImpl {
       log.error('Failed to load EPG:', source.url, err);
     }
     done();
+  }
+
+  private hasProgrammes(url: string): boolean {
+    const data = this.states.get(url)?.data;
+    if (!data) return false;
+    for (const id in data.programmes) {
+      if (data.programmes[id].length) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Restrict parsing to the channels this source actually serves. Both the
+   * tvg-id and the source-side name are allowed, so a feed the playlist matches
+   * by name only still resolves in `findChannelId`.
+   */
+  private filterFor(source: EpgSource): SourceFilter | null {
+    if (this.playlistChannels === null) return null;
+    const ids = new Set<string>();
+    const names = new Set<string>();
+    for (const channel of this.playlistChannels) {
+      if (source.kind !== 'manual'
+        && !channel.playlistIds.some((id) => source.playlistIds.includes(id))) continue;
+      if (channel.id) ids.add(channel.id);
+      // A rename keeps the source name, and findChannelId matches either one.
+      if (channel.name) names.add(channel.name.toLowerCase());
+      if (channel.sourceName) names.add(channel.sourceName.toLowerCase());
+    }
+    return { ids, names };
   }
 
   private rebuildIndexes(): void {
@@ -204,11 +278,97 @@ class EpgServiceImpl {
   private findLegacyChannelId(channel: Channel): string | null {
     if (channel.id && this.programmes[channel.id]) return channel.id;
     if (!channel.name) return null;
+    const name = channel.name.toLowerCase();
     for (const id in this.channels) {
-      if (this.channels[id].name.toLowerCase() === channel.name.toLowerCase()) return id;
+      if (matchesChannelName(this.channels[id], name, '')) return id;
     }
     return null;
   }
 }
 
 export const EpgService = new EpgServiceImpl();
+
+function matchesChannelName(channel: EpgChannel, name: string, sourceName: string): boolean {
+  const primary = channel.name.toLowerCase();
+  if (primary === name || primary === sourceName) return true;
+  return channel.aliases?.some((alias) => {
+    const normalized = alias.toLowerCase();
+    return normalized === name || normalized === sourceName;
+  }) ?? false;
+}
+
+/**
+ * Whether a cached parse still serves `wanted`. An unfiltered cache is a
+ * superset of every filter, and a shrinking playlist stays covered, so only a
+ * playlist that gained channels forces a refetch.
+ */
+function covers(cached: CachedEpgFilter | null | undefined, wanted: SourceFilter | null): boolean {
+  if (!cached) return true;
+  if (!wanted) return false;
+  const ids = new Set(cached.ids);
+  const names = new Set(cached.names);
+  for (const id of wanted.ids) if (!ids.has(id)) return false;
+  for (const name of wanted.names) if (!names.has(name)) return false;
+  return true;
+}
+
+function isEmptyFilter(filter: SourceFilter): boolean {
+  return filter.ids.size === 0 && filter.names.size === 0;
+}
+
+function serializeFilter(filter: SourceFilter | null): CachedEpgFilter | null {
+  return filter && {
+    ids: [...filter.ids],
+    names: [...filter.names],
+  };
+}
+
+function filtersEqual(
+  cached: CachedEpgFilter | null | undefined,
+  wanted: SourceFilter | null,
+): boolean {
+  if (!cached || !wanted) return !cached && !wanted;
+  if (cached.ids.length !== wanted.ids.size || cached.names.length !== wanted.names.size) {
+    return false;
+  }
+  return cached.ids.every((id) => wanted.ids.has(id))
+    && cached.names.every((name) => wanted.names.has(name));
+}
+
+function filterParsedEpg(
+  data: ParsedEpg,
+  filter: SourceFilter | null,
+): { data: ParsedEpg; changed: boolean } {
+  if (!filter) return { data, changed: false };
+  const accepted = new Set(filter.ids);
+  for (const id in data.channels) {
+    const channel = data.channels[id];
+    if (matchesAnyChannelName(channel, filter.names)) accepted.add(id);
+  }
+
+  const channels: Record<string, EpgChannel> = {};
+  const programmes: Record<string, Programme[]> = {};
+  let keptChannels = 0;
+  let keptProgrammeChannels = 0;
+  for (const id in data.channels) {
+    if (!accepted.has(id)) continue;
+    channels[id] = data.channels[id];
+    keptChannels++;
+  }
+  for (const id in data.programmes) {
+    if (!accepted.has(id)) continue;
+    programmes[id] = data.programmes[id];
+    keptProgrammeChannels++;
+  }
+  const changed = keptChannels !== Object.keys(data.channels).length
+    || keptProgrammeChannels !== Object.keys(data.programmes).length;
+  return {
+    data: changed ? { channels, programmes, tzOffsetMinutes: data.tzOffsetMinutes } : data,
+    changed,
+  };
+}
+
+function matchesAnyChannelName(channel: EpgChannel, names: ReadonlySet<string>): boolean {
+  if (names.has(channel.name.toLowerCase())) return true;
+  return channel.aliases?.some((alias) => names.has(alias.toLowerCase())) ?? false;
+}

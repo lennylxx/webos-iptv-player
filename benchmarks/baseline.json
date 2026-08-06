@@ -397,6 +397,27 @@
         "bytes": 7577851,
         "channels": 1,
         "programmes": 50000
+      },
+      "xmltvCatalog": {
+        "bytes": 18057979,
+        "sourceChannels": 2000,
+        "keptChannels": 300,
+        "unfiltered": {
+          "durationMs": 458.9,
+          "channels": 2000,
+          "programmes": 50000,
+          "programmesSeen": 50000,
+          "retainedBytes": 22514376
+        },
+        "filtered": {
+          "durationMs": 241.9,
+          "channels": 300,
+          "programmes": 7500,
+          "programmesSeen": 50000,
+          "retainedBytes": 3361296
+        },
+        "speedup": 1.8970649028524182,
+        "retainedHeapReductionPct": 85.07044565658849
       }
     },
     "groups": {

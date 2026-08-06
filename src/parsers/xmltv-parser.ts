@@ -5,21 +5,28 @@ const log = createLogger('XMLTV');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BUFFER_COMPACT_THRESHOLD = 256 * 1024;
 const TARGET_TAGS = new Set(['channel', 'programme']);
+const MAX_RETAINED_DISPLAY_NAMES = 4;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 export interface XMLTVParseOptions {
   nowMs?: number;
+  /** Keep only these XMLTV channel ids (plus any matched by `channelNames`). */
   channelIds?: ReadonlySet<string>;
+  /** Lowercased display names that also select a channel, for id-less playlists. */
+  channelNames?: ReadonlySet<string>;
 }
 
 export interface XMLTVParseStats {
   channelsSeen: number;
   channelsKept: number;
   programmesSeen: number;
+  /** Programmes admitted by the channel filter, before date/range checks. */
+  programmesMatched: number;
   programmesKept: number;
   skippedDate: number;
   skippedRange: number;
+  skippedFilter: number;
   malformed: number;
 }
 
@@ -48,9 +55,11 @@ export class XMLTVStreamParser {
     channelsSeen: 0,
     channelsKept: 0,
     programmesSeen: 0,
+    programmesMatched: 0,
     programmesKept: 0,
     skippedDate: 0,
     skippedRange: 0,
+    skippedFilter: 0,
     malformed: 0,
   };
 
@@ -61,6 +70,10 @@ export class XMLTVStreamParser {
   private readonly programmes: Record<string, Programme[]> = {};
   private readonly lastStartByChannel = new Map<string, number>();
   private readonly unsortedChannels = new Set<string>();
+  private readonly declaredIds = new Set<string>();
+  private readonly programmesBeforeDeclaration = new Set<string>();
+  /** Ids the filter accepts: the configured ids plus name-matched channels. */
+  private readonly acceptedIds: Set<string> | null;
   private readonly minTime: number;
   private readonly maxTime: number;
   private tzOffsetMinutes: number | null = null;
@@ -69,6 +82,9 @@ export class XMLTVStreamParser {
     const now = options.nowMs ?? Date.now();
     this.minTime = now - 7 * DAY_MS;
     this.maxTime = now + 7 * DAY_MS;
+    const { channelIds, channelNames } = options;
+    const filtering = (channelIds?.size ?? 0) > 0 || (channelNames?.size ?? 0) > 0;
+    this.acceptedIds = filtering ? new Set(channelIds ?? []) : null;
   }
 
   write(chunk: string): void {
@@ -91,6 +107,18 @@ export class XMLTVStreamParser {
       programmes: this.programmes,
       tzOffsetMinutes: this.tzOffsetMinutes,
     };
+  }
+
+  needsOrderRetry(): boolean {
+    if (!this.acceptedIds) return false;
+    for (const id of this.programmesBeforeDeclaration) {
+      if (this.acceptedIds.has(id)) return true;
+    }
+    return false;
+  }
+
+  acceptedChannelIds(): ReadonlySet<string> {
+    return this.acceptedIds ?? new Set();
   }
 
   private drain(final: boolean): void {
@@ -190,15 +218,24 @@ export class XMLTVStreamParser {
       return;
     }
     const id = copyString(rawId);
-    if (this.options.channelIds && !this.options.channelIds.has(id)) return;
+    this.declaredIds.add(id);
     const body = this.buffer.slice(element.bodyStart, element.bodyEnd);
-    const [name, icon] = copyStrings([
-      readElementText(body, 'display-name') || id,
-      readElementAttribute(body, 'icon', 'src') ?? '',
-    ]);
+    const displayNames = readElementTexts(body, 'display-name');
+    if (this.acceptedIds && !this.acceptedIds.has(id)) {
+      const names = this.options.channelNames;
+      if (!names?.size || !displayNames.some((value) => names.has(value.toLowerCase()))) {
+        this.stats.skippedFilter++;
+        return;
+      }
+      this.acceptedIds.add(id);
+    }
+    const retainedNames = retainDisplayNames(displayNames, this.options.channelNames);
+    const names = copyStrings(retainedNames.length ? retainedNames : [id]);
+    const icon = copyString(readElementAttribute(body, 'icon', 'src') ?? '');
     this.channels[id] = {
-      name,
+      name: names[0],
       icon,
+      ...(names.length > 1 ? { aliases: names.slice(1) } : {}),
     };
     this.stats.channelsKept++;
   }
@@ -209,13 +246,19 @@ export class XMLTVStreamParser {
       this.buffer,
       element.tagStart + 1,
       element.tagEnd + 1,
+      this.acceptedIds,
     );
     const channelId = attributes.channelId;
     if (!channelId) {
       this.stats.malformed++;
       return;
     }
-    if (this.options.channelIds && !this.options.channelIds.has(channelId)) return;
+    if (this.acceptedIds && !this.acceptedIds.has(channelId)) {
+      if (!this.declaredIds.has(channelId)) this.programmesBeforeDeclaration.add(channelId);
+      this.stats.skippedFilter++;
+      return;
+    }
+    this.stats.programmesMatched++;
 
     const start = parseTimestamp(attributes.start);
     const stop = parseTimestamp(attributes.stop);
@@ -280,6 +323,9 @@ export class XMLTVStreamParser {
     if (this.stats.skippedRange) {
       log.info(`Skipped ${String(this.stats.skippedRange)} programmes outside time range`);
     }
+    if (this.stats.skippedFilter) {
+      log.info(`Skipped ${String(this.stats.skippedFilter)} elements outside the channel filter`);
+    }
     if (this.stats.malformed) {
       log.warn(`Skipped ${String(this.stats.malformed)} malformed XMLTV elements`);
     }
@@ -288,9 +334,38 @@ export class XMLTVStreamParser {
 }
 
 export function parseXMLTV(xmlString: string, options: XMLTVParseOptions = {}): ParsedEpg {
+  return parseXMLTVWithStats(xmlString, options).data;
+}
+
+export function parseXMLTVWithStats(
+  xmlString: string,
+  options: XMLTVParseOptions = {},
+): { data: ParsedEpg; stats: XMLTVParseStats } {
   const parser = new XMLTVStreamParser(options);
   parser.write(xmlString);
-  return parser.finish();
+  let data = parser.finish();
+  if (!parser.needsOrderRetry()) return { data, stats: parser.stats };
+
+  const retry = new XMLTVStreamParser({
+    ...options,
+    channelIds: parser.acceptedChannelIds(),
+  });
+  retry.write(xmlString);
+  data = retry.finish();
+  return { data, stats: retry.stats };
+}
+
+function retainDisplayNames(
+  displayNames: string[],
+  matchedNames: ReadonlySet<string> | undefined,
+): string[] {
+  const retained = displayNames.slice(0, MAX_RETAINED_DISPLAY_NAMES);
+  if (!matchedNames?.size) return retained;
+  for (let i = MAX_RETAINED_DISPLAY_NAMES; i < displayNames.length; i++) {
+    const value = displayNames[i];
+    if (matchedNames.has(value.toLowerCase())) retained.push(value);
+  }
+  return retained;
 }
 
 function readTagName(value: string, start: number, end: number): string {
@@ -399,6 +474,7 @@ function readProgrammeAttributes(
   value: string,
   start: number,
   end: number,
+  acceptedIds: ReadonlySet<string> | null,
 ): ProgrammeAttributes {
   const result: ProgrammeAttributes = {
     channelId: undefined,
@@ -428,6 +504,7 @@ function readProgrammeAttributes(
     if (name === 'channel') {
       result.channelId = attributeValue;
       remaining--;
+      if (acceptedIds && !acceptedIds.has(attributeValue)) return result;
     } else if (name === 'start') {
       result.start = attributeValue;
       remaining--;
@@ -443,6 +520,24 @@ function readProgrammeAttributes(
 function readElementText(body: string, target: string): string {
   const range = findChildElement(body, target);
   if (!range) return '';
+  return readRangeText(body, range);
+}
+
+/** Every `<target>` text in document order, optionally capped at `limit` entries. */
+function readElementTexts(body: string, target: string, limit?: number): string[] {
+  const result: string[] = [];
+  let cursor = 0;
+  while (limit === undefined || result.length < limit) {
+    const range = findChildElement(body, target, cursor);
+    if (!range) break;
+    const text = readRangeText(body, range);
+    if (text) result.push(text);
+    cursor = range.elementEnd;
+  }
+  return result;
+}
+
+function readRangeText(body: string, range: ElementRange): string {
   let cursor = range.bodyStart;
   let plainStart = cursor;
   let result = '';
@@ -486,9 +581,9 @@ function readElementAttribute(
   return readAttribute(body, attribute, range.tagStart + 1, range.tagEnd + 1);
 }
 
-function findChildElement(body: string, target: string): ElementRange | null {
+function findChildElement(body: string, target: string, from = 0): ElementRange | null {
   const needle = `<${target}`;
-  let cursor = 0;
+  let cursor = from;
   while (true) {
     const tagStart = body.indexOf(needle, cursor);
     if (tagStart === -1) return null;

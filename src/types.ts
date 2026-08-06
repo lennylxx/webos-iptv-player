@@ -103,6 +103,8 @@ export interface Programme {
 export interface EpgChannel {
   name: string;
   icon: string;
+  /** Additional XMLTV display names used for playlist channel matching. */
+  aliases?: string[];
 }
 
 export interface ParsedEpg {

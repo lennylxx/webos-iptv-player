@@ -516,7 +516,7 @@ class App {
       }
 
       if (epgSources.length) {
-        EpgService.load(epgSources)
+        EpgService.load(epgSources, PlaylistService.allChannels)
           .then(() => {
             this.applyDisplayTz();
             this.channelList.render();

@@ -437,6 +437,128 @@ export function runRawParserBenchmarks(options) {
     };
 }
 
+/**
+ * Build a provider-shaped guide once: many channels, realistic programme
+ * bodies, and the subset of channels a playlist would keep. The feed and the
+ * parse result are retained on `window` so the caller can force GC between
+ * steps and attribute retained heap to each pass.
+ */
+export function prepareXMLTVCatalogBenchmark(options) {
+    const two = (value) => `0${String(value)}`.slice(-2);
+    const xmltvTime = (value) => {
+      const date = new Date(value);
+      return `${String(date.getUTCFullYear())}${two(date.getUTCMonth() + 1)}`
+        + `${two(date.getUTCDate())}${two(date.getUTCHours())}`
+        + `${two(date.getUTCMinutes())}${two(date.getUTCSeconds())} +0000`;
+    };
+    const sourceChannels = Math.max(2, Math.round(options.scale / 25));
+    const slots = Math.max(1, Math.round(options.scale / sourceChannels));
+    const keptChannels = Math.max(1, Math.round(sourceChannels * 0.15));
+    const base = Date.now() - 6 * 24 * 60 * 60 * 1000;
+
+    const parts = ['<tv>'];
+    for (let index = 0; index < sourceChannels; index++) {
+      parts.push(
+        `<channel id="ch${String(index)}"><display-name>Channel ${String(index)}</display-name>`,
+        `<icon src="http://host/logo/${String(index)}.png" /></channel>`,
+      );
+    }
+    for (let index = 0; index < sourceChannels; index++) {
+      for (let slot = 0; slot < slots; slot++) {
+        const start = base + slot * 20_000;
+        parts.push(
+          `<programme start="${xmltvTime(start)}" stop="${xmltvTime(start + 20_000)}"`,
+          ` channel="ch${String(index)}"><title>Program ${String(index)}-${String(slot)}</title>`,
+          `<desc>Synthetic description for slot ${String(slot)} of channel ${String(index)}, `,
+          'padded to the length a real guide carries so programme bodies cost ',
+          'what they cost in production.</desc>',
+          `<category>Category ${String(index % 12)}</category>`,
+          `<icon src="http://host/img/${String(index)}-${String(slot)}.png" /></programme>`,
+        );
+      }
+    }
+    parts.push('</tv>');
+
+    // Half the retained playlist carries no tvg-id, so it must match by name.
+    const channelIds = [];
+    const channelNames = [];
+    for (let index = 0; index < keptChannels; index++) {
+      if (index % 2 === 0) channelIds.push(`ch${String(index)}`);
+      channelNames.push(`channel ${String(index)}`);
+    }
+
+    const state = { text: parts.join(''), channelIds, channelNames, retained: null };
+    window.__IPTV_CATALOG_BENCHMARK__ = state;
+    return {
+      bytes: state.text.length,
+      sourceChannels,
+      keptChannels,
+      programmes: sourceChannels * slots,
+    };
+}
+
+export function runXMLTVCatalogPass(options) {
+    const api = window.__IPTV_BENCHMARK__;
+    const state = window.__IPTV_CATALOG_BENCHMARK__;
+    if (!api || !state) throw new Error('Catalog benchmark was not prepared');
+    const filter = options.filtered
+      ? { channelIds: state.channelIds, channelNames: state.channelNames }
+      : undefined;
+    const started = performance.now();
+    const result = api.parseXMLTV(state.text, filter);
+    const durationMs = performance.now() - started;
+    state.retained = result.retained;
+    return {
+      durationMs: Math.round(durationMs * 10) / 10,
+      channels: result.channels,
+      programmes: result.programmes || 0,
+      programmesSeen: result.programmesSeen || 0,
+    };
+}
+
+export function releaseXMLTVCatalogPass() {
+    const state = window.__IPTV_CATALOG_BENCHMARK__;
+    if (state) state.retained = null;
+    return { released: true };
+}
+
+export function disposeXMLTVCatalogBenchmark() {
+    window.__IPTV_CATALOG_BENCHMARK__ = undefined;
+    return { disposed: true };
+}
+
+/**
+ * Drive the catalog passes from the runner so each parse can be bracketed by a
+ * forced GC and a heap reading; retained heap is the point of the filter.
+ */
+export async function measureXMLTVCatalogBenchmark(scale, io) {
+  const meta = await io.evaluate(prepareXMLTVCatalogBenchmark, { scale });
+  const pass = async (filtered) => {
+    await io.collectGarbage();
+    const before = await io.heapUsed();
+    const result = await io.evaluate(runXMLTVCatalogPass, { filtered });
+    await io.collectGarbage();
+    result.retainedBytes = (await io.heapUsed()) - before;
+    await io.evaluate(releaseXMLTVCatalogPass);
+    return result;
+  };
+  const unfiltered = await pass(false);
+  const filtered = await pass(true);
+  await io.evaluate(disposeXMLTVCatalogBenchmark);
+  await io.collectGarbage();
+  return {
+    bytes: meta.bytes,
+    sourceChannels: meta.sourceChannels,
+    keptChannels: meta.keptChannels,
+    unfiltered,
+    filtered,
+    speedup: unfiltered.durationMs / filtered.durationMs,
+    retainedHeapReductionPct: unfiltered.retainedBytes > 0
+      ? (1 - filtered.retainedBytes / unfiltered.retainedBytes) * 100
+      : 0,
+  };
+}
+
 export async function runViewReopenCycle() {
     const waitFor = async (selector, timeout = 30_000) => {
       const started = Date.now();
@@ -756,6 +878,20 @@ export function summarizeRetainedMemory(beforeBytes, cycleBytes) {
       ? Math.round((samplesMiB[samplesMiB.length - 1] - samplesMiB[0]) * 10) / 10
       : 0,
   };
+}
+
+export function assertXMLTVCatalogBenchmark(catalog) {
+  if (catalog.unfiltered.channels !== catalog.sourceChannels
+      || catalog.filtered.programmesSeen !== catalog.unfiltered.programmes) {
+    throw new Error('Filtered XMLTV benchmark did not read the same source feed');
+  }
+  if (catalog.filtered.channels !== catalog.keptChannels
+      || catalog.filtered.programmes >= catalog.unfiltered.programmes) {
+    throw new Error('XMLTV channel filter did not retain the expected playlist subset');
+  }
+  if (!(catalog.filtered.retainedBytes < catalog.unfiltered.retainedBytes)) {
+    throw new Error('Filtered XMLTV parse did not reduce retained heap');
+  }
 }
 
 export function assertRetainedMemory(report) {

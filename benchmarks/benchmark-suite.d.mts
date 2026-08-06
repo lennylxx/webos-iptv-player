@@ -63,7 +63,39 @@ export function runRawParserBenchmarks(
 ): {
   m3u: { durationMs: number; bytes: number; channels: number; groups: number };
   xmltv: { durationMs: number; bytes: number; channels: number; programmes: number };
+  xmltvCatalog?: XMLTVCatalogBenchmark;
 };
+
+export interface XMLTVCatalogPass {
+  durationMs: number;
+  channels: number;
+  programmes: number;
+  programmesSeen: number;
+  retainedBytes: number;
+}
+
+export interface XMLTVCatalogBenchmark {
+  bytes: number;
+  sourceChannels: number;
+  keptChannels: number;
+  unfiltered: XMLTVCatalogPass;
+  filtered: XMLTVCatalogPass;
+  speedup: number;
+  retainedHeapReductionPct: number;
+}
+
+export interface XMLTVCatalogBenchmarkIo {
+  evaluate: (fn: unknown, arg?: unknown) => Promise<never>;
+  collectGarbage: () => Promise<unknown>;
+  heapUsed: () => Promise<number>;
+}
+
+export function assertXMLTVCatalogBenchmark(catalog: XMLTVCatalogBenchmark): void;
+
+export function measureXMLTVCatalogBenchmark(
+  scale: number,
+  io: XMLTVCatalogBenchmarkIo,
+): Promise<XMLTVCatalogBenchmark>;
 
 export function runViewReopenCycle(): Promise<{ nodes: number }>;
 

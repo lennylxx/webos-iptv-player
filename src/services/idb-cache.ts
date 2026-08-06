@@ -8,10 +8,17 @@ const EPG_STORE = 'epg-cache';
 const CATALOG_STORE = 'catalog-cache';
 const SUBTITLE_STORE = 'subtitle-cache';
 
+export interface CachedEpgFilter {
+  ids: string[];
+  names: string[];
+}
+
 export interface CachedEpgEntry {
   url: string;
   timestamp: number;
   data: ParsedEpg;
+  /** Channel filter the entry was parsed with; absent means the whole feed. */
+  filter?: CachedEpgFilter | null;
 }
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
@@ -66,13 +73,23 @@ export async function getCachedEpg(url: string): Promise<CachedEpgEntry | null> 
   });
 }
 
-export async function setCachedEpg(url: string, data: ParsedEpg): Promise<void> {
+export async function setCachedEpg(
+  url: string,
+  data: ParsedEpg,
+  filter?: CachedEpgFilter | null,
+  timestamp = Date.now(),
+): Promise<void> {
   const db = await openDb();
   if (!db) return;
   return new Promise((resolve) => {
     try {
       const tx = db.transaction(EPG_STORE, 'readwrite');
-      tx.objectStore(EPG_STORE).put({ url, timestamp: Date.now(), data } satisfies CachedEpgEntry);
+      tx.objectStore(EPG_STORE).put({
+        url,
+        timestamp,
+        data,
+        filter,
+      } satisfies CachedEpgEntry);
       tx.oncomplete = () => resolve();
       tx.onerror = () => { log.warn('Write failed:', tx.error); resolve(); };
       tx.onabort = () => { log.warn('Write aborted:', tx.error); resolve(); };

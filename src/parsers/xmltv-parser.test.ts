@@ -165,3 +165,83 @@ describe('parseXMLTV', () => {
     expect(parser.stats.malformed).toBeGreaterThan(0);
   });
 });
+
+describe('parseXMLTV channel filter', () => {
+  const start = new Date();
+  const stop = new Date(start.getTime() + 60 * 60 * 1000);
+  const feed = `<tv>
+      <channel id="c1"><display-name>Alpha</display-name></channel>
+      <channel id="c2"><display-name>Bravo</display-name><display-name>Bravo HD</display-name></channel>
+      <channel id="c3"><display-name>Charlie</display-name></channel>
+      <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>A</title></programme>
+      <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>B</title></programme>
+      <programme channel="c3" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>C</title></programme>
+    </tv>`;
+
+  it('keeps only the requested ids', () => {
+    const parser = new XMLTVStreamParser({ channelIds: new Set(['c1']) });
+    parser.write(feed);
+    const result = parser.finish();
+    expect(Object.keys(result.channels)).toEqual(['c1']);
+    expect(Object.keys(result.programmes)).toEqual(['c1']);
+    expect(parser.stats.programmesSeen).toBe(3);
+    expect(parser.stats.programmesKept).toBe(1);
+    expect(parser.stats.skippedFilter).toBeGreaterThan(0);
+  });
+
+  it('admits a channel matched by any display name, including its programmes', () => {
+    const result = parseXMLTV(feed, { channelNames: new Set(['bravo hd']) });
+    expect(Object.keys(result.channels)).toEqual(['c2']);
+    expect(result.channels.c2.name).toBe('Bravo');
+    expect(result.channels.c2.aliases).toEqual(['Bravo HD']);
+    expect(result.programmes.c2.map(programme => programme.title)).toEqual(['B']);
+  });
+
+  it('matches programmes declared before their channel', () => {
+    const reordered = `<tv>
+      <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>B</title></programme>
+      <channel id="c2"><display-name>Bravo</display-name><display-name>Bravo HD</display-name></channel>
+    </tv>`;
+    const result = parseXMLTV(reordered, { channelNames: new Set(['bravo hd']) });
+    expect(result.programmes.c2.map(programme => programme.title)).toEqual(['B']);
+  });
+
+  it('matches and retains a requested display name after the retention cap', () => {
+    const aliases = `<tv>
+      <channel id="c4">
+        <display-name>One</display-name><display-name>Two</display-name>
+        <display-name>Three</display-name><display-name>Four</display-name>
+        <display-name>Five</display-name>
+      </channel>
+      <programme channel="c4" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>D</title></programme>
+    </tv>`;
+    const result = parseXMLTV(aliases, { channelNames: new Set(['five']) });
+    expect(result.channels.c4.aliases).toContain('Five');
+    expect(result.programmes.c4.map(programme => programme.title)).toEqual(['D']);
+  });
+
+  it('counts filter matches before discarding out-of-range programmes', () => {
+    const parser = new XMLTVStreamParser({
+      nowMs: start.getTime() + 30 * 24 * 60 * 60 * 1000,
+      channelNames: new Set(['bravo hd']),
+    });
+    parser.write(feed);
+    parser.finish();
+    expect(parser.stats.channelsKept).toBe(1);
+    expect(parser.stats.programmesMatched).toBe(1);
+    expect(parser.stats.programmesKept).toBe(0);
+  });
+
+  it('unions ids and names', () => {
+    const result = parseXMLTV(feed, {
+      channelIds: new Set(['c1']),
+      channelNames: new Set(['charlie']),
+    });
+    expect(Object.keys(result.programmes).sort()).toEqual(['c1', 'c3']);
+  });
+
+  it('keeps everything when no filter is configured', () => {
+    const result = parseXMLTV(feed, { channelIds: new Set(), channelNames: new Set() });
+    expect(Object.keys(result.programmes).sort()).toEqual(['c1', 'c2', 'c3']);
+  });
+});

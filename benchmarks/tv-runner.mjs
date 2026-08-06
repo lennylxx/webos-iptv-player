@@ -18,6 +18,7 @@ import {
   installColdLoadFixture,
   buildM3UFixture,
   cleanupBenchmarkFixture,
+  measureXMLTVCatalogBenchmark,
   runRawParserBenchmarks,
   runViewReopenCycle,
   installUniqueGroupFixture,
@@ -28,6 +29,7 @@ import {
   runGroupBenchmark,
   summarizeRetainedMemory,
   assertRetainedMemory,
+  assertXMLTVCatalogBenchmark,
   assertGroupBenchmarkScale,
   runBenchmarkSuites,
   inspectPointerBenchmark,
@@ -328,6 +330,14 @@ async function runTvBenchmark() {
     const retained = summarizeRetainedMemory(beforeReopen.usedSize, reopenHeap);
     assertRetainedMemory(retained);
     const heap = await client.call('Runtime.getHeapUsage');
+    // Runs last of the in-page work: its multi-megabyte feed would otherwise
+    // skew the reopen heap samples measured above.
+    parsers.xmltvCatalog = await measureXMLTVCatalogBenchmark(SCALE, {
+      evaluate: (fn, arg) => evaluate(client, fn, arg),
+      collectGarbage: () => client.call('HeapProfiler.collectGarbage'),
+      heapUsed: async () => (await client.call('Runtime.getHeapUsage')).usedSize,
+    });
+    assertXMLTVCatalogBenchmark(parsers.xmltvCatalog);
     await evaluate(client, installM3USearchFixture);
     await reloadApp(client);
     suites.search.m3u = await evaluate(

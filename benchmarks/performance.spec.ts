@@ -8,6 +8,7 @@ import {
   assertM3USearchBenchmark,
   assertPointerBenchmark,
   assertRetainedMemory,
+  assertXMLTVCatalogBenchmark,
   assertBenchmarkScale,
   buildM3UFixture,
   cleanupBenchmarkFixture,
@@ -19,6 +20,7 @@ import {
   preparePointerBenchmark,
   runGroupBenchmark,
   runM3USearchBenchmark,
+  measureXMLTVCatalogBenchmark,
   runRawParserBenchmarks,
   runBenchmarkSuites,
   runViewReopenCycle,
@@ -112,6 +114,14 @@ test('records 50,000-item application benchmarks', async ({ page, browserName })
     const retained = summarizeRetainedMemory(beforeReopen.usedSize, reopenHeap);
     assertRetainedMemory(retained);
     const heap = await cdp.send('Runtime.getHeapUsage');
+    // Runs last of the in-page work: its multi-megabyte feed would otherwise
+    // skew the reopen heap samples measured above.
+    parsers.xmltvCatalog = await measureXMLTVCatalogBenchmark(SCALE, {
+      evaluate: (fn, arg) => page.evaluate(fn as never, arg),
+      collectGarbage: () => cdp.send('HeapProfiler.collectGarbage'),
+      heapUsed: async () => (await cdp.send('Runtime.getHeapUsage')).usedSize,
+    });
+    assertXMLTVCatalogBenchmark(parsers.xmltvCatalog);
     await page.evaluate(installM3USearchFixture);
     await page.reload();
     await expect(page.locator('#view-channels')).toBeVisible();
