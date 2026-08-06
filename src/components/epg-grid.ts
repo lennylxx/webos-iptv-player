@@ -772,6 +772,26 @@ export class EpgGrid {
     }
   }
 
+  private moveProgrammeFocus(idx: number): void {
+    const pane = this.container.querySelector<HTMLElement>('.epg-programmes-pane');
+    const target = this.container.querySelector<HTMLElement>(`[data-prog-idx="${idx}"]`);
+    if (!pane || !target) {
+      this.focusProg = idx;
+      this.render();
+      return;
+    }
+
+    const viewport = pane.clientHeight || EPG_VIEWPORT_FALLBACK;
+    this.programmeVirtualizer.setScrollOffset(pane.scrollTop);
+    this.programmeVirtualizer.ensureVisible(idx, viewport);
+    this.setProgFocusLight(idx);
+    this.scrollGuard.syncOffset(
+      pane,
+      'vertical',
+      this.programmeVirtualizer.scrollOffset,
+    );
+  }
+
   private scrollFocusedIntoView(): void {
     if (this.groupOpen) {
       this.container.querySelector<HTMLElement>('.epg-group-option.focused')
@@ -974,8 +994,7 @@ export class EpgGrid {
           this.onRevealTabBar?.(); // topmost row: hand focus to the docked tab bar
         } else if (this.focusCol === 'programmes') {
           if (this.focusProg > 0) {
-            this.focusProg--;
-            this.render();
+            this.moveProgrammeFocus(this.focusProg - 1);
           } else {
             this.focusCol = 'dates';
             this.render();
@@ -1005,8 +1024,7 @@ export class EpgGrid {
           this.render();
         } else if (this.focusCol === 'programmes') {
           if (this.focusProg < progCount - 1) {
-            this.focusProg++;
-            this.render();
+            this.moveProgrammeFocus(this.focusProg + 1);
           }
         }
         break;
@@ -1071,7 +1089,8 @@ export class EpgGrid {
             this.focusProg = 0;
           }
         } else if (this.focusCol === 'programmes') {
-          this.focusProg = Math.max(0, this.focusProg - 10);
+          this.moveProgrammeFocus(Math.max(0, this.focusProg - 10));
+          break;
         }
         this.render();
         break;
@@ -1084,7 +1103,8 @@ export class EpgGrid {
             this.focusProg = 0;
           }
         } else if (this.focusCol === 'programmes') {
-          this.focusProg = Math.min(progCount - 1, this.focusProg + 10);
+          this.moveProgrammeFocus(Math.min(progCount - 1, this.focusProg + 10));
+          break;
         }
         this.render();
         break;

@@ -308,6 +308,38 @@ describe('EpgGrid.handleAction', () => {
     expect(container.querySelector('.epg-programmes-pane')!.classList.contains('pane-focused')).toBe(true);
   });
 
+  it('moves programme focus inside the rendered window without a full render', () => {
+    grid.handleAction('right');
+    const render = vi.spyOn(grid, 'render');
+
+    grid.handleAction('down');
+
+    expect(render).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-prog-idx="1"]')?.classList.contains('focused')).toBe(true);
+    expect(container.querySelector('[data-prog-idx="0"]')?.classList.contains('focused')).toBe(false);
+  });
+
+  it('falls back to rendering when programme focus leaves the virtual window', () => {
+    state.programmes['Chan A'] = Array.from({ length: 30 }, (_, index) => ({
+      start: new Date(Y, M, D, 0, index * 20),
+      stop: new Date(Y, M, D, 0, index * 20 + 20),
+      title: `Program ${String(index)}`,
+      description: `Description ${String(index)}`,
+      category: '',
+      icon: '',
+    }));
+    grid.render();
+    grid.handleAction('right');
+    const render = vi.spyOn(grid, 'render');
+
+    grid.handleAction('channel_down');
+    expect(render).not.toHaveBeenCalled();
+    grid.handleAction('channel_down');
+
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[data-prog-idx="20"]')?.classList.contains('focused')).toBe(true);
+  });
+
   it('down moves the channel selection', () => {
     grid.handleAction('down');
     expect(channelItems()[1].classList.contains('selected')).toBe(true);
