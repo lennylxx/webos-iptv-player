@@ -66,6 +66,7 @@
   --text-primary: #e8e8e8;
   --text-secondary: #a0a0b0;
   --text-muted: #666680;
+  --bg-secondary: #12121a;
   --bg-tertiary: #1a1a2e;
   --border: #2a2a3e;
   --overlay-divider: rgba(255, 255, 255, 0.25);
@@ -86,6 +87,7 @@
   --text-primary: #1f2430;
   --text-secondary: #4a5160;
   --text-muted: #79808f;
+  --bg-secondary: #eceef2;
   --bg-tertiary: #dfe4ea;
   --border: #cfd5dd;
   --overlay-divider: rgba(0, 0, 0, 0.18);

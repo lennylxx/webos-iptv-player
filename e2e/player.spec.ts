@@ -100,6 +100,30 @@ test('player sidebar channel rows fit both text lines in their fixed box', async
   expect(fit.needed).toBeLessThanOrEqual(fit.available);
 });
 
+test('dark player overlay keeps sidebar scrollbar dark on a light theme', async ({ page }) => {
+  await routePlaylist(page, SEARCH_M3U);
+  await seedPlaylist(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_theme', JSON.stringify('daylight'));
+    localStorage.setItem('iptv_overlay_style', JSON.stringify('dark'));
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-player')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+
+  const list = page.locator('#player-sidebar .sidebar-channel-list');
+  await expect(list).toBeVisible();
+  const colors = await list.evaluate((element) => ({
+    track: getComputedStyle(element, '::-webkit-scrollbar-track').backgroundColor,
+    thumb: getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor,
+  }));
+  expect(colors.track).toBe('rgb(18, 18, 26)');
+  expect(colors.thumb).toBe('rgb(42, 42, 62)');
+});
+
 test('player sidebar expands groups and retains a selected group after tuning', async ({ page }) => {
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
