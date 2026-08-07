@@ -57,6 +57,13 @@
   min-height: 0;
   max-height: none;
 }
+.search-lists-mixed .search-channels {
+  flex-shrink: 0;
+  max-height: 462px;
+}
+.search-lists-mixed .search-channels .search-virtual-scroll {
+  max-height: 420px;
+}
 .search-virtual-list-spacer,
 .search-virtual-rail-spacer {
   position: relative;

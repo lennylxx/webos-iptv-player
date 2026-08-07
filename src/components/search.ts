@@ -550,6 +550,9 @@ export class Search {
 
     const hasResults = this.visibleChannels.length > 0 || this.visiblePrograms.length > 0
       || this.visibleMovies.length > 0 || this.visibleSeries.length > 0;
+    const hasMixedLists = !isXtream
+      && this.visibleChannels.length > 0
+      && this.visiblePrograms.length > 0;
     const channelSection = this.visibleChannels.length
       ? this.virtualList(
           t('common.channels'),
@@ -615,7 +618,9 @@ export class Search {
 
     // The query box lives in the tab bar; this view renders results only.
     morph(this.container, html`
-      <div class="search-view ${isXtream ? '' : 'search-lists'}" data-nav-container>
+      <div class="search-view ${isXtream ? '' : 'search-lists'} ${
+        hasMixedLists ? 'search-lists-mixed' : ''
+      }" data-nav-container>
         <div class="search-results">${resultsBody}</div>
       </div>
     `);

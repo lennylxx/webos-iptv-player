@@ -73,6 +73,43 @@ async function enterSearch(page: import('@playwright/test').Page): Promise<void>
   await expect(page.locator('.tab-bar-search.expanded')).toBeVisible();
 }
 
+test('M3U channel results retain visible space above matching programmes', async ({ page }) => {
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const stop = new Date(start.getTime() + 60 * 60 * 1000);
+  const epg = `<tv>
+    <channel id="one"><display-name>Channel One</display-name></channel>
+    <programme channel="one" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+      <title>Programme One</title>
+    </programme>
+  </tv>`;
+  await page.route('**/playlist.m3u', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U }));
+  await page.route('**/guide.xml', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([
+      { name: 'P', url: 'http://host/playlist.m3u' },
+    ]));
+    localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/guide.xml'));
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterSearch(page);
+  await page.locator('.tab-bar-search-input').fill('one');
+
+  const channel = page.locator('#view-search .search-channel-row').first();
+  const programme = page.locator('#view-search .search-program-row').first();
+  await expect(channel).toContainText('Channel One');
+  await expect(programme).toContainText('Programme One');
+  await expect.poll(async () => {
+    const channelBox = await channel.boundingBox();
+    const programmeBox = await programme.boundingBox();
+    if (!channelBox || !programmeBox) return false;
+    return channelBox.height >= 80
+      && channelBox.y + channelBox.height <= programmeBox.y;
+  }).toBe(true);
+});
+
 test('unified search matches channels, movies, and series; a channel result plays', async ({ page }) => {
   await seedSearch(page);
   await routeLiveManifest(page);
