@@ -47,7 +47,7 @@ change.
 
 ## CI
 
-`.github/workflows/build.yml` runs typecheck (app **and** `service`),
+`.github/workflows/build.yml` runs typecheck (app, `service`, **and** `benchmarks`),
 `npm run lint` (the Chromium-68 compat gate), `vitest run`, the esbuild bundle, and
 packages the IPK. Pushes/PRs to `main` build; tagged `v*` pushes publish a GitHub
 release with the `.ipk`.

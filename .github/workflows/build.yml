@@ -26,10 +26,10 @@ jobs:
         run: npm ci
 
       - name: Install webOS CLI
-        run: npm install -g @webos-tools/cli@3.2.3
+        run: npm install -g @webos-tools/cli@3.2.5
 
       - name: Type check
-        run: npx tsc --noEmit && npx tsc -p bundled-service/tsconfig.json
+        run: npx tsc --noEmit && npx tsc -p bundled-service/tsconfig.json && npm run benchmark:typecheck
 
       - name: Lint (webOS 5 / Chromium 68 compat gate)
         run: npm run lint
