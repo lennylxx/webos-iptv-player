@@ -1,4 +1,11 @@
-import { test, expect, type Page, enterTab, LIVE_MANIFEST } from './helpers';
+import {
+  test,
+  expect,
+  type Page,
+  enterTab,
+  LIVE_MANIFEST,
+  readUserDataStore,
+} from './helpers';
 
 test.use({ timezoneId: 'UTC' });
 
@@ -116,13 +123,13 @@ test('adds a live channel only after confirmed playback', async ({ page }) => {
     const video = document.querySelector<HTMLVideoElement>('#video-player')!;
     Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
   });
-  await expect.poll(() => page.evaluate(() =>
-    {
+  await expect.poll(async () => {
+    await page.evaluate(() => {
       document.querySelector<HTMLVideoElement>('#video-player')!
         .dispatchEvent(new Event('playing'));
-      return JSON.parse(localStorage.getItem('iptv_recently_watched_live') ?? '[]').length;
-    }
-  ), { timeout: 12_000, intervals: [500] }).toBe(1);
+    });
+    return (await readUserDataStore(page, 'recently-watched')).length;
+  }, { timeout: 12_000, intervals: [500] }).toBe(1);
 
   await page.keyboard.press('Escape');
   await page.locator('[data-group="builtin:recently-watched"]').click();
@@ -161,14 +168,12 @@ test('clears Recently Watched without clearing VOD resume', async ({ page }) => 
   await page.locator('[data-confirm-action="confirm"]').click();
   await expect(page.locator('.toast.visible')).toHaveText('Recently Watched cleared');
 
-  const stored = await page.evaluate(() => ({
-    live: localStorage.getItem('iptv_recently_watched_live'),
-    catchup: localStorage.getItem('iptv_catchup_progress'),
-    vod: localStorage.getItem('iptv_resume'),
-  }));
-  expect(stored.live).toBeNull();
-  expect(stored.catchup).toBeNull();
-  expect(stored.vod).toContain('Movie Alpha');
+  const live = await readUserDataStore(page, 'recently-watched');
+  const progress = await readUserDataStore<{ name?: string }>(page, 'playback-progress');
+  expect(live).toEqual([]);
+  expect(progress.some(record => record.key.startsWith('catchup:'))).toBe(false);
+  expect(progress.find(record => record.key.startsWith('resume:'))?.value.name)
+    .toBe('Movie Alpha');
 });
 
 test('filters Recently Watched by the selected playlist', async ({ page }) => {

@@ -388,9 +388,9 @@ export interface WatchlistEntry {
   addedAt: number;
 }
 
-// Local resume store: last playback position per catalog item. Kept in
-// localStorage (Xtream doesn't persist third-party resume). `kind` lets Movies
-// and Series share one store. name/poster are denormalized so the
+// Local resume store: last playback position per catalog item. Persisted in
+// IndexedDB (Xtream doesn't persist third-party resume). `kind` lets Movies and
+// Series share one store. name/poster are denormalized so the
 // "Continue watching" rail renders without a catalog round-trip.
 export type ResumeKind = 'vod' | 'episode';
 

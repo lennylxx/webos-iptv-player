@@ -5,6 +5,7 @@ import {
   neuterVideo,
   SAMPLE_M3U,
   enterTab,
+  readUserDataStore,
   type Page,
 } from './helpers';
 
@@ -121,10 +122,8 @@ async function focusAndSelect(page: Page, selector: string): Promise<void> {
 }
 
 async function storedWatchlist(page: Page): Promise<SeedWatchlistEntry[]> {
-  return page.evaluate(() => {
-    const stored = JSON.parse(localStorage.getItem('iptv_watchlist') ?? '{}') as Record<string, SeedWatchlistEntry>;
-    return Object.keys(stored).map((key) => stored[key]);
-  });
+  return (await readUserDataStore<SeedWatchlistEntry>(page, 'watchlist'))
+    .map(record => record.value);
 }
 
 async function finishCurrentVideo(page: Page): Promise<void> {
@@ -142,20 +141,24 @@ test('adds and removes Movies and Series through their detail screens', async ({
   await expect(page.locator('#view-movies [data-action="watchlist"]')).toContainText('Add to Watchlist');
   await page.locator('#view-movies [data-action="watchlist"]').click();
   await expect(page.locator('#view-movies [data-action="watchlist"]')).toContainText('Remove from Watchlist');
-  expect((await storedWatchlist(page)).map((entry) => `${entry.kind}:${entry.itemId}`)).toEqual(['vod:10']);
+  await expect.poll(async () =>
+    (await storedWatchlist(page)).map((entry) => `${entry.kind}:${entry.itemId}`))
+    .toEqual(['vod:10']);
   await page.locator('#view-movies [data-action="watchlist"]').click();
   await expect(page.locator('#view-movies [data-action="watchlist"]')).toContainText('Add to Watchlist');
-  expect(await storedWatchlist(page)).toEqual([]);
+  await expect.poll(() => storedWatchlist(page)).toEqual([]);
 
   await enterTab(page, 'series');
   await focusAndSelect(page, '#view-series .catalog-tile[data-item-id="1"]');
   await expect(page.locator('#view-series [data-action="watchlist"]')).toContainText('Add to Watchlist');
   await page.locator('#view-series [data-action="watchlist"]').click();
   await expect(page.locator('#view-series [data-action="watchlist"]')).toContainText('Remove from Watchlist');
-  expect((await storedWatchlist(page)).map((entry) => `${entry.kind}:${entry.itemId}`)).toEqual(['series:1']);
+  await expect.poll(async () =>
+    (await storedWatchlist(page)).map((entry) => `${entry.kind}:${entry.itemId}`))
+    .toEqual(['series:1']);
   await page.locator('#view-series [data-action="watchlist"]').click();
   await expect(page.locator('#view-series [data-action="watchlist"]')).toContainText('Add to Watchlist');
-  expect(await storedWatchlist(page)).toEqual([]);
+  await expect.poll(() => storedWatchlist(page)).toEqual([]);
 });
 
 test('shows Resume on return and keeps three movie actions at a stable height', async ({ page }) => {
@@ -244,14 +247,16 @@ test('auto-plays the next Watchlist movie and removes each completed movie', asy
   await expect(page.locator('#player-osd .osd-channel-name')).toHaveText('Movie One');
 
   await finishCurrentVideo(page);
-  expect((await storedWatchlist(page)).map((entry) => entry.itemId)).toEqual(['11']);
+  await expect.poll(async () =>
+    (await storedWatchlist(page)).map((entry) => entry.itemId))
+    .toEqual(['11']);
   await expect(page.locator('#player-osd .osd-next-episode')).toContainText('Movie Two');
   await expect(page.locator('#player-osd .osd-next-episode')).toHaveCount(0);
   await expect(page.locator('#player-osd .osd-channel-name')).toHaveText('Movie Two');
 
   await finishCurrentVideo(page);
   await expect(page.locator('#view-movies')).toBeVisible();
-  expect(await storedWatchlist(page)).toEqual([]);
+  await expect.poll(() => storedWatchlist(page)).toEqual([]);
 });
 
 test('auto-plays the next episode and removes a series only after its final episode', async ({ page }) => {
@@ -266,12 +271,14 @@ test('auto-plays the next episode and removes a series only after its final epis
   await expect(page.locator('#player-osd .osd-channel-name')).toContainText('Episode One');
 
   await finishCurrentVideo(page);
-  expect((await storedWatchlist(page)).map((entry) => entry.itemId)).toEqual(['1']);
+  await expect.poll(async () =>
+    (await storedWatchlist(page)).map((entry) => entry.itemId))
+    .toEqual(['1']);
   await expect(page.locator('#player-osd .osd-next-episode')).toContainText('Episode Two');
   await expect(page.locator('#player-osd .osd-next-episode')).toHaveCount(0);
   await expect(page.locator('#player-osd .osd-channel-name')).toContainText('Episode Two');
 
   await finishCurrentVideo(page);
   await expect(page.locator('#view-series')).toBeVisible();
-  expect(await storedWatchlist(page)).toEqual([]);
+  await expect.poll(() => storedWatchlist(page)).toEqual([]);
 });

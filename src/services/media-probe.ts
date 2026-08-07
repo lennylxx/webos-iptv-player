@@ -122,7 +122,7 @@ export async function probeMedia(url: string, cacheKey: string): Promise<MediaIn
     }
 
     if (!info) { log.warn('unparseable header', extFromUrl(url), cacheKey); return null; }
-    await setCachedCatalog(cacheKey, info);
+    await setCachedCatalog(cacheKey, info, null);
     log.debug('probed', cacheKey, info.videoCodec || '?', `${info.width}x${info.height}`, info.hdr || '');
     return info;
   } catch (err) {

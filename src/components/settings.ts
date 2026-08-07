@@ -5,7 +5,11 @@ import { SpatialNav } from '../navigation/spatial-nav';
 import { StorageService } from '../services/storage-service';
 import { ChannelCustomizationService } from '../services/channel-customization';
 import { PlaylistService } from '../services/playlist-service';
-import { clearCachedEpg } from '../services/idb-cache';
+import {
+  clearAllCachedData,
+  getCacheUsage,
+  type CacheUsageSummary,
+} from '../services/idb-cache';
 import { UploadClient, uploadIdFromUrl } from '../services/upload-client';
 import { createXtreamClient } from '../services/xtream-client';
 import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
@@ -46,6 +50,18 @@ function formatOffset(min: number): string {
   const sign = min > 0 ? '+' : '-';
   const abs = Math.abs(min);
   return `UTC${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+}
+
+function formatBytes(bytes: number): string {
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  let value = Math.max(0, bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const digits = unit === 0 || value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
 /** "MyList — 12 channels" when count is known, otherwise just the name. */
@@ -276,7 +292,7 @@ export type SaveAction = 'reload' | 'apply' | 'reset' | 'cancel' | 'edit-channel
 
 export class Settings {
   private container: HTMLElement;
-  private onSave: (action: SaveAction) => void;
+  private onSave: (action: SaveAction) => void | Promise<void>;
   private onChannelsChanged: () => void;
   private nav: SpatialNav;
   // Pending theme selection (persisted on Save; live-previewed while browsing).
@@ -289,7 +305,7 @@ export class Settings {
 
   constructor(
     container: HTMLElement,
-    onSave: (action: SaveAction) => void,
+    onSave: (action: SaveAction) => void | Promise<void>,
     onChannelsChanged: () => void = () => {},
   ) {
     this.container = container;
@@ -611,6 +627,9 @@ export class Settings {
                   </div>
                 </div>
               ` : ''}
+              <div class="cache-usage" id="cache-usage" aria-live="polite">
+                <div class="cache-usage-loading">${t('common.loading')}</div>
+              </div>
               <div class="settings-maintenance">
                 <button class="btn btn-secondary" data-focusable id="refresh-data">${t('settings.refreshAll')}</button>
                 <button class="btn btn-danger" data-focusable id="clear-cache">${t('settings.clearCache')}</button>
@@ -642,6 +661,7 @@ export class Settings {
     // updates arrive via the Luna `uploadEvents` push channel (wired in
     // app.ts → subscribeToUploadEvents) and call refreshUploads() directly.
     void this.refreshUploads();
+    void this.loadCacheUsage();
   }
 
   handleAction(action: Action): void {
@@ -723,11 +743,7 @@ export class Settings {
         message: t('settings.clearCacheMessage'),
         confirmLabel: t('common.clear'),
         cancelLabel: t('common.cancel'),
-        onConfirm: () => {
-          StorageService.remove('cached_playlist');
-          void clearCachedEpg();
-          showToast(t('settings.cacheCleared'));
-        },
+        onConfirm: () => { void this.clearCache(); },
         onCancel: () => {},
       });
     } else if (el.id === 'reset-app') {
@@ -736,7 +752,7 @@ export class Settings {
         message: t('settings.resetAppMessage'),
         confirmLabel: t('common.reset'),
         cancelLabel: t('common.cancel'),
-        onConfirm: () => this.onSave('reset'),
+        onConfirm: () => { void this.resetApp(); },
         onCancel: () => {},
       });
     } else if (el.id === 'edit-channel-list') {
@@ -786,6 +802,72 @@ export class Settings {
     }
   }
 
+  private async resetApp(): Promise<void> {
+    try {
+      await this.onSave('reset');
+    } catch (err) {
+      log.error(
+        'App reset failed',
+        'event=persistence.reset.failed',
+        'operation=clear',
+        err,
+      );
+      showToast(t('settings.resetFailed'));
+    }
+  }
+
+  private async loadCacheUsage(): Promise<void> {
+    try {
+      const usage = await getCacheUsage();
+      this.renderCacheUsage(usage);
+    } catch (err) {
+      log.warn(
+        'Cache usage read failed',
+        'event=persistence.cache.accounting.read.failed',
+        'operation=read',
+        'surface=settings',
+        err,
+      );
+      const target = $('#cache-usage', this.container);
+      if (target) morph(target, html`<div class="cache-usage-loading">-</div>`);
+    }
+  }
+
+  private renderCacheUsage(usage: CacheUsageSummary): void {
+    const target = $('#cache-usage', this.container);
+    if (!target) return;
+    morph(target, html`
+      <div class="cache-usage-total">
+        <strong>${formatBytes(usage.total.bytes)}</strong>
+        <span>/ ${formatBytes(usage.budgetBytes)}</span>
+      </div>
+      <div class="cache-usage-breakdown">
+        <span>${t('settings.playlists')} <strong>${formatBytes(usage.categories.playlist.bytes)}</strong></span>
+        <span>${t('settings.epg')} <strong>${formatBytes(usage.categories.epg.bytes)}</strong></span>
+        <span>${t('common.movies')} / ${t('common.series')} <strong>${formatBytes(usage.categories.catalog.bytes)}</strong></span>
+        <span>${t('settings.onlineSubtitles')} <strong>${formatBytes(usage.categories.subtitle.bytes)}</strong></span>
+      </div>
+    `);
+  }
+
+  private async clearCache(): Promise<void> {
+    try {
+      await clearAllCachedData();
+      await this.loadCacheUsage();
+      showToast(t('settings.cacheCleared'));
+    } catch (err) {
+      log.error(
+        'Cache clear failed',
+        'event=persistence.cache.clear.failed',
+        'operation=clear',
+        'scope=all',
+        'surface=settings',
+        err,
+      );
+      showToast(t('settings.cacheClearFailed'));
+    }
+  }
+
   // Applied on its own (not only on Save) so leaving through "Edit channel list"
   // still honors the toggle.
   private saveShowHidden(): void {
@@ -831,11 +913,12 @@ export class Settings {
     if (this.categoryScrollFrame !== null) {
       window.cancelAnimationFrame(this.categoryScrollFrame);
     }
+    const maxScrollTop = Math.max(0, main.scrollHeight - main.clientHeight);
     const targetScrollTop = Math.max(
       0,
       Math.min(
         main.scrollTop + target.getBoundingClientRect().top - main.getBoundingClientRect().top,
-        main.scrollHeight - main.clientHeight,
+        maxScrollTop,
       ),
     );
     target.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' });
@@ -1293,7 +1376,6 @@ export class Settings {
 
     const remaining = StorageService.getPlaylists().filter(pl => pl.url !== url);
     StorageService.setPlaylists(remaining);
-    StorageService.remove('cached_playlist');
     showToast(t('settings.uploadRemoved'));
 
     await this.refreshUploads();

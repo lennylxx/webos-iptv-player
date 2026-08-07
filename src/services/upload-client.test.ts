@@ -109,7 +109,6 @@ describe('UploadClient.reconcile', () => {
       { name: 'Manual', url: 'http://m', source: 'url' },
       { id: expect.any(String), name: 'Phone One', url: 'http://127.0.0.1:8890/uploads/p1.m3u', source: 'upload', count: 5 },
     ]);
-    expect(storageMock.remove).toHaveBeenCalledWith('cached_playlist');
   });
 
   it('removes uploaded entries that no longer exist on the service', async () => {
@@ -124,7 +123,6 @@ describe('UploadClient.reconcile', () => {
     expect(storageMock.setPlaylists).toHaveBeenCalledWith([
       { name: 'Manual', url: 'http://m', source: 'url' },
     ]);
-    expect(storageMock.remove).toHaveBeenCalledWith('cached_playlist');
   });
 
   it('skips writing storage when the uploaded list is already in sync', async () => {

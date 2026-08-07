@@ -54,6 +54,24 @@ export async function routeLiveManifest(page: Page): Promise<void> {
     route.fulfill({ status: 200, contentType: 'application/vnd.apple.mpegurl', body: LIVE_MANIFEST }));
 }
 
+export async function readUserDataStore<T>(
+  page: Page,
+  storeName: string,
+): Promise<{ key: string; value: T }[]> {
+  return page.evaluate((store) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('iptv');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction(store, 'readonly');
+      const request = tx.objectStore(store).getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+      tx.oncomplete = () => db.close();
+    };
+  }), storeName) as Promise<{ key: string; value: T }[]>;
+}
+
 /**
  * Keep VOD alive in the player by neutering the <video> element so an empty mock
  * movie/episode body can't fire `error` and auto-eject back to the catalog. The

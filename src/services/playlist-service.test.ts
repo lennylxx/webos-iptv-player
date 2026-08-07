@@ -2,11 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel, ChannelCustomization } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
 
-const { storageMock, fetchTextMock } = vi.hoisted(() => ({
+const { storageMock, cacheMock, fetchTextMock } = vi.hoisted(() => ({
   storageMock: {
-    getCachedPlaylist: vi.fn(),
     getPlaylists: vi.fn(),
-    setCachedPlaylist: vi.fn(),
     getFavorites: vi.fn(() => [] as string[]),
     migrateFavoriteKeys: vi.fn(),
     getShowHiddenChannels: vi.fn(() => false),
@@ -14,10 +12,15 @@ const { storageMock, fetchTextMock } = vi.hoisted(() => ({
     setChannelCustomization: vi.fn(),
     clearChannelCustomization: vi.fn(),
   },
+  cacheMock: {
+    getCachedPlaylist: vi.fn(),
+    setCachedPlaylist: vi.fn(),
+  },
   fetchTextMock: vi.fn(),
 }));
 
 vi.mock('./storage-service', () => ({ StorageService: storageMock }));
+vi.mock('./idb-cache', () => cacheMock);
 vi.mock('../utils/fetch-helper', async (importOriginal) => ({
   ...await importOriginal<typeof import('../utils/fetch-helper')>(),
   fetchPlaylistText: fetchTextMock,
@@ -55,6 +58,8 @@ http://stream/u3`;
 beforeEach(() => {
   vi.clearAllMocks();
   storageMock.getFavorites.mockReturnValue([]);
+  cacheMock.getCachedPlaylist.mockResolvedValue(null);
+  cacheMock.setCachedPlaylist.mockResolvedValue(true);
   PlaylistService.allChannels = [];
   PlaylistService.channels = [];
   PlaylistService.groups = [];
@@ -184,7 +189,7 @@ describe('PlaylistService.refresh', () => {
 
   it('persists the merged result to the cache', async () => {
     await PlaylistService.refresh();
-    expect(storageMock.setCachedPlaylist).toHaveBeenCalledWith(
+    expect(cacheMock.setCachedPlaylist).toHaveBeenCalledWith(
       PlaylistService.channels,
       [{ url: 'http://host1:8080/epg.xml', playlistIds: ['a'], kind: 'm3u' }],
     );
@@ -203,7 +208,7 @@ describe('PlaylistService.refresh', () => {
     );
     const channels = await PlaylistService.refresh();
     expect(channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
-    expect(storageMock.setCachedPlaylist).not.toHaveBeenCalled();
+    expect(cacheMock.setCachedPlaylist).not.toHaveBeenCalled();
   });
 });
 
@@ -342,7 +347,7 @@ describe('PlaylistService.load', () => {
   it('uses the cached playlist without hitting the network', async () => {
     const cached = [channel({ id: 'a', name: 'Alpha', group: 'News', playlistIds: ['P1'] })];
     const epgSources = [{ url: 'http://e', playlistIds: ['P1'], kind: 'm3u' }];
-    storageMock.getCachedPlaylist.mockReturnValue({ channels: cached, epgSources });
+    cacheMock.getCachedPlaylist.mockResolvedValue({ channels: cached, epgSources });
     const result = await PlaylistService.load();
     expect(result).toEqual(cached);
     expect(PlaylistService.allChannels).toBe(cached);
@@ -352,7 +357,7 @@ describe('PlaylistService.load', () => {
   });
 
   it('refreshes from the network on a cache miss', async () => {
-    storageMock.getCachedPlaylist.mockReturnValue(null);
+    cacheMock.getCachedPlaylist.mockResolvedValue(null);
     storageMock.getPlaylists.mockReturnValue([{ name: 'P2', url: 'http://host2/p2.m3u' }]);
     fetchTextMock.mockResolvedValue(P2);
     const result = await PlaylistService.load();
@@ -601,7 +606,7 @@ describe('PlaylistService customization', () => {
     expect(PlaylistService.allChannels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha']);
     // The raw parse is cached, so an edit never forces a re-fetch.
-    expect(storageMock.setCachedPlaylist).toHaveBeenCalledWith(
+    expect(cacheMock.setCachedPlaylist).toHaveBeenCalledWith(
       PlaylistService.allChannels, PlaylistService.epgSources);
   });
 
@@ -713,7 +718,7 @@ describe('PlaylistService customization', () => {
       channel({ name: 'Alpha', url: 'http://stream/u1', group: 'News', playlistIds: ['a'] }),
       channel({ name: 'Bravo', url: 'http://stream/u2', group: 'News', playlistIds: ['a'] }),
     ];
-    storageMock.getCachedPlaylist.mockReturnValue({ channels: cached, epgSources: [] });
+    cacheMock.getCachedPlaylist.mockResolvedValue({ channels: cached, epgSources: [] });
     useRecord(record({ order: [KEY_B, KEY_A] }));
 
     const result = await PlaylistService.load();

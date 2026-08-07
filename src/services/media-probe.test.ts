@@ -76,7 +76,7 @@ describe('probeMedia', () => {
     expect(result).toEqual(INFO);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1].headers.Range).toBe('bytes=0-');
-    expect(setCache).toHaveBeenCalledWith('key1', INFO);
+    expect(setCache).toHaveBeenCalledWith('key1', INFO, null);
   });
 
   it('routes .mkv/.webm to the MKV parser and never fetches a tail range', async () => {

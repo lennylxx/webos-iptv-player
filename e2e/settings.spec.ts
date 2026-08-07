@@ -36,6 +36,8 @@ test.describe('Settings navigation', () => {
 
   test('keeps dropdown spacing aligned with adjacent settings', async ({ page }) => {
     await page.goto('/');
+    await expect(page.locator('#os-pref-lang')).toBeAttached();
+    await expect(page.locator('#overlay-style')).toBeAttached();
 
     const gaps = await page.evaluate(() => {
       const titleGap = (selector: string): number => {
@@ -111,7 +113,7 @@ test.describe('Settings navigation', () => {
     await expect(data).toHaveClass(/active/);
   });
 
-  test('keeps the clicked weak indicator locked throughout smooth scrolling', async ({ page }) => {
+  test('keeps the clicked indicator and Data title visible after smooth scrolling', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#view-settings')).toBeVisible();
     await page.evaluate(() => {
@@ -134,8 +136,12 @@ test.describe('Settings navigation', () => {
       (window as typeof window & { __settingsActiveChanges: string[] }).__settingsActiveChanges.length = 0;
     });
     await data.click();
-    await expect.poll(() => page.locator('.settings-main').evaluate((main) =>
-      Math.abs(main.scrollHeight - main.clientHeight - main.scrollTop) <= 1)).toBe(true);
+    await expect.poll(() => page.evaluate(() => {
+      const main = document.querySelector('.settings-main')!.getBoundingClientRect();
+      const title = document.querySelector('#settings-data .settings-section-title')!
+        .getBoundingClientRect();
+      return title.top >= main.top && title.bottom <= main.bottom;
+    })).toBe(true);
 
     const changes = await page.evaluate(() =>
       (window as typeof window & { __settingsActiveChanges: string[] }).__settingsActiveChanges);

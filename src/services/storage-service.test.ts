@@ -41,10 +41,10 @@ describe('StorageService', () => {
   });
 
   it('invalidates the channel cache and probed stream MIMEs when playlist configuration changes', () => {
-    StorageService.setCachedPlaylist([], []);
+    StorageService.set('cached_playlist', { legacy: true });
     StorageService.setStreamMime('http://host/live', 'video/mp2t');
     StorageService.setPlaylists([{ id: 'p1', name: 'A', url: 'http://host/a' }]);
-    expect(StorageService.getCachedPlaylist()).toBeNull();
+    expect(localStorage.getItem('iptv_cached_playlist')).toBeNull();
     // An account that switches live output keeps its route, so a stale probe
     // would otherwise pin the new format to the old container.
     expect(StorageService.getStreamMime('http://host/live')).toBeNull();
@@ -66,29 +66,6 @@ describe('StorageService', () => {
       'http://host/play': { mime: 'application/vnd.apple.mpegurl', updatedAt: 0 },
     });
     expect(StorageService.getStreamMime('http://host/play')).toBeNull();
-  });
-
-  it('stores playlist cache EPG sources and invalidates the URL-only schema', () => {
-    const channels = [ch({ id: 'a', name: 'Alpha', url: 'http://host/a', playlistIds: ['p1'] })];
-    StorageService.set('cached_playlist', {
-      version: 1,
-      channels,
-      epgUrls: ['http://host/epg.xml'],
-      timestamp: Date.now(),
-    });
-    expect(StorageService.getCachedPlaylist()).toBeNull();
-
-    StorageService.set('cached_playlist', {
-      version: 2,
-      channels,
-      epgSources: [],
-      timestamp: Date.now(),
-    });
-    expect(StorageService.getCachedPlaylist()).toEqual({ channels, epgSources: [] });
-
-    const epgSources = [{ url: 'http://host/epg.xml', playlistIds: ['p1'], kind: 'm3u' as const }];
-    StorageService.setCachedPlaylist(channels, epgSources);
-    expect(StorageService.getCachedPlaylist()).toEqual({ channels, epgSources });
   });
 
   it('defaults the theme to midnight and round-trips a selection', () => {

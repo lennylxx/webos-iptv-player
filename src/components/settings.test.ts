@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { TzMode } from '../types';
 import type { XtreamAccountInfo } from '../services/xtream-client';
 
-const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.hoisted(() => {
+const { state, storageMock, cacheMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.hoisted(() => {
   const state = {
     playlists: [] as {
       id?: string;
@@ -31,6 +31,21 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
   };
   return {
     state,
+    cacheMock: {
+      clearAllCachedData: vi.fn(async () => {}),
+      getCacheUsage: vi.fn(async () => ({
+        total: { bytes: 438 * 1024 * 1024, entries: 12 },
+        categories: {
+          playlist: { bytes: 19 * 1024 * 1024, entries: 1 },
+          epg: { bytes: 92 * 1024 * 1024, entries: 2 },
+          catalog: { bytes: 286 * 1024 * 1024, entries: 7 },
+          subtitle: { bytes: 41 * 1024 * 1024, entries: 2 },
+        },
+        budgetBytes: 1024 * 1024 * 1024,
+        originUsageBytes: null,
+        quotaBytes: null,
+      })),
+    },
     themeMock: { previewTheme: vi.fn(), applyTheme: vi.fn(), initTheme: vi.fn(), applyTextSize: vi.fn() },
     storageMock: {
       getPlaylists: vi.fn(() => state.playlists),
@@ -81,7 +96,7 @@ const { state, storageMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.
 
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../services/theme-service', () => themeMock);
-vi.mock('../services/idb-cache', () => ({ clearCachedEpg: vi.fn(async () => {}) }));
+vi.mock('../services/idb-cache', () => cacheMock);
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 vi.mock('../services/xtream-client', () => ({
   createXtreamClient: () => ({ getAccountInfo: xtreamMock.getAccountInfo }),
@@ -95,7 +110,6 @@ vi.mock('../services/upload-client', () => ({
 }));
 
 import { Settings } from './settings';
-import { clearCachedEpg } from '../services/idb-cache';
 import { setLocale } from '../i18n';
 
 let container: HTMLElement;
@@ -190,6 +204,20 @@ describe('Settings.render', () => {
     state.autoPlay = true;
     settings.render();
     expect(container.querySelector('#auto-play .toggle-option.active')!.getAttribute('data-value')).toBe('on');
+  });
+
+  it('shows total and per-category cache usage', async () => {
+    settings.render();
+    await vi.waitFor(() => {
+      expect(container.querySelector('.cache-usage-total')?.textContent)
+        .toContain('438 MiB');
+    });
+    expect(container.querySelector('.cache-usage-total')?.textContent).toContain('1.00 GiB');
+    const breakdown = container.querySelector('.cache-usage-breakdown')!;
+    expect(breakdown.previousElementSibling?.classList.contains('cache-usage-total')).toBe(true);
+    expect(breakdown.children).toHaveLength(4);
+    expect(breakdown.textContent).toContain('286 MiB');
+    expect(breakdown.textContent).toContain('92.0 MiB');
   });
 });
 
@@ -421,20 +449,20 @@ describe('Settings editing', () => {
     expect(activeVal()).toBe('on');
   });
 
-  it('explains the cache scope and requires confirmation before clearing', () => {
+  it('explains the cache scope and requires confirmation before clearing', async () => {
     click('#clear-cache');
     expect(document.querySelector('.confirmation-title')?.textContent).toBe('Clear cache?');
     expect(document.querySelector('.confirmation-message')?.textContent)
       .toContain('Accounts, settings, favorites, and viewing history are kept.');
-    expect(storageMock.remove).not.toHaveBeenCalled();
-    expect(clearCachedEpg).not.toHaveBeenCalled();
+    expect(cacheMock.clearAllCachedData).not.toHaveBeenCalled();
 
     settings.handleAction('left');
     settings.handleAction('select');
 
-    expect(storageMock.remove).toHaveBeenCalledWith('cached_playlist');
-    expect(clearCachedEpg).toHaveBeenCalled();
-    expect(toastMock.showToast).toHaveBeenCalledWith('Cache cleared');
+    await vi.waitFor(() => {
+      expect(cacheMock.clearAllCachedData).toHaveBeenCalled();
+      expect(toastMock.showToast).toHaveBeenCalledWith('Cache cleared');
+    });
   });
 
   it('requires confirmation before requesting a full app reset', () => {
@@ -446,6 +474,20 @@ describe('Settings editing', () => {
     settings.handleAction('select');
 
     expect(onSave).toHaveBeenCalledWith('reset');
+  });
+
+  it('reports a reset failure instead of leaving an unhandled rejection', async () => {
+    onSave.mockRejectedValueOnce(new Error('clear failed'));
+    click('#reset-app');
+
+    settings.handleAction('left');
+    settings.handleAction('select');
+
+    await vi.waitFor(() => {
+      expect(toastMock.showToast).toHaveBeenCalledWith(
+        'Reset could not be completed. Restart the app and try again.',
+      );
+    });
   });
 
   it('cancel discards; refresh reloads', () => {
@@ -836,7 +878,6 @@ describe('Settings uploads section', () => {
     expect(storageMock.setPlaylists).toHaveBeenCalledWith([
       { name: 'Manual', url: 'http://manual', source: 'url' },
     ]);
-    expect(storageMock.remove).toHaveBeenCalledWith('cached_playlist');
     expect(toastMock.showToast).toHaveBeenCalledWith('Uploaded playlist removed');
   });
 

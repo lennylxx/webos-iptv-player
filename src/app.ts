@@ -4,7 +4,7 @@ import { KeyHandler } from './navigation/key-handler';
 import { PlaylistService } from './services/playlist-service';
 import { EpgService } from './services/epg-service';
 import { StorageService } from './services/storage-service';
-import { clearAllCachedData } from './services/idb-cache';
+import { clearAllCachedData, clearCachedPlaylist } from './services/idb-cache';
 import { setServicePort } from './services/upload-client';
 import { ChannelList } from './components/channel-list';
 import { Player } from './components/player';
@@ -56,6 +56,7 @@ class App {
   async init(): Promise<void> {
     const done = log.time('init');
     log.info('Initializing app');
+    await StorageService.init();
     initLocale(StorageService.getLocalePreference());
     const initialLoadingText = $('#loading-text');
     if (initialLoadingText) initialLoadingText.textContent = t('common.loading');
@@ -214,6 +215,7 @@ class App {
       if (document.visibilityState === lastVisibility) return;
       lastVisibility = document.visibilityState;
       if (document.visibilityState === 'hidden') {
+        void this.flushUserData('background');
         log.info('App backgrounded — stopping bundled service');
         this.stopBundledService();
       } else if (document.visibilityState === 'visible') {
@@ -221,12 +223,46 @@ class App {
           log.info('App foregrounded while bundled service start is pending');
           return;
         }
+
         log.info('App foregrounded — restarting bundled service');
         void this.startBundledService()
           .then((started) => started ? this.finishBundledServiceInit() : undefined)
           .catch(err => log.error('Bundled service restart failed:', err));
       }
     });
+  }
+
+  private async flushUserData(reason: 'background' | 'exit'): Promise<boolean> {
+    try {
+      await StorageService.flush();
+      log.info(
+        'User data flush completed',
+        'event=persistence.user.flush.completed',
+        'operation=flush',
+        `reason=${reason}`,
+      );
+      return true;
+    } catch (err) {
+      log.error(
+        'User data flush failed',
+        'event=persistence.user.flush.failed',
+        'operation=flush',
+        `reason=${reason}`,
+        err,
+      );
+      return false;
+    }
+  }
+
+  private async exitApp(): Promise<void> {
+    if (!await this.flushUserData('exit')) {
+      this.backPressTime = 0;
+      showToast(t('app.saveFailed'));
+      return;
+    }
+    const webOS = (window as unknown as Record<string, { platformBack?: () => void }>).webOS;
+    if (webOS?.platformBack) webOS.platformBack();
+    else window.close();
   }
 
   /**
@@ -908,9 +944,7 @@ class App {
         if (this.channelList.handleBack()) return;
         const now = Date.now();
         if (now - this.backPressTime < 3000) {
-          const webOS = (window as unknown as Record<string, { platformBack?: () => void }>).webOS;
-          if (webOS?.platformBack) webOS.platformBack();
-          else window.close();
+          void this.exitApp();
         } else {
           this.backPressTime = now;
           showToast(t('app.exitHint'));
@@ -1074,8 +1108,14 @@ class App {
       return;
     }
     if (action === 'reset') {
-      StorageService.clearAll();
       await clearAllCachedData();
+      await StorageService.clearUserData();
+      StorageService.clearAll();
+      log.info(
+        'App reset completed',
+        'event=persistence.reset.completed',
+        'operation=clear',
+      );
       location.reload();
       return;
     }
@@ -1088,7 +1128,7 @@ class App {
       }
     }
     if (action === 'reload') {
-      StorageService.remove('cached_playlist');
+      await clearCachedPlaylist();
       this.showView('channels');
       await this.loadData();
       return;

@@ -285,7 +285,7 @@ describe('diagnostic report assembly', () => {
     expect(records[0].headers).not.toHaveProperty('authorization');
   });
 
-  it('groups stable playback events by existing session and load labels', () => {
+  it('extracts stable diagnostic events with optional playback labels', () => {
     const timeline = extractPlaybackTimeline([
       {
         observedAt: '2026-01-01T00:00:00.000Z',
@@ -296,15 +296,28 @@ describe('diagnostic report assembly', () => {
       {
         observedAt: '2026-01-01T00:00:01.000Z',
         source: 'console',
+        level: 'warning',
+        text: '[Storage] event=persistence.cache.write.failed category=playlist',
+      },
+      {
+        observedAt: '2026-01-01T00:00:02.000Z',
+        source: 'console',
         level: 'log',
         text: '[Player] ordinary log',
       },
     ]);
-    expect(timeline).toEqual([expect.objectContaining({
-      code: 'playback.path.native',
-      session: 3,
-      load: 2,
-    })]);
+    expect(timeline).toEqual([
+      expect.objectContaining({
+        code: 'playback.path.native',
+        session: 3,
+        load: 2,
+      }),
+      expect.objectContaining({
+        code: 'persistence.cache.write.failed',
+        session: null,
+        load: null,
+      }),
+    ]);
   });
 
   it('extracts structured Xtream request failures from natural-language logs', () => {

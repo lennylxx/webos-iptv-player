@@ -1,4 +1,11 @@
-import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab } from './helpers';
+import {
+  test,
+  expect,
+  routeLiveManifest,
+  SAMPLE_M3U,
+  enterTab,
+  readUserDataStore,
+} from './helpers';
 
 function xmltvDate(date: Date): string {
   return date.toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
@@ -133,8 +140,8 @@ test('program search shows XMLTV metadata and toggles a future reminder', async 
 
   await result.click();
   await expect(result).toContainText('Reminder set');
-  await expect.poll(() => page.evaluate(() =>
-    JSON.parse(localStorage.getItem('iptv_reminders') || '[]').length)).toBe(1);
+  await expect.poll(async () =>
+    (await readUserDataStore(page, 'reminders')).length).toBe(1);
 });
 
 test('a movie search result deep-links into its Movies detail and Back returns to Search', async ({ page }) => {

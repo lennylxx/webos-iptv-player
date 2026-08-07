@@ -24,6 +24,7 @@ import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
 import { createXtreamClient } from './xtream-client';
+import { getCachedPlaylist, setCachedPlaylist } from './idb-cache';
 
 const log = createLogger('Playlist');
 
@@ -77,7 +78,7 @@ class PlaylistServiceImpl {
   }
 
   async load(): Promise<Channel[]> {
-    const cached = StorageService.getCachedPlaylist();
+    const cached = await getCachedPlaylist();
     if (cached) {
       this.allChannels = cached.channels;
       this.epgSources = cached.epgSources;
@@ -203,7 +204,7 @@ class PlaylistServiceImpl {
     // Cache the raw parse: customization is a view over it, so an edit re-sorts
     // memory instead of forcing a re-fetch.
     if (allPlaylistsLoaded) {
-      StorageService.setCachedPlaylist(allChannels, epgSources);
+      await setCachedPlaylist(allChannels, epgSources);
     } else {
       log.warn('Skipping cache write because one or more playlists failed');
     }
