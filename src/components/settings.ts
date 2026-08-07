@@ -844,7 +844,7 @@ export class Settings {
       <div class="cache-usage-breakdown">
         <span>${t('settings.playlists')} <strong>${formatBytes(usage.categories.playlist.bytes)}</strong></span>
         <span>${t('settings.epg')} <strong>${formatBytes(usage.categories.epg.bytes)}</strong></span>
-        <span>${t('common.movies')} / ${t('common.series')} <strong>${formatBytes(usage.categories.catalog.bytes)}</strong></span>
+        <span>${t('settings.moviesSeriesMediaData')} <strong>${formatBytes(usage.categories.catalog.bytes)}</strong></span>
         <span>${t('settings.onlineSubtitles')} <strong>${formatBytes(usage.categories.subtitle.bytes)}</strong></span>
       </div>
     `);
