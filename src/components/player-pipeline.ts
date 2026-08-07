@@ -1,6 +1,6 @@
 import type { AudioOption, ManifestAudio, ManifestClosedCaption, ManifestSubtitle, SubtitleOption } from '../types';
 import { CONFIG } from '../config';
-import { StorageService } from '../services/storage-service';
+import { getCachedStreamMime, setCachedStreamMime } from '../services/idb-cache';
 import { hlsAudioOptions, parseAudioRenditions } from '../utils/audio-tracks';
 import { fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
@@ -154,35 +154,37 @@ export class PlayerPipeline {
         return;
       }
       const routeKey = streamRouteKey(url);
-      const cachedMime = StorageService.getStreamMime(routeKey);
-      if (cachedMime) {
-        log.info('Selected webOS native playback', 'event=playback.path.native',
-          this.callbacks.playbackLabel(token),
-          'reason=cache', 'url=', safeUrl,
-          '| webOS native | cached MIME', cachedMime,
-          '| catchup:', this.callbacks.isCatchup());
-        if (cachedMime === 'application/vnd.apple.mpegurl') {
-          void this.loadManifest(url, this.manifestSeq, token);
-        }
-        this.playNative(url, cachedMime);
-        return;
-      }
-      void this.detectContentType(url, token).then(contentType => {
+      void getCachedStreamMime(routeKey).then(cachedMime => {
         if (token !== this.loadToken || !this.videoEl) return;
-        const mime = streamMime(contentType);
-        if (routeKey && contentType &&
-            contentType.split(';')[0].trim() !== 'application/octet-stream') {
-          StorageService.setStreamMime(routeKey, mime);
+        if (cachedMime) {
+          log.info('Selected webOS native playback', 'event=playback.path.native',
+            this.callbacks.playbackLabel(token),
+            'reason=cache', 'url=', safeUrl,
+            '| webOS native | cached MIME', cachedMime,
+            '| catchup:', this.callbacks.isCatchup());
+          if (cachedMime === 'application/vnd.apple.mpegurl') {
+            void this.loadManifest(url, this.manifestSeq, token);
+          }
+          this.playNative(url, cachedMime);
+          return;
         }
-        log.info('Selected webOS native playback', 'event=playback.path.native',
-          this.callbacks.playbackLabel(token),
-          'reason=probe', 'url=', safeUrl,
-          '| webOS native | content-type:', contentType || '(none)',
-          '| catchup:', this.callbacks.isCatchup(), '| MIME', mime || '(auto)');
-        if (mime === 'application/vnd.apple.mpegurl') {
-          void this.loadManifest(url, this.manifestSeq, token);
-        }
-        this.playNative(url, mime);
+        void this.detectContentType(url, token).then(contentType => {
+          if (token !== this.loadToken || !this.videoEl) return;
+          const mime = streamMime(contentType);
+          if (routeKey && contentType &&
+              contentType.split(';')[0].trim() !== 'application/octet-stream') {
+            void setCachedStreamMime(routeKey, mime);
+          }
+          log.info('Selected webOS native playback', 'event=playback.path.native',
+            this.callbacks.playbackLabel(token),
+            'reason=probe', 'url=', safeUrl,
+            '| webOS native | content-type:', contentType || '(none)',
+            '| catchup:', this.callbacks.isCatchup(), '| MIME', mime || '(auto)');
+          if (mime === 'application/vnd.apple.mpegurl') {
+            void this.loadManifest(url, this.manifestSeq, token);
+          }
+          this.playNative(url, mime);
+        });
       });
       return;
     }

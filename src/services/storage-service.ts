@@ -6,7 +6,11 @@ import { channelKey, legacyChannelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist-id';
 import { createLogger } from '../utils/logger';
 import { isLocalePreference, type LocalePreference } from '../i18n';
-import { clearCachedPlaylist } from './idb-cache';
+import {
+  clearCachedPlaylist,
+  clearCachedStreamMimes,
+  migrateLegacyStreamMimeCache,
+} from './idb-cache';
 import { openPersistenceDb } from './idb-database';
 import {
   applyUserChanges,
@@ -22,11 +26,6 @@ import {
 const log = createLogger('StorageService');
 
 const PREFIX = CONFIG.STORAGE_PREFIX;
-
-interface StreamMimeEntry {
-  mime: string;
-  updatedAt: number;
-}
 
 type StoredCatchup = CatchupProgressEntry & { expiresAt: number };
 
@@ -435,6 +434,14 @@ function evictCache(): void {
     'trigger=local_quota',
     err,
   ));
+  void clearCachedStreamMimes().catch(err => log.warn(
+    'Stream MIME cache eviction failed',
+    'event=persistence.cache.eviction.failed',
+    'operation=evict',
+    'category=catalog',
+    'trigger=playlist_change',
+    err,
+  ));
 }
 
 export const StorageService = {
@@ -461,6 +468,7 @@ export const StorageService = {
         });
     }
     await userDataInitPromise;
+    await migrateLegacyStreamMimeCache();
   },
 
   clearAll(): void {
@@ -508,25 +516,6 @@ export const StorageService = {
     const previous = get<PlaylistEntry[]>('playlists', []);
     if (JSON.stringify(previous) === JSON.stringify(playlists)) return;
     if (set('playlists', playlists)) evictCache();
-  },
-
-  getStreamMime(routeKey: string): string | null {
-    if (!routeKey) return null;
-    const entries = get<Record<string, StreamMimeEntry>>('stream_mimes', {});
-    const entry = entries[routeKey];
-    if (!entry || typeof entry.mime !== 'string' || !Number.isFinite(entry.updatedAt)) return null;
-    if (Date.now() - entry.updatedAt > CONFIG.PLAYER.STREAM_MIME_CACHE_TTL) {
-      delete entries[routeKey];
-      set('stream_mimes', entries);
-      return null;
-    }
-    return entry.mime;
-  },
-  setStreamMime(routeKey: string, mime: string): void {
-    if (!routeKey || !mime) return;
-    const entries = get<Record<string, StreamMimeEntry>>('stream_mimes', {});
-    entries[routeKey] = { mime, updatedAt: Date.now() };
-    set('stream_mimes', entries);
   },
 
   getEpgUrl(): string {

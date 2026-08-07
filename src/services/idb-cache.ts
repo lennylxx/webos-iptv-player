@@ -10,6 +10,7 @@ import {
   openPersistenceDb,
   PLAYLIST_STORE,
   requestResult,
+  STREAM_MIME_STORE,
   SUBTITLE_STORE,
   transactionDone,
   type CacheStore,
@@ -83,6 +84,11 @@ export interface CachedCatalogEntry<T = unknown> {
   data: T;
 }
 
+interface StreamMimeEntry {
+  mime: string;
+  updatedAt: number;
+}
+
 interface CachedPlaylistPayload {
   version: number;
   sourceSignature: string;
@@ -107,6 +113,7 @@ function categoryForStore(store: CacheStore): CacheCategory {
     case PLAYLIST_STORE: return 'playlist';
     case EPG_STORE: return 'epg';
     case CATALOG_STORE: return 'catalog';
+    case STREAM_MIME_STORE: return 'catalog';
     case SUBTITLE_STORE: return 'subtitle';
   }
 }
@@ -673,25 +680,53 @@ async function readRawWithoutTouch(
   return raw ? normalizeRecord(store, raw) : null;
 }
 
+async function readStoreUsage(store: CacheStore): Promise<CacheUsageEntry> {
+  const db = await openDb();
+  if (!db) throw new Error('IndexedDB unavailable');
+  const usage = { bytes: 0, entries: 0 };
+  const tx = db.transaction(store, 'readonly');
+  const done = transactionDone(tx);
+  await new Promise<void>((resolve, reject) => {
+    const req = tx.objectStore(store).openCursor();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      usage.bytes += normalizeRecord(
+        store,
+        cursor.value as Record<string, unknown>,
+      ).byteSize;
+      usage.entries++;
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error ?? new Error('Cache store scan failed'));
+  });
+  await done;
+  return usage;
+}
+
 async function clearStoreNow(store: CacheStore): Promise<void> {
   const db = await openDb();
   if (!db) throw new Error('IndexedDB unavailable');
   await ensureMetadata();
   const metadata = await readMetadata();
   const category = categoryForStore(store);
+  const storeUsage = await readStoreUsage(store);
   const categoryUsage = metadata.categories[category];
   const tx = db.transaction([store, META_STORE], 'readwrite');
   tx.objectStore(store).clear();
   tx.objectStore(META_STORE).put({
     category,
-    bytes: 0,
-    entries: 0,
+    bytes: Math.max(0, categoryUsage.bytes - storeUsage.bytes),
+    entries: Math.max(0, categoryUsage.entries - storeUsage.entries),
     updatedAt: Date.now(),
   } satisfies CacheMeta);
   tx.objectStore(META_STORE).put({
     category: 'total',
-    bytes: Math.max(0, metadata.total.bytes - categoryUsage.bytes),
-    entries: Math.max(0, metadata.total.entries - categoryUsage.entries),
+    bytes: Math.max(0, metadata.total.bytes - storeUsage.bytes),
+    entries: Math.max(0, metadata.total.entries - storeUsage.entries),
     updatedAt: Date.now(),
   } satisfies CacheMeta);
   await transactionDone(tx);
@@ -775,6 +810,95 @@ export async function setCachedCatalog(
     data,
     expiresAt: ttlMs === null ? null : timestamp + ttlMs,
   });
+}
+
+export async function getCachedStreamMime(routeKey: string): Promise<string | null> {
+  if (!routeKey) return null;
+  try {
+    const raw = await readRaw(STREAM_MIME_STORE, routeKey);
+    if (!raw) return null;
+    if (raw.expiresAt !== null && raw.expiresAt <= Date.now()) {
+      await removeExpiredRecord(STREAM_MIME_STORE, routeKey);
+      return null;
+    }
+    const data = raw.data as Partial<StreamMimeEntry> | undefined;
+    return data && typeof data.mime === 'string' ? data.mime : null;
+  } catch (err) {
+    log.warn(
+      'Stream MIME cache read failed',
+      'event=persistence.cache.read.failed',
+      'operation=read',
+      'category=catalog',
+      err,
+    );
+    return null;
+  }
+}
+
+export async function setCachedStreamMime(routeKey: string, mime: string): Promise<void> {
+  if (!routeKey || !mime) return;
+  const timestamp = Date.now();
+  await putRaw(STREAM_MIME_STORE, {
+    key: routeKey,
+    timestamp,
+    data: { mime, updatedAt: timestamp } satisfies StreamMimeEntry,
+    expiresAt: timestamp + CONFIG.PLAYER.STREAM_MIME_CACHE_TTL,
+  });
+}
+
+export function clearCachedStreamMimes(): Promise<void> {
+  return clearStore(STREAM_MIME_STORE);
+}
+
+// TODO: Remove this localStorage cache migration after all supported installs use IndexedDB v4.
+export async function migrateLegacyStreamMimeCache(): Promise<void> {
+  const legacyKey = CONFIG.STORAGE_PREFIX + 'stream_mimes';
+  try {
+    const raw = localStorage.getItem(legacyKey);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, Partial<StreamMimeEntry>>;
+    const now = Date.now();
+    let migrated = 0;
+    for (const routeKey of Object.keys(parsed)) {
+      const entry = parsed[routeKey];
+      const updatedAt = entry?.updatedAt;
+      if (
+        !routeKey
+        || typeof entry?.mime !== 'string'
+        || typeof updatedAt !== 'number'
+        || !Number.isFinite(updatedAt)
+        || now - updatedAt > CONFIG.PLAYER.STREAM_MIME_CACHE_TTL
+      ) {
+        continue;
+      }
+      const current = await readRawWithoutTouch(STREAM_MIME_STORE, routeKey);
+      if (current && current.updatedAt >= updatedAt) continue;
+      const stored = await putRaw(STREAM_MIME_STORE, {
+        key: routeKey,
+        timestamp: updatedAt,
+        data: { mime: entry.mime, updatedAt },
+        expiresAt: updatedAt + CONFIG.PLAYER.STREAM_MIME_CACHE_TTL,
+      });
+      if (!stored) return;
+      migrated++;
+    }
+    localStorage.removeItem(legacyKey);
+    log.info(
+      'Legacy stream MIME cache migration completed',
+      'event=persistence.cache.migration.completed',
+      'operation=migrate',
+      'category=catalog',
+      `records=${migrated}`,
+    );
+  } catch (err) {
+    log.warn(
+      'Legacy stream MIME cache migration failed',
+      'event=persistence.cache.migration.failed',
+      'operation=migrate',
+      'category=catalog',
+      err,
+    );
+  }
 }
 
 export async function getCachedSubtitle(key: string): Promise<string | null> {

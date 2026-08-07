@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
+import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
 import { StorageService } from './storage-service';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { CONFIG } from '../config';
+import {
+  clearAllCachedData,
+  getCachedStreamMime,
+  setCachedStreamMime,
+} from './idb-cache';
 
 const ch = (over: Partial<Channel>): Channel => ({
   id: '', name: '', logo: '', group: '', url: '', extras: null,
@@ -11,8 +17,9 @@ const ch = (over: Partial<Channel>): Channel => ({
 });
 
 describe('StorageService', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear();
+    await clearAllCachedData();
   });
 
   it('returns an empty playlist list by default', () => {
@@ -40,32 +47,22 @@ describe('StorageService', () => {
     expect(StorageService.getPlaylists()[0].id).toBe(got[0].id);
   });
 
-  it('invalidates the channel cache and probed stream MIMEs when playlist configuration changes', () => {
+  it('invalidates the channel cache and probed stream MIMEs when playlist configuration changes', async () => {
     StorageService.set('cached_playlist', { legacy: true });
-    StorageService.setStreamMime('http://host/live', 'video/mp2t');
+    await setCachedStreamMime('http://host/live', 'video/mp2t');
     StorageService.setPlaylists([{ id: 'p1', name: 'A', url: 'http://host/a' }]);
     expect(localStorage.getItem('iptv_cached_playlist')).toBeNull();
     // An account that switches live output keeps its route, so a stale probe
     // would otherwise pin the new format to the old container.
-    expect(StorageService.getStreamMime('http://host/live')).toBeNull();
+    await vi.waitFor(async () => {
+      expect(await getCachedStreamMime('http://host/live')).toBeNull();
+    });
   });
 
   it('defaults the EPG url to an empty string and round-trips it', () => {
     expect(StorageService.getEpgUrl()).toBe('');
     StorageService.setEpgUrl('http://epg/guide.xml');
     expect(StorageService.getEpgUrl()).toBe('http://epg/guide.xml');
-  });
-
-  it('stores verified stream MIME routes and expires stale entries', () => {
-    expect(StorageService.getStreamMime('http://host/play')).toBeNull();
-    StorageService.setStreamMime('http://host/play', 'application/vnd.apple.mpegurl');
-    expect(StorageService.getStreamMime('http://host/play'))
-      .toBe('application/vnd.apple.mpegurl');
-
-    StorageService.set('stream_mimes', {
-      'http://host/play': { mime: 'application/vnd.apple.mpegurl', updatedAt: 0 },
-    });
-    expect(StorageService.getStreamMime('http://host/play')).toBeNull();
   });
 
   it('defaults the theme to midnight and round-trips a selection', () => {

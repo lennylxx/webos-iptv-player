@@ -4,19 +4,24 @@ import { beforeEach, describe, it, expect } from 'vitest';
 import type { Channel } from '../types';
 import {
   clearAllCachedData,
+  clearCachedStreamMimes,
   getCacheUsage,
   getCachedCatalog,
   getCachedEpg,
   getCachedPlaylist,
+  getCachedStreamMime,
   getCachedSubtitle,
+  migrateLegacyStreamMimeCache,
   setCachedCatalog,
   setCachedEpg,
   setCachedPlaylist,
+  setCachedStreamMime,
   setCachedSubtitle,
 } from './idb-cache';
 import {
   openPersistenceDb,
   requestResult,
+  STREAM_MIME_STORE,
   SUBTITLE_STORE,
   transactionDone,
 } from './idb-database';
@@ -34,20 +39,86 @@ const channel = (id: string): Channel => ({
   catchupDays: 0,
 });
 
-describe('idb-cache subtitle cache', () => {
+describe('idb-cache', () => {
   beforeEach(async () => {
     localStorage.clear();
     await clearAllCachedData();
   });
 
   it('uses the next schema version after the published v3 database', async () => {
-    expect((await openPersistenceDb())?.version).toBe(4);
+    const db = await openPersistenceDb();
+    expect(db?.version).toBe(4);
+    expect(db?.objectStoreNames.contains(STREAM_MIME_STORE)).toBe(true);
   });
 
   it('round-trips a cached subtitle', async () => {
     await setCachedSubtitle('subdl:1', 'WEBVTT\n\nhi');
     expect(await getCachedSubtitle('subdl:1')).toContain('hi');
     expect(await getCachedSubtitle('missing')).toBeNull();
+  });
+
+  it('stores stream MIME probes in their cache store and expires them', async () => {
+    await setCachedStreamMime('http://host/live', 'video/mp2t');
+    expect(await getCachedStreamMime('http://host/live')).toBe('video/mp2t');
+    expect((await getCacheUsage()).categories.catalog.entries).toBe(1);
+
+    const db = await openPersistenceDb();
+    expect(db).not.toBeNull();
+    const readTx = db!.transaction(STREAM_MIME_STORE, 'readonly');
+    const record = await requestResult(
+      readTx.objectStore(STREAM_MIME_STORE).get('http://host/live'),
+    );
+    const writeTx = db!.transaction(STREAM_MIME_STORE, 'readwrite');
+    writeTx.objectStore(STREAM_MIME_STORE).put({ ...record, expiresAt: Date.now() - 1 });
+    await transactionDone(writeTx);
+
+    expect(await getCachedStreamMime('http://host/live')).toBeNull();
+    expect((await getCacheUsage()).categories.catalog.entries).toBe(0);
+  });
+
+  it('migrates legacy stream MIME probes and removes their localStorage key', async () => {
+    localStorage.setItem('iptv_stream_mimes', JSON.stringify({
+      'http://host/live': { mime: 'video/mp2t', updatedAt: Date.now() },
+      'http://host/expired': { mime: 'video/mp2t', updatedAt: 0 },
+    }));
+
+    await migrateLegacyStreamMimeCache();
+
+    expect(localStorage.getItem('iptv_stream_mimes')).toBeNull();
+    expect(await getCachedStreamMime('http://host/live')).toBe('video/mp2t');
+    expect(await getCachedStreamMime('http://host/expired')).toBeNull();
+  });
+
+  it('clears stream MIME records without clearing catalog records', async () => {
+    await setCachedCatalog('x1|vod_categories', ['a']);
+    await setCachedStreamMime('http://host/live', 'video/mp2t');
+
+    await clearCachedStreamMimes();
+
+    expect(await getCachedStreamMime('http://host/live')).toBeNull();
+    expect(await getCachedCatalog('x1|vod_categories')).not.toBeNull();
+    expect((await getCacheUsage()).categories.catalog.entries).toBe(1);
+  });
+
+  it('includes stream MIME records in the shared cache eviction pass', async () => {
+    await setCachedStreamMime('http://host/live', 'video/mp2t');
+    const storageDescriptor = Object.getOwnPropertyDescriptor(navigator, 'storage');
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { estimate: async () => ({ usage: 0, quota: 100 }) },
+    });
+    try {
+      await setCachedCatalog('x1|vod_categories', ['a']);
+    } finally {
+      if (storageDescriptor) {
+        Object.defineProperty(navigator, 'storage', storageDescriptor);
+      } else {
+        delete (navigator as Navigator & { storage?: StorageManager }).storage;
+      }
+    }
+
+    expect(await getCachedStreamMime('http://host/live')).toBeNull();
+    expect(await getCachedCatalog('x1|vod_categories')).not.toBeNull();
   });
 
   it('removes an expired subtitle instead of serving it', async () => {

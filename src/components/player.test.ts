@@ -14,7 +14,6 @@ vi.mock('../services/storage-service', () => ({
     setLastChannel: vi.fn(), setLastChannelKey: vi.fn(),
     getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
     getAudioPref: vi.fn(), setAudioPref: vi.fn(),
-    getStreamMime: vi.fn(() => null), setStreamMime: vi.fn(),
     setResume: vi.fn(), clearResume: vi.fn(),
     removeWatchlist: vi.fn(),
     getPickedOnlineSub: vi.fn(), setPickedOnlineSub: vi.fn(),
