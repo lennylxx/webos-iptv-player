@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { Channel } from '../types';
 import {
   clearAllCachedData,
   clearCachedStreamMimes,
+  flushCacheWrites,
   getCacheUsage,
   getCachedCatalog,
   getCachedEpg,
@@ -12,6 +13,7 @@ import {
   getCachedStreamMime,
   getCachedSubtitle,
   migrateLegacyStreamMimeCache,
+  scheduleCachedPlaylist,
   setCachedCatalog,
   setCachedEpg,
   setCachedPlaylist,
@@ -160,6 +162,31 @@ describe('idb-cache', () => {
 
     expect(await getCachedPlaylist()).toEqual({ channels, epgSources: sources });
     expect(localStorage.getItem('iptv_cached_playlist')).toBeNull();
+  });
+
+  it('defers playlist persistence until after the next painted frame', async () => {
+    const frames: FrameRequestCallback[] = [];
+    const originalRequest = globalThis.requestAnimationFrame;
+    const originalCancel = globalThis.cancelAnimationFrame;
+    globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    globalThis.cancelAnimationFrame = vi.fn();
+    try {
+      scheduleCachedPlaylist([channel('ch1')]);
+      expect(await getCachedPlaylist()).toBeNull();
+
+      frames.shift()?.(0);
+      expect(await getCachedPlaylist()).toBeNull();
+
+      frames.shift()?.(16);
+      await flushCacheWrites();
+      expect(await getCachedPlaylist()).not.toBeNull();
+    } finally {
+      globalThis.requestAnimationFrame = originalRequest;
+      globalThis.cancelAnimationFrame = originalCancel;
+    }
   });
 
   it('does not serve a parsed playlist after its source configuration changes', async () => {

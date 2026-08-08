@@ -24,7 +24,7 @@ import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
 import { createXtreamClient } from './xtream-client';
-import { getCachedPlaylist, setCachedPlaylist } from './idb-cache';
+import { getCachedPlaylist, scheduleCachedPlaylist } from './idb-cache';
 
 const log = createLogger('Playlist');
 
@@ -204,23 +204,7 @@ class PlaylistServiceImpl {
     // Cache the raw parse: customization is a view over it, so an edit re-sorts
     // memory instead of forcing a re-fetch.
     if (allPlaylistsLoaded) {
-      void setCachedPlaylist(allChannels, epgSources).then(
-        (stored) => {
-          if (!stored) {
-            log.warn(
-              'Playlist cache write was not accepted',
-              'event=playlist.cache.write.skipped',
-              'operation=write',
-            );
-          }
-        },
-        (err) => log.error(
-          'Playlist cache write failed',
-          'event=playlist.cache.write.failed',
-          'operation=write',
-          err,
-        ),
-      );
+      scheduleCachedPlaylist(allChannels, epgSources);
     } else {
       log.warn('Skipping cache write because one or more playlists failed');
     }

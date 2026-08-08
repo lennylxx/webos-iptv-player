@@ -14,7 +14,7 @@ const { storageMock, cacheMock, fetchTextMock } = vi.hoisted(() => ({
   },
   cacheMock: {
     getCachedPlaylist: vi.fn(),
-    setCachedPlaylist: vi.fn(),
+    scheduleCachedPlaylist: vi.fn(),
   },
   fetchTextMock: vi.fn(),
 }));
@@ -59,7 +59,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   storageMock.getFavorites.mockReturnValue([]);
   cacheMock.getCachedPlaylist.mockResolvedValue(null);
-  cacheMock.setCachedPlaylist.mockResolvedValue(true);
   PlaylistService.allChannels = [];
   PlaylistService.channels = [];
   PlaylistService.groups = [];
@@ -189,21 +188,15 @@ describe('PlaylistService.refresh', () => {
 
   it('persists the merged result to the cache', async () => {
     await PlaylistService.refresh();
-    expect(cacheMock.setCachedPlaylist).toHaveBeenCalledWith(
+    expect(cacheMock.scheduleCachedPlaylist).toHaveBeenCalledWith(
       PlaylistService.channels,
       [{ url: 'http://host1:8080/epg.xml', playlistIds: ['a'], kind: 'm3u' }],
     );
   });
 
   it('does not block the refreshed channel list on cache persistence', async () => {
-    let finishWrite: ((stored: boolean) => void) | undefined;
-    cacheMock.setCachedPlaylist.mockReturnValue(new Promise((resolve) => {
-      finishWrite = resolve;
-    }));
-
     await expect(PlaylistService.refresh()).resolves.toHaveLength(3);
-    expect(finishWrite).toBeTypeOf('function');
-    finishWrite?.(true);
+    expect(cacheMock.scheduleCachedPlaylist).toHaveBeenCalledOnce();
   });
 
   it('returns an empty list and skips fetching when no playlists are configured', async () => {
@@ -219,7 +212,7 @@ describe('PlaylistService.refresh', () => {
     );
     const channels = await PlaylistService.refresh();
     expect(channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
-    expect(cacheMock.setCachedPlaylist).not.toHaveBeenCalled();
+    expect(cacheMock.scheduleCachedPlaylist).not.toHaveBeenCalled();
   });
 });
 
@@ -617,7 +610,7 @@ describe('PlaylistService customization', () => {
     expect(PlaylistService.allChannels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha']);
     // The raw parse is cached, so an edit never forces a re-fetch.
-    expect(cacheMock.setCachedPlaylist).toHaveBeenCalledWith(
+    expect(cacheMock.scheduleCachedPlaylist).toHaveBeenCalledWith(
       PlaylistService.allChannels, PlaylistService.epgSources);
   });
 

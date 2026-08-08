@@ -121,6 +121,13 @@ let storageEstimateCache: {
   value: { usage: number | null; quota: number | null };
   timestamp: number;
 } | null = null;
+let scheduledPlaylist: {
+  channels: Channel[];
+  epgSources: EpgSource[];
+  timestamp: number;
+} | null = null;
+let playlistFrame: number | null = null;
+let playlistTimer: ReturnType<typeof setTimeout> | null = null;
 
 function enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
   const result = mutationChain.then(operation, operation);
@@ -128,7 +135,59 @@ function enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
+function cancelPlaylistSchedule(): void {
+  if (playlistFrame !== null && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(playlistFrame);
+  }
+  if (playlistTimer !== null) clearTimeout(playlistTimer);
+  playlistFrame = null;
+  playlistTimer = null;
+}
+
+function persistScheduledPlaylist(): void {
+  cancelPlaylistSchedule();
+  const pending = scheduledPlaylist;
+  scheduledPlaylist = null;
+  if (!pending) return;
+  void setCachedPlaylist(
+    pending.channels,
+    pending.epgSources,
+    pending.timestamp,
+  ).then((stored) => {
+    if (!stored) {
+      log.warn(
+        'Playlist cache write was not accepted',
+        'event=playlist.cache.write.skipped',
+        'operation=write',
+      );
+    }
+  }, (err) => log.error(
+    'Playlist cache write failed',
+    'event=playlist.cache.write.failed',
+    'operation=write',
+    err,
+  ));
+}
+
+export function scheduleCachedPlaylist(
+  channels: Channel[],
+  epgSources: EpgSource[] = [],
+  timestamp = Date.now(),
+): void {
+  if (!channels.length) return;
+  scheduledPlaylist = { channels, epgSources, timestamp };
+  cancelPlaylistSchedule();
+  if (typeof requestAnimationFrame === 'function') {
+    playlistFrame = requestAnimationFrame(() => {
+      playlistFrame = requestAnimationFrame(persistScheduledPlaylist);
+    });
+  } else {
+    playlistTimer = setTimeout(persistScheduledPlaylist, 0);
+  }
+}
+
 export async function flushCacheWrites(): Promise<void> {
+  if (scheduledPlaylist) persistScheduledPlaylist();
   await mutationChain;
 }
 

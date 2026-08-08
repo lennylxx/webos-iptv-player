@@ -68,6 +68,47 @@ export async function loadUserRecords<T = unknown>(
   }
 }
 
+export async function loadAllUserRecords(): Promise<
+Record<UserDataStore, UserDataRecord[]>
+> {
+  await writeChain;
+  const db = await openPersistenceDb();
+  if (!db) {
+    log.warn(
+      'User data storage is unavailable',
+      'event=persistence.user.unavailable',
+      'operation=read_all',
+    );
+    return {
+      favorites: [],
+      reminders: [],
+      'channel-state': [],
+      watchlist: [],
+      'playback-progress': [],
+      'recently-watched': [],
+      'online-sub-picks': [],
+    };
+  }
+  try {
+    const tx = db.transaction(USER_DATA_STORES, 'readonly');
+    const records = await Promise.all(USER_DATA_STORES.map(async (storeName) => [
+      storeName,
+      await requestResult(tx.objectStore(storeName).getAll()) as UserDataRecord[],
+    ] as const));
+    const result = {} as Record<UserDataStore, UserDataRecord[]>;
+    for (const [storeName, items] of records) result[storeName] = items;
+    return result;
+  } catch (err) {
+    log.error(
+      'User data read failed',
+      'event=persistence.user.read.failed',
+      'operation=read_all',
+      err,
+    );
+    throw err;
+  }
+}
+
 // TODO: Remove this marker helper once all supported installs have upgraded to IndexedDB v4.
 export async function loadMigrationMarkers(): Promise<Set<string>> {
   const db = await openPersistenceDb();

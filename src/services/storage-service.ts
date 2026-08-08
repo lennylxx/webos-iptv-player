@@ -16,8 +16,8 @@ import {
   applyUserChanges,
   clearAllUserData,
   flushUserDataWrites,
+  loadAllUserRecords,
   loadMigrationMarkers,
-  loadUserRecords,
   migrateUserRecordSets,
   replaceAllUserData,
   type UserDataRecord,
@@ -266,23 +266,17 @@ function legacyRecords(key: string, value: unknown): {
 }
 
 async function loadUserDataState(): Promise<UserDataState> {
-  const [
-    favorites,
-    reminders,
-    channelState,
-    watchlist,
-    progress,
-    recentlyWatched,
-    onlineSubPicks,
-  ] = await Promise.all([
-    loadUserRecords<string>('favorites'),
-    loadUserRecords<Reminder>('reminders'),
-    loadUserRecords('channel-state'),
-    loadUserRecords<WatchlistEntry>('watchlist'),
-    loadUserRecords<ResumeEntry | StoredCatchup>('playback-progress'),
-    loadUserRecords<RecentlyWatchedLiveEntry>('recently-watched'),
-    loadUserRecords<PickedOnlineSub>('online-sub-picks'),
-  ]);
+  const records = await loadAllUserRecords();
+  const favorites = records.favorites as UserDataRecord<string>[];
+  const reminders = records.reminders as UserDataRecord<Reminder>[];
+  const channelState = records['channel-state'];
+  const watchlist = records.watchlist as UserDataRecord<WatchlistEntry>[];
+  const progress = records['playback-progress'] as
+    UserDataRecord<ResumeEntry | StoredCatchup>[];
+  const recentlyWatched = records['recently-watched'] as
+    UserDataRecord<RecentlyWatchedLiveEntry>[];
+  const onlineSubPicks = records['online-sub-picks'] as
+    UserDataRecord<PickedOnlineSub>[];
 
   const data: UserDataState = {
     favorites: favorites.map(item => item.value),

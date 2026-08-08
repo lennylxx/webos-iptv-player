@@ -4,6 +4,7 @@ import {
   applyUserChanges,
   clearAllUserData,
   flushUserDataWrites,
+  loadAllUserRecords,
   loadMigrationMarkers,
   loadUserRecords,
   migrateUserRecordSets,
@@ -22,6 +23,20 @@ describe('IndexedDB user-data write barrier', () => {
     expect(await loadUserRecords('favorites')).toEqual([
       { key: 'favorite:ch1', value: 'ch1' },
     ]);
+  });
+
+  it('loads every user-data store through one snapshot', async () => {
+    await applyUserChanges('favorites', [{ key: 'favorite:ch1', value: 'ch1' }]);
+    await applyUserChanges('watchlist', [{
+      key: 'watch:x1|movie|1',
+      value: { accountId: 'x1', kind: 'movie', itemId: '1' },
+    }]);
+
+    const records = await loadAllUserRecords();
+
+    expect(records.favorites).toHaveLength(1);
+    expect(records.watchlist).toHaveLength(1);
+    expect(records.reminders).toEqual([]);
   });
 
   it('rejects once when a queued write failed', async () => {
