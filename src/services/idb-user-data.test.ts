@@ -4,6 +4,7 @@ import {
   applyUserChanges,
   clearAllUserData,
   flushUserDataWrites,
+  loadMigrationMarkers,
   loadUserRecords,
   migrateUserRecordSets,
 } from './idb-user-data';
@@ -54,5 +55,26 @@ describe('IndexedDB user-data write barrier', () => {
     ]));
     expect((await loadUserRecords('channel-state')).some(item => item.key === 'audio:old'))
       .toBe(false);
+  });
+
+  it('loads all completed migration markers in one batch', async () => {
+    await migrateUserRecordSets([
+      {
+        legacyKey: 'favorites',
+        storeName: 'favorites',
+        records: [],
+        replacePrefix: null,
+        replaceExisting: true,
+      },
+      {
+        legacyKey: 'watchlist',
+        storeName: 'watchlist',
+        records: [],
+        replacePrefix: null,
+        replaceExisting: true,
+      },
+    ]);
+
+    expect(await loadMigrationMarkers()).toEqual(new Set(['favorites', 'watchlist']));
   });
 });

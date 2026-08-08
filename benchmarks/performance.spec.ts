@@ -18,6 +18,7 @@ import {
   installUniqueGroupFixture,
   inspectPointerBenchmark,
   preparePointerBenchmark,
+  rebuildBenchmarkDatabase,
   runGroupBenchmark,
   runM3USearchBenchmark,
   measureXMLTVCatalogBenchmark,
@@ -36,6 +37,7 @@ const FIXTURE = {
   accountId: 'benchmark-x1',
   epgUrl: 'http://host/benchmark-epg',
   backupKey: '__tv_benchmark_backup__',
+  directStorage: true,
 };
 const COLD_PLAYLIST_URL = 'http://host/cold-list.m3u';
 
@@ -74,6 +76,7 @@ test('records 50,000-item application benchmarks', async ({ page, browserName })
   }
 
   await page.goto('/benchmark-seed.html');
+  await page.evaluate(rebuildBenchmarkDatabase);
   const fixtureStarted = Date.now();
   await page.evaluate(installBenchmarkFixture, FIXTURE);
   const fixtureSetupMs = Date.now() - fixtureStarted;

@@ -204,7 +204,23 @@ class PlaylistServiceImpl {
     // Cache the raw parse: customization is a view over it, so an edit re-sorts
     // memory instead of forcing a re-fetch.
     if (allPlaylistsLoaded) {
-      await setCachedPlaylist(allChannels, epgSources);
+      void setCachedPlaylist(allChannels, epgSources).then(
+        (stored) => {
+          if (!stored) {
+            log.warn(
+              'Playlist cache write was not accepted',
+              'event=playlist.cache.write.skipped',
+              'operation=write',
+            );
+          }
+        },
+        (err) => log.error(
+          'Playlist cache write failed',
+          'event=playlist.cache.write.failed',
+          'operation=write',
+          err,
+        ),
+      );
     } else {
       log.warn('Skipping cache write because one or more playlists failed');
     }

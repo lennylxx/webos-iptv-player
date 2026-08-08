@@ -125,6 +125,7 @@ async function installFixture(client) {
     accountId: ACCOUNT_ID,
     epgUrl: EPG_URL,
     backupKey: BACKUP_KEY,
+    directStorage: true,
   });
 }
 
@@ -412,15 +413,20 @@ async function runTvBenchmark() {
       try {
         await cleanupFixture(client);
         await reloadApp(client);
-        const restored = await evaluate(client, () => {
-          try {
-            const cached = JSON.parse(
-              localStorage.getItem('iptv_cached_playlist') || 'null',
-            );
-            return cached && cached.channels ? cached.channels.length : 0;
-          } catch {
-            return 0;
-          }
+        const restored = await evaluate(client, async () => {
+          const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open('iptv');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          const tx = db.transaction('playlist-cache', 'readonly');
+          const cached = await new Promise((resolve, reject) => {
+            const request = tx.objectStore('playlist-cache').get('combined');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          db.close();
+          return cached?.data?.channels?.length ?? 0;
         });
         console.log(`Restored TV playlist cache: ${String(restored)} channels`);
       } catch (error) {

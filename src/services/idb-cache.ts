@@ -24,6 +24,11 @@ const SUBTITLE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLEANUP_MARGIN_BYTES = 4 * 1024 * 1024;
 const PLAYLIST_CACHE_KEY = 'combined';
 const PLAYLIST_CACHE_VERSION = 2;
+const ENTRY_META_PREFIX = 'entry:';
+const ENTRY_META_INDEX_KEY = 'entry-index';
+const ENTRY_META_VERSION = 1;
+const ACCESS_TOUCH_INTERVAL_MS = 60 * 60 * 1000;
+const STORAGE_ESTIMATE_TTL_MS = 60 * 1000;
 
 export type CacheCategory = typeof CACHE_CATEGORIES[number];
 
@@ -41,6 +46,16 @@ interface CacheMeta {
   bytes: number;
   entries: number;
   updatedAt: number;
+}
+
+interface CacheEntryMeta {
+  category: string;
+  cacheCategory: CacheCategory;
+  store: CacheStore;
+  key: IDBValidKey;
+  byteSize: number;
+  expiresAt: number | null;
+  lastAccessedAt: number;
 }
 
 interface CacheCandidate {
@@ -101,11 +116,20 @@ type StoredRecord = Record<string, unknown> & CacheFields;
 
 let metadataPromise: Promise<void> | null = null;
 let mutationChain: Promise<void> = Promise.resolve();
+const accessTouches = new Map<string, number>();
+let storageEstimateCache: {
+  value: { usage: number | null; quota: number | null };
+  timestamp: number;
+} | null = null;
 
 function enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
   const result = mutationChain.then(operation, operation);
   mutationChain = result.then(() => {}, () => {});
   return result;
+}
+
+export async function flushCacheWrites(): Promise<void> {
+  await mutationChain;
 }
 
 function categoryForStore(store: CacheStore): CacheCategory {
@@ -137,6 +161,54 @@ function serializedBytes(value: unknown): number {
 
 function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function entryMetaId(store: CacheStore, key: IDBValidKey): string {
+  return `${ENTRY_META_PREFIX}${store}:${String(key)}`;
+}
+
+function entryMeta(
+  store: CacheStore,
+  key: IDBValidKey,
+  record: StoredRecord,
+  lastAccessedAt = record.lastAccessedAt,
+): CacheEntryMeta {
+  return {
+    category: entryMetaId(store, key),
+    cacheCategory: categoryForStore(store),
+    store,
+    key,
+    byteSize: record.byteSize,
+    expiresAt: record.expiresAt,
+    lastAccessedAt,
+  };
+}
+
+function isCacheEntryMeta(value: unknown): value is CacheEntryMeta {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<CacheEntryMeta>;
+  return typeof record.category === 'string'
+    && record.category.indexOf(ENTRY_META_PREFIX) === 0
+    && typeof record.store === 'string'
+    && CACHE_STORES.includes(record.store as CacheStore)
+    && record.key !== undefined
+    && typeof record.byteSize === 'number'
+    && typeof record.lastAccessedAt === 'number';
+}
+
+function isNormalizedRecord(store: CacheStore, raw: Record<string, unknown>): raw is StoredRecord {
+  return raw.cacheCategory === categoryForStore(store)
+    && typeof raw.createdAt === 'number'
+    && Number.isFinite(raw.createdAt)
+    && typeof raw.updatedAt === 'number'
+    && Number.isFinite(raw.updatedAt)
+    && typeof raw.lastAccessedAt === 'number'
+    && Number.isFinite(raw.lastAccessedAt)
+    && (raw.expiresAt === null
+      || (typeof raw.expiresAt === 'number' && Number.isFinite(raw.expiresAt)))
+    && typeof raw.byteSize === 'number'
+    && Number.isFinite(raw.byteSize)
+    && raw.byteSize > 0;
 }
 
 function normalizeRecord(
@@ -181,12 +253,8 @@ async function readRaw(store: CacheStore, key: IDBValidKey): Promise<StoredRecor
     const raw = await requestResult(tx.objectStore(store).get(key)) as
       Record<string, unknown> | undefined;
     if (!raw) return null;
-    const normalized = normalizeRecord(store, raw);
-    if (
-      raw.byteSize !== normalized.byteSize
-      || raw.lastAccessedAt !== normalized.lastAccessedAt
-      || raw.cacheCategory !== normalized.cacheCategory
-    ) {
+    const normalized = isNormalizedRecord(store, raw) ? raw : normalizeRecord(store, raw);
+    if (!isNormalizedRecord(store, raw)) {
       void persistNormalizedRecord(store, normalized);
     } else {
       void touchRecord(store, normalized);
@@ -215,19 +283,18 @@ async function readRaw(store: CacheStore, key: IDBValidKey): Promise<StoredRecor
 }
 
 async function touchRecord(store: CacheStore, record: StoredRecord): Promise<void> {
+  const key = record[cacheKeyPath(store)] as IDBValidKey;
+  const id = entryMetaId(store, key);
+  const now = Date.now();
+  const lastTouch = accessTouches.get(id);
+  if (lastTouch !== undefined && now - lastTouch < ACCESS_TOUCH_INTERVAL_MS) return;
+  accessTouches.set(id, now);
   const db = await openDb();
   if (!db) return;
   try {
-    const tx = db.transaction(store, 'readwrite');
-    const done = transactionDone(tx);
-    const objectStore = tx.objectStore(store);
-    const key = record[cacheKeyPath(store)] as IDBValidKey;
-    const req = objectStore.get(key);
-    req.onsuccess = () => {
-      const current = req.result as Record<string, unknown> | undefined;
-      if (current) objectStore.put({ ...current, lastAccessedAt: Date.now() });
-    };
-    await done;
+    const tx = db.transaction(META_STORE, 'readwrite');
+    tx.objectStore(META_STORE).put(entryMeta(store, key, record, now));
+    await transactionDone(tx);
   } catch {
     // Access-time bookkeeping must not turn a valid cache hit into a miss.
   }
@@ -254,6 +321,7 @@ async function rebuildMetadata(): Promise<void> {
   const db = await openDb();
   if (!db) return;
   const categories = emptyUsage();
+  const entries: CacheEntryMeta[] = [];
   try {
     const tx = db.transaction(CACHE_STORES, 'readonly');
     const done = transactionDone(tx);
@@ -269,6 +337,7 @@ async function rebuildMetadata(): Promise<void> {
         const record = normalizeRecord(storeName, cursor.value as Record<string, unknown>);
         categories[category].bytes += record.byteSize;
         categories[category].entries++;
+        entries.push(entryMeta(storeName, cursor.primaryKey, record));
         cursor.continue();
       };
       req.onerror = () => reject(req.error ?? new Error('Cache scan failed'));
@@ -280,12 +349,25 @@ async function rebuildMetadata(): Promise<void> {
       bytes: sum.bytes + categories[category].bytes,
       entries: sum.entries + categories[category].entries,
     }), { bytes: 0, entries: 0 });
+    const keysTx = db.transaction(META_STORE, 'readonly');
+    const existingKeys = await requestResult(keysTx.objectStore(META_STORE).getAllKeys());
     const metaTx = db.transaction(META_STORE, 'readwrite');
     const metaStore = metaTx.objectStore(META_STORE);
+    for (const key of existingKeys) {
+      if (typeof key === 'string' && key.indexOf(ENTRY_META_PREFIX) === 0) {
+        metaStore.delete(key);
+      }
+    }
     for (const category of CACHE_CATEGORIES) {
       metaStore.put({ category, ...categories[category], updatedAt: now } satisfies CacheMeta);
     }
     metaStore.put({ category: 'total', ...total, updatedAt: now } satisfies CacheMeta);
+    for (const entry of entries) metaStore.put(entry);
+    metaStore.put({
+      category: ENTRY_META_INDEX_KEY,
+      version: ENTRY_META_VERSION,
+      updatedAt: now,
+    });
     await transactionDone(metaTx);
   } catch (err) {
     log.warn(
@@ -304,8 +386,13 @@ async function ensureMetadata(): Promise<void> {
     if (!db) return;
     try {
       const tx = db.transaction(META_STORE, 'readonly');
-      const total = await requestResult(tx.objectStore(META_STORE).get('total'));
-      if (!total) await rebuildMetadata();
+      const store = tx.objectStore(META_STORE);
+      const [total, entryIndex] = await Promise.all([
+        requestResult(store.get('total')),
+        requestResult(store.get(ENTRY_META_INDEX_KEY)),
+      ]);
+      const indexVersion = (entryIndex as { version?: unknown } | undefined)?.version;
+      if (!total || indexVersion !== ENTRY_META_VERSION) await rebuildMetadata();
     } catch {
       await rebuildMetadata();
     }
@@ -362,6 +449,17 @@ async function storageEstimate(): Promise<{ usage: number | null; quota: number 
   }
 }
 
+async function cachedStorageEstimate(): Promise<{ usage: number | null; quota: number | null }> {
+  const now = Date.now();
+  if (storageEstimateCache
+      && now - storageEstimateCache.timestamp < STORAGE_ESTIMATE_TTL_MS) {
+    return storageEstimateCache.value;
+  }
+  const value = await storageEstimate();
+  if (value.quota !== null) storageEstimateCache = { value, timestamp: now };
+  return value;
+}
+
 function budgetForQuota(quota: number | null): number {
   if (quota === null || quota <= 0) return FALLBACK_BUDGET_BYTES;
   return Math.min(Math.floor(quota * 0.5), MAX_BUDGET_BYTES);
@@ -380,32 +478,18 @@ export async function getCacheUsage(): Promise<CacheUsageSummary> {
 async function collectCandidates(): Promise<CacheCandidate[]> {
   const db = await openDb();
   if (!db) return [];
-  const candidates: CacheCandidate[] = [];
+  await ensureMetadata();
   try {
-    const tx = db.transaction(CACHE_STORES, 'readonly');
-    const done = transactionDone(tx);
-    await Promise.all(CACHE_STORES.map((storeName) => new Promise<void>((resolve, reject) => {
-      const req = tx.objectStore(storeName).openCursor();
-      req.onsuccess = () => {
-        const cursor = req.result;
-        if (!cursor) {
-          resolve();
-          return;
-        }
-        const record = normalizeRecord(storeName, cursor.value as Record<string, unknown>);
-        candidates.push({
-          store: storeName,
-          key: cursor.primaryKey,
-          category: categoryForStore(storeName),
-          byteSize: record.byteSize,
-          expiresAt: record.expiresAt,
-          lastAccessedAt: record.lastAccessedAt,
-        });
-        cursor.continue();
-      };
-      req.onerror = () => reject(req.error ?? new Error('Cache candidate scan failed'));
-    })));
-    await done;
+    const tx = db.transaction(META_STORE, 'readonly');
+    const records = await requestResult(tx.objectStore(META_STORE).getAll()) as unknown[];
+    return records.filter(isCacheEntryMeta).map((record) => ({
+      store: record.store,
+      key: record.key,
+      category: record.cacheCategory,
+      byteSize: record.byteSize,
+      expiresAt: record.expiresAt,
+      lastAccessedAt: record.lastAccessedAt,
+    }));
   } catch (err) {
     log.warn(
       'Cache candidate scan failed',
@@ -413,8 +497,8 @@ async function collectCandidates(): Promise<CacheCandidate[]> {
       'operation=scan',
       err,
     );
+    return [];
   }
-  return candidates;
 }
 
 async function deleteCandidates(candidates: CacheCandidate[]): Promise<number> {
@@ -433,6 +517,8 @@ async function deleteCandidates(candidates: CacheCandidate[]): Promise<number> {
     const tx = db.transaction([...CACHE_STORES, META_STORE], 'readwrite');
     for (const candidate of candidates) {
       tx.objectStore(candidate.store).delete(candidate.key);
+      tx.objectStore(META_STORE).delete(entryMetaId(candidate.store, candidate.key));
+      accessTouches.delete(entryMetaId(candidate.store, candidate.key));
     }
     const now = Date.now();
     const metaStore = tx.objectStore(META_STORE);
@@ -511,10 +597,12 @@ async function pruneBytes(targetBytes: number): Promise<number> {
 
 async function ensureCapacity(deltaBytes: number): Promise<void> {
   if (deltaBytes <= 0) return;
-  const usage = await getCacheUsage();
-  const cacheOver = usage.total.bytes + deltaBytes - usage.budgetBytes;
-  const originOver = usage.quotaBytes !== null && usage.originUsageBytes !== null
-    ? usage.originUsageBytes + deltaBytes - Math.floor(usage.quotaBytes * 0.8)
+  const metadata = await readMetadata();
+  const estimate = await cachedStorageEstimate();
+  const budgetBytes = budgetForQuota(estimate.quota);
+  const cacheOver = metadata.total.bytes + deltaBytes - budgetBytes;
+  const originOver = estimate.quota !== null && estimate.usage !== null
+    ? estimate.usage + deltaBytes - Math.floor(estimate.quota * 0.8)
     : 0;
   const required = Math.max(cacheOver, originOver);
   if (required > 0) {
@@ -551,6 +639,8 @@ async function commitRecord(
   const now = Date.now();
   const tx = db.transaction([store, META_STORE], 'readwrite');
   tx.objectStore(store).put(record);
+  const key = record[cacheKeyPath(store)] as IDBValidKey;
+  tx.objectStore(META_STORE).put(entryMeta(store, key, record));
   tx.objectStore(META_STORE).put({
     category,
     bytes: Math.max(0, categoryUsage.bytes + deltaBytes),
@@ -677,34 +767,18 @@ async function readRawWithoutTouch(
   const tx = db.transaction(store, 'readonly');
   const raw = await requestResult(tx.objectStore(store).get(key)) as
     Record<string, unknown> | undefined;
-  return raw ? normalizeRecord(store, raw) : null;
+  if (!raw) return null;
+  return isNormalizedRecord(store, raw) ? raw : normalizeRecord(store, raw);
 }
 
-async function readStoreUsage(store: CacheStore): Promise<CacheUsageEntry> {
+async function readStoreEntries(store: CacheStore): Promise<CacheEntryMeta[]> {
   const db = await openDb();
   if (!db) throw new Error('IndexedDB unavailable');
-  const usage = { bytes: 0, entries: 0 };
-  const tx = db.transaction(store, 'readonly');
-  const done = transactionDone(tx);
-  await new Promise<void>((resolve, reject) => {
-    const req = tx.objectStore(store).openCursor();
-    req.onsuccess = () => {
-      const cursor = req.result;
-      if (!cursor) {
-        resolve();
-        return;
-      }
-      usage.bytes += normalizeRecord(
-        store,
-        cursor.value as Record<string, unknown>,
-      ).byteSize;
-      usage.entries++;
-      cursor.continue();
-    };
-    req.onerror = () => reject(req.error ?? new Error('Cache store scan failed'));
-  });
-  await done;
-  return usage;
+  await ensureMetadata();
+  const tx = db.transaction(META_STORE, 'readonly');
+  const records = await requestResult(tx.objectStore(META_STORE).getAll()) as unknown[];
+  return records.filter((record): record is CacheEntryMeta =>
+    isCacheEntryMeta(record) && record.store === store);
 }
 
 async function clearStoreNow(store: CacheStore): Promise<void> {
@@ -713,10 +787,18 @@ async function clearStoreNow(store: CacheStore): Promise<void> {
   await ensureMetadata();
   const metadata = await readMetadata();
   const category = categoryForStore(store);
-  const storeUsage = await readStoreUsage(store);
+  const storeEntries = await readStoreEntries(store);
+  const storeUsage = storeEntries.reduce((usage, entry) => ({
+    bytes: usage.bytes + entry.byteSize,
+    entries: usage.entries + 1,
+  }), { bytes: 0, entries: 0 });
   const categoryUsage = metadata.categories[category];
   const tx = db.transaction([store, META_STORE], 'readwrite');
   tx.objectStore(store).clear();
+  for (const entry of storeEntries) {
+    tx.objectStore(META_STORE).delete(entry.category);
+    accessTouches.delete(entry.category);
+  }
   tx.objectStore(META_STORE).put({
     category,
     bytes: Math.max(0, categoryUsage.bytes - storeUsage.bytes),
@@ -1021,6 +1103,8 @@ export async function clearAllCachedData(): Promise<void> {
       tx.objectStore(META_STORE).clear();
       await transactionDone(tx);
       metadataPromise = null;
+      accessTouches.clear();
+      storageEstimateCache = null;
       log.info(
         'Cache clear completed',
         'event=persistence.cache.clear.completed',

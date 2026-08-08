@@ -16,7 +16,7 @@ import {
   applyUserChanges,
   clearAllUserData,
   flushUserDataWrites,
-  hasMigration,
+  loadMigrationMarkers,
   loadUserRecords,
   migrateUserRecordSets,
   replaceAllUserData,
@@ -358,9 +358,11 @@ async function initUserData(): Promise<void> {
     ['recently_watched_live', []],
   ];
   const pending = [];
-  for (const [key, defaultValue] of migrations) {
+  const migratedKeys = await loadMigrationMarkers();
+  for (let index = 0; index < migrations.length; index++) {
+    const [key, defaultValue] = migrations[index];
     const legacyExists = localStorage.getItem(PREFIX + key) !== null;
-    const migrated = await hasMigration(key);
+    const migrated = migratedKeys.has(key);
     if (migrated && !legacyExists) continue;
     const destination = legacyRecords(key, get<unknown>(key, defaultValue));
     pending.push({

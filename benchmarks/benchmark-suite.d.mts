@@ -3,6 +3,7 @@ export interface BenchmarkFixtureOptions {
   accountId: string;
   epgUrl: string;
   backupKey: string;
+  directStorage?: boolean;
 }
 
 export interface BenchmarkRunOptions {
@@ -34,6 +35,8 @@ export interface BenchmarkSuites {
 export function installBenchmarkFixture(
   options: BenchmarkFixtureOptions,
 ): Promise<{ channels: number }>;
+
+export function rebuildBenchmarkDatabase(): Promise<void>;
 
 export function buildM3UFixture(scale: number): string;
 
@@ -101,9 +104,9 @@ export function runViewReopenCycle(): Promise<{ nodes: number }>;
 
 export function installUniqueGroupFixture(
   scale: number,
-): { channels: number; groups: number };
+): Promise<{ channels: number; groups: number }>;
 
-export function installM3USearchFixture(): { playlists: number };
+export function installM3USearchFixture(): Promise<{ playlists: number }>;
 
 export function runM3USearchBenchmark(
   options: { querySamples: number },

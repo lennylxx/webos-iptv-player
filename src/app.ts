@@ -4,7 +4,11 @@ import { KeyHandler } from './navigation/key-handler';
 import { PlaylistService } from './services/playlist-service';
 import { EpgService } from './services/epg-service';
 import { StorageService } from './services/storage-service';
-import { clearAllCachedData, clearCachedPlaylist } from './services/idb-cache';
+import {
+  clearAllCachedData,
+  clearCachedPlaylist,
+  flushCacheWrites,
+} from './services/idb-cache';
 import { setServicePort } from './services/upload-client';
 import { ChannelList } from './components/channel-list';
 import { Player } from './components/player';
@@ -234,7 +238,7 @@ class App {
 
   private async flushUserData(reason: 'background' | 'exit'): Promise<boolean> {
     try {
-      await StorageService.flush();
+      await Promise.all([StorageService.flush(), flushCacheWrites()]);
       log.info(
         'User data flush completed',
         'event=persistence.user.flush.completed',

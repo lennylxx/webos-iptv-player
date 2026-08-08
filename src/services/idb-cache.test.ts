@@ -19,6 +19,8 @@ import {
   setCachedSubtitle,
 } from './idb-cache';
 import {
+  CACHE_META_STORE,
+  CATALOG_STORE,
   openPersistenceDb,
   requestResult,
   STREAM_MIME_STORE,
@@ -206,6 +208,28 @@ describe('idb-cache', () => {
 
     await clearAllCachedData();
     expect((await getCacheUsage()).total).toEqual({ bytes: 0, entries: 0 });
+  });
+
+  it('touches access metadata without rewriting a cached payload', async () => {
+    await setCachedCatalog('x1|vod_all', Array.from({ length: 100 }, (_, index) => index));
+    const db = await openPersistenceDb();
+    expect(db).not.toBeNull();
+    const beforeTx = db!.transaction(CATALOG_STORE, 'readonly');
+    const before = await requestResult(beforeTx.objectStore(CATALOG_STORE).get('x1|vod_all'));
+
+    expect(await getCachedCatalog('x1|vod_all')).not.toBeNull();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const afterTx = db!.transaction([CATALOG_STORE, CACHE_META_STORE], 'readonly');
+    const after = await requestResult(afterTx.objectStore(CATALOG_STORE).get('x1|vod_all'));
+    const access = await requestResult(
+      afterTx.objectStore(CACHE_META_STORE).get('entry:catalog-cache:x1|vod_all'),
+    );
+    expect(after).toEqual(before);
+    expect(access).toMatchObject({
+      store: CATALOG_STORE,
+      key: 'x1|vod_all',
+    });
   });
 
   it('keeps accounting correct when pruning the record being updated', async () => {

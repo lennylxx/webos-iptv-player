@@ -4,6 +4,8 @@ The benchmark exercises the real bundled application in Playwright Chromium
 with 50,000 channels, groups, programs, movies, series, categories, and episodes. It
 uses IndexedDB and localStorage fixtures so network and fixture generation are
 excluded from the measured view operations.
+Playwright rebuilds the current database schema and seeds current-format
+records directly, so schema upgrades and legacy-data migration are not measured.
 
 ## Commands
 

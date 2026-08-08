@@ -5,8 +5,9 @@
 // module-level state, no Node APIs.
 
 export async function installBenchmarkFixture(options) {
+    const directStorage = options.directStorage === true;
     const openDb = () => new Promise((resolve, reject) => {
-      const request = indexedDB.open('iptv', 3);
+      const request = indexedDB.open('iptv');
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains('epg-cache')) {
@@ -31,6 +32,28 @@ export async function installBenchmarkFixture(options) {
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
     });
+    const cacheEntries = [];
+    const cacheRecord = (
+      store,
+      category,
+      value,
+      expiresAt = Date.now() + 6 * 60 * 60 * 1000,
+    ) => {
+      if (!directStorage) return value;
+      const timestamp = typeof value.timestamp === 'number' ? value.timestamp : Date.now();
+      const record = {
+        ...value,
+        cacheCategory: category,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        lastAccessedAt: timestamp,
+        expiresAt,
+        byteSize: 0,
+      };
+      record.byteSize = new TextEncoder().encode(JSON.stringify(record)).byteLength;
+      cacheEntries.push({ store, record });
+      return record;
+    };
 
     const db = await openDb();
     const existingTx = db.transaction('catalog-cache', 'readonly');
@@ -49,12 +72,44 @@ export async function installBenchmarkFixture(options) {
       const key = localStorage.key(index);
       if (key !== null) backup[key] = localStorage.getItem(key);
     }
+    let playlistCache = null;
+    if (db.objectStoreNames.contains('playlist-cache')) {
+      const playlistTx = db.transaction('playlist-cache', 'readonly');
+      playlistCache = await requestValue(
+        playlistTx.objectStore('playlist-cache').get('combined'),
+      ) || null;
+    }
+    let cacheMeta = null;
+    if (db.objectStoreNames.contains('cache-meta')) {
+      const metaTx = db.transaction('cache-meta', 'readonly');
+      cacheMeta = await requestValue(metaTx.objectStore('cache-meta').getAll());
+    }
+    let recentlyWatched = null;
+    if (db.objectStoreNames.contains('recently-watched')) {
+      const recentTx = db.transaction('recently-watched', 'readonly');
+      recentlyWatched = await requestValue(
+        recentTx.objectStore('recently-watched').getAll(),
+      );
+    }
+    let playbackProgress = null;
+    if (db.objectStoreNames.contains('playback-progress')) {
+      const progressTx = db.transaction('playback-progress', 'readonly');
+      playbackProgress = await requestValue(
+        progressTx.objectStore('playback-progress').getAll(),
+      );
+    }
     const backupTx = db.transaction('catalog-cache', 'readwrite');
-    backupTx.objectStore('catalog-cache').put({
+    backupTx.objectStore('catalog-cache').put(cacheRecord('catalog-cache', 'catalog', {
       key: options.backupKey,
       timestamp: Date.now(),
-      data: backup,
-    });
+      data: {
+        localStorage: backup,
+        playlistCache,
+        cacheMeta,
+        recentlyWatched,
+        playbackProgress,
+      },
+    }));
     await transactionDone(backupTx);
 
     let firstUrl = 'http://host/0';
@@ -118,20 +173,29 @@ export async function installBenchmarkFixture(options) {
       source: 'xtream',
       xtream: { username: 'u', password: 'p' },
     };
-    localStorage.setItem('iptv_playlists', JSON.stringify([account]));
+    const serializedPlaylists = JSON.stringify([account]);
+    localStorage.setItem('iptv_playlists', serializedPlaylists);
     localStorage.setItem('iptv_selectedXtream', JSON.stringify(options.accountId));
-    localStorage.setItem('iptv_cached_playlist', JSON.stringify({
-      version: 2,
-      channels,
-      epgSources: [{
+    let sourceHash = 2166136261;
+    for (let index = 0; index < serializedPlaylists.length; index++) {
+      sourceHash ^= serializedPlaylists.charCodeAt(index);
+      sourceHash = Math.imul(sourceHash, 16777619);
+    }
+    const epgSources = [{
         url: options.epgUrl,
         playlistIds: [options.accountId],
         kind: 'm3u',
-      }],
-      timestamp: Date.now(),
-    }));
-    localStorage.setItem('iptv_recently_watched_live', JSON.stringify(recentLive));
-    localStorage.setItem('iptv_catchup_progress', JSON.stringify(catchupProgress));
+    }];
+    if (!directStorage) {
+      localStorage.setItem('iptv_cached_playlist', JSON.stringify({
+        version: 2,
+        channels,
+        epgSources,
+        timestamp: Date.now(),
+      }));
+      localStorage.setItem('iptv_recently_watched_live', JSON.stringify(recentLive));
+      localStorage.setItem('iptv_catchup_progress', JSON.stringify(catchupProgress));
+    }
 
     const day = new Date();
     day.setHours(0, 0, 0, 0);
@@ -185,8 +249,20 @@ export async function installBenchmarkFixture(options) {
       subtitles: [],
     }));
 
-    const fixtureTx = db.transaction(['epg-cache', 'catalog-cache'], 'readwrite');
-    fixtureTx.objectStore('epg-cache').put({
+    const fixtureStores = [
+      'epg-cache',
+      'catalog-cache',
+    ];
+    if (directStorage) {
+      fixtureStores.push(
+        'playlist-cache',
+        'playback-progress',
+        'recently-watched',
+        'user-meta',
+      );
+    }
+    const fixtureTx = db.transaction(fixtureStores, 'readwrite');
+    fixtureTx.objectStore('epg-cache').put(cacheRecord('epg-cache', 'epg', {
       url: options.epgUrl,
       timestamp: Date.now(),
       data: {
@@ -197,13 +273,30 @@ export async function installBenchmarkFixture(options) {
         programmes: { ch0: programs, ch1: transitionPrograms },
         tzOffsetMinutes: null,
       },
-    });
+    }));
+    if (directStorage) {
+      fixtureTx.objectStore('playlist-cache').put(cacheRecord(
+        'playlist-cache',
+        'playlist',
+        {
+        key: 'combined',
+        timestamp: Date.now(),
+        data: {
+          version: 2,
+          sourceSignature: (sourceHash >>> 0).toString(16),
+          channels,
+          epgSources,
+          timestamp: Date.now(),
+        },
+        },
+      ));
+    }
     const catalog = fixtureTx.objectStore('catalog-cache');
-    const put = (suffix, data) => catalog.put({
+    const put = (suffix, data) => catalog.put(cacheRecord('catalog-cache', 'catalog', {
       key: `${options.accountId}|${suffix}`,
       timestamp: Date.now(),
       data,
-    });
+    }));
     put('vod_categories', categories);
     put('vod_streams|13', movies);
     put('vod_all', movies);
@@ -215,9 +308,134 @@ export async function installBenchmarkFixture(options) {
       put(`vod_streams|${String(category)}`, []);
       put(`series|${String(category)}`, []);
     }
+    if (directStorage) {
+      const progressStore = fixtureTx.objectStore('playback-progress');
+      for (const key of Object.keys(catchupProgress)) {
+        const entry = catchupProgress[key];
+        progressStore.put({
+          key: `catchup:${entry.channelKey}|${String(entry.progStart)}`,
+          value: entry,
+          updatedAt: entry.updatedAt,
+          expiresAt: entry.expiresAt,
+        });
+      }
+      const recentStore = fixtureTx.objectStore('recently-watched');
+      for (const entry of recentLive) {
+        recentStore.put({
+          key: `live:${entry.channelKey}`,
+          value: entry,
+          updatedAt: entry.updatedAt,
+        });
+      }
+      const userMeta = fixtureTx.objectStore('user-meta');
+      for (const key of [
+        'favorites',
+        'reminders',
+        'channel_custom',
+        'audio_prefs',
+        'subtitle_prefs',
+        'subtitle_offsets',
+        'resume',
+        'watchlist',
+        'online_sub_picks',
+        'catchup_progress',
+        'recently_watched_live',
+      ]) {
+        userMeta.put({ key: `migration:${key}`, migratedAt: Date.now() });
+      }
+    }
     await transactionDone(fixtureTx);
+
+    if (directStorage) {
+      const usage = {
+        playlist: { bytes: 0, entries: 0 },
+        epg: { bytes: 0, entries: 0 },
+        catalog: { bytes: 0, entries: 0 },
+        subtitle: { bytes: 0, entries: 0 },
+      };
+      for (const { record } of cacheEntries) {
+        usage[record.cacheCategory].bytes += record.byteSize;
+        usage[record.cacheCategory].entries++;
+      }
+      const total = Object.keys(usage).reduce((sum, category) => ({
+        bytes: sum.bytes + usage[category].bytes,
+        entries: sum.entries + usage[category].entries,
+      }), { bytes: 0, entries: 0 });
+      const metaTx = db.transaction('cache-meta', 'readwrite');
+      const meta = metaTx.objectStore('cache-meta');
+      const now = Date.now();
+      for (const category of Object.keys(usage)) {
+        meta.put({ category, ...usage[category], updatedAt: now });
+      }
+      meta.put({ category: 'total', ...total, updatedAt: now });
+      for (const { store, record } of cacheEntries) {
+        const key = store === 'epg-cache' ? record.url : record.key;
+        meta.put({
+          category: `entry:${store}:${String(key)}`,
+          cacheCategory: record.cacheCategory,
+          store,
+          key,
+          byteSize: record.byteSize,
+          expiresAt: record.expiresAt,
+          lastAccessedAt: record.lastAccessedAt,
+        });
+      }
+      meta.put({ category: 'entry-index', version: 1, updatedAt: now });
+      await transactionDone(metaTx);
+    }
     db.close();
     return { channels: channels.length };
+}
+
+export async function rebuildBenchmarkDatabase() {
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase('iptv');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve();
+    request.onblocked = () => reject(new Error('Benchmark database rebuild was blocked'));
+  });
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.open('iptv', 4);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      const cacheStores = [
+        ['epg-cache', 'url'],
+        ['catalog-cache', 'key'],
+        ['subtitle-cache', 'key'],
+        ['playlist-cache', 'key'],
+        ['stream-mime-cache', 'key'],
+      ];
+      for (const [name, keyPath] of cacheStores) {
+        const store = db.createObjectStore(name, { keyPath });
+        store.createIndex('expiresAt', 'expiresAt');
+        store.createIndex('lastAccessedAt', 'lastAccessedAt');
+      }
+      db.createObjectStore('cache-meta', { keyPath: 'category' });
+      for (const name of [
+        'favorites',
+        'reminders',
+        'channel-state',
+        'watchlist',
+        'playback-progress',
+        'recently-watched',
+        'online-sub-picks',
+      ]) {
+        const store = db.createObjectStore(name, { keyPath: 'key' });
+        if (name === 'watchlist') store.createIndex('scope', 'scope');
+        if (name === 'playback-progress') {
+          store.createIndex('expiresAt', 'expiresAt');
+          store.createIndex('updatedAt', 'updatedAt');
+        }
+        if (name === 'recently-watched') store.createIndex('updatedAt', 'updatedAt');
+      }
+      db.createObjectStore('user-meta', { keyPath: 'key' });
+    };
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      request.result.close();
+      resolve();
+    };
+  });
 }
 
 export function buildM3UFixture(scale) {
@@ -334,7 +552,7 @@ export function assertPointerBenchmark(report, scale) {
 
 export async function cleanupBenchmarkFixture(options) {
     const openDb = () => new Promise((resolve, reject) => {
-      const request = indexedDB.open('iptv', 3);
+      const request = indexedDB.open('iptv');
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result);
     });
@@ -354,15 +572,27 @@ export async function cleanupBenchmarkFixture(options) {
       readTx.objectStore('catalog-cache').get(options.backupKey),
     );
     if (backupEntry && backupEntry.data) {
+      const backupData = backupEntry.data.localStorage
+        ? backupEntry.data.localStorage
+        : backupEntry.data;
       localStorage.clear();
-      for (const key of Object.keys(backupEntry.data)) {
-        const value = backupEntry.data[key];
+      for (const key of Object.keys(backupData)) {
+        const value = backupData[key];
         if (value === null) localStorage.removeItem(key);
         else localStorage.setItem(key, value);
       }
     }
 
-    const cleanupTx = db.transaction(['epg-cache', 'catalog-cache'], 'readwrite');
+    const cleanupStores = ['epg-cache', 'catalog-cache'];
+    for (const store of [
+      'playlist-cache',
+      'recently-watched',
+      'playback-progress',
+      'cache-meta',
+    ]) {
+      if (db.objectStoreNames.contains(store)) cleanupStores.push(store);
+    }
+    const cleanupTx = db.transaction(cleanupStores, 'readwrite');
     cleanupTx.objectStore('epg-cache').delete(options.epgUrl);
     const catalog = cleanupTx.objectStore('catalog-cache');
     const cursorRequest = catalog.openCursor();
@@ -375,6 +605,54 @@ export async function cleanupBenchmarkFixture(options) {
       }
       cursor.continue();
     };
+    if (cleanupStores.indexOf('playlist-cache') >= 0) {
+      const playlist = cleanupTx.objectStore('playlist-cache');
+      const savedPlaylist = backupEntry?.data?.playlistCache;
+      if (savedPlaylist) playlist.put(savedPlaylist);
+      else playlist.delete('combined');
+    }
+    if (cleanupStores.indexOf('cache-meta') >= 0
+        && Array.isArray(backupEntry?.data?.cacheMeta)) {
+      const meta = cleanupTx.objectStore('cache-meta');
+      meta.clear();
+      for (const record of backupEntry.data.cacheMeta) meta.put(record);
+    }
+    const benchmarkChannelKeys = new Set();
+    const fnv1a = (value) => {
+      let hash = 0x811c9dc5;
+      for (let index = 0; index < value.length; index++) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+      }
+      return (hash >>> 0).toString(16).padStart(8, '0');
+    };
+    for (let index = 0; index < 50; index++) {
+      benchmarkChannelKeys.add(fnv1a(`http://host/${String(index)}`));
+    }
+    if (cleanupStores.indexOf('recently-watched') >= 0
+        && Array.isArray(backupEntry?.data?.recentlyWatched)) {
+      const recent = cleanupTx.objectStore('recently-watched');
+      recent.clear();
+      for (const record of backupEntry.data.recentlyWatched) recent.put(record);
+    } else if (cleanupStores.indexOf('recently-watched') >= 0) {
+      const recent = cleanupTx.objectStore('recently-watched');
+      for (const key of benchmarkChannelKeys) recent.delete(`live:${key}`);
+    }
+    if (cleanupStores.indexOf('playback-progress') >= 0
+        && Array.isArray(backupEntry?.data?.playbackProgress)) {
+      const progress = cleanupTx.objectStore('playback-progress');
+      progress.clear();
+      for (const record of backupEntry.data.playbackProgress) progress.put(record);
+    } else if (cleanupStores.indexOf('playback-progress') >= 0) {
+      const progressCursor = cleanupTx.objectStore('playback-progress').openCursor();
+      progressCursor.onsuccess = () => {
+        const cursor = progressCursor.result;
+        if (!cursor) return;
+        const channelKey = cursor.value?.value?.channelKey;
+        if (benchmarkChannelKeys.has(channelKey)) cursor.delete();
+        cursor.continue();
+      };
+    }
     await transactionDone(cleanupTx);
     db.close();
     return { restored: Boolean(backupEntry) };
@@ -619,19 +897,43 @@ export async function runViewReopenCycle() {
     return { nodes: document.getElementsByTagName('*').length };
 }
 
-export function installUniqueGroupFixture(scale) {
-  const cached = JSON.parse(localStorage.getItem('iptv_cached_playlist') || 'null');
-  if (!cached || !Array.isArray(cached.channels) || cached.channels.length !== scale) {
+export async function installUniqueGroupFixture(scale) {
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open('iptv');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+  const tx = db.transaction('playlist-cache', 'readwrite');
+  const store = tx.objectStore('playlist-cache');
+  const cached = await new Promise((resolve, reject) => {
+    const request = store.get('combined');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+  if (!cached || !cached.data || !Array.isArray(cached.data.channels)
+      || cached.data.channels.length !== scale) {
+    db.close();
     throw new Error('Cannot install unique groups without the channel fixture');
   }
-  for (let index = 0; index < cached.channels.length; index++) {
-    cached.channels[index].group = `Group ${String(index)}`;
+  for (let index = 0; index < cached.data.channels.length; index++) {
+    cached.data.channels[index].group = `Group ${String(index)}`;
   }
-  localStorage.setItem('iptv_cached_playlist', JSON.stringify(cached));
-  return { channels: cached.channels.length, groups: cached.channels.length };
+  cached.byteSize = 0;
+  cached.byteSize = new TextEncoder().encode(JSON.stringify(cached)).byteLength;
+  store.put(cached);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+  return {
+    channels: cached.data.channels.length,
+    groups: cached.data.channels.length,
+  };
 }
 
-export function installM3USearchFixture() {
+export async function installM3USearchFixture() {
   const playlists = JSON.parse(localStorage.getItem('iptv_playlists') || '[]');
   if (!Array.isArray(playlists) || playlists.length !== 1) {
     throw new Error('M3U Search benchmark requires one fixture playlist');
@@ -642,8 +944,42 @@ export function installM3USearchFixture() {
     url: 'http://host/list.m3u',
     source: 'url',
   };
-  localStorage.setItem('iptv_playlists', JSON.stringify([playlist]));
+  const serializedPlaylists = JSON.stringify([playlist]);
+  localStorage.setItem('iptv_playlists', serializedPlaylists);
   localStorage.removeItem('iptv_selectedXtream');
+
+  let hash = 2166136261;
+  for (let index = 0; index < serializedPlaylists.length; index++) {
+    hash ^= serializedPlaylists.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const sourceSignature = (hash >>> 0).toString(16);
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open('iptv');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+  const tx = db.transaction('playlist-cache', 'readwrite');
+  const store = tx.objectStore('playlist-cache');
+  const cached = await new Promise((resolve, reject) => {
+    const request = store.get('combined');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+  if (!cached || !cached.data || !Array.isArray(cached.data.channels)) {
+    db.close();
+    throw new Error('M3U Search benchmark requires a cached playlist fixture');
+  }
+  cached.data.sourceSignature = sourceSignature;
+  cached.byteSize = 0;
+  cached.byteSize = new TextEncoder().encode(JSON.stringify(cached)).byteLength;
+  store.put(cached);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  db.close();
   return { playlists: 1 };
 }
 

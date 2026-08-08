@@ -195,6 +195,17 @@ describe('PlaylistService.refresh', () => {
     );
   });
 
+  it('does not block the refreshed channel list on cache persistence', async () => {
+    let finishWrite: ((stored: boolean) => void) | undefined;
+    cacheMock.setCachedPlaylist.mockReturnValue(new Promise((resolve) => {
+      finishWrite = resolve;
+    }));
+
+    await expect(PlaylistService.refresh()).resolves.toHaveLength(3);
+    expect(finishWrite).toBeTypeOf('function');
+    finishWrite?.(true);
+  });
+
   it('returns an empty list and skips fetching when no playlists are configured', async () => {
     storageMock.getPlaylists.mockReturnValue([]);
     const channels = await PlaylistService.refresh();

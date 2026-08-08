@@ -69,18 +69,24 @@ export async function loadUserRecords<T = unknown>(
 }
 
 // TODO: Remove this marker helper once all supported installs have upgraded to IndexedDB v4.
-export async function hasMigration(legacyKey: string): Promise<boolean> {
+export async function loadMigrationMarkers(): Promise<Set<string>> {
   const db = await openPersistenceDb();
-  if (!db) return false;
+  if (!db) return new Set();
   try {
     const tx = db.transaction(USER_META_STORE, 'readonly');
-    return !!await requestResult(tx.objectStore(USER_META_STORE).get(`migration:${legacyKey}`));
+    const keys = await requestResult(tx.objectStore(USER_META_STORE).getAllKeys());
+    const migrated = new Set<string>();
+    for (const key of keys) {
+      if (typeof key === 'string' && key.indexOf('migration:') === 0) {
+        migrated.add(key.slice(10));
+      }
+    }
+    return migrated;
   } catch (err) {
     log.error(
-      'Migration marker read failed',
+      'Migration markers read failed',
       'event=persistence.user.migration.failed',
-      'operation=read_marker',
-      `key=${legacyKey}`,
+      'operation=read_markers',
       err,
     );
     throw err;
