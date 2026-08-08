@@ -498,6 +498,38 @@ describe('Sidebar', () => {
       expect(items()[2].classList.contains('focused')).toBe(true);
     });
 
+    it('updates Favorites count when reopened after membership changes', () => {
+      sidebar.show();
+      sidebar.handleAction('left');
+      expect(groupItems()[1].querySelector('.sidebar-group-count')?.textContent).toBe('1');
+
+      sidebar.hide();
+      channels[0].favorite = true;
+      sidebar.show();
+      sidebar.handleAction('left');
+
+      expect(groupItems()[1].querySelector('.sidebar-group-count')?.textContent).toBe('2');
+      channels[0].favorite = false;
+    });
+
+    it('updates Recently Watched count when reopened after history changes', () => {
+      sidebar.show();
+      sidebar.handleAction('left');
+      expect(groupItems()[2].querySelector('.sidebar-group-count')?.textContent).toBe('0');
+
+      sidebar.hide();
+      recentMock.items = [{
+        kind: 'live',
+        channel: channels[2],
+        channelIndex: 2,
+        updatedAt: 1000,
+      }];
+      sidebar.show();
+      sidebar.handleAction('left');
+
+      expect(groupItems()[2].querySelector('.sidebar-group-count')?.textContent).toBe('1');
+    });
+
     it('refreshes a visible Favorites group after its membership changes', () => {
       sidebar.handleAction('left');
       sidebar.handleAction('down');

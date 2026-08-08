@@ -204,7 +204,6 @@ export class Player {
     });
     el.addEventListener('stalled', () => {
       log.debug('stalled event', this.videoLabel(el), this.mediaState(el));
-      this.cancelLiveHistoryTimer();
     });
     el.addEventListener('timeupdate', () => {
       this.reconcilePendingSeek(el);

@@ -166,6 +166,7 @@ export class Sidebar {
     this.groupsExpanded = false;
     this.searchQuery = '';
     this.channelSource = null;
+    this.groupSource = null;
     this.pointerAtGroupEdge = false;
     this.clearGroupDwell();
     this.clearPointerExit();

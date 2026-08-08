@@ -525,6 +525,16 @@ describe('Player Recently Watched recording', () => {
     expect(touchLive()).not.toHaveBeenCalled();
   });
 
+  it('keeps the pending live record through a spurious stalled event', () => {
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(2000);
+    video.dispatchEvent(new Event('stalled'));
+    vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS - 2000);
+
+    expect(touchLive()).toHaveBeenCalledWith(channelKey(CHANNEL));
+  });
+
   it('cancels the abandoned playback generation', () => {
     player.play(0);
     video.dispatchEvent(new Event('playing'));
