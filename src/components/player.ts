@@ -53,6 +53,7 @@ export class Player {
   private upNextSeconds = 0;
   private upNextTimer: ReturnType<typeof setInterval> | null = null;
   private pendingResumeSecs = 0;
+  private pendingSeekTarget: number | null = null;
   private wasPlayingBeforeHide = false;
   private dvrPauseTick: ReturnType<typeof setInterval> | null = null;
   // Catch-up progress checkpointing. Wall-clock time of the last periodic save;
@@ -142,6 +143,7 @@ export class Player {
 
   init(videoEl: HTMLVideoElement): void {
     this.videoEl = videoEl;
+    this.pendingSeekTarget = null;
     this.pipeline.setVideoElement(videoEl);
     this.bindVideoEvents(videoEl);
 
@@ -204,10 +206,15 @@ export class Player {
       log.debug('stalled event', this.videoLabel(el), this.mediaState(el));
       this.cancelLiveHistoryTimer();
     });
-    el.addEventListener('timeupdate', () => this.refreshProgress());
+    el.addEventListener('timeupdate', () => {
+      this.reconcilePendingSeek(el);
+      this.refreshProgress();
+    });
     el.addEventListener('seeked', () => {
       log.info('seeked', this.videoLabel(el), this.mediaState(el));
+      this.reconcilePendingSeek(el, true);
       if (this.catchupInfo) this.saveCatchupProgress();
+      this.refreshProgress();
     });
     el.addEventListener('ended', () => this.onEnded());
   }
@@ -244,7 +251,11 @@ export class Player {
       // seeks to pendingResumeSecs, currentTime is still 0 and would otherwise
       // collapse the resume point to the start on the next play().
       if (this.catchupInfo) {
-        this.catchupSuspendPos = Math.max(this.videoEl.currentTime, this.pendingResumeSecs);
+        this.catchupSuspendPos = Math.max(
+          this.videoEl.currentTime,
+          this.pendingResumeSecs,
+          this.pendingSeekTarget ?? 0,
+        );
         this.saveCatchupProgress();
       }
       this.stallWatchdog.stop();
@@ -367,6 +378,7 @@ export class Player {
     } else {
       this.pendingResumeSecs = catchup?.resumeSecs ?? 0;
     }
+    this.pendingSeekTarget = null;
 
     log.info('play index', channelIndex, '|', channel.name, catchup ? '(catchup)' : '');
     this.currentChannel = channel;
@@ -404,6 +416,7 @@ export class Player {
     this.catchupInfo = null;
     this.vod = v;
     this.pendingResumeSecs = v.resumeSecs > 0 ? v.resumeSecs : 0;
+    this.pendingSeekTarget = null;
     this.osd.clearFailedIcons();
     this.videoEl.classList.add('active');
     this.loadStream(v.url, null, { direct: true });
@@ -430,7 +443,7 @@ export class Player {
     StorageService.setResume({
       accountId: v.accountId, kind: v.kind, itemId: v.itemId,
       name: v.title, poster: v.poster, ext: extFromUrl(v.url),
-      position: el.currentTime || 0,
+      position: this.pendingSeekTarget ?? (el.currentTime || 0),
       duration: dur,
       updatedAt: Date.now(),
       episodeQueue: v.episodeQueue,
@@ -443,7 +456,7 @@ export class Player {
     const ch = this.currentChannel;
     if (!info || !ch || !ch.catchupSource) return;
     const el = this.videoEl;
-    const pos = el ? (el.currentTime || 0) : 0;
+    const pos = this.pendingSeekTarget ?? (el ? (el.currentTime || 0) : 0);
     const progStartMs = info.start * 1000;
     const progEndMs = info.end * 1000;
     const epgDur = info.end - info.start; // seconds, as fallback when media duration unknown
@@ -602,6 +615,7 @@ export class Player {
     hide(this.container);
     this.vod = null;
     this.pendingResumeSecs = 0;
+    this.pendingSeekTarget = null;
     this.catchupCheckpointAt = 0;
     this.catchupSuspendPos = -1;
     this.catchupFallbackActive = false;
@@ -731,7 +745,7 @@ export class Player {
   }
 
   seekBy(seconds: number): void {
-    this.seekTo((this.videoEl?.currentTime ?? 0) + seconds);
+    this.seekTo((this.pendingSeekTarget ?? this.videoEl?.currentTime ?? 0) + seconds);
   }
 
   /** Seek to a fraction (0..1) of the seekable range (DVR window or VOD duration). */
@@ -752,14 +766,26 @@ export class Player {
       // Live DVR: clamp within the retained window; seeking to/near the edge snaps
       // to the live edge (a small pad back so playback does not stall at the tip).
       const liveEdge = win.end - CONFIG.PLAYER.DVR_GO_LIVE_PAD;
-      v.currentTime = time >= liveEdge ? liveEdge : Math.max(win.start, time);
+      this.pendingSeekTarget = time >= liveEdge ? liveEdge : Math.max(win.start, time);
     } else if (Number.isFinite(v.duration) && v.duration > 0) {
-      v.currentTime = Math.max(0, Math.min(v.duration, time));
+      this.pendingSeekTarget = Math.max(0, Math.min(v.duration, time));
     } else {
       return;
     }
+    v.currentTime = this.pendingSeekTarget;
     if (this.osd.isVisible()) this.osd.resetTimer(); else this.showOSD();
     this.refreshProgress();
+  }
+
+  private reconcilePendingSeek(el: HTMLVideoElement, retry = false): void {
+    if (el !== this.videoEl || this.pendingSeekTarget === null) return;
+    if (Math.abs(el.currentTime - this.pendingSeekTarget) <= 1) {
+      this.pendingSeekTarget = null;
+    } else if (retry) {
+      // webOS may discard currentTime assignments made while an earlier seek is
+      // active. Re-submit the accumulated target once that seek completes.
+      el.currentTime = this.pendingSeekTarget;
+    }
   }
 
   private goToLive(): void {
@@ -896,9 +922,10 @@ export class Player {
     const upcoming = epgId ? EpgService.getUpcoming(epgId, 1) : [];
     const win = this.liveDvrWindow();
     const video = this.videoEl;
+    const position = this.pendingSeekTarget ?? video?.currentTime ?? 0;
     return {
       playback: video ? {
-        position: video.currentTime || 0,
+        position,
         duration: video.duration,
         paused: video.paused,
       } : null,
@@ -908,7 +935,7 @@ export class Player {
       vodTitle: this.vod?.title ?? null,
       upNextSeconds: this.upNextSeconds,
       dvr: win && video
-        ? dvrState(win, video.currentTime, CONFIG.PLAYER.DVR_LIVE_EDGE)
+        ? dvrState(win, position, CONFIG.PLAYER.DVR_LIVE_EDGE)
         : null,
       nowPlaying: epgId ? EpgService.getNowPlaying(epgId) : null,
       upcoming: upcoming[0] ?? null,

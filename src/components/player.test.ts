@@ -88,6 +88,39 @@ function fakeVideo(duration: number): HTMLVideoElement {
   } as unknown as HTMLVideoElement;
 }
 
+function fakeAsyncSeekVideo(duration: number) {
+  let currentTime = 0;
+  let requestedTime = 0;
+  const requestedTimes: number[] = [];
+  let paused = false;
+  let src = '';
+  const listeners: Record<string, Array<() => void>> = {};
+  const video = {
+    duration,
+    get currentTime() { return currentTime; },
+    set currentTime(t: number) { requestedTime = t; requestedTimes.push(t); },
+    get paused() { return paused; },
+    get src() { return src; },
+    set src(v: string) { src = v; },
+    classList: { add() {}, remove() {} },
+    canPlayType: () => '',
+    play: () => { paused = false; return Promise.resolve(); },
+    pause() { paused = true; },
+    load() {}, removeAttribute() {}, appendChild() {}, set innerHTML(_: string) {},
+    addEventListener(type: string, fn: () => void) { (listeners[type] ||= []).push(fn); },
+    dispatchEvent(e: Event) { (listeners[e.type] || []).forEach((fn) => fn()); return true; },
+  };
+  return {
+    video: video as unknown as HTMLVideoElement,
+    requestedTime: () => requestedTime,
+    requestedTimes,
+    settleSeek: (time = requestedTime) => {
+      currentTime = time;
+      video.dispatchEvent(new Event('seeked'));
+    },
+  };
+}
+
 // A live <video> stand-in: duration Infinity and a single seekable range (the DVR
 // window), with a mutable window so tests can simulate it rolling forward.
 function fakeLiveVideo(start: number, end: number, currentTime = 0) {
@@ -197,6 +230,34 @@ describe('Player catch-up seeking', () => {
 
     player.handleAction('left');
     expect(video.currentTime).toBe(30);
+  });
+
+  it('accumulates repeated seeks while the native position is still stale', () => {
+    const asyncVideo = fakeAsyncSeekVideo(120);
+    video = asyncVideo.video;
+    player.init(video);
+    player.play(0, CATCHUP);
+
+    player.handleAction('right');
+    expect(asyncVideo.requestedTime()).toBe(30);
+    expect(elapsed()).toBe('0:30');
+
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(elapsed()).toBe('0:30');
+
+    player.handleAction('right');
+    expect(asyncVideo.requestedTime()).toBe(60);
+    expect(bar().style.width).toBe('50%');
+    expect(elapsed()).toBe('1:00');
+
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(elapsed()).toBe('1:00');
+    asyncVideo.settleSeek(30);
+    expect(asyncVideo.requestedTimes).toEqual([30, 60, 60]);
+    expect(elapsed()).toBe('1:00');
+
+    asyncVideo.settleSeek(60);
+    expect(elapsed()).toBe('1:00');
   });
 
   it('clamps seeks to [0, duration]', () => {
