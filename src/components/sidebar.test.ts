@@ -209,6 +209,40 @@ describe('Sidebar', () => {
       }
     });
 
+    it('blanks decoded logos before reopening and restores one per frame', async () => {
+      channels[0].logo = 'http://host/a.png';
+      channels[1].logo = 'http://host/b.png';
+      try {
+        const target = sidebar as unknown as { preloadLogo(src: string): Promise<boolean> };
+        const preload = vi.spyOn(target, 'preloadLogo').mockResolvedValue(true);
+
+        sidebar.show();
+        finishOpening();
+        await Promise.resolve();
+        await Promise.resolve();
+        vi.advanceTimersByTime(40);
+        expect(el.querySelectorAll('.ch-logo[src]')).toHaveLength(2);
+
+        sidebar.hide();
+        preload.mockClear();
+        sidebar.show();
+        expect(el.querySelectorAll('.ch-logo[src]')).toHaveLength(0);
+        expect(el.querySelectorAll('.ch-logo-wrap[data-logo-src]')).toHaveLength(2);
+
+        finishOpening();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(preload).toHaveBeenCalledTimes(2);
+        vi.advanceTimersByTime(20);
+        expect(el.querySelectorAll('.ch-logo[src]')).toHaveLength(1);
+        vi.advanceTimersByTime(20);
+        expect(el.querySelectorAll('.ch-logo[src]')).toHaveLength(2);
+      } finally {
+        channels[0].logo = '';
+        channels[1].logo = '';
+      }
+    });
+
     it('removes a failed channel logo and does not restore it on later renders', async () => {
       channels[0].logo = 'http://host/broken.png';
       try {
@@ -232,18 +266,21 @@ describe('Sidebar', () => {
       }
     });
 
-    it('starts the slide transition before rendering channel rows', () => {
+    it('renders channel rows while hidden before starting the slide transition', () => {
       const target = sidebar as unknown as { render(): void };
       const render = target.render.bind(sidebar);
       let visibleDuringRender = false;
+      let hiddenDuringRender = false;
       vi.spyOn(target, 'render').mockImplementation(() => {
         visibleDuringRender = el.classList.contains('visible');
+        hiddenDuringRender = el.classList.contains('hidden');
         render();
       });
 
       sidebar.show();
 
-      expect(visibleDuringRender).toBe(true);
+      expect(visibleDuringRender).toBe(false);
+      expect(hiddenDuringRender).toBe(true);
     });
   });
 

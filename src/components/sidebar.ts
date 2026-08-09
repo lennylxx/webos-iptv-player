@@ -178,10 +178,12 @@ export class Sidebar {
     this.focusCurrentChannel(true);
     if (this.el) {
       this.syncPanelState();
+    }
+    this.render();
+    if (this.el) {
       this.el.classList.remove('hidden');
       this.el.classList.add('visible');
     }
-    this.render();
     this.resetTimer();
   }
 
@@ -740,7 +742,7 @@ export class Sidebar {
       `;
     }
     if (this.failedLogos.has(ch.logo)) return html`<div class="ch-logo-wrap"></div>`;
-    if (this.decodedLogos.has(ch.logo)) {
+    if (this.decodedLogos.has(ch.logo) && !this.opening) {
       return html`
         <div class="ch-logo-wrap">
           <img class="ch-logo" src="${ch.logo}" alt="">

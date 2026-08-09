@@ -160,6 +160,31 @@ test('large sidebar decodes visible logos before revealing one per frame', async
   for (let index = 1; index < counts.shown.length; index++) {
     expect(counts.shown[index] - counts.shown[index - 1]).toBeLessThanOrEqual(1);
   }
+
+  await page.keyboard.press('Escape');
+  await expect(sidebar).toBeHidden();
+  expect(await sidebar.locator('img.ch-logo[src]').count()).toBeGreaterThan(1);
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebar).toBeVisible();
+  await expect(sidebar.locator('img.ch-logo[src]')).toHaveCount(0);
+  expect(await pending.count()).toBeGreaterThan(0);
+
+  await page.waitForTimeout(300);
+  const reopened = await page.evaluate(async () => {
+    (window as unknown as { resolveSidebarLogoDecodes: () => number })
+      .resolveSidebarLogoDecodes();
+    const shown: number[] = [];
+    for (let frame = 0; frame < 6; frame++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      shown.push(document.querySelectorAll('#player-sidebar img.ch-logo[src]').length);
+    }
+    return shown;
+  });
+  expect(reopened[reopened.length - 1]).toBeGreaterThan(1);
+  for (let index = 1; index < reopened.length; index++) {
+    expect(reopened[index] - reopened[index - 1]).toBeLessThanOrEqual(1);
+  }
 });
 
 // The row has a fixed height because the list is virtualized, so its two text
