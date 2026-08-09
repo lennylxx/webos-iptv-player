@@ -80,6 +80,8 @@ export class EpgGrid {
   private programmeSizeKey = '';
   private programmeCount = 0;
   private measuredProgrammes = new Set<number>();
+  private programmeMeasureFrame: number | null = null;
+  private programmeMeasureGeneration = 0;
   private scrollFrame: number | null = null;
   private readonly scrollGuard = new VirtualScrollGuard();
 
@@ -552,18 +554,18 @@ export class EpgGrid {
       </div>
     `);
 
-    if (this.measureProgrammeRows()) this.applyProgrammeRowOffsets();
+    this.scheduleProgrammeRowMeasurement();
 
     const channelList = this.container.querySelector<HTMLElement>('.epg-channel-list');
     const programmeList = this.container.querySelector<HTMLElement>('.epg-programmes-pane');
-    if (channelList) {
+    if (previousChannelList && channelList) {
       this.scrollGuard.syncOffset(
         channelList,
         'vertical',
         this.channelVirtualizer.scrollOffset,
       );
     }
-    if (programmeList) {
+    if (previousProgrammeList && programmeList) {
       this.scrollGuard.syncOffset(
         programmeList,
         'vertical',
@@ -571,15 +573,29 @@ export class EpgGrid {
       );
     }
     const groupList = this.container.querySelector<HTMLElement>('.epg-group-options');
-    if (groupList) {
+    if (previousGroupList && groupList) {
       this.scrollGuard.syncOffset(groupList, 'vertical', this.groupVirtualizer.scrollOffset);
     }
-    if (ensureFocus) this.scrollFocusedIntoView();
+    if (ensureFocus && previousChannelList) this.scrollFocusedIntoView();
+  }
+
+  private scheduleProgrammeRowMeasurement(): void {
+    const generation = ++this.programmeMeasureGeneration;
+    if (this.programmeMeasureFrame !== null) {
+      cancelAnimationFrame(this.programmeMeasureFrame);
+    }
+    this.programmeMeasureFrame = requestAnimationFrame(() => {
+      this.programmeMeasureFrame = requestAnimationFrame(() => {
+        this.programmeMeasureFrame = null;
+        if (generation !== this.programmeMeasureGeneration) return;
+        if (this.measureProgrammeRows()) this.applyProgrammeRowOffsets();
+      });
+    });
   }
 
   /** Programme rows are content-sized — a one-line description is shorter than a
    *  two-line one — so the seeded estimates are replaced by real heights once a
-   *  row has been rendered. Returns true when a size changed. */
+   *  row has been painted. Returns true when a size changed. */
   private measureProgrammeRows(): boolean {
     const updates: Array<{ index: number; size: number }> = [];
     this.container.querySelectorAll<HTMLElement>('.epg-programme-item').forEach((row) => {

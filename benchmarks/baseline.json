@@ -83,9 +83,9 @@
       }
     },
     "epg": {
-      "openMs": 36.1,
-      "firstFrameMs": 76.6,
-      "maxLongTaskMs": 94,
+      "openMs": 26.4,
+      "firstFrameMs": 69,
+      "maxLongTaskMs": 86,
       "channelList": {
         "p50": 15.7,
         "p95": 20.1,

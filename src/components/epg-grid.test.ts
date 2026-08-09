@@ -160,6 +160,12 @@ describe('EpgGrid.render', () => {
     expect(container.querySelector('.epg-date-bar .epg-legend')).not.toBeNull();
   });
 
+  it('does not force focused-item layout on the initial render', () => {
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    grid.render();
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce();
+  });
+
   it('flags the currently airing program with a NOW badge', () => {
     const now = container.querySelector('.epg-programme-item.current');
     expect(now!.querySelector('.epg-now-badge')).not.toBeNull();
@@ -182,7 +188,7 @@ describe('EpgGrid.render', () => {
     )?.style.height).toBe('240px');
   });
 
-  it('replaces the seeded row estimates with measured row heights', () => {
+  it('replaces the seeded row estimates with measured row heights after paint', () => {
     expect(container.querySelector<HTMLElement>(
       '#epg-programmes .epg-virtual-spacer',
     )?.style.height).toBe('324px');
@@ -195,6 +201,11 @@ describe('EpgGrid.render', () => {
     };
     try {
       grid.render();
+      expect(container.querySelector<HTMLElement>(
+        '#epg-programmes .epg-virtual-spacer',
+      )?.style.height).toBe('324px');
+      vi.advanceTimersToNextFrame();
+      vi.advanceTimersToNextFrame();
       expect(container.querySelector<HTMLElement>(
         '#epg-programmes .epg-virtual-spacer',
       )?.style.height).toBe('255px');
@@ -957,5 +968,27 @@ describe('EpgGrid click pointer activation', () => {
     const item1 = container.querySelector<HTMLElement>('[data-prog-idx="1"]')!;
     item1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
     expect(item1.classList.contains('focused')).toBe(true);
+  });
+
+  it('measures variable programme rows only after the first paint', () => {
+    const row = container.querySelector<HTMLElement>('[data-prog-idx="0"]')!;
+    const measure = vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 96,
+      top: 0,
+      right: 100,
+      bottom: 96,
+      left: 0,
+      toJSON: () => ({}),
+    });
+
+    grid.render();
+    expect(measure).not.toHaveBeenCalled();
+    vi.advanceTimersToNextFrame();
+    expect(measure).not.toHaveBeenCalled();
+    vi.advanceTimersToNextFrame();
+    expect(measure).toHaveBeenCalledOnce();
   });
 });
