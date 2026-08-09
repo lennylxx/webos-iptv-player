@@ -72,6 +72,19 @@
           "mean": 41.2
         },
         "framesOver50Ms": 12
+      },
+      "logoReveal": {
+        "initialSpacers": 12,
+        "initialImages": 0,
+        "invalidImages": 0,
+        "revealed": 11,
+        "maxPerFrame": 1,
+        "frame": {
+          "p50": 21.3,
+          "p95": 50.8,
+          "max": 54.2,
+          "mean": 24.7
+        }
       }
     },
     "epg": {

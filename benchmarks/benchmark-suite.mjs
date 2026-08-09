@@ -1491,11 +1491,58 @@ export async function runBenchmarkSuites(options) {
     const sidebarStarted = performance.now();
     key('ArrowLeft', 37);
     await waitFor('#player-sidebar:not(.hidden)');
+    document.querySelectorAll('#player-sidebar .ch-logo-wrap')
+      .forEach((spacer, index) => {
+        if (index >= 12) return;
+        spacer.textContent = '';
+        spacer.dataset.logoSrc =
+          `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=#${String(index)}`;
+      });
+    const initialLogoSpacers = document.querySelectorAll(
+      '#player-sidebar .ch-logo-wrap[data-logo-src]',
+    ).length;
+    const initialLogoImages = document.querySelectorAll(
+      '#player-sidebar img.ch-logo[src]',
+    ).length;
+    const invalidLogoImages = document.querySelectorAll(
+      '#player-sidebar img.ch-logo:not([src])',
+    ).length;
+    const sidebarElement = document.querySelector('#player-sidebar');
+    const transitionEnd = new Event('transitionend', { bubbles: true });
+    Object.defineProperty(transitionEnd, 'propertyName', { value: 'transform' });
+    sidebarElement.dispatchEvent(transitionEnd);
+    const logoFrameValues = [];
+    const logoCounts = [document.querySelectorAll(
+      '#player-sidebar img.ch-logo[src]',
+    ).length];
+    for (let frame = 0; frame < 24; frame++) {
+      const started = performance.now();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      logoFrameValues.push(performance.now() - started);
+      logoCounts.push(document.querySelectorAll(
+        '#player-sidebar img.ch-logo[src]',
+      ).length);
+    }
+    let maxLogosPerFrame = 0;
+    for (let index = 1; index < logoCounts.length; index++) {
+      maxLogosPerFrame = Math.max(
+        maxLogosPerFrame,
+        logoCounts[index] - logoCounts[index - 1],
+      );
+    }
     const sidebar = {
       openMs: round(performance.now() - sidebarStarted),
       rendered: document.querySelectorAll('.sidebar-ch-item').length,
       totalSize: pixelSize('.sidebar-channel-spacer', 'height'),
       navigation: await measureKeys('ArrowDown', 40),
+      logoReveal: {
+        initialSpacers: initialLogoSpacers,
+        initialImages: initialLogoImages,
+        invalidImages: invalidLogoImages,
+        revealed: logoCounts[logoCounts.length - 1],
+        maxPerFrame: maxLogosPerFrame,
+        frame: distribution(logoFrameValues),
+      },
     };
     key('Backspace', 461);
     key('Backspace', 461);
@@ -1750,6 +1797,17 @@ export function assertBenchmarkScale(report, scale) {
     );
   }
   bounded('Sidebar', report.sidebar.rendered, 60);
+  if (report.sidebar.logoReveal.initialSpacers < 2
+      || report.sidebar.logoReveal.initialImages !== 0
+      || report.sidebar.logoReveal.invalidImages !== 0
+      || report.sidebar.logoReveal.revealed < 2
+      || report.sidebar.logoReveal.maxPerFrame > 1) {
+    throw new Error(
+      `Sidebar logo reveal did not remain blank and frame-paced: ${JSON.stringify(
+        report.sidebar.logoReveal,
+      )}`,
+    );
+  }
   bounded('EPG channels', report.epg.renderedChannels, 50);
   bounded('EPG programs', report.epg.renderedPrograms, 40);
   bounded('Movies', report.movies.rendered, 60);

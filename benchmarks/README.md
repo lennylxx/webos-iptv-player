@@ -42,7 +42,7 @@ sample counts instead of comparing incompatible reports.
 | Raw parsing | Production M3U and XMLTV parsers over generated 50,000-item source text, plus a provider-shaped guide parsed twice — whole feed vs. pre-filtered to the 15% of channels a playlist keeps, each bracketed by a forced GC so `parsers.xmltvCatalog` reports both duration and retained heap |
 | Channel List | Bounded DOM size and D-pad handler p50/p95/max |
 | Recently Watched | Full rendering at the 50-entry product maximum, alternating 88px Live and 100px Catch-up rows |
-| Player Sidebar | Open latency, bounded DOM size, and D-pad handler distribution |
+| Player Sidebar | Open latency, bounded DOM size, D-pad handler distribution, and frame-paced reveal of pre-decoded logos |
 | EPG Channel List | 50,000 channels, bounded DOM/extent, and navigation distribution under `epg.channelList` |
 | EPG Program List | 50,000 programs for one channel, bounded DOM/extent, and navigation distribution under `epg.programList` |
 | Groups | Repeated All/large/small switching plus a separate 50,000-unique-group reload covering Channel List, Sidebar, and EPG group navigation |

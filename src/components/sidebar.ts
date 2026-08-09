@@ -89,6 +89,11 @@ export class Sidebar {
   private groupSourceRevision = -1;
   private groupSourceLocale: SupportedLocale | null = null;
   private groupWidthProbe: SidebarGroup | null = null;
+  private decodedLogos = new Set<string>();
+  private logoDecodePromises = new Map<string, Promise<boolean>>();
+  private logoLoadGeneration = 0;
+  private logoRevealQueue: string[] = [];
+  private logoRevealFrame: number | null = null;
 
   constructor(
     container: HTMLElement,
@@ -185,6 +190,7 @@ export class Sidebar {
     this.isVisible = false;
     this.keyboardOn = false;
     this.opening = false;
+    this.cancelLogoLoads();
     this.pointerAtGroupEdge = false;
     this.clearGroupDwell();
     this.clearPointerExit();
@@ -713,7 +719,10 @@ export class Sidebar {
       span.style.setProperty('--scroll-dist', dist);
       span.classList.add('scrolling');
     });
-    if (!this.opening && measureMarquees) this.measureMarquees();
+    if (!this.opening) {
+      if (measureMarquees) this.measureMarquees();
+      this.scheduleVisibleLogoLoads();
+    }
   }
 
   private groupWidthScore(group: SidebarGroup): number {
@@ -723,14 +732,123 @@ export class Sidebar {
   }
 
   private renderLogo(ch: Channel): Safe {
-    let logo: Safe | string = '';
     if (!ch.logo) {
-      logo = html`<div class="ch-logo-placeholder">${ch.name.charAt(0)}</div>`;
-    } else if (!this.failedLogos.has(ch.logo)) {
-      logo = html`<img class="ch-logo" src="${ch.logo}" alt="" loading="lazy">`;
+      return html`
+        <div class="ch-logo-wrap">
+          <div class="ch-logo-placeholder">${ch.name.charAt(0)}</div>
+        </div>
+      `;
+    }
+    if (this.failedLogos.has(ch.logo)) return html`<div class="ch-logo-wrap"></div>`;
+    if (this.decodedLogos.has(ch.logo)) {
+      return html`
+        <div class="ch-logo-wrap">
+          <img class="ch-logo" src="${ch.logo}" alt="">
+        </div>
+      `;
+    }
+    return html`<div class="ch-logo-wrap" data-logo-src="${ch.logo}"></div>`;
+  }
+
+  private preloadLogo(src: string): Promise<boolean> {
+    const existing = this.logoDecodePromises.get(src);
+    if (existing) return existing;
+
+    const promise = new Promise<boolean>((resolve) => {
+      const image = new Image();
+      const finish = (decoded: boolean) => {
+        image.onload = null;
+        image.onerror = null;
+        resolve(decoded);
+      };
+      image.decoding = 'async';
+      image.onload = () => {
+        const decoded = typeof image.decode === 'function' ? image.decode() : Promise.resolve();
+        decoded.then(() => finish(true), () => finish(false));
+      };
+      image.onerror = () => finish(false);
+      image.src = src;
+    });
+    this.logoDecodePromises.set(src, promise);
+    void promise.then(() => {
+      if (this.logoDecodePromises.get(src) === promise) this.logoDecodePromises.delete(src);
+    });
+    return promise;
+  }
+
+  private scheduleVisibleLogoLoads(): void {
+    const el = this.el;
+    if (!el || !this.isVisible || this.opening) return;
+    const list = el.querySelector<HTMLElement>('.sidebar-channel-list');
+    if (!list) return;
+
+    const generation = ++this.logoLoadGeneration;
+    this.logoRevealQueue = [];
+    if (this.logoRevealFrame !== null) {
+      cancelAnimationFrame(this.logoRevealFrame);
+      this.logoRevealFrame = null;
     }
 
-    return html`<div class="ch-logo-wrap">${logo}</div>`;
+    const viewportStart = list.scrollTop;
+    const viewportEnd = viewportStart + (list.clientHeight || FALLBACK_LIST_HEIGHT);
+    const sources = new Set<string>();
+    list.querySelectorAll<HTMLElement>('.ch-logo-wrap[data-logo-src]').forEach((spacer) => {
+      const item = spacer.closest<HTMLElement>('.sidebar-ch-item');
+      const position = item?.dataset.sidebarPos ? parseInt(item.dataset.sidebarPos, 10) : -1;
+      if (position < 0) return;
+      const rowStart = this.channelVirtualizer.getItemOffset(position);
+      if (rowStart + CHANNEL_ROW_STRIDE <= viewportStart || rowStart >= viewportEnd) return;
+      const src = spacer.dataset.logoSrc;
+      if (src) sources.add(src);
+    });
+
+    sources.forEach((src) => {
+      void this.preloadLogo(src).then((decoded) => {
+        if (generation !== this.logoLoadGeneration || !this.isVisible) return;
+        if (!decoded) {
+          this.failedLogos.add(src);
+          el.querySelectorAll<HTMLElement>('.ch-logo-wrap[data-logo-src]').forEach((spacer) => {
+            if (spacer.dataset.logoSrc === src) spacer.removeAttribute('data-logo-src');
+          });
+          return;
+        }
+        this.logoRevealQueue.push(src);
+        this.scheduleLogoReveal(generation);
+      });
+    });
+  }
+
+  private scheduleLogoReveal(generation: number): void {
+    if (this.logoRevealFrame !== null) return;
+    this.logoRevealFrame = requestAnimationFrame(() => {
+      this.logoRevealFrame = null;
+      if (generation !== this.logoLoadGeneration || !this.isVisible) return;
+      const src = this.logoRevealQueue.shift();
+      if (!src) return;
+      const spacers = this.el?.querySelectorAll<HTMLElement>('.ch-logo-wrap[data-logo-src]');
+      const target = spacers
+        ? Array.from(spacers).find(spacer => spacer.dataset.logoSrc === src)
+        : undefined;
+      if (target) {
+        this.decodedLogos.add(src);
+        target.removeAttribute('data-logo-src');
+        const image = document.createElement('img');
+        image.className = 'ch-logo';
+        image.alt = '';
+        image.src = src;
+        target.appendChild(image);
+      }
+      if (this.logoRevealQueue.length) this.scheduleLogoReveal(generation);
+    });
+  }
+
+  private cancelLogoLoads(): void {
+    this.logoLoadGeneration++;
+    this.logoRevealQueue = [];
+    if (this.logoRevealFrame !== null) {
+      cancelAnimationFrame(this.logoRevealFrame);
+      this.logoRevealFrame = null;
+    }
   }
 
   private measureMarquees(): void {
@@ -763,6 +881,7 @@ export class Sidebar {
       this.opening = false;
       if (this.pointerAtGroupEdge) this.startGroupDwell();
       this.measureMarquees();
+      this.scheduleVisibleLogoLoads();
     });
 
     el.addEventListener('error', (e: Event) => {

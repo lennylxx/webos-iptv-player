@@ -34,6 +34,7 @@ const metricPaths = [
   'recentlyWatched.navigation.frame.p95',
   'sidebar.navigation.p95',
   'sidebar.navigation.frame.p95',
+  'sidebar.logoReveal.frame.p50',
   'epg.channelList.p95',
   'epg.channelList.frame.p95',
   'epg.programList.p95',

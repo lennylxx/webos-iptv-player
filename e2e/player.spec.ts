@@ -79,6 +79,89 @@ test('player sidebar focuses the playing channel; search still filters', async (
   await expect(sidebar.locator('.sidebar-ch-item')).toHaveCount(2);
 });
 
+test('large sidebar decodes visible logos before revealing one per frame', async ({ page }) => {
+  const lines = ['#EXTM3U'];
+  for (let index = 0; index < 900; index++) {
+    lines.push(
+      `#EXTINF:-1 tvg-logo="http://host/logo/${String(index)}.png" group-title="Group",Channel ${String(index)}`,
+      `http://host/${String(index)}.m3u8`,
+    );
+  }
+  await routePlaylist(page, lines.join('\n'));
+  await routeLiveManifest(page);
+  await page.route('http://host/logo/*.png', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    ),
+  }));
+  await page.addInitScript(() => {
+    const pending: Array<() => void> = [];
+    class DeferredImage {
+      decoding = 'auto';
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private value = '';
+
+      set src(value: string) {
+        this.value = value;
+        Promise.resolve().then(() => this.onload?.());
+      }
+
+      get src(): string {
+        return this.value;
+      }
+
+      decode(): Promise<void> {
+        return new Promise(resolve => pending.push(resolve));
+      }
+    }
+    Object.defineProperty(window, 'Image', { configurable: true, value: DeferredImage });
+    (window as unknown as { resolveSidebarLogoDecodes: () => number })
+      .resolveSidebarLogoDecodes = () => {
+        const ready = pending.splice(0);
+        ready.forEach(resolve => resolve());
+        return ready.length;
+      };
+  });
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-player')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+
+  const sidebar = page.locator('#player-sidebar');
+  await expect(sidebar).toBeVisible();
+  const pending = sidebar.locator('.ch-logo-wrap[data-logo-src]');
+  expect(await pending.count()).toBeGreaterThan(0);
+  await expect(sidebar.locator('img.ch-logo:not([src])')).toHaveCount(0);
+  await expect(sidebar.locator('.ch-logo-placeholder')).toHaveCount(0);
+  expect(await sidebar.locator('.sidebar-ch-item').count()).toBeLessThan(60);
+  expect(await sidebar.locator('.sidebar-channel-spacer').evaluate(
+    element => parseFloat((element as HTMLElement).style.height),
+  )).toBe(900 * 88);
+
+  await page.waitForTimeout(300);
+  const counts = await page.evaluate(async () => {
+    const resolved = (window as unknown as { resolveSidebarLogoDecodes: () => number })
+      .resolveSidebarLogoDecodes();
+    const shown: number[] = [];
+    for (let frame = 0; frame < 6; frame++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      shown.push(document.querySelectorAll('#player-sidebar img.ch-logo[src]').length);
+    }
+    return { resolved, shown };
+  });
+  expect(counts.resolved).toBeGreaterThan(1);
+  expect(counts.shown[counts.shown.length - 1]).toBeGreaterThan(1);
+  for (let index = 1; index < counts.shown.length; index++) {
+    expect(counts.shown[index] - counts.shown[index - 1]).toBeLessThanOrEqual(1);
+  }
+});
+
 // The row has a fixed height because the list is virtualized, so its two text
 // lines can overflow into the neighbouring row instead of growing the row.
 test('player sidebar channel rows fit both text lines in their fixed box', async ({ page }) => {

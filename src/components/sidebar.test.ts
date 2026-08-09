@@ -183,14 +183,43 @@ describe('Sidebar', () => {
         .toBe('最近观看');
     });
 
-    it('removes a failed channel logo and does not restore it on later renders', () => {
+    it('keeps logos blank until decoded and reveals one per frame', async () => {
+      channels[0].logo = 'http://host/a.png';
+      channels[1].logo = 'http://host/b.png';
+      try {
+        const target = sidebar as unknown as { preloadLogo(src: string): Promise<boolean> };
+        vi.spyOn(target, 'preloadLogo').mockResolvedValue(true);
+
+        sidebar.show();
+        expect(el.querySelectorAll('.ch-logo[src]')).toHaveLength(0);
+        expect(el.querySelectorAll('.ch-logo-wrap[data-logo-src]')).toHaveLength(2);
+
+        finishOpening();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(el.querySelectorAll('.ch-logo[src]')).toHaveLength(0);
+
+        vi.advanceTimersByTime(20);
+        expect(el.querySelectorAll('.ch-logo[src]')).toHaveLength(1);
+        vi.advanceTimersByTime(20);
+        expect(el.querySelectorAll('.ch-logo[src]')).toHaveLength(2);
+      } finally {
+        channels[0].logo = '';
+        channels[1].logo = '';
+      }
+    });
+
+    it('removes a failed channel logo and does not restore it on later renders', async () => {
       channels[0].logo = 'http://host/broken.png';
       try {
+        const target = sidebar as unknown as { preloadLogo(src: string): Promise<boolean> };
+        vi.spyOn(target, 'preloadLogo').mockResolvedValue(false);
         sidebar.show();
-        const logo = items()[0].querySelector<HTMLImageElement>('.ch-logo');
-        expect(logo).not.toBeNull();
+        expect(items()[0].querySelector('.ch-logo-wrap[data-logo-src]')).not.toBeNull();
 
-        logo!.dispatchEvent(new Event('error'));
+        finishOpening();
+        await Promise.resolve();
+        await Promise.resolve();
         expect(items()[0].querySelector('.ch-logo')).toBeNull();
         expect(items()[0].querySelector('.ch-logo-placeholder')).toBeNull();
         expect(items()[0].querySelector('.ch-logo-wrap')).not.toBeNull();
