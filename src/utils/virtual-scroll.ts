@@ -21,7 +21,13 @@ export class VirtualScrollGuard {
 
   syncOffset(element: HTMLElement, axis: VirtualScrollAxis, offset: number): void {
     const safeOffset = Math.max(0, offset);
-    if (this.readOffset(element, axis) === safeOffset) return;
+    if (this.readOffset(element, axis) === safeOffset) {
+      const expected = this.expected.get(element);
+      if (expected && (expected.axis !== axis || expected.offset !== safeOffset)) {
+        this.expected.delete(element);
+      }
+      return;
+    }
     const state = {
       axis,
       offset: safeOffset,

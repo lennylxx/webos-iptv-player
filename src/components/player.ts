@@ -265,11 +265,10 @@ export class Player {
   }
 
   /**
-   * Destroy the native media pipeline by swapping in a fresh <video> element.
-   * On webOS the pipeline runs in a separate process and survives src changes —
-   * and after a VOD reaches `ended` it stays terminal *and* keeps its whole
-   * buffer, so the next stream won't start on the same element. A fresh element
-   * kills the pipeline and frees it.
+   * Hard-reset playback by swapping in a fresh <video> element. Normal channel
+   * changes replace the webOS native pipeline through source + load(), but a
+   * wedged or ended pipeline can remain terminal and retain its buffer. A fresh
+   * element kills that pipeline and frees it.
    */
   private recreateVideoEl(): void {
     const old = this.videoEl;

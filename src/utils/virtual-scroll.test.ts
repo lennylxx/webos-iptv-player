@@ -42,4 +42,16 @@ describe('VirtualScrollGuard', () => {
 
     expect(element.scrollTop).toBe(300);
   });
+
+  it('cancels a pending correction when the desired offset is already applied', () => {
+    const guard = new VirtualScrollGuard();
+    const element = document.createElement('div');
+
+    guard.syncOffset(element, 'vertical', 300);
+    element.scrollTop = 0;
+    guard.syncOffset(element, 'vertical', 0);
+    vi.advanceTimersByTime(20);
+
+    expect(element.scrollTop).toBe(0);
+  });
 });
