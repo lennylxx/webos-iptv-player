@@ -37,12 +37,13 @@ sample counts instead of comparing incompatible reports.
 
 | Suite | Metrics |
 |---|---|
-| Startup | Cached playlist, indexes, and EPG restoration until Channels is visible; informational only |
+| Startup | Cached playlist, indexes, and EPG restoration until Channels is visible; hover-to-next-frame latency is regression-gated |
 | Cold load | Uncached 50,000-channel M3U fetch, production parse, index build, and first useful render |
 | Raw parsing | Production M3U and XMLTV parsers over generated 50,000-item source text, plus a provider-shaped guide parsed twice — whole feed vs. pre-filtered to the 15% of channels a playlist keeps, each bracketed by a forced GC so `parsers.xmltvCatalog` reports both duration and retained heap |
 | Channel List | Bounded DOM size and D-pad handler p50/p95/max |
 | Recently Watched | Full rendering at the 50-entry product maximum, alternating 88px Live and 100px Catch-up rows |
 | Player Sidebar | Open latency, bounded DOM size, D-pad handler distribution, and frame-paced reveal of pre-decoded logos |
+| EPG open | Red-key-to-visible and red-key-to-first-frame latency, plus the longest Long Task during that transition |
 | EPG Channel List | 50,000 channels, bounded DOM/extent, and navigation distribution under `epg.channelList` |
 | EPG Program List | 50,000 programs for one channel, bounded DOM/extent, and navigation distribution under `epg.programList` |
 | Groups | Repeated All/large/small switching plus a separate 50,000-unique-group reload covering Channel List, Sidebar, and EPG group navigation |
@@ -85,10 +86,12 @@ channel, program, and no-match shapes without catalog ranking.
 
 `benchmarks/baseline.json` is the checked-in reference. `benchmark:check`
 compares repeated distributions and fails when any is more than 15% slower.
-Single-sample startup and view-load timings remain informational because they
-are sensitive to IndexedDB and host scheduling. Update the baseline only for
-an intentional performance change and review the JSON diff. Increment the
-report schema version when metric semantics change.
+Single-sample startup-ready and view-load timings remain informational because
+they are sensitive to IndexedDB and host scheduling. Startup hover-to-frame and
+EPG first-frame/Long-Task timings are regression-gated because they directly
+measure interaction responsiveness. Update the baseline only for an intentional
+performance change and review the JSON diff. Increment the report schema version
+when metric semantics change.
 
 Sidebar uses p95 for its regression gate. Its channel source is cached between
 filter changes, and navigation resolves only selected or currently visible

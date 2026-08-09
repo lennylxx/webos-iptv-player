@@ -28,6 +28,7 @@ if (!Number.isFinite(absoluteToleranceMs) || absoluteToleranceMs < 0) {
 }
 
 const metricPaths = [
+  'startup.hoverFrameMs',
   'channelList.navigation.p95',
   'channelList.navigation.frame.p95',
   'recentlyWatched.navigation.p95',
@@ -35,6 +36,8 @@ const metricPaths = [
   'sidebar.navigation.p95',
   'sidebar.navigation.frame.p95',
   'sidebar.logoReveal.frame.p50',
+  'epg.firstFrameMs',
+  'epg.maxLongTaskMs',
   'epg.channelList.p95',
   'epg.channelList.frame.p95',
   'epg.programList.p95',

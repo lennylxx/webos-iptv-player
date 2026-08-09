@@ -190,8 +190,25 @@ describe('Search', () => {
     expect(container.querySelector('.search-program-row')).toBeNull();
 
     epgMock.programmes = { Alpha: [prog('Late Report', Date.now() + 3600000, Date.now() + 7200000)] };
-    view.refreshPrograms();
+    await view.refreshPrograms();
     expect(container.querySelector('.search-program-row')?.textContent).toContain('Late Report');
+  });
+
+  it('does not build the program index until Search opens', async () => {
+    const channel = chan('Alpha');
+    playlistMock.channels = [channel];
+    epgMock.programmes = {
+      Alpha: [prog('Late Report', Date.now() + 3600000, Date.now() + 7200000)],
+    };
+    const view = new Search(container, mkHandlers());
+
+    await view.refreshPrograms();
+    expect(epgMock.findChannelId).not.toHaveBeenCalled();
+
+    catalogMock.loadAllVodStreams.mockResolvedValue([]);
+    catalogMock.loadAllSeries.mockResolvedValue([]);
+    await view.open(null);
+    expect(epgMock.findChannelId).toHaveBeenCalledWith(channel);
   });
 
   it('plays a current program and starts catch-up for an aired program', async () => {

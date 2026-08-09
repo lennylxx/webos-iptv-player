@@ -462,6 +462,29 @@ export function installColdLoadFixture(options) {
   return { playlists: 1 };
 }
 
+export async function measureStartupHoverBenchmark() {
+  const target = document.querySelector('.channel-main .channel-item');
+  if (!target) throw new Error('Missing channel row for startup hover benchmark');
+  const started = performance.now();
+  target.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+  const focusedSynchronously = target.classList.contains('focused');
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  return {
+    hoverFrameMs: Math.round((performance.now() - started) * 10) / 10,
+    focusedSynchronously,
+    focusedAtFrame: target.classList.contains('focused'),
+  };
+}
+
+export function assertStartupHoverBenchmark(report) {
+  if (!report.focusedSynchronously || !report.focusedAtFrame) {
+    throw new Error('Startup hover did not focus the channel row before its next frame');
+  }
+  if (!Number.isFinite(report.hoverFrameMs) || report.hoverFrameMs < 0) {
+    throw new Error(`Invalid startup hover frame time: ${String(report.hoverFrameMs)}`);
+  }
+}
+
 export async function preparePointerBenchmark() {
   const waitFor = async (selector, timeout = 30_000) => {
     const started = Date.now();
@@ -1055,6 +1078,9 @@ export async function runM3USearchBenchmark(options) {
   input.value = 'channel';
   input.dispatchEvent(new Event('input', { bubbles: true }));
   await waitFor('#view-search:not(.hidden)');
+  input.value = 'rareprogramneedle';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor('#view-search .search-program-row');
   const queries = {
     channelsBroad: await queryDistribution('channel'),
     channelsSparse: await queryDistribution('rarechannelneedle'),
@@ -1548,10 +1574,32 @@ export async function runBenchmarkSuites(options) {
     key('Backspace', 461);
     await waitFor('#view-channels:not(.hidden)');
 
+    const epgLongTasks = [];
+    let epgLongTaskObserver = null;
+    if (typeof PerformanceObserver !== 'undefined') {
+      try {
+        epgLongTaskObserver = new PerformanceObserver((list) => {
+          list.getEntries().forEach((entry) => epgLongTasks.push(entry.duration));
+        });
+        epgLongTaskObserver.observe({ entryTypes: ['longtask'] });
+      } catch {
+        epgLongTaskObserver = null;
+      }
+    }
     const epgStarted = performance.now();
     key('', 403);
     await waitFor('#view-epg:not(.hidden)');
     const epgOpenMs = round(performance.now() - epgStarted);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const epgFirstFrameMs = round(performance.now() - epgStarted);
+    if (epgLongTaskObserver) {
+      epgLongTaskObserver.takeRecords()
+        .forEach((entry) => epgLongTasks.push(entry.duration));
+      epgLongTaskObserver.disconnect();
+    }
+    const epgMaxLongTaskMs = round(
+      epgLongTasks.length ? Math.max(...epgLongTasks) : 0,
+    );
     await waitFor('.epg-programme-item');
     click('#epg-channels [data-channel-idx="1"]');
     await settle();
@@ -1678,6 +1726,9 @@ export async function runBenchmarkSuites(options) {
     await waitFor(
       '#view-search [data-search-virtual="movies"] .search-virtual-rail-spacer',
     );
+    input.value = 'rareprogramneedle';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await waitFor('#view-search .search-program-row');
     input.value = '';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     const searchOpen = await searchOpenDistribution();
@@ -1751,6 +1802,8 @@ export async function runBenchmarkSuites(options) {
       sidebar,
       epg: {
         openMs: epgOpenMs,
+        firstFrameMs: epgFirstFrameMs,
+        maxLongTaskMs: epgMaxLongTaskMs,
         channelList: epgChannels.navigation,
         programList: epgPrograms.navigation,
         renderedChannels: epgChannels.rendered,

@@ -19,7 +19,10 @@
   "suites": {
     "startup": {
       "readyMs": 2125,
-      "rendered": 35
+      "rendered": 35,
+      "hoverFrameMs": 4.7,
+      "focusedSynchronously": true,
+      "focusedAtFrame": true
     },
     "channelList": {
       "rendered": 35,
@@ -89,6 +92,8 @@
     },
     "epg": {
       "openMs": 122.6,
+      "firstFrameMs": 265,
+      "maxLongTaskMs": 252,
       "channelList": {
         "p50": 66.8,
         "p95": 89.2,

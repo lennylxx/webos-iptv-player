@@ -322,14 +322,10 @@ test.describe('Settings playlists', () => {
     await page.keyboard.press('Enter');
 
     // loadData re-opens settings because there are no playlists now. Wait for
-    // the storage write + settings re-open before pressing Back, because the
-    // test would otherwise race against the async loadData() call inside
-    // onSettingsSaved.
-    await page.waitForFunction(() => {
-      const pls = JSON.parse(localStorage.getItem('iptv_playlists') || '[]') as unknown[];
-      const settings = document.getElementById('view-settings');
-      return pls.length === 0 && settings != null && !settings.classList.contains('hidden');
-    });
+    // its completion toast before pressing Back; Settings was already visible
+    // before Save, so visibility alone cannot distinguish completion.
+    await expect(page.locator('.toast.visible'))
+      .toContainText('Welcome! Add a playlist URL to get started.');
 
     // Press Back to return to the channel list — it must NOT show the previous
     // playlist's channels (the bug: PlaylistService kept stale in-memory state).

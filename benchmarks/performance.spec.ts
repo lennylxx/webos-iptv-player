@@ -7,6 +7,7 @@ import {
   assertColdLoadBenchmark,
   assertM3USearchBenchmark,
   assertPointerBenchmark,
+  assertStartupHoverBenchmark,
   assertRetainedMemory,
   assertXMLTVCatalogBenchmark,
   assertBenchmarkScale,
@@ -17,6 +18,7 @@ import {
   installM3USearchFixture,
   installUniqueGroupFixture,
   inspectPointerBenchmark,
+  measureStartupHoverBenchmark,
   preparePointerBenchmark,
   rebuildBenchmarkDatabase,
   runGroupBenchmark,
@@ -87,6 +89,8 @@ test('records 50,000-item application benchmarks', async ({ page, browserName })
     await expect(page.locator('#view-channels')).toBeVisible();
     await expect(page.locator('.channel-item').first()).toBeVisible();
     const startupReadyMs = Date.now() - startupStarted;
+    const startupHover = await page.evaluate(measureStartupHoverBenchmark);
+    assertStartupHoverBenchmark(startupHover);
     await page.addScriptTag({
       content: await readFile('test-output/benchmarks/parser-bundle.js', 'utf8'),
     });
@@ -178,6 +182,7 @@ test('records 50,000-item application benchmarks', async ({ page, browserName })
         startup: {
           readyMs: startupReadyMs,
           rendered: suites.channelList.rendered,
+          ...startupHover,
         },
         ...suites,
         memory: {

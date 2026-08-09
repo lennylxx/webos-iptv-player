@@ -26,6 +26,7 @@ import {
   runM3USearchBenchmark,
   assertM3USearchBenchmark,
   assertPointerBenchmark,
+  assertStartupHoverBenchmark,
   runGroupBenchmark,
   summarizeRetainedMemory,
   assertRetainedMemory,
@@ -33,6 +34,7 @@ import {
   assertGroupBenchmarkScale,
   runBenchmarkSuites,
   inspectPointerBenchmark,
+  measureStartupHoverBenchmark,
   preparePointerBenchmark,
   assertBenchmarkScale,
   assertColdLoadBenchmark,
@@ -275,6 +277,8 @@ async function runTvBenchmark() {
     const startupStarted = Date.now();
     await reloadApp(client);
     const startupReadyMs = Date.now() - startupStarted;
+    const startupHover = await evaluate(client, measureStartupHoverBenchmark);
+    assertStartupHoverBenchmark(startupHover);
     const parserBundle = await readFile(
       path.join(process.cwd(), 'test-output', 'benchmarks', 'parser-bundle.js'),
       'utf8',
@@ -393,6 +397,7 @@ async function runTvBenchmark() {
         startup: {
           readyMs: startupReadyMs,
           rendered: suites.channelList.rendered,
+          ...startupHover,
         },
         ...suites,
         memory: {

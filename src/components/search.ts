@@ -9,7 +9,7 @@ import { StorageService } from '../services/storage-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
 import { loadAllVodStreams, loadAllSeries } from '../services/xtream-catalog';
 import {
-  prepareSearchItems,
+  prepareSearchItem,
   prepareNameSearchItems,
   rankPreparedNamesTopK,
   rankPreparedTopK,
@@ -25,6 +25,7 @@ import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard, type VirtualScrollAxis } from '../utils/virtual-scroll';
+import { runInFrameSlices } from '../utils/frame-slices';
 
 const log = createLogger('Search');
 const SEARCH_LIST_VIEWPORT = 420;
@@ -89,6 +90,8 @@ export class Search {
   private queryFrame: number | null = null;
   private queryGeneration = 0;
   private catalogController: AbortController | null = null;
+  private active = false;
+  private programIndexGeneration = 0;
   private resultLimit: number = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
   private hasMoreResults = false;
   private readonly scrollGuard = new VirtualScrollGuard();
@@ -112,6 +115,7 @@ export class Search {
   }
 
   async open(account: PlaylistEntry | null): Promise<void> {
+    this.active = true;
     this.cancelScheduledQuery();
     this.catalogController?.abort();
     this.catalogController = null;
@@ -125,12 +129,16 @@ export class Search {
     this.account = account;
     this.query = '';
     this.resultLimit = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
-    this.buildProgramIndex(false);
     this.render();
+    let catalogLoad: Promise<void> | null = null;
     if (account) {
       this.catalogController = new AbortController();
-      await this.loadCatalog(account, this.catalogController.signal);
+      catalogLoad = this.loadCatalog(account, this.catalogController.signal);
     }
+    await this.buildProgramIndex(false);
+    if (!this.active) return;
+    if (this.query.trim()) this.render();
+    await catalogLoad;
   }
 
   /** The tab bar's search box drives the query; re-render the results for it. */
@@ -158,9 +166,13 @@ export class Search {
     });
   }
 
-  refreshPrograms(): void {
-    this.buildProgramIndex(true);
-    if (this.query.trim()) this.render();
+  async refreshPrograms(): Promise<void> {
+    this.programIndexGeneration++;
+    this.indexedChannels = null;
+    this.indexedProgrammes = null;
+    if (!this.active) return;
+    await this.buildProgramIndex(true);
+    if (this.active && this.query.trim()) this.render();
   }
 
   dismissPrompt(): void {
@@ -168,6 +180,8 @@ export class Search {
   }
 
   deactivate(): void {
+    this.active = false;
+    this.programIndexGeneration++;
     this.catalogController?.abort();
     this.catalogController = null;
   }
@@ -399,28 +413,55 @@ export class Search {
     `;
   }
 
-  private buildProgramIndex(force: boolean): void {
+  private async buildProgramIndex(force: boolean): Promise<void> {
     if (!force
         && this.indexedChannels === PlaylistService.channels
         && this.indexedProgrammes === EpgService.programmes) return;
+    const generation = ++this.programIndexGeneration;
+    const channels = PlaylistService.channels;
+    const programmesByChannel = EpgService.programmes;
     const programs: ProgramResult[] = [];
-    for (let channelIndex = 0; channelIndex < PlaylistService.channels.length; channelIndex++) {
-      const channel = PlaylistService.channels[channelIndex];
-      const epgId = EpgService.findChannelId(channel);
-      if (!epgId) continue;
-      for (const programme of EpgService.programmes[epgId] ?? []) {
-        programs.push({ channel, channelIndex, programme });
+    let channelIndex = 0;
+    let channelPrograms: Programme[] = [];
+    let programmeIndex = 0;
+    const shouldContinue = (): boolean =>
+      this.active && generation === this.programIndexGeneration;
+    const collected = await runInFrameSlices(() => {
+      if (programmeIndex < channelPrograms.length) {
+        programs.push({
+          channel: channels[channelIndex - 1],
+          channelIndex: channelIndex - 1,
+          programme: channelPrograms[programmeIndex++],
+        });
+        return false;
       }
-    }
-    this.programIndex = prepareSearchItems(programs, result => [
-      result.programme.title,
-      result.programme.category,
-      result.programme.description,
-      result.channel.name,
-      result.channel.group,
-    ]);
-    this.indexedChannels = PlaylistService.channels;
-    this.indexedProgrammes = EpgService.programmes;
+      if (channelIndex >= channels.length) return true;
+      const channel = channels[channelIndex++];
+      const epgId = EpgService.findChannelId(channel);
+      channelPrograms = epgId ? programmesByChannel[epgId] ?? [] : [];
+      programmeIndex = 0;
+      return false;
+    }, { shouldContinue });
+    if (!collected) return;
+
+    const prepared: PreparedSearchItem<ProgramResult>[] = [];
+    let index = 0;
+    const indexed = await runInFrameSlices(() => {
+      if (index >= programs.length) return true;
+      prepared.push(prepareSearchItem(programs[index++], result => [
+        result.programme.title,
+        result.programme.category,
+        result.programme.description,
+        result.channel.name,
+        result.channel.group,
+      ]));
+      return false;
+    }, { shouldContinue });
+    if (!indexed || !shouldContinue()) return;
+
+    this.programIndex = prepared;
+    this.indexedChannels = channels;
+    this.indexedProgrammes = programmesByChannel;
   }
 
   private programRow(result: ProgramResult, index: number): ReturnType<typeof html> {

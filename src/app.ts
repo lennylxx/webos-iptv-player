@@ -572,14 +572,14 @@ class App {
           .then(() => {
             this.applyDisplayTz();
             this.channelList.render();
-            this.search.refreshPrograms();
+            void this.search.refreshPrograms();
           })
           .catch(err => log.error('EPG load failed:', err));
         setInterval(() => EpgService.refresh()
           .then(() => {
             this.applyDisplayTz();
             this.channelList.render();
-            this.search.refreshPrograms();
+            void this.search.refreshPrograms();
           })
           .catch(err => log.error('EPG refresh failed:', err)),
         CONFIG.EPG_REFRESH_INTERVAL);
@@ -724,7 +724,7 @@ class App {
     EpgService.refresh().then(() => {
       this.applyDisplayTz();
       this.epgGrid.render();
-      this.search.refreshPrograms();
+      void this.search.refreshPrograms();
     });
   }
 

@@ -44,6 +44,16 @@ export function installColdLoadFixture(
   options: ColdLoadFixtureOptions,
 ): { playlists: number };
 
+export interface StartupHoverBenchmark {
+  hoverFrameMs: number;
+  focusedSynchronously: boolean;
+  focusedAtFrame: boolean;
+}
+
+export function measureStartupHoverBenchmark(): Promise<StartupHoverBenchmark>;
+
+export function assertStartupHoverBenchmark(report: StartupHoverBenchmark): void;
+
 export function preparePointerBenchmark(): Promise<{ x: number; y: number }>;
 
 export function inspectPointerBenchmark(): Promise<Record<string, any>>;
