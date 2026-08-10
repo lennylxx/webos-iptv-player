@@ -72,7 +72,7 @@ describe('webOS.js shim — URL construction (regression for trailing slash)', (
   });
 
   it('does NOT produce a double slash between the service name and method when the URI already ends in /', () => {
-    // This exact pattern silently broke our upload service: a trailing slash
+    // This exact pattern silently broke our LAN service: a trailing slash
     // produced luna://...//start, which Luna rejected as a malformed method.
     env.webOS.service.request('luna://com.foo.bar/', { method: 'start' });
     expect(env.calls[0].url).toBe('luna://com.foo.bar/start');

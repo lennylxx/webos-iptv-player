@@ -1,5 +1,5 @@
 // Reminder-alert logic for the bundled service. Kept out of index.ts so that
-// entry stays a thin wiring file (same split as ./upload/server).
+// entry stays a thin wiring file (same split as ./lan/server).
 //
 // On webOS, createAlert is refused to every identity a third-party app can
 // present; only luna-send-pub (role type "devmode") may raise it, and only

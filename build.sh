@@ -35,7 +35,7 @@ rm -rf build/bundled-service
 npx tsc -p bundled-service/tsconfig.json
 cp bundled-service/package.json build/bundled-service/
 cp bundled-service/src/services.json build/bundled-service/
-cp bundled-service/src/upload/upload-page.html build/bundled-service/upload/
+cp bundled-service/src/setup/setup-page.html build/bundled-service/setup/
 
 # Package IPK (--no-minify since esbuild already minifies)
 info "Packaging IPK..."

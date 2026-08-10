@@ -84,8 +84,8 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
   `innerHTML =`**; build a `Safe` with `` html`…` `` and pass it to `morph`. Bind
   listeners once (delegated), not per render.
 - **Services** (`src/services/`) are singletons (exported object or single class
-  instance): `PlaylistService`, `EpgService`, `StorageService`, `UploadClient`,
-  `ReminderService`, `idb-cache`. `StorageService` wraps `localStorage` with the
+  instance): `PlaylistService`, `EpgService`, `StorageService`, `SetupClient`,
+  `UploadClient`, `ReminderService`, `idb-cache`. `StorageService` wraps `localStorage` with the
   `iptv_` prefix + JSON and evicts the playlist cache on quota errors. EPG is cached
   in IndexedDB for instant reopen. `ReminderService` stores reminders, schedules an
   Activity Manager callback per reminder (dev-mode alert vs. retail toast), and
@@ -101,14 +101,15 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
 - **Config** (`src/config.ts`) — `CONFIG` holds key codes, refresh intervals,
   player/EPG/storage constants. Prefer constants here over magic numbers.
 - **Bundled service** (`bundled-service/`) — a sandbox-separate Node (CommonJS) webOS
-  service (`com.lennylxx.iptv.service`) hosting two features: LAN M3U **uploads** and,
-  in Developer Mode, interactive program-reminder **alerts**. The app talks to it over
-  the Luna bus (`start`/`stop`/`heartbeat`/`uploadEvents` for uploads; `getDevMode`/
-  `fireReminderAlert` for reminders) and over HTTP; uploads **push** `uploadEvents` (no
-  polling). Its lifecycle is tied to app `visibilitychange`. `index.ts` is a thin entry
-  that wires the feature modules (`upload/`, `reminder/`).
-  **Read `docs/upload-service.md` before changing it**, and keep the Luna/HTTP contract aligned with
-  `src/services/upload-client.ts`.
+  service (`com.lennylxx.iptv.service`) hosting LAN phone setup/M3U uploads and,
+  in Developer Mode, interactive program-reminder **alerts**. The app talks to
+  it over the Luna bus
+  (`start`/`stop`/`heartbeat`/`serviceEvents` for LAN changes; `getDevMode`/
+  `fireReminderAlert` for reminders) and over HTTP; changes push
+  `serviceEvents` without polling. Its lifecycle is tied to app
+  `visibilitychange`. `index.ts` wires `lan/`, `setup/`, and `reminder/`.
+  **Read `docs/lan-service.md` before changing it**, and keep the Luna/HTTP
+  contract aligned with `setup-client.ts` and `upload-client.ts`.
 
 ## Conventions
 

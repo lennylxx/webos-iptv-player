@@ -1,19 +1,19 @@
-# Upload Service
+# LAN Setup Service
 
 A bundled webOS JS service that lets a phone or computer on the same LAN
-upload an `.m3u` playlist to the TV. The TV-side app consumes those uploads
-through Luna and shows them in **Settings → Upload Playlist**.
+configure Playlist URLs, Xtream accounts, and an EPG URL, or upload an `.m3u`
+playlist to the TV. The TV-side app consumes these changes through Luna.
 
 ## Architecture
 
 ```
 ┌──────────────────┐  Luna  ┌─────────────────────────────┐  HTTP  ┌──────────────────┐
 │ App (browser)    │◀──────▶│  Bundled service            │◀──────▶│  Phone / laptop  │
-│  src/app.ts      │        │  com.lennylxx.iptv.service  │  LAN   │  upload page     │
-│  upload-client.ts│        │                             │        │  (/upload)       │
+│  src/app.ts      │        │  com.lennylxx.iptv.service  │  LAN   │  setup page      │
+│  LAN clients     │        │  lan/ + setup/ + upload/    │        │  (/setup)        │
 └──────────────────┘        └─────────────────────────────┘        └──────────────────┘
             ▲                             │
-            └─────── uploadEvents ────────┘    push notification on every change
+            └─────── serviceEvents ───────┘    push notification on every change
 ```
 
 - **Luna bus** — in-process IPC between the app and the service.
@@ -21,45 +21,67 @@ through Luna and shows them in **Settings → Upload Playlist**.
 
 ## APIs
 
-The service exposes **4 Luna methods** and **5 HTTP routes**.
+The service exposes **4 Luna methods** and the HTTP routes below.
 
-Luna (called by the in-app `UploadClient` / `app.ts`):
+Luna (called by the in-app `SetupClient`, `UploadClient`, and `app.ts`):
 
 | Method | Subscribe? | Purpose |
 |---|---|---|
 | `start` | no | Bind the HTTP server; returns the bound port. Idempotent. |
 | `stop` | no | Close the HTTP server and release the keepAlive activity. |
 | `heartbeat` | no | Liveness probe; returns `{running, port}`. |
-| `uploadEvents` | **yes** | Push channel — service emits `{event: 'uploads-changed'}` after every successful upload or delete. |
+| `serviceEvents` | **yes** | Push channel for `uploads-changed` and `setup-changed` events. |
 
 HTTP (called by phones, and by the app for reconcile):
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/info` | GET | Service metadata (ip, port, uploadUrl, dataDir). |
-| `/upload` | GET | The HTML drag-and-drop page phones load. |
+| `/info` | GET | Loopback-only metadata, including setup URLs and the pairing code. |
+| `/` or `/setup` | GET | Public setup page; asks for the TV pairing code. |
+| `/setup?token=…` | GET | QR entry that opens the same page already authorized. |
+| `/pair` | POST | Rate-limited exchange of the four-digit code for the setup token. |
+| `/setup-actions?token=…` | POST | Validate and queue a Playlist, Xtream, or EPG change. |
+| `/setup-actions` | GET | Loopback-only list consumed by the TV app. |
+| `/setup-actions/:id` | DELETE | Loopback-only acknowledgement from the TV app. |
+| `/setup-actions/:id?token=…` | GET | Phone-facing application status. |
 | `/uploads` | GET | List all stored uploads with serve-back URLs. |
-| `/uploads?name=foo.m3u` | POST | Save a playlist; fires `uploadEvents`. |
-| `/uploads/:id[.m3u]` | GET / DELETE | Serve or remove a stored playlist; DELETE fires `uploadEvents`. |
+| `/uploads?name=foo.m3u&token=…` | POST | Save a playlist; fires `serviceEvents`. |
+| `/uploads/:id[.m3u]` | GET | Serve a stored playlist. |
+| `/uploads/:id?token=…` | DELETE | Remove an upload; loopback callers do not need the token. |
 
 ## Event-driven updates
 
-When a phone uploads or deletes a playlist, the in-app Settings view
-refreshes within milliseconds. There is **no polling**.
+When a phone uploads, deletes, or submits a source change, the TV updates
+within milliseconds. There is **no background polling**.
 
 A successful POST or DELETE on the HTTP side calls an `onChange` hook,
-which iterates a `Set<msg>` of active `uploadEvents` subscribers and calls
-`msg.respond({event: 'uploads-changed'})` on each one. The app's
-subscription handler then runs `Settings.refreshUploads()`, which
-re-fetches `/uploads`, updates `localStorage`, and patches the upload
-list in the DOM.
+which iterates a `Set<msg>` of active `serviceEvents` subscribers and calls
+`msg.respond({event})` on each one. Upload events refresh `/uploads`.
+Setup events make `SetupClient` consume the pending actions, update the
+existing `StorageService` models, acknowledge each action, and reload data.
+The phone waits for that acknowledgement before showing “Saved on TV”.
 
 Rejected uploads (HTTP 400) and missing-id deletes (HTTP 404) do **not**
 fire the event.
 
-State is server-authoritative; the push is just a hint to refresh. If the
-app misses a push (e.g. it's mid-restart), the next `Settings.render()`
-runs `refreshUploads()` on open and picks up the new state.
+Uploaded files remain server-authoritative. Setup actions remain in a shared
+in-memory queue until the TV acknowledges them. If the app misses a push,
+bundled-service initialization consumes the queue after reconnecting.
+
+## Setup authorization
+
+Every HTTP bind generates a random 12-character token. `/info` is available
+only over loopback, so only the TV app can obtain the tokenized setup URL for
+the QR code. It also returns a random four-digit code for computers that open
+the short root URL manually. The public page exchanges that code for the full
+token; five failures from one client lock pairing for one minute.
+
+The token is required to submit source changes, query their status, upload M3U
+files, or remotely delete uploads. Reading and acknowledging queued actions is
+loopback-only, which prevents another LAN client from reading Xtream
+credentials. Upload identifiers are validated before file access so requests
+cannot escape the upload directory. A new foreground bind creates a new token,
+pairing code, and URL, invalidating the old values.
 
 ## Foreground / background lifecycle
 
@@ -70,9 +92,9 @@ port nor the service process lingers while other webOS apps are in use.
 
 When the app is foregrounded (`visibilitychange → visible`) it calls
 Luna `start` again, which re-binds the HTTP server on a new ephemeral
-port and resubscribes to `uploadEvents`. `Settings.refreshUploads()`
-runs so the QR code and upload list reflect the new port and current
-state.
+port and resubscribes to `serviceEvents`. `Settings.refreshSetupInfo()` and
+`Settings.refreshUploads()` run so the QR code and upload list reflect the
+new port and current state.
 
 The service process itself stays alive across stop/start cycles — only
 the HTTP server is torn down. Luna respawns the process on cold start

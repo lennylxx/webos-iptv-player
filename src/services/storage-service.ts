@@ -508,17 +508,19 @@ export const StorageService = {
     if (changed) set('playlists', list);
     return list;
   },
-  setPlaylists(playlists: PlaylistEntry[]): void {
+  setPlaylists(playlists: PlaylistEntry[]): boolean {
     const previous = get<PlaylistEntry[]>('playlists', []);
-    if (JSON.stringify(previous) === JSON.stringify(playlists)) return;
-    if (set('playlists', playlists)) evictCache();
+    if (JSON.stringify(previous) === JSON.stringify(playlists)) return true;
+    const stored = set('playlists', playlists);
+    if (stored) evictCache();
+    return stored;
   },
 
   getEpgUrl(): string {
     return get<string>('epg_url', '');
   },
-  setEpgUrl(url: string): void {
-    set('epg_url', url);
+  setEpgUrl(url: string): boolean {
+    return set('epg_url', url);
   },
 
   getReminders(): Reminder[] {

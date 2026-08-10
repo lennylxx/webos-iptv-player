@@ -58,7 +58,7 @@ async function installStartupHarness(
           if (opts.method === 'start') {
             probe.starts++;
             if (opts.onSuccess) pendingStarts.push(opts.onSuccess);
-          } else if (opts.method === 'uploadEvents') {
+          } else if (opts.method === 'serviceEvents') {
             probe.subscriptions++;
             setTimeout(() => opts.onSuccess?.({ subscribed: true }), 0);
           } else if (opts.method === 'getDevMode') {

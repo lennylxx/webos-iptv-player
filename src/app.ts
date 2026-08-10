@@ -9,7 +9,8 @@ import {
   clearCachedPlaylist,
   flushCacheWrites,
 } from './services/idb-cache';
-import { setServicePort } from './services/upload-client';
+import { SetupClient } from './services/setup-client';
+import { setServicePort } from './services/service-http';
 import { ChannelList } from './components/channel-list';
 import { Player } from './components/player';
 import { EpgGrid } from './components/epg-grid';
@@ -56,6 +57,7 @@ class App {
   private enterChannelsAfterUploadSync = false;
   private remindersInitialized = false;
   private bundledServiceStarting = false;
+  private deviceSetupSync = Promise.resolve();
 
   async init(): Promise<void> {
     const done = log.time('init');
@@ -367,14 +369,27 @@ class App {
 
   private async finishBundledServiceInit(): Promise<void> {
     if (document.visibilityState === 'hidden') return;
-    this.subscribeToUploadEvents();
+    this.subscribeToServiceEvents();
     if (!this.remindersInitialized) {
       const initialized = await this.queryDevMode();
       ReminderService.reschedulePending();
       this.remindersInitialized = initialized;
     }
+    await this.queueDeviceSetupSync();
+    await this.settings.refreshSetupInfo();
     await this.settings.refreshUploads();
     await this.loadChannelsAfterFirstUpload();
+  }
+
+  private queueDeviceSetupSync(): Promise<void> {
+    this.deviceSetupSync = this.deviceSetupSync
+      .then(async () => {
+        if (await SetupClient.applyPendingActions()) {
+          await this.onSettingsSaved('reload');
+        }
+      })
+      .catch(err => log.error('Device setup sync failed:', err));
+    return this.deviceSetupSync;
   }
 
   private async loadChannelsAfterFirstUpload(): Promise<void> {
@@ -444,44 +459,47 @@ class App {
   }
 
   /**
-   * Subscribe to the bundled service's `uploadEvents` push channel. Whenever
-   * the service writes/deletes an uploaded playlist (via the LAN /upload page
-   * or DELETE /uploads/:id), it pushes a notification on this subscription
-   * and we call Settings.refreshUploads() to re-sync storage + the upload
-   * list UI. No polling.
+   * Subscribe to the bundled service's `serviceEvents` push channel. Upload
+   * changes refresh the managed upload list; phone setup changes consume the
+   * queued Playlist, Xtream, or EPG action and reload channel data. No polling.
    *
    * Subscription is best-effort: if Luna isn't available (desktop/e2e) or
    * the subscribe call fails, we silently fall back to the explicit
-   * refreshUploads() that Settings.render() already runs on open.
+   * refresh calls that bundled-service initialization runs on open.
    */
-  private subscribeToUploadEvents(): void {
+  private subscribeToServiceEvents(): void {
     type LunaService = { request: (uri: string, opts: unknown) => void };
     const w = window as unknown as { webOS?: { service?: LunaService } };
     const request = w.webOS?.service?.request;
     if (!request) {
-      log.debug('Luna unavailable — upload event subscription skipped');
+      log.debug('Luna unavailable — service event subscription skipped');
       return;
     }
-    log.info('Subscribing to luna://' + CONFIG.SERVICE_ID + '/uploadEvents ...');
+    log.info('Subscribing to luna://' + CONFIG.SERVICE_ID + '/serviceEvents ...');
     try {
       request(`luna://${CONFIG.SERVICE_ID}`, {
-        method: 'uploadEvents',
+        method: 'serviceEvents',
         subscribe: true,
         parameters: {},
         onSuccess: (resp: unknown) => {
-          log.info('uploadEvents push:', JSON.stringify(resp));
+          log.info('serviceEvents push:', JSON.stringify(resp));
           if (resp && typeof resp === 'object' &&
               (resp as { subscribed?: unknown }).subscribed === true) return;
+          if (resp && typeof resp === 'object' &&
+              (resp as { event?: unknown }).event === 'setup-changed') {
+            void this.queueDeviceSetupSync();
+            return;
+          }
           void this.settings.refreshUploads()
             .then(() => this.loadChannelsAfterFirstUpload())
             .catch(err => log.error('Upload event refresh failed:', err));
         },
         onFailure: (err: unknown) => {
-          log.warn('uploadEvents subscription failed:', JSON.stringify(err));
+          log.warn('serviceEvents subscription failed:', JSON.stringify(err));
         },
       });
     } catch (e) {
-      log.warn('uploadEvents subscribe threw:', e);
+      log.warn('serviceEvents subscribe threw:', e);
     }
   }
 

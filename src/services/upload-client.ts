@@ -1,30 +1,13 @@
 import type { PlaylistEntry } from '../types';
-import { CONFIG } from '../config';
 import { fetchWithTimeout } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
 import { genPlaylistId } from '../utils/playlist-id';
+import { serviceBase } from './service-http';
 import { StorageService } from './storage-service';
 
 const log = createLogger('Upload');
 
 const TIMEOUT = 4000;
-
-// The upload service binds to an OS-assigned port at startup and reports it
-// back via the Luna `start` response (see app.ts → startBundledService). Until
-// setServicePort() has been called with that value, base() returns null and
-// every method here no-ops as if the service were unreachable. This matches
-// dev / e2e environments where Luna is unavailable and no service runs.
-let runtimePort: number | null = null;
-
-export function setServicePort(p: number | null): void {
-  if (p === null) {
-    runtimePort = null;
-    return;
-  }
-  if (typeof p === 'number' && p > 0 && p < 65536) {
-    runtimePort = p;
-  }
-}
 
 export interface UploadMeta {
   id: string;
@@ -34,19 +17,6 @@ export interface UploadMeta {
   url: string;
 }
 
-export interface ServiceInfo {
-  ip: string;
-  port: number;
-  uploadUrl: string;
-  /** Absolute path on device where uploads are persisted. Useful for debugging. */
-  dataDir?: string;
-}
-
-function base(): string | null {
-  if (runtimePort === null) return null;
-  return `http://${CONFIG.SERVICE_HOST}:${runtimePort}`;
-}
-
 /** Derive the stored upload id from its /uploads/<id>.m3u serve URL. */
 export function uploadIdFromUrl(url: string): string {
   const m = url.match(/\/uploads\/([^/]+?)(?:\.m3u)?$/i);
@@ -54,28 +24,9 @@ export function uploadIdFromUrl(url: string): string {
 }
 
 class UploadClientImpl {
-  async getInfo(): Promise<ServiceInfo | null> {
-    const b = base();
-    if (!b) {
-      log.debug('getInfo skipped: service port not yet known');
-      return null;
-    }
-    try {
-      const res = await fetchWithTimeout(`${b}/info`, {}, TIMEOUT);
-      if (!res.ok) {
-        log.warn('getInfo: HTTP', res.status);
-        return null;
-      }
-      return (await res.json()) as ServiceInfo;
-    } catch (e) {
-      log.debug('getInfo failed (service likely not running):', e);
-      return null;
-    }
-  }
-
   /** Returns the stored uploads, or null if the service is unreachable. */
   async list(): Promise<UploadMeta[] | null> {
-    const b = base();
+    const b = serviceBase();
     if (!b) {
       log.debug('list skipped: service port not yet known');
       return null;
@@ -99,7 +50,7 @@ class UploadClientImpl {
 
   /** Returns true only when the server confirms the upload was deleted. */
   async remove(id: string): Promise<boolean> {
-    const b = base();
+    const b = serviceBase();
     if (!b) {
       log.debug('remove skipped: service port not yet known');
       return false;
@@ -126,7 +77,7 @@ class UploadClientImpl {
   async reconcile(): Promise<void> {
     const uploads = await this.list();
     if (uploads === null) {
-      log.info('Upload service unreachable — skipping reconcile');
+      log.info('LAN service unreachable — skipping upload reconcile');
       return;
     }
 

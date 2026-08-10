@@ -554,14 +554,14 @@ test.describe('Settings Xtream live output', () => {
 });
 
 test.describe('Settings upload', () => {
-  test('Settings shows an uploaded playlist when the upload service pushes a uploadEvents notification', async ({ page }) => {
+  test('Settings shows an uploaded playlist after a serviceEvents upload notification', async ({ page }) => {
     // End-to-end coverage for the push-driven upload refresh flow:
-    //   service POST /uploads succeeds → service broadcasts Luna `uploadEvents`
+    //   service POST /uploads succeeds → service broadcasts Luna `serviceEvents`
     //   → app's subscription onSuccess fires → settings.refreshUploads() →
     //   UploadClient.reconcile() → fetch /uploads → storage write → morph().
     //
     // Playwright can't drive a real Luna bus, so we fake `window.webOS.service`
-    // in an init script (captures the uploadEvents onSuccess so the test can
+    // in an init script (captures the serviceEvents onSuccess so the test can
     // synthesize a push) and route the in-app HTTP fetches to a small
     // mutable fixture. Everything else — Settings render, UploadClient,
     // StorageService, morph, focus — runs as real production code.
@@ -584,7 +584,11 @@ test.describe('Settings upload', () => {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          ip: '192.168.1.2', port: 9999, uploadUrl: 'http://192.168.1.2:9999/upload',
+          ip: '192.168.1.2',
+          port: 9999,
+          setupUrl: 'http://192.168.1.2:9999/setup?token=abc123',
+          manualUrl: 'http://192.168.1.2:9999',
+          pairingCode: '1234',
         }),
       }),
     );
@@ -609,9 +613,9 @@ test.describe('Settings upload', () => {
               // The real service returns the bound port; the in-app client
               // (UploadClient) uses this for all subsequent fetches.
               setTimeout(() => opts.onSuccess?.({ running: true, port: 9999 }), 0);
-            } else if (opts.method === 'uploadEvents') {
+            } else if (opts.method === 'serviceEvents') {
               // Initial subscription ack (matches the real service's first
-              // respond({subscribed:true}) inside the uploadEvents handler).
+              // respond({subscribed:true}) inside the serviceEvents handler).
               setTimeout(() => opts.onSuccess?.({ subscribed: true }), 0);
               // Register the callback for test-driven pushes.
               if (opts.onSuccess) win.__eventCallbacks__!.push(opts.onSuccess);
@@ -661,7 +665,7 @@ test.describe('Settings upload', () => {
     );
 
     // A second push that drops the upload also flows through (covers the
-    // "delete on the upload page" case → service DELETE /uploads/:id fires
+    // "delete in the setup page's M3U section" case → DELETE /uploads/:id fires
     // onChange too).
     uploads = [];
     await page.evaluate(() => (window as unknown as { __triggerUploadPush__: () => void }).__triggerUploadPush__());

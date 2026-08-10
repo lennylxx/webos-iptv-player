@@ -11,6 +11,7 @@ import {
   type CacheUsageSummary,
 } from '../services/idb-cache';
 import { UploadClient, uploadIdFromUrl } from '../services/upload-client';
+import { SetupClient } from '../services/setup-client';
 import { createXtreamClient } from '../services/xtream-client';
 import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
 import { genPlaylistId } from '../utils/playlist-id';
@@ -415,11 +416,19 @@ export class Settings {
 
         <div class="settings-main">
           <div class="settings-category" id="settings-general" data-settings-category="general">
-            <div class="settings-section">
-              <h3 class="settings-section-title">${languageHeading()}</h3>
-              <div class="settings-item">
-                ${dropdown('app-language', languageOptions(), localePreference)}
-                <div class="settings-item-hint">${t('settings.languageHint')}</div>
+            <div class="settings-general-row">
+              <div class="settings-section settings-general-language">
+                <h3 class="settings-section-title">${languageHeading()}</h3>
+                <div class="settings-item">
+                  ${dropdown('app-language', languageOptions(), localePreference)}
+                  <div class="settings-item-hint">${t('settings.languageHint')}</div>
+                </div>
+              </div>
+
+              <div class="settings-section settings-general-device">
+                <h3 class="settings-section-title">${t('settings.deviceSetup')}</h3>
+                <div class="source-box setup-box-info device-setup-card"
+                     id="setup-info">${t('settings.checkingSetup')}</div>
               </div>
             </div>
           </div>
@@ -470,22 +479,19 @@ export class Settings {
 
             <div class="settings-section">
               <h3 class="settings-section-title">${t('settings.uploadPlaylist')}</h3>
-              <div class="upload-section">
-                <div class="upload-box upload-box-info" id="upload-info">${t('settings.checkingUpload')}</div>
-                <div class="upload-box upload-box-list">
-                  <div class="upload-entries" id="upload-entries">
-                    ${uploads.length
-                      ? uploads.map((pl) => html`
-                        <div class="settings-row" data-key="${pl.url}">
-                          <div class="settings-field wide">
-                            <label>${uploadLabel(pl)}</label>
-                          </div>
-                          <button class="btn btn-danger remove-upload" data-focusable
-                                  data-url="${pl.url}">${t('common.remove')}</button>
+              <div class="source-box upload-box-list">
+                <div class="upload-entries" id="upload-entries">
+                  ${uploads.length
+                    ? uploads.map((pl) => html`
+                      <div class="settings-row" data-key="${pl.url}">
+                        <div class="settings-field wide">
+                          <label>${uploadLabel(pl)}</label>
                         </div>
-                      `)
-                      : html`<div class="empty-hint">${t('settings.noUploads')}</div>`}
-                  </div>
+                        <button class="btn btn-danger remove-upload" data-focusable
+                                data-url="${pl.url}">${t('common.remove')}</button>
+                      </div>
+                    `)
+                    : html`<div class="empty-hint">${t('settings.noUploads')}</div>`}
                 </div>
               </div>
             </div>
@@ -656,10 +662,10 @@ export class Settings {
     `);
 
     this.nav.focusFirst();
-    void this.loadUploadInfo();
+    void this.refreshSetupInfo();
     // Sync uploads from the local service on every Settings open. Subsequent
-    // updates arrive via the Luna `uploadEvents` push channel (wired in
-    // app.ts → subscribeToUploadEvents) and call refreshUploads() directly.
+    // updates arrive via the Luna `serviceEvents` push channel (wired in
+    // app.ts → subscribeToServiceEvents) and call refreshUploads() directly.
     void this.refreshUploads();
     void this.loadCacheUsage();
   }
@@ -1356,31 +1362,33 @@ export class Settings {
   }
 
   /**
-   * Replace the placeholder text in #upload-info with QR + instructions (or
+   * Replace the placeholder text in #setup-info with QR + instructions (or
    * an error when the service is unreachable). Built through `html` so the
-   * upload URL — which originates off-device — is escaped, then handed to
+   * setup URL — which originates off-device — is escaped, then handed to
    * `morph()` so the surrounding rendered content stays unaffected and we
    * never touch innerHTML directly with an interpolated string.
    */
-  private async loadUploadInfo(): Promise<void> {
-    const el = $('#upload-info', this.container);
+  async refreshSetupInfo(): Promise<void> {
+    const el = $('#setup-info', this.container);
     if (!el) return;
-    const info = await UploadClient.getInfo();
+    const info = await SetupClient.getInfo();
     // Re-resolve in case the user navigated away or settings re-rendered.
-    const target = $('#upload-info', this.container);
+    const target = $('#setup-info', this.container);
     if (!target) return;
     if (info) {
-      const url = info.uploadUrl;
+      const qrUrl = info.setupUrl;
       morph(target, html`
-        <img class="upload-qr" alt="${t('settings.qrAlt', { url })}" src="${qrDataUrl(url)}">
-        <div class="upload-instructions">
-          ${t('settings.uploadInstructionsBefore')}
-          <span class="upload-url">${url}</span>
-          ${t('settings.uploadInstructionsAfter')}
+        <img class="setup-qr" alt="${t('settings.qrAlt', { url: qrUrl })}" src="${qrDataUrl(qrUrl)}">
+        <div class="setup-instructions">
+          <div class="setup-scan-instruction">${t('settings.setupScanQr')}</div>
+          <div class="setup-browser-instruction">${t('settings.setupOpenInBrowser')}</div>
+          <span class="setup-url">${info.manualUrl}</span>
+          <div class="setup-pairing-instruction">${t('settings.setupPairingPrompt')}</div>
+          <span class="setup-pairing-code">${info.pairingCode}</span>
         </div>
       `);
     } else {
-      morph(target, html`<span>${t('settings.uploadUnavailable')}</span>`);
+      morph(target, html`<span>${t('settings.setupUnavailable')}</span>`);
     }
   }
 
@@ -1401,7 +1409,7 @@ export class Settings {
    * keeps its focus and unsaved input.
    *
    * Called on render() (covers uploads that arrived before the user opened
-   * Settings) and on every Luna `uploadEvents` push from the upload service
+   * Settings) and on every Luna `serviceEvents` upload push from the LAN service
    * (covers uploads that arrive while Settings is open — see app.ts).
    *
    * Safe to call when the settings view is hidden: reconcile still updates

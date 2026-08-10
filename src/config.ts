@@ -9,7 +9,7 @@ export const CONFIG = {
   // Bump when its shape changes so an older payload is ignored, not misapplied.
   CHANNEL_CUSTOMIZATION_VERSION: 1,
 
-  // Bundled webOS JS service (see bundled-service/src/upload) for LAN playlist uploads.
+  // Bundled webOS JS service (see bundled-service/src/lan) for phone setup and uploads.
   SERVICE_ID: __SERVICE_ID__,
   SERVICE_HOST: '127.0.0.1',
 

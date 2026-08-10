@@ -9,7 +9,7 @@
 //   recently-watched.png  mixed live and resumable catch-up history
 //   epg-guide.png      three-pane program guide, with catch-up resume markers
 //   epg-catchup-resume.png  the Resume / Start Over / Cancel resume prompt
-//   settings.png       settings incl. the LAN-upload QR
+//   settings.png       settings incl. LAN setup QR and manual pairing
 //   themes.png         Settings Appearance section with the theme picker
 //   player.png         playback overlays: channel switcher + action menu
 //   channel-info.png   channel info bar (the OSD) — live DVR (timeshift) view
@@ -377,7 +377,13 @@ const UPLOADS = [
   { id: 'living-room', name: 'Living Room', count: 84, createdAt: NOW - 3_600_000, url: `http://127.0.0.1:${UPLOAD_PORT}/uploads/living-room.m3u` },
   { id: 'sports-pack', name: 'Sports Pack', count: 36, createdAt: NOW - 7_200_000, url: `http://127.0.0.1:${UPLOAD_PORT}/uploads/sports-pack.m3u` },
 ];
-const SERVICE_INFO = { ip: '192.168.1.42', port: UPLOAD_PORT, uploadUrl: `http://192.168.1.42:${UPLOAD_PORT}/upload` };
+const SERVICE_INFO = {
+  ip: '192.168.1.42',
+  port: UPLOAD_PORT,
+  setupUrl: `http://192.168.1.42:${UPLOAD_PORT}/setup?token=0123456789ab`,
+  manualUrl: `http://192.168.1.42:${UPLOAD_PORT}`,
+  pairingCode: '6993',
+};
 
 // ---------------------------------------------------------------------------
 // Static file server for dist/
@@ -540,7 +546,7 @@ async function setupPage(page, {
     await page.route('https://api.assrt.net/**', json(ASSRT_SUBS_JSON));
   }
 
-  // Fake the Luna service bus so the upload service "runs" (settings QR).
+  // Fake the Luna service bus so the LAN service "runs" (settings QR).
   if (upload) {
     await page.addInitScript((port) => {
       window.webOS = {
@@ -548,7 +554,7 @@ async function setupPage(page, {
           request(_uri, opts) {
             const m = opts && opts.method;
             if (m === 'start') setTimeout(() => opts.onSuccess && opts.onSuccess({ running: true, port }), 0);
-            else if (m === 'uploadEvents') setTimeout(() => opts.onSuccess && opts.onSuccess({ subscribed: true }), 0);
+            else if (m === 'serviceEvents') setTimeout(() => opts.onSuccess && opts.onSuccess({ subscribed: true }), 0);
             else if (m === 'stop') setTimeout(() => opts.onSuccess && opts.onSuccess({ stopped: true }), 0);
             else setTimeout(() => opts.onFailure && opts.onFailure({ errorText: 'unmocked: ' + m }), 0);
             return { cancel() { /* no-op */ } };
@@ -743,20 +749,16 @@ try {
     await context.close();
   }
 
-  // 3) Settings (incl. LAN-upload QR + uploaded playlists).
+  // 3) Settings (incl. LAN setup QR, pairing code, and uploaded playlists).
   {
     const { context, page } = await newPage({ upload: true });
     await gotoChannels(page, base);
     await remote(page, KEY.BLUE); // open settings
     await page.locator('#view-settings').waitFor({ state: 'visible' });
-    await page.locator('.upload-qr').waitFor({ state: 'visible', timeout: 10_000 });
-    await page.locator('#upload-entries .settings-row').first().waitFor({ state: 'visible', timeout: 10_000 });
-    await page.locator('#playlist-entries .settings-row:not(.playlist-header-row)').nth(1).evaluate((el) => el.remove());
+    await page.locator('.setup-qr').waitFor({ state: 'visible', timeout: 10_000 });
     await page.locator('.settings-main').evaluate((el) => {
-      const sources = el.querySelector('#settings-sources');
-      if (!(sources instanceof HTMLElement)) return;
       el.style.scrollBehavior = 'auto';
-      el.scrollTop = sources.offsetTop + 30;
+      el.scrollTop = 0;
     });
     await clearToasts(page);
     await page.waitForTimeout(300);

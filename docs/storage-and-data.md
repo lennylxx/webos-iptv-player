@@ -71,8 +71,9 @@ flowchart LR
   expiration, LRU access times, budgeting, and eviction.
 - `src/services/idb-database.ts` owns the shared IndexedDB schema, connection,
   requests, and transaction completion.
-- `bundled-service/src/upload/` is a separate Node process because the webOS
-  browser sandbox cannot listen on the LAN.
+- `bundled-service/src/lan/` runs in the separate Node service because the
+  webOS browser sandbox cannot listen on the LAN. `setup/` owns phone setup;
+  `upload/` owns persisted M3U files.
 
 ### localStorage
 
@@ -329,7 +330,7 @@ processed again.
 **Reset App** permanently removes the app's local setup, personal data, and
 managed cache, then restarts at initial setup.
 
-Original LAN-uploaded M3U files belong to the separate upload service and are
+Original LAN-uploaded M3U files belong to the separate LAN service and are
 not part of the browser database or cache meter. They should be removed through
 the playlist/upload workflow if they must also be deleted; otherwise the app
 may discover them again after a reset.
@@ -338,7 +339,7 @@ may discover them again after a reset.
 
 ### Bundled-service upload files
 
-The upload service chooses the first writable directory in this order:
+The upload store chooses the first writable directory in this order:
 
 ```text
 WEBOS_UPLOAD_DIR environment override

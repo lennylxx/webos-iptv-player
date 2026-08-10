@@ -2,9 +2,19 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
   storageMock: {
-    playlists: [] as Array<{ name: string; url: string; source?: 'upload' | 'url' }>,
+    playlists: [] as Array<{
+      id?: string;
+      name: string;
+      url: string;
+      source?: 'upload' | 'url' | 'xtream';
+      count?: number;
+      xtream?: { username: string; password: string; liveOutput?: 'auto' | 'ts' | 'm3u8' };
+    }>,
+    epgUrl: '',
     getPlaylists: vi.fn(),
     setPlaylists: vi.fn(),
+    getEpgUrl: vi.fn(),
+    setEpgUrl: vi.fn(),
     remove: vi.fn(),
   },
   fetchWithTimeoutMock: vi.fn(),
@@ -12,12 +22,20 @@ const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
 storageMock.getPlaylists.mockImplementation(() => storageMock.playlists);
 storageMock.setPlaylists.mockImplementation((next: typeof storageMock.playlists) => {
   storageMock.playlists = next;
+  return true;
+});
+storageMock.getEpgUrl.mockImplementation(() => storageMock.epgUrl);
+storageMock.setEpgUrl.mockImplementation((url: string) => {
+  storageMock.epgUrl = url;
+  return true;
 });
 
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../utils/fetch-helper', () => ({ fetchWithTimeout: fetchWithTimeoutMock }));
 
-import { UploadClient, uploadIdFromUrl, setServicePort } from './upload-client';
+import { setServicePort } from './service-http';
+import { SetupClient } from './setup-client';
+import { UploadClient, uploadIdFromUrl } from './upload-client';
 
 function jsonResponse(data: unknown, status = 200): { ok: boolean; status: number; json: () => Promise<unknown> } {
   return { ok: status >= 200 && status < 300, status, json: async () => data };
@@ -25,12 +43,15 @@ function jsonResponse(data: unknown, status = 200): { ok: boolean; status: numbe
 
 beforeEach(() => {
   storageMock.playlists = [];
+  storageMock.epgUrl = '';
   storageMock.getPlaylists.mockClear();
   storageMock.setPlaylists.mockClear();
+  storageMock.getEpgUrl.mockClear();
+  storageMock.setEpgUrl.mockClear();
   storageMock.remove.mockClear();
   fetchWithTimeoutMock.mockReset();
   // Simulate the Luna `start` response that the app applies before any
-  // UploadClient call. Without this, base() returns null and all methods
+  // LAN client call. Without this, serviceBase() returns null and all methods
   // no-op (which is the no-port path covered by its own describe block).
   setServicePort(8890);
 });
@@ -54,11 +75,11 @@ describe('uploadIdFromUrl', () => {
   });
 });
 
-describe('UploadClient when the service port is not yet known', () => {
+describe('LAN clients when the service port is not yet known', () => {
   beforeEach(() => setServicePort(null));
 
   it('getInfo no-ops to null without calling fetch', async () => {
-    expect(await UploadClient.getInfo()).toBeNull();
+    expect(await SetupClient.getInfo()).toBeNull();
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 
@@ -84,7 +105,7 @@ describe('UploadClient when the service port is not yet known', () => {
 });
 
 describe('UploadClient.reconcile', () => {
-  it('is a no-op when the upload service is unreachable (does not delete existing uploads)', async () => {
+  it('is a no-op when the LAN service is unreachable (does not delete existing uploads)', async () => {
     storageMock.playlists = [
       { name: 'Manual', url: 'http://m', source: 'url' },
       { name: 'Old upload', url: 'http://127.0.0.1:8890/uploads/old.m3u', source: 'upload' },
@@ -205,10 +226,127 @@ describe('UploadClient.remove', () => {
   });
 });
 
-describe('UploadClient.getInfo / list — non-2xx handling', () => {
+describe('SetupClient.applyPendingActions', () => {
+  it('adds phone-submitted playlist, Xtream, and EPG settings and acknowledges them', async () => {
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 1, type: 'playlist', name: 'Alpha', url: 'http://host/a.m3u' },
+        {
+          id: 2,
+          type: 'xtream',
+          serverUrl: 'http://host/',
+          username: 'u1',
+          password: 'p1',
+        },
+        { id: 3, type: 'epg', url: 'http://host/epg.xml' },
+      ]))
+      .mockResolvedValue(jsonResponse({ deleted: true }));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      {
+        id: expect.any(String),
+        name: 'Alpha',
+        url: 'http://host/a.m3u',
+        source: 'url',
+      },
+      {
+        id: expect.any(String),
+        name: 'host',
+        url: 'http://host',
+        source: 'xtream',
+        xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
+      },
+    ]);
+    expect(storageMock.setEpgUrl).toHaveBeenCalledWith('http://host/epg.xml');
+    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/1',
+      { method: 'DELETE' },
+      4000,
+    );
+    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/3',
+      { method: 'DELETE' },
+      4000,
+    );
+  });
+
+  it('updates matching sources idempotently after an acknowledgement retry', async () => {
+    storageMock.playlists = [
+      { id: 'p1', name: 'Old', url: 'http://host/a.m3u', source: 'url' },
+      {
+        id: 'x1',
+        name: 'host',
+        url: 'http://host',
+        source: 'xtream',
+        xtream: { username: 'u1', password: 'old', liveOutput: 'm3u8' },
+      },
+    ];
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 4, type: 'playlist', name: 'Alpha', url: 'http://host/a.m3u' },
+        {
+          id: 5,
+          type: 'xtream',
+          serverUrl: 'http://host',
+          username: 'u1',
+          password: 'new',
+        },
+      ]))
+      .mockResolvedValue(jsonResponse({ deleted: true }));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url' },
+      {
+        id: 'x1',
+        name: 'host',
+        url: 'http://host',
+        source: 'xtream',
+        xtream: { username: 'u1', password: 'new', liveOutput: 'm3u8' },
+      },
+    ]);
+  });
+
+  it('acknowledges only actions whose storage write succeeded', async () => {
+    storageMock.setPlaylists.mockReturnValueOnce(false);
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 6, type: 'playlist', name: 'Alpha', url: 'http://host/a.m3u' },
+        { id: 7, type: 'epg', url: 'http://host/epg.xml' },
+      ]))
+      .mockResolvedValue(jsonResponse({ deleted: true }));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/6',
+      { method: 'DELETE' },
+      4000,
+    );
+    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/7',
+      { method: 'DELETE' },
+      4000,
+    );
+  });
+
+  it('does nothing when there are no pending setup actions', async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse([]));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(false);
+
+    expect(storageMock.setPlaylists).not.toHaveBeenCalled();
+    expect(storageMock.setEpgUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe('LAN clients non-2xx handling', () => {
   it('getInfo returns null on a 5xx response (rather than parsing garbage as ServiceInfo)', async () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse({ error: 'oops' }, 500));
-    await expect(UploadClient.getInfo()).resolves.toBeNull();
+    await expect(SetupClient.getInfo()).resolves.toBeNull();
   });
 
   it('list returns null on a 5xx response', async () => {

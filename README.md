@@ -40,7 +40,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 - **M3U playlists** — load multiple M3U/M3U8 lists, auto-deduplicated
 - **Xtream Codes accounts** — add one or more accounts; the playlist and EPG are derived from your credentials, and you switch between them from the top-bar avatar
-- **LAN upload** — push `.m3u` files from a phone or laptop on the same network by scanning a QR code ([upload service](docs/upload-service.md))
+- **LAN setup** — configure sources or upload `.m3u` files from a phone on the same network by scanning a QR code ([LAN service](docs/lan-service.md))
 
 **Live TV & on-demand**
 
@@ -231,4 +231,4 @@ some of the features above:
 - [`docs/hls-subtitles.md`](docs/hls-subtitles.md) — how live HLS subtitles are handled on webOS (in-manifest types and their render paths)
 - [`docs/vod-subtitles.md`](docs/vod-subtitles.md) — how VOD (Xtream movies & episodes) subtitles work: in-container tracks plus sidecar SRT/WebVTT/ASS, and online subtitle search (SubDL, OpenSubtitles, Assrt)
 - [`docs/storage-and-data.md`](docs/storage-and-data.md) — what the app stores, where it lives, and how user data is separated from disposable caches
-- [`docs/upload-service.md`](docs/upload-service.md) — the bundled LAN M3U upload service (Luna + HTTP contract)
+- [`docs/lan-service.md`](docs/lan-service.md) — phone setup and M3U uploads over the bundled LAN service

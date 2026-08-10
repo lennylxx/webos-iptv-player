@@ -3,7 +3,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { TzMode } from '../types';
 import type { XtreamAccountInfo } from '../services/xtream-client';
 
-const { state, storageMock, cacheMock, themeMock, toastMock, uploadMock, xtreamMock } = vi.hoisted(() => {
+const {
+  state,
+  storageMock,
+  cacheMock,
+  themeMock,
+  toastMock,
+  setupMock,
+  uploadMock,
+  xtreamMock,
+} = vi.hoisted(() => {
   const state = {
     playlists: [] as {
       id?: string;
@@ -78,11 +87,12 @@ const { state, storageMock, cacheMock, themeMock, toastMock, uploadMock, xtreamM
       clearWatchlist: vi.fn(),
     },
     toastMock: { showToast: vi.fn() },
-    uploadMock: {
-      // Default to "service unreachable" so render's async loadUploadInfo is a
+    setupMock: {
+      // Default to "service unreachable" so render's async refreshSetupInfo is a
       // no-op for existing tests. Tests can override via mockResolvedValueOnce.
       getInfo: vi.fn(async () => null),
-      list: vi.fn(async () => null),
+    },
+    uploadMock: {
       remove: vi.fn(async () => true),
       reconcile: vi.fn(async () => undefined),
     },
@@ -108,6 +118,7 @@ vi.mock('../services/upload-client', () => ({
     return m ? decodeURIComponent(m[1]) : '';
   },
 }));
+vi.mock('../services/setup-client', () => ({ SetupClient: setupMock }));
 
 import { Settings } from './settings';
 import { setLocale } from '../i18n';
@@ -898,31 +909,55 @@ describe('Settings uploads section', () => {
     ]);
   });
 
-  it('renders the QR + URL when the upload service is reachable', async () => {
-    uploadMock.getInfo.mockResolvedValueOnce({
-      ip: '192.168.1.2', port: 8890, uploadUrl: 'http://192.168.1.2:8890/upload',
+  it('renders the QR + URL when the setup service is reachable', async () => {
+    setupMock.getInfo.mockResolvedValueOnce({
+      ip: '192.168.1.2',
+      port: 8890,
+      setupUrl: 'http://192.168.1.2:8890/setup?token=abc123',
+      manualUrl: 'http://192.168.1.2:8890',
+      pairingCode: '1234',
     });
     settings.render();
     await new Promise((r) => setTimeout(r, 0));
-    const info = container.querySelector('#upload-info')!;
-    expect(info.querySelector('.upload-url')!.textContent).toBe('http://192.168.1.2:8890/upload');
-    const img = info.querySelector<HTMLImageElement>('img.upload-qr');
+    const info = container.querySelector('#setup-info')!;
+    expect(info.closest('#settings-general')).not.toBeNull();
+    expect(info.querySelector('.setup-url')!.textContent).toBe('http://192.168.1.2:8890');
+    expect(info.querySelector('.setup-pairing-code')!.textContent).toContain('1234');
+    const img = info.querySelector<HTMLImageElement>('img.setup-qr');
     expect(img).not.toBeNull();
     expect(img!.src.startsWith('data:image/')).toBe(true);
   });
 
-  it('shows an unavailable message when the upload service is unreachable', async () => {
+  it('shows an unavailable message when the setup service is unreachable', async () => {
     // Default mock returns null -> service unreachable.
     settings.render();
     await new Promise((r) => setTimeout(r, 0));
-    expect(container.querySelector('#upload-info')!.textContent)
-      .toContain('The upload service is currently unavailable.');
+    expect(container.querySelector('#setup-info')!.textContent)
+      .toContain('The setup service is currently unavailable.');
+  });
+
+  it('replaces the early unavailable state when the service becomes ready', async () => {
+    settings.render();
+    await new Promise((r) => setTimeout(r, 0));
+    setupMock.getInfo.mockResolvedValueOnce({
+      ip: '192.168.1.2',
+      port: 8890,
+      setupUrl: 'http://192.168.1.2:8890/setup?token=abc123',
+      manualUrl: 'http://192.168.1.2:8890',
+      pairingCode: '1234',
+    });
+
+    await settings.refreshSetupInfo();
+
+    expect(container.querySelector('#setup-info .setup-url')?.textContent)
+      .toBe('http://192.168.1.2:8890');
+    expect(container.querySelector('#setup-info .setup-qr')).not.toBeNull();
   });
 });
 
 describe('Settings uploads auto-refresh', () => {
   // Settings reconciles + morphs the upload list on open. While the view is
-  // open, app.ts subscribes to the upload service's Luna `uploadEvents` push
+  // open, app.ts subscribes to the LAN service's Luna `serviceEvents` push
   // channel and calls settings.refreshUploads() on each push (event-driven,
   // no polling).
 
@@ -959,7 +994,7 @@ describe('Settings uploads auto-refresh', () => {
     await Promise.resolve(); await Promise.resolve();
     uploadMock.reconcile.mockClear();
 
-    // Simulate a push from the upload service: a new file arrived.
+    // Simulate a LAN service push: a new uploaded file arrived.
     uploadMock.reconcile.mockImplementationOnce(async () => {
       state.playlists = [
         { name: 'Pushed', url: 'http://127.0.0.1:8890/uploads/pushed.m3u', source: 'upload' },
@@ -1067,12 +1102,23 @@ describe('Settings Xtream section', () => {
     expect(container.querySelector<HTMLElement>('#add-xtream')).not.toBeNull();
   });
 
-  it('renders Language first and keeps Xtream Accounts above Playlists', () => {
+  it('places phone setup beside Language and keeps Xtream Accounts above Playlists', () => {
     settings.render();
     const heads = Array.from(container.querySelectorAll('.settings-section-title'))
       .map((h) => h.textContent);
     expect(heads[0]).toBe('Language');
+    expect(heads[1]).toBe('Set up with your phone or computer');
+    expect(container.querySelector('#app-language')?.closest('.settings-general-row'))
+      .toBe(container.querySelector('#setup-info')?.closest('.settings-general-row'));
+    expect(heads.indexOf('Language')).toBeLessThan(heads.indexOf('Xtream Accounts'));
     expect(heads.indexOf('Xtream Accounts')).toBeLessThan(heads.indexOf('Playlists'));
+  });
+
+  it('shows the phone setup QR panel without an extra action', () => {
+    settings.render();
+    const panel = container.querySelector<HTMLElement>('#setup-info')!;
+    expect(panel.classList.contains('hidden')).toBe(false);
+    expect(container.querySelector('#phone-setup-toggle')).toBeNull();
   });
 
   it('adds a blank xtream card and drops the empty hint', () => {

@@ -31,7 +31,7 @@ export const LIVE_MANIFEST =
   '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:0\n';
 
 /**
- * The app polls the bundled webOS upload service at 127.0.0.1:8890 (see
+ * The app connects to the bundled webOS LAN service at 127.0.0.1:8890 (see
  * UploadClient.reconcile). It is not running in the preview/e2e environment, so
  * chromium would spend hundreds of ms per probe waiting for the connection to be
  * refused — enough to push toast/view assertions past their 5s timeout on slower

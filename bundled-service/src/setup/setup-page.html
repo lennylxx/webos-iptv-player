@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Set up IPTV with playlist URL(s), Xtream account(s), or M3U file(s)">
+<title>Set up IPTV</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: linear-gradient(180deg, #f6f7fb 0%, #eef0f7 100%);
+    color: #1a2138;
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+  .card {
+    background: #ffffff;
+    width: 100%;
+    max-width: 480px;
+    border-radius: 20px;
+    padding: 32px 28px;
+    box-shadow: 0 12px 36px rgba(20, 28, 60, 0.06);
+  }
+  .title { font-size: 22px; font-weight: 600; text-align: center; margin: 0 0 6px; color: #1a2138; }
+  .subtitle { font-size: 13px; text-align: center; color: #8a93a8; margin: 0 0 24px; }
+  [hidden] { display: none !important; }
+  .pair-card { text-align: center; }
+  .pair-title { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
+  .pair-instructions { color: #8a93a8; font-size: 14px; margin: 0 0 20px; }
+  .pair-form { display: flex; flex-direction: column; align-items: center; }
+  .pair-input {
+    width: 180px;
+    height: 54px;
+    border: 1px solid #dce2ed;
+    border-radius: 10px;
+    color: #1a2138;
+    font: inherit;
+    font-size: 28px;
+    letter-spacing: 12px;
+    padding: 0 7px 0 19px;
+    text-align: center;
+    outline: none;
+  }
+  .pair-input:focus {
+    border-color: #4c7eff;
+    box-shadow: 0 0 0 3px rgba(76, 126, 255, 0.12);
+  }
+  .pair-submit {
+    width: 180px;
+    margin-top: 12px;
+    padding: 11px 16px;
+    border: 0;
+    border-radius: 8px;
+    color: #ffffff;
+    background: #4c7eff;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .pair-submit:disabled { cursor: default; opacity: 0.65; }
+  .pair-status { min-height: 18px; margin: 10px 0 0; color: #c43b4d; font-size: 13px; }
+
+  .drop {
+    display: block;
+    border: 2px dashed #c1cce0;
+    border-radius: 16px;
+    background: #fafcff;
+    padding: 36px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .drop.drag { background: #eef4ff; border-color: #4c7eff; }
+  .drop svg { width: 56px; height: 56px; color: #4c7eff; display: block; margin: 0 auto 10px; }
+  .drop .primary { font-size: 15px; color: #1a2138; margin: 0 0 8px; }
+  .drop .or { font-size: 13px; color: #8a93a8; margin: 0 0 12px; }
+  .browse {
+    display: inline-block;
+    background: #e8efff;
+    color: #4c7eff;
+    border-radius: 8px;
+    padding: 8px 18px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  #file { display: none; }
+
+  .config-section {
+    margin-top: 28px;
+    padding-top: 4px;
+    border-top: 1px solid #f0f2f7;
+  }
+  .config-heading,
+  .upload-heading {
+    margin: 20px 0 10px;
+    color: #1a2138;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .config-group {
+    margin-top: 8px;
+    overflow: hidden;
+    background: #fafcff;
+    border: 1px solid #e4e9f2;
+    border-radius: 12px;
+  }
+  .config-group summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px 14px;
+    color: #1a2138;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    list-style: none;
+  }
+  .config-group summary::-webkit-details-marker { display: none; }
+  .config-group summary::after {
+    margin-left: auto;
+    color: #8a93a8;
+    content: "+";
+    font-size: 19px;
+    font-weight: 400;
+  }
+  .config-group[open] summary::after { content: "−"; }
+  .config-type {
+    display: inline-flex;
+    width: 34px;
+    height: 26px;
+    align-items: center;
+    justify-content: center;
+    color: #4c7eff;
+    background: #e8efff;
+    border-radius: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+  }
+  .config-fields {
+    padding: 0 14px 14px;
+    border-top: 1px solid #edf0f6;
+  }
+  .config-field {
+    display: block;
+    margin-top: 12px;
+  }
+  .config-field span {
+    display: block;
+    margin-bottom: 6px;
+    color: #6c7488;
+    font-size: 12px;
+  }
+  .config-input {
+    width: 100%;
+    height: 40px;
+    padding: 0 11px;
+    color: #1a2138;
+    background: #ffffff;
+    border: 1px solid #dce2ed;
+    border-radius: 8px;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+  }
+  .config-input:focus {
+    border-color: #4c7eff;
+    box-shadow: 0 0 0 3px rgba(76, 126, 255, 0.12);
+  }
+  .config-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .config-save {
+    width: 100%;
+    margin-top: 14px;
+    padding: 10px 16px;
+    color: #ffffff;
+    background: #4c7eff;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .config-save:hover { background: #3d6fe8; }
+  .config-save:disabled { cursor: default; opacity: 0.65; }
+  .config-status {
+    min-height: 16px;
+    margin: 8px 0 0;
+    color: #6c7488;
+    font-size: 12px;
+  }
+  .config-status.ok { color: #23845a; }
+  .config-status.err { color: #c43b4d; }
+
+  .section { font-size: 14px; font-weight: 600; color: #1a2138; margin: 28px 0 8px; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  .empty { color: #8a93a8; font-size: 14px; padding: 16px; text-align: center; }
+
+  .item {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid #f0f2f7;
+  }
+  .item:last-child { border-bottom: none; }
+  .item .icon {
+    flex: 0 0 34px;
+    height: 40px;
+    border-radius: 4px;
+    background: #4c7eff;
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    clip-path: polygon(0 0, 80% 0, 100% 20%, 100% 100%, 0 100%);
+  }
+  .item .content { flex: 1 1 auto; min-width: 0; }
+  .item .row1 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .item .name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 14px;
+    color: #1a2138;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .item .size { color: #8a93a8; font-weight: normal; font-size: 13px; margin-left: 4px; }
+  /* Row 2 shows the progress bar while uploading, or the status message once
+     done/failed. Exactly one is visible at a time. */
+  .item .row2 { margin-top: 6px; }
+  .item .bar {
+    height: 4px;
+    background: #eef0f5;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .item .bar > i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: #ff8a3d;
+    transition: width 0.2s;
+  }
+  .item .msg {
+    font-size: 13px;
+    line-height: 1.4;
+    color: #8a93a8;
+    word-break: break-word;
+  }
+  .item .msg.ok { color: #34c759; font-weight: 500; }
+  .item .msg.err { color: #ff4757; font-weight: 500; }
+  /* While uploading: show bar, hide msg. Once done/err/persisted: hide bar,
+     show msg. */
+  .item .row2 .msg { display: none; }
+  .item.done .row2 .bar, .item.err .row2 .bar, .item.persisted .row2 .bar { display: none; }
+  .item.done .row2 .msg, .item.err .row2 .msg, .item.persisted .row2 .msg { display: block; }
+
+  .item .x {
+    flex: 0 0 28px;
+    background: transparent;
+    border: none;
+    color: #b0b8c8;
+    cursor: pointer;
+    font-size: 16px;
+    width: 28px; height: 28px;
+    padding: 0;
+    border-radius: 4px;
+  }
+  .item .x:hover { background: #f0f2f7; color: #6c7488; }
+</style>
+</head>
+<body>
+  <div class="card pair-card" id="pair-card" hidden>
+    <h1 class="pair-title">Connect to your TV</h1>
+    <p class="pair-instructions">Enter the 4-digit code shown on your TV.</p>
+    <form class="pair-form" id="pair-form">
+      <input class="pair-input" id="pair-code" type="text" inputmode="numeric"
+        pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code"
+        aria-label="Pairing code" required>
+      <button class="pair-submit" type="submit">Connect</button>
+      <p class="pair-status" aria-live="polite"></p>
+    </form>
+  </div>
+
+  <div class="card" id="setup-card" hidden>
+    <h1 class="title">Set up IPTV</h1>
+    <p class="subtitle">Set up IPTV with playlist URL(s), Xtream account(s), or M3U file(s)</p>
+
+    <div class="config-section">
+      <div class="config-heading" data-message="setupSources">Set up sources</div>
+
+      <details class="config-group" open>
+        <summary><span class="config-type">URL</span><span data-message="playlistUrl">Playlist URL</span></summary>
+        <form class="config-fields" data-action="playlist">
+          <label class="config-field">
+            <span data-message="name">Name</span>
+            <input class="config-input" name="name" type="text" placeholder="My Playlist"
+              data-placeholder-message="playlistNamePlaceholder">
+          </label>
+          <label class="config-field">
+            <span data-message="playlistUrl">Playlist URL</span>
+            <input class="config-input" name="url" type="url"
+              placeholder="https://example.com/playlist.m3u" required>
+          </label>
+          <button class="config-save" type="submit" data-message="addPlaylist">Add playlist</button>
+          <p class="config-status" aria-live="polite"></p>
+        </form>
+      </details>
+
+      <details class="config-group">
+        <summary><span class="config-type">XC</span><span data-message="xtreamAccount">Xtream account</span></summary>
+        <form class="config-fields" data-action="xtream">
+          <label class="config-field">
+            <span data-message="serverUrl">Server URL</span>
+            <input class="config-input" name="serverUrl" type="url"
+              placeholder="https://example.com" required>
+          </label>
+          <div class="config-row">
+            <label class="config-field">
+              <span data-message="username">Username</span>
+              <input class="config-input" name="username" type="text"
+                autocomplete="username" required>
+            </label>
+            <label class="config-field">
+              <span data-message="password">Password</span>
+              <input class="config-input" name="password" type="password"
+                autocomplete="current-password" required>
+            </label>
+          </div>
+          <button class="config-save" type="submit" data-message="addAccount">Add account</button>
+          <p class="config-status" aria-live="polite"></p>
+        </form>
+      </details>
+
+      <details class="config-group">
+        <summary><span class="config-type">EPG</span><span data-message="programGuideUrl">Program guide URL</span></summary>
+        <form class="config-fields" data-action="epg">
+          <label class="config-field">
+            <span data-message="xmltvUrl">XMLTV URL</span>
+            <input class="config-input" name="url" type="url"
+              placeholder="https://example.com/epg.xml" required>
+          </label>
+          <button class="config-save" type="submit" data-message="saveProgramGuide">Save program guide</button>
+          <p class="config-status" aria-live="polite"></p>
+        </form>
+      </details>
+    </div>
+    <div class="upload-heading" data-message="uploadM3uFiles">Upload M3U files</div>
+    <label class="drop" id="drop">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20.39 18.39A5 5 0 0018 9h-1.26A5.5 5.5 0 006 11A4 4 0 003 16.3"/>
+        <path d="M16 16l-4-4-4 4"/>
+        <path d="M12 12v9"/>
+      </svg>
+      <p class="primary">Drag &amp; drop your .m3u files here</p>
+      <p class="or">or</p>
+      <span class="browse">Browse Files</span>
+      <input type="file" id="file" multiple accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl">
+    </label>
+
+    <div class="section">Playlists</div>
+    <ul id="list"><li class="empty">No playlists yet</li></ul>
+  </div>
+
+<script>
+  var drop = document.getElementById("drop");
+  var fileEl = document.getElementById("file");
+  var list = document.getElementById("list");
+  var pairCard = document.getElementById("pair-card");
+  var pairForm = document.getElementById("pair-form");
+  var pairCode = document.getElementById("pair-code");
+  var pairStatus = pairForm.querySelector(".pair-status");
+  var pairSubmit = pairForm.querySelector(".pair-submit");
+  var setupCard = document.getElementById("setup-card");
+  var setupToken = new URLSearchParams(window.location.search).get("token") || "";
+
+  function authenticatedUrl(path) {
+    return path + (path.indexOf("?") >= 0 ? "&" : "?") +
+      "token=" + encodeURIComponent(setupToken);
+  }
+
+  var MESSAGES = {
+    en: {
+      systemExact: [],
+      systemPrefixes: [],
+      text: {
+        title: "Set up IPTV",
+        subtitle: "Set up IPTV with playlist URL(s), Xtream account(s), or M3U file(s)",
+        pairTitle: "Connect to your TV",
+        pairInstructions: "Enter the 4-digit code shown on your TV.",
+        pairCode: "Pairing code",
+        pairSubmit: "Connect",
+        pairFailed: "The pairing code is incorrect.",
+        pairLocked: "Too many attempts. Try again in one minute.",
+        setupSources: "Set up sources",
+        playlistUrl: "Playlist URL",
+        name: "Name",
+        playlistNamePlaceholder: "My Playlist",
+        addPlaylist: "Add playlist",
+        xtreamAccount: "Xtream account",
+        serverUrl: "Server URL",
+        username: "Username",
+        password: "Password",
+        addAccount: "Add account",
+        programGuideUrl: "Program guide URL",
+        xmltvUrl: "XMLTV URL",
+        saveProgramGuide: "Save program guide",
+        uploadM3uFiles: "Upload M3U files",
+        saving: "Saving...",
+        applyingOnTv: "Applying on TV...",
+        savedToTv: "Saved on TV",
+        setupFailed: "Could not save",
+        setupTimedOut: "the TV did not confirm the change",
+        drop: "Drag & drop your .m3u files here",
+        or: "or",
+        browse: "Browse Files",
+        playlists: "Playlists",
+        empty: "No playlists yet",
+        channelCount: {
+          one: "{count} channel",
+          other: "{count} channels",
+        },
+        success: "Successfully uploaded",
+        failed: "Failed: ",
+        networkError: "Failed: network error",
+      },
+    },
+    de: {
+      systemExact: [],
+      systemPrefixes: ["de"],
+      text: {
+        title: "IPTV einrichten",
+        subtitle: "Richte IPTV mit Wiedergabelisten-URLs, Xtream-Konten oder M3U-Dateien ein",
+        pairTitle: "Mit dem Fernseher verbinden",
+        pairInstructions: "Gib den 4-stelligen Code vom Fernseher ein.",
+        pairCode: "Kopplungscode",
+        pairSubmit: "Verbinden",
+        pairFailed: "Der Kopplungscode ist falsch.",
+        pairLocked: "Zu viele Versuche. Versuche es in einer Minute erneut.",
+        setupSources: "Quellen einrichten",
+        playlistUrl: "Wiedergabelisten-URL",
+        name: "Name",
+        playlistNamePlaceholder: "Meine Wiedergabeliste",
+        addPlaylist: "Wiedergabeliste hinzufügen",
+        xtreamAccount: "Xtream-Konto",
+        serverUrl: "Server-URL",
+        username: "Benutzername",
+        password: "Passwort",
+        addAccount: "Konto hinzufügen",
+        programGuideUrl: "Programmführer-URL",
+        xmltvUrl: "XMLTV-URL",
+        saveProgramGuide: "Programmführer speichern",
+        uploadM3uFiles: "M3U-Dateien hochladen",
+        saving: "Wird gespeichert...",
+        applyingOnTv: "Wird auf dem Fernseher angewendet...",
+        savedToTv: "Auf dem Fernseher gespeichert",
+        setupFailed: "Speichern fehlgeschlagen",
+        setupTimedOut: "der Fernseher hat die Änderung nicht bestätigt",
+        drop: "Ziehe deine .m3u-Dateien hierher",
+        or: "oder",
+        browse: "Dateien auswählen",
+        playlists: "Wiedergabelisten",
+        empty: "Noch keine Wiedergabelisten",
+        channelCount: {
+          one: "{count} Sender",
+          other: "{count} Sender",
+        },
+        success: "Erfolgreich hochgeladen",
+        failed: "Fehlgeschlagen: ",
+        networkError: "Fehlgeschlagen: Netzwerkfehler",
+      },
+    },
+    es: {
+      systemExact: [],
+      systemPrefixes: ["es"],
+      text: {
+        title: "Configurar IPTV",
+        subtitle: "Configura IPTV con URLs de listas, cuentas Xtream o archivos M3U",
+        pairTitle: "Conectar al televisor",
+        pairInstructions: "Introduce el código de 4 dígitos que aparece en el televisor.",
+        pairCode: "Código de vinculación",
+        pairSubmit: "Conectar",
+        pairFailed: "El código de vinculación es incorrecto.",
+        pairLocked: "Demasiados intentos. Inténtalo de nuevo en un minuto.",
+        setupSources: "Configurar fuentes",
+        playlistUrl: "URL de la lista",
+        name: "Nombre",
+        playlistNamePlaceholder: "Mi lista",
+        addPlaylist: "Añadir lista",
+        xtreamAccount: "Cuenta Xtream",
+        serverUrl: "URL del servidor",
+        username: "Usuario",
+        password: "Contraseña",
+        addAccount: "Añadir cuenta",
+        programGuideUrl: "URL de la guía de programación",
+        xmltvUrl: "URL XMLTV",
+        saveProgramGuide: "Guardar guía de programación",
+        uploadM3uFiles: "Subir archivos M3U",
+        saving: "Guardando...",
+        applyingOnTv: "Aplicando en el televisor...",
+        savedToTv: "Guardado en el televisor",
+        setupFailed: "No se pudo guardar",
+        setupTimedOut: "el televisor no confirmó el cambio",
+        drop: "Arrastra y suelta tus archivos .m3u aquí",
+        or: "o",
+        browse: "Elegir archivos",
+        playlists: "Listas de reproducción",
+        empty: "Aún no hay listas",
+        channelCount: {
+          one: "{count} canal",
+          other: "{count} canales",
+        },
+        success: "Archivo subido",
+        failed: "Error: ",
+        networkError: "Error: problema de red",
+      },
+    },
+    fr: {
+      systemExact: [],
+      systemPrefixes: ["fr"],
+      text: {
+        title: "Configurer l’IPTV",
+        subtitle: "Configurez l’IPTV avec des URL de listes, des comptes Xtream ou des fichiers M3U",
+        pairTitle: "Se connecter au téléviseur",
+        pairInstructions: "Saisissez le code à 4 chiffres affiché sur le téléviseur.",
+        pairCode: "Code d’association",
+        pairSubmit: "Se connecter",
+        pairFailed: "Le code d’association est incorrect.",
+        pairLocked: "Trop de tentatives. Réessayez dans une minute.",
+        setupSources: "Configurer les sources",
+        playlistUrl: "URL de la liste",
+        name: "Nom",
+        playlistNamePlaceholder: "Ma liste",
+        addPlaylist: "Ajouter la liste",
+        xtreamAccount: "Compte Xtream",
+        serverUrl: "URL du serveur",
+        username: "Nom d’utilisateur",
+        password: "Mot de passe",
+        addAccount: "Ajouter le compte",
+        programGuideUrl: "URL du guide des programmes",
+        xmltvUrl: "URL XMLTV",
+        saveProgramGuide: "Enregistrer le guide",
+        uploadM3uFiles: "Importer des fichiers M3U",
+        saving: "Enregistrement...",
+        applyingOnTv: "Application sur le téléviseur...",
+        savedToTv: "Enregistré sur le téléviseur",
+        setupFailed: "Échec de l’enregistrement",
+        setupTimedOut: "le téléviseur n’a pas confirmé la modification",
+        drop: "Glissez-déposez vos fichiers .m3u ici",
+        or: "ou",
+        browse: "Choisir des fichiers",
+        playlists: "Listes de lecture",
+        empty: "Aucune liste pour le moment",
+        channelCount: {
+          one: "{count} chaîne",
+          other: "{count} chaînes",
+        },
+        success: "Importation réussie",
+        failed: "Échec : ",
+        networkError: "Échec : erreur réseau",
+      },
+    },
+    it: {
+      systemExact: [],
+      systemPrefixes: ["it"],
+      text: {
+        title: "Configura IPTV",
+        subtitle: "Configura IPTV con URL playlist, account Xtream o file M3U",
+        pairTitle: "Connetti alla TV",
+        pairInstructions: "Inserisci il codice di 4 cifre mostrato sulla TV.",
+        pairCode: "Codice di abbinamento",
+        pairSubmit: "Connetti",
+        pairFailed: "Il codice di abbinamento non è corretto.",
+        pairLocked: "Troppi tentativi. Riprova tra un minuto.",
+        setupSources: "Configura sorgenti",
+        playlistUrl: "URL playlist",
+        name: "Nome",
+        playlistNamePlaceholder: "La mia playlist",
+        addPlaylist: "Aggiungi playlist",
+        xtreamAccount: "Account Xtream",
+        serverUrl: "URL server",
+        username: "Nome utente",
+        password: "Password",
+        addAccount: "Aggiungi account",
+        programGuideUrl: "URL guida programmi",
+        xmltvUrl: "URL XMLTV",
+        saveProgramGuide: "Salva guida programmi",
+        uploadM3uFiles: "Carica file M3U",
+        saving: "Salvataggio...",
+        applyingOnTv: "Applicazione sulla TV...",
+        savedToTv: "Salvato sulla TV",
+        setupFailed: "Impossibile salvare",
+        setupTimedOut: "la TV non ha confermato la modifica",
+        drop: "Trascina qui i tuoi file .m3u",
+        or: "oppure",
+        browse: "Scegli file",
+        playlists: "Playlist",
+        empty: "Ancora nessuna playlist",
+        channelCount: {
+          one: "{count} canale",
+          other: "{count} canali",
+        },
+        success: "Caricamento completato",
+        failed: "Errore: ",
+        networkError: "Errore di rete",
+      },
+    },
+    "pt-BR": {
+      systemExact: [],
+      systemPrefixes: ["pt"],
+      text: {
+        title: "Configurar IPTV",
+        subtitle: "Configure IPTV com URLs de listas, contas Xtream ou arquivos M3U",
+        pairTitle: "Conectar à TV",
+        pairInstructions: "Digite o código de 4 dígitos exibido na TV.",
+        pairCode: "Código de pareamento",
+        pairSubmit: "Conectar",
+        pairFailed: "O código de pareamento está incorreto.",
+        pairLocked: "Muitas tentativas. Tente novamente em um minuto.",
+        setupSources: "Configurar fontes",
+        playlistUrl: "URL da lista",
+        name: "Nome",
+        playlistNamePlaceholder: "Minha lista",
+        addPlaylist: "Adicionar lista",
+        xtreamAccount: "Conta Xtream",
+        serverUrl: "URL do servidor",
+        username: "Usuário",
+        password: "Senha",
+        addAccount: "Adicionar conta",
+        programGuideUrl: "URL do guia de programação",
+        xmltvUrl: "URL XMLTV",
+        saveProgramGuide: "Salvar guia de programação",
+        uploadM3uFiles: "Enviar arquivos M3U",
+        saving: "Salvando...",
+        applyingOnTv: "Aplicando na TV...",
+        savedToTv: "Salvo na TV",
+        setupFailed: "Não foi possível salvar",
+        setupTimedOut: "a TV não confirmou a alteração",
+        drop: "Arraste e solte seus arquivos .m3u aqui",
+        or: "ou",
+        browse: "Escolher arquivos",
+        playlists: "Listas de reprodução",
+        empty: "Nenhuma lista ainda",
+        channelCount: {
+          one: "{count} canal",
+          other: "{count} canais",
+        },
+        success: "Enviado com sucesso",
+        failed: "Falha: ",
+        networkError: "Falha: erro de rede",
+      },
+    },
+    ru: {
+      systemExact: [],
+      systemPrefixes: ["ru"],
+      text: {
+        title: "Настройка IPTV",
+        subtitle: "Настройте IPTV через URL плейлистов, аккаунты Xtream или файлы M3U",
+        pairTitle: "Подключение к телевизору",
+        pairInstructions: "Введите 4-значный код с экрана телевизора.",
+        pairCode: "Код подключения",
+        pairSubmit: "Подключить",
+        pairFailed: "Неверный код подключения.",
+        pairLocked: "Слишком много попыток. Повторите через минуту.",
+        setupSources: "Настройка источников",
+        playlistUrl: "URL плейлиста",
+        name: "Название",
+        playlistNamePlaceholder: "Мой плейлист",
+        addPlaylist: "Добавить плейлист",
+        xtreamAccount: "Аккаунт Xtream",
+        serverUrl: "URL сервера",
+        username: "Имя пользователя",
+        password: "Пароль",
+        addAccount: "Добавить аккаунт",
+        programGuideUrl: "URL телепрограммы",
+        xmltvUrl: "URL XMLTV",
+        saveProgramGuide: "Сохранить телепрограмму",
+        uploadM3uFiles: "Загрузить файлы M3U",
+        saving: "Сохранение...",
+        applyingOnTv: "Применение на телевизоре...",
+        savedToTv: "Сохранено на телевизоре",
+        setupFailed: "Не удалось сохранить",
+        setupTimedOut: "телевизор не подтвердил изменение",
+        drop: "Перетащите сюда файлы .m3u",
+        or: "или",
+        browse: "Выбрать файлы",
+        playlists: "Плейлисты",
+        empty: "Плейлистов пока нет",
+        channelCount: {
+          one: "{count} канал",
+          few: "{count} канала",
+          many: "{count} каналов",
+          other: "{count} канала",
+        },
+        success: "Успешно загружено",
+        failed: "Ошибка: ",
+        networkError: "Ошибка сети",
+      },
+    },
+    uk: {
+      systemExact: [],
+      systemPrefixes: ["uk"],
+      text: {
+        title: "Налаштування IPTV",
+        subtitle: "Налаштуйте IPTV через URL плейлистів, облікові записи Xtream або файли M3U",
+        pairTitle: "Підключення до телевізора",
+        pairInstructions: "Введіть 4-значний код з екрана телевізора.",
+        pairCode: "Код підключення",
+        pairSubmit: "Підключити",
+        pairFailed: "Неправильний код підключення.",
+        pairLocked: "Забагато спроб. Повторіть через хвилину.",
+        setupSources: "Налаштування джерел",
+        playlistUrl: "URL плейлиста",
+        name: "Назва",
+        playlistNamePlaceholder: "Мій плейлист",
+        addPlaylist: "Додати плейлист",
+        xtreamAccount: "Обліковий запис Xtream",
+        serverUrl: "URL сервера",
+        username: "Ім’я користувача",
+        password: "Пароль",
+        addAccount: "Додати обліковий запис",
+        programGuideUrl: "URL телепрограми",
+        xmltvUrl: "URL XMLTV",
+        saveProgramGuide: "Зберегти телепрограму",
+        uploadM3uFiles: "Завантажити файли M3U",
+        saving: "Збереження...",
+        applyingOnTv: "Застосування на телевізорі...",
+        savedToTv: "Збережено на телевізорі",
+        setupFailed: "Не вдалося зберегти",
+        setupTimedOut: "телевізор не підтвердив зміну",
+        drop: "Перетягніть сюди файли .m3u",
+        or: "або",
+        browse: "Вибрати файли",
+        playlists: "Плейлисти",
+        empty: "Плейлистів ще немає",
+        channelCount: {
+          one: "{count} канал",
+          few: "{count} канали",
+          many: "{count} каналів",
+          other: "{count} каналу",
+        },
+        success: "Успішно завантажено",
+        failed: "Помилка: ",
+        networkError: "Помилка мережі",
+      },
+    },
+    "zh-CN": {
+      systemExact: ["zh"],
+      systemPrefixes: ["zh-cn", "zh-sg", "zh-hans"],
+      text: {
+        title: "设置 IPTV",
+        subtitle: "通过播放列表 URL、Xtream 账户或 M3U 文件设置 IPTV",
+        pairTitle: "连接电视",
+        pairInstructions: "输入电视上显示的 4 位配对码。",
+        pairCode: "配对码",
+        pairSubmit: "连接",
+        pairFailed: "配对码不正确。",
+        pairLocked: "尝试次数过多，请一分钟后重试。",
+        setupSources: "设置节目源",
+        playlistUrl: "播放列表 URL",
+        name: "名称",
+        playlistNamePlaceholder: "我的播放列表",
+        addPlaylist: "添加播放列表",
+        xtreamAccount: "Xtream 账户",
+        serverUrl: "服务器 URL",
+        username: "用户名",
+        password: "密码",
+        addAccount: "添加账户",
+        programGuideUrl: "节目指南 URL",
+        xmltvUrl: "XMLTV URL",
+        saveProgramGuide: "保存节目指南",
+        uploadM3uFiles: "上传 M3U 文件",
+        saving: "正在保存...",
+        applyingOnTv: "正在应用到电视...",
+        savedToTv: "已保存到电视",
+        setupFailed: "无法保存",
+        setupTimedOut: "电视未确认此更改",
+        drop: "将 .m3u 文件拖放到这里",
+        or: "或",
+        browse: "选择文件",
+        playlists: "播放列表",
+        empty: "暂无播放列表",
+        channelCount: {
+          other: "{count} 个频道",
+        },
+        success: "上传成功",
+        failed: "失败：",
+        networkError: "失败：网络错误",
+      },
+    },
+  };
+  var DEFAULT_LOCALE = "en";
+  var locale = resolveLocale();
+  var messages = MESSAGES[locale].text;
+
+  function resolveLocale() {
+    var languages = navigator.languages && navigator.languages.length
+      ? navigator.languages
+      : [navigator.language || DEFAULT_LOCALE];
+    var locales = Object.keys(MESSAGES);
+    for (var i = 0; i < languages.length; i += 1) {
+      var language = String(languages[i]).toLowerCase();
+      for (var j = 0; j < locales.length; j += 1) {
+        var definition = MESSAGES[locales[j]];
+        if (definition.systemExact.some(function (value) { return language === value; })
+            || definition.systemPrefixes.some(function (prefix) {
+              return language === prefix || language.indexOf(prefix + "-") === 0;
+            })) {
+          return locales[j];
+        }
+      }
+    }
+    return DEFAULT_LOCALE;
+  }
+
+  function tr(key, params) {
+    var message = messages[key];
+    if (typeof message !== "string") throw new Error("Missing setup message: " + locale + ":" + key);
+    if (!params) return message;
+    return message.replace(/\{([A-Za-z0-9_]+)\}/g, function (token, name) {
+      return params[name] === undefined ? token : String(params[name]);
+    });
+  }
+
+  function trPlural(key, count) {
+    var forms = messages[key];
+    var category = new Intl.PluralRules(locale).select(count);
+    var message = forms[category] || forms.other;
+    return message.replace("{count}", String(count));
+  }
+
+  function setStaticMessages() {
+    document.documentElement.lang = locale;
+    document.title = tr("title");
+    document.querySelector('meta[name="description"]').setAttribute("content", tr("subtitle"));
+    document.querySelector(".pair-title").textContent = tr("pairTitle");
+    document.querySelector(".pair-instructions").textContent = tr("pairInstructions");
+    pairCode.setAttribute("aria-label", tr("pairCode"));
+    pairSubmit.textContent = tr("pairSubmit");
+    document.querySelector(".title").textContent = tr("title");
+    document.querySelector(".subtitle").textContent = tr("subtitle");
+    var messageEls = document.querySelectorAll("[data-message]");
+    for (var i = 0; i < messageEls.length; i += 1) {
+      messageEls[i].textContent = tr(messageEls[i].getAttribute("data-message"));
+    }
+    var placeholderEls = document.querySelectorAll("[data-placeholder-message]");
+    for (var j = 0; j < placeholderEls.length; j += 1) {
+      placeholderEls[j].setAttribute("placeholder", tr(placeholderEls[j].getAttribute("data-placeholder-message")));
+    }
+    document.querySelector(".primary").textContent = tr("drop");
+    document.querySelector(".or").textContent = tr("or");
+    document.querySelector(".browse").textContent = tr("browse");
+    document.querySelector(".section").textContent = tr("playlists");
+    document.querySelector(".empty").textContent = tr("empty");
+  }
+
+  function showSetup() {
+    pairCard.hidden = true;
+    setupCard.hidden = false;
+    refresh();
+  }
+
+  pairCode.addEventListener("input", function () {
+    pairCode.value = pairCode.value.replace(/[^0-9]/g, "").slice(0, 4);
+  });
+
+  pairForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    if (!pairForm.reportValidity()) return;
+    pairSubmit.disabled = true;
+    pairStatus.textContent = "";
+    fetch("/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: pairCode.value }),
+    }).then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) {
+          var error = new Error(response.status === 429 ? "locked" : "invalid");
+          throw error;
+        }
+        return data;
+      });
+    }).then(function (data) {
+      setupToken = data.token;
+      showSetup();
+    }).catch(function (error) {
+      pairStatus.textContent = tr(error.message === "locked" ? "pairLocked" : "pairFailed");
+      pairSubmit.disabled = false;
+      pairCode.select();
+    });
+  });
+
+  function submitSetup(form) {
+    if (!form.reportValidity()) return;
+    var button = form.querySelector(".config-save");
+    var status = form.querySelector(".config-status");
+    var payload = { type: form.getAttribute("data-action") };
+    var fields = form.querySelectorAll("[name]");
+    for (var i = 0; i < fields.length; i += 1) {
+      payload[fields[i].name] = fields[i].value;
+    }
+    button.disabled = true;
+    status.className = "config-status";
+    status.textContent = tr("saving");
+    fetch("/setup-actions?token=" + encodeURIComponent(setupToken), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error("request");
+        return data;
+      });
+    }).then(function (data) {
+      status.textContent = tr("applyingOnTv");
+      return waitForSetup(data.id, 0);
+    }).then(function () {
+      form.reset();
+      status.className = "config-status ok";
+      status.textContent = tr("savedToTv");
+      button.disabled = false;
+    }).catch(function (error) {
+      status.className = "config-status err";
+      status.textContent = error.message === "timeout" ? tr("setupTimedOut") : tr("setupFailed");
+      button.disabled = false;
+    });
+  }
+
+  function waitForSetup(id, attempt) {
+    return fetch("/setup-actions/" + encodeURIComponent(String(id)) +
+      "?token=" + encodeURIComponent(setupToken)).then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error("request");
+        if (!data.pending) return;
+        if (attempt >= 40) throw new Error("timeout");
+        return new Promise(function (resolve) {
+          setTimeout(resolve, 250);
+        }).then(function () {
+          return waitForSetup(id, attempt + 1);
+        });
+      });
+    });
+  }
+
+  var setupForms = document.querySelectorAll(".config-fields[data-action]");
+  for (var formIndex = 0; formIndex < setupForms.length; formIndex += 1) {
+    setupForms[formIndex].addEventListener("submit", function (event) {
+      event.preventDefault();
+      submitSetup(event.currentTarget);
+    });
+  }
+
+  // Drag-over highlight + drop handling. We listen on the whole document for
+  // dragover/dragleave so the highlight feels reactive across the page, but
+  // only the drop zone accepts the drop.
+  ["dragenter","dragover"].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("drag"); });
+  });
+  document.addEventListener("dragleave", function (e) {
+    if (e.target === document || e.relatedTarget == null) drop.classList.remove("drag");
+  });
+  document.addEventListener("drop", function (e) {
+    e.preventDefault();
+    drop.classList.remove("drag");
+    var files = e.dataTransfer && e.dataTransfer.files;
+    if (files) Array.from(files).forEach(upload);
+  });
+  fileEl.addEventListener("change", function () {
+    Array.from(fileEl.files).forEach(upload);
+    fileEl.value = "";
+  });
+
+  function fmtSize(b) {
+    if (b < 1024) return b + " B";
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " KB";
+    return (b / 1024 / 1024).toFixed(1) + " MB";
+  }
+
+  // Build a single row. Returns the <li>. Layout:
+  //   [icon] [content: row1=name+size, row2=bar OR msg] [x]
+  function makeRow(opts) {
+    var li = document.createElement("li");
+    li.className = "item";
+    if (opts.cls) li.classList.add(opts.cls);
+
+    var icon = document.createElement("div");
+    icon.className = "icon"; icon.textContent = "M3U";
+
+    var content = document.createElement("div"); content.className = "content";
+
+    var row1 = document.createElement("div"); row1.className = "row1";
+    var name = document.createElement("div"); name.className = "name";
+    name.appendChild(document.createTextNode(opts.name));
+    if (opts.sub) {
+      var s = document.createElement("span"); s.className = "size";
+      s.textContent = "(" + opts.sub + ")";
+      name.appendChild(s);
+    }
+    row1.appendChild(name);
+
+    var row2 = document.createElement("div"); row2.className = "row2";
+    var bar = document.createElement("div"); bar.className = "bar";
+    bar.appendChild(document.createElement("i"));
+    var msg = document.createElement("div"); msg.className = "msg";
+    if (opts.msg) msg.textContent = opts.msg;
+    if (opts.msgClass) msg.classList.add(opts.msgClass);
+    row2.appendChild(bar); row2.appendChild(msg);
+
+    content.appendChild(row1); content.appendChild(row2);
+
+    var x = document.createElement("button");
+    x.type = "button"; x.className = "x"; x.textContent = "✕";
+    if (opts.onCancel) x.onclick = opts.onCancel;
+
+    li.appendChild(icon); li.appendChild(content); li.appendChild(x);
+    return li;
+  }
+
+  // Refresh persisted rows from /uploads. Leaves in-progress and just-finished
+  // rows (data-id set after success) alone so a stale fetch doesn't wipe them.
+  function refresh() {
+    fetch("/uploads").then(function (r) { return r.json(); }).then(function (items) {
+      var existingIds = {};
+      Array.from(list.querySelectorAll("li[data-id]")).forEach(function (n) { existingIds[n.dataset.id] = n; });
+      var seen = {};
+      items.forEach(function (it) {
+        seen[it.id] = true;
+        if (existingIds[it.id]) return; // already rendered (in-progress just finished, or already persisted)
+        var li = makeRow({
+          name: it.name,
+          sub: trPlural("channelCount", it.count),
+          msg: "✓",
+          msgClass: "ok",
+          cls: "persisted",
+          onCancel: function () {
+            fetch(authenticatedUrl("/uploads/" + encodeURIComponent(it.id)),
+              { method: "DELETE" }).then(refresh);
+          },
+        });
+        li.dataset.id = it.id;
+        list.appendChild(li);
+      });
+      // Drop persisted rows whose ids no longer exist on the server.
+      Object.keys(existingIds).forEach(function (id) {
+        if (!seen[id]) existingIds[id].remove();
+      });
+      maybeShowEmpty();
+    }).catch(function () { /* keep stale list on network failure */ });
+  }
+
+  function maybeShowEmpty() {
+    var rows = list.querySelectorAll(".item");
+    var empty = list.querySelector(".empty");
+    if (rows.length === 0 && !empty) {
+      var e = document.createElement("li");
+      e.className = "empty";
+      e.textContent = tr("empty");
+      list.appendChild(e);
+    } else if (rows.length > 0 && empty) {
+      empty.remove();
+    }
+  }
+
+  function upload(file) {
+    var empty = list.querySelector(".empty");
+    if (empty) empty.remove();
+
+    var xhr = new XMLHttpRequest();
+    var li = makeRow({
+      name: file.name,
+      sub: fmtSize(file.size),
+      onCancel: function () { xhr.abort(); li.remove(); maybeShowEmpty(); },
+    });
+    list.insertBefore(li, list.firstChild);
+    var bar = li.querySelector(".bar > i");
+    var msg = li.querySelector(".msg");
+    var xBtn = li.querySelector(".x");
+
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      bar.style.width = Math.round(e.loaded / e.total * 100) + "%";
+    };
+    xhr.onload = function () {
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status >= 200 && xhr.status < 300 && data) {
+        li.classList.add("done");
+        msg.textContent = tr("success");
+        msg.classList.add("ok");
+        li.dataset.id = data.id;
+        xBtn.onclick = function () {
+          fetch(authenticatedUrl("/uploads/" + encodeURIComponent(data.id)),
+            { method: "DELETE" }).then(refresh);
+        };
+        setTimeout(refresh, 300);
+      } else {
+        li.classList.add("err");
+        msg.textContent = tr("failed") + ((data && data.error) || ("HTTP " + xhr.status));
+        msg.classList.add("err");
+      }
+    };
+    xhr.onerror = function () {
+      li.classList.add("err");
+      msg.textContent = tr("networkError");
+      msg.classList.add("err");
+    };
+
+    xhr.open("POST", authenticatedUrl("/uploads?name=" + encodeURIComponent(file.name)));
+    xhr.setRequestHeader("Content-Type", "text/plain; charset=utf-8");
+    xhr.send(file);
+  }
+
+  setStaticMessages();
+  if (setupToken) {
+    showSetup();
+  } else {
+    pairCard.hidden = false;
+    pairCode.focus();
+  }
+</script>
+</body>
+</html>

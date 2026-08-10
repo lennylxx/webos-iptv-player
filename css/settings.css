@@ -151,6 +151,27 @@
   font-size: 30px;
 }
 
+.settings-general-row {
+  display: flex;
+  gap: 0;
+}
+
+.settings-general-row > .settings-section {
+  min-width: 0;
+}
+
+.settings-general-language {
+  flex: 0 0 45%;
+}
+
+.settings-general-device {
+  flex: 0 0 55%;
+}
+
+.settings-general-device > .settings-section-title {
+  padding-left: 44px;
+}
+
 .settings-row {
   display: flex;
   align-items: flex-end;
@@ -338,13 +359,7 @@
   padding: 16px;
 }
 
-.upload-section {
-  display: flex;
-  gap: 16px;
-  align-items: stretch;
-}
-
-.upload-box {
+.source-box {
   flex: 1;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -353,7 +368,7 @@
   min-width: 0;
 }
 
-.upload-box-info {
+.setup-box-info {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -362,6 +377,51 @@
   text-align: center;
   color: var(--text-secondary);
   line-height: 1.5;
+}
+
+.device-setup-card {
+  min-height: 214px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 24px;
+  padding: 0 0 0 44px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+}
+
+.device-setup-card .setup-qr {
+  flex: 0 0 auto;
+  width: 188px;
+  height: 188px;
+}
+
+.device-setup-card .setup-instructions {
+  max-width: 560px;
+  font-size: 20px;
+}
+
+.device-setup-card .setup-url {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.device-setup-card .setup-browser-instruction {
+  margin-top: 12px;
+}
+
+.device-setup-card .setup-pairing-instruction {
+  margin-top: 14px;
+}
+
+.device-setup-card .setup-pairing-code {
+  display: block;
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 600;
 }
 
 .upload-box-list {
@@ -377,7 +437,7 @@
   color: var(--text-primary);
 }
 
-.upload-qr {
+.setup-qr {
   width: 200px;
   height: 200px;
   padding: 12px;
@@ -386,7 +446,7 @@
   image-rendering: pixelated;
 }
 
-.upload-url {
+.setup-url {
   color: var(--accent);
   font-weight: 600;
   word-break: break-all;
