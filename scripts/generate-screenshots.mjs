@@ -605,6 +605,7 @@ async function setupPage(page, {
 
   if (upload) {
     await page.route(`http://127.0.0.1:${UPLOAD_PORT}/info`, fulfill(JSON.stringify(SERVICE_INFO), 'application/json'));
+    await page.route(`http://127.0.0.1:${UPLOAD_PORT}/setup-state`, fulfill('{"updated":true}', 'application/json'));
     await page.route(`http://127.0.0.1:${UPLOAD_PORT}/uploads`, fulfill(JSON.stringify(UPLOADS), 'application/json'));
     await page.route(`http://127.0.0.1:${UPLOAD_PORT}/uploads/**`, (r) => r.abort());
   }

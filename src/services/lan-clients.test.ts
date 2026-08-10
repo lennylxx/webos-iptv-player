@@ -227,6 +227,42 @@ describe('UploadClient.remove', () => {
 });
 
 describe('SetupClient.applyPendingActions', () => {
+  it('publishes a sanitized snapshot without Xtream passwords', async () => {
+    storageMock.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url' },
+      {
+        id: 'x1',
+        name: 'host',
+        url: 'http://host',
+        source: 'xtream',
+        xtream: { username: 'u1', password: 'secret', liveOutput: 'ts' },
+      },
+      {
+        id: 'u1',
+        name: 'Uploaded',
+        url: 'http://host/uploads/u1.m3u',
+        source: 'upload',
+      },
+    ];
+    storageMock.epgUrl = 'http://host/epg.xml';
+    fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse({ updated: true }));
+
+    await expect(SetupClient.publishState()).resolves.toBe(true);
+
+    const request = fetchWithTimeoutMock.mock.calls[0];
+    expect(request[0]).toBe('http://127.0.0.1:8890/setup-state');
+    expect(JSON.parse(String(request[1].body))).toEqual({
+      playlists: [{ id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' }],
+      xtreamAccounts: [{
+        id: 'x1',
+        name: 'host',
+        serverUrl: 'http://host',
+        username: 'u1',
+      }],
+      epgUrl: 'http://host/epg.xml',
+    });
+  });
+
   it('adds phone-submitted playlist, Xtream, and EPG settings and acknowledges them', async () => {
     fetchWithTimeoutMock
       .mockResolvedValueOnce(jsonResponse([
@@ -310,6 +346,35 @@ describe('SetupClient.applyPendingActions', () => {
     ]);
   });
 
+  it('removes an Xtream account and publishes the updated state', async () => {
+    storageMock.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url' },
+      {
+        id: 'x1',
+        name: 'host',
+        url: 'http://host',
+        source: 'xtream',
+        xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
+      },
+    ];
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 8, type: 'remove-source', sourceId: 'x1' },
+      ]))
+      .mockResolvedValue(jsonResponse({ updated: true }));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url' },
+    ]);
+    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/8',
+      { method: 'DELETE' },
+      4000,
+    );
+  });
+
   it('acknowledges only actions whose storage write succeeded', async () => {
     storageMock.setPlaylists.mockReturnValueOnce(false);
     fetchWithTimeoutMock
@@ -328,6 +393,23 @@ describe('SetupClient.applyPendingActions', () => {
     );
     expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
       'http://127.0.0.1:8890/setup-actions/7',
+      { method: 'DELETE' },
+      4000,
+    );
+  });
+
+  it('keeps persisted actions pending when state publication fails', async () => {
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 9, type: 'playlist', name: 'Alpha', url: 'http://host/a.m3u' },
+      ]))
+      .mockResolvedValueOnce(jsonResponse({ error: 'unavailable' }, 503));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+
+    expect(storageMock.setPlaylists).toHaveBeenCalled();
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/9',
       { method: 'DELETE' },
       4000,
     );

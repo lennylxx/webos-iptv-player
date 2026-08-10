@@ -13,6 +13,7 @@ import {
   parseSetupAction,
   SetupActionStore,
 } from '../setup/actions';
+import { parseSetupState, SetupStateStore } from '../setup/state';
 import { isValidUploadId, UploadStore } from '../upload/store';
 
 export type ServiceChangeEvent = 'uploads-changed' | 'setup-changed';
@@ -95,6 +96,7 @@ export function startServer(
   dataDir: string,
   onChange?: (event: ServiceChangeEvent) => void,
   setupActions = new SetupActionStore(),
+  setupState = new SetupStateStore(),
 ): Promise<{ server: http.Server; port: number }> {
   let boundPort = port;
   const setupToken = randomBytes(6).toString('hex');
@@ -161,6 +163,23 @@ export function startServer(
         }
         pairingAttempts.delete(client);
         sendJson(res, 200, { token: setupToken });
+      } else if (pathname === '/setup-state' && req.method === 'PUT') {
+        if (!isLoopback(req)) {
+          sendJson(res, 403, { error: 'Local access only' });
+          return;
+        }
+        try {
+          setupState.set(parseSetupState(JSON.parse(await readBody(req, 64 * 1024))));
+          sendJson(res, 200, { updated: true });
+        } catch (e) {
+          sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
+        }
+      } else if (pathname === '/setup-state' && req.method === 'GET') {
+        if (query.get('token') !== setupToken) {
+          sendJson(res, 403, { error: 'Invalid setup token' });
+          return;
+        }
+        sendJson(res, 200, setupState.get());
       } else if (pathname === '/setup-actions' && req.method === 'POST') {
         if (query.get('token') !== setupToken) {
           sendJson(res, 403, { error: 'Invalid setup token' });

@@ -82,5 +82,31 @@ describe('phone setup synchronization', () => {
     ]);
     expect(StorageService.getEpgUrl()).toBe('http://host/epg.xml');
     expect(await (await fetch(`${baseUrl}/setup-actions`)).json()).toEqual([]);
+
+    const state = await (await fetch(`${baseUrl}/setup-state${setupToken}`)).json();
+    expect(state).toEqual({
+      playlists: [{
+        id: expect.any(String),
+        name: 'Alpha',
+        url: 'http://host/a.m3u',
+      }],
+      xtreamAccounts: [{
+        id: expect.any(String),
+        name: 'host',
+        serverUrl: 'http://host',
+        username: 'u1',
+      }],
+      epgUrl: 'http://host/epg.xml',
+    });
+    expect((state as { xtreamAccounts: Array<Record<string, unknown>> })
+      .xtreamAccounts[0]).not.toHaveProperty('password');
+
+    const xtreamId = StorageService.getPlaylists()
+      .find(item => item.source === 'xtream')!.id;
+    await submit({ type: 'remove-source', sourceId: xtreamId });
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+    expect(StorageService.getPlaylists().map(item => item.source)).toEqual(['url']);
+    expect(await (await fetch(`${baseUrl}/setup-state${setupToken}`)).json())
+      .toMatchObject({ xtreamAccounts: [] });
   });
 });

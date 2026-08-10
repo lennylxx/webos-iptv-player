@@ -95,13 +95,66 @@
     padding-top: 4px;
     border-top: 1px solid #f0f2f7;
   }
+  .configured-section {
+    margin-top: 24px;
+    padding-top: 4px;
+    border-top: 1px solid #f0f2f7;
+  }
   .config-heading,
+  .configured-heading,
   .upload-heading {
     margin: 20px 0 10px;
     color: #1a2138;
     font-size: 14px;
     font-weight: 600;
   }
+  .configured-empty {
+    padding: 14px;
+    color: #8a93a8;
+    background: #fafcff;
+    border: 1px solid #e4e9f2;
+    border-radius: 12px;
+    font-size: 13px;
+    text-align: center;
+  }
+  .configured-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    padding: 11px 12px;
+    background: #fafcff;
+    border: 1px solid #e4e9f2;
+    border-radius: 12px;
+  }
+  .configured-content { flex: 1; min-width: 0; }
+  .configured-name {
+    overflow: hidden;
+    color: #1a2138;
+    font-size: 14px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .configured-detail {
+    overflow: hidden;
+    margin-top: 3px;
+    color: #8a93a8;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .configured-remove {
+    flex: 0 0 auto;
+    padding: 7px 10px;
+    color: #c43b4d;
+    background: #ffffff;
+    border: 1px solid #efccd2;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .configured-remove:disabled { cursor: default; opacity: 0.6; }
   .config-group {
     margin-top: 8px;
     overflow: hidden;
@@ -299,6 +352,13 @@
     <h1 class="title">Set up IPTV</h1>
     <p class="subtitle">Set up IPTV with playlist URL(s), Xtream account(s), or M3U file(s)</p>
 
+    <div class="configured-section">
+      <div class="configured-heading" data-message="configuredSources">Configured sources</div>
+      <div id="configured-list">
+        <div class="configured-empty" data-message="noConfiguredSources">No sources configured yet</div>
+      </div>
+    </div>
+
     <div class="config-section">
       <div class="config-heading" data-message="setupSources">Set up sources</div>
 
@@ -379,6 +439,7 @@
   var drop = document.getElementById("drop");
   var fileEl = document.getElementById("file");
   var list = document.getElementById("list");
+  var configuredList = document.getElementById("configured-list");
   var pairCard = document.getElementById("pair-card");
   var pairForm = document.getElementById("pair-form");
   var pairCode = document.getElementById("pair-code");
@@ -399,6 +460,11 @@
       text: {
         title: "Set up IPTV",
         subtitle: "Set up IPTV with playlist URL(s), Xtream account(s), or M3U file(s)",
+        configuredSources: "Configured sources",
+        noConfiguredSources: "No sources configured yet",
+        remove: "Remove",
+        removing: "Removing...",
+        removeFailed: "Try again",
         pairTitle: "Connect to your TV",
         pairInstructions: "Enter the 4-digit code shown on your TV.",
         pairCode: "Pairing code",
@@ -444,6 +510,11 @@
       text: {
         title: "IPTV einrichten",
         subtitle: "Richte IPTV mit Wiedergabelisten-URLs, Xtream-Konten oder M3U-Dateien ein",
+        configuredSources: "Eingerichtete Quellen",
+        noConfiguredSources: "Noch keine Quellen eingerichtet",
+        remove: "Entfernen",
+        removing: "Wird entfernt...",
+        removeFailed: "Erneut versuchen",
         pairTitle: "Mit dem Fernseher verbinden",
         pairInstructions: "Gib den 4-stelligen Code vom Fernseher ein.",
         pairCode: "Kopplungscode",
@@ -489,6 +560,11 @@
       text: {
         title: "Configurar IPTV",
         subtitle: "Configura IPTV con URLs de listas, cuentas Xtream o archivos M3U",
+        configuredSources: "Fuentes configuradas",
+        noConfiguredSources: "Aún no hay fuentes configuradas",
+        remove: "Eliminar",
+        removing: "Eliminando...",
+        removeFailed: "Reintentar",
         pairTitle: "Conectar al televisor",
         pairInstructions: "Introduce el código de 4 dígitos que aparece en el televisor.",
         pairCode: "Código de vinculación",
@@ -534,6 +610,11 @@
       text: {
         title: "Configurer l’IPTV",
         subtitle: "Configurez l’IPTV avec des URL de listes, des comptes Xtream ou des fichiers M3U",
+        configuredSources: "Sources configurées",
+        noConfiguredSources: "Aucune source configurée",
+        remove: "Supprimer",
+        removing: "Suppression...",
+        removeFailed: "Réessayer",
         pairTitle: "Se connecter au téléviseur",
         pairInstructions: "Saisissez le code à 4 chiffres affiché sur le téléviseur.",
         pairCode: "Code d’association",
@@ -579,6 +660,11 @@
       text: {
         title: "Configura IPTV",
         subtitle: "Configura IPTV con URL playlist, account Xtream o file M3U",
+        configuredSources: "Sorgenti configurate",
+        noConfiguredSources: "Nessuna sorgente configurata",
+        remove: "Rimuovi",
+        removing: "Rimozione...",
+        removeFailed: "Riprova",
         pairTitle: "Connetti alla TV",
         pairInstructions: "Inserisci il codice di 4 cifre mostrato sulla TV.",
         pairCode: "Codice di abbinamento",
@@ -624,6 +710,11 @@
       text: {
         title: "Configurar IPTV",
         subtitle: "Configure IPTV com URLs de listas, contas Xtream ou arquivos M3U",
+        configuredSources: "Fontes configuradas",
+        noConfiguredSources: "Nenhuma fonte configurada",
+        remove: "Remover",
+        removing: "Removendo...",
+        removeFailed: "Tentar novamente",
         pairTitle: "Conectar à TV",
         pairInstructions: "Digite o código de 4 dígitos exibido na TV.",
         pairCode: "Código de pareamento",
@@ -669,6 +760,11 @@
       text: {
         title: "Настройка IPTV",
         subtitle: "Настройте IPTV через URL плейлистов, аккаунты Xtream или файлы M3U",
+        configuredSources: "Настроенные источники",
+        noConfiguredSources: "Источники ещё не настроены",
+        remove: "Удалить",
+        removing: "Удаление...",
+        removeFailed: "Повторить",
         pairTitle: "Подключение к телевизору",
         pairInstructions: "Введите 4-значный код с экрана телевизора.",
         pairCode: "Код подключения",
@@ -716,6 +812,11 @@
       text: {
         title: "Налаштування IPTV",
         subtitle: "Налаштуйте IPTV через URL плейлистів, облікові записи Xtream або файли M3U",
+        configuredSources: "Налаштовані джерела",
+        noConfiguredSources: "Джерела ще не налаштовані",
+        remove: "Видалити",
+        removing: "Видалення...",
+        removeFailed: "Повторити",
         pairTitle: "Підключення до телевізора",
         pairInstructions: "Введіть 4-значний код з екрана телевізора.",
         pairCode: "Код підключення",
@@ -763,6 +864,11 @@
       text: {
         title: "设置 IPTV",
         subtitle: "通过播放列表 URL、Xtream 账户或 M3U 文件设置 IPTV",
+        configuredSources: "已设置的节目源",
+        noConfiguredSources: "尚未设置节目源",
+        remove: "删除",
+        removing: "正在删除...",
+        removeFailed: "重试",
         pairTitle: "连接电视",
         pairInstructions: "输入电视上显示的 4 位配对码。",
         pairCode: "配对码",
@@ -871,6 +977,7 @@
     pairCard.hidden = true;
     setupCard.hidden = false;
     refresh();
+    refreshSetupState();
   }
 
   pairCode.addEventListener("input", function () {
@@ -904,6 +1011,22 @@
     });
   });
 
+  function requestSetupAction(payload, onQueued) {
+    return fetch("/setup-actions?token=" + encodeURIComponent(setupToken), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error("request");
+        return data;
+      });
+    }).then(function (data) {
+      if (onQueued) onQueued();
+      return waitForSetup(data.id, 0);
+    });
+  }
+
   function submitSetup(form) {
     if (!form.reportValidity()) return;
     var button = form.querySelector(".config-save");
@@ -916,18 +1039,10 @@
     button.disabled = true;
     status.className = "config-status";
     status.textContent = tr("saving");
-    fetch("/setup-actions?token=" + encodeURIComponent(setupToken), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }).then(function (response) {
-      return response.json().then(function (data) {
-        if (!response.ok) throw new Error("request");
-        return data;
-      });
-    }).then(function (data) {
+    requestSetupAction(payload, function () {
       status.textContent = tr("applyingOnTv");
-      return waitForSetup(data.id, 0);
+    }).then(function () {
+      return refreshSetupState();
     }).then(function () {
       form.reset();
       status.className = "config-status ok";
@@ -937,6 +1052,78 @@
       status.className = "config-status err";
       status.textContent = error.message === "timeout" ? tr("setupTimedOut") : tr("setupFailed");
       button.disabled = false;
+    });
+  }
+
+  function configuredItem(kind, title, detail, sourceId) {
+    var row = document.createElement("div");
+    row.className = "configured-item";
+    var badge = document.createElement("span");
+    badge.className = "config-type";
+    badge.textContent = kind;
+    var content = document.createElement("div");
+    content.className = "configured-content";
+    var name = document.createElement("div");
+    name.className = "configured-name";
+    name.textContent = title;
+    var info = document.createElement("div");
+    info.className = "configured-detail";
+    info.textContent = detail;
+    content.appendChild(name);
+    content.appendChild(info);
+    row.appendChild(badge);
+    row.appendChild(content);
+    if (sourceId) {
+      var remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "configured-remove";
+      remove.textContent = tr("remove");
+      remove.onclick = function () {
+        remove.disabled = true;
+        remove.textContent = tr("removing");
+        requestSetupAction({ type: "remove-source", sourceId: sourceId })
+          .then(refreshSetupState)
+          .catch(function () {
+            remove.disabled = false;
+            remove.textContent = tr("removeFailed");
+          });
+      };
+      row.appendChild(remove);
+    }
+    return row;
+  }
+
+  function renderSetupState(state) {
+    while (configuredList.firstChild) configuredList.removeChild(configuredList.firstChild);
+    var count = 0;
+    (state.playlists || []).forEach(function (item) {
+      configuredList.appendChild(configuredItem("URL", item.name, item.url, item.id));
+      count += 1;
+    });
+    (state.xtreamAccounts || []).forEach(function (item) {
+      configuredList.appendChild(configuredItem(
+        "XC", item.name, item.serverUrl + " · " + item.username, item.id));
+      count += 1;
+    });
+    if (state.epgUrl) {
+      configuredList.appendChild(configuredItem(
+        "EPG", tr("programGuideUrl"), state.epgUrl, ""));
+      count += 1;
+    }
+    if (count === 0) {
+      var empty = document.createElement("div");
+      empty.className = "configured-empty";
+      empty.textContent = tr("noConfiguredSources");
+      configuredList.appendChild(empty);
+    }
+  }
+
+  function refreshSetupState() {
+    return fetch(authenticatedUrl("/setup-state")).then(function (response) {
+      if (!response.ok) throw new Error("state");
+      return response.json();
+    }).then(renderSetupState).catch(function () {
+      // Keep the last synchronized state while the TV is temporarily busy.
     });
   }
 
@@ -1131,6 +1318,9 @@
     pairCard.hidden = false;
     pairCode.focus();
   }
+  setInterval(function () {
+    if (!setupCard.hidden) refreshSetupState();
+  }, 5000);
 </script>
 </body>
 </html>

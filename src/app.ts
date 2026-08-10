@@ -376,6 +376,7 @@ class App {
       this.remindersInitialized = initialized;
     }
     await this.queueDeviceSetupSync();
+    void SetupClient.publishState();
     await this.settings.refreshSetupInfo();
     await this.settings.refreshUploads();
     await this.loadChannelsAfterFirstUpload();
@@ -1150,6 +1151,7 @@ class App {
       }
     }
     if (action === 'reload') {
+      await SetupClient.publishState();
       await clearCachedPlaylist();
       this.showView('channels');
       await this.loadData();

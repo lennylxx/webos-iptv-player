@@ -17,6 +17,8 @@ async function installStartupHarness(
   page: Page,
   options: { visibility?: DocumentVisibilityState; devMode?: boolean } = {},
 ): Promise<void> {
+  await page.route('http://127.0.0.1:9999/setup-state', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{"updated":true}' }));
   await page.addInitScript(({ initialVisibility, devMode }) => {
     type Cb = (resp: unknown) => void;
     type LunaOpts = {

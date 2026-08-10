@@ -592,6 +592,13 @@ test.describe('Settings upload', () => {
         }),
       }),
     );
+    await page.route('http://127.0.0.1:9999/setup-state', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: '{"updated":true}',
+      }),
+    );
 
     // Fake Luna shim — installed before the app bundle runs.
     await page.addInitScript(() => {

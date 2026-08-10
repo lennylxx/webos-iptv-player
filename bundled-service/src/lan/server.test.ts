@@ -151,6 +151,46 @@ describe('POST /pair', () => {
   });
 });
 
+describe('setup state', () => {
+  const state = {
+    playlists: [{ id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' }],
+    xtreamAccounts: [{
+      id: 'x1',
+      name: 'host',
+      serverUrl: 'http://host',
+      username: 'u1',
+    }],
+    epgUrl: 'http://host/epg.xml',
+  };
+
+  it('accepts a loopback snapshot and returns it only with the setup token', async () => {
+    const put = await fetch(`${baseUrl}/setup-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state),
+    });
+    expect(put.status).toBe(200);
+    expect((await fetch(`${baseUrl}/setup-state`)).status).toBe(403);
+    const get = await fetch(`${baseUrl}/setup-state?token=${setupToken}`);
+    expect(get.status).toBe(200);
+    expect(await get.json()).toEqual(state);
+  });
+
+  it('strips credential fields from snapshots', async () => {
+    const put = await fetch(`${baseUrl}/setup-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...state,
+        xtreamAccounts: [{ ...state.xtreamAccounts[0], password: 'p1' }],
+      }),
+    });
+    expect(put.status).toBe(200);
+    const saved = await (await fetch(`${baseUrl}/setup-state?token=${setupToken}`)).json();
+    expect(saved).not.toHaveProperty('xtreamAccounts.0.password');
+  });
+});
+
 describe('setup actions', () => {
   async function postAction(payload: unknown, url = setupUrl): Promise<Response> {
     const token = new URL(url).search;
@@ -161,7 +201,7 @@ describe('setup actions', () => {
     });
   }
 
-  it('queues playlist, Xtream, and EPG actions for the local TV client', async () => {
+  it('queues source additions and removal for the local TV client', async () => {
     expect((await postAction({
       type: 'playlist', name: 'Alpha', url: 'http://host/a.m3u',
     })).status).toBe(201);
@@ -170,6 +210,9 @@ describe('setup actions', () => {
     })).status).toBe(201);
     expect((await postAction({
       type: 'epg', url: 'http://host/epg.xml',
+    })).status).toBe(201);
+    expect((await postAction({
+      type: 'remove-source', sourceId: 'x1',
     })).status).toBe(201);
 
     const actions = await (await fetch(`${baseUrl}/setup-actions`)).json();
@@ -183,6 +226,7 @@ describe('setup actions', () => {
         password: 'p1',
       },
       { id: expect.any(Number), type: 'epg', url: 'http://host/epg.xml' },
+      { id: expect.any(Number), type: 'remove-source', sourceId: 'x1' },
     ]);
   });
 

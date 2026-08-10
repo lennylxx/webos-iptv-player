@@ -27,6 +27,9 @@ describe('setup page forms', () => {
       if (url === '/pair' && options?.method === 'POST') {
         return Promise.resolve(response({ token: 'paired-token' }));
       }
+      if (url === '/setup-state?token=paired-token') {
+        return Promise.resolve(response({ playlists: [], xtreamAccounts: [], epgUrl: '' }));
+      }
       if (url === '/uploads') return Promise.resolve(response([]));
       return Promise.resolve(response({ error: 'unexpected request' }, 500));
     });
@@ -56,6 +59,9 @@ describe('setup page forms', () => {
   it('submits a playlist with the QR token and waits for TV acknowledgement', async () => {
     const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
       if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        return Promise.resolve(response({ playlists: [], xtreamAccounts: [], epgUrl: '' }));
+      }
       if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
         return Promise.resolve(response({ id: 7, type: 'playlist' }, 201));
       }
@@ -96,6 +102,57 @@ describe('setup page forms', () => {
     expect(form.querySelector('.config-status')!.textContent).toBe('Saved on TV');
     expect(form.querySelector<HTMLInputElement>('[name="url"]')!.value).toBe('');
     expect(errors).toEqual([]);
+    dom.window.close();
+  });
+
+  it('renders synchronized sources and removes an Xtream account by id', async () => {
+    let removed = false;
+    const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
+      if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        return Promise.resolve(response({
+          playlists: [{ id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' }],
+          xtreamAccounts: removed
+            ? []
+            : [{ id: 'x1', name: 'host', serverUrl: 'http://host', username: 'u1' }],
+          epgUrl: 'http://host/epg.xml',
+        }));
+      }
+      if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
+        return Promise.resolve(response({ id: 9, type: 'remove-source' }, 201));
+      }
+      if (url === '/setup-actions/9?token=abc123') {
+        removed = true;
+        return Promise.resolve(response({ id: 9, pending: false }));
+      }
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(dom.window.document.querySelectorAll('.configured-item')).toHaveLength(3);
+    expect(dom.window.document.querySelector('#configured-list')!.textContent)
+      .not.toContain('password');
+    const buttons = dom.window.document.querySelectorAll<HTMLButtonElement>('.configured-remove');
+    expect(buttons).toHaveLength(2);
+    buttons[1].click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const post = fetchMock.mock.calls.find(call =>
+      call[0] === '/setup-actions?token=abc123' && call[1]?.method === 'POST');
+    expect(JSON.parse(String(post![1]?.body))).toEqual({
+      type: 'remove-source',
+      sourceId: 'x1',
+    });
+    expect(dom.window.document.querySelector('#configured-list')!.textContent)
+      .not.toContain('host · u1');
     dom.window.close();
   });
 });

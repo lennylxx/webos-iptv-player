@@ -40,6 +40,8 @@ HTTP (called by phones, and by the app for reconcile):
 | `/` or `/setup` | GET | Public setup page; asks for the TV pairing code. |
 | `/setup?token=…` | GET | QR entry that opens the same page already authorized. |
 | `/pair` | POST | Rate-limited exchange of the four-digit code for the setup token. |
+| `/setup-state` | PUT | Loopback-only sanitized state snapshot published by the TV. |
+| `/setup-state?token=…` | GET | Current Playlist, Xtream, and EPG state for the setup page. |
 | `/setup-actions?token=…` | POST | Validate and queue a Playlist, Xtream, or EPG change. |
 | `/setup-actions` | GET | Loopback-only list consumed by the TV app. |
 | `/setup-actions/:id` | DELETE | Loopback-only acknowledgement from the TV app. |
@@ -58,8 +60,14 @@ A successful POST or DELETE on the HTTP side calls an `onChange` hook,
 which iterates a `Set<msg>` of active `serviceEvents` subscribers and calls
 `msg.respond({event})` on each one. Upload events refresh `/uploads`.
 Setup events make `SetupClient` consume the pending actions, update the
-existing `StorageService` models, acknowledge each action, and reload data.
-The phone waits for that acknowledgement before showing “Saved on TV”.
+existing `StorageService` models, publish a sanitized `/setup-state` snapshot,
+acknowledge each action, and reload data. The phone waits for that
+acknowledgement before showing “Saved on TV”. Source-removal actions use the
+same queue, so deleting a Playlist or Xtream account remains idempotent.
+
+The TV also publishes state after service startup and local Settings changes.
+The setup page refreshes the snapshot periodically. Xtream snapshots contain
+the account id, display name, server URL, and username, but never the password.
 
 Rejected uploads (HTTP 400) and missing-id deletes (HTTP 404) do **not**
 fire the event.
@@ -77,8 +85,9 @@ the short root URL manually. The public page exchanges that code for the full
 token; five failures from one client lock pairing for one minute.
 
 The token is required to submit source changes, query their status, upload M3U
-files, or remotely delete uploads. Reading and acknowledging queued actions is
-loopback-only, which prevents another LAN client from reading Xtream
+files, read the sanitized setup state, or remotely delete uploads. Publishing
+state and reading or acknowledging queued actions is loopback-only, which
+prevents another LAN client from injecting state or reading Xtream
 credentials. Upload identifiers are validated before file access so requests
 cannot escape the upload directory. A new foreground bind creates a new token,
 pairing code, and URL, invalidating the old values.
