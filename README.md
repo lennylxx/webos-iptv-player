@@ -16,7 +16,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Channel info | Playback overlays |
 | --- | --- |
-| ![Channel info](https://github.com/user-attachments/assets/87744996-4e94-45fe-b3ba-103ff7b2ddb9) | ![Playback overlays](https://github.com/user-attachments/assets/b1734ae5-637e-4759-ae88-227d832294e4) |
+| ![Channel info](https://github.com/user-attachments/assets/e0dd4fbf-b6b4-46f6-a8e8-7235c66d9512) | ![Playback overlays](https://github.com/user-attachments/assets/b1734ae5-637e-4759-ae88-227d832294e4) |
 
 | Subtitles | Subtitle search |
 | --- | --- |
@@ -32,7 +32,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Settings | Theme picker |
 | --- | --- |
-| ![Settings](https://github.com/user-attachments/assets/a50a7179-07c7-4d92-821f-d16aa544f7f9) | ![Theme picker](https://github.com/user-attachments/assets/48eb438f-3b61-4508-80fe-0775ab729027) |
+| ![Settings](https://github.com/user-attachments/assets/45ffa833-a77d-43c3-9b38-6242379c3d5f) | ![Theme picker](https://github.com/user-attachments/assets/48eb438f-3b61-4508-80fe-0775ab729027) |
 
 ## Features
 
@@ -40,7 +40,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 - **M3U playlists** — load multiple M3U/M3U8 lists, auto-deduplicated
 - **Xtream Codes accounts** — add one or more accounts; the playlist and EPG are derived from your credentials, and you switch between them from the top-bar avatar
-- **LAN setup** — configure sources or upload `.m3u` files from a phone on the same network by scanning a QR code ([LAN service](docs/lan-service.md))
+- **LAN setup** — configure sources and online subtitle settings or upload `.m3u` files from a phone on the same network by scanning a QR code ([LAN service](docs/lan-service.md))
 
 **Live TV & on-demand**
 
@@ -192,6 +192,7 @@ Opens at http://localhost:3000. Video playback uses HLS.js/mpegts.js on desktop 
 Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 
 - **Language** — follow the TV's system language when supported, or choose a language explicitly.
+- **Device Setup** — scan the QR code to configure the app from a phone, or open the shown URL on a computer and enter the pairing code.
 - **Xtream Account** — add, edit, or remove Xtream Codes accounts (portal URL + username + password). The playlist and EPG are derived from your credentials on Save.
 - **Playlists** — add, edit, or remove M3U URLs. Re-applied on Save.
 - **Upload Playlist** — QR code + LAN URL on the left, list of currently uploaded playlists on the right. Scan the QR from a phone/laptop on the same network to upload `.m3u` files; they appear in this list within milliseconds via Luna push.
@@ -201,7 +202,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Playback** — toggle auto-play (resume last watched channel on launch).
 - **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.
 - **Data Management** — refresh data, clear caches or viewing lists, or reset the app.
-- **Save & Apply** reloads channels from the new sources. **Cancel** discards edits.
+- **Save Changes** applies preferences and reloads playlist and guide data when their sources change. **Cancel** discards edits.
 
 ## Remote Control Mapping
 
