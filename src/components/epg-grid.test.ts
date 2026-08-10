@@ -128,6 +128,24 @@ afterEach(() => {
 
 const channelItems = () => Array.from(container.querySelectorAll('.epg-channel-item'));
 const dateItems = () => Array.from(container.querySelectorAll('.epg-date-item'));
+
+describe('entry channel focus', () => {
+  it('focuses the channel that was playing before the guide opened', () => {
+    grid.focusChannel(1);
+    grid.render();
+
+    expect(container.querySelector('.epg-channel-item.focused')
+      ?.getAttribute('data-channel-idx')).toBe('1');
+  });
+
+  it('falls back to the first visible channel when the playing channel is missing', () => {
+    grid.focusChannel(99);
+    grid.render();
+
+    expect(container.querySelector('.epg-channel-item.focused')
+      ?.getAttribute('data-channel-idx')).toBe('0');
+  });
+});
 const progItems = () => Array.from(container.querySelectorAll('.epg-programme-item'));
 
 function clickData(attr: string, value: number): void {

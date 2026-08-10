@@ -738,6 +738,7 @@ class App {
   // Show the guide and refresh its data in the background (shared by the EPG
   // tab and the red-key shortcut).
   private openEpg(): void {
+    this.epgGrid.focusChannel(this.player.getCurrentIndex());
     this.showView('epg');
     this.epgGrid.render();
     EpgService.refresh().then(() => {

@@ -105,6 +105,15 @@ export class EpgGrid {
     this.focusProg = 0;
   }
 
+  focusChannel(channelIndex: number): void {
+    const visible = this.getVisibleChannels();
+    this.selectedChannelIdx = visible.some(item => item.globalIndex === channelIndex)
+      ? channelIndex
+      : visible[0]?.globalIndex ?? -1;
+    this.focusCol = 'channels';
+    this.focusProg = 0;
+  }
+
   /** Whether the catch-up resume prompt is currently visible. */
   get isPromptVisible(): boolean {
     return this.resumePrompt.visible;
