@@ -161,6 +161,15 @@ describe('setup state', () => {
       username: 'u1',
     }],
     epgUrl: 'http://host/epg.xml',
+    onlineSubtitles: {
+      preferredLanguage: '',
+      subdlConfigured: true,
+      assrtConfigured: false,
+      opensubtitlesConfigured: true,
+      opensubtitlesApiKeyConfigured: true,
+      opensubtitlesPasswordConfigured: true,
+      opensubtitlesUsername: 'u2',
+    },
   };
 
   it('accepts a loopback snapshot and returns it only with the setup token', async () => {
@@ -183,11 +192,18 @@ describe('setup state', () => {
       body: JSON.stringify({
         ...state,
         xtreamAccounts: [{ ...state.xtreamAccounts[0], password: 'p1' }],
+        onlineSubtitles: {
+          ...state.onlineSubtitles,
+          subdlApiKey: 'k1',
+          opensubtitlesPassword: 'p1',
+        },
       }),
     });
     expect(put.status).toBe(200);
     const saved = await (await fetch(`${baseUrl}/setup-state?token=${setupToken}`)).json();
     expect(saved).not.toHaveProperty('xtreamAccounts.0.password');
+    expect(saved).not.toHaveProperty('onlineSubtitles.subdlApiKey');
+    expect(saved).not.toHaveProperty('onlineSubtitles.opensubtitlesPassword');
   });
 });
 
@@ -214,6 +230,12 @@ describe('setup actions', () => {
     expect((await postAction({
       type: 'remove-source', sourceId: 'x1',
     })).status).toBe(201);
+    expect((await postAction({
+      type: 'online-subtitles',
+      preferredLanguage: '',
+      subdlApiKey: 'k1',
+      opensubtitles: { apiKey: 'k2', username: 'u2', password: 'p2' },
+    })).status).toBe(201);
 
     const actions = await (await fetch(`${baseUrl}/setup-actions`)).json();
     expect(actions).toEqual([
@@ -227,6 +249,13 @@ describe('setup actions', () => {
       },
       { id: expect.any(Number), type: 'epg', url: 'http://host/epg.xml' },
       { id: expect.any(Number), type: 'remove-source', sourceId: 'x1' },
+      {
+        id: expect.any(Number),
+        type: 'online-subtitles',
+        preferredLanguage: '',
+        subdlApiKey: 'k1',
+        opensubtitles: { apiKey: 'k2', username: 'u2', password: 'p2' },
+      },
     ]);
   });
 
@@ -246,6 +275,15 @@ describe('setup actions', () => {
     })).status).toBe(400);
     expect((await postAction({
       type: 'playlist', name: 'Alpha', url: '',
+    })).status).toBe(400);
+    expect((await postAction({
+      type: 'online-subtitles',
+      preferredLanguage: 'invalid',
+    })).status).toBe(400);
+    expect((await postAction({
+      type: 'online-subtitles',
+      preferredLanguage: '',
+      opensubtitles: {},
     })).status).toBe(400);
   });
 

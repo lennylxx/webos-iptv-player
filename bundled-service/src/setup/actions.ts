@@ -1,10 +1,23 @@
-import { httpUrl, objectValue, stringValue } from './validation';
+import { httpUrl, objectValue, stringValue, subtitleLanguage } from './validation';
+
+interface OpenSubtitlesCredentials {
+  apiKey?: string;
+  username?: string;
+  password?: string;
+}
 
 export type SetupActionPayload =
   | { type: 'playlist'; name: string; url: string }
   | { type: 'xtream'; serverUrl: string; username: string; password: string }
   | { type: 'epg'; url: string }
-  | { type: 'remove-source'; sourceId: string };
+  | { type: 'remove-source'; sourceId: string }
+  | {
+      type: 'online-subtitles';
+      preferredLanguage: string;
+      subdlApiKey?: string;
+      assrtApiKey?: string;
+      opensubtitles?: OpenSubtitlesCredentials | null;
+    };
 
 export type SetupAction = SetupActionPayload & { id: number };
 
@@ -13,6 +26,12 @@ function passwordValue(value: unknown): string {
     throw new Error('Invalid password');
   }
   return value;
+}
+
+function optionalApiKey(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length > 256) throw new Error(`Invalid ${field}`);
+  return value.trim();
 }
 
 export function parseSetupAction(value: unknown): SetupActionPayload {
@@ -42,6 +61,38 @@ export function parseSetupAction(value: unknown): SetupActionPayload {
     return {
       type: 'remove-source',
       sourceId: stringValue(input.sourceId, 'source id', 120),
+    };
+  }
+  if (input.type === 'online-subtitles') {
+    const subdlApiKey = optionalApiKey(input.subdlApiKey, 'SubDL API key');
+    const assrtApiKey = optionalApiKey(input.assrtApiKey, 'Assrt token');
+    let opensubtitles: OpenSubtitlesCredentials | null | undefined;
+    if (input.opensubtitles === null) {
+      opensubtitles = null;
+    } else if (input.opensubtitles !== undefined) {
+      const credentials = objectValue(input.opensubtitles);
+      const apiKey = optionalApiKey(credentials.apiKey, 'OpenSubtitles API key');
+      const username = optionalApiKey(credentials.username, 'OpenSubtitles username');
+      const password = credentials.password === undefined
+        ? undefined
+        : credentials.password === ''
+          ? ''
+          : passwordValue(credentials.password);
+      if (apiKey === undefined && username === undefined && password === undefined) {
+        throw new Error('Invalid OpenSubtitles credentials');
+      }
+      opensubtitles = {
+        ...(apiKey === undefined ? {} : { apiKey }),
+        ...(username === undefined ? {} : { username }),
+        ...(password === undefined ? {} : { password }),
+      };
+    }
+    return {
+      type: 'online-subtitles',
+      preferredLanguage: subtitleLanguage(input.preferredLanguage),
+      ...(subdlApiKey === undefined ? {} : { subdlApiKey }),
+      ...(assrtApiKey === undefined ? {} : { assrtApiKey }),
+      ...(opensubtitles === undefined ? {} : { opensubtitles }),
     };
   }
   throw new Error('Invalid setup action type');

@@ -58,6 +58,12 @@ describe('phone setup synchronization', () => {
       password: 'p1',
     });
     await submit({ type: 'epg', url: 'http://host/epg.xml' });
+    await submit({
+      type: 'online-subtitles',
+      preferredLanguage: '',
+      subdlApiKey: 'k1',
+      opensubtitles: { apiKey: 'k2', username: 'u2', password: 'p2' },
+    });
 
     await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
 
@@ -81,6 +87,18 @@ describe('phone setup synchronization', () => {
       },
     ]);
     expect(StorageService.getEpgUrl()).toBe('http://host/epg.xml');
+    expect(StorageService.getOnlineSubtitleConfig()).toEqual({
+      preferredLanguage: '',
+      subdl: { apiKey: 'k1' },
+      assrt: { apiKey: '' },
+      opensubtitles: {
+        apiKey: 'k2',
+        username: 'u2',
+        password: 'p2',
+        token: '',
+        tokenTs: 0,
+      },
+    });
     expect(await (await fetch(`${baseUrl}/setup-actions`)).json()).toEqual([]);
 
     const state = await (await fetch(`${baseUrl}/setup-state${setupToken}`)).json();
@@ -97,9 +115,19 @@ describe('phone setup synchronization', () => {
         username: 'u1',
       }],
       epgUrl: 'http://host/epg.xml',
+      onlineSubtitles: {
+        preferredLanguage: '',
+        subdlConfigured: true,
+        assrtConfigured: false,
+        opensubtitlesConfigured: true,
+        opensubtitlesApiKeyConfigured: true,
+        opensubtitlesPasswordConfigured: true,
+        opensubtitlesUsername: 'u2',
+      },
     });
     expect((state as { xtreamAccounts: Array<Record<string, unknown>> })
       .xtreamAccounts[0]).not.toHaveProperty('password');
+    expect(JSON.stringify(state)).not.toContain('p2');
 
     const xtreamId = StorageService.getPlaylists()
       .find(item => item.source === 'xtream')!.id;

@@ -32,3 +32,19 @@ export function httpUrl(value: unknown, field: string): string {
   }
   return text;
 }
+
+export function booleanValue(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`Invalid ${field}`);
+  return value;
+}
+
+const SUBTITLE_LANGUAGES = [
+  '', 'en', 'zh-CN', 'zh-TW', 'es', 'fr', 'de', 'pt', 'ru', 'ja', 'ko',
+];
+
+export function subtitleLanguage(value: unknown): string {
+  if (typeof value !== 'string' || !SUBTITLE_LANGUAGES.includes(value)) {
+    throw new Error('Invalid preferred subtitle language');
+  }
+  return value;
+}

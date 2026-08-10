@@ -11,10 +11,24 @@ const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
       xtream?: { username: string; password: string; liveOutput?: 'auto' | 'ts' | 'm3u8' };
     }>,
     epgUrl: '',
+    onlineSubtitles: {
+      preferredLanguage: '',
+      subdl: { apiKey: '' },
+      assrt: { apiKey: '' },
+      opensubtitles: {
+        apiKey: '',
+        username: '',
+        password: '',
+        token: '',
+        tokenTs: 0,
+      },
+    },
     getPlaylists: vi.fn(),
     setPlaylists: vi.fn(),
     getEpgUrl: vi.fn(),
     setEpgUrl: vi.fn(),
+    getOnlineSubtitleConfig: vi.fn(),
+    setOnlineSubtitleConfig: vi.fn(),
     remove: vi.fn(),
   },
   fetchWithTimeoutMock: vi.fn(),
@@ -29,6 +43,13 @@ storageMock.setEpgUrl.mockImplementation((url: string) => {
   storageMock.epgUrl = url;
   return true;
 });
+storageMock.getOnlineSubtitleConfig.mockImplementation(() => storageMock.onlineSubtitles);
+storageMock.setOnlineSubtitleConfig.mockImplementation(
+  (config: typeof storageMock.onlineSubtitles) => {
+    storageMock.onlineSubtitles = config;
+    return true;
+  },
+);
 
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../utils/fetch-helper', () => ({ fetchWithTimeout: fetchWithTimeoutMock }));
@@ -44,10 +65,24 @@ function jsonResponse(data: unknown, status = 200): { ok: boolean; status: numbe
 beforeEach(() => {
   storageMock.playlists = [];
   storageMock.epgUrl = '';
+  storageMock.onlineSubtitles = {
+    preferredLanguage: '',
+    subdl: { apiKey: '' },
+    assrt: { apiKey: '' },
+    opensubtitles: {
+      apiKey: '',
+      username: '',
+      password: '',
+      token: '',
+      tokenTs: 0,
+    },
+  };
   storageMock.getPlaylists.mockClear();
   storageMock.setPlaylists.mockClear();
   storageMock.getEpgUrl.mockClear();
   storageMock.setEpgUrl.mockClear();
+  storageMock.getOnlineSubtitleConfig.mockClear();
+  storageMock.setOnlineSubtitleConfig.mockClear();
   storageMock.remove.mockClear();
   fetchWithTimeoutMock.mockReset();
   // Simulate the Luna `start` response that the app applies before any
@@ -245,6 +280,18 @@ describe('SetupClient.applyPendingActions', () => {
       },
     ];
     storageMock.epgUrl = 'http://host/epg.xml';
+    storageMock.onlineSubtitles = {
+      preferredLanguage: '',
+      subdl: { apiKey: 'k1' },
+      assrt: { apiKey: '' },
+      opensubtitles: {
+        apiKey: 'k2',
+        username: 'u2',
+        password: 'secret',
+        token: 'session',
+        tokenTs: 1,
+      },
+    };
     fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse({ updated: true }));
 
     await expect(SetupClient.publishState()).resolves.toBe(true);
@@ -260,6 +307,15 @@ describe('SetupClient.applyPendingActions', () => {
         username: 'u1',
       }],
       epgUrl: 'http://host/epg.xml',
+      onlineSubtitles: {
+        preferredLanguage: '',
+        subdlConfigured: true,
+        assrtConfigured: false,
+        opensubtitlesConfigured: true,
+        opensubtitlesApiKeyConfigured: true,
+        opensubtitlesPasswordConfigured: true,
+        opensubtitlesUsername: 'u2',
+      },
     });
   });
 
@@ -370,6 +426,88 @@ describe('SetupClient.applyPendingActions', () => {
     ]);
     expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
       'http://127.0.0.1:8890/setup-actions/8',
+      { method: 'DELETE' },
+      4000,
+    );
+  });
+
+  it('updates and clears online subtitle credentials without returning secrets', async () => {
+    storageMock.onlineSubtitles = {
+      preferredLanguage: '',
+      subdl: { apiKey: 'old-subdl' },
+      assrt: { apiKey: 'old-assrt' },
+      opensubtitles: {
+        apiKey: 'old-key',
+        username: 'old-user',
+        password: 'old-password',
+        token: 'old-token',
+        tokenTs: 1,
+      },
+    };
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        {
+          id: 10,
+          type: 'online-subtitles',
+          preferredLanguage: '',
+          subdlApiKey: '',
+          assrtApiKey: '',
+          opensubtitles: {
+            password: '',
+          },
+        },
+      ]))
+      .mockResolvedValue(jsonResponse({ updated: true }));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+
+    expect(storageMock.setOnlineSubtitleConfig).toHaveBeenCalledWith({
+      preferredLanguage: '',
+      subdl: { apiKey: '' },
+      assrt: { apiKey: '' },
+      opensubtitles: {
+        apiKey: 'old-key',
+        username: 'old-user',
+        password: '',
+        token: '',
+        tokenTs: 0,
+      },
+    });
+    const stateRequest = fetchWithTimeoutMock.mock.calls.find(call =>
+      call[0] === 'http://127.0.0.1:8890/setup-state');
+    const published = JSON.parse(String(stateRequest![1].body));
+    expect(published.onlineSubtitles).toEqual({
+      preferredLanguage: '',
+      subdlConfigured: false,
+      assrtConfigured: false,
+      opensubtitlesConfigured: false,
+      opensubtitlesApiKeyConfigured: true,
+      opensubtitlesPasswordConfigured: false,
+      opensubtitlesUsername: 'old-user',
+    });
+    expect(JSON.stringify(published)).not.toContain('old-password');
+    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/10',
+      { method: 'DELETE' },
+      4000,
+    );
+  });
+
+  it('keeps an online subtitle action pending when storage fails', async () => {
+    storageMock.setOnlineSubtitleConfig.mockReturnValueOnce(false);
+    fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse([
+      {
+        id: 11,
+        type: 'online-subtitles',
+        preferredLanguage: '',
+        subdlApiKey: 'k1',
+      },
+    ]));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(false);
+
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/11',
       { method: 'DELETE' },
       4000,
     );

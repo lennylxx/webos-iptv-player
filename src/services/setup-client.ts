@@ -8,6 +8,7 @@ import {
 } from '../utils/xtream-url';
 import { serviceBase } from './service-http';
 import { StorageService } from './storage-service';
+import type { OnlineSubtitleConfig } from './subtitle-search/types';
 
 const log = createLogger('Setup');
 const TIMEOUT = 4000;
@@ -26,7 +27,19 @@ export type SetupAction =
   | { id: number; type: 'playlist'; name: string; url: string }
   | { id: number; type: 'xtream'; serverUrl: string; username: string; password: string }
   | { id: number; type: 'epg'; url: string }
-  | { id: number; type: 'remove-source'; sourceId: string };
+  | { id: number; type: 'remove-source'; sourceId: string }
+  | {
+      id: number;
+      type: 'online-subtitles';
+      preferredLanguage: string;
+      subdlApiKey?: string;
+      assrtApiKey?: string;
+      opensubtitles?: {
+        apiKey?: string;
+        username?: string;
+        password?: string;
+      } | null;
+    };
 
 export interface SetupState {
   playlists: Array<{ id: string; name: string; url: string }>;
@@ -37,6 +50,15 @@ export interface SetupState {
     username: string;
   }>;
   epgUrl: string;
+  onlineSubtitles: {
+    preferredLanguage: string;
+    subdlConfigured: boolean;
+    assrtConfigured: boolean;
+    opensubtitlesConfigured: boolean;
+    opensubtitlesApiKeyConfigured: boolean;
+    opensubtitlesPasswordConfigured: boolean;
+    opensubtitlesUsername: string;
+  };
 }
 
 class SetupClientImpl {
@@ -78,6 +100,7 @@ class SetupClientImpl {
     const base = serviceBase();
     if (!base) return false;
     const playlists = StorageService.getPlaylists();
+    const onlineSubtitles = StorageService.getOnlineSubtitleConfig();
     const state: SetupState = {
       playlists: playlists
         .filter(item => item.source !== 'upload' && item.source !== 'xtream')
@@ -91,6 +114,20 @@ class SetupClientImpl {
           username: item.xtream!.username,
         })),
       epgUrl: StorageService.getEpgUrl(),
+        onlineSubtitles: {
+          preferredLanguage: onlineSubtitles.preferredLanguage,
+          subdlConfigured: onlineSubtitles.subdl.apiKey.trim() !== '',
+          assrtConfigured: onlineSubtitles.assrt.apiKey.trim() !== '',
+          opensubtitlesConfigured:
+            onlineSubtitles.opensubtitles.apiKey.trim() !== '' &&
+            onlineSubtitles.opensubtitles.username.trim() !== '' &&
+            onlineSubtitles.opensubtitles.password !== '',
+          opensubtitlesApiKeyConfigured:
+            onlineSubtitles.opensubtitles.apiKey.trim() !== '',
+          opensubtitlesPasswordConfigured:
+            onlineSubtitles.opensubtitles.password !== '',
+          opensubtitlesUsername: onlineSubtitles.opensubtitles.username,
+        },
     };
     try {
       const res = await fetchWithTimeout(
@@ -146,8 +183,16 @@ class SetupClientImpl {
       .map(item => ({ ...item, xtream: item.xtream && { ...item.xtream } }));
     const previousEpgUrl = StorageService.getEpgUrl();
     let epgUrl = previousEpgUrl;
+    const previousOnlineSubtitles = StorageService.getOnlineSubtitleConfig();
+    let onlineSubtitles: OnlineSubtitleConfig = {
+      preferredLanguage: previousOnlineSubtitles.preferredLanguage,
+      subdl: { ...previousOnlineSubtitles.subdl },
+      assrt: { ...previousOnlineSubtitles.assrt },
+      opensubtitles: { ...previousOnlineSubtitles.opensubtitles },
+    };
     const playlistActionIds: number[] = [];
     const epgActionIds: number[] = [];
+    const subtitleActionIds: number[] = [];
 
     for (const action of actions) {
       if (!action || !Number.isSafeInteger(action.id)) continue;
@@ -199,6 +244,36 @@ class SetupClientImpl {
         playlists = playlists.filter(item =>
           item.source === 'upload' || item.id !== action.sourceId);
         playlistActionIds.push(action.id);
+      } else if (action.type === 'online-subtitles' &&
+          typeof action.preferredLanguage === 'string') {
+        onlineSubtitles.preferredLanguage = action.preferredLanguage;
+        if (typeof action.subdlApiKey === 'string') {
+          onlineSubtitles.subdl.apiKey = action.subdlApiKey;
+        }
+        if (typeof action.assrtApiKey === 'string') {
+          onlineSubtitles.assrt.apiKey = action.assrtApiKey;
+        }
+        if (action.opensubtitles === null) {
+          onlineSubtitles.opensubtitles = {
+            apiKey: '',
+            username: '',
+            password: '',
+            token: '',
+            tokenTs: 0,
+          };
+        } else if (action.opensubtitles) {
+          onlineSubtitles.opensubtitles = {
+            apiKey: action.opensubtitles.apiKey ??
+              onlineSubtitles.opensubtitles.apiKey,
+            username: action.opensubtitles.username ??
+              onlineSubtitles.opensubtitles.username,
+            password: action.opensubtitles.password ??
+              onlineSubtitles.opensubtitles.password,
+            token: '',
+            tokenTs: 0,
+          };
+        }
+        subtitleActionIds.push(action.id);
       } else {
         log.warn('Ignoring invalid action:', action.id);
       }
@@ -206,19 +281,27 @@ class SetupClientImpl {
 
     const playlistsChanged = JSON.stringify(playlists) !== JSON.stringify(previousPlaylists);
     const epgChanged = epgUrl !== previousEpgUrl;
+    const subtitlesChanged =
+      JSON.stringify(onlineSubtitles) !== JSON.stringify(previousOnlineSubtitles);
     const playlistsStored = !playlistsChanged || StorageService.setPlaylists(playlists);
     const epgStored = !epgChanged || StorageService.setEpgUrl(epgUrl);
+    const subtitlesStored =
+      !subtitlesChanged || StorageService.setOnlineSubtitleConfig(onlineSubtitles);
 
     if (!playlistsStored) log.error('Playlist setup actions were not persisted');
     if (!epgStored) log.error('EPG setup action was not persisted');
+    if (!subtitlesStored) log.error('Online subtitle setup action was not persisted');
     const acknowledgedIds = [
       ...(playlistsStored ? playlistActionIds : []),
       ...(epgStored ? epgActionIds : []),
+      ...(subtitlesStored ? subtitleActionIds : []),
     ];
     if (acknowledgedIds.length > 0 && await this.publishState()) {
       for (const id of acknowledgedIds) await this.acknowledgeAction(id);
     }
-    return (playlistsChanged && playlistsStored) || (epgChanged && epgStored);
+    return (playlistsChanged && playlistsStored) ||
+      (epgChanged && epgStored) ||
+      (subtitlesChanged && subtitlesStored);
   }
 }
 

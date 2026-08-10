@@ -1,4 +1,20 @@
-import { httpUrl, objectValue, stringValue } from './validation';
+import {
+  booleanValue,
+  httpUrl,
+  objectValue,
+  stringValue,
+  subtitleLanguage,
+} from './validation';
+
+export interface OnlineSubtitleState {
+  preferredLanguage: string;
+  subdlConfigured: boolean;
+  assrtConfigured: boolean;
+  opensubtitlesConfigured: boolean;
+  opensubtitlesApiKeyConfigured: boolean;
+  opensubtitlesPasswordConfigured: boolean;
+  opensubtitlesUsername: string;
+}
 
 export interface SetupState {
   playlists: Array<{ id: string; name: string; url: string }>;
@@ -9,6 +25,7 @@ export interface SetupState {
     username: string;
   }>;
   epgUrl: string;
+  onlineSubtitles: OnlineSubtitleState;
 }
 
 export function parseSetupState(value: unknown): SetupState {
@@ -34,21 +51,59 @@ export function parseSetupState(value: unknown): SetupState {
       username: stringValue(item.username, 'username', 256),
     };
   });
+  const onlineSubtitles = objectValue(input.onlineSubtitles);
   return {
     playlists,
     xtreamAccounts,
     epgUrl: input.epgUrl === '' ? '' : httpUrl(input.epgUrl, 'program guide URL'),
+    onlineSubtitles: {
+      preferredLanguage: subtitleLanguage(onlineSubtitles.preferredLanguage),
+      subdlConfigured: booleanValue(onlineSubtitles.subdlConfigured, 'SubDL status'),
+      assrtConfigured: booleanValue(onlineSubtitles.assrtConfigured, 'Assrt status'),
+      opensubtitlesConfigured: booleanValue(
+        onlineSubtitles.opensubtitlesConfigured,
+        'OpenSubtitles status',
+      ),
+      opensubtitlesApiKeyConfigured: booleanValue(
+        onlineSubtitles.opensubtitlesApiKeyConfigured,
+        'OpenSubtitles API key status',
+      ),
+      opensubtitlesPasswordConfigured: booleanValue(
+        onlineSubtitles.opensubtitlesPasswordConfigured,
+        'OpenSubtitles password status',
+      ),
+      opensubtitlesUsername: stringValue(
+        onlineSubtitles.opensubtitlesUsername,
+        'OpenSubtitles username',
+        256,
+        false,
+      ),
+    },
   };
 }
 
 export class SetupStateStore {
-  private state: SetupState = { playlists: [], xtreamAccounts: [], epgUrl: '' };
+  private state: SetupState = {
+    playlists: [],
+    xtreamAccounts: [],
+    epgUrl: '',
+    onlineSubtitles: {
+      preferredLanguage: '',
+      subdlConfigured: false,
+      assrtConfigured: false,
+      opensubtitlesConfigured: false,
+      opensubtitlesApiKeyConfigured: false,
+      opensubtitlesPasswordConfigured: false,
+      opensubtitlesUsername: '',
+    },
+  };
 
   set(state: SetupState): void {
     this.state = {
       playlists: state.playlists.map(item => ({ ...item })),
       xtreamAccounts: state.xtreamAccounts.map(item => ({ ...item })),
       epgUrl: state.epgUrl,
+      onlineSubtitles: { ...state.onlineSubtitles },
     };
   }
 
@@ -57,6 +112,7 @@ export class SetupStateStore {
       playlists: this.state.playlists.map(item => ({ ...item })),
       xtreamAccounts: this.state.xtreamAccounts.map(item => ({ ...item })),
       epgUrl: this.state.epgUrl,
+      onlineSubtitles: { ...this.state.onlineSubtitles },
     };
   }
 }

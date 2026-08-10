@@ -50,19 +50,6 @@
     border-color: #4c7eff;
     box-shadow: 0 0 0 3px rgba(76, 126, 255, 0.12);
   }
-  .pair-submit {
-    width: 180px;
-    margin-top: 12px;
-    padding: 11px 16px;
-    border: 0;
-    border-radius: 8px;
-    color: #ffffff;
-    background: #4c7eff;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-  }
-  .pair-submit:disabled { cursor: default; opacity: 0.65; }
   .pair-status { min-height: 18px; margin: 10px 0 0; color: #c43b4d; font-size: 13px; }
 
   .drop {
@@ -209,6 +196,7 @@
     color: #6c7488;
     font-size: 12px;
   }
+  .config-field span span { display: inline; margin: 0; }
   .config-input {
     width: 100%;
     height: 40px;
@@ -225,10 +213,26 @@
     border-color: #4c7eff;
     box-shadow: 0 0 0 3px rgba(76, 126, 255, 0.12);
   }
+  .config-provider-status {
+    margin-top: 10px;
+    color: #8a93a8;
+    font-size: 12px;
+    line-height: 1.5;
+  }
   .config-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
+  }
+  .opensubtitles-row {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  }
+  .opensubtitles-row > .config-field > span {
+    line-height: 15px;
+  }
+  .opensubtitles-row > .config-field > span span { font-size: inherit; }
+  @media (max-width: 420px) {
+    .opensubtitles-row > .config-field > span { min-height: 30px; }
   }
   .config-save {
     width: 100%;
@@ -343,7 +347,6 @@
       <input class="pair-input" id="pair-code" type="text" inputmode="numeric"
         pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code"
         aria-label="Pairing code" required>
-      <button class="pair-submit" type="submit">Connect</button>
       <p class="pair-status" aria-live="polite"></p>
     </form>
   </div>
@@ -417,6 +420,59 @@
           <p class="config-status" aria-live="polite"></p>
         </form>
       </details>
+
+      <details class="config-group">
+        <summary><span class="config-type">SUB</span><span data-message="onlineSubtitles">Online subtitles</span></summary>
+        <form class="config-fields" data-action="online-subtitles">
+          <label class="config-field">
+            <span data-message="preferredSubtitle">Preferred subtitle language</span>
+            <select class="config-input" name="preferredLanguage">
+              <option value="" data-message="anyLanguage">Any language</option>
+              <option value="en">English</option>
+              <option value="zh-CN">简体中文</option>
+              <option value="zh-TW">繁體中文</option>
+              <option value="es">Español</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="pt">Português</option>
+              <option value="ru">Русский</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+            </select>
+          </label>
+          <div class="config-provider-status" id="subtitle-state"></div>
+          <label class="config-field">
+            <span>SubDL.com <span data-message="apiKey">API key</span></span>
+            <input class="config-input" name="subdlApiKey" type="password"
+              autocomplete="off">
+          </label>
+          <label class="config-field">
+            <span>Assrt.net <span data-message="assrtToken">Token</span></span>
+            <input class="config-input" name="assrtApiKey" type="password"
+              autocomplete="off">
+          </label>
+          <div class="config-row opensubtitles-row">
+            <label class="config-field">
+              <span>OpenSubtitles.com <span data-message="apiKey">API key</span></span>
+              <input class="config-input" name="opensubtitlesApiKey" type="password"
+                autocomplete="off">
+            </label>
+            <label class="config-field">
+              <span data-message="username">Username</span>
+              <input class="config-input" name="opensubtitlesUsername" type="text"
+                autocomplete="off">
+            </label>
+          </div>
+          <label class="config-field">
+            <span data-message="password">Password</span>
+            <input class="config-input" name="opensubtitlesPassword" type="password"
+              autocomplete="off">
+          </label>
+          <button class="config-save" type="submit"
+            data-message="saveSubtitleSettings">Save subtitle settings</button>
+          <p class="config-status" aria-live="polite"></p>
+        </form>
+      </details>
     </div>
     <div class="upload-heading" data-message="uploadM3uFiles">Upload M3U files</div>
     <label class="drop" id="drop">
@@ -444,8 +500,9 @@
   var pairForm = document.getElementById("pair-form");
   var pairCode = document.getElementById("pair-code");
   var pairStatus = pairForm.querySelector(".pair-status");
-  var pairSubmit = pairForm.querySelector(".pair-submit");
   var setupCard = document.getElementById("setup-card");
+  var subtitleForm = document.querySelector('[data-action="online-subtitles"]');
+  var subtitleState = document.getElementById("subtitle-state");
   var setupToken = new URLSearchParams(window.location.search).get("token") || "";
 
   function authenticatedUrl(path) {
@@ -468,7 +525,6 @@
         pairTitle: "Connect to your TV",
         pairInstructions: "Enter the 4-digit code shown on your TV.",
         pairCode: "Pairing code",
-        pairSubmit: "Connect",
         pairFailed: "The pairing code is incorrect.",
         pairLocked: "Too many attempts. Try again in one minute.",
         setupSources: "Set up sources",
@@ -484,6 +540,15 @@
         programGuideUrl: "Program guide URL",
         xmltvUrl: "XMLTV URL",
         saveProgramGuide: "Save program guide",
+        onlineSubtitles: "Online Subtitles",
+        preferredSubtitle: "Preferred subtitle language",
+        anyLanguage: "Any",
+        apiKey: "API key",
+        assrtToken: "API token",
+        saveSubtitleSettings: "Save subtitle settings",
+        configured: "Configured",
+        notConfigured: "Not configured",
+        builtInAccess: "Built-in access",
         uploadM3uFiles: "Upload M3U files",
         saving: "Saving...",
         applyingOnTv: "Applying on TV...",
@@ -518,7 +583,6 @@
         pairTitle: "Mit dem Fernseher verbinden",
         pairInstructions: "Gib den 4-stelligen Code vom Fernseher ein.",
         pairCode: "Kopplungscode",
-        pairSubmit: "Verbinden",
         pairFailed: "Der Kopplungscode ist falsch.",
         pairLocked: "Zu viele Versuche. Versuche es in einer Minute erneut.",
         setupSources: "Quellen einrichten",
@@ -534,6 +598,15 @@
         programGuideUrl: "Programmführer-URL",
         xmltvUrl: "XMLTV-URL",
         saveProgramGuide: "Programmführer speichern",
+        onlineSubtitles: "Online-Untertitel",
+        preferredSubtitle: "Bevorzugte Untertitelsprache",
+        anyLanguage: "Beliebig",
+        apiKey: "API-Schlüssel",
+        assrtToken: "API-Token",
+        saveSubtitleSettings: "Untertiteleinstellungen speichern",
+        configured: "Eingerichtet",
+        notConfigured: "Nicht eingerichtet",
+        builtInAccess: "Integrierter Zugriff",
         uploadM3uFiles: "M3U-Dateien hochladen",
         saving: "Wird gespeichert...",
         applyingOnTv: "Wird auf dem Fernseher angewendet...",
@@ -568,7 +641,6 @@
         pairTitle: "Conectar al televisor",
         pairInstructions: "Introduce el código de 4 dígitos que aparece en el televisor.",
         pairCode: "Código de vinculación",
-        pairSubmit: "Conectar",
         pairFailed: "El código de vinculación es incorrecto.",
         pairLocked: "Demasiados intentos. Inténtalo de nuevo en un minuto.",
         setupSources: "Configurar fuentes",
@@ -584,6 +656,15 @@
         programGuideUrl: "URL de la guía de programación",
         xmltvUrl: "URL XMLTV",
         saveProgramGuide: "Guardar guía de programación",
+        onlineSubtitles: "Subtítulos en línea",
+        preferredSubtitle: "Idioma de subtítulos preferido",
+        anyLanguage: "Cualquier idioma",
+        apiKey: "Clave de API",
+        assrtToken: "Token de API",
+        saveSubtitleSettings: "Guardar configuración de subtítulos",
+        configured: "Configurado",
+        notConfigured: "Sin configurar",
+        builtInAccess: "Acceso integrado",
         uploadM3uFiles: "Subir archivos M3U",
         saving: "Guardando...",
         applyingOnTv: "Aplicando en el televisor...",
@@ -618,7 +699,6 @@
         pairTitle: "Se connecter au téléviseur",
         pairInstructions: "Saisissez le code à 4 chiffres affiché sur le téléviseur.",
         pairCode: "Code d’association",
-        pairSubmit: "Se connecter",
         pairFailed: "Le code d’association est incorrect.",
         pairLocked: "Trop de tentatives. Réessayez dans une minute.",
         setupSources: "Configurer les sources",
@@ -634,6 +714,15 @@
         programGuideUrl: "URL du guide des programmes",
         xmltvUrl: "URL XMLTV",
         saveProgramGuide: "Enregistrer le guide",
+        onlineSubtitles: "Sous-titres en ligne",
+        preferredSubtitle: "Langue de sous-titres préférée",
+        anyLanguage: "Toutes les langues",
+        apiKey: "Clé API",
+        assrtToken: "Jeton API",
+        saveSubtitleSettings: "Enregistrer les paramètres des sous-titres",
+        configured: "Configuré",
+        notConfigured: "Non configuré",
+        builtInAccess: "Accès intégré",
         uploadM3uFiles: "Importer des fichiers M3U",
         saving: "Enregistrement...",
         applyingOnTv: "Application sur le téléviseur...",
@@ -668,7 +757,6 @@
         pairTitle: "Connetti alla TV",
         pairInstructions: "Inserisci il codice di 4 cifre mostrato sulla TV.",
         pairCode: "Codice di abbinamento",
-        pairSubmit: "Connetti",
         pairFailed: "Il codice di abbinamento non è corretto.",
         pairLocked: "Troppi tentativi. Riprova tra un minuto.",
         setupSources: "Configura sorgenti",
@@ -684,6 +772,15 @@
         programGuideUrl: "URL guida programmi",
         xmltvUrl: "URL XMLTV",
         saveProgramGuide: "Salva guida programmi",
+        onlineSubtitles: "Sottotitoli online",
+        preferredSubtitle: "Lingua dei sottotitoli preferita",
+        anyLanguage: "Qualsiasi",
+        apiKey: "Chiave API",
+        assrtToken: "Token API",
+        saveSubtitleSettings: "Salva impostazioni sottotitoli",
+        configured: "Configurato",
+        notConfigured: "Non configurato",
+        builtInAccess: "Accesso integrato",
         uploadM3uFiles: "Carica file M3U",
         saving: "Salvataggio...",
         applyingOnTv: "Applicazione sulla TV...",
@@ -718,7 +815,6 @@
         pairTitle: "Conectar à TV",
         pairInstructions: "Digite o código de 4 dígitos exibido na TV.",
         pairCode: "Código de pareamento",
-        pairSubmit: "Conectar",
         pairFailed: "O código de pareamento está incorreto.",
         pairLocked: "Muitas tentativas. Tente novamente em um minuto.",
         setupSources: "Configurar fontes",
@@ -728,12 +824,21 @@
         addPlaylist: "Adicionar lista",
         xtreamAccount: "Conta Xtream",
         serverUrl: "URL do servidor",
-        username: "Usuário",
+        username: "Nome de usuário",
         password: "Senha",
         addAccount: "Adicionar conta",
         programGuideUrl: "URL do guia de programação",
         xmltvUrl: "URL XMLTV",
         saveProgramGuide: "Salvar guia de programação",
+        onlineSubtitles: "Legendas online",
+        preferredSubtitle: "Idioma de legenda preferido",
+        anyLanguage: "Qualquer idioma",
+        apiKey: "Chave da API",
+        assrtToken: "Token da API",
+        saveSubtitleSettings: "Salvar configurações de legenda",
+        configured: "Configurado",
+        notConfigured: "Não configurado",
+        builtInAccess: "Acesso integrado",
         uploadM3uFiles: "Enviar arquivos M3U",
         saving: "Salvando...",
         applyingOnTv: "Aplicando na TV...",
@@ -768,7 +873,6 @@
         pairTitle: "Подключение к телевизору",
         pairInstructions: "Введите 4-значный код с экрана телевизора.",
         pairCode: "Код подключения",
-        pairSubmit: "Подключить",
         pairFailed: "Неверный код подключения.",
         pairLocked: "Слишком много попыток. Повторите через минуту.",
         setupSources: "Настройка источников",
@@ -784,6 +888,15 @@
         programGuideUrl: "URL телепрограммы",
         xmltvUrl: "URL XMLTV",
         saveProgramGuide: "Сохранить телепрограмму",
+        onlineSubtitles: "Онлайн-субтитры",
+        preferredSubtitle: "Предпочитаемый язык субтитров",
+        anyLanguage: "Любой",
+        apiKey: "Ключ API",
+        assrtToken: "Токен API",
+        saveSubtitleSettings: "Сохранить настройки субтитров",
+        configured: "Настроено",
+        notConfigured: "Не настроено",
+        builtInAccess: "Встроенный доступ",
         uploadM3uFiles: "Загрузить файлы M3U",
         saving: "Сохранение...",
         applyingOnTv: "Применение на телевизоре...",
@@ -820,7 +933,6 @@
         pairTitle: "Підключення до телевізора",
         pairInstructions: "Введіть 4-значний код з екрана телевізора.",
         pairCode: "Код підключення",
-        pairSubmit: "Підключити",
         pairFailed: "Неправильний код підключення.",
         pairLocked: "Забагато спроб. Повторіть через хвилину.",
         setupSources: "Налаштування джерел",
@@ -836,6 +948,15 @@
         programGuideUrl: "URL телепрограми",
         xmltvUrl: "URL XMLTV",
         saveProgramGuide: "Зберегти телепрограму",
+        onlineSubtitles: "Онлайн-субтитри",
+        preferredSubtitle: "Бажана мова субтитрів",
+        anyLanguage: "Будь-яка",
+        apiKey: "Ключ API",
+        assrtToken: "Токен API",
+        saveSubtitleSettings: "Зберегти налаштування субтитрів",
+        configured: "Налаштовано",
+        notConfigured: "Не налаштовано",
+        builtInAccess: "Вбудований доступ",
         uploadM3uFiles: "Завантажити файли M3U",
         saving: "Збереження...",
         applyingOnTv: "Застосування на телевізорі...",
@@ -872,7 +993,6 @@
         pairTitle: "连接电视",
         pairInstructions: "输入电视上显示的 4 位配对码。",
         pairCode: "配对码",
-        pairSubmit: "连接",
         pairFailed: "配对码不正确。",
         pairLocked: "尝试次数过多，请一分钟后重试。",
         setupSources: "设置节目源",
@@ -888,6 +1008,15 @@
         programGuideUrl: "节目指南 URL",
         xmltvUrl: "XMLTV URL",
         saveProgramGuide: "保存节目指南",
+        onlineSubtitles: "在线字幕",
+        preferredSubtitle: "首选字幕语言",
+        anyLanguage: "不限",
+        apiKey: "API 密钥",
+        assrtToken: "API 令牌",
+        saveSubtitleSettings: "保存字幕设置",
+        configured: "已配置",
+        notConfigured: "未配置",
+        builtInAccess: "内置访问",
         uploadM3uFiles: "上传 M3U 文件",
         saving: "正在保存...",
         applyingOnTv: "正在应用到电视...",
@@ -955,7 +1084,6 @@
     document.querySelector(".pair-title").textContent = tr("pairTitle");
     document.querySelector(".pair-instructions").textContent = tr("pairInstructions");
     pairCode.setAttribute("aria-label", tr("pairCode"));
-    pairSubmit.textContent = tr("pairSubmit");
     document.querySelector(".title").textContent = tr("title");
     document.querySelector(".subtitle").textContent = tr("subtitle");
     var messageEls = document.querySelectorAll("[data-message]");
@@ -982,12 +1110,15 @@
 
   pairCode.addEventListener("input", function () {
     pairCode.value = pairCode.value.replace(/[^0-9]/g, "").slice(0, 4);
+    if (pairCode.value.length === 4 && !pairCode.disabled) {
+      pairForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    }
   });
 
   pairForm.addEventListener("submit", function (event) {
     event.preventDefault();
-    if (!pairForm.reportValidity()) return;
-    pairSubmit.disabled = true;
+    if (pairCode.disabled || !pairForm.reportValidity()) return;
+    pairCode.disabled = true;
     pairStatus.textContent = "";
     fetch("/pair", {
       method: "POST",
@@ -1006,7 +1137,7 @@
       showSetup();
     }).catch(function (error) {
       pairStatus.textContent = tr(error.message === "locked" ? "pairLocked" : "pairFailed");
-      pairSubmit.disabled = false;
+      pairCode.disabled = false;
       pairCode.select();
     });
   });
@@ -1028,6 +1159,10 @@
   }
 
   function submitSetup(form) {
+    if (form.getAttribute("data-action") === "online-subtitles") {
+      submitSubtitleSetup(form);
+      return;
+    }
     if (!form.reportValidity()) return;
     var button = form.querySelector(".config-save");
     var status = form.querySelector(".config-status");
@@ -1045,6 +1180,65 @@
       return refreshSetupState();
     }).then(function () {
       form.reset();
+      status.className = "config-status ok";
+      status.textContent = tr("savedToTv");
+      button.disabled = false;
+    }).catch(function (error) {
+      status.className = "config-status err";
+      status.textContent = error.message === "timeout" ? tr("setupTimedOut") : tr("setupFailed");
+      button.disabled = false;
+    });
+  }
+
+  function submitSubtitleSetup(form) {
+    var credentialMask = "********";
+    var button = form.querySelector(".config-save");
+    var status = form.querySelector(".config-status");
+    var value = function (name) {
+      return form.elements[name].value.trim();
+    };
+    var credentialUpdate = function (name) {
+      var input = form.elements[name];
+      if (!input.dataset.dirty || input.value === credentialMask) return undefined;
+      if (/^\**$/.test(input.value)) return "";
+      return input.value.trim();
+    };
+    var textUpdate = function (name) {
+      var input = form.elements[name];
+      return input.dataset.dirty ? input.value.trim() : undefined;
+    };
+    var payload = {
+      type: "online-subtitles",
+      preferredLanguage: value("preferredLanguage"),
+    };
+    var subdlApiKey = credentialUpdate("subdlApiKey");
+    var assrtApiKey = credentialUpdate("assrtApiKey");
+    if (subdlApiKey !== undefined) payload.subdlApiKey = subdlApiKey;
+    if (assrtApiKey !== undefined) payload.assrtApiKey = assrtApiKey;
+    var opensubtitles = {};
+    var osFields = [
+      ["apiKey", credentialUpdate("opensubtitlesApiKey")],
+      ["username", textUpdate("opensubtitlesUsername")],
+      ["password", credentialUpdate("opensubtitlesPassword")],
+    ];
+    osFields.forEach(function (field) {
+      if (field[1] !== undefined) opensubtitles[field[0]] = field[1];
+    });
+    if (Object.keys(opensubtitles).length > 0) {
+      payload.opensubtitles = opensubtitles;
+    }
+
+    button.disabled = true;
+    status.className = "config-status";
+    status.textContent = tr("saving");
+    requestSetupAction(payload, function () {
+      status.textContent = tr("applyingOnTv");
+    }).then(function () {
+      Array.from(form.elements).forEach(function (field) {
+        if (field.dataset) field.dataset.dirty = "";
+      });
+      return refreshSetupState();
+    }).then(function () {
       status.className = "config-status ok";
       status.textContent = tr("savedToTv");
       button.disabled = false;
@@ -1110,12 +1304,44 @@
         "EPG", tr("programGuideUrl"), state.epgUrl, ""));
       count += 1;
     }
+    renderSubtitleState(state.onlineSubtitles || {});
     if (count === 0) {
       var empty = document.createElement("div");
       empty.className = "configured-empty";
       empty.textContent = tr("noConfiguredSources");
       configuredList.appendChild(empty);
     }
+  }
+
+  function renderSubtitleState(state) {
+    var credentialMask = "********";
+    if (!subtitleForm.elements.preferredLanguage.dataset.dirty) {
+      subtitleForm.elements.preferredLanguage.value = state.preferredLanguage || "";
+    }
+    var setCredential = function (name, configured) {
+      var input = subtitleForm.elements[name];
+      if (!input.dataset.dirty) input.value = configured ? credentialMask : "";
+    };
+    setCredential("subdlApiKey", state.subdlConfigured);
+    setCredential("assrtApiKey", state.assrtConfigured);
+    setCredential(
+      "opensubtitlesApiKey",
+      state.opensubtitlesApiKeyConfigured === undefined
+        ? state.opensubtitlesConfigured
+        : state.opensubtitlesApiKeyConfigured);
+    setCredential(
+      "opensubtitlesPassword",
+      state.opensubtitlesPasswordConfigured === undefined
+        ? state.opensubtitlesConfigured
+        : state.opensubtitlesPasswordConfigured);
+    var username = subtitleForm.elements.opensubtitlesUsername;
+    if (!username.dataset.dirty) username.value = state.opensubtitlesUsername || "";
+    subtitleState.textContent = [
+      "SubDL: " + tr(state.subdlConfigured ? "configured" : "notConfigured"),
+      "Assrt: " + tr(state.assrtConfigured ? "configured" : "builtInAccess"),
+      "OpenSubtitles: " +
+        tr(state.opensubtitlesConfigured ? "configured" : "notConfigured"),
+    ].join(" · ");
   }
 
   function refreshSetupState() {
@@ -1150,6 +1376,31 @@
       submitSetup(event.currentTarget);
     });
   }
+  subtitleForm.addEventListener("input", function (event) {
+    event.target.dataset.dirty = "true";
+  });
+  subtitleForm.addEventListener("change", function (event) {
+    event.target.dataset.dirty = "true";
+  });
+  subtitleForm.addEventListener("focusin", function (event) {
+    if (event.target.value === "********" && event.target.select) event.target.select();
+  });
+  subtitleForm.addEventListener("keydown", function (event) {
+    if (event.target.value === "********" &&
+        (event.key === "Backspace" || event.key === "Delete")) {
+      event.preventDefault();
+      event.target.value = "";
+      event.target.dataset.dirty = "true";
+    }
+  });
+  subtitleForm.addEventListener("beforeinput", function (event) {
+    if (event.target.value === "********" &&
+        event.inputType && event.inputType.indexOf("delete") === 0) {
+      event.preventDefault();
+      event.target.value = "";
+      event.target.dataset.dirty = "true";
+    }
+  });
 
   // Drag-over highlight + drop handling. We listen on the whole document for
   // dragover/dragleave so the highlight feels reactive across the page, but

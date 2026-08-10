@@ -939,8 +939,8 @@ export const StorageService = {
       },
     };
   },
-  setOnlineSubtitleConfig(cfg: OnlineSubtitleConfig): void {
-    set('online_subtitles', cfg);
+  setOnlineSubtitleConfig(cfg: OnlineSubtitleConfig): boolean {
+    return set('online_subtitles', cfg);
   },
 
   getPickedOnlineSub(accountId: string, kind: ResumeKind, itemId: string): PickedOnlineSub | null {
