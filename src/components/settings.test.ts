@@ -213,6 +213,10 @@ describe('Settings.render', () => {
         .toContain('438 MiB');
     });
     expect(container.querySelector('.cache-usage-total')?.textContent).toContain('1.00 GiB');
+    expect(container.querySelector('.cache-usage-ring-used')
+      ?.getAttribute('stroke-dasharray')).toBe('42.8 100');
+    expect(container.querySelector('.cache-usage-ring-used')
+      ?.getAttribute('transform')).toBe('rotate(-90 60 60)');
     const breakdown = container.querySelector('.cache-usage-breakdown')!;
     expect(breakdown.previousElementSibling?.classList.contains('cache-usage-total')).toBe(true);
     expect(breakdown.children).toHaveLength(4);

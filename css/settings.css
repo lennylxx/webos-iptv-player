@@ -435,16 +435,54 @@
 }
 
 .cache-usage-total {
+  position: relative;
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 22px;
+  width: 190px;
+  height: 190px;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
   color: var(--text-secondary);
 }
 
-.cache-usage-total strong {
-  font-size: 30px;
+.cache-usage-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 190px;
+  height: 190px;
+}
+
+.cache-usage-ring circle {
+  fill: none;
+  stroke-width: 14;
+}
+
+.cache-usage-ring-track {
+  stroke: var(--bg-tertiary);
+}
+
+.cache-usage-ring-used {
+  stroke: var(--accent);
+  stroke-linecap: butt;
+}
+
+.cache-usage-value {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.cache-usage-value strong {
+  font-size: 27px;
   color: var(--text-primary);
+}
+
+.cache-usage-value span {
+  font-size: 16px;
 }
 
 .cache-usage-breakdown {
