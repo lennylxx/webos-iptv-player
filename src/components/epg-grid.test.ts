@@ -35,6 +35,7 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
     epgMock: {
       get programmes() { return state.programmes; },
       findChannelId: vi.fn((ch: any) => (state.programmes[ch.name] ? ch.name : null)),
+      getSourceUrl: vi.fn(() => 'http://host/epg.xml'),
       getProgrammesStartingInRange(id: string, from: number, to: number) {
         return (state.programmes[id] ?? [])
           .filter(programme => programme.start.getTime() >= from && programme.start.getTime() < to);

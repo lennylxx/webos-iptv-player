@@ -42,6 +42,8 @@ export const CONFIG = {
     VISIBLE_HOURS: 6,
     PIXELS_PER_MINUTE: (1920 - 200) / (6 * 60),
     TIME_SLOT_MINUTES: 30,
+    OFFSET_STEP_MINUTES: 15,
+    OFFSET_MAX_MINUTES: 12 * 60,
   },
 
   // Xtream Movies/Series catalog + resume tuning.

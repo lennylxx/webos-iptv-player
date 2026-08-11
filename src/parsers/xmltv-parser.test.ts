@@ -12,6 +12,20 @@ function xmltvDate(d: Date): string {
 }
 
 describe('parseXMLTV', () => {
+  it('reads a human-readable source name from the XMLTV root', () => {
+    const result = parseXMLTV(`<?xml version="1.0"?>
+      <tv source-info-name="Guide Alpha" generator-info-name="Generator">
+      </tv>`);
+
+    expect(result.sourceName).toBe('Guide Alpha');
+  });
+
+  it('falls back to the XMLTV generator name', () => {
+    const result = parseXMLTV('<tv generator-info-name="Generator Alpha"></tv>');
+
+    expect(result.sourceName).toBe('Generator Alpha');
+  });
+
   it('parses channels with display names and icons', () => {
     const xml = `<?xml version="1.0"?>
       <tv>

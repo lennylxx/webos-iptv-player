@@ -52,6 +52,8 @@ export interface EpgSource {
   url: string;
   playlistIds: string[];
   kind: 'manual' | 'm3u' | 'xtream';
+  /** User correction applied after parsing; cached source timestamps stay unchanged. */
+  offsetMinutes?: number;
 }
 
 export interface ParsedPlaylist {
@@ -110,6 +112,8 @@ export interface EpgChannel {
 export interface ParsedEpg {
   channels: Record<string, EpgChannel>;
   programmes: Record<string, Programme[]>;
+  /** Optional human-readable feed name declared on the XMLTV root element. */
+  sourceName?: string;
   /** Minutes east of UTC declared by the feed's timestamps (e.g. +0100 -> 60), or null if none carry an offset. */
   tzOffsetMinutes?: number | null;
 }
@@ -176,6 +180,8 @@ export interface CatchupInfo {
   title: string;
   description: string;
   icon: string;
+  /** EPG feed that supplied the corrected programme times. */
+  epgSourceUrl?: string;
   /** If set, seek to this position (seconds) once metadata loads — set by resume callers. */
   resumeSecs?: number;
 }
@@ -185,6 +191,7 @@ export interface Reminder {
   channelKey: string;
   channelName: string;
   playlistIds?: string[];
+  epgSourceUrl?: string;
   title: string;
   startMs: number;
   stopMs: number;
@@ -428,6 +435,7 @@ export interface CatchupProgressEntry {
   channelKey: string;
   progStart: number;   // programme start epoch ms
   progEnd: number;     // programme end epoch ms
+  epgSourceUrl?: string;
   title?: string;      // display snapshot for Recently Watched; absent on legacy entries
   description?: string;
   icon?: string;

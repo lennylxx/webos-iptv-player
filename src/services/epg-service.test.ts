@@ -93,15 +93,30 @@ describe('EpgService programme lookup', () => {
 });
 
 describe('EpgService multi-source matching', () => {
+  it('applies a source offset without mutating parsed program times', async () => {
+    const data = parsed('a', 'Alpha', 'Shifted');
+    const originalStart = data.programmes.a[0].start.getTime();
+    vi.mocked(parseXMLTV).mockReturnValue(data);
+
+    await EpgService.load([{ ...source('http://a', ['a']), offsetMinutes: 60 }]);
+
+    const id = EpgService.findChannelId(channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }));
+    expect(EpgService.programmes[id!][0].start).toEqual(h(0));
+    expect(EpgService.programmes[id!][0].stop).toEqual(h(2));
+    expect(data.programmes.a[0].start.getTime()).toBe(originalStart);
+  });
+
   it('keeps colliding XMLTV ids isolated and uses the channel owning playlist', async () => {
     vi.mocked(parseXMLTV).mockImplementation((text) =>
       text === 'http://a' ? parsed('shared', 'Alpha', 'From A') : parsed('shared', 'Bravo', 'From B'));
 
     await EpgService.load([source('http://a', ['a']), source('http://b', ['b'], 'xtream')]);
 
-    const aId = EpgService.findChannelId(channel({ id: 'shared', name: 'Alpha', playlistIds: ['a'] }));
+    const alpha = channel({ id: 'shared', name: 'Alpha', playlistIds: ['a'] });
+    const aId = EpgService.findChannelId(alpha);
     const bId = EpgService.findChannelId(channel({ id: 'shared', name: 'Bravo', playlistIds: ['b'] }));
     expect(aId).not.toBe(bId);
+    expect(EpgService.getSourceUrl(alpha)).toBe('http://a');
     expect(EpgService.getNowPlaying(aId!)?.title).toBe('From A');
     expect(EpgService.getNowPlaying(bId!)?.title).toBe('From B');
   });

@@ -504,6 +504,7 @@ export class Search {
           channelKey: key,
           channelName: channel.name,
           playlistIds: channel.playlistIds.slice(),
+          epgSourceUrl: EpgService.getSourceUrl(channel) ?? undefined,
           title: programme.title,
           startMs,
           stopMs: programme.stop.getTime(),
@@ -559,6 +560,7 @@ export class Search {
         title: programme.title,
         description: programme.description,
         icon: programme.icon,
+        epgSourceUrl: EpgService.getSourceUrl(channel) ?? undefined,
         resumeSecs,
       };
     }

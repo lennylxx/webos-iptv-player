@@ -65,6 +65,26 @@ describe('StorageService', () => {
     expect(StorageService.getEpgUrl()).toBe('http://epg/guide.xml');
   });
 
+  it('round-trips sanitized EPG source offsets and omits zero values', () => {
+    StorageService.setEpgOffsets({
+      'http://host/a': 30,
+      'http://host/b': -90,
+      'http://host/zero': 0,
+      'http://host/high': 900,
+    });
+
+    expect(StorageService.getEpgOffsets()).toEqual({
+      'http://host/a': 30,
+      'http://host/b': -90,
+      'http://host/high': CONFIG.EPG.OFFSET_MAX_MINUTES,
+    });
+  });
+
+  it('ignores a malformed EPG offset map', () => {
+    StorageService.set('epg_offsets', null);
+    expect(StorageService.getEpgOffsets()).toEqual({});
+  });
+
   it('defaults the theme to midnight and round-trips a selection', () => {
     expect(StorageService.getTheme()).toBe('midnight');
     StorageService.setTheme('arctic');
@@ -491,6 +511,67 @@ describe('StorageService catchup progress store', () => {
     expect(got!.position).toBe(60);
     expect(got!.completed).toBe(false);
     expect(got).toMatchObject({ title: 'Program Alpha', description: 'Summary', icon: 'http://host/a' });
+  });
+
+  it('migrates catchup progress keys when an EPG offset changes', () => {
+    const start = baseNow - HOUR;
+    StorageService.setCatchupProgress(mkEntry({
+      progStart: start,
+      epgSourceUrl: 'http://host/epg.xml',
+    }), 7, baseNow);
+
+    StorageService.migrateCatchupEpgOffsets(
+      {},
+      { 'http://host/epg.xml': 30 },
+      {},
+    );
+
+    expect(StorageService.getCatchupProgress('ck1', start, baseNow)).toBeNull();
+    expect(StorageService.getCatchupProgress('ck1', start + 30 * 60_000, baseNow))
+      .toMatchObject({
+        progEnd: baseNow + HOUR + 30 * 60_000,
+        epgSourceUrl: 'http://host/epg.xml',
+      });
+  });
+
+  it('migrates legacy catchup progress using its channel source', () => {
+    const start = baseNow - HOUR;
+    StorageService.setCatchupProgress(mkEntry({ progStart: start }), 7, baseNow);
+
+    StorageService.migrateCatchupEpgOffsets(
+      { 'http://host/epg.xml': 60 },
+      {},
+      { ck1: 'http://host/epg.xml' },
+    );
+
+    expect(StorageService.getCatchupProgress('ck1', start - HOUR, baseNow))
+      .toMatchObject({ epgSourceUrl: 'http://host/epg.xml' });
+  });
+
+  it('migrates adjacent catchup entries without overwriting either one', () => {
+    const first = baseNow - 2 * HOUR;
+    const second = baseNow - HOUR;
+    StorageService.setCatchupProgress(mkEntry({
+      progStart: first,
+      progEnd: second,
+      title: 'Alpha',
+      epgSourceUrl: 'http://host/epg.xml',
+    }), 7, baseNow);
+    StorageService.setCatchupProgress(mkEntry({
+      progStart: second,
+      progEnd: baseNow,
+      title: 'Bravo',
+      epgSourceUrl: 'http://host/epg.xml',
+    }), 7, baseNow);
+
+    StorageService.migrateCatchupEpgOffsets(
+      {},
+      { 'http://host/epg.xml': 60 },
+      {},
+    );
+
+    expect(StorageService.getCatchupProgress('ck1', second, baseNow)?.title).toBe('Alpha');
+    expect(StorageService.getCatchupProgress('ck1', baseNow, baseNow)?.title).toBe('Bravo');
   });
 
   it('isolates entries by channelKey', () => {

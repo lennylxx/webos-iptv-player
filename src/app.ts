@@ -523,9 +523,11 @@ class App {
     if (!StorageService.getPlaylists().some(isSourceEnabled)) return [];
     const manualUrl = StorageService.getEpgUrl();
     const discovered = PlaylistService.epgSources;
-    return manualUrl && !discovered.some((source) => source.url === manualUrl)
+    const sources: EpgSource[] = manualUrl && !discovered.some((source) => source.url === manualUrl)
       ? [{ url: manualUrl, playlistIds: [], kind: 'manual' }, ...discovered]
       : discovered;
+    const offsets = StorageService.getEpgOffsets();
+    return sources.map(source => ({ ...source, offsetMinutes: offsets[source.url] ?? 0 }));
   }
 
   private stopEpgRefresh(): void {

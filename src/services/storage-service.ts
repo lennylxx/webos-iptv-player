@@ -523,6 +523,33 @@ export const StorageService = {
     return set('epg_url', url);
   },
 
+  getEpgOffsets(): Record<string, number> {
+    const stored = get<unknown>('epg_offsets', {});
+    const offsets: Record<string, number> = {};
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return offsets;
+    for (const url of Object.keys(stored)) {
+      const value = (stored as Record<string, unknown>)[url];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) continue;
+      offsets[url] = Math.max(
+        -CONFIG.EPG.OFFSET_MAX_MINUTES,
+        Math.min(CONFIG.EPG.OFFSET_MAX_MINUTES, Math.round(value)),
+      );
+    }
+    return offsets;
+  },
+  setEpgOffsets(offsets: Record<string, number>): void {
+    const sanitized: Record<string, number> = {};
+    for (const url of Object.keys(offsets)) {
+      const value = offsets[url];
+      if (!url || !Number.isFinite(value) || value === 0) continue;
+      sanitized[url] = Math.max(
+        -CONFIG.EPG.OFFSET_MAX_MINUTES,
+        Math.min(CONFIG.EPG.OFFSET_MAX_MINUTES, Math.round(value)),
+      );
+    }
+    set('epg_offsets', sanitized);
+  },
+
   getReminders(): Reminder[] {
     return userData ? cloneValue(userData.reminders) : get<Reminder[]>('reminders', []);
   },
@@ -1037,6 +1064,55 @@ export const StorageService = {
       );
     } else {
       set('catchup_progress', all);
+    }
+  },
+
+  migrateCatchupEpgOffsets(
+    previous: Record<string, number>,
+    next: Record<string, number>,
+    sourceByChannel: Record<string, string>,
+  ): void {
+    const all = userData
+      ? userData.catchupProgress
+      : get<Record<string, StoredCatchup>>('catchup_progress', {});
+    const migratedAll: Record<string, StoredCatchup> = {};
+    let changed = false;
+    for (const entry of Object.keys(all).map(key => all[key])) {
+      const sourceUrl = entry.epgSourceUrl ?? sourceByChannel[entry.channelKey];
+      const deltaMs = sourceUrl
+        ? ((next[sourceUrl] ?? 0) - (previous[sourceUrl] ?? 0)) * 60_000
+        : 0;
+      const migrated = deltaMs
+        ? {
+            ...entry,
+            progStart: entry.progStart + deltaMs,
+            progEnd: entry.progEnd + deltaMs,
+            expiresAt: entry.expiresAt + deltaMs,
+            epgSourceUrl: sourceUrl,
+          }
+        : entry;
+      changed = changed || deltaMs !== 0;
+      const migratedKey = `${migrated.channelKey}|${migrated.progStart}`;
+      const existing = migratedAll[migratedKey];
+      if (!existing || existing.updatedAt <= migrated.updatedAt) {
+        migratedAll[migratedKey] = migrated;
+      }
+    }
+    if (!changed) return;
+    if (userData) {
+      const toRecord = (entry: StoredCatchup) =>
+        record(catchupKey(entry), entry, {
+          updatedAt: entry.updatedAt,
+          expiresAt: entry.expiresAt,
+        });
+      userData.catchupProgress = migratedAll;
+      syncUserRecords(
+        'playback-progress',
+        Object.keys(all).map(key => toRecord(all[key])),
+        Object.keys(migratedAll).map(key => toRecord(migratedAll[key])),
+      );
+    } else {
+      set('catchup_progress', migratedAll);
     }
   },
 

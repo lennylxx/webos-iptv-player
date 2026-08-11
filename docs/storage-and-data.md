@@ -96,6 +96,7 @@ This is the complete active key inventory:
 | `iptv_overlay_style` | `dark \| frosted` | Player OSD/sidebar/menu glass style | Preference |
 | `iptv_tz_mode` | `device \| feed` | Which time zone displays EPG times | Preference |
 | `iptv_epg_tz_offset` | `number \| null` | Last known feed offset in minutes east of UTC | Small derived state |
+| `iptv_epg_offsets` | `Record<string, number>` | User time correction in minutes, keyed by EPG source URL | Preference |
 | `iptv_online_subtitles` | `OnlineSubtitleConfig` | Preferred language; SubDL and Assrt API keys; OpenSubtitles API key, username, password, access token, and token timestamp | Configuration and credentials |
 | `iptv_log_level` | `string` | Optional runtime logger threshold used by diagnostics | Developer preference |
 
@@ -120,7 +121,7 @@ the `iptv_` prefix.
 | Object store | Key examples | Additional indexes | Contents |
 | --- | --- | --- | --- |
 | `favorites` | `favorite:<channel-key>` | None | Stable channel keys |
-| `reminders` | `reminder:<channel-key>\|<start-ms>` | None | Channel key/name, program title, start/stop milliseconds, answered flag; `updatedAt` is the start time |
+| `reminders` | `reminder:<channel-key>\|<start-ms>` | None | Channel key/name, EPG source URL, program title, start/stop milliseconds, answered flag; `updatedAt` is the start time |
 | `channel-state` | `custom:meta` | None | Customization version, channel/group order, and user-created group keys |
 | `channel-state` | `custom:channel:<channel-key>` | None | Optional renamed display name, destination group, and hidden flag |
 | `channel-state` | `custom:group:<group-key>` | None | Optional renamed group name and hidden flag |
@@ -129,7 +130,7 @@ the `iptv_` prefix.
 | `channel-state` | `offset:<channel-key>` | None | Subtitle timing adjustment in seconds |
 | `watchlist` | `watch:<account-id>\|<vod-or-series>\|<item-id>` | `scope` | Name, poster, rating, category, extension, and added time; scope is account and content kind |
 | `playback-progress` | `resume:<account-id>\|<vod-or-episode>\|<item-id>` | `expiresAt`, `updatedAt` | Position, duration, title/poster/extension snapshot, optional autoplay queue and Watchlist owner |
-| `playback-progress` | `catchup:<channel-key>\|<program-start>` | `expiresAt`, `updatedAt` | Program start/stop, title/description/icon snapshot, position, completion, update time, and computed expiry |
+| `playback-progress` | `catchup:<channel-key>\|<program-start>` | `expiresAt`, `updatedAt` | EPG source URL, program start/stop, title/description/icon snapshot, position, completion, update time, and computed expiry |
 | `recently-watched` | `live:<channel-key>` | `updatedAt` | Channel key and last-confirmed watch time; capped to 30 live entries |
 | `online-sub-picks` | `pick:<account-id>\|<vod-or-episode>\|<item-id>` | None | Provider id, provider result id, display name, language, and subtitle format |
 
@@ -380,6 +381,8 @@ correct time; the authoritative reminder record remains in IndexedDB.
 Removing or pruning a reminder sends Activity Manager a best-effort cancel by
 activity name. Startup reschedules every still-pending reminder with
 `replace: true`, repairing missing OS activities without creating duplicates.
+Changing an EPG source's time correction migrates reminder and catch-up keys to
+the corrected program time. The old reminder activity is canceled and replaced.
 
 ### Browser-managed HTTP cache
 

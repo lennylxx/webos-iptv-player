@@ -88,6 +88,28 @@ test('each playlist channel uses its own EPG when XMLTV ids collide', async ({ p
   await expect(page.locator('#epg-programmes')).not.toContainText('Bravo Program');
 });
 
+test('applies the saved time correction only to its EPG source', async ({ page }) => {
+  await setup(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_epg_offsets', JSON.stringify({
+      'http://host/m3u.xml': 60,
+    }));
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
+  await expect(page.locator('#view-epg')).toBeVisible();
+
+  const alpha = page.locator('.epg-programme-item').filter({ hasText: 'Alpha Program' });
+  await expect(alpha.locator('.epg-prog-time')).toHaveText('12:00');
+
+  await page.locator('#epg-channels .epg-channel-item').filter({ hasText: 'Bravo' }).click();
+  const bravo = page.locator('.epg-programme-item').filter({ hasText: 'Bravo Program' });
+  await expect(bravo.locator('.epg-prog-time')).toHaveText('11:00');
+});
+
 test('filters EPG channels by source, group, and channel name', async ({ page }) => {
   await setup(page);
   await page.goto('/');

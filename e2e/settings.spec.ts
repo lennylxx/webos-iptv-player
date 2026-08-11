@@ -204,6 +204,50 @@ test.describe('Settings navigation', () => {
     }
   });
 
+  test('keeps localized EPG time correction text and controls within the section', async ({ page }) => {
+    const locales = ['en', 'de', 'es', 'fr', 'it', 'pt-BR', 'ru', 'uk', 'zh-CN'];
+    await page.goto('/');
+
+    for (const locale of locales) {
+      await page.evaluate((value) => {
+        localStorage.setItem('iptv_locale', JSON.stringify(value));
+      }, locale);
+      await page.reload();
+      await page.locator('[data-settings-target="guide"]').click();
+
+      const layout = await page.locator('.epg-offset-controls').evaluate((controls) => {
+        const item = controls.closest<HTMLElement>('.settings-item')!;
+        const section = controls.closest<HTMLElement>('.settings-section')!;
+        const dropdown = controls.querySelector<HTMLElement>('.dropdown')!;
+        const stepper = controls.querySelector<HTMLElement>('.epg-offset-stepper')!;
+        const sectionRight = section.getBoundingClientRect().right;
+        const overflowing = Array.from(item.querySelectorAll<HTMLElement>(
+          '.settings-item-title, .settings-item-hint, .epg-offset-controls',
+        )).filter(element =>
+          element.scrollWidth > element.clientWidth + 1
+          || element.getBoundingClientRect().right > sectionRight + 1)
+          .map(element => element.textContent?.trim() ?? '');
+        const hintLines = Array.from(item.querySelectorAll<HTMLElement>('.settings-item-hint'))
+          .map(element => Math.round(
+            element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight),
+          ));
+        return {
+          overflowing,
+          hintLines,
+          dropdownTop: Math.round(dropdown.getBoundingClientRect().top),
+          stepperTop: Math.round(stepper.getBoundingClientRect().top),
+          controlsRight: Math.round(controls.getBoundingClientRect().right),
+          sectionRight: Math.round(sectionRight),
+        };
+      });
+
+      expect(layout.overflowing, locale).toEqual([]);
+      expect(Math.max(...layout.hintLines), locale).toBeLessThanOrEqual(2);
+      expect(layout.stepperTop, locale).toBe(layout.dropdownTop);
+      expect(layout.controlsRight, locale).toBeLessThanOrEqual(layout.sectionRight);
+    }
+  });
+
   test('lays out the 15 theme swatches across three full rows', async ({ page }) => {
     await page.goto('/');
     await page.locator('[data-settings-target="appearance"]').click();

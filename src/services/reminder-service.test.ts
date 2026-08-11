@@ -110,6 +110,71 @@ describe('ReminderService store', () => {
 
     expect(ReminderService.list()[0].playlistIds).toEqual(['p1']);
   });
+
+  it('migrates reminder times when an EPG offset changes', () => {
+    ReminderService.add(rem({
+      startMs: 5_000_000,
+      stopMs: 6_000_000,
+      epgSourceUrl: 'http://host/epg.xml',
+    }));
+
+    ReminderService.migrateEpgOffsets(
+      {},
+      { 'http://host/epg.xml': 30 },
+      {},
+      1000,
+    );
+
+    expect(ReminderService.list()[0]).toMatchObject({
+      startMs: 6_800_000,
+      stopMs: 7_800_000,
+      epgSourceUrl: 'http://host/epg.xml',
+    });
+  });
+
+  it('migrates legacy reminders using their channel source', () => {
+    ReminderService.add(rem({ startMs: 5_000_000, stopMs: 6_000_000 }));
+
+    ReminderService.migrateEpgOffsets(
+      { 'http://host/epg.xml': 15 },
+      {},
+      { [keyA]: 'http://host/epg.xml' },
+      1000,
+    );
+
+    expect(ReminderService.list()[0].startMs).toBe(4_100_000);
+  });
+
+  it('deduplicates reminders that migrate to the same timestamp', () => {
+    ReminderService.add(rem({
+      title: 'Alpha',
+      startMs: 1_000,
+      stopMs: 2_000,
+      answered: true,
+      epgSourceUrl: 'http://host/a.xml',
+    }));
+    ReminderService.add(rem({
+      title: 'Bravo',
+      startMs: 3_601_000,
+      stopMs: 3_602_000,
+      epgSourceUrl: 'http://host/b.xml',
+    }));
+
+    ReminderService.migrateEpgOffsets(
+      {},
+      { 'http://host/a.xml': 60 },
+      {},
+      0,
+    );
+
+    expect(ReminderService.list()).toEqual([
+      expect.objectContaining({
+        title: 'Bravo',
+        startMs: 3_601_000,
+      }),
+    ]);
+    expect(ReminderService.list()[0].answered).toBeUndefined();
+  });
 });
 
 describe('ReminderService scheduling', () => {
@@ -156,6 +221,60 @@ describe('ReminderService scheduling', () => {
     ReminderService.remove(keyA, 5000);
     expect(request).toHaveBeenCalledWith('luna://com.webos.service.activitymanager',
       expect.objectContaining({ method: 'cancel', parameters: { activityName: `iptvReminder-${keyA}-5000` } }));
+  });
+
+  it('replaces the scheduled activity after an EPG offset change', () => {
+    const request = mockLuna();
+    const startMs = new Date(2030, 0, 2, 15, 0, 0).getTime();
+    ReminderService.add(rem({
+      startMs,
+      stopMs: startMs + 3_600_000,
+      epgSourceUrl: 'http://host/epg.xml',
+    }));
+    request.mockClear();
+
+    ReminderService.migrateEpgOffsets(
+      {},
+      { 'http://host/epg.xml': 30 },
+      {},
+      startMs - 3_600_000,
+    );
+
+    expect(request).toHaveBeenNthCalledWith(1,
+      'luna://com.webos.service.activitymanager',
+      expect.objectContaining({
+        method: 'cancel',
+        parameters: { activityName: `iptvReminder-${keyA}-${startMs}` },
+      }));
+    const create = request.mock.calls[1][1] as {
+      parameters: { activity: { name: string; schedule: { start: string } } };
+    };
+    expect(create.parameters.activity.name)
+      .toBe(`iptvReminder-${keyA}-${startMs + 30 * 60_000}`);
+    expect(create.parameters.activity.schedule.start).toBe('2030-01-02 15:30:00');
+  });
+
+  it('does not reschedule an answered reminder after an offset change', () => {
+    const request = mockLuna();
+    const startMs = new Date(2030, 0, 2, 15, 0, 0).getTime();
+    ReminderService.add(rem({
+      startMs,
+      stopMs: startMs + 3_600_000,
+      answered: true,
+      epgSourceUrl: 'http://host/epg.xml',
+    }));
+    request.mockClear();
+
+    ReminderService.migrateEpgOffsets(
+      {},
+      { 'http://host/epg.xml': 30 },
+      {},
+      startMs - 3_600_000,
+    );
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.every(([, options]) =>
+      (options as { method: string }).method === 'cancel')).toBe(true);
   });
 
   it('no-ops scheduling when Luna is unavailable', () => {

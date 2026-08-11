@@ -104,6 +104,7 @@ export const RecentlyWatchedService = {
       title: item.progress.title ?? '',
       description: item.progress.description ?? '',
       icon: item.progress.icon ?? '',
+      epgSourceUrl: item.progress.epgSourceUrl,
       resumeSecs: item.progress.position,
     };
   },

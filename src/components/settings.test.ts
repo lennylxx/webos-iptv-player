@@ -31,6 +31,7 @@ const {
     tzMode: 'device' as TzMode,
     showHidden: false,
     tzOffset: null as number | null,
+    epgOffsets: {} as Record<string, number>,
     locale: 'system' as const,
     onlineSubtitles: {
       preferredLanguage: '',
@@ -66,6 +67,7 @@ const {
       getTextSize: vi.fn(() => state.textSize),
       getTzMode: vi.fn(() => state.tzMode),
       getEpgTzOffset: vi.fn(() => state.tzOffset),
+      getEpgOffsets: vi.fn(() => ({ ...state.epgOffsets })),
       getLocalePreference: vi.fn(() => state.locale),
       getOnlineSubtitleConfig: vi.fn(() => state.onlineSubtitles),
       getSelectedXtreamAccountId: vi.fn(() => null),
@@ -81,6 +83,10 @@ const {
       setOverlayStyle: vi.fn((s: string) => { state.overlayStyle = s; }),
       setTextSize: vi.fn((s: string) => { state.textSize = s; }),
       setTzMode: vi.fn(),
+      setEpgOffsets: vi.fn((offsets: Record<string, number>) => {
+        state.epgOffsets = { ...offsets };
+      }),
+      migrateCatchupEpgOffsets: vi.fn(),
       setLocalePreference: vi.fn(),
       setOnlineSubtitleConfig: vi.fn((cfg: any) => { state.onlineSubtitles = cfg; }),
       remove: vi.fn(),
@@ -120,12 +126,15 @@ vi.mock('../services/upload-client', () => ({
   },
 }));
 vi.mock('../services/reminder-service', () => ({
-  ReminderService: { backfillSourceIds: vi.fn() },
+  ReminderService: { backfillSourceIds: vi.fn(), migrateEpgOffsets: vi.fn() },
 }));
 vi.mock('../services/setup-client', () => ({ SetupClient: setupMock }));
 
 import { Settings } from './settings';
 import { setLocale } from '../i18n';
+import { PlaylistService } from '../services/playlist-service';
+import { EpgService } from '../services/epg-service';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 
 let container: HTMLElement;
 let onSave: ReturnType<typeof vi.fn>;
@@ -140,6 +149,9 @@ beforeEach(() => {
   state.theme = 'midnight';
   state.overlayStyle = 'dark';
   state.textSize = '100';
+  state.epgOffsets = {};
+  PlaylistService.epgSources = [];
+  PlaylistService.channels = [];
   storageMock.getSelectedXtreamAccountId.mockReturnValue(null);
   state.onlineSubtitles = {
     preferredLanguage: '',
@@ -204,6 +216,27 @@ describe('Settings.render', () => {
     expect(container.querySelector('#playlist-entries .empty-hint')?.textContent).toBe('No playlists added yet');
   });
 
+  it('keeps disabled time correction controls visible before an EPG source is loaded', () => {
+    settings.render();
+
+    expect(container.querySelector('#epg-offset-source')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>(
+      '#epg-offset-source .dropdown-trigger',
+    )?.disabled).toBe(true);
+    expect(container.querySelectorAll('.epg-offset-stepper button:disabled')).toHaveLength(3);
+    expect(container.querySelector('#settings-guide')?.textContent)
+      .not.toContain('Load the program guide to discover sources');
+  });
+
+  it('places the EPG source dropdown and offset buttons in one control row', () => {
+    state.epg = 'http://host/epg.xml';
+    settings.render();
+
+    const controls = container.querySelector('.epg-offset-controls')!;
+    expect(controls.children[0]?.id).toBe('epg-offset-source');
+    expect(controls.children[1]?.classList.contains('epg-offset-stepper')).toBe(true);
+  });
+
   it('renders a row per configured playlist with its values', () => {
     state.playlists = [{ name: 'P1', url: 'http://a' }, { name: 'P2', url: 'http://b' }];
     state.epg = 'http://epg';
@@ -234,6 +267,147 @@ describe('Settings.render', () => {
     state.autoPlay = true;
     settings.render();
     expect(container.querySelector('#auto-play .toggle-option.active')!.getAttribute('data-value')).toBe('on');
+  });
+
+  it('adjusts and resets a manual EPG source offset with remote actions', () => {
+    state.epg = 'http://host/epg.xml';
+    settings.render();
+
+    const plus = container.querySelector<HTMLElement>('[data-offset-delta="15"]')!;
+    plus.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    settings.handleAction('select');
+    expect(container.querySelector('.epg-offset-value')?.textContent?.trim()).toBe('+15 min');
+    expect(container.querySelector('.epg-offset-preview')?.textContent).toContain('20:15');
+
+    const value = container.querySelector<HTMLElement>('.epg-offset-value')!;
+    value.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    settings.handleAction('select');
+    expect(container.querySelector('.epg-offset-value')?.textContent?.trim()).toBe('0 min');
+
+    value.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    settings.handleAction('left');
+    expect(container.querySelector('.epg-offset-value')?.textContent?.trim()).toBe('0 min');
+
+    const minus = container.querySelector<HTMLElement>('[data-offset-delta="-15"]')!;
+    minus.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    settings.handleAction('select');
+    click('#save-settings');
+    expect(storageMock.setEpgOffsets).toHaveBeenCalledWith({
+      'http://host/epg.xml': -15,
+    });
+    expect(onSave).toHaveBeenCalledWith('reload');
+  });
+
+  it('rebinds time correction when the manual XMLTV URL is edited', () => {
+    state.epg = 'http://host/old.xml';
+    state.epgOffsets = { 'http://host/old.xml': 30 };
+    settings.render();
+
+    const input = container.querySelector<HTMLInputElement>('#epg-url')!;
+    input.value = 'http://host/new.xml';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(container.querySelector<HTMLElement>('#epg-offset-source')?.dataset.value)
+      .toBe('http://host/new.xml');
+    expect(container.querySelector('.epg-offset-value')?.textContent?.trim()).toBe('0 min');
+    click('[data-offset-delta="15"]');
+    click('#save-settings');
+    expect(storageMock.setEpgOffsets).toHaveBeenCalledWith({
+      'http://host/new.xml': 15,
+    });
+  });
+
+  it('does not assign a source to an ambiguous legacy channel key', () => {
+    const first = {
+      id: 'ch1',
+      name: 'Alpha',
+      logo: '',
+      group: '',
+      url: 'http://host/live?id=1',
+      extras: null,
+      playlistIds: ['p1'],
+      catchup: '',
+      catchupSource: '',
+      catchupDays: 0,
+    };
+    const second = {
+      ...first,
+      id: 'ch2',
+      name: 'Bravo',
+      url: 'http://host/live?id=2',
+      playlistIds: ['p2'],
+    };
+    PlaylistService.channels = [first, second];
+    const sourceUrl = vi.spyOn(EpgService, 'getSourceUrl')
+      .mockImplementation(channel =>
+        channel === first ? 'http://host/a.xml' : 'http://host/b.xml');
+    settings.render();
+
+    click('#save-settings');
+
+    const sourceMap = storageMock.migrateCatchupEpgOffsets.mock.calls[0][2];
+    expect(sourceMap[channelKey(first)]).toBe('http://host/a.xml');
+    expect(sourceMap[channelKey(second)]).toBe('http://host/b.xml');
+    expect(sourceMap).not.toHaveProperty(legacyChannelKey(first));
+    sourceUrl.mockRestore();
+  });
+
+  it('switches between discovered EPG sources without mixing their offsets', () => {
+    state.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a' },
+      { id: 'p2', name: 'Bravo', url: 'http://host/b' },
+    ];
+    state.epgOffsets = { 'http://host/b.xml': 60 };
+    PlaylistService.epgSources = [
+      { url: 'http://host/a.xml', playlistIds: ['p1'], kind: 'm3u' },
+      { url: 'http://host/b.xml', playlistIds: ['p2'], kind: 'm3u' },
+    ];
+    settings.render();
+
+    click('#epg-offset-source [data-dropdown-trigger]');
+    click('#epg-offset-source [data-dropdown-value="http://host/b.xml"]');
+
+    expect(container.querySelector('#epg-offset-source .dropdown-current')?.textContent)
+      .toBe('Bravo');
+    expect(container.querySelector('.epg-offset-value')?.textContent?.trim()).toBe('+1 h');
+  });
+
+  it('uses XMLTV names and numbers unnamed EPG feeds from one playlist', () => {
+    state.playlists = [{ id: 'p1', name: 'Alpha', url: 'http://host/a' }];
+    PlaylistService.epgSources = [
+      { url: 'http://host/a.xml', playlistIds: ['p1'], kind: 'm3u' },
+      { url: 'http://host/b.xml', playlistIds: ['p1'], kind: 'm3u' },
+      { url: 'http://host/c.xml', playlistIds: ['p1'], kind: 'm3u' },
+    ];
+    const sourceName = vi.spyOn(EpgService, 'getSourceName')
+      .mockImplementation(url => url.endsWith('/a.xml') ? 'Guide Alpha' : null);
+
+    settings.render();
+
+    expect(Array.from(container.querySelectorAll('#epg-offset-source .dropdown-option'))
+      .map(option => option.textContent?.trim()))
+      .toEqual(['Guide Alpha', 'Alpha — EPG 1', 'Alpha — EPG 2']);
+    sourceName.mockRestore();
+  });
+
+  it('qualifies duplicate XMLTV names with playlist names', () => {
+    state.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a' },
+      { id: 'p2', name: 'Bravo', url: 'http://host/b' },
+    ];
+    PlaylistService.epgSources = [
+      { url: 'http://host/a.xml', playlistIds: ['p1'], kind: 'm3u' },
+      { url: 'http://host/b.xml', playlistIds: ['p2'], kind: 'm3u' },
+    ];
+    const sourceName = vi.spyOn(EpgService, 'getSourceName')
+      .mockReturnValue('Shared Guide');
+
+    settings.render();
+
+    expect(Array.from(container.querySelectorAll('#epg-offset-source .dropdown-option'))
+      .map(option => option.textContent?.trim()))
+      .toEqual(['Shared Guide — Alpha', 'Shared Guide — Bravo']);
+    sourceName.mockRestore();
   });
 
   it('shows total and per-category cache usage', async () => {

@@ -200,6 +200,51 @@
   line-height: 1.35;
 }
 
+.epg-offset-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.epg-offset-controls .dropdown {
+  flex: 0 1 auto;
+  width: max-content;
+  min-width: 320px;
+  max-width: calc(100% - 338px);
+}
+
+.epg-offset-controls .dropdown-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epg-offset-stepper {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding-left: 20px;
+}
+
+.epg-offset-step {
+  width: 54px;
+  min-width: 54px;
+}
+
+.epg-offset-value {
+  min-width: 180px;
+}
+
+.epg-offset-preview {
+  color: var(--text-secondary);
+}
+
+.epg-offset-unavailable {
+  opacity: .55;
+}
+
 .settings-view .btn:not(.btn-large) {
   padding-top: 12px;
   padding-bottom: 12px;

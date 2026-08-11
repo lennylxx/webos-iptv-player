@@ -13,6 +13,7 @@ const { catalogMock, playlistMock, epgMock, reminderMock, storageMock, archiveMo
   epgMock: {
     programmes: {} as Record<string, Programme[]>,
     findChannelId: vi.fn((channel: { id: string }) => channel.id),
+    getSourceUrl: vi.fn(() => 'http://host/epg.xml'),
   },
   reminderMock: { has: vi.fn(() => false), add: vi.fn(), remove: vi.fn() },
   storageMock: { getCatchupProgressList: vi.fn(() => [] as unknown[]), clearCatchupProgress: vi.fn() },

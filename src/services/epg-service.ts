@@ -92,6 +92,22 @@ class EpgServiceImpl {
     return this.getTimeIndex(channelId)?.atStart(timestamp) ?? null;
   }
 
+  getSourceName(url: string): string | null {
+    return this.states.get(url)?.data.sourceName?.trim() || null;
+  }
+
+  getSourceUrl(channel: Channel): string | null {
+    const channelId = this.findChannelId(channel);
+    if (!channelId) return null;
+    const separator = channelId.indexOf('::');
+    if (separator < 0) return null;
+    try {
+      return decodeURIComponent(channelId.slice(0, separator));
+    } catch {
+      return null;
+    }
+  }
+
   findChannelId(channel: Channel): string | null {
     if (!this.sources.length) return this.findLegacyChannelId(channel);
     const candidates = this.sources.filter((source) =>
@@ -129,6 +145,7 @@ class EpgServiceImpl {
           if (!existing.playlistIds.includes(id)) existing.playlistIds.push(id);
         }
         if (source.kind === 'manual') existing.kind = 'manual';
+        if (source.offsetMinutes !== undefined) existing.offsetMinutes = source.offsetMinutes;
       } else {
         merged.push({ ...source, playlistIds: source.playlistIds.slice() });
       }
@@ -271,9 +288,19 @@ class EpgServiceImpl {
       }
       for (const id in data.programmes) {
         const key = this.channelKey(source.url, id);
-        const programmes = data.programmes[id];
-        this.programmes[key] = programmes;
-        this.timeIndexes.set(key, { source: programmes, index: new EpgTimeIndex(programmes) });
+        const offsetMs = (source.offsetMinutes ?? 0) * 60_000;
+        const shiftedPrograms = offsetMs === 0
+          ? data.programmes[id]
+          : data.programmes[id].map(program => ({
+              ...program,
+              start: new Date(program.start.getTime() + offsetMs),
+              stop: new Date(program.stop.getTime() + offsetMs),
+            }));
+        this.programmes[key] = shiftedPrograms;
+        this.timeIndexes.set(key, {
+          source: shiftedPrograms,
+          index: new EpgTimeIndex(shiftedPrograms),
+        });
       }
     }
   }
@@ -380,7 +407,12 @@ function filterParsedEpg(
   const changed = keptChannels !== Object.keys(data.channels).length
     || keptProgrammeChannels !== Object.keys(data.programmes).length;
   return {
-    data: changed ? { channels, programmes, tzOffsetMinutes: data.tzOffsetMinutes } : data,
+    data: changed ? {
+      channels,
+      programmes,
+      sourceName: data.sourceName,
+      tzOffsetMinutes: data.tzOffsetMinutes,
+    } : data,
     changed,
   };
 }

@@ -77,6 +77,7 @@ export class XMLTVStreamParser {
   private readonly minTime: number;
   private readonly maxTime: number;
   private tzOffsetMinutes: number | null = null;
+  private sourceName: string | undefined;
 
   constructor(private readonly options: XMLTVParseOptions = {}) {
     const now = options.nowMs ?? Date.now();
@@ -105,6 +106,7 @@ export class XMLTVStreamParser {
     return {
       channels: this.channels,
       programmes: this.programmes,
+      sourceName: this.sourceName,
       tzOffsetMinutes: this.tzOffsetMinutes,
     };
   }
@@ -168,6 +170,19 @@ export class XMLTVStreamParser {
       if (tagEnd === -1) return this.incomplete(final);
       const name = readTagName(this.buffer, tagStart + 1, tagEnd);
       if (!TARGET_TAGS.has(name)) {
+        if (name === 'tv' && this.sourceName === undefined) {
+          this.sourceName = readAttribute(
+            this.buffer,
+            'source-info-name',
+            tagStart + 1,
+            tagEnd + 1,
+          )?.trim() || readAttribute(
+            this.buffer,
+            'generator-info-name',
+            tagStart + 1,
+            tagEnd + 1,
+          )?.trim() || undefined;
+        }
         this.cursor = tagEnd + 1;
         continue;
       }

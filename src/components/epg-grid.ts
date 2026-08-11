@@ -869,6 +869,7 @@ export class EpgGrid {
         title: prog.title,
         description: prog.description || '',
         icon: prog.icon || '',
+        epgSourceUrl: EpgService.getSourceUrl(channel) ?? undefined,
         resumeSecs,
       };
     }
@@ -933,6 +934,7 @@ export class EpgGrid {
         channelKey: chKey,
         channelName: channel.name,
         playlistIds: channel.playlistIds.slice(),
+        epgSourceUrl: EpgService.getSourceUrl(channel) ?? undefined,
         title: prog.title,
         startMs,
         stopMs: prog.stop.getTime(),

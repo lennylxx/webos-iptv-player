@@ -1,8 +1,9 @@
-import type { Action, PlaylistEntry, TzMode } from '../types';
+import type { Action, EpgSource, PlaylistEntry, TzMode } from '../types';
 import { $, $$, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SpatialNav } from '../navigation/spatial-nav';
 import { StorageService } from '../services/storage-service';
+import { EpgService } from '../services/epg-service';
 import { ChannelCustomizationService } from '../services/channel-customization';
 import { PlaylistService } from '../services/playlist-service';
 import {
@@ -16,6 +17,7 @@ import { ReminderService } from '../services/reminder-service';
 import { createXtreamClient } from '../services/xtream-client';
 import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
 import { genPlaylistId, isSourceEnabled } from '../utils/playlist';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 import { CONFIG } from '../config';
 import { THEMES, OVERLAY_STYLES, TEXT_SIZES, DEFAULT_TEXT_SIZE, type ThemeMeta, type OverlayStyle, type TextSize } from '../config/themes';
 import { previewTheme, applyTextSize } from '../services/theme-service';
@@ -52,6 +54,28 @@ function formatOffset(min: number): string {
   const sign = min > 0 ? '+' : '-';
   const abs = Math.abs(min);
   return `UTC${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+}
+
+function formatCorrection(min: number): string {
+  if (!min) return t('settings.offsetZero');
+  const sign = min > 0 ? '+' : '-';
+  const abs = Math.abs(min);
+  const hours = Math.floor(abs / 60);
+  const minutes = abs % 60;
+  const value = hours
+    ? `${hours} ${t('settings.offsetHours')}${minutes ? ` ${minutes} ${t('settings.offsetMinutes')}` : ''}`
+    : `${minutes} ${t('settings.offsetMinutes')}`;
+  return `${sign}${value}`;
+}
+
+function correctedTime(min: number): string {
+  const total = 20 * 60 + min;
+  const wrapped = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
+  return `${String(Math.floor(wrapped / 60)).padStart(2, '0')}:${String(wrapped % 60).padStart(2, '0')}`;
+}
+
+function correctionPreview(min: number): Safe {
+  return html`${t('settings.timeCorrectionExample')}: 20:00 -> ${correctedTime(min)}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -233,6 +257,17 @@ function dropdown(id: string, options: { value: string; label: string }[], activ
     </div>`;
 }
 
+function disabledDropdown(id: string, label: string): Safe {
+  return html`
+    <div class="dropdown epg-offset-unavailable" id="${id}" data-value="">
+      <span class="dropdown-sizer" aria-hidden="true"><span>${label}</span></span>
+      <button class="dropdown-trigger" disabled>
+        <span class="dropdown-current">${label}</span>
+        <span class="dropdown-caret"></span>
+      </button>
+    </div>`;
+}
+
 function sourceToggle(enabled: boolean): Safe {
   return html`
     <button class="source-toggle ${enabled ? 'active' : ''}" data-focusable
@@ -335,6 +370,8 @@ export class Settings {
   private nav: SpatialNav;
   // Pending theme selection (persisted on Save; live-previewed while browsing).
   private selectedTheme = '';
+  private epgOffsets: Record<string, number> = {};
+  private storedEpgOffsets: Record<string, number> = {};
   private confirmationPrompt = new ConfirmationPrompt();
   private watchlistAccount: PlaylistEntry | null = null;
   private ignoreCategoryScroll = false;
@@ -381,6 +418,11 @@ export class Settings {
       }
     });
 
+    this.container.addEventListener('input', (e: Event) => {
+      const input = e.target as HTMLInputElement;
+      if (input.id === 'epg-url') this.refreshEpgOffsetEditor(input.value.trim());
+    });
+
     // Pointer theme preview: hovering a swatch previews that theme app-wide;
     // moving the pointer off the swatches restores the currently selected theme
     // immediately (no deferring until focus lands elsewhere).
@@ -415,6 +457,9 @@ export class Settings {
       ?? enabledAccounts[0] ?? null;
     const uploads = allPlaylists.filter(pl => pl.source === 'upload');
     const epgUrl = StorageService.getEpgUrl();
+    this.storedEpgOffsets = StorageService.getEpgOffsets();
+    this.epgOffsets = { ...this.storedEpgOffsets };
+    const epgSources = this.epgSources(epgUrl, allPlaylists);
     const autoPlay = StorageService.getAutoPlay();
     const showHidden = StorageService.getShowHiddenChannels();
     const feedTime = StorageService.getTzMode() === 'feed';
@@ -569,6 +614,13 @@ export class Settings {
                     : t('settings.timeZoneKnown', { offset: formatOffset(tzOffset) })}
                 </div>
               </div>
+              <div class="settings-item">
+                <div class="settings-item-title">${t('settings.timeCorrection')}</div>
+                <div class="epg-offset-editor">
+                  ${this.epgOffsetEditor(epgSources, allPlaylists, epgSources[0]?.url)}
+                </div>
+                <div class="settings-item-hint">${t('settings.timeCorrectionHint')}</div>
+              </div>
             </div>
           </div>
 
@@ -703,6 +755,135 @@ export class Settings {
     void this.loadCacheUsage();
   }
 
+  private epgSources(manualUrl: string, playlists: PlaylistEntry[]): EpgSource[] {
+    const enabledIds = new Set(playlists.filter(isSourceEnabled).map(source => source.id));
+    const discovered = PlaylistService.epgSources
+      .map(source => ({
+        ...source,
+        playlistIds: source.playlistIds.filter(id => enabledIds.has(id)),
+      }))
+      .filter(source => source.playlistIds.length > 0);
+    return manualUrl && !discovered.some(source => source.url === manualUrl)
+      ? [{ url: manualUrl, playlistIds: [], kind: 'manual' }, ...discovered]
+      : discovered;
+  }
+
+  private epgSourceOptions(
+    sources: EpgSource[],
+    playlists: PlaylistEntry[],
+  ): { value: string; label: string }[] {
+    const names = new Map(playlists.map(source => [source.id, source.name || source.url]));
+    const fallbackLabels = sources.map(source => {
+      const labels = source.playlistIds
+        .map(id => names.get(id))
+        .filter((name): name is string => Boolean(name));
+      return source.kind === 'manual'
+        ? t('settings.manualXmltv')
+        : labels.join(', ') || t('settings.discoveredEpg');
+    });
+    const sourceNames = sources.map(source => EpgService.getSourceName(source.url));
+    const baseLabels = sources.map((_source, index) =>
+      sourceNames[index] || fallbackLabels[index]);
+    return sources.map((source, index) => {
+      const base = baseLabels[index];
+      const duplicateIndexes = baseLabels
+        .map((label, candidate) => label === base ? candidate : -1)
+        .filter(candidate => candidate >= 0);
+      if (duplicateIndexes.length === 1) return { value: source.url, label: base };
+      const qualified = sourceNames[index] ? `${base} — ${fallbackLabels[index]}` : base;
+      const qualifiedLabels = duplicateIndexes.map(candidate =>
+        sourceNames[candidate]
+          ? `${baseLabels[candidate]} — ${fallbackLabels[candidate]}`
+          : baseLabels[candidate]);
+      const duplicateIndex = duplicateIndexes.indexOf(index) + 1;
+      return {
+        value: source.url,
+        label: qualifiedLabels.filter(label => label === qualified).length === 1
+          ? qualified
+          : `${qualified} — EPG ${duplicateIndex}`,
+      };
+    });
+  }
+
+  private epgOffsetEditor(
+    sources: EpgSource[],
+    playlists: PlaylistEntry[],
+    selectedUrl?: string,
+  ): Safe {
+    const selected = sources.some(source => source.url === selectedUrl)
+      ? selectedUrl as string
+      : sources[0]?.url;
+    const offset = selected ? this.epgOffsets[selected] ?? 0 : 0;
+    return html`
+      <div class="epg-offset-controls">
+        ${selected
+          ? dropdown('epg-offset-source', this.epgSourceOptions(sources, playlists), selected)
+          : disabledDropdown('epg-offset-source', t('settings.manualXmltv'))}
+        <div class="epg-offset-stepper ${selected ? '' : 'epg-offset-unavailable'}">
+          ${selected
+            ? html`
+              <button class="btn btn-secondary epg-offset-step" data-focusable
+                      data-offset-delta="-${CONFIG.EPG.OFFSET_STEP_MINUTES}"
+                      aria-label="${t('settings.offsetEarlier')}">-</button>
+              <button class="btn btn-secondary epg-offset-value" data-focusable
+                      aria-label="${t('settings.offsetReset')}">
+                ${formatCorrection(offset)}
+              </button>
+              <button class="btn btn-secondary epg-offset-step" data-focusable
+                      data-offset-delta="${CONFIG.EPG.OFFSET_STEP_MINUTES}"
+                      aria-label="${t('settings.offsetLater')}">+</button>
+            `
+            : html`
+              <button class="btn btn-secondary epg-offset-step" disabled>-</button>
+              <button class="btn btn-secondary epg-offset-value" disabled>
+                ${formatCorrection(0)}
+              </button>
+              <button class="btn btn-secondary epg-offset-step" disabled>+</button>
+            `}
+        </div>
+      </div>
+      <div class="settings-item-hint epg-offset-preview">
+        ${correctionPreview(offset)}
+      </div>`;
+  }
+
+  private refreshEpgOffsetEditor(manualUrl: string): void {
+    const editor = $('.epg-offset-editor', this.container);
+    if (!editor) return;
+    const playlists = StorageService.getPlaylists();
+    const sources = this.epgSources(manualUrl, playlists);
+    morph(editor, this.epgOffsetEditor(sources, playlists, manualUrl));
+  }
+
+  private adjustEpgOffset(delta: number): void {
+    if (!Number.isFinite(delta)) return;
+    const source = $('#epg-offset-source', this.container)?.dataset.value;
+    if (!source) return;
+    this.setEpgOffset((this.epgOffsets[source] ?? 0) + delta);
+  }
+
+  private setEpgOffset(value: number): void {
+    const source = $('#epg-offset-source', this.container)?.dataset.value;
+    if (!source) return;
+    const bounded = Math.max(
+      -CONFIG.EPG.OFFSET_MAX_MINUTES,
+      Math.min(CONFIG.EPG.OFFSET_MAX_MINUTES, value),
+    );
+    if (bounded === 0) delete this.epgOffsets[source];
+    else this.epgOffsets[source] = bounded;
+    this.updateEpgOffsetControl();
+  }
+
+  private updateEpgOffsetControl(): void {
+    const source = $('#epg-offset-source', this.container)?.dataset.value;
+    if (!source) return;
+    const offset = this.epgOffsets[source] ?? 0;
+    const value = $('.epg-offset-value', this.container);
+    if (value) value.textContent = formatCorrection(offset);
+    const preview = $('.epg-offset-preview', this.container);
+    if (preview) morph(preview, correctionPreview(offset));
+  }
+
   handleAction(action: Action): void {
     if (this.confirmationPrompt.visible) {
       this.confirmationPrompt.handleAction(action);
@@ -770,6 +951,10 @@ export class Settings {
       // Single-select toggle group: clear the siblings, activate the chosen option.
       el.parentElement?.querySelectorAll('.toggle-option').forEach(b => b.classList.remove('active'));
       el.classList.add('active');
+    } else if (el.classList.contains('epg-offset-step')) {
+      this.adjustEpgOffset(Number(el.dataset.offsetDelta));
+    } else if (el.classList.contains('epg-offset-value')) {
+      this.setEpgOffset(0);
     } else if (el.classList.contains('theme-swatch')) {
       this.selectThemeSwatch(el);
     } else if (el.id === 'save-settings') {
@@ -1015,7 +1200,7 @@ export class Settings {
   private leftPeer(el: HTMLElement | null): HTMLElement | null {
     if (!el) return null;
     const group = el.closest<HTMLElement>(
-      '.toggle-group, .theme-swatch-grid, .settings-row, .xtream-fields, .xtream-card-foot, .settings-actions',
+      '.toggle-group, .theme-swatch-grid, .settings-row, .xtream-fields, .xtream-card-foot, .settings-actions, .epg-offset-controls',
     );
     if (!group) return null;
     const rect = el.getBoundingClientRect();
@@ -1125,6 +1310,7 @@ export class Settings {
     // Text size previews live so the choice can be judged at its own scale;
     // showView() reverts it if Settings closes without saving.
     if (dd.id === 'text-size') applyTextSize(dd.dataset.value ?? '');
+    if (dd.id === 'epg-offset-source') this.updateEpgOffsetControl();
     const trigger = dd.querySelector<HTMLElement>('.dropdown-trigger');
     if (trigger) this.nav.focus(trigger);
   }
@@ -1379,6 +1565,40 @@ export class Settings {
 
     const tzModeBtn = $('#tz-mode .toggle-option.active', this.container);
     if (tzModeBtn?.dataset.value) StorageService.setTzMode(tzModeBtn.dataset.value as TzMode);
+    const sourceByChannel: Record<string, string> = {};
+    const legacySources = new Map<string, string>();
+    const ambiguousLegacyKeys = new Set<string>();
+    for (const channel of PlaylistService.channels) {
+      const sourceUrl = EpgService.getSourceUrl(channel);
+      if (!sourceUrl) continue;
+      sourceByChannel[channelKey(channel)] = sourceUrl;
+      const legacyKey = legacyChannelKey(channel);
+      if (legacySources.has(legacyKey)) {
+        ambiguousLegacyKeys.add(legacyKey);
+      } else {
+        legacySources.set(legacyKey, sourceUrl);
+      }
+    }
+    for (const [legacyKey, sourceUrl] of legacySources) {
+      if (!ambiguousLegacyKeys.has(legacyKey)) sourceByChannel[legacyKey] = sourceUrl;
+    }
+    ReminderService.migrateEpgOffsets(
+      this.storedEpgOffsets,
+      this.epgOffsets,
+      sourceByChannel,
+    );
+    StorageService.migrateCatchupEpgOffsets(
+      this.storedEpgOffsets,
+      this.epgOffsets,
+      sourceByChannel,
+    );
+    const nextEpgOffsets = { ...this.epgOffsets };
+    if (prevEpg && prevEpg !== epgUrl
+        && !PlaylistService.epgSources.some(source => source.url === prevEpg)) {
+      delete nextEpgOffsets[prevEpg];
+    }
+    this.epgOffsets = nextEpgOffsets;
+    StorageService.setEpgOffsets(nextEpgOffsets);
 
     StorageService.setTheme(this.selectedTheme);
 
@@ -1407,9 +1627,8 @@ export class Settings {
       },
     });
 
-    // Only a playlist/account or EPG-URL change needs a re-fetch; display-only
-    // settings (time zone, auto-play) just re-render in place. Xtream credentials
-    // and live output are part of the signature so changing either reloads too.
+    // Source, EPG URL, and time correction changes rebuild loaded data. Display-only
+    // settings (time zone, auto-play) just re-render in place.
     const sig = (l: PlaylistEntry[]) =>
       JSON.stringify(l.map(pl => [
         pl.id,
@@ -1420,7 +1639,11 @@ export class Settings {
         pl.xtream?.password,
         pl.xtream ? normalizeXtreamLiveOutputPreference(pl.xtream.liveOutput) : '',
       ]));
-    const dataChanged = epgUrl !== prevEpg || sig(stored) !== sig(nextSources);
+    const offsetSig = (offsets: Record<string, number>) =>
+      JSON.stringify(Object.keys(offsets).sort().map(url => [url, offsets[url]]));
+    const dataChanged = epgUrl !== prevEpg
+      || sig(stored) !== sig(nextSources)
+      || offsetSig(this.storedEpgOffsets) !== offsetSig(this.epgOffsets);
     this.onSave(dataChanged ? 'reload' : 'apply');
   }
 

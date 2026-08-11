@@ -466,6 +466,7 @@ export class Player {
       channelKey: channelKey(ch),
       progStart: progStartMs,
       progEnd: progEndMs,
+      epgSourceUrl: info.epgSourceUrl,
       title: info.title,
       description: info.description,
       icon: info.icon,

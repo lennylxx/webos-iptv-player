@@ -44,7 +44,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 **Live TV & on-demand**
 
-- **Program guide (EPG)** — three-pane guide with an auto-derived date range, cached for instant reopen
+- **Program guide (EPG)** — three-pane guide with an auto-derived date range, per-source time correction, and caching for instant reopen
 - **Reminders** — flag an upcoming program and get notified at air time, even with the app closed, to tune straight in
 - **Recently Watched** — return to recent live channels or resume partially watched catch-up programs
 - **Movies & Series** — browse an Xtream account's VOD catalogs, with Continue Watching and account-scoped Watchlist rails
@@ -197,7 +197,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Playlists** — add, edit, or remove M3U URLs. Re-applied on Save.
 - **Upload Playlist** — QR code + LAN URL on the left, list of currently uploaded playlists on the right. Scan the QR from a phone/laptop on the same network to upload `.m3u` files; they appear in this list within milliseconds via Luna push.
 - **Channels** — reorder, hide, rename, or regroup entries; show hidden channels or reset customizations.
-- **Program Guide** — set the XMLTV URL (also auto-detected from `x-tvg-url` in M3U) and show times in the TV's **Device** time zone or the guide **Feed** time zone.
+- **Program Guide** — set the XMLTV URL (also auto-detected from `x-tvg-url` in M3U), show times in the TV's **Device** time zone or the guide **Feed** time zone, and correct each source in 15-minute steps.
 - **Appearance** — preview an app-wide color theme, choose Dark or Frosted player overlays, and adjust text from 80% to 150%.
 - **Playback** — toggle auto-play (resume last watched channel on launch).
 - **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.

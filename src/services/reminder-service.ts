@@ -110,6 +110,56 @@ class ReminderServiceImpl {
     if (changed) StorageService.setReminders(reminders);
   }
 
+  migrateEpgOffsets(
+    previous: Record<string, number>,
+    next: Record<string, number>,
+    sourceByChannel: Record<string, string>,
+    now = Date.now(),
+  ): void {
+    const reminders = this.list();
+    let changed = false;
+    const touchedKeys = new Set<string>();
+    for (const reminder of reminders) {
+      const sourceUrl = reminder.epgSourceUrl ?? sourceByChannel[reminder.channelKey];
+      if (!sourceUrl) continue;
+      const deltaMs = ((next[sourceUrl] ?? 0) - (previous[sourceUrl] ?? 0)) * 60_000;
+      if (!deltaMs) continue;
+      this.cancelSchedule(reminder.channelKey, reminder.startMs);
+      reminder.startMs += deltaMs;
+      reminder.stopMs += deltaMs;
+      reminder.epgSourceUrl = sourceUrl;
+      touchedKeys.add(`${reminder.channelKey}|${reminder.startMs}`);
+      changed = true;
+    }
+    if (!changed) return;
+
+    const deduped: Reminder[] = [];
+    const indexByKey = new Map<string, number>();
+    for (const reminder of reminders) {
+      const key = `${reminder.channelKey}|${reminder.startMs}`;
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex === undefined) {
+        indexByKey.set(key, deduped.length);
+        deduped.push(reminder);
+        continue;
+      }
+      touchedKeys.add(key);
+      const existing = deduped[existingIndex];
+      if (existing.answered && !reminder.answered) deduped[existingIndex] = reminder;
+    }
+
+    StorageService.setReminders(deduped);
+    for (const reminder of deduped) {
+      const key = `${reminder.channelKey}|${reminder.startMs}`;
+      if (!touchedKeys.has(key)) continue;
+      if (!reminder.answered && reminder.startMs > now && reminder.stopMs > now) {
+        this.schedule(reminder);
+      } else {
+        this.cancelSchedule(reminder.channelKey, reminder.startMs);
+      }
+    }
+  }
+
   // Parse a reminderChannelKey out of a launch param (JSON string on cold
   // launch, object on webOSRelaunch) and resolve it to a channel index (-1 if
   // absent, malformed, or the channel is gone).
