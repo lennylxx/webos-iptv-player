@@ -206,6 +206,36 @@ describe('PlaylistService.refresh', () => {
     expect(fetchTextMock).not.toHaveBeenCalled();
   });
 
+  it('skips disabled sources and omits their playlist tabs', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'a', name: 'P1', url: 'http://host1/p1.m3u', enabled: false },
+      { id: 'b', name: 'P2', url: 'http://host2/p2.m3u' },
+    ]);
+
+    const channels = await PlaylistService.refresh();
+
+    expect(fetchTextMock).toHaveBeenCalledTimes(1);
+    expect(fetchTextMock).toHaveBeenCalledWith('http://host2/p2.m3u', 60000);
+    expect(channels.map(channel => channel.name)).toEqual(['Bravo Dup', 'Charlie']);
+    expect(PlaylistService.playlistTabs).toEqual([{ id: 'b', name: 'P2' }]);
+  });
+
+  it('clears in-memory channels when every source is disabled', async () => {
+    PlaylistService.allChannels = [
+      channel({ id: 'a', name: 'Alpha', url: 'http://stream/a', playlistIds: ['a'] }),
+    ];
+    PlaylistService.channels = PlaylistService.allChannels;
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'a', name: 'P1', url: 'http://host1/p1.m3u', enabled: false },
+    ]);
+
+    await expect(PlaylistService.refresh()).resolves.toEqual([]);
+
+    expect(PlaylistService.allChannels).toEqual([]);
+    expect(PlaylistService.playlistTabs).toEqual([]);
+    expect(fetchTextMock).not.toHaveBeenCalled();
+  });
+
   it('skips a playlist that fails to fetch but keeps the others', async () => {
     fetchTextMock.mockImplementation((url: string) =>
       url.includes('p1') ? Promise.reject(new Error('boom')) : Promise.resolve(P2),
@@ -351,6 +381,9 @@ describe('PlaylistService.load', () => {
   it('uses the cached playlist without hitting the network', async () => {
     const cached = [channel({ id: 'a', name: 'Alpha', group: 'News', playlistIds: ['P1'] })];
     const epgSources = [{ url: 'http://e', playlistIds: ['P1'], kind: 'm3u' }];
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'P1', name: 'P1', url: 'http://host/p1.m3u' },
+    ]);
     cacheMock.getCachedPlaylist.mockResolvedValue({ channels: cached, epgSources });
     const result = await PlaylistService.load();
     expect(result).toEqual(cached);

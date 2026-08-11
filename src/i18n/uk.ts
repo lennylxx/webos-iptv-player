@@ -47,6 +47,7 @@ export const UK_MESSAGES = {
     other: '{count} каналу',
   },
   'channel.empty': 'Каналів не знайдено',
+  'channel.noEnabledSources': 'Немає ввімкнених джерел. Увімкніть джерело в налаштуваннях.',
   'channel.recentEmpty': 'Ви ще нічого не переглядали',
   'channel.resumeAt': '{channel} — продовжити з {position}',
   'channel.catchupUnavailable': 'Ця програма більше недоступна в архіві.',

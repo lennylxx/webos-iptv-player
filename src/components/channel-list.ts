@@ -160,6 +160,7 @@ export class ChannelList {
     const favs = StorageService.getFavorites();
     const editing = this.editor.isChannelEditing;
     const managingFavorites = this.editor.isManagingFavorites;
+    const allSourcesDisabled = PlaylistService.allSourcesDisabled;
 
     // Capture the current focus key before morph so we can restore it on a
     // reused node. morph treats `class` as authoritative — it will remove the
@@ -265,7 +266,9 @@ export class ChannelList {
                         ))}
                     </div>
                   `
-                  : html`<div class="empty-state">${t('channel.empty')}</div>`)}
+                  : html`<div class="empty-state">${
+                    t(allSourcesDisabled ? 'channel.noEnabledSources' : 'channel.empty')
+                  }</div>`)}
           </div>
         </div>
         ${this.editor.renderFooter(

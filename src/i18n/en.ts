@@ -49,6 +49,7 @@ export const EN_MESSAGES = {
     other: '{count} channels',
   },
   'channel.empty': 'No channels found',
+  'channel.noEnabledSources': 'No sources are enabled. Enable one in Settings.',
   'channel.recentEmpty': 'Nothing watched yet',
   'channel.resumeAt': '{channel} - Resume at {position}',
   'channel.catchupUnavailable': 'This catch-up program is no longer available.',

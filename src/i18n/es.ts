@@ -45,6 +45,7 @@ export const ES_MESSAGES = {
     other: '{count} canales',
   },
   'channel.empty': 'No se encontraron canales',
+  'channel.noEnabledSources': 'No hay fuentes activadas. Activa una en Ajustes.',
   'channel.recentEmpty': 'Sin reproducciones recientes',
   'channel.resumeAt': '{channel} - Continuar desde {position}',
   'channel.catchupUnavailable': 'Este programa en repetición ya no está disponible.',

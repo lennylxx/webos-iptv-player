@@ -1,7 +1,7 @@
 import type { PlaylistEntry } from '../types';
 import { fetchWithTimeout } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
-import { genPlaylistId } from '../utils/playlist-id';
+import { genPlaylistId } from '../utils/playlist';
 import { serviceBase } from './service-http';
 import { StorageService } from './storage-service';
 
@@ -84,20 +84,25 @@ class UploadClientImpl {
     const existing = StorageService.getPlaylists();
     const manual = existing.filter((p) => p.source !== 'upload');
     const prevUpload = existing.filter((p) => p.source === 'upload');
-    const uploadEntries: PlaylistEntry[] = uploads.map((u) => ({
-      // The HTTP port can change after a service restart, so preserve identity
-      // by the stable upload path id rather than the full serve URL.
-      id: prevUpload.find((p) => uploadIdFromUrl(p.url) === u.id)?.id ?? genPlaylistId(),
-      name: u.name,
-      url: u.url,
-      source: 'upload',
-      count: u.count,
-    }));
+    const uploadEntries: PlaylistEntry[] = uploads.map((u) => {
+      const previous = prevUpload.find((p) => uploadIdFromUrl(p.url) === u.id);
+      return {
+        // The HTTP port can change after a service restart, so preserve identity
+        // by the stable upload path id rather than the full serve URL.
+        id: previous?.id ?? genPlaylistId(),
+        name: u.name,
+        url: u.url,
+        source: 'upload',
+        count: u.count,
+        ...(previous?.enabled === false ? { enabled: false } : {}),
+      };
+    });
 
     const changed =
       prevUpload.length !== uploadEntries.length ||
       uploadEntries.some((u) => !prevUpload.some(
-        (p) => p.url === u.url && p.name === u.name && p.count === u.count,
+        (p) => p.url === u.url && p.name === u.name && p.count === u.count
+          && p.enabled === u.enabled,
       ));
 
     if (!changed) {

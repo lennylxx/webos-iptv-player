@@ -40,7 +40,7 @@ HTTP (called by phones, and by the app for reconcile):
 | `/` or `/setup` | GET | Public setup page; asks for the TV pairing code. |
 | `/setup?token=…` | GET | QR entry that opens the same page already authorized. |
 | `/pair` | POST | Rate-limited exchange of the four-digit code for the setup token. |
-| `/setup-state` | PUT | Loopback-only sanitized state snapshot published by the TV. |
+| `/setup-state` | PUT | Loopback-only sanitized source state, including enabled flags, published by the TV. |
 | `/setup-state?token=…` | GET | Sanitized source and online-subtitle state for the setup page. |
 | `/setup-actions?token=…` | POST | Validate and queue a source or online-subtitle change. |
 | `/setup-actions` | GET | Loopback-only list consumed by the TV app. |
@@ -64,6 +64,8 @@ existing `StorageService` models, publish a sanitized `/setup-state` snapshot,
 acknowledge each action, and reload data. The phone waits for that
 acknowledgement before showing “Saved on TV”. Source-removal actions use the
 same queue, so deleting a Playlist or Xtream account remains idempotent.
+Source-enable actions also use this queue for URL, Xtream, and uploaded
+playlists; missing `enabled` fields remain backward-compatible and mean enabled.
 
 The TV also publishes state after service startup and local Settings changes.
 The setup page refreshes the snapshot periodically. Xtream snapshots contain

@@ -45,6 +45,7 @@ export const PT_BR_MESSAGES = {
     other: '{count} canais',
   },
   'channel.empty': 'Nenhum canal encontrado',
+  'channel.noEnabledSources': 'Nenhuma fonte está ativada. Ative uma nas Configurações.',
   'channel.recentEmpty': 'Nada assistido ainda',
   'channel.resumeAt': '{channel} - Continuar em {position}',
   'channel.catchupUnavailable': 'Este programa não está mais disponível na reprise.',

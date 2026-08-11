@@ -45,6 +45,7 @@ export const DE_MESSAGES = {
     other: '{count} Sender',
   },
   'channel.empty': 'Keine Sender gefunden',
+  'channel.noEnabledSources': 'Keine Quellen aktiviert. Aktiviere eine in den Einstellungen.',
   'channel.recentEmpty': 'Noch nichts angesehen',
   'channel.resumeAt': '{channel} – Fortsetzen bei {position}',
   'channel.catchupUnavailable': 'Diese Catch-up-Sendung ist nicht mehr verfügbar.',

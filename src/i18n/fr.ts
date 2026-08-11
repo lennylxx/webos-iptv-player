@@ -45,6 +45,7 @@ export const FR_MESSAGES = {
     other: '{count} chaînes',
   },
   'channel.empty': 'Aucune chaîne trouvée',
+  'channel.noEnabledSources': 'Aucune source activée. Activez-en une dans les paramètres.',
   'channel.recentEmpty': 'Aucun visionnage récent',
   'channel.resumeAt': '{channel} - Reprendre à {position}',
   'channel.catchupUnavailable': 'Ce programme en rattrapage n’est plus disponible.',

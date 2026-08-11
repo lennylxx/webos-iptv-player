@@ -31,12 +31,14 @@ class EpgServiceImpl {
   private states = new Map<string, SourceState>();
   private timeIndexes = new Map<string, { source: Programme[]; index: EpgTimeIndex }>();
   private playlistChannels: Channel[] | null = null;
+  private revision = 0;
 
   /**
    * Clear all in-memory state. Called when the user removes every configured
    * playlist so stale programme data does not survive a reload.
    */
   reset(): void {
+    this.revision++;
     this.channels = {};
     this.programmes = {};
     this.tzOffsetMinutes = null;
@@ -48,20 +50,24 @@ class EpgServiceImpl {
   }
 
   async load(sources: EpgSource[], channels?: Channel[]): Promise<void> {
+    const revision = ++this.revision;
     this.playlistChannels = channels ?? null;
     this.setSources(sources);
-    await Promise.all(this.sources.map((source) => this.loadSource(source)));
+    await Promise.all(this.sources.map((source) => this.loadSource(source, revision)));
+    if (revision !== this.revision) return;
     this.rebuildIndexes();
     this.loaded = this.sources.length > 0;
   }
 
   async refresh(): Promise<void> {
+    const revision = ++this.revision;
     await Promise.all(this.sources.map(async (source) => {
       const state = this.states.get(source.url);
       if (state && !state.needsRefresh
         && Date.now() - state.timestamp < CONFIG.EPG_REFRESH_INTERVAL) return;
-      await this.fetchSource(source);
+      await this.fetchSource(source, this.filterFor(source), revision);
     }));
+    if (revision !== this.revision) return;
     this.rebuildIndexes();
     this.loaded = this.sources.length > 0;
   }
@@ -134,7 +140,8 @@ class EpgServiceImpl {
     }
   }
 
-  private async loadSource(source: EpgSource): Promise<void> {
+  private async loadSource(source: EpgSource, revision: number): Promise<void> {
+    if (revision !== this.revision) return;
     const filter = this.filterFor(source);
     if (filter && isEmptyFilter(filter)) {
       this.states.delete(source.url);
@@ -142,6 +149,7 @@ class EpgServiceImpl {
     }
     try {
       const cached = await getCachedEpg(source.url);
+      if (revision !== this.revision) return;
       if (cached) {
         const age = Date.now() - cached.timestamp;
         const hasTzField = 'tzOffsetMinutes' in cached.data;
@@ -169,10 +177,15 @@ class EpgServiceImpl {
     } catch (err) {
       log.warn('Cache read failed:', source.url, err);
     }
-    await this.fetchSource(source, filter);
+    await this.fetchSource(source, filter, revision);
   }
 
-  private async fetchSource(source: EpgSource, filter = this.filterFor(source)): Promise<void> {
+  private async fetchSource(
+    source: EpgSource,
+    filter = this.filterFor(source),
+    revision = this.revision,
+  ): Promise<void> {
+    if (revision !== this.revision) return;
     if (filter && isEmptyFilter(filter)) {
       this.states.delete(source.url);
       return;
@@ -180,6 +193,10 @@ class EpgServiceImpl {
     const done = log.time(`fetch '${source.url}'`);
     try {
       const text = await fetchMaybeGzipText(source.url, 120000);
+      if (revision !== this.revision) {
+        done();
+        return;
+      }
       const { data: result, stats } = parseXMLTVWithStats(text, filter
         ? { channelIds: filter.ids, channelNames: filter.names }
         : {});

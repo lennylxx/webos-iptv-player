@@ -27,6 +27,7 @@ import { ReminderPrompt } from './components/reminder-prompt';
 import { setDisplayTz } from './utils/time';
 import { initTheme, applyTheme, applyOverlayStyle, applyTextSize } from './services/theme-service';
 import { channelKey } from './utils/channel';
+import { isSourceEnabled } from './utils/playlist';
 import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
@@ -58,6 +59,7 @@ class App {
   private remindersInitialized = false;
   private bundledServiceStarting = false;
   private deviceSetupSync = Promise.resolve();
+  private epgRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   async init(): Promise<void> {
     const done = log.time('init');
@@ -518,6 +520,7 @@ class App {
   }
 
   private epgSources(): EpgSource[] {
+    if (!StorageService.getPlaylists().some(isSourceEnabled)) return [];
     const manualUrl = StorageService.getEpgUrl();
     const discovered = PlaylistService.epgSources;
     return manualUrl && !discovered.some((source) => source.url === manualUrl)
@@ -525,9 +528,16 @@ class App {
       : discovered;
   }
 
+  private stopEpgRefresh(): void {
+    if (this.epgRefreshTimer === null) return;
+    clearInterval(this.epgRefreshTimer);
+    this.epgRefreshTimer = null;
+  }
+
   private async loadData(): Promise<void> {
     const done = log.time('loadData');
     show(this.views.loading);
+    this.stopEpgRefresh();
 
     this.applyDisplayTz();
     this.epgGrid.resetDay(); // re-pick today; a tz change invalidates the remembered day index
@@ -560,11 +570,16 @@ class App {
         '| epgSources:', PlaylistService.epgSources);
       const epgSources = this.epgSources();
       if (epgSources.length) log.info('Using EPG sources:', epgSources);
-      else log.warn('No EPG sources configured');
+      else {
+        log.warn('No EPG sources configured');
+        EpgService.reset();
+      }
 
-      const hasXtream = StorageService.getPlaylists().some((p) => p.source === 'xtream');
+      const hasXtream = StorageService.getPlaylists()
+        .some((p) => p.source === 'xtream' && isSourceEnabled(p));
       this.tabBar.setSections(hasXtream);
-      const xtreamAccounts = StorageService.getPlaylists().filter((p) => p.source === 'xtream' && p.xtream);
+      const xtreamAccounts = StorageService.getPlaylists()
+        .filter((p) => p.source === 'xtream' && p.xtream && isSourceEnabled(p));
       this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
 
       this.showView('channels');
@@ -573,6 +588,7 @@ class App {
       showToast(tp('app.channelsLoaded', PlaylistService.channels.length));
 
       this.scanReminders();
+      ReminderService.reschedulePending();
 
       if (StorageService.getAutoPlay()) {
         // The per-stream key survives customization and provider reshuffles.
@@ -594,7 +610,7 @@ class App {
             void this.search.refreshPrograms();
           })
           .catch(err => log.error('EPG load failed:', err));
-        setInterval(() => EpgService.refresh()
+        this.epgRefreshTimer = setInterval(() => EpgService.refresh()
           .then(() => {
             this.applyDisplayTz();
             this.channelList.render();
@@ -765,7 +781,8 @@ class App {
   }
 
   private activeXtreamAccount(): PlaylistEntry | null {
-    const accounts = StorageService.getPlaylists().filter((p) => p.source === 'xtream' && p.xtream);
+    const accounts = StorageService.getPlaylists()
+      .filter((p) => p.source === 'xtream' && p.xtream && isSourceEnabled(p));
     const selId = StorageService.getSelectedXtreamAccountId();
     return accounts.find((a) => a.id === selId) ?? accounts[0] ?? null;
   }
@@ -778,7 +795,8 @@ class App {
     if (!account) return;
     log.info('Xtream account switched to', account.name);
     this.tabBar.setAccounts(
-      StorageService.getPlaylists().filter((p) => p.source === 'xtream' && p.xtream),
+      StorageService.getPlaylists()
+        .filter((p) => p.source === 'xtream' && p.xtream && isSourceEnabled(p)),
       account.id,
     );
     const current = this.viewStack[this.viewStack.length - 1];

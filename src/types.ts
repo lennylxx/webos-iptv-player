@@ -127,6 +127,9 @@ export interface PlaylistEntry {
   /** 'upload' entries are auto-managed by the local bundled service; 'xtream' is an
    *  Xtream Codes account; absent/'url' are user-entered M3U URLs. */
   source?: 'upload' | 'url' | 'xtream';
+  /** False temporarily removes this source from every content surface without
+   *  deleting its configuration or user data. Missing/true means enabled. */
+  enabled?: boolean;
   /** Credentials and live output preference for an 'xtream' entry. */
   xtream?: {
     username: string;
@@ -181,6 +184,7 @@ export interface CatchupInfo {
 export interface Reminder {
   channelKey: string;
   channelName: string;
+  playlistIds?: string[];
   title: string;
   startMs: number;
   stopMs: number;

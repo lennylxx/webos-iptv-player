@@ -232,6 +232,25 @@ describe('EpgService.reset', () => {
     expect(EpgService.programmes).toEqual({});
     expect(EpgService.loaded).toBe(false);
   });
+
+  it('ignores an in-flight load that completes after reset', async () => {
+    let resolveFetch!: (value: string) => void;
+    vi.mocked(fetchMaybeGzipText).mockImplementationOnce(() =>
+      new Promise(resolve => { resolveFetch = resolve; }));
+    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Program'));
+    const loading = EpgService.load([source('http://a', ['a'])]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMaybeGzipText).toHaveBeenCalled();
+
+    EpgService.reset();
+    resolveFetch('xml');
+    await loading;
+
+    expect(EpgService.channels).toEqual({});
+    expect(EpgService.programmes).toEqual({});
+    expect(EpgService.loaded).toBe(false);
+  });
 });
 
 describe('EpgService channel pre-filter', () => {

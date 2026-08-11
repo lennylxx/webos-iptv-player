@@ -7,6 +7,7 @@ const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
       name: string;
       url: string;
       source?: 'upload' | 'url' | 'xtream';
+      enabled?: boolean;
       count?: number;
       xtream?: { username: string; password: string; liveOutput?: 'auto' | 'ts' | 'm3u8' };
     }>,
@@ -53,6 +54,9 @@ storageMock.setOnlineSubtitleConfig.mockImplementation(
 
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../utils/fetch-helper', () => ({ fetchWithTimeout: fetchWithTimeoutMock }));
+vi.mock('../services/reminder-service', () => ({
+  ReminderService: { backfillSourceIds: vi.fn() },
+}));
 
 import { setServicePort } from './service-http';
 import { SetupClient } from './setup-client';
@@ -214,6 +218,24 @@ describe('UploadClient.reconcile', () => {
     ]);
   });
 
+  it('preserves a disabled upload when reconciling service metadata', async () => {
+    storageMock.playlists = [
+      { id: 'stable', name: 'P1', url: 'http://127.0.0.1:8890/uploads/p1.m3u',
+        source: 'upload', count: 5, enabled: false },
+    ];
+    fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse([
+      { id: 'p1', name: 'P1', count: 6, createdAt: 2,
+        url: 'http://127.0.0.1:8890/uploads/p1.m3u' },
+    ]));
+
+    await UploadClient.reconcile();
+
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      { id: 'stable', name: 'P1', url: 'http://127.0.0.1:8890/uploads/p1.m3u',
+        source: 'upload', count: 6, enabled: false },
+    ]);
+  });
+
   it('rewrites storage when only the channel count changed (re-upload of same name)', async () => {
     storageMock.playlists = [
       { name: 'P1', url: 'http://127.0.0.1:8890/uploads/p1.m3u', source: 'upload', count: 5 },
@@ -306,6 +328,7 @@ describe('SetupClient.applyPendingActions', () => {
         serverUrl: 'http://host',
         username: 'u1',
       }],
+      uploadedPlaylists: [{ id: 'u1', uploadId: 'u1' }],
       epgUrl: 'http://host/epg.xml',
       onlineSubtitles: {
         preferredLanguage: '',
@@ -429,6 +452,53 @@ describe('SetupClient.applyPendingActions', () => {
       { method: 'DELETE' },
       4000,
     );
+  });
+
+  it('enables and disables URL, Xtream, and uploaded sources by id', async () => {
+    storageMock.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url' },
+      {
+        id: 'x1',
+        name: 'host',
+        url: 'http://host',
+        source: 'xtream',
+        enabled: false,
+        xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
+      },
+      {
+        id: 'u1',
+        name: 'Uploaded',
+        url: 'http://host/uploads/upload-1.m3u',
+        source: 'upload',
+      },
+    ];
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 20, type: 'set-source-enabled', sourceId: 'p1', enabled: false },
+        { id: 21, type: 'set-source-enabled', sourceId: 'x1', enabled: true },
+        { id: 22, type: 'set-source-enabled', sourceId: 'u1', enabled: false },
+      ]))
+      .mockResolvedValue(jsonResponse({ updated: true }));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url', enabled: false },
+      {
+        id: 'x1',
+        name: 'host',
+        url: 'http://host',
+        source: 'xtream',
+        xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
+      },
+      {
+        id: 'u1',
+        name: 'Uploaded',
+        url: 'http://host/uploads/upload-1.m3u',
+        source: 'upload',
+        enabled: false,
+      },
+    ]);
   });
 
   it('updates and clears online subtitle credentials without returning secrets', async () => {

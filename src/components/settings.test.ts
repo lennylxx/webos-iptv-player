@@ -19,6 +19,7 @@ const {
       name: string;
       url: string;
       source?: 'upload' | 'url' | 'xtream';
+      enabled?: boolean;
       count?: number;
       xtream?: { username: string; password: string };
     }[],
@@ -118,6 +119,9 @@ vi.mock('../services/upload-client', () => ({
     return m ? decodeURIComponent(m[1]) : '';
   },
 }));
+vi.mock('../services/reminder-service', () => ({
+  ReminderService: { backfillSourceIds: vi.fn() },
+}));
 vi.mock('../services/setup-client', () => ({ SetupClient: setupMock }));
 
 import { Settings } from './settings';
@@ -209,6 +213,21 @@ describe('Settings.render', () => {
     expect(names.map(n => n.value)).toEqual(['P1', 'P2']);
     expect(urls.map(u => u.value)).toEqual(['http://a', 'http://b']);
     expect(container.querySelector<HTMLInputElement>('#epg-url')!.value).toBe('http://epg');
+  });
+
+  it('persists a disabled M3U source without deleting it', () => {
+    state.playlists = [{ id: 'p1', name: 'P1', url: 'http://a', source: 'url' }];
+    settings.render();
+    click('#playlist-entries .source-toggle');
+    expect(container.querySelector('#playlist-entries [data-source-entry]')
+      ?.classList.contains('source-disabled')).toBe(true);
+
+    click('#save-settings');
+
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      { id: 'p1', name: 'P1', url: 'http://a', source: 'url', enabled: false },
+    ]);
+    expect(onSave).toHaveBeenCalledWith('reload');
   });
 
   it('reflects the auto-play state on the toggle', () => {
@@ -1009,6 +1028,32 @@ describe('Settings uploads auto-refresh', () => {
     expect(rows[0].querySelector('label')!.textContent).toBe('Pushed');
   });
 
+  it('keeps upload toggles and pending state when the upload list refreshes', async () => {
+    state.playlists = [{
+      id: 'upload-source',
+      name: 'Pushed',
+      url: 'http://127.0.0.1:8890/uploads/pushed.m3u',
+      source: 'upload',
+      enabled: false,
+    }];
+    settings.render();
+    await Promise.resolve(); await Promise.resolve();
+    const toggle = container.querySelector<HTMLElement>('#upload-entries .source-toggle')!;
+    expect(toggle.dataset.enabled).toBe('false');
+
+    toggle.click();
+    await settings.refreshUploads();
+
+    expect(container.querySelector<HTMLElement>('#upload-entries .source-toggle')
+      ?.dataset.enabled).toBe('true');
+    click('#save-settings');
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'upload-source', source: 'upload' }),
+    ]);
+    const calls = storageMock.setPlaylists.mock.calls;
+    expect(calls[calls.length - 1][0][0]).not.toHaveProperty('enabled');
+  });
+
   it('refreshUploads() can be called when settings has never rendered (event arrives early) without throwing', async () => {
     // No render() yet — #upload-entries doesn't exist in the DOM.
     uploadMock.reconcile.mockImplementationOnce(async () => {
@@ -1079,6 +1124,22 @@ describe('Settings Xtream section', () => {
     const pw = card.querySelector<HTMLInputElement>('.xtream-password')!;
     expect(pw.value).toBe('pass1');
     expect(pw.type).toBe('password');
+  });
+
+  it('renders and preserves a disabled Xtream account', () => {
+    state.playlists = [{
+      id: 'x1', name: 'My Provider', url: 'http://host:8080', source: 'xtream',
+      enabled: false, xtream: { username: 'user1', password: 'pass1' },
+    }];
+    settings.render();
+    const card = container.querySelector<HTMLElement>('#xtream-entries .xtream-card')!;
+    expect(card.classList.contains('source-disabled')).toBe(true);
+    expect(card.querySelector<HTMLElement>('.source-toggle')?.dataset.enabled).toBe('false');
+
+    click('#save-settings');
+
+    const saved = storageMock.setPlaylists.mock.calls.at(-1)![0] as PlaylistEntry[];
+    expect(saved[0].enabled).toBe(false);
   });
 
   it('keeps xtream accounts out of the M3U Playlists list', () => {

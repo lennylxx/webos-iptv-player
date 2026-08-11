@@ -25,6 +25,7 @@ import { StorageService } from './storage-service';
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
 import { createXtreamClient } from './xtream-client';
 import { getCachedPlaylist, scheduleCachedPlaylist } from './idb-cache';
+import { isSourceEnabled } from '../utils/playlist';
 
 const log = createLogger('Playlist');
 
@@ -50,6 +51,11 @@ class PlaylistServiceImpl {
   private indexedChannels: Channel[] | null = null;
   private indexedChannelCount = -1;
   private includeHidden = false;
+
+  get allSourcesDisabled(): boolean {
+    const sources = StorageService.getPlaylists();
+    return sources.length > 0 && !sources.some(isSourceEnabled);
+  }
 
   /**
    * Clear all in-memory state. Called when the user removes every configured
@@ -78,10 +84,35 @@ class PlaylistServiceImpl {
   }
 
   async load(): Promise<Channel[]> {
+    const enabledIds = new Set(
+      StorageService.getPlaylists().filter(isSourceEnabled).map(source => source.id),
+    );
+    if (!enabledIds.size) {
+      this.reset();
+      return [];
+    }
     const cached = await getCachedPlaylist();
     if (cached) {
-      this.allChannels = cached.channels;
-      this.epgSources = cached.epgSources;
+      const channelsNeedFiltering = cached.channels
+        .some(channel => channel.playlistIds.some(id => !enabledIds.has(id)));
+      this.allChannels = channelsNeedFiltering
+        ? cached.channels
+            .map(channel => ({
+              ...channel,
+              playlistIds: channel.playlistIds.filter(id => enabledIds.has(id)),
+            }))
+            .filter(channel => channel.playlistIds.length > 0)
+        : cached.channels;
+      const epgSourcesNeedFiltering = cached.epgSources
+        .some(source => source.playlistIds.some(id => !enabledIds.has(id)));
+      this.epgSources = epgSourcesNeedFiltering
+        ? cached.epgSources
+            .map(source => ({
+              ...source,
+              playlistIds: source.playlistIds.filter(id => enabledIds.has(id)),
+            }))
+            .filter(source => source.playlistIds.length > 0)
+        : cached.epgSources;
       log.info('Cache hit:', this.allChannels.length, 'channels,', this.epgSources.length, 'epg sources');
       this.applyCustomization();
       this.buildPlaylistTabs();
@@ -94,9 +125,10 @@ class PlaylistServiceImpl {
 
   async refresh(): Promise<Channel[]> {
     const done = log.time('refresh');
-    const playlists = StorageService.getPlaylists();
+    const playlists = StorageService.getPlaylists().filter(isSourceEnabled);
     if (!playlists.length) {
-      log.warn('No playlists configured');
+      log.info('No playlist sources enabled');
+      this.reset();
       done();
       return [];
     }
@@ -371,7 +403,7 @@ class PlaylistServiceImpl {
     // including a playlist that loaded zero channels (empty/unreachable feed), so
     // it stays visible. Derived from the registry, not the cached channels, so a
     // stale/desynced channel cache can never blank out the tab bar.
-    const configured = StorageService.getPlaylists() || [];
+    const configured = StorageService.getPlaylists().filter(isSourceEnabled);
     this.playlistTabs = configured.map(pl => ({ id: pl.id, name: pl.name || pl.url }));
   }
 

@@ -462,11 +462,21 @@
 
 .playlist-header-spacer {
   flex: 0 0 auto;
-  width: 120px;
+  width: 254px;
+}
+
+#playlist-entries .settings-row {
+  gap: 12px;
 }
 
 #playlist-entries .settings-row > .settings-field:nth-child(1) { flex: 3; }
 #playlist-entries .settings-row > .settings-field:nth-child(2) { flex: 7; }
+
+#playlist-entries .source-toggle {
+  min-width: auto;
+  padding-right: 8px;
+  padding-left: 8px;
+}
 
 /* Connected buttons; no overflow:hidden so the focus glow isn't clipped. */
 .toggle-group {
@@ -605,6 +615,61 @@
   z-index: 1; /* lift the accent border above the neighboring option */
 }
 
+.source-toggle {
+  display: inline-flex;
+  min-width: 150px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 18px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.source-toggle-track {
+  position: relative;
+  width: 50px;
+  height: 26px;
+  background: var(--bg-tertiary);
+  border: 2px solid var(--border);
+  border-radius: 15px;
+  transition: var(--transition);
+}
+
+.source-toggle-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: var(--transition);
+}
+
+.source-toggle.active .source-toggle-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.source-toggle.active .source-toggle-knob {
+  left: 27px;
+  background: #fff;
+}
+
+[data-source-entry].source-disabled {
+  opacity: .62;
+}
+
+[data-source-entry].source-disabled .source-toggle {
+  opacity: 1;
+}
+
 /* Xtream accounts: a card per account so its four credential fields, the
    Check/Remove actions and the inline status line stay grouped. */
 .xtream-card {
@@ -641,6 +706,13 @@
   align-items: center;
   gap: 16px;
   margin-top: 16px;
+}
+
+.xtream-card-foot .source-toggle {
+  min-width: auto;
+  justify-content: flex-start;
+  padding-right: 8px;
+  padding-left: 0;
 }
 
 .xtream-status {

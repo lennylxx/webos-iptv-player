@@ -45,6 +45,7 @@ export const IT_MESSAGES = {
     other: '{count} canali',
   },
   'channel.empty': 'Nessun canale trovato',
+  'channel.noEnabledSources': 'Nessuna fonte abilitata. Abilitane una nelle impostazioni.',
   'channel.recentEmpty': 'Non hai ancora guardato nulla',
   'channel.resumeAt': '{channel} - Riprendi da {position}',
   'channel.catchupUnavailable': 'Questo programma non è più disponibile in replay.',

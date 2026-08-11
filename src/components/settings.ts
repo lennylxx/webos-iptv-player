@@ -12,9 +12,10 @@ import {
 } from '../services/idb-cache';
 import { UploadClient, uploadIdFromUrl } from '../services/upload-client';
 import { SetupClient } from '../services/setup-client';
+import { ReminderService } from '../services/reminder-service';
 import { createXtreamClient } from '../services/xtream-client';
 import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
-import { genPlaylistId } from '../utils/playlist-id';
+import { genPlaylistId, isSourceEnabled } from '../utils/playlist';
 import { CONFIG } from '../config';
 import { THEMES, OVERLAY_STYLES, TEXT_SIZES, DEFAULT_TEXT_SIZE, type ThemeMeta, type OverlayStyle, type TextSize } from '../config/themes';
 import { previewTheme, applyTextSize } from '../services/theme-service';
@@ -232,12 +233,47 @@ function dropdown(id: string, options: { value: string; label: string }[], activ
     </div>`;
 }
 
+function sourceToggle(enabled: boolean): Safe {
+  return html`
+    <button class="source-toggle ${enabled ? 'active' : ''}" data-focusable
+            data-enabled="${enabled ? 'true' : 'false'}"
+            aria-pressed="${enabled ? 'true' : 'false'}">
+      <span class="source-toggle-track" aria-hidden="true">
+        <span class="source-toggle-knob"></span>
+      </span>
+      <span class="source-toggle-label">${t(enabled ? 'settings.on' : 'settings.off')}</span>
+    </button>`;
+}
+
+function uploadRow(pl: PlaylistEntry, enabled = isSourceEnabled(pl)): Safe {
+    return html`
+      <div class="settings-row ${enabled ? '' : 'source-disabled'}"
+           data-key="${pl.url}" data-id="${pl.id}" data-source-entry>
+        <div class="settings-field wide">
+          <label>${uploadLabel(pl)}</label>
+        </div>
+        ${sourceToggle(enabled)}
+        <button class="btn btn-danger remove-upload" data-focusable
+                data-url="${pl.url}">${t('common.remove')}</button>
+      </div>
+    `;
+}
+
+function withEnabledState(entry: PlaylistEntry, enabled: boolean): PlaylistEntry {
+  if (!enabled) return { ...entry, enabled: false };
+  const copy = { ...entry };
+  delete copy.enabled;
+  return copy;
+}
+
 /** One editable Xtream account: its fields grouped in a card
  *  keyed by the entry's stable id. Untrusted values interpolate through `html`. */
 function xtreamCard(pl: Partial<PlaylistEntry>) {
   const liveOutput = normalizeXtreamLiveOutputPreference(pl.xtream?.liveOutput);
+  const enabled = pl.enabled !== false;
   return html`
-    <div class="xtream-card" data-id="${pl.id || ''}">
+    <div class="xtream-card ${enabled ? '' : 'source-disabled'}"
+         data-id="${pl.id || ''}" data-source-entry>
       <div class="xtream-fields">
         <div class="settings-field">
           <label>${t('settings.label')}</label>
@@ -269,6 +305,7 @@ function xtreamCard(pl: Partial<PlaylistEntry>) {
         </div>
       </div>
       <div class="xtream-card-foot">
+        ${sourceToggle(enabled)}
         <button class="btn btn-secondary check-xtream" data-focusable>${t('settings.check')}</button>
         <button class="btn btn-danger remove-xtream" data-focusable>${t('common.remove')}</button>
         <div class="xtream-status"></div>
@@ -372,8 +409,10 @@ export class Settings {
     const allPlaylists = StorageService.getPlaylists();
     const playlists = allPlaylists.filter(pl => pl.source !== 'upload' && pl.source !== 'xtream');
     const accounts = allPlaylists.filter(pl => pl.source === 'xtream');
+    const enabledAccounts = accounts.filter(isSourceEnabled);
     const selectedAccountId = StorageService.getSelectedXtreamAccountId();
-    this.watchlistAccount = accounts.find((account) => account.id === selectedAccountId) ?? accounts[0] ?? null;
+    this.watchlistAccount = enabledAccounts.find((account) => account.id === selectedAccountId)
+      ?? enabledAccounts[0] ?? null;
     const uploads = allPlaylists.filter(pl => pl.source === 'upload');
     const epgUrl = StorageService.getEpgUrl();
     const autoPlay = StorageService.getAutoPlay();
@@ -458,7 +497,8 @@ export class Settings {
                       <div class="playlist-header-spacer"></div>
                     </div>
                     ${playlists.map((pl) => html`
-                    <div class="settings-row" data-id="${pl.id}">
+                    <div class="settings-row ${isSourceEnabled(pl) ? '' : 'source-disabled'}"
+                         data-id="${pl.id}" data-source-entry>
                       <div class="settings-field">
                         <input type="text" class="settings-input playlist-name"
                                aria-label="${t('settings.playlistName')}" placeholder="${t('settings.myPlaylist')}"
@@ -469,6 +509,7 @@ export class Settings {
                                aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
                                data-focusable value="${pl.url || ''}">
                       </div>
+                      ${sourceToggle(isSourceEnabled(pl))}
                       <button class="btn btn-danger remove-playlist" data-focusable>${t('common.remove')}</button>
                     </div>
                   `)}`
@@ -482,15 +523,7 @@ export class Settings {
               <div class="source-box upload-box-list">
                 <div class="upload-entries" id="upload-entries">
                   ${uploads.length
-                    ? uploads.map((pl) => html`
-                      <div class="settings-row" data-key="${pl.url}">
-                        <div class="settings-field wide">
-                          <label>${uploadLabel(pl)}</label>
-                        </div>
-                        <button class="btn btn-danger remove-upload" data-focusable
-                                data-url="${pl.url}">${t('common.remove')}</button>
-                      </div>
-                    `)
+                    ? uploads.map((pl) => uploadRow(pl))
                     : html`<div class="empty-hint">${t('settings.noUploads')}</div>`}
                 </div>
               </div>
@@ -725,6 +758,8 @@ export class Settings {
       this.removeXtreamEntry(el);
     } else if (el.classList.contains('check-xtream')) {
       void this.checkXtreamAccount(el);
+    } else if (el.classList.contains('source-toggle')) {
+      this.toggleSource(el);
     } else if (el.classList.contains('remove-upload')) {
       void this.removeUpload(el.dataset.url!);
     } else if (el.hasAttribute('data-dropdown-trigger')) {
@@ -1124,6 +1159,7 @@ export class Settings {
     const row = document.createElement('div');
     row.className = 'settings-row';
     row.dataset.id = genPlaylistId();
+    row.setAttribute('data-source-entry', '');
     row.innerHTML = `
       <div class="settings-field">
         <input type="text" class="settings-input playlist-name"
@@ -1135,6 +1171,7 @@ export class Settings {
                aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
                data-focusable value="">
       </div>
+      ${String(sourceToggle(true))}
       <button class="btn btn-danger remove-playlist" data-focusable>${t('common.remove')}</button>
     `;
     entries.appendChild(row);
@@ -1196,6 +1233,17 @@ export class Settings {
       entries.appendChild(e);
     }
     this.nav.focusFirst();
+  }
+
+  private toggleSource(button: HTMLElement): void {
+    const enabled = button.dataset.enabled !== 'true';
+    button.dataset.enabled = enabled ? 'true' : 'false';
+    button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    button.classList.toggle('active', enabled);
+    const label = button.querySelector('.source-toggle-label');
+    if (label) label.textContent = t(enabled ? 'settings.on' : 'settings.off');
+    button.closest<HTMLElement>('[data-source-entry]')
+      ?.classList.toggle('source-disabled', !enabled);
   }
 
   /**
@@ -1266,12 +1314,16 @@ export class Settings {
       const url = row.querySelector<HTMLInputElement>('.playlist-url')!.value.trim();
       if (!url) continue;
       const name = row.querySelector<HTMLInputElement>('.playlist-name')!.value.trim();
-      playlists.push({
+      const entry: PlaylistEntry = {
         id: row.dataset.id || genPlaylistId(),
         name: name || t('settings.playlistDefault', { number: playlists.length + 1 }),
         url,
         source: 'url',
-      });
+      };
+      playlists.push(withEnabledState(
+        entry,
+        row.querySelector<HTMLElement>('.source-toggle')?.dataset.enabled !== 'false',
+      ));
     }
 
     // Xtream accounts derive their get.php/xmltv.php URLs from these credentials
@@ -1288,22 +1340,32 @@ export class Settings {
       const liveOutput = normalizeXtreamLiveOutputPreference(
         card.querySelector<HTMLElement>('.xtream-output .dropdown')!.dataset.value,
       );
-      accounts.push({
+      const entry: PlaylistEntry = {
         id: card.dataset.id || genPlaylistId(),
         name: name || base.replace(/^https?:\/\//i, ''),
         url: base,
         source: 'xtream',
         xtream: { username, password, liveOutput },
-      });
+      };
+      accounts.push(withEnabledState(
+        entry,
+        card.querySelector<HTMLElement>('.source-toggle')?.dataset.enabled !== 'false',
+      ));
     }
 
     const nonUpload = [...playlists, ...accounts];
 
     // Preserve auto-managed uploaded playlists (not shown in the editors above).
     const stored = StorageService.getPlaylists();
-    const prevNonUpload = stored.filter(pl => pl.source !== 'upload');
-    const uploads = stored.filter(pl => pl.source === 'upload');
-    StorageService.setPlaylists([...nonUpload, ...uploads]);
+    const uploads = stored.filter(pl => pl.source === 'upload').map((playlist) => {
+      const toggle = this.container.querySelector<HTMLElement>(
+        `#upload-entries [data-id="${playlist.id}"] .source-toggle`,
+      );
+      return withEnabledState(playlist, toggle?.dataset.enabled !== 'false');
+    });
+    const nextSources = [...nonUpload, ...uploads];
+    ReminderService.backfillSourceIds();
+    StorageService.setPlaylists(nextSources);
 
     const epgInput = $('#epg-url', this.container) as HTMLInputElement | null;
     const prevEpg = StorageService.getEpgUrl();
@@ -1353,11 +1415,12 @@ export class Settings {
         pl.id,
         pl.name,
         pl.url,
+        isSourceEnabled(pl),
         pl.xtream?.username,
         pl.xtream?.password,
         pl.xtream ? normalizeXtreamLiveOutputPreference(pl.xtream.liveOutput) : '',
       ]));
-    const dataChanged = epgUrl !== prevEpg || sig(prevNonUpload) !== sig(nonUpload);
+    const dataChanged = epgUrl !== prevEpg || sig(stored) !== sig(nextSources);
     this.onSave(dataChanged ? 'reload' : 'apply');
   }
 
@@ -1417,21 +1480,20 @@ export class Settings {
    * there's no visible side effect.
    */
   async refreshUploads(): Promise<void> {
+    const pending = new Map<string, boolean>();
+    $$('#upload-entries [data-source-entry]', this.container).forEach((row) => {
+      const key = row.dataset.id || row.getAttribute('data-key');
+      const toggle = row.querySelector<HTMLElement>('.source-toggle');
+      if (key && toggle) pending.set(key, toggle.dataset.enabled !== 'false');
+    });
     await UploadClient.reconcile();
     const target = $('#upload-entries', this.container);
     if (!target) return;
 
     const uploads = StorageService.getPlaylists().filter(pl => pl.source === 'upload');
     morph(target, uploads.length
-      ? html`${uploads.map((pl) => html`
-        <div class="settings-row" data-key="${pl.url}">
-          <div class="settings-field wide">
-            <label>${uploadLabel(pl)}</label>
-          </div>
-          <button class="btn btn-danger remove-upload" data-focusable
-                  data-url="${pl.url}">${t('common.remove')}</button>
-        </div>
-      `)}`
+      ? html`${uploads.map((pl) =>
+          uploadRow(pl, pending.get(pl.id || pl.url) ?? isSourceEnabled(pl)))}`
       : html`<div class="empty-hint">${t('settings.noUploads')}</div>`);
   }
 }

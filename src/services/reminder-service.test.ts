@@ -8,13 +8,14 @@ const { state, playlistMock } = vi.hoisted(() => {
 vi.mock('./playlist-service', () => ({ PlaylistService: playlistMock }));
 
 import { ReminderService } from './reminder-service';
+import { StorageService } from './storage-service';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { CONFIG } from '../config';
 import { setLocale } from '../i18n';
 
-const chan = (url: string, name: string) => ({
+const chan = (url: string, name: string, playlistIds: string[] = []) => ({
   id: '', name, logo: '', group: '', url, extras: null,
-  playlistIds: [], catchup: '', catchupSource: '', catchupDays: 0,
+  playlistIds, catchup: '', catchupSource: '', catchupDays: 0,
 });
 
 const keyA = channelKey(chan('http://host/a', 'A') as never);
@@ -79,6 +80,35 @@ describe('ReminderService store', () => {
     ReminderService.add({ channelKey: 'gone', channelName: 'X', title: 'T', startMs: 1000, stopMs: 9000 });
     ReminderService.prune(5000); // first ended, second channel gone
     expect(ReminderService.list()).toHaveLength(0);
+  });
+
+  it('keeps a reminder dormant while all of its sources are disabled', () => {
+    StorageService.setPlaylists([
+      { id: 'p1', name: 'P1', url: 'http://host/p1', enabled: false },
+    ]);
+    ReminderService.add(rem({
+      channelKey: 'gone',
+      playlistIds: ['p1'],
+      startMs: 6000,
+      stopMs: 9000,
+    }));
+    state.channels = [];
+
+    ReminderService.prune(5000);
+    expect(ReminderService.list()).toHaveLength(1);
+
+    StorageService.setPlaylists([{ id: 'p1', name: 'P1', url: 'http://host/p1' }]);
+    ReminderService.prune(5000);
+    expect(ReminderService.list()).toHaveLength(0);
+  });
+
+  it('backfills legacy reminder source ids before a source is disabled', () => {
+    state.channels = [chan('http://host/a', 'A', ['p1'])] as never[];
+    ReminderService.add(rem());
+
+    ReminderService.backfillSourceIds();
+
+    expect(ReminderService.list()[0].playlistIds).toEqual(['p1']);
   });
 });
 

@@ -155,6 +155,71 @@ describe('setup page forms', () => {
     dom.window.close();
   });
 
+  it('toggles URL, Xtream, and uploaded sources through setup actions', async () => {
+    let nextId = 20;
+    const posts: unknown[] = [];
+    const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
+      if (url === '/uploads') {
+        return Promise.resolve(response([
+          { id: 'upload-1', name: 'Uploaded', count: 2, createdAt: 1 },
+        ]));
+      }
+      if (url === '/setup-state?token=abc123') {
+        return Promise.resolve(response({
+          playlists: [{ id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' }],
+          xtreamAccounts: [{
+            id: 'x1',
+            name: 'host',
+            serverUrl: 'http://host',
+            username: 'u1',
+            enabled: false,
+          }],
+          uploadedPlaylists: [{
+            id: 'u1',
+            uploadId: 'upload-1',
+            enabled: false,
+          }],
+          epgUrl: '',
+        }));
+      }
+      if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
+        posts.push(JSON.parse(String(options.body)));
+        return Promise.resolve(response({
+          id: nextId++,
+          type: 'set-source-enabled',
+        }, 201));
+      }
+      if (url.indexOf('/setup-actions/') === 0) {
+        return Promise.resolve(response({ pending: false }));
+      }
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const switches = dom.window.document.querySelectorAll<HTMLButtonElement>('.source-switch');
+    expect(switches).toHaveLength(3);
+    expect(Array.from(switches).map(button => button.getAttribute('aria-pressed')))
+      .toEqual(['true', 'false', 'false']);
+    switches.forEach(button => button.click());
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(posts).toEqual([
+      { type: 'set-source-enabled', sourceId: 'p1', enabled: false },
+      { type: 'set-source-enabled', sourceId: 'x1', enabled: true },
+      { type: 'set-source-enabled', sourceId: 'u1', enabled: true },
+    ]);
+    dom.window.close();
+  });
+
   it('masks saved subtitle credentials and clears one on a single delete', async () => {
     const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
       if (url === '/uploads') return Promise.resolve(response([]));

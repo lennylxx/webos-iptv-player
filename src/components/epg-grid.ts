@@ -932,6 +932,7 @@ export class EpgGrid {
       ReminderService.add({
         channelKey: chKey,
         channelName: channel.name,
+        playlistIds: channel.playlistIds.slice(),
         title: prog.title,
         startMs,
         stopMs: prog.stop.getTime(),

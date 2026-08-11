@@ -32,14 +32,14 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Settings | Theme picker |
 | --- | --- |
-| ![Settings](https://github.com/user-attachments/assets/45ffa833-a77d-43c3-9b38-6242379c3d5f) | ![Theme picker](https://github.com/user-attachments/assets/48eb438f-3b61-4508-80fe-0775ab729027) |
+| ![Settings](https://github.com/user-attachments/assets/27be0dff-7e9d-419f-b324-beff4656ffde) | ![Theme picker](https://github.com/user-attachments/assets/48eb438f-3b61-4508-80fe-0775ab729027) |
 
 ## Features
 
 **Playlists & accounts**
 
-- **M3U playlists** — load multiple M3U/M3U8 lists, auto-deduplicated
-- **Xtream Codes accounts** — add one or more accounts; the playlist and EPG are derived from your credentials, and you switch between them from the top-bar avatar
+- **M3U playlists** — load multiple M3U/M3U8 lists, auto-deduplicated, and temporarily disable a source without deleting its setup
+- **Xtream Codes accounts** — add or temporarily disable accounts, or switch between accounts from the top-bar avatar; playlists and EPG data are derived from their credentials
 - **LAN setup** — configure sources and online subtitle settings or upload `.m3u` files from a phone on the same network by scanning a QR code ([LAN service](docs/lan-service.md))
 
 **Live TV & on-demand**

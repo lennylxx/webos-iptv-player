@@ -503,6 +503,7 @@ export class Search {
         ReminderService.add({
           channelKey: key,
           channelName: channel.name,
+          playlistIds: channel.playlistIds.slice(),
           title: programme.title,
           startMs,
           stopMs: programme.stop.getTime(),

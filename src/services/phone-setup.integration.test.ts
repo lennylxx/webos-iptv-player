@@ -114,6 +114,7 @@ describe('phone setup synchronization', () => {
         serverUrl: 'http://host',
         username: 'u1',
       }],
+      uploadedPlaylists: [],
       epgUrl: 'http://host/epg.xml',
       onlineSubtitles: {
         preferredLanguage: '',

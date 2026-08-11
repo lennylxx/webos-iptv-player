@@ -160,6 +160,7 @@ describe('setup state', () => {
       serverUrl: 'http://host',
       username: 'u1',
     }],
+    uploadedPlaylists: [{ id: 'u1', uploadId: 'upload-1', enabled: false }],
     epgUrl: 'http://host/epg.xml',
     onlineSubtitles: {
       preferredLanguage: '',
@@ -231,6 +232,9 @@ describe('setup actions', () => {
       type: 'remove-source', sourceId: 'x1',
     })).status).toBe(201);
     expect((await postAction({
+      type: 'set-source-enabled', sourceId: 'u1', enabled: false,
+    })).status).toBe(201);
+    expect((await postAction({
       type: 'online-subtitles',
       preferredLanguage: '',
       subdlApiKey: 'k1',
@@ -249,6 +253,12 @@ describe('setup actions', () => {
       },
       { id: expect.any(Number), type: 'epg', url: 'http://host/epg.xml' },
       { id: expect.any(Number), type: 'remove-source', sourceId: 'x1' },
+      {
+        id: expect.any(Number),
+        type: 'set-source-enabled',
+        sourceId: 'u1',
+        enabled: false,
+      },
       {
         id: expect.any(Number),
         type: 'online-subtitles',
@@ -284,6 +294,11 @@ describe('setup actions', () => {
       type: 'online-subtitles',
       preferredLanguage: '',
       opensubtitles: {},
+    })).status).toBe(400);
+    expect((await postAction({
+      type: 'set-source-enabled',
+      sourceId: 'u1',
+      enabled: 'false',
     })).status).toBe(400);
   });
 

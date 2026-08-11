@@ -47,6 +47,7 @@ export const RU_MESSAGES = {
     other: '{count} канала',
   },
   'channel.empty': 'Каналы не найдены',
+  'channel.noEnabledSources': 'Нет включённых источников. Включите источник в настройках.',
   'channel.recentEmpty': 'Вы пока ничего не смотрели',
   'channel.resumeAt': '{channel} — продолжить с {position}',
   'channel.catchupUnavailable': 'Эта передача больше недоступна в архиве.',

@@ -142,6 +142,36 @@
     font-size: 12px;
   }
   .configured-remove:disabled { cursor: default; opacity: 0.6; }
+  .source-switch {
+    position: relative;
+    flex: 0 0 42px;
+    width: 42px;
+    height: 24px;
+    padding: 0;
+    background: #d9deea;
+    border: 0;
+    border-radius: 12px;
+    cursor: pointer;
+  }
+  .source-switch::after {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    background: #ffffff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(20, 28, 48, 0.24);
+    content: "";
+    transition: left 0.16s ease;
+  }
+  .source-switch.on { background: #4c7eff; }
+  .source-switch.on::after { left: 21px; }
+  .source-switch:disabled { cursor: default; opacity: 0.6; }
+  .configured-item.source-off,
+  .item.source-off { opacity: 0.62; }
+  .configured-item.source-off .source-switch,
+  .item.source-off .source-switch { opacity: 1; }
   .config-group {
     margin-top: 8px;
     overflow: hidden;
@@ -504,6 +534,7 @@
   var subtitleForm = document.querySelector('[data-action="online-subtitles"]');
   var subtitleState = document.getElementById("subtitle-state");
   var setupToken = new URLSearchParams(window.location.search).get("token") || "";
+  var uploadedSources = {};
 
   function authenticatedUrl(path) {
     return path + (path.indexOf("?") >= 0 ? "&" : "?") +
@@ -522,6 +553,8 @@
         remove: "Remove",
         removing: "Removing...",
         removeFailed: "Try again",
+        enabled: "Enabled",
+        disabled: "Disabled",
         pairTitle: "Connect to your TV",
         pairInstructions: "Enter the 4-digit code shown on your TV.",
         pairCode: "Pairing code",
@@ -580,6 +613,8 @@
         remove: "Entfernen",
         removing: "Wird entfernt...",
         removeFailed: "Erneut versuchen",
+        enabled: "Aktiviert",
+        disabled: "Deaktiviert",
         pairTitle: "Mit dem Fernseher verbinden",
         pairInstructions: "Gib den 4-stelligen Code vom Fernseher ein.",
         pairCode: "Kopplungscode",
@@ -638,6 +673,8 @@
         remove: "Eliminar",
         removing: "Eliminando...",
         removeFailed: "Reintentar",
+        enabled: "Activado",
+        disabled: "Desactivado",
         pairTitle: "Conectar al televisor",
         pairInstructions: "Introduce el código de 4 dígitos que aparece en el televisor.",
         pairCode: "Código de vinculación",
@@ -696,6 +733,8 @@
         remove: "Supprimer",
         removing: "Suppression...",
         removeFailed: "Réessayer",
+        enabled: "Activé",
+        disabled: "Désactivé",
         pairTitle: "Se connecter au téléviseur",
         pairInstructions: "Saisissez le code à 4 chiffres affiché sur le téléviseur.",
         pairCode: "Code d’association",
@@ -754,6 +793,8 @@
         remove: "Rimuovi",
         removing: "Rimozione...",
         removeFailed: "Riprova",
+        enabled: "Attivo",
+        disabled: "Disattivato",
         pairTitle: "Connetti alla TV",
         pairInstructions: "Inserisci il codice di 4 cifre mostrato sulla TV.",
         pairCode: "Codice di abbinamento",
@@ -812,6 +853,8 @@
         remove: "Remover",
         removing: "Removendo...",
         removeFailed: "Tentar novamente",
+        enabled: "Ativado",
+        disabled: "Desativado",
         pairTitle: "Conectar à TV",
         pairInstructions: "Digite o código de 4 dígitos exibido na TV.",
         pairCode: "Código de pareamento",
@@ -870,6 +913,8 @@
         remove: "Удалить",
         removing: "Удаление...",
         removeFailed: "Повторить",
+        enabled: "Включено",
+        disabled: "Выключено",
         pairTitle: "Подключение к телевизору",
         pairInstructions: "Введите 4-значный код с экрана телевизора.",
         pairCode: "Код подключения",
@@ -930,6 +975,8 @@
         remove: "Видалити",
         removing: "Видалення...",
         removeFailed: "Повторити",
+        enabled: "Увімкнено",
+        disabled: "Вимкнено",
         pairTitle: "Підключення до телевізора",
         pairInstructions: "Введіть 4-значний код з екрана телевізора.",
         pairCode: "Код підключення",
@@ -990,6 +1037,8 @@
         remove: "删除",
         removing: "正在删除...",
         removeFailed: "重试",
+        enabled: "已启用",
+        disabled: "已停用",
         pairTitle: "连接电视",
         pairInstructions: "输入电视上显示的 4 位配对码。",
         pairCode: "配对码",
@@ -1249,9 +1298,29 @@
     });
   }
 
-  function configuredItem(kind, title, detail, sourceId) {
+  function sourceSwitch(sourceId, enabled) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "source-switch" + (enabled ? " on" : "");
+    button.setAttribute("aria-pressed", enabled ? "true" : "false");
+    button.setAttribute("aria-label", tr(enabled ? "enabled" : "disabled"));
+    button.title = tr(enabled ? "enabled" : "disabled");
+    button.onclick = function () {
+      button.disabled = true;
+      requestSetupAction({
+        type: "set-source-enabled",
+        sourceId: sourceId,
+        enabled: !enabled,
+      }).then(refreshSetupState).catch(function () {
+        button.disabled = false;
+      });
+    };
+    return button;
+  }
+
+  function configuredItem(kind, title, detail, sourceId, enabled) {
     var row = document.createElement("div");
-    row.className = "configured-item";
+    row.className = "configured-item" + (enabled ? "" : " source-off");
     var badge = document.createElement("span");
     badge.className = "config-type";
     badge.textContent = kind;
@@ -1268,6 +1337,7 @@
     row.appendChild(badge);
     row.appendChild(content);
     if (sourceId) {
+      row.appendChild(sourceSwitch(sourceId, enabled));
       var remove = document.createElement("button");
       remove.type = "button";
       remove.className = "configured-remove";
@@ -1291,19 +1361,26 @@
     while (configuredList.firstChild) configuredList.removeChild(configuredList.firstChild);
     var count = 0;
     (state.playlists || []).forEach(function (item) {
-      configuredList.appendChild(configuredItem("URL", item.name, item.url, item.id));
+      configuredList.appendChild(configuredItem(
+        "URL", item.name, item.url, item.id, item.enabled !== false));
       count += 1;
     });
     (state.xtreamAccounts || []).forEach(function (item) {
       configuredList.appendChild(configuredItem(
-        "XC", item.name, item.serverUrl + " · " + item.username, item.id));
+        "XC", item.name, item.serverUrl + " · " + item.username,
+        item.id, item.enabled !== false));
       count += 1;
     });
     if (state.epgUrl) {
       configuredList.appendChild(configuredItem(
-        "EPG", tr("programGuideUrl"), state.epgUrl, ""));
+        "EPG", tr("programGuideUrl"), state.epgUrl, "", true));
       count += 1;
     }
+    uploadedSources = {};
+    (state.uploadedPlaylists || []).forEach(function (item) {
+      uploadedSources[item.uploadId] = item;
+    });
+    refresh();
     renderSubtitleState(state.onlineSubtitles || {});
     if (count === 0) {
       var empty = document.createElement("div");
@@ -1432,7 +1509,7 @@
   //   [icon] [content: row1=name+size, row2=bar OR msg] [x]
   function makeRow(opts) {
     var li = document.createElement("li");
-    li.className = "item";
+    li.className = "item" + (opts.enabled === false ? " source-off" : "");
     if (opts.cls) li.classList.add(opts.cls);
 
     var icon = document.createElement("div");
@@ -1464,7 +1541,11 @@
     x.type = "button"; x.className = "x"; x.textContent = "✕";
     if (opts.onCancel) x.onclick = opts.onCancel;
 
-    li.appendChild(icon); li.appendChild(content); li.appendChild(x);
+    li.appendChild(icon); li.appendChild(content);
+    if (opts.sourceId) {
+      li.appendChild(sourceSwitch(opts.sourceId, opts.enabled !== false));
+    }
+    li.appendChild(x);
     return li;
   }
 
@@ -1477,13 +1558,18 @@
       var seen = {};
       items.forEach(function (it) {
         seen[it.id] = true;
-        if (existingIds[it.id]) return; // already rendered (in-progress just finished, or already persisted)
+        if (existingIds[it.id] &&
+            !existingIds[it.id].classList.contains("persisted")) return;
+        if (existingIds[it.id]) existingIds[it.id].remove();
+        var source = uploadedSources[it.id];
         var li = makeRow({
           name: it.name,
           sub: trPlural("channelCount", it.count),
           msg: "✓",
           msgClass: "ok",
           cls: "persisted",
+          sourceId: source && source.id,
+          enabled: !source || source.enabled !== false,
           onCancel: function () {
             fetch(authenticatedUrl("/uploads/" + encodeURIComponent(it.id)),
               { method: "DELETE" }).then(refresh);

@@ -44,6 +44,7 @@ export const ZH_CN_MESSAGES = {
     other: '{count} 个频道',
   },
   'channel.empty': '未找到频道',
+  'channel.noEnabledSources': '没有已启用的来源。请在设置中启用一个来源。',
   'channel.recentEmpty': '暂无观看记录',
   'channel.resumeAt': '{channel} - 从 {position} 继续',
   'channel.catchupUnavailable': '此回看节目已失效。',

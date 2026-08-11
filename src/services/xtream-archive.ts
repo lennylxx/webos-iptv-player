@@ -2,6 +2,7 @@ import type { Channel } from '../types';
 import { CONFIG } from '../config';
 import { StorageService } from './storage-service';
 import { createXtreamClient } from './xtream-client';
+import { isSourceEnabled } from '../utils/playlist';
 
 type Availability = Map<number, boolean> | null;
 
@@ -41,7 +42,8 @@ async function load(channel: Channel): Promise<Availability> {
 
   const request = (async (): Promise<Availability> => {
     const account = StorageService.getPlaylists()
-      .find(item => item.id === channel.catchupAccountId && item.source === 'xtream' && item.xtream);
+      .find(item => item.id === channel.catchupAccountId && item.source === 'xtream'
+        && item.xtream && isSourceEnabled(item));
     if (!account?.xtream) return null;
     const listings = await createXtreamClient({
       baseUrl: account.url,

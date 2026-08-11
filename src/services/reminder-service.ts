@@ -6,6 +6,7 @@ import { channelKey, legacyChannelKey } from '../utils/channel';
 import { truncate } from '../utils/text';
 import { t } from '../i18n';
 import { createLogger } from '../utils/logger';
+import { isSourceEnabled } from '../utils/playlist';
 
 const log = createLogger('Reminder');
 
@@ -88,6 +89,27 @@ class ReminderServiceImpl {
     return named.length === 1 && named[0] === target;
   }
 
+  private unavailableBecauseDisabled(reminder: Reminder): boolean {
+    const ids = reminder.playlistIds;
+    if (!ids?.length) return false;
+    const matching = StorageService.getPlaylists()
+      .filter(source => ids.includes(source.id));
+    return matching.length > 0 && !matching.some(isSourceEnabled);
+  }
+
+  backfillSourceIds(): void {
+    const reminders = this.list();
+    let changed = false;
+    for (const reminder of reminders) {
+      if (reminder.playlistIds?.length) continue;
+      const index = this.resolveChannelIndex(reminder.channelKey);
+      if (index < 0) continue;
+      reminder.playlistIds = PlaylistService.channels[index].playlistIds.slice();
+      changed = true;
+    }
+    if (changed) StorageService.setReminders(reminders);
+  }
+
   // Parse a reminderChannelKey out of a launch param (JSON string on cold
   // launch, object on webOSRelaunch) and resolve it to a channel index (-1 if
   // absent, malformed, or the channel is gone).
@@ -103,17 +125,25 @@ class ReminderServiceImpl {
 
   prune(now = Date.now()): void {
     const list = this.list();
-    const kept = list.filter(r => now < r.stopMs && this.resolveChannelIndex(r.channelKey) >= 0);
-    if (kept.length === list.length) return;
-    StorageService.setReminders(kept);
-    for (const r of list) {
-      if (!kept.includes(r)) this.cancelSchedule(r.channelKey, r.startMs);
+    const kept = list.filter(r => now < r.stopMs
+      && (this.resolveChannelIndex(r.channelKey) >= 0 || this.unavailableBecauseDisabled(r)));
+    if (kept.length !== list.length) {
+      StorageService.setReminders(kept);
+      for (const r of list) {
+        if (!kept.includes(r)) this.cancelSchedule(r.channelKey, r.startMs);
+      }
+    }
+    for (const r of kept) {
+      if (this.resolveChannelIndex(r.channelKey) < 0) {
+        this.cancelSchedule(r.channelKey, r.startMs);
+      }
     }
   }
 
   reschedulePending(now = Date.now()): void {
     for (const reminder of this.list()) {
-      if (!reminder.answered && reminder.startMs > now && reminder.stopMs > now) {
+      if (!reminder.answered && reminder.startMs > now && reminder.stopMs > now
+          && this.resolveChannelIndex(reminder.channelKey) >= 0) {
         this.schedule(reminder);
       }
     }

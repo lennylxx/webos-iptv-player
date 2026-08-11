@@ -1,13 +1,15 @@
 import type { PlaylistEntry } from '../types';
 import { fetchWithTimeout } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
-import { genPlaylistId } from '../utils/playlist-id';
+import { genPlaylistId, isSourceEnabled } from '../utils/playlist';
 import {
   normalizeXtreamBaseUrl,
   normalizeXtreamLiveOutputPreference,
 } from '../utils/xtream-url';
 import { serviceBase } from './service-http';
 import { StorageService } from './storage-service';
+import { uploadIdFromUrl } from './upload-client';
+import { ReminderService } from './reminder-service';
 import type { OnlineSubtitleConfig } from './subtitle-search/types';
 
 const log = createLogger('Setup');
@@ -28,6 +30,7 @@ export type SetupAction =
   | { id: number; type: 'xtream'; serverUrl: string; username: string; password: string }
   | { id: number; type: 'epg'; url: string }
   | { id: number; type: 'remove-source'; sourceId: string }
+  | { id: number; type: 'set-source-enabled'; sourceId: string; enabled: boolean }
   | {
       id: number;
       type: 'online-subtitles';
@@ -42,13 +45,15 @@ export type SetupAction =
     };
 
 export interface SetupState {
-  playlists: Array<{ id: string; name: string; url: string }>;
+  playlists: Array<{ id: string; name: string; url: string; enabled?: boolean }>;
   xtreamAccounts: Array<{
     id: string;
     name: string;
     serverUrl: string;
     username: string;
+    enabled?: boolean;
   }>;
+  uploadedPlaylists: Array<{ id: string; uploadId: string; enabled?: boolean }>;
   epgUrl: string;
   onlineSubtitles: {
     preferredLanguage: string;
@@ -104,7 +109,12 @@ class SetupClientImpl {
     const state: SetupState = {
       playlists: playlists
         .filter(item => item.source !== 'upload' && item.source !== 'xtream')
-        .map(item => ({ id: item.id, name: item.name, url: item.url })),
+        .map(item => ({
+          id: item.id,
+          name: item.name,
+          url: item.url,
+          ...(isSourceEnabled(item) ? {} : { enabled: false }),
+        })),
       xtreamAccounts: playlists
         .filter(item => item.source === 'xtream' && item.xtream)
         .map(item => ({
@@ -112,6 +122,14 @@ class SetupClientImpl {
           name: item.name,
           serverUrl: item.url,
           username: item.xtream!.username,
+          ...(isSourceEnabled(item) ? {} : { enabled: false }),
+        })),
+      uploadedPlaylists: playlists
+        .filter(item => item.source === 'upload')
+        .map(item => ({
+          id: item.id,
+          uploadId: uploadIdFromUrl(item.url),
+          ...(isSourceEnabled(item) ? {} : { enabled: false }),
         })),
       epgUrl: StorageService.getEpgUrl(),
         onlineSubtitles: {
@@ -208,6 +226,9 @@ class SetupClientImpl {
           name,
           url: action.url,
           source: 'url',
+          ...(existing >= 0 && playlists[existing].enabled === false
+            ? { enabled: false }
+            : {}),
         };
         if (existing >= 0) playlists[existing] = entry;
         else playlists.push(entry);
@@ -225,6 +246,9 @@ class SetupClientImpl {
           name: existing >= 0 ? playlists[existing].name : url.replace(/^https?:\/\//i, ''),
           url,
           source: 'xtream',
+          ...(existing >= 0 && playlists[existing].enabled === false
+            ? { enabled: false }
+            : {}),
           xtream: {
             username: action.username,
             password: action.password,
@@ -243,6 +267,17 @@ class SetupClientImpl {
           typeof action.sourceId === 'string') {
         playlists = playlists.filter(item =>
           item.source === 'upload' || item.id !== action.sourceId);
+        playlistActionIds.push(action.id);
+      } else if (action.type === 'set-source-enabled' &&
+          typeof action.sourceId === 'string' &&
+          typeof action.enabled === 'boolean') {
+        const existing = playlists.findIndex(item => item.id === action.sourceId);
+        if (existing >= 0) {
+          const updated = { ...playlists[existing] };
+          if (action.enabled) delete updated.enabled;
+          else updated.enabled = false;
+          playlists[existing] = updated;
+        }
         playlistActionIds.push(action.id);
       } else if (action.type === 'online-subtitles' &&
           typeof action.preferredLanguage === 'string') {
@@ -283,6 +318,7 @@ class SetupClientImpl {
     const epgChanged = epgUrl !== previousEpgUrl;
     const subtitlesChanged =
       JSON.stringify(onlineSubtitles) !== JSON.stringify(previousOnlineSubtitles);
+    if (playlistsChanged) ReminderService.backfillSourceIds();
     const playlistsStored = !playlistsChanged || StorageService.setPlaylists(playlists);
     const epgStored = !epgChanged || StorageService.setEpgUrl(epgUrl);
     const subtitlesStored =

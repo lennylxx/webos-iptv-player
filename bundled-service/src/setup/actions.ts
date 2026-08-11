@@ -1,4 +1,4 @@
-import { httpUrl, objectValue, stringValue, subtitleLanguage } from './validation';
+import { booleanValue, httpUrl, objectValue, stringValue, subtitleLanguage } from './validation';
 
 interface OpenSubtitlesCredentials {
   apiKey?: string;
@@ -11,6 +11,7 @@ export type SetupActionPayload =
   | { type: 'xtream'; serverUrl: string; username: string; password: string }
   | { type: 'epg'; url: string }
   | { type: 'remove-source'; sourceId: string }
+  | { type: 'set-source-enabled'; sourceId: string; enabled: boolean }
   | {
       type: 'online-subtitles';
       preferredLanguage: string;
@@ -61,6 +62,13 @@ export function parseSetupAction(value: unknown): SetupActionPayload {
     return {
       type: 'remove-source',
       sourceId: stringValue(input.sourceId, 'source id', 120),
+    };
+  }
+  if (input.type === 'set-source-enabled') {
+    return {
+      type: 'set-source-enabled',
+      sourceId: stringValue(input.sourceId, 'source id', 120),
+      enabled: booleanValue(input.enabled, 'source enabled state'),
     };
   }
   if (input.type === 'online-subtitles') {
