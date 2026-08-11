@@ -161,11 +161,11 @@
 }
 
 .settings-general-language {
-  flex: 0 0 45%;
+  flex: 0 0 50%;
 }
 
 .settings-general-device {
-  flex: 0 0 55%;
+  flex: 0 0 50%;
 }
 
 .settings-general-device > .settings-section-title {
@@ -317,10 +317,12 @@
   border-left: 7px solid transparent;
   border-right: 7px solid transparent;
   border-top: 8px solid var(--text-secondary);
+  transition: transform 0.2s ease, border-top-color 0.2s ease;
 }
 
 .dropdown.open .dropdown-caret {
   border-top-color: var(--accent);
+  transform: rotate(180deg);
 }
 
 .dropdown-menu {
