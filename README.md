@@ -12,7 +12,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Program guide | Catch-up resume |
 | --- | --- |
-| ![Program guide](https://github.com/user-attachments/assets/b5a3c75b-bfc4-4413-aa41-ed981c657130) | ![Catch-up resume](https://github.com/user-attachments/assets/a55843ab-723a-4ef1-9add-491d694fd215) |
+| ![Program guide](https://github.com/user-attachments/assets/9928c342-c2fa-46b8-92f1-b5e815f24f19) | ![Catch-up resume](https://github.com/user-attachments/assets/9a49fa89-b3ae-4b27-bcd6-b93de2c3e1e1) |
 
 | Channel info | Playback overlays |
 | --- | --- |
@@ -20,19 +20,23 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Subtitles | Subtitle search |
 | --- | --- |
-| ![Subtitles](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) | ![Subtitle search](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) |
+| ![Subtitles](https://github.com/user-attachments/assets/dd680a0f-2817-4905-94fb-80225f515a1e) | ![Subtitle search](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) |
 
 | Movies | Movie detail |
 | --- | --- |
-| ![Movies](https://github.com/user-attachments/assets/a6b09baf-0342-4e02-9d7e-5cf7677d1ecf) | ![Movie detail](https://github.com/user-attachments/assets/820d768b-0ed2-42fa-b2bc-5caee70d4a1c) |
+| ![Movies](https://github.com/user-attachments/assets/a6b09baf-0342-4e02-9d7e-5cf7677d1ecf) | ![Movie detail](https://github.com/user-attachments/assets/1380b0b2-680f-49bb-a470-336c9e14a54a) |
 
 | Series detail | Search |
 | --- | --- |
-| ![Series detail](https://github.com/user-attachments/assets/05810327-7066-4202-94d0-7cb08e87168e) | ![Search](https://github.com/user-attachments/assets/008383a1-64c5-49f9-8cc6-877a0ebbae08) |
+| ![Series detail](https://github.com/user-attachments/assets/e7bf3b55-3464-4c7a-966d-34ee432795e3) | ![Search](https://github.com/user-attachments/assets/8677ff38-b32d-44af-991b-ce40a7157e61) |
 
 | Settings | Theme picker |
 | --- | --- |
-| ![Settings](https://github.com/user-attachments/assets/27be0dff-7e9d-419f-b324-beff4656ffde) | ![Theme picker](https://github.com/user-attachments/assets/48eb438f-3b61-4508-80fe-0775ab729027) |
+| ![Settings](https://github.com/user-attachments/assets/fb86992b-91f6-43c3-94dc-0b4435751eb5) | ![Theme picker](https://github.com/user-attachments/assets/90ecc674-1421-42a5-8c10-248697cce305) |
+
+| Reminder manager | LAN setup |
+| --- | --- |
+| ![Reminder manager](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) | ![LAN setup](https://github.com/user-attachments/assets/60492401-f02d-4e90-b66f-17700b39bae6) |
 
 ## Features
 
@@ -197,7 +201,10 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Playlists** — add, edit, or remove M3U URLs. Re-applied on Save.
 - **Upload Playlist** — QR code + LAN URL on the left, list of currently uploaded playlists on the right. Scan the QR from a phone/laptop on the same network to upload `.m3u` files; they appear in this list within milliseconds via Luna push.
 - **Channels** — reorder, hide, rename, or regroup entries; show hidden channels or reset customizations.
-- **Program Guide** — set the XMLTV URL (also auto-detected from `x-tvg-url` in M3U), show times in the TV's **Device** time zone or the guide **Feed** time zone, and correct each source in 15-minute steps.
+- **XMLTV URL** — set the program guide URL, also auto-detected from `x-tvg-url` in M3U playlists.
+- **EPG time zone** — show guide times in the TV's **Device** time zone or the guide **Feed** time zone.
+- **EPG time correction** — adjust each source independently in 15-minute steps.
+- **Program reminders** — open the date-grouped Reminder Manager to review or remove upcoming reminders.
 - **Appearance** — preview an app-wide color theme, choose Dark or Frosted player overlays, and adjust text from 80% to 150%.
 - **Playback** — toggle auto-play (resume last watched channel on launch).
 - **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.
@@ -209,18 +216,21 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 | Key | Player | Channel List | EPG |
 |-----|--------|-------------|-----|
 | Up/Down | Channel +/- | Navigate | Navigate within pane |
-| Left | Open sidebar, then groups; seek −30s when available | — | Back to channels; previous day |
-| Right | Open menu; seek +30s when available | — | To programs; next day |
-| OK/Enter | Toggle OSD; pause/resume; activate overlay | Select channel | Play channel / program (catch-up if past) |
+| Left | Open sidebar, then groups; seek −30s when available | Move toward groups | Previous pane or day |
+| Right | Open menu; seek +30s when available | Move toward channels | Next pane, day, or Reminder Manager |
+| OK/Enter | Toggle OSD; pause/resume; activate overlay | Select channel | Play channel/program or open Reminder Manager |
 | Back | Back out of sidebar/menu; stop & return | Exit app (press twice) | Close guide |
 | Red | Open EPG | Open EPG | — |
-| Blue | Open settings | Open settings | Close guide |
-| Yellow | Show OSD | Edit channel list | — |
+| Blue | Open settings | Open settings | Open settings |
+| Yellow | Show OSD | Edit channel list | Search guide |
 | Green | Toggle favorite (in sidebar/menu) | Toggle favorite (on focused channel) | Jump to today |
-| Play/Pause | Pause/resume (live DVR) | — | — |
+| Play/Pause | Pause/resume playback | — | — |
 | Rewind/Fast-Forward | To oldest / Go to live (live DVR) | — | — |
-| Ch +/- | Channel +/- | Page up/down | Jump 10 channels |
+| Ch +/- | Channel +/- | Previous/next channel | Jump 10 channels/programs |
 | 0-9 | Direct channel entry | Direct channel entry | — |
+
+Movies, Series, Search, Settings, and Reminder Manager use standard D-pad
+navigation; **Back** returns to the previous view.
 
 ## Docs
 

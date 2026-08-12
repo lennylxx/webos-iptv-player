@@ -11,6 +11,8 @@
 //   epg-catchup-resume.png  the Resume / Start Over / Cancel resume prompt
 //   settings.png       settings incl. LAN setup QR and manual pairing
 //   themes.png         Settings Appearance section with the theme picker
+//   reminder-manager.png  date-grouped upcoming reminders with removal controls
+//   setup-page.png     authorized LAN setup page for a phone or laptop
 //   player.png         playback overlays: channel switcher + action menu
 //   channel-info.png   channel info bar (the OSD) — live DVR (timeshift) view
 //   subtitles.png      self-rendered WebVTT cues — ::cue colors + positioning
@@ -33,6 +35,10 @@ import { join, extname } from 'node:path';
 const ROOT = process.cwd();
 const SHOTS = join(ROOT, 'screenshots');
 const SCALE = 1; // device pixel ratio — 1 = native 1920x1080 (no upsampling)
+const SETUP_PAGE_HTML = await readFile(
+  join(ROOT, 'bundled-service/src/setup/setup-page.html'),
+  'utf8',
+);
 
 // Radial "video frame" backdrop for the player shots (the fake stream can't decode
 // headless). One color pair, used as both a CSS gradient and a canvas gradient.
@@ -333,6 +339,31 @@ const REMINDER = {
   stopMs: at(23.25),
 };
 
+const REMINDER_MANAGER = [
+  REMINDER,
+  {
+    url: `https://demo.local/stream/${CHANNELS[1].id}.m3u8`,
+    channelName: CHANNELS[1].name,
+    title: 'Midnight Protocol',
+    startMs: at(23.25),
+    stopMs: at(24.5),
+  },
+  {
+    url: `https://demo.local/stream/${CHANNELS[2].id}.m3u8`,
+    channelName: CHANNELS[2].name,
+    title: 'Morning Brief',
+    startMs: at(33),
+    stopMs: at(34),
+  },
+  {
+    url: `https://demo.local/stream/${CHANNELS[24].id}.m3u8`,
+    channelName: CHANNELS[24].name,
+    title: 'Weekend Matchday',
+    startMs: at(36.5),
+    stopMs: at(38.5),
+  },
+];
+
 // Catch-up progress on two of the hero channel's already-aired programs so the
 // guide renders the resume markers: a finished show (Watched) and a partly
 // watched one (Resume + progress bar). Keyed like the app: FNV-1a of the
@@ -384,6 +415,33 @@ const SERVICE_INFO = {
   manualUrl: `http://192.168.1.42:${UPLOAD_PORT}`,
   pairingCode: '6993',
 };
+const SETUP_PAGE_STATE = {
+  playlists: [{
+    id: 'setup-playlist',
+    name: 'Home Playlist',
+    url: 'https://demo.local/playlist.m3u',
+  }],
+  xtreamAccounts: [{
+    id: 'setup-xtream',
+    name: 'Demo Account',
+    serverUrl: 'https://xtream.demo.local',
+    username: 'viewer',
+  }],
+  uploadedPlaylists: [{
+    id: 'setup-upload',
+    uploadId: 'living-room',
+  }],
+  epgUrl: 'https://demo.local/epg.xml',
+  onlineSubtitles: {
+    preferredLanguage: '',
+    subdlConfigured: false,
+    assrtConfigured: false,
+    opensubtitlesConfigured: false,
+    opensubtitlesApiKeyConfigured: false,
+    opensubtitlesPasswordConfigured: false,
+    opensubtitlesUsername: '',
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Static file server for dist/
@@ -427,6 +485,7 @@ async function setupPage(page, {
   subs = false,
   catchup = false,
   recently = false,
+  reminderManager = false,
 } = {}) {
   // Freeze the clock before any app code runs (real timers keep working).
   await page.addInitScript((fixed) => {
@@ -467,15 +526,21 @@ async function setupPage(page, {
   // Pre-set one reminder so the EPG shows the "set" bell. The program starts after
   // the frozen clock, so it's a future reminder (no due prompt fires). Compute the
   // channel key with the same FNV-1a the app derives from the stripped stream URL.
-  await page.addInitScript((r) => {
-    let h = 0x811c9dc5;
-    const stable = r.url.split('#')[0].split('?')[0];
-    for (let i = 0; i < stable.length; i++) { h ^= stable.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-    const channelKey = (h >>> 0).toString(16).padStart(8, '0');
-    localStorage.setItem('iptv_reminders', JSON.stringify([
-      { channelKey, channelName: r.channelName, title: r.title, startMs: r.startMs, stopMs: r.stopMs },
-    ]));
-  }, REMINDER);
+  await page.addInitScript((reminders) => {
+    const channelKey = (url) => {
+      let h = 0x811c9dc5;
+      const stable = url.split('#')[0].split('?')[0];
+      for (let i = 0; i < stable.length; i++) { h ^= stable.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+      return (h >>> 0).toString(16).padStart(8, '0');
+    };
+    localStorage.setItem('iptv_reminders', JSON.stringify(reminders.map((reminder) => ({
+      channelKey: channelKey(reminder.url),
+      channelName: reminder.channelName,
+      title: reminder.title,
+      startMs: reminder.startMs,
+      stopMs: reminder.stopMs,
+    }))));
+  }, reminderManager ? REMINDER_MANAGER : [REMINDER]);
 
   // Seed catch-up progress on the hero channel so its already-aired programs show
   // the Resume/Watched markers in the guide. Same FNV-1a key the app derives.
@@ -783,6 +848,104 @@ try {
     await page.waitForTimeout(400);
     await shoot(page, 'themes.png');
     console.log('  themes.png');
+    await context.close();
+  }
+
+  // 3c) Reminder manager — upcoming programs grouped across today and tomorrow.
+  {
+    const { context, page } = await newPage({ reminderManager: true });
+    await gotoChannels(page, base);
+    await remote(page, KEY.BLUE);
+    await page.locator('#view-settings').waitFor({ state: 'visible' });
+    await page.locator('#manage-reminders').click();
+    await page.locator('#view-reminders').waitFor({ state: 'visible' });
+    await page.locator('.reminder-manager-row').nth(3).waitFor({ state: 'visible' });
+    await clearToasts(page);
+    await page.waitForTimeout(400);
+    await shoot(page, 'reminder-manager.png');
+    console.log('  reminder-manager.png');
+    await context.close();
+  }
+
+  // 3d) LAN setup page — two views of the real authorized phone/laptop UI.
+  // Side-by-side 480x540 CSS panels at 2x DPR produce one 1920x1080 image.
+  {
+    const context = await browser.newContext({
+      viewport: { width: 960, height: 540 },
+      deviceScaleFactor: 2,
+    });
+    const page = await context.newPage();
+    await page.route('http://setup.demo.local/**', (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/collage') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'text/html',
+          body: `<!DOCTYPE html>
+            <html>
+              <head>
+                <style>
+                  * { box-sizing: border-box; }
+                  html, body { width: 100%; height: 100%; margin: 0; }
+                  body {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 12px;
+                    padding: 12px;
+                    background: #eef0f7;
+                  }
+                  iframe {
+                    width: 100%;
+                    height: 100%;
+                    background: #eef0f7;
+                    border: 0;
+                    border-radius: 14px;
+                  }
+                </style>
+              </head>
+              <body>
+                <iframe src="/setup?token=0123456789ab&amp;panel=sources"
+                        title="Source setup"></iframe>
+                <iframe src="/setup?token=0123456789ab&amp;panel=uploads"
+                        title="Playlist upload"></iframe>
+              </body>
+            </html>`,
+        });
+      }
+      if (url.pathname === '/setup') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'text/html',
+          body: SETUP_PAGE_HTML,
+        });
+      }
+      if (url.pathname === '/setup-state') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(SETUP_PAGE_STATE),
+        });
+      }
+      if (url.pathname === '/uploads') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(UPLOADS),
+        });
+      }
+      return route.fulfill({ status: 404, body: '' });
+    });
+    await page.goto('http://setup.demo.local/collage');
+    const sources = page.frameLocator('iframe[title="Source setup"]');
+    const uploads = page.frameLocator('iframe[title="Playlist upload"]');
+    await sources.locator('.configured-item').nth(2).waitFor({ state: 'visible' });
+    await uploads.locator('.item').nth(1).waitFor({ state: 'visible' });
+    await uploads.locator('.upload-heading').evaluate(
+      element => element.scrollIntoView({ block: 'start' }),
+    );
+    await page.waitForTimeout(300);
+    await shoot(page, 'setup-page.png');
+    console.log('  setup-page.png');
     await context.close();
   }
 
