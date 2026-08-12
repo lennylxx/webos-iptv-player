@@ -25,7 +25,7 @@ import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 
-type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'programmes';
+type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'legend' | 'programmes';
 type FilterFocus = 'group' | 'search';
 type VisibleChannel = { channel: Channel; globalIndex: number };
 type GroupOption = { id: ChannelGroupId; label: string; count: number };
@@ -43,6 +43,7 @@ export class EpgGrid {
   private container: HTMLElement;
   private onChannelSelect: (index: number, catchup?: CatchupInfo) => void;
   private onRevealTabBar?: () => void;
+  private onManageReminders?: () => void;
   private selectedChannelIdx = 0;
   private selectedPlaylist = '';
   private playlistFocusIdx = 0;
@@ -89,10 +90,12 @@ export class EpgGrid {
     container: HTMLElement,
     onChannelSelect: (index: number, catchup?: CatchupInfo) => void,
     onRevealTabBar?: () => void,
+    onManageReminders?: () => void,
   ) {
     this.container = container;
     this.onChannelSelect = onChannelSelect;
     this.onRevealTabBar = onRevealTabBar;
+    this.onManageReminders = onManageReminders;
     this.bindEvents();
   }
 
@@ -112,6 +115,11 @@ export class EpgGrid {
       : visible[0]?.globalIndex ?? -1;
     this.focusCol = 'channels';
     this.focusProg = 0;
+  }
+
+  focusReminderEntry(): void {
+    this.focusCol = 'legend';
+    this.render();
   }
 
   /** Whether the catch-up resume prompt is currently visible. */
@@ -506,7 +514,11 @@ export class EpgGrid {
                 <span class="epg-legend-item state-future">
                   <i class="epg-legend-dot"></i>${t('epg.upcoming')}
                 </span>
-                <span class="epg-legend-item">${raw(bellIcon(true))}${t('epg.reminder')}</span>
+                <button type="button"
+                        class="epg-legend-item epg-reminder-entry ${this.focusCol === 'legend' ? 'focused' : ''}"
+                        data-epg-reminders aria-label="${t('reminderManager.title')}">
+                  ${raw(bellIcon(true))}${t('epg.reminder')}
+                </button>
               </div>
             </div>
             <div class="epg-programmes-pane ${this.focusCol === 'programmes' ? 'pane-focused' : ''}" id="epg-programmes">
@@ -639,6 +651,12 @@ export class EpgGrid {
     // reusing nodes across renders, per-render addEventListener would stack up.
     this.container.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
+      if (target.closest('[data-epg-reminders]')) {
+        this.groupOpen = false;
+        this.focusCol = 'legend';
+        this.onManageReminders?.();
+        return;
+      }
       const groupToggle = target.closest('[data-epg-group-toggle]');
       if (groupToggle) {
         if (this.groupOpen) {
@@ -828,6 +846,7 @@ export class EpgGrid {
       filters: '.epg-filter-bar .focused',
       channels: '.epg-channel-item.focused',
       dates: '.epg-date-item.focused',
+      legend: '.epg-reminder-entry.focused',
       programmes: '.epg-programme-item.focused',
     };
     const el = this.container.querySelector<HTMLElement>(map[this.focusCol]);
@@ -1020,6 +1039,8 @@ export class EpgGrid {
           this.render();
         } else if (this.focusCol === 'filters' || this.focusCol === 'playlists') {
           this.onRevealTabBar?.(); // topmost row: hand focus to the docked tab bar
+        } else if (this.focusCol === 'legend') {
+          this.onRevealTabBar?.();
         } else if (this.focusCol === 'programmes') {
           if (this.focusProg > 0) {
             this.moveProgrammeFocus(this.focusProg - 1);
@@ -1046,7 +1067,7 @@ export class EpgGrid {
             this.focusProg = 0;
             this.render();
           }
-        } else if (this.focusCol === 'dates') {
+        } else if (this.focusCol === 'dates' || this.focusCol === 'legend') {
           this.focusCol = 'programmes';
           this.focusProg = 0;
           this.render();
@@ -1078,6 +1099,9 @@ export class EpgGrid {
             this.focusProg = 0;
             this.render();
           }
+        } else if (this.focusCol === 'legend') {
+          this.focusCol = 'dates';
+          this.render();
         } else if (this.focusCol === 'programmes') {
           this.focusCol = 'channels';
           this.render();
@@ -1104,6 +1128,9 @@ export class EpgGrid {
           if (this.selectedDay < total - 1) {
             this.selectedDay++;
             this.focusProg = 0;
+            this.render();
+          } else {
+            this.focusCol = 'legend';
             this.render();
           }
         }
@@ -1153,6 +1180,8 @@ export class EpgGrid {
           this.focusCol = 'programmes';
           this.focusProg = 0;
           this.render();
+        } else if (this.focusCol === 'legend') {
+          this.onManageReminders?.();
         }
         break;
 

@@ -52,6 +52,22 @@
   color: var(--text-secondary);
 }
 
+.epg-reminder-entry {
+  padding: 8px 10px;
+  font-family: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.epg-reminder-entry:hover,
+.epg-reminder-entry.focused {
+  color: var(--text-primary);
+  background: rgb(var(--accent-rgb) / 0.14);
+}
+
+.epg-reminder-entry .epg-bell-glyph { margin-right: 0; }
+
 .epg-legend-dot {
   width: 11px;
   height: 11px;

@@ -82,6 +82,24 @@ describe('ReminderService store', () => {
     expect(ReminderService.list()).toHaveLength(0);
   });
 
+  it('lists manageable reminders in start order and excludes dormant ones', () => {
+    StorageService.setPlaylists([
+      { id: 'p1', name: 'P1', url: 'http://host/p1', enabled: false },
+    ]);
+    ReminderService.add(rem({ title: 'Bravo', startMs: 6000, stopMs: 9000 }));
+    ReminderService.add(rem({ title: 'Alpha', startMs: 5000, stopMs: 8000 }));
+    ReminderService.add(rem({
+      channelKey: 'gone',
+      playlistIds: ['p1'],
+      startMs: 4000,
+      stopMs: 7000,
+    }));
+
+    expect(ReminderService.listManageable(4500).map(r => r.title))
+      .toEqual(['Alpha', 'Bravo']);
+    expect(ReminderService.list()).toHaveLength(3);
+  });
+
   it('keeps a reminder dormant while all of its sources are disabled', () => {
     StorageService.setPlaylists([
       { id: 'p1', name: 'P1', url: 'http://host/p1', enabled: false },
@@ -221,6 +239,22 @@ describe('ReminderService scheduling', () => {
     ReminderService.remove(keyA, 5000);
     expect(request).toHaveBeenCalledWith('luna://com.webos.service.activitymanager',
       expect.objectContaining({ method: 'cancel', parameters: { activityName: `iptvReminder-${keyA}-5000` } }));
+  });
+
+  it('clears all reminders and cancels every activity', () => {
+    const request = mockLuna();
+    ReminderService.add(rem({ startMs: 5000 }));
+    ReminderService.add(rem({ startMs: 6000 }));
+    request.mockClear();
+
+    ReminderService.clearAll();
+
+    expect(ReminderService.list()).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith('luna://com.webos.service.activitymanager',
+      expect.objectContaining({ method: 'cancel', parameters: { activityName: `iptvReminder-${keyA}-5000` } }));
+    expect(request).toHaveBeenCalledWith('luna://com.webos.service.activitymanager',
+      expect.objectContaining({ method: 'cancel', parameters: { activityName: `iptvReminder-${keyA}-6000` } }));
   });
 
   it('replaces the scheduled activity after an EPG offset change', () => {

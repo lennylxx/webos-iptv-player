@@ -126,7 +126,11 @@ vi.mock('../services/upload-client', () => ({
   },
 }));
 vi.mock('../services/reminder-service', () => ({
-  ReminderService: { backfillSourceIds: vi.fn(), migrateEpgOffsets: vi.fn() },
+  ReminderService: {
+    backfillSourceIds: vi.fn(),
+    migrateEpgOffsets: vi.fn(),
+    listManageable: vi.fn(() => []),
+  },
 }));
 vi.mock('../services/setup-client', () => ({ SetupClient: setupMock }));
 
@@ -209,6 +213,17 @@ describe('Settings.render', () => {
       ?.getAttribute('data-settings-category')).toBe('data');
     expect(container.querySelector('#settings-general')?.textContent).not.toContain('Display');
     expect(container.querySelector('.settings-section .settings-section')).toBeNull();
+  });
+
+  it('opens reminder management from the count-bearing guide entry', () => {
+    const onManageReminders = vi.fn();
+    settings = new Settings(container, onSave, onChannelsChanged, onManageReminders);
+    settings.render();
+
+    expect(container.querySelector('#manage-reminders')?.textContent?.trim())
+      .toBe('Manage Reminders (0)');
+    click('#manage-reminders');
+    expect(onManageReminders).toHaveBeenCalledOnce();
   });
 
   it('shows an empty hint when there are no playlists', () => {

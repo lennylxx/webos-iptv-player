@@ -1,0 +1,256 @@
+.reminder-manager-view {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 46px 80px 64px;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 78% -20%, rgb(var(--accent-rgb) / 0.16), transparent 42%),
+    var(--bg-primary);
+}
+
+.reminder-manager-hero {
+  max-width: 1560px;
+  margin: 0 auto 34px;
+}
+
+.reminder-manager-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 58px;
+}
+
+.reminder-manager-back,
+.reminder-manager-clear,
+.reminder-manager-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 21px;
+  font-weight: 600;
+  background: rgb(var(--catalog-hero-scrim-rgb) / 0.45);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+}
+
+.reminder-manager-back,
+.reminder-manager-clear {
+  min-height: 60px;
+  padding: 12px 22px;
+  font-size: 22px;
+}
+
+.reminder-manager-back {
+  background: transparent;
+  border-color: transparent;
+}
+
+.reminder-manager-clear {
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.reminder-manager-button-icon,
+.reminder-manager-time-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+}
+
+.reminder-manager-button-icon svg,
+.reminder-manager-time-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.reminder-manager-back .reminder-manager-button-icon {
+  transform: translateY(-2px);
+}
+
+.reminder-manager-heading {
+  display: flex;
+  align-items: center;
+  margin-top: 38px;
+}
+
+.reminder-manager-heading h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 50px;
+  line-height: 1.05;
+}
+
+.reminder-manager-heading p {
+  margin: 9px 0 0;
+  color: var(--text-secondary);
+  font-size: 23px;
+}
+
+.reminder-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  max-width: 1560px;
+  margin: 0 auto;
+}
+
+.reminder-day-heading {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.reminder-day-label {
+  display: flex;
+  flex-direction: column;
+  color: var(--text-secondary);
+}
+
+.reminder-day-label strong {
+  color: var(--text-primary);
+  font-size: 21px;
+  line-height: 1.2;
+}
+
+.reminder-day-label span {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.reminder-day-line {
+  height: 1px;
+  background: linear-gradient(90deg, var(--border), transparent);
+}
+
+.reminder-day-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-left: 40px;
+}
+
+.reminder-manager-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 150px 1fr 164px;
+  align-items: center;
+  gap: 24px;
+  min-height: 112px;
+  padding: 14px 20px 14px 32px;
+  overflow: hidden;
+  background:
+    linear-gradient(105deg, rgb(var(--accent-rgb) / 0.06), transparent 35%),
+    var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.12);
+}
+
+.reminder-manager-row::before {
+  position: absolute;
+  top: 20px;
+  bottom: 20px;
+  left: 0;
+  width: 4px;
+  background: var(--accent);
+  border-radius: 0 4px 4px 0;
+  content: '';
+}
+
+.reminder-manager-details {
+  min-width: 0;
+}
+
+.reminder-manager-program {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 30px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reminder-manager-channel {
+  overflow: hidden;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 21px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reminder-manager-time {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 26px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.reminder-manager-time-icon {
+  width: 26px;
+  height: 26px;
+  color: var(--accent);
+}
+
+.reminder-manager-remove {
+  min-height: 58px;
+  padding: 12px 18px;
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.reminder-manager-remove .reminder-manager-button-icon {
+  color: var(--danger);
+}
+
+.reminder-manager-back.focused,
+.reminder-manager-clear.focused,
+.reminder-manager-remove.focused {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+
+.reminder-manager-clear.focused,
+.reminder-manager-remove.focused {
+  color: var(--danger);
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 4px rgb(var(--danger-rgb) / 0.18);
+}
+
+.reminder-manager-empty {
+  display: flex;
+  max-width: 1560px;
+  min-height: 420px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 22px;
+  margin: 0 auto;
+  color: var(--text-secondary);
+  background: rgb(var(--catalog-hero-scrim-rgb) / 0.22);
+  border: 1px dashed var(--border);
+  border-radius: 20px;
+}
+
+.reminder-manager-empty p {
+  margin: 0;
+  font-size: 28px;
+}

@@ -37,6 +37,13 @@ class ReminderServiceImpl {
     return StorageService.getReminders();
   }
 
+  listManageable(now = Date.now()): Reminder[] {
+    this.prune(now);
+    return this.list()
+      .filter(r => now < r.startMs && this.resolveChannelIndex(r.channelKey) >= 0)
+      .sort((a, b) => a.startMs - b.startMs);
+  }
+
   has(chKey: string, startMs: number): boolean {
     return this.list().some(r => this.matchesChannel(r, chKey) && r.startMs === startMs);
   }
@@ -55,6 +62,14 @@ class ReminderServiceImpl {
     const removed = list.filter(r => this.matchesChannel(r, chKey) && r.startMs === startMs);
     StorageService.setReminders(list.filter(r => !removed.includes(r)));
     for (const reminder of removed) this.cancelSchedule(reminder.channelKey, startMs);
+  }
+
+  clearAll(): void {
+    const reminders = this.list();
+    StorageService.setReminders([]);
+    for (const reminder of reminders) {
+      this.cancelSchedule(reminder.channelKey, reminder.startMs);
+    }
   }
 
   markAnswered(chKey: string, startMs: number): void {

@@ -24,6 +24,7 @@ import { Search } from './components/search';
 import { showToast } from './components/toast';
 import { ReminderService } from './services/reminder-service';
 import { ReminderPrompt } from './components/reminder-prompt';
+import { ReminderManager } from './components/reminder-manager';
 import { setDisplayTz } from './utils/time';
 import { initTheme, applyTheme, applyOverlayStyle, applyTextSize } from './services/theme-service';
 import { channelKey } from './utils/channel';
@@ -36,7 +37,8 @@ import { getLocale, initLocale, resolveLocale, setLocale, t, tp } from './i18n';
 
 const log = createLogger('App');
 
-type ViewName = 'channels' | 'player' | 'epg' | 'settings' | 'loading' | 'movies' | 'series' | 'search';
+type ViewName = 'channels' | 'player' | 'epg' | 'settings' | 'reminders'
+  | 'loading' | 'movies' | 'series' | 'search';
 
 class App {
   private views!: Record<ViewName, HTMLElement>;
@@ -50,6 +52,8 @@ class App {
   private sidebar!: Sidebar;
   private menu!: PlayerMenu;
   private reminderPrompt = new ReminderPrompt();
+  private reminderManager!: ReminderManager;
+  private reminderManagerOrigin: 'settings' | 'epg' = 'settings';
   private tabBar!: TabBar;
   private search!: Search;
   private movies!: Movies;
@@ -74,6 +78,7 @@ class App {
       player: $('#view-player')!,
       epg: $('#view-epg')!,
       settings: $('#view-settings')!,
+      reminders: $('#view-reminders')!,
       movies: $('#view-movies')!,
       series: $('#view-series')!,
       search: $('#view-search')!,
@@ -94,11 +99,22 @@ class App {
       this.views.epg,
       (idx, catchup) => this.playChannel(idx, catchup),
       () => this.tabBar.focus(),
+      () => this.openReminderManager('epg'),
     );
+    this.reminderManager = new ReminderManager(this.views.reminders, () => {
+      if (this.reminderManagerOrigin === 'epg') {
+        this.showView('epg');
+        this.epgGrid.focusReminderEntry();
+      } else {
+        this.showView('settings');
+        this.settings.focusReminderEntry();
+      }
+    });
     this.settings = new Settings(
       this.views.settings,
       (action) => this.onSettingsSaved(action),
       () => this.player.syncCurrentIndex(),
+      () => this.openReminderManager('settings'),
     );
 
     this.player.init($('#video-player') as HTMLVideoElement);
@@ -766,6 +782,12 @@ class App {
     });
   }
 
+  private openReminderManager(origin: 'settings' | 'epg'): void {
+    this.reminderManagerOrigin = origin;
+    this.showView('reminders');
+    this.reminderManager.open();
+  }
+
   // Down/Select from the bar: switch to the section and drop focus into content.
   private enterSection(section: Section): void {
     this.tabBar.setActive(section);
@@ -877,13 +899,16 @@ class App {
       truncate(r.channelName, CONFIG.REMINDER.CHANNEL_MAX),
       {
       onConfirm: () => {
-        ReminderService.markAnswered(r.channelKey, r.startMs);
+        ReminderService.remove(r.channelKey, r.startMs);
         const idx = ReminderService.resolveChannelIndex(r.channelKey);
         if (idx >= 0) this.playChannel(idx);
         this.showNextReminder();
       },
       onCancel: () => {
-        ReminderService.markAnswered(r.channelKey, r.startMs);
+        ReminderService.remove(r.channelKey, r.startMs);
+        if (this.viewStack[this.viewStack.length - 1] === 'reminders') {
+          this.reminderManager.open();
+        }
         this.showNextReminder();
       },
     });
@@ -907,6 +932,10 @@ class App {
 
     if (this.settings.isPromptVisible) {
       this.settings.handleAction(action);
+      return;
+    }
+    if (this.reminderManager.isPromptVisible) {
+      this.reminderManager.handleAction(action);
       return;
     }
 
@@ -982,6 +1011,10 @@ class App {
         this.tabBar.setActive('live');
         this.channelList.render();
         this.showView('channels');
+        return;
+      }
+      if (currentView === 'reminders') {
+        this.reminderManager.handleAction('back');
         return;
       }
       if (currentView === 'channels') {
@@ -1064,6 +1097,9 @@ class App {
         } else {
           this.settings.handleAction(action);
         }
+        break;
+      case 'reminders':
+        this.reminderManager.handleAction(action);
         break;
     }
   }

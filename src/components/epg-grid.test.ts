@@ -86,6 +86,7 @@ function prog(h1: number, m1: number, h2: number, m2: number, title: string) {
 
 let container: HTMLElement;
 let onSelect: ReturnType<typeof vi.fn>;
+let onManageReminders: ReturnType<typeof vi.fn>;
 let grid: EpgGrid;
 
 beforeEach(() => {
@@ -120,7 +121,8 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   onSelect = vi.fn();
-  grid = new EpgGrid(container, onSelect);
+  onManageReminders = vi.fn();
+  grid = new EpgGrid(container, onSelect, undefined, onManageReminders);
 });
 
 afterEach(() => {
@@ -177,6 +179,7 @@ describe('EpgGrid.render', () => {
     expect(container.querySelector('.epg-page-info')!.textContent).toContain('Chan A');
     expect(container.querySelector('.epg-page-info')!.textContent).toContain('3 programs');
     expect(container.querySelector('.epg-date-bar .epg-legend')).not.toBeNull();
+    expect(container.querySelector('.epg-reminder-entry')).not.toBeNull();
   });
 
   it('does not force focused-item layout on the initial render', () => {
@@ -303,6 +306,12 @@ describe('EpgGrid mouse interaction', () => {
     expect(progItems()[0].querySelector('.epg-prog-title')!.textContent).toContain('Tomorrow AM');
   });
 
+  it('opens reminder management from the legend by pointer', () => {
+    container.querySelector<HTMLElement>('.epg-reminder-entry')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onManageReminders).toHaveBeenCalledOnce();
+  });
+
   it('clicking a past program plays it with catch-up info when channel has catchupSource', () => {
     state.channels = [
       { name: 'Chan A', url: 'http://host/a', catchupSource: 'http://host/catchup/{start}' },
@@ -336,6 +345,17 @@ describe('EpgGrid.handleAction', () => {
   it('right moves focus to the programs column', () => {
     grid.handleAction('right');
     expect(container.querySelector('.epg-programmes-pane')!.classList.contains('pane-focused')).toBe(true);
+  });
+
+  it('reaches reminder management after the last date with the D-pad', () => {
+    grid.handleAction('right'); // channels -> programmes
+    grid.handleAction('up'); // programmes -> dates
+    grid.handleAction('right'); // tomorrow
+    grid.handleAction('right'); // legend
+    expect(container.querySelector('.epg-reminder-entry.focused')).not.toBeNull();
+
+    grid.handleAction('select');
+    expect(onManageReminders).toHaveBeenCalledOnce();
   });
 
   it('moves programme focus inside the rendered window without a full render', () => {

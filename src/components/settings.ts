@@ -377,15 +377,18 @@ export class Settings {
   private ignoreCategoryScroll = false;
   private categoryScrollFrame: number | null = null;
   private categorySyncFrame: number | null = null;
+  private onManageReminders: () => void;
 
   constructor(
     container: HTMLElement,
     onSave: (action: SaveAction) => void | Promise<void>,
     onChannelsChanged: () => void = () => {},
+    onManageReminders: () => void = () => {},
   ) {
     this.container = container;
     this.onSave = onSave;
     this.onChannelsChanged = onChannelsChanged;
+    this.onManageReminders = onManageReminders;
     this.nav = new SpatialNav(container, (el) => this.onNavFocus(el));
 
     // Mouse/pointer support: clicking a focusable element behaves like remote OK.
@@ -620,6 +623,14 @@ export class Settings {
                   ${this.epgOffsetEditor(epgSources, allPlaylists, epgSources[0]?.url)}
                 </div>
                 <div class="settings-item-hint">${t('settings.timeCorrectionHint')}</div>
+              </div>
+              <div class="settings-item settings-item--action">
+                <div class="settings-item-title">${t('reminderManager.title')}</div>
+                <button class="btn btn-secondary" data-focusable id="manage-reminders">
+                  ${t('settings.manageReminders', {
+                    count: ReminderService.listManageable().length,
+                  })}
+                </button>
               </div>
             </div>
           </div>
@@ -889,6 +900,7 @@ export class Settings {
       this.confirmationPrompt.handleAction(action);
       return;
     }
+
     switch (action) {
       case 'up':
       case 'down':
@@ -924,6 +936,15 @@ export class Settings {
         break;
       }
     }
+  }
+
+  focusReminderEntry(): void {
+    const entry = $('#manage-reminders', this.container);
+    if (!entry) return;
+    entry.textContent = t('settings.manageReminders', {
+      count: ReminderService.listManageable().length,
+    });
+    this.nav.focus(entry);
   }
 
   private activate(el: HTMLElement): void {
@@ -984,6 +1005,8 @@ export class Settings {
     } else if (el.id === 'edit-channel-list') {
       this.saveShowHidden();
       this.onSave('edit-channels');
+    } else if (el.id === 'manage-reminders') {
+      this.onManageReminders();
     } else if (el.id === 'reset-customization') {
       this.confirmationPrompt.show({
         title: t('settings.resetCustomizationTitle'),
