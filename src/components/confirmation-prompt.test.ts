@@ -46,4 +46,17 @@ describe('ConfirmationPrompt', () => {
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it('moves focus to the button under the pointer', () => {
+    document.querySelector<HTMLElement>('[data-confirm-action="confirm"]')!
+      .dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+    expect(document.querySelector('[data-confirm-action="confirm"]')!
+      .classList.contains('focused')).toBe(true);
+    expect(document.querySelector('[data-confirm-action="cancel"]')!
+      .classList.contains('focused')).toBe(false);
+
+    prompt.handleAction('select');
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
 });

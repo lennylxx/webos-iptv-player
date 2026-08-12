@@ -98,6 +98,16 @@ export class CatchupResumePrompt {
   }
 
   private bindEvents(): void {
+    this.el!.addEventListener('mouseover', (e: MouseEvent) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const focusIdx = action === 'resume' ? 0 : action === 'start-over' ? 1 : 2;
+      if (focusIdx === this.focusIdx) return;
+      this.focusIdx = focusIdx;
+      this.render();
+    });
+
     // Hit-test the button under the pointer.
     this.el!.addEventListener('click', (e: MouseEvent) => {
       const hit = document.elementFromPoint(e.clientX, e.clientY);

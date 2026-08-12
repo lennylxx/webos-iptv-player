@@ -20,7 +20,16 @@
   background: var(--accent-dim);
   border-color: var(--accent);
   color: white;
-  transform: scale(1.02);
+}
+
+.btn-danger.focused,
+.confirmation-btn.danger.focused {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger) !important;
+  box-shadow:
+    0 0 0 3px rgb(var(--danger-rgb) / 0.24),
+    0 0 20px rgb(var(--danger-rgb) / 0.35);
 }
 
 .settings-input.focused {

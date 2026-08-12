@@ -74,6 +74,15 @@ export class ReminderPrompt {
   }
 
   private bindEvents(): void {
+    this.el!.addEventListener('mouseover', (e: MouseEvent) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-reminder-action]');
+      if (!btn) return;
+      const focus = btn.dataset.reminderAction === 'ok' ? 'ok' : 'cancel';
+      if (focus === this.focus) return;
+      this.focus = focus;
+      this.render();
+    });
+
     // Hit-test the button under the pointer.
     this.el!.addEventListener('click', (e: MouseEvent) => {
       const hit = document.elementFromPoint(e.clientX, e.clientY);

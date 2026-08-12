@@ -18,7 +18,45 @@ test('disabling every M3U source hides channels until the source is enabled agai
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(2);
 
   await enterTab(page, 'settings');
-  await page.locator('#playlist-entries .source-toggle').click();
+  const sourceToggle = page.locator('#playlist-entries .source-toggle');
+  await sourceToggle.hover();
+  await expect(sourceToggle).toHaveClass(/focused/);
+  await expect(sourceToggle).toHaveCSS('transform', 'none');
+  const alignment = await page.evaluate(() => {
+    const toggle = document.querySelector('#playlist-entries .source-toggle')!
+      .getBoundingClientRect();
+    const remove = document.querySelector('#playlist-entries .remove-playlist')!
+      .getBoundingClientRect();
+    return {
+      topDelta: toggle.top - remove.top,
+      heightDelta: toggle.height - remove.height,
+    };
+  });
+  expect(alignment.topDelta).toBe(0);
+  expect(alignment.heightDelta).toBe(0);
+
+  const remove = page.locator('#playlist-entries .remove-playlist');
+  await remove.hover();
+  await expect(remove).toHaveClass(/focused/);
+  const focusColors = await remove.evaluate((button) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--danger)';
+    document.body.appendChild(probe);
+    const danger = getComputedStyle(probe).color;
+    probe.style.color = 'var(--focus-ring)';
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+    return {
+      border: getComputedStyle(button).borderColor,
+      danger,
+      accent,
+    };
+  });
+  expect(focusColors.border).toBe(focusColors.danger);
+  expect(focusColors.border).not.toBe(focusColors.accent);
+  await expect(remove).toHaveCSS('background-color', focusColors.danger);
+
+  await sourceToggle.click();
   await page.locator('#save-settings').click();
 
   await expect(page.locator('#view-channels')).toBeVisible();

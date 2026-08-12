@@ -14,6 +14,9 @@ export class SpatialNav {
         this.focus(target);
       }
     });
+    this.container.addEventListener('nav:unhover', (e: Event) => {
+      if (e.target === this.focused) this.clearHighlight();
+    });
   }
 
   private getFocusables(): HTMLElement[] {
@@ -66,6 +69,7 @@ export class SpatialNav {
       this.focus(items[0]);
       return true;
     }
+    this.focused.classList.add('focused');
 
     const rect = this.focused.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;

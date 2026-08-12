@@ -42,4 +42,15 @@ describe('ReminderPrompt', () => {
     prompt.show('<img src=x>', 'Bravo', { onConfirm: vi.fn(), onCancel: vi.fn() });
     expect(document.querySelector('.reminder-message img')).toBeNull();
   });
+
+  it('moves focus to the button under the pointer', () => {
+    const onCancel = vi.fn();
+    prompt.show('Alpha', 'Bravo', { onConfirm: vi.fn(), onCancel });
+    document.querySelector<HTMLElement>('[data-reminder-action="cancel"]')!
+      .dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+    expect(document.querySelector('.reminder-btn.focused')!.textContent).toBe('Cancel');
+    prompt.handleAction('select');
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
 });

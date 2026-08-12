@@ -89,18 +89,19 @@ export const KeyHandler = {
 
     // Mouse support for desktop preview. Skip re-dispatching when the focusable hasn't changed.
     let lastHover: HTMLElement | null = null;
+    const setHoverTarget = (target: HTMLElement | null): void => {
+      if (target === lastHover) return;
+      lastHover?.dispatchEvent(new CustomEvent('nav:unhover', { bubbles: true }));
+      lastHover = target;
+      target?.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    };
     document.addEventListener('mouseover', (e: MouseEvent) => {
       const target = (e.target as HTMLElement).closest<HTMLElement>('[data-focusable]');
-      if (target && target !== lastHover) {
-        lastHover = target;
-        target.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-      } else if (!target) {
-        lastHover = null;
-      }
+      setHoverTarget(target);
     });
     // Cursor left the window: forget the last hover so returning to the same
     // element re-dispatches nav:hover (re-showing a cleared highlight).
-    document.documentElement.addEventListener('mouseleave', () => { lastHover = null; });
+    document.documentElement.addEventListener('mouseleave', () => setHoverTarget(null));
 
     // Magic Remote scroll wheel / desktop mouse wheel
     // Let any scrollable ancestor scroll natively — otherwise mouseover-driven

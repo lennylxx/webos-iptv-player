@@ -183,8 +183,8 @@ test('shows Resume on return and keeps three movie actions at a stable height', 
   const actions = page.locator('#view-movies .detail-btn');
   await expect(actions).toHaveCount(3);
   const layout = await actions.evaluateAll((buttons) => buttons.map((button) => ({
-    height: button.getBoundingClientRect().height,
-    top: button.getBoundingClientRect().top,
+    height: (button as HTMLElement).offsetHeight,
+    top: (button as HTMLElement).offsetTop,
     whiteSpace: getComputedStyle(button).whiteSpace,
   })));
   expect(new Set(layout.map((item) => item.height)).size).toBe(1);
@@ -224,7 +224,7 @@ test('keeps three pseudo-localized movie actions on one row without clipping', a
     buttons: Array.from(row.querySelectorAll<HTMLElement>('.detail-btn')).map((button) => ({
       clientWidth: button.clientWidth,
       scrollWidth: button.scrollWidth,
-      top: button.getBoundingClientRect().top,
+      top: button.offsetTop,
     })),
   }));
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);

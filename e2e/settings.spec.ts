@@ -113,6 +113,67 @@ test.describe('Settings navigation', () => {
     await expect(data).toHaveClass(/active/);
   });
 
+  test('scales buttons consistently for pointer and D-pad focus', async ({ page }) => {
+    await page.goto('/');
+    const playback = page.locator('[data-settings-target="playback"]');
+
+    await playback.hover();
+    await expect(playback).toHaveCSS('transform', 'matrix(1.03, 0, 0, 1.03, 0, 0)');
+
+    await page.locator('.settings-title').hover();
+    await expect(playback).not.toHaveClass(/focused/);
+    await expect(playback).toHaveCSS('transform', 'none');
+
+    await page.keyboard.press('ArrowDown');
+    const focusedButton = page.locator('#view-settings button.focused');
+    await expect(focusedButton).toHaveCount(1);
+    await expect(focusedButton).toHaveCSS('transform', 'matrix(1.03, 0, 0, 1.03, 0, 0)');
+
+    const toggle = page.locator('.toggle-option').first();
+    await toggle.hover();
+    await expect(toggle).toHaveClass(/focused/);
+    await expect(toggle).toHaveCSS('transform', 'none');
+  });
+
+  test('keeps scaled dropdown controls inside their scroll containers', async ({ page }) => {
+    await page.goto('/');
+    const dropdown = page.locator('#app-language');
+    const trigger = dropdown.locator('.dropdown-trigger');
+
+    await trigger.hover();
+    await expect(trigger).toHaveCSS('transform', 'matrix(1.03, 0, 0, 1.03, 0, 0)');
+    const triggerBounds = await page.evaluate(() => {
+      const main = document.querySelector('.settings-main')!.getBoundingClientRect();
+      const control = document.querySelector('#app-language .dropdown-trigger')!
+        .getBoundingClientRect();
+      return {
+        leftInset: control.left - main.left,
+        rightInset: main.right - control.right,
+      };
+    });
+    expect(triggerBounds.leftInset).toBeGreaterThanOrEqual(0);
+    expect(triggerBounds.rightInset).toBeGreaterThanOrEqual(0);
+
+    await trigger.click();
+    const option = dropdown.locator('.dropdown-option').first();
+    await option.hover();
+    await expect(option).toHaveCSS('transform', 'matrix(1.03, 0, 0, 1.03, 0, 0)');
+    const optionBounds = await page.evaluate(() => {
+      const menu = document.querySelector('#app-language .dropdown-menu')!
+        .getBoundingClientRect();
+      const item = document.querySelector('#app-language .dropdown-option')!
+        .getBoundingClientRect();
+      return {
+        leftInset: item.left - menu.left,
+        rightInset: menu.right - item.right,
+        topInset: item.top - menu.top,
+      };
+    });
+    expect(optionBounds.leftInset).toBeGreaterThanOrEqual(0);
+    expect(optionBounds.rightInset).toBeGreaterThanOrEqual(0);
+    expect(optionBounds.topInset).toBeGreaterThanOrEqual(0);
+  });
+
   test('keeps the clicked indicator and Data title visible after smooth scrolling', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#view-settings')).toBeVisible();

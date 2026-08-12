@@ -88,6 +88,15 @@ export class ConfirmationPrompt {
   }
 
   private bindEvents(): void {
+    this.el!.addEventListener('mouseover', (event: MouseEvent) => {
+      const button = (event.target as HTMLElement).closest<HTMLElement>('[data-confirm-action]');
+      if (!button) return;
+      const focus = button.dataset.confirmAction === 'confirm' ? 'confirm' : 'cancel';
+      if (focus === this.focus) return;
+      this.focus = focus;
+      this.render();
+    });
+
     this.el!.addEventListener('click', (event: MouseEvent) => {
       const button = (event.target as HTMLElement).closest<HTMLElement>('[data-confirm-action]');
       if (!button) return;

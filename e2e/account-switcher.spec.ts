@@ -69,6 +69,8 @@ test('the account avatar shows the active account initial, to the right of Searc
   const avatar = page.locator('.account-avatar');
   await expect(avatar).toBeVisible();
   await expect(avatar).toHaveText('A');
+  await avatar.hover();
+  await expect(avatar).toHaveCSS('transform', 'matrix(1.06, 0, 0, 1.06, 0, 0)');
 
   // It sits to the right of the Search magnifier.
   const avatarBox = await avatar.boundingBox();

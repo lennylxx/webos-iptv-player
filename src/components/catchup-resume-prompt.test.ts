@@ -139,6 +139,17 @@ describe('CatchupResumePrompt', () => {
     expect(focused()!.textContent?.trim()).toBe('Resume');
   });
 
+  it('moves focus to the button under the pointer', () => {
+    const onCancel = vi.fn();
+    prompt.show('S', 0, { onResume: vi.fn(), onStartOver: vi.fn(), onCancel });
+    document.querySelector<HTMLElement>('[data-action="cancel"]')!
+      .dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+    expect(focused()!.textContent?.trim()).toBe('Cancel');
+    prompt.handleAction('select');
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('handleAction is a no-op when not visible', () => {
     const onResume = vi.fn();
     prompt.show('S', 0, { onResume, onStartOver: vi.fn(), onCancel: vi.fn() });

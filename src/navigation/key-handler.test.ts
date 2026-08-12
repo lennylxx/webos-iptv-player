@@ -169,6 +169,34 @@ describe('KeyHandler', () => {
       expect(onB).toHaveBeenCalledTimes(1);
     });
 
+    it('dispatches nav:unhover when the pointer leaves a focusable element', () => {
+      const el = document.createElement('div');
+      el.setAttribute('data-focusable', '');
+      const outside = document.createElement('div');
+      document.body.append(el, outside);
+      const onUnhover = vi.fn();
+      el.addEventListener('nav:unhover', onUnhover);
+
+      el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      outside.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(onUnhover).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps hover while the pointer moves between children of one focusable', () => {
+      const row = document.createElement('div');
+      row.setAttribute('data-focusable', '');
+      const child1 = document.createElement('span');
+      const child2 = document.createElement('span');
+      row.append(child1, child2);
+      document.body.appendChild(row);
+      const onUnhover = vi.fn();
+      row.addEventListener('nav:unhover', onUnhover);
+
+      child1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      child2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(onUnhover).not.toHaveBeenCalled();
+    });
+
     it('does not dispatch nav:hover over non-focusable elements', () => {
       const el = document.createElement('div');
       document.body.appendChild(el);

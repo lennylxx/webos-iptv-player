@@ -104,6 +104,16 @@ describe('SpatialNav', () => {
       a.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
       expect(nav.focused).toBe(a);
     });
+
+    it('clears only the visual highlight when the pointer leaves', () => {
+      const a = focusable({ x: 0, y: 0 });
+      const nav = new SpatialNav(makeContainer(a));
+      nav.focus(a);
+
+      a.dispatchEvent(new CustomEvent('nav:unhover', { bubbles: true }));
+      expect(a.classList.contains('focused')).toBe(false);
+      expect(nav.focused).toBe(a);
+    });
   });
 
   describe('move', () => {
@@ -188,8 +198,10 @@ describe('SpatialNav', () => {
       const b = focusable({ x: 0, y: 100 });
       const nav = new SpatialNav(makeContainer(a, b));
       nav.focus(a);
+      nav.clearHighlight();
       expect(nav.move('up')).toBe(false);
       expect(nav.focused).toBe(a);
+      expect(a.classList.contains('focused')).toBe(true);
     });
 
     it('returns true when nothing was focused yet (focuses the first item)', () => {

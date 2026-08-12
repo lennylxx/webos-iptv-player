@@ -113,6 +113,22 @@ h3 {
 }
 
 /* Buttons */
+button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry) {
+  transform-origin: center;
+  transition:
+    transform 160ms ease,
+    filter 160ms ease,
+    border-color var(--transition),
+    box-shadow var(--transition),
+    background var(--transition),
+    color var(--transition);
+}
+
+button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry):hover,
+button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry).focused {
+  transform: scale(1.03);
+}
+
 .btn {
   display: inline-flex;
   align-items: center;

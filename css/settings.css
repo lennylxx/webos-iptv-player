@@ -135,7 +135,7 @@
 .settings-main {
   min-width: 0;
   height: 100%;
-  padding: 0 10px 0 4px;
+  padding: 0 12px;
   overflow-y: auto;
   scroll-behavior: smooth;
 }
@@ -333,6 +333,7 @@
   top: calc(100% + 6px);
   z-index: 20;
   max-height: 340px;
+  padding: 8px 10px;
   overflow-y: auto;
   background: var(--bg-secondary);
   border: 2px solid var(--border);
@@ -668,7 +669,7 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 12px 14px;
   font-family: inherit;
   font-size: 18px;
   color: var(--text-secondary);
