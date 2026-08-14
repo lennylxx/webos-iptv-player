@@ -36,7 +36,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Reminder manager | LAN setup |
 | --- | --- |
-| ![Reminder manager](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) | ![LAN setup](https://github.com/user-attachments/assets/60492401-f02d-4e90-b66f-17700b39bae6) |
+| ![Reminder manager](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) | ![LAN setup](https://github.com/user-attachments/assets/5cb397f8-d2f1-4274-80e6-1395c16af87c) |
 
 ## Features
 

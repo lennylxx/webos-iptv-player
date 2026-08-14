@@ -892,14 +892,13 @@ try {
                     grid-template-columns: 1fr 1fr;
                     gap: 12px;
                     padding: 12px;
-                    background: #eef0f7;
+                    background: linear-gradient(180deg, #f6f7fb 0%, #eef0f7 100%);
                   }
                   iframe {
                     width: 100%;
                     height: 100%;
-                    background: #eef0f7;
+                    background: transparent;
                     border: 0;
-                    border-radius: 14px;
                   }
                 </style>
               </head>
@@ -940,9 +939,14 @@ try {
     const uploads = page.frameLocator('iframe[title="Playlist upload"]');
     await sources.locator('.configured-item').nth(2).waitFor({ state: 'visible' });
     await uploads.locator('.item').nth(1).waitFor({ state: 'visible' });
-    await uploads.locator('.upload-heading').evaluate(
-      element => element.scrollIntoView({ block: 'start' }),
-    );
+    await Promise.all([
+      sources.locator('body').evaluate(element => { element.style.background = 'transparent'; }),
+      uploads.locator('body').evaluate(element => { element.style.background = 'transparent'; }),
+    ]);
+    await uploads.locator('.upload-heading').evaluate((element) => {
+      element.scrollIntoView({ block: 'start' });
+      element.ownerDocument.defaultView?.scrollBy(0, -32);
+    });
     await page.waitForTimeout(300);
     await shoot(page, 'setup-page.png');
     console.log('  setup-page.png');

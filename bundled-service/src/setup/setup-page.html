@@ -22,7 +22,7 @@
     background: #ffffff;
     width: 100%;
     max-width: 480px;
-    border-radius: 20px;
+    border-radius: 8px;
     padding: 32px 28px;
     box-shadow: 0 12px 36px rgba(20, 28, 60, 0.06);
   }
@@ -37,7 +37,7 @@
     width: 180px;
     height: 54px;
     border: 1px solid #dce2ed;
-    border-radius: 10px;
+    border-radius: 8px;
     color: #1a2138;
     font: inherit;
     font-size: 28px;
@@ -53,29 +53,70 @@
   .pair-status { min-height: 18px; margin: 10px 0 0; color: #c43b4d; font-size: 13px; }
 
   .drop {
-    display: block;
-    border: 2px dashed #c1cce0;
-    border-radius: 16px;
-    background: #fafcff;
-    padding: 36px 20px;
+    position: relative;
+    display: flex;
+    min-height: 210px;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border: 1px solid #dce2ed;
+    border-radius: 8px;
+    background: #f5f8ff;
+    padding: 30px 20px;
     text-align: center;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
   }
-  .drop.drag { background: #eef4ff; border-color: #4c7eff; }
-  .drop svg { width: 56px; height: 56px; color: #4c7eff; display: block; margin: 0 auto 10px; }
-  .drop .primary { font-size: 15px; color: #1a2138; margin: 0 0 8px; }
-  .drop .or { font-size: 13px; color: #8a93a8; margin: 0 0 12px; }
+  .drop.drag {
+    background: #eef4ff;
+    border-color: #a9c0f5;
+    box-shadow: 0 6px 18px rgba(76, 126, 255, 0.1);
+  }
+  @media (hover: hover) {
+    .drop:hover {
+      background: #eef4ff;
+      border-color: #a9c0f5;
+      box-shadow: 0 6px 18px rgba(76, 126, 255, 0.1);
+    }
+  }
+  .drop svg {
+    display: block;
+    width: 56px;
+    height: 56px;
+    margin: 0;
+    color: #4c7eff;
+  }
+  .drop .primary {
+    margin: 0;
+    color: #1a2138;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .drop .or {
+    margin: -5px 0;
+    color: #8a93a8;
+    font-size: 13px;
+  }
   .browse {
     display: inline-block;
-    background: #e8efff;
-    color: #4c7eff;
-    border-radius: 8px;
-    padding: 8px 18px;
-    font-size: 14px;
-    font-weight: 500;
+    padding: 9px 14px;
+    color: #ffffff;
+    background: #4c7eff;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
   }
   #file { display: none; }
+  @media (max-width: 420px) {
+    .drop {
+      min-height: 190px;
+      padding: 24px 16px;
+    }
+    .drop svg { width: 56px; height: 56px; }
+  }
 
   .config-section {
     margin-top: 28px;
@@ -100,7 +141,7 @@
     color: #8a93a8;
     background: #fafcff;
     border: 1px solid #e4e9f2;
-    border-radius: 12px;
+    border-radius: 8px;
     font-size: 13px;
     text-align: center;
   }
@@ -112,7 +153,7 @@
     padding: 11px 12px;
     background: #fafcff;
     border: 1px solid #e4e9f2;
-    border-radius: 12px;
+    border-radius: 8px;
   }
   .configured-content { flex: 1; min-width: 0; }
   .configured-name {
@@ -177,7 +218,7 @@
     overflow: hidden;
     background: #fafcff;
     border: 1px solid #e4e9f2;
-    border-radius: 12px;
+    border-radius: 8px;
   }
   .config-group summary {
     display: flex;
@@ -189,6 +230,8 @@
     font-size: 14px;
     font-weight: 500;
     list-style: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .config-group summary::-webkit-details-marker { display: none; }
   .config-group summary::after {
@@ -506,10 +549,12 @@
     </div>
     <div class="upload-heading" data-message="uploadM3uFiles">Upload M3U files</div>
     <label class="drop" id="drop">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M20.39 18.39A5 5 0 0018 9h-1.26A5.5 5.5 0 006 11A4 4 0 003 16.3"/>
-        <path d="M16 16l-4-4-4 4"/>
-        <path d="M12 12v9"/>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 16V5"/>
+        <path d="M7.5 9.5L12 5l4.5 4.5"/>
+        <rect x="4" y="17" width="16" height="4" rx="1"/>
+        <circle cx="17" cy="19" r="0.8" fill="currentColor" stroke="none"/>
       </svg>
       <p class="primary">Drag &amp; drop your .m3u files here</p>
       <p class="or">or</p>
