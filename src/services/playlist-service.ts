@@ -50,6 +50,8 @@ class PlaylistServiceImpl {
   private channelSearchByPlaylist = new Map<string, PreparedSearchItem<Channel>[]>();
   private indexedChannels: Channel[] | null = null;
   private indexedChannelCount = -1;
+  private searchIndexedChannels: Channel[] | null = null;
+  private searchIndexedChannelCount = -1;
   private includeHidden = false;
 
   get allSourcesDisabled(): boolean {
@@ -81,6 +83,8 @@ class PlaylistServiceImpl {
     this.channelSearchByPlaylist = new Map();
     this.indexedChannels = null;
     this.indexedChannelCount = -1;
+    this.searchIndexedChannels = null;
+    this.searchIndexedChannelCount = -1;
   }
 
   async load(): Promise<Channel[]> {
@@ -312,6 +316,8 @@ class PlaylistServiceImpl {
     this.channelByLegacyKey = new Map();
     this.channelSearchIndex = [];
     this.channelSearchByPlaylist = new Map();
+    this.searchIndexedChannels = null;
+    this.searchIndexedChannelCount = -1;
 
     for (const key of ChannelCustomizationService.customGroups) {
       this.groupKeyByDisplay.set(ChannelCustomizationService.groupLabel(key), key);
@@ -319,11 +325,6 @@ class PlaylistServiceImpl {
 
     for (let i = 0; i < this.channels.length; i++) {
       const ch = this.channels[i];
-      const searchItem = prepareSearchItem(
-        ch,
-        item => [item.name, item.group, item.sourceName ?? ''],
-      );
-      this.channelSearchIndex.push(searchItem);
       this.indexMap.set(ch, i);
       this.channelByKey.set(channelKey(ch), ch);
       const legacyKey = legacyChannelKey(ch);
@@ -340,7 +341,6 @@ class PlaylistServiceImpl {
       }
       for (const playlistId of ch.playlistIds) {
         this.appendIndexed(this.channelsByPlaylist, playlistId, ch);
-        this.appendIndexed(this.channelSearchByPlaylist, playlistId, searchItem);
         if (!ch.group) continue;
         let byGroup = this.channelsByPlaylistGroup.get(playlistId);
         if (!byGroup) {
@@ -381,6 +381,26 @@ class PlaylistServiceImpl {
     if (this.indexedChannels !== this.channels || this.indexedChannelCount !== this.channels.length) {
       this.buildDerivedIndexes();
     }
+  }
+
+  private ensureLocalSearchIndexes(): void {
+    this.ensureDerivedIndexes();
+    if (this.searchIndexedChannels === this.channels
+        && this.searchIndexedChannelCount === this.channels.length) return;
+    this.channelSearchIndex = [];
+    this.channelSearchByPlaylist = new Map();
+    for (const channel of this.channels) {
+      const searchItem = prepareSearchItem(
+        channel,
+        item => [item.name, item.group, item.sourceName ?? ''],
+      );
+      this.channelSearchIndex.push(searchItem);
+      for (const playlistId of channel.playlistIds) {
+        this.appendIndexed(this.channelSearchByPlaylist, playlistId, searchItem);
+      }
+    }
+    this.searchIndexedChannels = this.channels;
+    this.searchIndexedChannelCount = this.channels.length;
   }
 
   /** Sort display group names into the custom group order (keyed by group key). */
@@ -437,21 +457,13 @@ class PlaylistServiceImpl {
       : this.channelsByGroup.get(sourceGroup)?.length ?? 0;
   }
 
-  /** Relevance-ranked name/genre search, optionally scoped to one playlist. Empty query → []. */
-  search(query: string, playlist?: string): Channel[] {
-    this.ensureDerivedIndexes();
-    const index = playlist
-      ? this.channelSearchByPlaylist.get(playlist) ?? []
-      : this.channelSearchIndex;
-    return rankPreparedTopK(index, query, index.length).items;
-  }
-
-  searchRanked(
+  searchLocalRanked(
     query: string,
     limit: number,
     playlist?: string,
   ): RankedSearchResult<Channel> {
-    this.ensureDerivedIndexes();
+    if (!query.trim()) return { items: [], hasMore: false };
+    this.ensureLocalSearchIndexes();
     const index = playlist
       ? this.channelSearchByPlaylist.get(playlist) ?? []
       : this.channelSearchIndex;

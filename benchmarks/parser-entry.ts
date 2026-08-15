@@ -3,6 +3,7 @@ import { parseXMLTVWithStats, XMLTVStreamParser } from '../src/parsers/xmltv-par
 import { fetchAndParseXMLTV } from '../src/parsers/xmltv-loader';
 import { fetchMaybeGzipText } from '../src/utils/fetch-helper';
 import { isAppWorkerRunning } from '../src/workers/app-worker-client';
+import { PlaylistService } from '../src/services/playlist-service';
 
 interface BenchmarkParseResult {
   channels: number;
@@ -22,6 +23,7 @@ interface BenchmarkXMLTVOptions {
 
 interface BenchmarkParserApi {
   parseM3U(text: string): BenchmarkParseResult;
+  profileDerivedIndexes(text: string): BenchmarkDerivedIndexResult;
   parseXMLTV(text: string, options?: BenchmarkXMLTVOptions): BenchmarkParseResult;
   loadXMLTV(url: string, options?: BenchmarkXMLTVOptions): Promise<BenchmarkXMLTVLoadResult>;
   profileXMLTV(url: string, options?: BenchmarkXMLTVOptions): Promise<BenchmarkParseResult>;
@@ -32,11 +34,20 @@ interface BenchmarkParserApi {
   workerRunning(): boolean;
 }
 
+interface BenchmarkDerivedIndexResult {
+  durationMs: number;
+  channels: number;
+  groups: number;
+}
+
 interface BenchmarkXMLTVLoadResult extends BenchmarkParseResult {
   durationMs: number;
 }
 
 declare global {
+  const __APP_ID__: string;
+  const __APP_VERSION__: string;
+  const __SERVICE_ID__: string;
   const __ENABLE_PSEUDO_LOCALE__: boolean;
 
   interface Window {
@@ -53,6 +64,25 @@ window.__IPTV_BENCHMARK__ = {
     return {
       channels: parsed.channels.length,
       groups: parsed.groups.length,
+    };
+  },
+  profileDerivedIndexes(text) {
+    const parsed = parseM3U(text, 'http://host/list.m3u');
+    for (const channel of parsed.channels) channel.playlistIds = ['benchmark'];
+    const target = PlaylistService as unknown as {
+      channels: typeof parsed.channels;
+      groups: string[];
+      reset(): void;
+      buildDerivedIndexes(): void;
+    };
+    target.reset();
+    target.channels = parsed.channels;
+    const started = performance.now();
+    target.buildDerivedIndexes();
+    return {
+      durationMs: performance.now() - started,
+      channels: target.channels.length,
+      groups: target.groups.length,
     };
   },
   parseXMLTV(text, options) {

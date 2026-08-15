@@ -767,6 +767,7 @@ export function runRawParserBenchmarks(options) {
     let started = performance.now();
     const m3uResult = api.parseM3U(m3uText);
     const m3uDuration = performance.now() - started;
+    const derivedIndexes = api.profileDerivedIndexes(m3uText);
 
     const base = Date.now() - 6 * 24 * 60 * 60 * 1000;
     const xmltvParts = [
@@ -791,6 +792,11 @@ export function runRawParserBenchmarks(options) {
         bytes: m3uText.length,
         channels: m3uResult.channels,
         groups: m3uResult.groups || 0,
+      },
+      derivedIndexes: {
+        durationMs: round(derivedIndexes.durationMs),
+        channels: derivedIndexes.channels,
+        groups: derivedIndexes.groups,
       },
       xmltv: {
         durationMs: round(xmltvDuration),
@@ -2443,7 +2449,9 @@ export function assertBenchmarkScale(report, scale) {
       `Event loop froze for ${String(report.stress.maxEventLoopGapMs)}ms`,
     );
   }
-  if (report.parsers.m3u.channels !== scale || report.parsers.xmltv.programmes !== scale) {
+  if (report.parsers.m3u.channels !== scale
+      || report.parsers.derivedIndexes.channels !== scale
+      || report.parsers.xmltv.programmes !== scale) {
     throw new Error('Raw parser benchmark did not produce the requested scale');
   }
   closeTo(report.channelList.totalSize, scale * 88);

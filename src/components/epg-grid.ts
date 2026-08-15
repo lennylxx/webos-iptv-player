@@ -260,7 +260,7 @@ export class EpgGrid {
     } catch (error) {
       if (generation !== this.channelSearchGeneration) return;
       log.error(
-        'Worker search failed; using local ranking',
+        'Worker search failed; using main-thread fallback',
         'event=search.worker.fallback.used',
         'scope=list',
         'owner=epg-grid',

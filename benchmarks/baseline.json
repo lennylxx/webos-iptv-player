@@ -590,6 +590,11 @@
         "channels": 50000,
         "groups": 100
       },
+      "derivedIndexes": {
+        "durationMs": 230.9,
+        "channels": 50000,
+        "groups": 100
+      },
       "xmltv": {
         "durationMs": 297.4,
         "bytes": 7577851,

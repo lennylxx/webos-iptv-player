@@ -40,7 +40,7 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
       findChannelId: vi.fn(() => null as string | null),
       getSourceOffsetMinutes: vi.fn(() => 0),
       getNowPlaying: () => null,
-      getMappingCandidates: vi.fn(() => [] as Array<{
+      getLocalMappingCandidates: vi.fn(() => [] as Array<{
         id: string;
         channelId: string;
         name: string;
@@ -187,11 +187,11 @@ beforeEach(() => {
   epgMock.findChannelId.mockReturnValue(null);
   epgMock.getSourceOffsetMinutes.mockReset();
   epgMock.getSourceOffsetMinutes.mockReturnValue(0);
-  epgMock.getMappingCandidates.mockReset();
-  epgMock.getMappingCandidates.mockReturnValue([]);
+  epgMock.getLocalMappingCandidates.mockReset();
+  epgMock.getLocalMappingCandidates.mockReturnValue([]);
   epgMock.getMappingSearchEntries.mockReset();
   epgMock.getMappingSearchEntries.mockImplementation((channel: Channel) =>
-    epgMock.getMappingCandidates(channel, '').map(candidate => ({
+    epgMock.getLocalMappingCandidates(channel, '').map(candidate => ({
       ...candidate,
       fields: [candidate.channelId, candidate.name, channel.name],
       sourceIndex: 0,
@@ -611,7 +611,7 @@ describe('ChannelList edit mode', () => {
   it('maps a selected channel to a searched XMLTV candidate and can restore automatic matching',
     async () => {
       const mappedId = `${encodeURIComponent('http://host/epg')}::guide-a`;
-      epgMock.getMappingCandidates.mockReturnValue([{
+      epgMock.getLocalMappingCandidates.mockReturnValue([{
         id: mappedId,
         channelId: 'guide-a',
         name: 'Alpha Guide',
@@ -705,7 +705,7 @@ describe('ChannelList edit mode', () => {
   });
 
   it('rerenders the virtualized EPG range after the keyboard closes', async () => {
-    epgMock.getMappingCandidates.mockReturnValue(Array.from({ length: 120 }, (_, index) => ({
+    epgMock.getLocalMappingCandidates.mockReturnValue(Array.from({ length: 120 }, (_, index) => ({
       id: `source::guide-${String(index)}`,
       channelId: `guide-${String(index)}`,
       name: `Guide ${String(index)}`,
@@ -740,7 +740,7 @@ describe('ChannelList edit mode', () => {
   });
 
   it('keeps an empty EPG search focused when the pointer crosses candidates', async () => {
-    epgMock.getMappingCandidates.mockReturnValue([{
+    epgMock.getLocalMappingCandidates.mockReturnValue([{
       id: 'source::guide-a',
       channelId: 'guide-a',
       name: 'Alpha Guide',
@@ -773,7 +773,7 @@ describe('ChannelList edit mode', () => {
   });
 
   it('focuses the EPG search when Magic Remote OK clicks its wrapper', async () => {
-    epgMock.getMappingCandidates.mockReturnValue([{
+    epgMock.getLocalMappingCandidates.mockReturnValue([{
       id: 'source::guide-a',
       channelId: 'guide-a',
       name: 'Alpha Guide',
@@ -805,7 +805,7 @@ describe('ChannelList edit mode', () => {
     await waitForEpgSearch();
     expect(container.querySelectorAll('[data-epg-position]')).toHaveLength(1);
 
-    epgMock.getMappingCandidates.mockReturnValue([{
+    epgMock.getLocalMappingCandidates.mockReturnValue([{
       id: 'source::guide-a',
       channelId: 'guide-a',
       name: 'Alpha Guide',
@@ -820,7 +820,7 @@ describe('ChannelList edit mode', () => {
 
   it('virtualizes the complete EPG catalog and moves D-pad focus beyond the first window',
     async () => {
-      epgMock.getMappingCandidates.mockReturnValue(Array.from({ length: 120 }, (_, index) => ({
+      epgMock.getLocalMappingCandidates.mockReturnValue(Array.from({ length: 120 }, (_, index) => ({
         id: `source::guide-${String(index)}`,
         channelId: `guide-${String(index)}`,
         name: `Guide ${String(index).padStart(3, '0')}`,

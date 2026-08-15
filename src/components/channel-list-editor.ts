@@ -1066,13 +1066,13 @@ export class ChannelListEditor {
     } catch (error) {
       if (generation !== this.epgSearchGeneration || key !== this.epgPickerFor) return;
       log.error(
-        'Worker search failed; using local ranking',
+        'Worker search failed; using main-thread fallback',
         'event=search.worker.fallback.used',
         'scope=mapping',
         'owner=epg-mapping',
         error,
       );
-      this.epgCandidates = EpgService.getMappingCandidates(channel, query);
+      this.epgCandidates = EpgService.getLocalMappingCandidates(channel, query);
     }
     this.epgSearchPending = false;
     this.epgSearchResultQuery = query;

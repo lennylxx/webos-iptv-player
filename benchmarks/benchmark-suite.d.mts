@@ -75,6 +75,7 @@ export function runRawParserBenchmarks(
   options: RawParserBenchmarkOptions,
 ): {
   m3u: { durationMs: number; bytes: number; channels: number; groups: number };
+  derivedIndexes: { durationMs: number; channels: number; groups: number };
   xmltv: { durationMs: number; bytes: number; channels: number; programmes: number };
   xmltvCatalog?: XMLTVCatalogBenchmark;
   xmltvPipeline?: XMLTVPipelineBenchmark;

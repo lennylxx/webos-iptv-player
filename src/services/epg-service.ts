@@ -278,7 +278,7 @@ class EpgServiceImpl {
     return entries;
   }
 
-  getMappingCandidates(
+  getLocalMappingCandidates(
     channel: Channel,
     query: string,
     limit?: number,

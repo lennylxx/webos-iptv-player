@@ -616,12 +616,12 @@ export class Search {
     }
     if (!response) {
       log.warn(
-        'Using main-thread search fallback',
+        'Worker search failed; using main-thread fallback',
         'event=search.worker.fallback.used',
         'scope=unified',
         `session=${String(sessionId)}`,
       );
-      response = this.fallbackQuery(query);
+      response = this.queryLocally(query);
     }
     this.applyQueryResponse(response);
     this.queryPending = false;
@@ -629,8 +629,8 @@ export class Search {
     this.render();
   }
 
-  private fallbackQuery(query: string): SearchQueryResponse {
-    const channels = PlaylistService.searchRanked(query, this.resultLimit);
+  private queryLocally(query: string): SearchQueryResponse {
+    const channels = PlaylistService.searchLocalRanked(query, this.resultLimit);
     const programmes = rankPreparedTopK(
       prepareSearchItems(this.programIndex, result => [
         result.programme.title,
@@ -710,7 +710,7 @@ export class Search {
       return response;
     } catch (error) {
       log.error(
-        'Search worker recovery failed; using main-thread fallback',
+        'Search worker recovery failed',
         'event=search.worker.recovery.failed',
         'scope=unified',
         `session=${String(sessionId)}`,

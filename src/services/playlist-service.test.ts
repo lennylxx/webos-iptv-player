@@ -485,7 +485,15 @@ describe('PlaylistService.getByGroup', () => {
   });
 });
 
-describe('PlaylistService.search', () => {
+function localSearchResults(query: string, playlist?: string): Channel[] {
+  return PlaylistService.searchLocalRanked(
+    query,
+    PlaylistService.channels.length,
+    playlist,
+  ).items;
+}
+
+describe('PlaylistService.searchLocalRanked', () => {
   beforeEach(() => {
     PlaylistService.channels = [
       channel({ name: 'Alpha', group: 'News', playlistIds: ['P1'] }),
@@ -495,23 +503,34 @@ describe('PlaylistService.search', () => {
   });
 
   it('matches channel names case-insensitively, spanning all groups/playlists', () => {
-    expect(PlaylistService.search('A').map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
-    expect(PlaylistService.search('char').map(c => c.name)).toEqual(['Charlie']);
+    expect(localSearchResults('A').map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect(localSearchResults('char').map(c => c.name)).toEqual(['Charlie']);
+  });
+
+  it('builds the local fallback index only when search is used', () => {
+    const internals = PlaylistService as unknown as {
+      channelSearchIndex: unknown[];
+    };
+    PlaylistService.getByGroup('builtin:all');
+    expect(internals.channelSearchIndex).toHaveLength(0);
+
+    localSearchResults('alpha');
+    expect(internals.channelSearchIndex).toHaveLength(3);
   });
 
   it('scopes results to a single playlist when one is given', () => {
-    expect(PlaylistService.search('a', 'P1').map(c => c.name)).toEqual(['Alpha', 'Bravo']);
-    expect(PlaylistService.search('a', 'P2').map(c => c.name)).toEqual(['Charlie']);
+    expect(localSearchResults('a', 'P1').map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    expect(localSearchResults('a', 'P2').map(c => c.name)).toEqual(['Charlie']);
   });
 
   it('returns no results for an empty or whitespace query', () => {
-    expect(PlaylistService.search('')).toEqual([]);
-    expect(PlaylistService.search('   ')).toEqual([]);
+    expect(localSearchResults('')).toEqual([]);
+    expect(localSearchResults('   ')).toEqual([]);
   });
 
   it('matches channel genres through natural-language-lite synonyms', () => {
-    expect(PlaylistService.search('footy').map(c => c.name)).toEqual(['Bravo']);
-    expect(PlaylistService.search('headlines').map(c => c.name)).toEqual(['Alpha', 'Charlie']);
+    expect(localSearchResults('footy').map(c => c.name)).toEqual(['Bravo']);
+    expect(localSearchResults('headlines').map(c => c.name)).toEqual(['Alpha', 'Charlie']);
   });
 });
 
@@ -592,7 +611,7 @@ describe('PlaylistService.reset', () => {
   });
 });
 
-describe('PlaylistService.search', () => {
+describe('PlaylistService.searchLocalRanked', () => {
   beforeEach(() => {
     PlaylistService.channels = [
       channel({ id: '1', name: 'Alpha', playlistIds: ['a'] }),
@@ -602,15 +621,15 @@ describe('PlaylistService.search', () => {
   });
 
   it('returns [] for a blank query', () => {
-    expect(PlaylistService.search('  ')).toEqual([]);
+    expect(localSearchResults('  ')).toEqual([]);
   });
 
   it('ranks exact and prefix matches above a mid-word match', () => {
-    expect(PlaylistService.search('alpha').map(c => c.name)).toEqual(['Alpha', 'Alpha HD', 'XAlpha']);
+    expect(localSearchResults('alpha').map(c => c.name)).toEqual(['Alpha', 'Alpha HD', 'XAlpha']);
   });
 
   it('scopes to a single playlist when given', () => {
-    expect(PlaylistService.search('alpha', 'b').map(c => c.name)).toEqual(['Alpha HD']);
+    expect(localSearchResults('alpha', 'b').map(c => c.name)).toEqual(['Alpha HD']);
   });
 });
 

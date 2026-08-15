@@ -309,7 +309,7 @@ describe('EpgService multi-source matching', () => {
       source('http://b', ['b']),
     ], [playlistChannel]);
 
-    expect(EpgService.getMappingCandidates(playlistChannel, 'guide')).toEqual([{
+    expect(EpgService.getLocalMappingCandidates(playlistChannel, 'guide')).toEqual([{
       id: `${encodeURIComponent('http://a')}::epg.9`,
       channelId: 'epg.9',
       name: 'Alpha Guide',
@@ -328,7 +328,7 @@ describe('EpgService multi-source matching', () => {
     });
     await EpgService.load([source('http://a', ['a'])], [playlistChannel]);
 
-    expect(EpgService.getMappingCandidates(playlistChannel, 'Alpha')).toEqual([{
+    expect(EpgService.getLocalMappingCandidates(playlistChannel, 'Alpha')).toEqual([{
       id: mappedId,
       channelId: 'epg.9',
       name: 'Bravo Guide',
@@ -352,8 +352,8 @@ describe('EpgService multi-source matching', () => {
     });
     await EpgService.load([source('http://a', ['a'])], [playlistChannel]);
 
-    expect(EpgService.getMappingCandidates(playlistChannel, '')).toHaveLength(80);
-    expect(EpgService.getMappingCandidates(playlistChannel, '', 50)).toHaveLength(50);
+    expect(EpgService.getLocalMappingCandidates(playlistChannel, '')).toHaveLength(80);
+    expect(EpgService.getLocalMappingCandidates(playlistChannel, '', 50)).toHaveLength(50);
   });
 });
 
