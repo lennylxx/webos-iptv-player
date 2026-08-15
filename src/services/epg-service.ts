@@ -6,8 +6,7 @@ import type {
   ParsedEpg,
   Programme,
 } from '../types';
-import { parseXMLTVWithStats } from '../parsers/xmltv-parser';
-import { fetchMaybeGzipText } from '../utils/fetch-helper';
+import { fetchAndParseXMLTV } from '../parsers/xmltv-loader';
 import { createLogger } from '../utils/logger';
 import { EpgTimeIndex } from '../utils/epg-time-index';
 import { CONFIG } from '../config';
@@ -49,6 +48,7 @@ class EpgServiceImpl {
   private timeIndexes = new Map<string, { source: Programme[]; index: EpgTimeIndex }>();
   private sourceOffsets = new Map<string, number>();
   private derivedOffsets = new Map<string, { id: string; baseId: string; minutes: number }>();
+  private mappedChannelIds: string[] = [];
   private playlistChannels: Channel[] | null = null;
   private revision = 0;
   private mappingRevisionValue = 0;
@@ -74,12 +74,14 @@ class EpgServiceImpl {
     this.timeIndexes.clear();
     this.sourceOffsets.clear();
     this.derivedOffsets.clear();
+    this.mappedChannelIds = [];
     this.playlistChannels = null;
   }
 
   async load(sources: EpgSource[], channels?: Channel[]): Promise<void> {
     const revision = ++this.revision;
     this.playlistChannels = channels ?? null;
+    this.mappedChannelIds = ChannelCustomizationService.epgChannelIds();
     this.setSources(sources);
     await Promise.all(this.sources.map((source) => this.loadSource(source, revision)));
     if (revision !== this.revision) return;
@@ -90,6 +92,7 @@ class EpgServiceImpl {
 
   async refresh(): Promise<void> {
     const revision = ++this.revision;
+    this.mappedChannelIds = ChannelCustomizationService.epgChannelIds();
     await Promise.all(this.sources.map(async (source) => {
       const state = this.states.get(source.url);
       if (state && !state.needsRefresh
@@ -360,18 +363,17 @@ class EpgServiceImpl {
     }
     const done = log.time(`fetch '${source.url}'`);
     try {
-      const text = await fetchMaybeGzipText(source.url, 120000);
-      if (revision !== this.revision) {
-        done();
-        return;
-      }
-      const { data: result, stats } = parseXMLTVWithStats(text, filter
+      const { data: result, stats } = await fetchAndParseXMLTV(source.url, 120000, filter
         ? {
             channelIds: filter.ids,
             channelNames: filter.names,
             retainChannelCatalog: true,
           }
         : {});
+      if (revision !== this.revision) {
+        done();
+        return;
+      }
       const programmeCount = stats.programmesKept;
       // An empty parse is usually a transient upstream response; neither cache
       // it nor let it replace programmes already loaded for this source.
@@ -435,7 +437,7 @@ class EpgServiceImpl {
     if (this.playlistChannels === null) return null;
     const ids = new Set<string>();
     const names = new Set<string>();
-    for (const override of ChannelCustomizationService.epgChannelIds()) {
+    for (const override of this.mappedChannelIds) {
       const mapped = this.splitChannelKey(override);
       if (mapped?.url === source.url) ids.add(mapped.id);
     }
@@ -484,6 +486,15 @@ class EpgServiceImpl {
           index: new EpgTimeIndex(shiftedPrograms),
         });
       }
+    }
+    const staleMappings = this.mappedChannelIds
+      .filter(id => !this.channels[id]).length;
+    if (staleMappings) {
+      log.warn(
+        'Saved EPG mappings no longer match loaded guide channels',
+        'event=epg.mapping.stale',
+        `count=${String(staleMappings)}`,
+      );
     }
   }
 

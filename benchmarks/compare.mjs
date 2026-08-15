@@ -37,6 +37,8 @@ const metricPaths = [
   'sidebar.navigation.frame.p95',
   'sidebar.logoReveal.frame.p50',
   'parsers.xmltvCatalog.filtered.durationMs',
+  'parsers.xmltvPipeline.durationMs',
+  'parsers.xmltvPipeline.maxFrameGapMs',
   'epg.firstFrameMs',
   'epg.maxLongTaskMs',
   'epg.channelList.p95',

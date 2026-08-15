@@ -14,6 +14,9 @@ export default defineConfig({
     ...devices['Desktop Chrome'],
     baseURL,
     viewport: { width: 1920, height: 1080 },
+    launchOptions: {
+      args: ['--enable-precise-memory-info'],
+    },
     trace: 'off',
     screenshot: 'off',
     video: 'off',

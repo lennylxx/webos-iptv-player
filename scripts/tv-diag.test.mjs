@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import {
   DiagnosticRedactor,
   assembleDiagnosticReport,
-  extractPlaybackTimeline,
+  extractDiagnosticTimeline,
   extractXtreamTimeline,
   normalizeNetworkRecords,
   parseNativeMetricOutput,
@@ -285,8 +285,8 @@ describe('diagnostic report assembly', () => {
     expect(records[0].headers).not.toHaveProperty('authorization');
   });
 
-  it('extracts stable diagnostic events with optional playback labels', () => {
-    const timeline = extractPlaybackTimeline([
+  it('extracts stable diagnostic events with optional context fields', () => {
+    const timeline = extractDiagnosticTimeline([
       {
         observedAt: '2026-01-01T00:00:00.000Z',
         source: 'console',
@@ -297,10 +297,17 @@ describe('diagnostic report assembly', () => {
         observedAt: '2026-01-01T00:00:01.000Z',
         source: 'console',
         level: 'warning',
-        text: '[Storage] event=persistence.cache.write.failed category=playlist',
+        text: '[EPG] event=epg.mapping.stale count=2 reason=missing_channel',
       },
       {
         observedAt: '2026-01-01T00:00:02.000Z',
+        source: 'console',
+        level: 'error',
+        text: '[AppWorker] event=worker.lifecycle.failed'
+          + ' generation=2 active=1 reason=execution_error',
+      },
+      {
+        observedAt: '2026-01-01T00:00:03.000Z',
         source: 'console',
         level: 'log',
         text: '[Player] ordinary log',
@@ -313,9 +320,17 @@ describe('diagnostic report assembly', () => {
         load: 2,
       }),
       expect.objectContaining({
-        code: 'persistence.cache.write.failed',
+        code: 'epg.mapping.stale',
         session: null,
         load: null,
+        count: 2,
+        reason: 'missing_channel',
+      }),
+      expect.objectContaining({
+        code: 'worker.lifecycle.failed',
+        generation: 2,
+        active: 1,
+        reason: 'execution_error',
       }),
     ]);
   });
@@ -397,16 +412,36 @@ describe('diagnostic report assembly', () => {
         level: 'warning',
         text: 'Xtream request failed event=xtream.request.failed'
           + ' endpoint=get_series code=timeout timeoutMs=30000 limitBytes=33554432',
+      }, {
+        observedAt: '2026-01-01T00:00:03.000Z',
+        source: 'console',
+        level: 'warning',
+        text: '[EPG] Saved mapping missing event=epg.mapping.stale'
+          + ' count=2 reason=missing_channel',
+      }, {
+        observedAt: '2026-01-01T00:00:04.000Z',
+        source: 'console',
+        level: 'error',
+        text: '[AppWorker] App worker failed event=worker.lifecycle.failed'
+          + ' generation=2 active=1 reason=execution_error',
       }],
       networkEvents: [],
     });
     const serialized = JSON.stringify(report);
+    expect(report.schemaVersion).toBe(2);
+    expect(report.diagnostics).toHaveLength(4);
+    expect(report).not.toHaveProperty('playback');
     expect(serialized).not.toContain('user1');
     expect(serialized).not.toContain('pass1');
     expect(serialized).not.toContain('Alpha.m3u8');
     const summary = formatDiagnosticSummary(report);
     expect(summary).toContain('webview=200');
     expect(summary).toContain('playback.path.native');
+    expect(summary).toContain('Diagnostic events: 4');
+    expect(summary).toContain('epg.mapping.stale count=2 reason=missing_channel');
+    expect(summary).toContain(
+      'worker.lifecycle.failed generation=2 active=1 reason=execution_error',
+    );
     expect(summary).toContain(
       'xtream.request.failed endpoint=get_series code=timeout'
         + ' timeoutMs=30000 limitBytes=33554432',
@@ -426,11 +461,26 @@ describe('diagnostic report assembly', () => {
         webview: { error: 'first line\nsecond line' },
         native: { error: 'x'.repeat(200) },
       }],
-      playback: [],
+      diagnostics: [],
       network: [],
       logs: [],
     });
     expect(summary).not.toContain('second line');
     expect(summary.length).toBeLessThan(500);
+  });
+
+  it('formats legacy schema v1 playback events as diagnostics', () => {
+    const summary = formatDiagnosticSummary({
+      schemaVersion: 1,
+      capturedAt: '2026-01-01T00:00:00.000Z',
+      app: {},
+      environment: {},
+      state: {},
+      playlists: [],
+      playback: [{ code: 'playback.path.native', session: 1 }],
+    });
+
+    expect(summary).toContain('Diagnostic events: 1');
+    expect(summary).toContain('playback.path.native session=1');
   });
 });

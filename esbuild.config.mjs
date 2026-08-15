@@ -3,7 +3,6 @@ import { cpSync, readFileSync, writeFileSync, readdirSync, appendFileSync, rmSyn
 import postcss from 'postcss';
 import { scanBundle, formatViolations } from './scripts/compat-gate.mjs';
 
-const isWatch = process.argv.includes('--watch');
 const isPreview = process.argv.includes('--preview');
 // Read version from package.json (single source of truth)
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
@@ -94,9 +93,8 @@ const define = {
 // webOS 5/6 and leave the app stuck on the loading screen.
 const TARGET = ['chrome68'];
 
-// Shared config for the main app bundle (src/app.ts). The shipped build, the
-// compat-gate scan, and the dev watch rebuild all use this; they differ only in
-// minify / sourcemap / write.
+// Shared config for the main app bundle (src/app.ts). The shipped build and
+// compat-gate scan use the same tree-shaken graph.
 const appBuild = {
   entryPoints: ['src/app.ts'],
   bundle: true,
@@ -106,28 +104,35 @@ const appBuild = {
   external: ['hls.js', 'mpegts.js'],
   define,
 };
+const workerBuild = {
+  entryPoints: ['src/workers/app-worker.ts'],
+  bundle: true,
+  outfile: 'dist/js/app-worker.js',
+  format: 'iife',
+  target: TARGET,
+  define,
+};
+const shippedBuilds = [
+  { name: 'app', config: appBuild },
+  { name: 'worker', config: workerBuild },
+];
 
-if (isWatch) {
-  // Dev watch: rebuild unminified with sourcemaps on every change. Owns the
-  // app bundle in watch mode — no separate one-shot build.
-  const ctx = await esbuild.context({ ...appBuild, minify: false, sourcemap: true });
-  await ctx.watch();
-  console.log('Watching for changes...');
-} else {
-  // Shipped app bundle → dist/js/app.js (minified, goes into the IPK).
-  await esbuild.build({ ...appBuild, minify: true });
+// Shipped bundles (minified, both go into the IPK).
+await Promise.all(shippedBuilds.map(({ config }) =>
+  esbuild.build({ ...config, minify: true })));
 
-  // webOS 5 (Chromium 68) bundle compat gate. Down-leveling handles post-68
-  // *syntax*, but not *APIs* — and dependencies get bundled in without passing
-  // through the eslint source gate. Scan a NON-minified build of the same entry
-  // (same tree-shaken graph, readable identifiers) for banned APIs.
-  const scan = await esbuild.build({ ...appBuild, minify: false, write: false });
+// webOS 5 (Chromium 68) bundle compat gate. Down-leveling handles post-68
+// *syntax*, but not *APIs* — and dependencies get bundled in without passing
+// through the eslint source gate. Scan a NON-minified build of the same entry
+// (same tree-shaken graph, readable identifiers) for banned APIs.
+for (const { name, config } of shippedBuilds) {
+  const scan = await esbuild.build({ ...config, minify: false, write: false });
   const violations = scanBundle(scan.outputFiles[0].text);
   if (violations.length > 0) {
-    throw new Error(formatViolations(violations));
+    throw new Error(`${name} bundle:\n${formatViolations(violations)}`);
   }
-  console.log('Compat gate: bundle is Chromium-68 clean.');
 }
+console.log('Compat gate: app and worker bundles are Chromium-68 clean.');
 
 // Desktop-only playback libraries. Production builds neither reference nor
 // generate this bundle, so it cannot leak into the IPK.

@@ -77,7 +77,96 @@ export function runRawParserBenchmarks(
   m3u: { durationMs: number; bytes: number; channels: number; groups: number };
   xmltv: { durationMs: number; bytes: number; channels: number; programmes: number };
   xmltvCatalog?: XMLTVCatalogBenchmark;
+  xmltvPipeline?: XMLTVPipelineBenchmark;
+  xmltvPipelineBuffered?: XMLTVPipelineBenchmark;
 };
+
+export interface XMLTVPipelineBenchmark {
+  durationMs: number;
+  maxFrameGapMs: number;
+  memoryScope: string;
+  transientParseHeapIncluded: boolean;
+  workerTerminatedAfterIdle?: boolean;
+  compressedBytes: number;
+  uncompressedBytes: number;
+  channels: number;
+  catalogChannels: number;
+  programmes: number;
+  programmesSeen: number;
+  samples: number;
+  startMemoryMiB: number;
+  peakMemoryMiB: number;
+  averageMemoryMiB: number;
+  peakMemoryDeltaMiB: number;
+  averageMemoryDeltaMiB: number;
+  peakV8HeapMiB: number;
+  peakEmbedderHeapMiB: number;
+  peakBackingStorageMiB: number;
+  rssSamples?: number;
+  startRssMiB?: number;
+  peakRssMiB?: number;
+  averageRssMiB?: number;
+  peakRssDeltaMiB?: number;
+  rendererHighWaterMiB?: number;
+}
+
+export interface XMLTVPipelineBenchmarkOptions {
+  url: string;
+  compressedBytes: number;
+  uncompressedBytes: number;
+  channelIds: string[];
+  channelNames: string[];
+  buffered?: boolean;
+}
+
+export interface XMLTVPipelineBenchmarkIo {
+  evaluate: (fn: unknown, arg?: unknown) => Promise<any>;
+  collectGarbage: () => Promise<unknown>;
+  memoryUsed: () => Promise<{
+    usedSize: number;
+    embedderHeapUsedSize?: number;
+    backingStorageSize?: number;
+  }>;
+  delay: (milliseconds: number) => Promise<void>;
+  startProcessMemorySampling?: () => Promise<
+    () => Promise<Record<string, number> | null>
+  >;
+}
+
+export function buildXMLTVPipelineFixture(scale: number): {
+  text: string;
+  channelIds: string[];
+  channelNames: string[];
+};
+
+export function measureXMLTVPipelineBenchmark(
+  options: XMLTVPipelineBenchmarkOptions,
+  io: XMLTVPipelineBenchmarkIo,
+): Promise<XMLTVPipelineBenchmark>;
+
+export function measureXMLTVPipelineComparison(
+  options: XMLTVPipelineBenchmarkOptions,
+  io: XMLTVPipelineBenchmarkIo,
+): Promise<{
+  buffered: XMLTVPipelineBenchmark;
+  streaming: XMLTVPipelineBenchmark;
+}>;
+
+export function measureHostedXMLTVPipelineComparison(
+  options: {
+    scale: number;
+    deviceIp: string;
+    appId: string;
+    chunkBytes?: number;
+    chunkDelayMs?: number;
+  },
+  io: XMLTVPipelineBenchmarkIo,
+): Promise<{
+  buffered: XMLTVPipelineBenchmark;
+  streaming: XMLTVPipelineBenchmark;
+}>;
+
+export function releaseXMLTVPipelineBenchmark(): void;
 
 export interface XMLTVCatalogPass {
   durationMs: number;

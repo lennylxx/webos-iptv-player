@@ -1,8 +1,13 @@
-// Shared browser-side fixture, measurement, and assertion functions used by
-// both the Desktop Playwright benchmark (performance.spec.ts) and the TV CDP
-// benchmark (tv-runner.mjs). These run inside the app page via
-// `fn.toString()`, so they must stay self-contained — no closures over
-// module-level state, no Node APIs.
+import { once } from 'node:events';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
+import { createSocket } from 'node:dgram';
+import path from 'node:path';
+import { gzipSync } from 'node:zlib';
+
+// Shared fixture, measurement, and assertion functions used by both runners.
+// Browser functions run inside the app page via `fn.toString()`, so those
+// functions must stay self-contained and must not close over Node APIs.
 
 export async function installBenchmarkFixture(options) {
     const directStorage = options.directStorage === true;
@@ -56,10 +61,13 @@ export async function installBenchmarkFixture(options) {
     };
 
     const db = await openDb();
-    const existingTx = db.transaction('catalog-cache', 'readonly');
-    const existing = await requestValue(
-      existingTx.objectStore('catalog-cache').get(options.backupKey),
-    );
+    const backupStores = ['catalog-cache', 'user-meta'];
+    const existingTx = db.transaction(backupStores, 'readonly');
+    const [userBackup, legacyBackup] = await Promise.all([
+      requestValue(existingTx.objectStore('user-meta').get(options.backupKey)),
+      requestValue(existingTx.objectStore('catalog-cache').get(options.backupKey)),
+    ]);
+    const existing = userBackup || legacyBackup;
     if (existing) {
       db.close();
       throw new Error(
@@ -98,10 +106,9 @@ export async function installBenchmarkFixture(options) {
         progressTx.objectStore('playback-progress').getAll(),
       );
     }
-    const backupTx = db.transaction('catalog-cache', 'readwrite');
-    backupTx.objectStore('catalog-cache').put(cacheRecord('catalog-cache', 'catalog', {
+    const backupTx = db.transaction('user-meta', 'readwrite');
+    backupTx.objectStore('user-meta').put({
       key: options.backupKey,
-      timestamp: Date.now(),
       data: {
         localStorage: backup,
         playlistCache,
@@ -109,7 +116,7 @@ export async function installBenchmarkFixture(options) {
         recentlyWatched,
         playbackProgress,
       },
-    }));
+    });
     await transactionDone(backupTx);
 
     let firstUrl = 'http://host/0';
@@ -590,10 +597,12 @@ export async function cleanupBenchmarkFixture(options) {
     });
 
     const db = await openDb();
-    const readTx = db.transaction('catalog-cache', 'readonly');
-    const backupEntry = await requestValue(
-      readTx.objectStore('catalog-cache').get(options.backupKey),
-    );
+    const readTx = db.transaction(['catalog-cache', 'user-meta'], 'readonly');
+    const [userBackup, legacyBackup] = await Promise.all([
+      requestValue(readTx.objectStore('user-meta').get(options.backupKey)),
+      requestValue(readTx.objectStore('catalog-cache').get(options.backupKey)),
+    ]);
+    const backupEntry = userBackup || legacyBackup;
     if (backupEntry && backupEntry.data) {
       const backupData = backupEntry.data.localStorage
         ? backupEntry.data.localStorage
@@ -612,6 +621,7 @@ export async function cleanupBenchmarkFixture(options) {
       'recently-watched',
       'playback-progress',
       'cache-meta',
+      'user-meta',
     ]) {
       if (db.objectStoreNames.contains(store)) cleanupStores.push(store);
     }
@@ -628,6 +638,9 @@ export async function cleanupBenchmarkFixture(options) {
       }
       cursor.continue();
     };
+    if (cleanupStores.indexOf('user-meta') >= 0) {
+      cleanupTx.objectStore('user-meta').delete(options.backupKey);
+    }
     if (cleanupStores.indexOf('playlist-cache') >= 0) {
       const playlist = cleanupTx.objectStore('playlist-cache');
       const savedPlaylist = backupEntry?.data?.playlistCache;
@@ -679,6 +692,49 @@ export async function cleanupBenchmarkFixture(options) {
     await transactionDone(cleanupTx);
     db.close();
     return { restored: Boolean(backupEntry) };
+}
+
+export function buildXMLTVPipelineFixture(scale) {
+  const sourceChannels = Math.max(2, Math.round(scale / 25));
+  const slots = Math.max(1, Math.round(scale / sourceChannels));
+  const keptChannels = Math.max(1, Math.round(sourceChannels * 0.15));
+  const base = Date.now() - 6 * 24 * 60 * 60 * 1000;
+  const two = (value) => `0${String(value)}`.slice(-2);
+  const xmltvTime = (value) => {
+    const date = new Date(value);
+    return `${String(date.getUTCFullYear())}${two(date.getUTCMonth() + 1)}`
+      + `${two(date.getUTCDate())}${two(date.getUTCHours())}`
+      + `${two(date.getUTCMinutes())}${two(date.getUTCSeconds())} +0000`;
+  };
+  const parts = ['<tv>'];
+  for (let index = 0; index < sourceChannels; index++) {
+    parts.push(
+      `<channel id="ch${String(index)}"><display-name>Channel ${String(index)}</display-name>`,
+      `<icon src="http://host/logo/${String(index)}.png" /></channel>`,
+    );
+  }
+  for (let index = 0; index < sourceChannels; index++) {
+    for (let slot = 0; slot < slots; slot++) {
+      const start = base + slot * 20_000;
+      parts.push(
+        `<programme start="${xmltvTime(start)}" stop="${xmltvTime(start + 20_000)}"`,
+        ` channel="ch${String(index)}"><title>Program ${String(index)}-${String(slot)}</title>`,
+        `<desc>Synthetic description for slot ${String(slot)} of channel ${String(index)}, `,
+        'padded to the length a real guide carries so programme bodies cost ',
+        'what they cost in production.</desc>',
+        `<category>Category ${String(index % 12)}</category>`,
+        `<icon src="http://host/img/${String(index)}-${String(slot)}.png" /></programme>`,
+      );
+    }
+  }
+  parts.push('</tv>');
+  const channelIds = [];
+  const channelNames = [];
+  for (let index = 0; index < keptChannels; index++) {
+    if (index % 2 === 0) channelIds.push(`ch${String(index)}`);
+    channelNames.push(`channel ${String(index)}`);
+  }
+  return { text: parts.join(''), channelIds, channelNames };
 }
 
 export function runRawParserBenchmarks(options) {
@@ -822,6 +878,76 @@ export function runXMLTVCatalogPass(options) {
     };
 }
 
+export async function runXMLTVPipelineTimingBenchmark(options) {
+    const api = window.__IPTV_BENCHMARK__;
+    if (!api) throw new Error('Parser benchmark bundle was not installed');
+    const load = options.buffered ? api.loadXMLTVBuffered : api.loadXMLTV;
+    let active = true;
+    let frameRequest = 0;
+    let previousFrame = performance.now();
+    let maxFrameGapMs = 0;
+    const observeFrame = (timestamp) => {
+      maxFrameGapMs = Math.max(maxFrameGapMs, timestamp - previousFrame);
+      previousFrame = timestamp;
+      if (active) frameRequest = requestAnimationFrame(observeFrame);
+    };
+    frameRequest = requestAnimationFrame(observeFrame);
+    let result;
+    try {
+      result = await load.call(api, options.url, {
+        channelIds: options.channelIds,
+        channelNames: options.channelNames,
+        retainChannelCatalog: true,
+      });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    } finally {
+      active = false;
+      cancelAnimationFrame(frameRequest);
+    }
+    return {
+      durationMs: Math.round(result.durationMs * 10) / 10,
+      maxFrameGapMs: Math.round(maxFrameGapMs * 10) / 10,
+      channels: result.channels,
+      catalogChannels: result.catalogChannels,
+      programmes: result.programmes,
+      programmesSeen: result.programmesSeen,
+    };
+}
+
+export function startXMLTVPipelineMemoryBenchmark(options) {
+    const api = window.__IPTV_BENCHMARK__;
+    if (!api) throw new Error('Parser benchmark bundle was not installed');
+    window.__IPTV_PIPELINE_MEMORY__ = { done: false, result: null, error: null };
+    const profile = options.buffered ? api.profileXMLTVBuffered : api.profileXMLTV;
+    void profile.call(api, options.url, {
+      channelIds: options.channelIds,
+      channelNames: options.channelNames,
+      retainChannelCatalog: true,
+    }).then((result) => {
+      window.__IPTV_PIPELINE_BENCHMARK__ = result.retained;
+      window.__IPTV_PIPELINE_MEMORY__ = { done: true, result, error: null };
+    }).catch((error) => {
+      window.__IPTV_PIPELINE_MEMORY__ = {
+        done: true,
+        result: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    });
+}
+
+export function inspectXMLTVPipelineMemoryBenchmark() {
+    return window.__IPTV_PIPELINE_MEMORY__;
+}
+
+export function releaseXMLTVPipelineBenchmark() {
+    window.__IPTV_PIPELINE_BENCHMARK__ = undefined;
+    window.__IPTV_PIPELINE_MEMORY__ = undefined;
+}
+
+export function inspectXMLTVWorkerRunning() {
+    return window.__IPTV_BENCHMARK__?.workerRunning() === true;
+}
+
 export function releaseXMLTVCatalogPass() {
     const state = window.__IPTV_CATALOG_BENCHMARK__;
     if (state) state.retained = null;
@@ -863,6 +989,248 @@ export async function measureXMLTVCatalogBenchmark(scale, io) {
       ? (1 - filtered.retainedBytes / unfiltered.retainedBytes) * 100
       : 0,
   };
+}
+
+export async function measureXMLTVPipelineBenchmark(options, io) {
+  const timed = await io.evaluate(runXMLTVPipelineTimingBenchmark, options);
+  await io.collectGarbage();
+  await io.delay(25);
+  await io.collectGarbage();
+  const stopProcessMemorySampling = io.startProcessMemorySampling
+    ? await io.startProcessMemorySampling()
+    : null;
+  let processMemory = null;
+  let memorySamples;
+  let state;
+  try {
+    await io.collectGarbage();
+    memorySamples = [await io.memoryUsed()];
+    await io.evaluate(startXMLTVPipelineMemoryBenchmark, options);
+    while (true) {
+      await io.collectGarbage();
+      memorySamples.push(await io.memoryUsed());
+      state = await io.evaluate(inspectXMLTVPipelineMemoryBenchmark);
+      if (state.done) break;
+      await io.delay(10);
+    }
+    await io.collectGarbage();
+    memorySamples.push(await io.memoryUsed());
+  } finally {
+    if (stopProcessMemorySampling) {
+      processMemory = await stopProcessMemorySampling();
+    }
+  }
+  if (state.error) throw new Error(`XMLTV memory benchmark failed: ${state.error}`);
+  const total = (sample) =>
+    sample.usedSize
+      + (sample.embedderHeapUsedSize || 0)
+      + (sample.backingStorageSize || 0);
+  const totals = memorySamples.map(total);
+  const startMemoryBytes = totals[0];
+  const peakMemoryBytes = Math.max(...totals);
+  const averageMemoryBytes = totals.reduce((sum, value) => sum + value, 0)
+    / totals.length;
+  const mib = (bytes) => Math.round(bytes / 1_048_576 * 100) / 100;
+  await io.evaluate(releaseXMLTVPipelineBenchmark);
+  await io.collectGarbage();
+  let workerTerminatedAfterIdle;
+  if (!options.buffered) {
+    await io.delay(1100);
+    workerTerminatedAfterIdle = !(await io.evaluate(inspectXMLTVWorkerRunning));
+    if (!workerTerminatedAfterIdle) {
+      throw new Error('XMLTV worker remained active after its idle timeout');
+    }
+  }
+  return {
+    ...timed,
+    memoryScope: options.buffered
+      ? 'page heap; includes buffered parse and retained result'
+      : 'page heap; excludes worker transient heap, includes cloned retained result',
+    transientParseHeapIncluded: options.buffered === true,
+    ...(workerTerminatedAfterIdle === undefined
+      ? {}
+      : { workerTerminatedAfterIdle }),
+    compressedBytes: options.compressedBytes,
+    uncompressedBytes: options.uncompressedBytes,
+    samples: memorySamples.length,
+    startMemoryMiB: mib(startMemoryBytes),
+    peakMemoryMiB: mib(peakMemoryBytes),
+    averageMemoryMiB: mib(averageMemoryBytes),
+    peakMemoryDeltaMiB: mib(peakMemoryBytes - startMemoryBytes),
+    averageMemoryDeltaMiB: mib(averageMemoryBytes - startMemoryBytes),
+    peakV8HeapMiB: mib(Math.max(...memorySamples.map(sample => sample.usedSize))),
+    peakEmbedderHeapMiB: mib(Math.max(
+      ...memorySamples.map(sample => sample.embedderHeapUsedSize || 0),
+    )),
+    peakBackingStorageMiB: mib(Math.max(
+      ...memorySamples.map(sample => sample.backingStorageSize || 0),
+    )),
+    ...processMemory,
+  };
+}
+
+export async function measureXMLTVPipelineComparison(options, io) {
+  return {
+    buffered: await measureXMLTVPipelineBenchmark(
+      { ...options, buffered: true },
+      io,
+    ),
+    streaming: await measureXMLTVPipelineBenchmark(options, io),
+  };
+}
+
+async function resolveLocalAddress(deviceIp) {
+  const socket = createSocket('udp4');
+  try {
+    socket.connect(9, deviceIp);
+    await once(socket, 'connect');
+    return socket.address().address;
+  } finally {
+    socket.close();
+  }
+}
+
+async function startXMLTVBenchmarkServer(deviceIp, body, options = {}) {
+  const chunkBytes = options.chunkBytes ?? 16 * 1024;
+  const chunkDelayMs = options.chunkDelayMs ?? 1;
+  const host = await resolveLocalAddress(deviceIp);
+  const server = createServer(async (request, response) => {
+    if (request.url !== '/benchmark-guide.xml.gz') {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200, {
+      'Access-Control-Allow-Origin': '*',
+      'Content-Length': String(body.byteLength),
+      'Content-Type': 'application/gzip',
+    });
+    for (let offset = 0; offset < body.byteLength; offset += chunkBytes) {
+      if (response.destroyed) return;
+      const end = Math.min(offset + chunkBytes, body.byteLength);
+      if (!response.write(body.subarray(offset, end))) {
+        await once(response, 'drain');
+      }
+      if (end < body.byteLength && chunkDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
+      }
+    }
+    response.end();
+  });
+  server.listen(0, '0.0.0.0');
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    server.close();
+    throw new Error('XMLTV benchmark server did not bind to a TCP port');
+  }
+  return {
+    url: `http://${host}:${String(address.port)}/benchmark-guide.xml.gz`,
+    close: async () => {
+      server.close();
+      await once(server, 'close');
+    },
+  };
+}
+
+async function startRendererRssSampler(appId, intervalMs = 10) {
+  const command =
+    `pid=$(ps -ef | grep -- '--app-id=${appId}' | grep -v grep | awk 'NR==1{print $2}'); `
+    + '[ -n "$pid" ] || exit 1; '
+    + 'while [ -r "/proc/$pid/status" ]; do '
+    + `awk '/^VmRSS:/{rss=$2}/^VmHWM:/{hwm=$2}END{print rss " " hwm}' `
+    + '"/proc/$pid/status"; '
+    + `usleep ${String(intervalMs * 1000)}; done`;
+  const child = spawn(
+    path.join(process.cwd(), 'scripts', 'tv.sh'),
+    ['run', command],
+    { detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let output = '';
+  let errorOutput = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    output += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    errorOutput += chunk;
+  });
+  const started = Date.now();
+  while (!/\d+\s+\d+/.test(output)) {
+    if (child.exitCode !== null) {
+      throw new Error(
+        `TV RSS sampler exited before its first sample: ${errorOutput.trim()}`,
+      );
+    }
+    if (Date.now() - started > 10_000) {
+      process.kill(-child.pid, 'SIGTERM');
+      throw new Error('Timed out waiting for the first TV RSS sample');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  let stopped = false;
+  return async () => {
+    if (stopped) return null;
+    stopped = true;
+    process.kill(-child.pid, 'SIGTERM');
+    await Promise.race([
+      once(child, 'close'),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]);
+    const samples = output.split('\n')
+      .map((line) => line.trim().match(/^(\d+)\s+(\d+)$/))
+      .filter(Boolean)
+      .map((match) => ({
+        rssKiB: Number(match[1]),
+        highWaterKiB: Number(match[2]),
+      }));
+    if (samples.length === 0) {
+      throw new Error(`TV RSS sampler produced no samples: ${errorOutput.trim()}`);
+    }
+    const mib = (kib) => Math.round(kib / 1024 * 100) / 100;
+    const startRssKiB = samples[0].rssKiB;
+    const peakRssKiB = Math.max(...samples.map((sample) => sample.rssKiB));
+    const averageRssKiB = samples.reduce(
+      (sum, sample) => sum + sample.rssKiB,
+      0,
+    ) / samples.length;
+    return {
+      rssSamples: samples.length,
+      startRssMiB: mib(startRssKiB),
+      peakRssMiB: mib(peakRssKiB),
+      averageRssMiB: mib(averageRssKiB),
+      peakRssDeltaMiB: mib(peakRssKiB - startRssKiB),
+      rendererHighWaterMiB: mib(Math.max(
+        ...samples.map((sample) => sample.highWaterKiB),
+      )),
+    };
+  };
+}
+
+export async function measureHostedXMLTVPipelineComparison(options, io) {
+  const fixture = buildXMLTVPipelineFixture(options.scale);
+  const compressed = gzipSync(Buffer.from(fixture.text));
+  const server = await startXMLTVBenchmarkServer(
+    options.deviceIp,
+    compressed,
+    options,
+  );
+  try {
+    const benchmarkOptions = {
+      url: server.url,
+      compressedBytes: compressed.byteLength,
+      uncompressedBytes: Buffer.byteLength(fixture.text),
+      channelIds: fixture.channelIds,
+      channelNames: fixture.channelNames,
+    };
+    const benchmarkIo = {
+      ...io,
+      startProcessMemorySampling: () => startRendererRssSampler(options.appId),
+    };
+    return await measureXMLTVPipelineComparison(benchmarkOptions, benchmarkIo);
+  } finally {
+    await server.close();
+  }
 }
 
 export async function runViewReopenCycle() {

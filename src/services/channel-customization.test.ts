@@ -125,13 +125,24 @@ describe('ChannelCustomizationService', () => {
   });
 
   it('sets and clears a manual EPG channel mapping', () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
     ChannelCustomizationService.setEpgChannel(KEY_A, 'source::epg-a');
     expect(ChannelCustomizationService.overrideFor(KEY_A)?.epgChannelId).toBe('source::epg-a');
     expect(ChannelCustomizationService.epgChannelIds()).toEqual(['source::epg-a']);
+    expect(info).toHaveBeenCalledWith(
+      '[ChannelCustom]',
+      'EPG mapping set',
+      'event=epg.mapping.set',
+    );
 
     ChannelCustomizationService.setEpgChannel(KEY_A, '  ');
     expect(ChannelCustomizationService.overrideFor(KEY_A)).toBeNull();
     expect(ChannelCustomizationService.epgChannelIds()).toEqual([]);
+    expect(info).toHaveBeenCalledWith(
+      '[ChannelCustom]',
+      'EPG mapping cleared',
+      'event=epg.mapping.cleared',
+    );
   });
 
   it('sets, bounds, and clears a per-channel EPG offset delta', () => {

@@ -234,11 +234,36 @@ describe('ReminderService scheduling', () => {
 
   it('cancels the activity by name on remove', () => {
     const request = mockLuna();
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
     ReminderService.add(rem({ startMs: 5000 }));
     request.mockClear();
     ReminderService.remove(keyA, 5000);
     expect(request).toHaveBeenCalledWith('luna://com.webos.service.activitymanager',
       expect.objectContaining({ method: 'cancel', parameters: { activityName: `iptvReminder-${keyA}-5000` } }));
+    expect(info).toHaveBeenCalledWith(
+      '[Reminder]',
+      'Reminder removed',
+      'event=reminder.removed',
+      'count=1',
+    );
+  });
+
+  it('reports Activity Manager cancellation failures for diagnostics', () => {
+    const request = mockLuna();
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    ReminderService.add(rem({ startMs: 5000 }));
+    request.mockClear();
+
+    ReminderService.remove(keyA, 5000);
+    const options = request.mock.calls[0][1] as { onFailure: () => void };
+    options.onFailure();
+
+    expect(info).toHaveBeenCalledWith(
+      '[Reminder]',
+      'Reminder activity cancel failed',
+      'event=reminder.cancel.failed',
+      'reason=request_failed',
+    );
   });
 
   it('clears all reminders and cancels every activity', () => {

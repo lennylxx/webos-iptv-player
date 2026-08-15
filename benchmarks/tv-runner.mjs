@@ -23,6 +23,7 @@ import {
   runViewReopenCycle,
   installUniqueGroupFixture,
   installM3USearchFixture,
+  measureHostedXMLTVPipelineComparison,
   runM3USearchBenchmark,
   assertM3USearchBenchmark,
   assertPointerBenchmark,
@@ -90,6 +91,46 @@ async function evaluate(client, fn, argument) {
   return result.value;
 }
 
+async function installParserBundle(client) {
+  const parserBundle = await readFile(
+    path.join(process.cwd(), 'test-output', 'benchmarks', 'parser-bundle.js'),
+    'utf8',
+  );
+  const parserInstall = await client.call('Runtime.evaluate', {
+    expression: parserBundle,
+    returnByValue: true,
+  });
+  if (parserInstall.exceptionDetails) {
+    throw new Error(
+      parserInstall.exceptionDetails.exception?.description
+        || parserInstall.exceptionDetails.text
+        || 'Parser benchmark bundle injection failed',
+    );
+  }
+}
+
+async function readDevice(client) {
+  return evaluate(client, async () => {
+    const info = await new Promise((resolve) => {
+      if (!window.webOS || !window.webOS.deviceInfo) {
+        resolve({});
+        return;
+      }
+      const timer = setTimeout(() => resolve({}), 2000);
+      window.webOS.deviceInfo((value) => {
+        clearTimeout(timer);
+        resolve(value || {});
+      });
+    });
+    return {
+      modelName: info.modelName || '',
+      sdkVersion: info.sdkVersion || '',
+      screen: `${String(screen.width)}x${String(screen.height)}`,
+      userAgent: navigator.userAgent,
+    };
+  });
+}
+
 async function waitForLoad(client, action) {
   await client.call('Page.enable');
   let removeListener = () => {};
@@ -108,17 +149,19 @@ async function waitForLoad(client, action) {
   await loaded;
 }
 
-async function reloadApp(client) {
+async function reloadApp(client, selectors = ['#view-channels']) {
   await waitForLoad(client, () => client.call('Page.reload', { ignoreCache: true }));
-  await evaluate(client, async (selector) => {
+  await evaluate(client, async (readySelectors) => {
     const started = Date.now();
     while (Date.now() - started < 30_000) {
-      const element = document.querySelector(selector);
-      if (element && !element.classList.contains('hidden')) return true;
+      for (const selector of readySelectors) {
+        const element = document.querySelector(selector);
+        if (element && !element.classList.contains('hidden')) return true;
+      }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    throw new Error(`Timed out waiting for ${selector}`);
-  }, '#view-channels');
+    throw new Error(`Timed out waiting for ${readySelectors.join(' or ')}`);
+  }, selectors);
 }
 
 async function installFixture(client) {
@@ -261,12 +304,11 @@ async function runTvBenchmark() {
   let client = await connect();
   if (cleanupOnly) {
     const cleanup = await cleanupFixture(client);
-    await reloadApp(client);
+    await reloadApp(client, ['#view-channels', '#view-settings']);
     console.log(JSON.stringify(cleanup, null, 2));
     client.close();
     return;
   }
-
   let fixtureAttempted = false;
   try {
     const build = await verifyInstalledBuild(client);
@@ -279,21 +321,7 @@ async function runTvBenchmark() {
     const startupReadyMs = Date.now() - startupStarted;
     const startupHover = await evaluate(client, measureStartupHoverBenchmark);
     assertStartupHoverBenchmark(startupHover);
-    const parserBundle = await readFile(
-      path.join(process.cwd(), 'test-output', 'benchmarks', 'parser-bundle.js'),
-      'utf8',
-    );
-    const parserInstall = await client.call('Runtime.evaluate', {
-      expression: parserBundle,
-      returnByValue: true,
-    });
-    if (parserInstall.exceptionDetails) {
-      throw new Error(
-        parserInstall.exceptionDetails.exception?.description
-          || parserInstall.exceptionDetails.text
-          || 'Parser benchmark bundle injection failed',
-      );
-    }
+    await installParserBundle(client);
     const parsers = await evaluate(client, runRawParserBenchmarks, { scale: SCALE });
     await client.call('HeapProfiler.collectGarbage');
     const suites = await runSuites(client);
@@ -335,6 +363,19 @@ async function runTvBenchmark() {
     const retained = summarizeRetainedMemory(beforeReopen.usedSize, reopenHeap);
     assertRetainedMemory(retained);
     const heap = await client.call('Runtime.getHeapUsage');
+    const xmltvPipeline = await measureHostedXMLTVPipelineComparison({
+      scale: SCALE,
+      deviceIp: resolveConfiguredDeviceIp(),
+      appId: APP_ID,
+    }, {
+      evaluate: (fn, arg) => evaluate(client, fn, arg),
+      collectGarbage: () => client.call('HeapProfiler.collectGarbage'),
+      memoryUsed: () => client.call('Runtime.getHeapUsage'),
+      delay: (milliseconds) =>
+        new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    });
+    parsers.xmltvPipelineBuffered = xmltvPipeline.buffered;
+    parsers.xmltvPipeline = xmltvPipeline.streaming;
     // Runs last of the in-page work: its multi-megabyte feed would otherwise
     // skew the reopen heap samples measured above.
     parsers.xmltvCatalog = await measureXMLTVCatalogBenchmark(SCALE, {
@@ -361,25 +402,7 @@ async function runTvBenchmark() {
     const coldLoad = await runColdLoad(client);
     assertColdLoadBenchmark(coldLoad, SCALE);
     suites.coldLoad = coldLoad;
-    const device = await evaluate(client, async () => {
-      const info = await new Promise((resolve) => {
-        if (!window.webOS || !window.webOS.deviceInfo) {
-          resolve({});
-          return;
-        }
-        const timer = setTimeout(() => resolve({}), 2000);
-        window.webOS.deviceInfo((value) => {
-          clearTimeout(timer);
-          resolve(value || {});
-        });
-      });
-      return {
-        modelName: info.modelName || '',
-        sdkVersion: info.sdkVersion || '',
-        screen: `${String(screen.width)}x${String(screen.height)}`,
-        userAgent: navigator.userAgent,
-      };
-    });
+    const device = await readDevice(client);
     const report = {
       version: 1,
       target: 'webos-tv',
@@ -417,7 +440,7 @@ async function runTvBenchmark() {
     if (fixtureAttempted) {
       try {
         await cleanupFixture(client);
-        await reloadApp(client);
+        await reloadApp(client, ['#view-channels', '#view-settings']);
         const restored = await evaluate(client, async () => {
           const db = await new Promise((resolve, reject) => {
             const request = indexedDB.open('iptv');

@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
-import { parseXMLTV, XMLTVStreamParser } from './xmltv-parser';
+import {
+  parseXMLTVWithStats,
+  XMLTVStreamParser,
+} from './xmltv-parser';
 
 // Format a Date as an XMLTV UTC timestamp: YYYYMMDDHHMMSS +0000
 function xmltvDate(d: Date): string {
@@ -13,15 +16,17 @@ function xmltvDate(d: Date): string {
 
 describe('parseXMLTV', () => {
   it('reads a human-readable source name from the XMLTV root', () => {
-    const result = parseXMLTV(`<?xml version="1.0"?>
+    const result = parseXMLTVWithStats(`<?xml version="1.0"?>
       <tv source-info-name="Guide Alpha" generator-info-name="Generator">
-      </tv>`);
+      </tv>`).data;
 
     expect(result.sourceName).toBe('Guide Alpha');
   });
 
   it('falls back to the XMLTV generator name', () => {
-    const result = parseXMLTV('<tv generator-info-name="Generator Alpha"></tv>');
+    const result = parseXMLTVWithStats(
+      '<tv generator-info-name="Generator Alpha"></tv>',
+    ).data;
 
     expect(result.sourceName).toBe('Generator Alpha');
   });
@@ -34,7 +39,7 @@ describe('parseXMLTV', () => {
           <icon src="http://logo/chan1.png"/>
         </channel>
       </tv>`;
-    const { channels } = parseXMLTV(xml);
+    const { channels } = parseXMLTVWithStats(xml).data;
     expect(channels['chan1']).toEqual({ name: 'Channel One', icon: 'http://logo/chan1.png' });
   });
 
@@ -49,7 +54,7 @@ describe('parseXMLTV', () => {
           <desc>An episode</desc>
         </programme>
       </tv>`;
-    const { programmes } = parseXMLTV(xml);
+    const { programmes } = parseXMLTVWithStats(xml).data;
     expect(programmes['c1']).toHaveLength(1);
     expect(programmes['c1'][0].title).toBe('The Show');
   });
@@ -64,7 +69,7 @@ describe('parseXMLTV', () => {
           <title>Ancient</title>
         </programme>
       </tv>`;
-    const { programmes } = parseXMLTV(xml);
+    const { programmes } = parseXMLTVWithStats(xml).data;
     expect(programmes['c1']).toBeUndefined();
   });
 
@@ -82,7 +87,7 @@ describe('parseXMLTV', () => {
         <category>News &#x26; Talk</category>
       </programme>
     </tv>`;
-    const result = parseXMLTV(xml);
+    const result = parseXMLTVWithStats(xml).data;
     expect(result.channels['c&1']).toEqual({
       name: 'Alpha & Bravo',
       icon: 'http://host/a?x=1&y=2',
@@ -103,7 +108,7 @@ describe('parseXMLTV', () => {
         <title>First</title>
       </programme>
     </tv>`;
-    expect(parseXMLTV(xml).programmes.c1[0].title).toBe('First');
+    expect(parseXMLTVWithStats(xml).data.programmes.c1[0].title).toBe('First');
   });
 
   it('parses every possible chunk boundary identically', () => {
@@ -116,7 +121,7 @@ describe('parseXMLTV', () => {
         <title>First &amp; Best</title><desc>Long enough description</desc>
       </programme>
     </tv>`;
-    const expected = parseXMLTV(xml);
+    const expected = parseXMLTVWithStats(xml).data;
     for (let split = 1; split < xml.length; split++) {
       const parser = new XMLTVStreamParser();
       parser.write(xml.slice(0, split));
@@ -134,7 +139,7 @@ describe('parseXMLTV', () => {
       <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>One</title></programme>
       <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>Two</title></programme>
     </tv>`;
-    const result = parseXMLTV(xml, { channelIds: new Set(['c2']) });
+    const result = parseXMLTVWithStats(xml, { channelIds: new Set(['c2']) }).data;
     expect(Object.keys(result.channels)).toEqual(['c2']);
     expect(Object.keys(result.programmes)).toEqual(['c2']);
   });
@@ -148,10 +153,10 @@ describe('parseXMLTV', () => {
       <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>One</title></programme>
       <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>Two</title></programme>
     </tv>`;
-    const result = parseXMLTV(xml, {
+    const result = parseXMLTVWithStats(xml, {
       channelIds: new Set(['c2']),
       retainChannelCatalog: true,
-    });
+    }).data;
     expect(Object.keys(result.channels)).toEqual(['c1', 'c2']);
     expect(Object.keys(result.programmes)).toEqual(['c2']);
     expect(result.channelCatalogComplete).toBe(true);
@@ -166,7 +171,7 @@ describe('parseXMLTV', () => {
       <programme channel="c1" start="${xmltvDate(earlier)}" stop="${xmltvDate(stop(earlier))}"><title>Earlier</title></programme>
       <programme channel="c1" start="${xmltvDate(now)}" stop="${xmltvDate(stop(now))}"><title>Later B</title></programme>
     </tv>`;
-    expect(parseXMLTV(xml).programmes.c1.map(programme => programme.title))
+    expect(parseXMLTVWithStats(xml).data.programmes.c1.map(programme => programme.title))
       .toEqual(['Earlier', 'Later A', 'Later B']);
   });
 
@@ -178,7 +183,7 @@ describe('parseXMLTV', () => {
       <programme channel="bad" start="20260230000000 +0000" stop="${stop}"><title>Bad</title></programme>
       <programme channel="c1" start="${start}" stop="${stop}"><title>Good</title></programme>
     </tv>`;
-    const result = parseXMLTV(xml);
+    const result = parseXMLTVWithStats(xml).data;
     expect(result.tzOffsetMinutes).toBe(330);
     expect(result.programmes.bad).toBeUndefined();
   });
@@ -222,7 +227,10 @@ describe('parseXMLTV channel filter', () => {
   });
 
   it('admits a channel matched by any display name, including its programmes', () => {
-    const result = parseXMLTV(feed, { channelNames: new Set(['bravo hd']) });
+    const result = parseXMLTVWithStats(
+      feed,
+      { channelNames: new Set(['bravo hd']) },
+    ).data;
     expect(Object.keys(result.channels)).toEqual(['c2']);
     expect(result.channels.c2.name).toBe('Bravo');
     expect(result.channels.c2.aliases).toEqual(['Bravo HD']);
@@ -234,7 +242,10 @@ describe('parseXMLTV channel filter', () => {
       <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>B</title></programme>
       <channel id="c2"><display-name>Bravo</display-name><display-name>Bravo HD</display-name></channel>
     </tv>`;
-    const result = parseXMLTV(reordered, { channelNames: new Set(['bravo hd']) });
+    const result = parseXMLTVWithStats(
+      reordered,
+      { channelNames: new Set(['bravo hd']) },
+    ).data;
     expect(result.programmes.c2.map(programme => programme.title)).toEqual(['B']);
   });
 
@@ -247,7 +258,10 @@ describe('parseXMLTV channel filter', () => {
       </channel>
       <programme channel="c4" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>D</title></programme>
     </tv>`;
-    const result = parseXMLTV(aliases, { channelNames: new Set(['five']) });
+    const result = parseXMLTVWithStats(
+      aliases,
+      { channelNames: new Set(['five']) },
+    ).data;
     expect(result.channels.c4.aliases).toContain('Five');
     expect(result.programmes.c4.map(programme => programme.title)).toEqual(['D']);
   });
@@ -265,15 +279,18 @@ describe('parseXMLTV channel filter', () => {
   });
 
   it('unions ids and names', () => {
-    const result = parseXMLTV(feed, {
+    const result = parseXMLTVWithStats(feed, {
       channelIds: new Set(['c1']),
       channelNames: new Set(['charlie']),
-    });
+    }).data;
     expect(Object.keys(result.programmes).sort()).toEqual(['c1', 'c3']);
   });
 
   it('keeps everything when no filter is configured', () => {
-    const result = parseXMLTV(feed, { channelIds: new Set(), channelNames: new Set() });
+    const result = parseXMLTVWithStats(
+      feed,
+      { channelIds: new Set(), channelNames: new Set() },
+    ).data;
     expect(Object.keys(result.programmes).sort()).toEqual(['c1', 'c2', 'c3']);
   });
 });

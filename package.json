@@ -11,7 +11,6 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && node esbuild.config.mjs",
     "manifest": "node scripts/generate-homebrew-manifest.mjs",
-    "watch": "node esbuild.config.mjs --watch --preview",
     "package": "bash build.sh",
     "clean": "rm -rf dist build test-output *.ipk *.manifest.json",
     "preview": "npm run typecheck && node esbuild.config.mjs --preview && node scripts/serve.mjs",

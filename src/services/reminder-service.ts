@@ -53,7 +53,11 @@ class ReminderServiceImpl {
     const list = this.list();
     list.push(reminder);
     StorageService.setReminders(list);
-    log.info('added', reminder.title, new Date(reminder.startMs).toISOString());
+    log.info(
+      'Reminder added',
+      'event=reminder.added',
+      new Date(reminder.startMs).toISOString(),
+    );
     this.schedule(reminder);
   }
 
@@ -62,6 +66,13 @@ class ReminderServiceImpl {
     const removed = list.filter(r => this.matchesChannel(r, chKey) && r.startMs === startMs);
     StorageService.setReminders(list.filter(r => !removed.includes(r)));
     for (const reminder of removed) this.cancelSchedule(reminder.channelKey, startMs);
+    if (removed.length) {
+      log.info(
+        'Reminder removed',
+        'event=reminder.removed',
+        `count=${String(removed.length)}`,
+      );
+    }
   }
 
   clearAll(): void {
@@ -69,6 +80,13 @@ class ReminderServiceImpl {
     StorageService.setReminders([]);
     for (const reminder of reminders) {
       this.cancelSchedule(reminder.channelKey, reminder.startMs);
+    }
+    if (reminders.length) {
+      log.info(
+        'Reminders cleared',
+        'event=reminder.cleared',
+        `count=${String(reminders.length)}`,
+      );
     }
   }
 
@@ -271,11 +289,23 @@ class ReminderServiceImpl {
           start: true,
           replace: true,
         },
-        onSuccess: (r: unknown) => log.info('scheduled', name, JSON.stringify(r)),
-        onFailure: (e: unknown) => log.warn('schedule failed', name, JSON.stringify(e)),
+        onSuccess: () => log.info(
+          'Reminder activity scheduled',
+          'event=reminder.schedule.completed',
+        ),
+        onFailure: () => log.warn(
+          'Reminder activity schedule failed',
+          'event=reminder.schedule.failed',
+          'reason=request_failed',
+        ),
       });
     } catch (e) {
-      log.warn('schedule threw', e);
+      log.warn(
+        'Reminder activity schedule threw',
+        'event=reminder.schedule.failed',
+        'reason=exception',
+        e,
+      );
     }
   }
 
@@ -286,11 +316,23 @@ class ReminderServiceImpl {
       request('luna://com.webos.service.activitymanager', {
         method: 'cancel',
         parameters: { activityName: activityName(chKey, startMs) },
-        onSuccess: () => { /* best-effort */ },
-        onFailure: () => { /* activity may already be gone */ },
+        onSuccess: () => log.debug(
+          'Reminder activity cancelled',
+          'event=reminder.cancel.completed',
+        ),
+        onFailure: () => log.debug(
+          'Reminder activity cancel failed',
+          'event=reminder.cancel.failed',
+          'reason=request_failed',
+        ),
       });
     } catch (e) {
-      log.warn('cancel threw', e);
+      log.warn(
+        'Reminder activity cancel threw',
+        'event=reminder.cancel.failed',
+        'reason=exception',
+        e,
+      );
     }
   }
 }

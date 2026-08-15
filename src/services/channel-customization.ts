@@ -110,10 +110,16 @@ class ChannelCustomizationServiceImpl {
   /** An empty id restores automatic EPG matching. */
   setEpgChannel(key: string, epgChannelId: string): void {
     const trimmed = epgChannelId.trim();
+    const previous = this.overrideFor(key)?.epgChannelId ?? '';
     this.mutate(key, (ov) => {
       if (trimmed) ov.epgChannelId = trimmed;
       else delete ov.epgChannelId;
     });
+    if (trimmed === previous) return;
+    log.info(
+      trimmed ? 'EPG mapping set' : 'EPG mapping cleared',
+      `event=epg.mapping.${trimmed ? 'set' : 'cleared'}`,
+    );
   }
 
   /** A null or zero delta restores the correction configured for the EPG source. */

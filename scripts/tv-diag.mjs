@@ -284,18 +284,26 @@ export function normalizeNetworkRecords(events, redactor) {
   return [...records.values()];
 }
 
-export function extractPlaybackTimeline(logs) {
+export function extractDiagnosticTimeline(logs) {
   const timeline = [];
   for (const entry of logs) {
     const code = entry.text.match(/\bevent=([a-z0-9_.-]+)/i)?.[1];
     if (!code) continue;
     const session = Number(entry.text.match(/\bsession=(\d+)/)?.[1] ?? NaN);
     const load = Number(entry.text.match(/\bload=(\d+)/)?.[1] ?? NaN);
+    const count = Number(entry.text.match(/\bcount=(\d+)/)?.[1] ?? NaN);
+    const generation = Number(entry.text.match(/\bgeneration=(\d+)/)?.[1] ?? NaN);
+    const active = Number(entry.text.match(/\bactive=(\d+)/)?.[1] ?? NaN);
+    const reason = entry.text.match(/\breason=([a-z0-9_-]+)/i)?.[1] ?? '';
     timeline.push({
       observedAt: entry.observedAt,
       code,
       session: Number.isFinite(session) ? session : null,
       load: Number.isFinite(load) ? load : null,
+      count: Number.isFinite(count) ? count : null,
+      generation: Number.isFinite(generation) ? generation : null,
+      active: Number.isFinite(active) ? active : null,
+      reason,
       level: entry.level,
       text: entry.text,
     });
@@ -397,7 +405,7 @@ export function assembleDiagnosticReport({
     } : null,
   } : null;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     capturedAt,
     redacted: !full,
     app,
@@ -406,7 +414,7 @@ export function assembleDiagnosticReport({
     storage: probe?.storage ?? {},
     nativeMetrics,
     playlists,
-    playback: extractPlaybackTimeline(safeLogs),
+    diagnostics: extractDiagnosticTimeline(safeLogs),
     xtream: extractXtreamTimeline(safeLogs),
     logs: safeLogs,
     network: normalizeNetworkRecords(networkEvents, redactor),
@@ -468,11 +476,17 @@ export function formatDiagnosticSummary(report) {
       + ` native=${outcome(native, 'not-run')} ${playlist.url}`,
     );
   }
-  lines.push(`Playback events: ${String(report.playback?.length ?? 0)}`);
-  for (const event of report.playback ?? []) {
-    lines.push(
-      `- ${event.code} session=${String(event.session ?? '?')} load=${String(event.load ?? '?')}`,
-    );
+  const diagnostics = report.diagnostics ?? report.playback ?? [];
+  lines.push(`Diagnostic events: ${String(diagnostics.length)}`);
+  for (const event of diagnostics) {
+    const fields = [];
+    if (event.session != null) fields.push(`session=${String(event.session)}`);
+    if (event.load != null) fields.push(`load=${String(event.load)}`);
+    if (event.count != null) fields.push(`count=${String(event.count)}`);
+    if (event.generation != null) fields.push(`generation=${String(event.generation)}`);
+    if (event.active != null) fields.push(`active=${String(event.active)}`);
+    if (event.reason) fields.push(`reason=${event.reason}`);
+    lines.push(`- ${event.code}${fields.length ? ` ${fields.join(' ')}` : ''}`);
   }
   lines.push(`Xtream events: ${String(report.xtream?.length ?? 0)}`);
   for (const event of report.xtream ?? []) {
@@ -1085,7 +1099,7 @@ export async function captureDiagnostics(options, overrides = {}) {
 const HELP_TEXT = `Usage: scripts/tv.sh diag [options]
 
 Capture a redacted TV diagnostics report with CDP logs, network activity,
-playlist probes, playback events, media state, and optional native metrics.
+playlist probes, diagnostic events, media state, and optional native metrics.
 
 Options:
   --app <id>             webOS app id (default: ${DEFAULT_APP_ID})

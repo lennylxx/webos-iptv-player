@@ -1,15 +1,25 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { channelOverrideMock, epgChannelIdsMock } = vi.hoisted(() => ({
+const {
+  channelOverrideMock,
+  epgChannelIdsMock,
+  fetchAndParseXMLTVMock,
+  parseXMLTVMock,
+} = vi.hoisted(() => ({
   channelOverrideMock: vi.fn(() => null as {
     epgChannelId?: string;
     epgOffsetDeltaMinutes?: number;
   } | null),
   epgChannelIdsMock: vi.fn(() => [] as string[]),
+  fetchAndParseXMLTVMock: vi.fn(),
+  parseXMLTVMock: vi.fn(),
 }));
 
 vi.mock('./idb-cache', () => ({ getCachedEpg: vi.fn(), setCachedEpg: vi.fn(async () => {}) }));
 vi.mock('../utils/fetch-helper', () => ({ fetchMaybeGzipText: vi.fn(async (url: string) => url) }));
+vi.mock('../parsers/xmltv-loader', () => ({
+  fetchAndParseXMLTV: fetchAndParseXMLTVMock,
+}));
 vi.mock('./channel-customization', () => ({
   ChannelCustomizationService: {
     overrideFor: channelOverrideMock,
@@ -17,11 +27,9 @@ vi.mock('./channel-customization', () => ({
   },
 }));
 vi.mock('../parsers/xmltv-parser', () => {
-  const parseXMLTV = vi.fn();
   return {
-    parseXMLTV,
     parseXMLTVWithStats: vi.fn((xml: string, options?: unknown) => {
-      const data = parseXMLTV(xml, options) as ParsedEpg | undefined;
+      const data = parseXMLTVMock(xml, options) as ParsedEpg | undefined;
       const kept = Object.values(data?.programmes ?? {}).reduce((n, list) => n + list.length, 0);
       return {
         data,
@@ -38,7 +46,7 @@ vi.mock('../parsers/xmltv-parser', () => {
 
 import { EpgService } from './epg-service';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
-import { parseXMLTV, parseXMLTVWithStats } from '../parsers/xmltv-parser';
+import { parseXMLTVWithStats } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import type { Channel, EpgSource, ParsedEpg, Programme } from '../types';
 import { CONFIG } from '../config';
@@ -72,6 +80,11 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOON);
   vi.clearAllMocks();
+  fetchAndParseXMLTVMock.mockImplementation(async (
+    url: string,
+    _timeout: number,
+    options: unknown,
+  ) => parseXMLTVWithStats(await fetchMaybeGzipText(url, 120000), options));
   channelOverrideMock.mockReturnValue(null);
   epgChannelIdsMock.mockReturnValue([]);
   EpgService.reset();
@@ -110,10 +123,27 @@ describe('EpgService programme lookup', () => {
 });
 
 describe('EpgService multi-source matching', () => {
+  it('reports stale manual mappings after rebuilding guide indexes', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    parseXMLTVMock.mockReturnValue(parsed('available', 'Alpha', 'Matched'));
+    epgChannelIdsMock.mockReturnValue([
+      `${encodeURIComponent('http://a')}::missing`,
+    ]);
+
+    await EpgService.load([source('http://a', ['a'])]);
+
+    expect(warn).toHaveBeenCalledWith(
+      '[EPG]',
+      'Saved EPG mappings no longer match loaded guide channels',
+      'event=epg.mapping.stale',
+      'count=1',
+    );
+  });
+
   it('applies a source offset without mutating parsed program times', async () => {
     const data = parsed('a', 'Alpha', 'Shifted');
     const originalStart = data.programmes.a[0].start.getTime();
-    vi.mocked(parseXMLTV).mockReturnValue(data);
+    parseXMLTVMock.mockReturnValue(data);
 
     await EpgService.load([{ ...source('http://a', ['a']), offsetMinutes: 60 }]);
 
@@ -124,7 +154,7 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('overrides a source offset for only the customized playlist channel', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('shared', 'Alpha', 'Shifted'));
+    parseXMLTVMock.mockReturnValue(parsed('shared', 'Alpha', 'Shifted'));
     const customized = channel({
       id: 'shared',
       name: 'Alpha',
@@ -166,7 +196,7 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('keeps colliding XMLTV ids isolated and uses the channel owning playlist', async () => {
-    vi.mocked(parseXMLTV).mockImplementation((text) =>
+    parseXMLTVMock.mockImplementation((text) =>
       text === 'http://a' ? parsed('shared', 'Alpha', 'From A') : parsed('shared', 'Bravo', 'From B'));
 
     await EpgService.load([source('http://a', ['a']), source('http://b', ['b'], 'xtream')]);
@@ -181,7 +211,7 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('falls back to a case-insensitive name match within the owning feed', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.5', 'Alpha HD', 'Matched'));
+    parseXMLTVMock.mockReturnValue(parsed('epg.5', 'Alpha HD', 'Matched'));
     await EpgService.load([source('http://a', ['a'])]);
 
     const id = EpgService.findChannelId(channel({ id: 'missing', name: 'alpha hd', playlistIds: ['a'] }));
@@ -189,7 +219,7 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('matches a locally renamed channel through its source name', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.6', 'Alpha', 'Matched'));
+    parseXMLTVMock.mockReturnValue(parsed('epg.6', 'Alpha', 'Matched'));
     await EpgService.load([source('http://a', ['a'])]);
 
     const id = EpgService.findChannelId(
@@ -200,7 +230,7 @@ describe('EpgService multi-source matching', () => {
   it('matches an XMLTV channel through a secondary display name', async () => {
     const data = parsed('epg.7', 'Alpha', 'Matched');
     data.channels['epg.7'].aliases = ['Alpha HD'];
-    vi.mocked(parseXMLTV).mockReturnValue(data);
+    parseXMLTVMock.mockReturnValue(data);
     await EpgService.load([source('http://a', ['a'])]);
 
     const id = EpgService.findChannelId(
@@ -209,14 +239,14 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('does not match a channel against an unrelated playlist feed', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('same', 'Alpha', 'Wrong source'));
+    parseXMLTVMock.mockReturnValue(parsed('same', 'Alpha', 'Wrong source'));
     await EpgService.load([source('http://a', ['a'])]);
 
     expect(EpgService.findChannelId(channel({ id: 'same', name: 'Alpha', playlistIds: ['b'] }))).toBeNull();
   });
 
   it('gives a manual feed priority over playlist-owned feeds', async () => {
-    vi.mocked(parseXMLTV).mockImplementation((text) =>
+    parseXMLTVMock.mockImplementation((text) =>
       text === 'http://manual' ? parsed('same', 'Alpha', 'Manual') : parsed('same', 'Alpha', 'Owned'));
     await EpgService.load([
       source('http://manual', [], 'manual'),
@@ -228,7 +258,7 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('uses a manual channel mapping before id and name matching', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.8', 'Bravo', 'Mapped'));
+    parseXMLTVMock.mockReturnValue(parsed('epg.8', 'Bravo', 'Mapped'));
     const mappedId = `${encodeURIComponent('http://a')}::epg.8`;
     channelOverrideMock.mockReturnValue({ epgChannelId: mappedId });
     epgChannelIdsMock.mockReturnValue([mappedId]);
@@ -250,7 +280,7 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('collects sparse EPG mappings without per-channel customization lookups', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.8', 'Alpha', 'Mapped'));
+    parseXMLTVMock.mockReturnValue(parsed('epg.8', 'Alpha', 'Mapped'));
     const channels = Array.from({ length: 1000 }, (_, index) => channel({
       id: `ch${String(index)}`,
       name: `Channel ${String(index)}`,
@@ -265,7 +295,7 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('lists searchable mapping candidates only from eligible feeds', async () => {
-    vi.mocked(parseXMLTV).mockImplementation((text) =>
+    parseXMLTVMock.mockImplementation((text) =>
       text === 'http://a'
         ? parsed('epg.9', 'Alpha Guide', 'A')
         : parsed('epg.10', 'Alpha Other', 'B'));
@@ -288,7 +318,7 @@ describe('EpgService multi-source matching', () => {
   });
 
   it('keeps the selected mapping visible when it does not match the search', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.9', 'Bravo Guide', 'A'));
+    parseXMLTVMock.mockReturnValue(parsed('epg.9', 'Bravo Guide', 'A'));
     const mappedId = `${encodeURIComponent('http://a')}::epg.9`;
     channelOverrideMock.mockReturnValue({ epgChannelId: mappedId });
     const playlistChannel = channel({
@@ -314,7 +344,7 @@ describe('EpgService multi-source matching', () => {
         icon: '',
       };
     }
-    vi.mocked(parseXMLTV).mockReturnValue(data);
+    parseXMLTVMock.mockReturnValue(data);
     const playlistChannel = channel({
       name: 'Alpha',
       url: 'http://host/a',
@@ -345,7 +375,7 @@ describe('EpgService cache and refresh', () => {
   it('refreshes a cache that predates timezone capture', async () => {
     const stale = { channels: {}, programmes: {} } as ParsedEpg;
     vi.mocked(getCachedEpg).mockResolvedValue({ url: 'http://a', timestamp: NOON, data: stale });
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Fresh', 480));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Fresh', 480));
 
     await EpgService.load([source('http://a', ['a'])]);
 
@@ -368,7 +398,7 @@ describe('EpgService cache and refresh', () => {
   });
 
   it('does not cache a feed with zero programmes', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue({
+    parseXMLTVMock.mockReturnValue({
       channels: { a: { name: 'Alpha', icon: '' } },
       programmes: {},
       tzOffsetMinutes: null,
@@ -385,7 +415,7 @@ describe('EpgService cache and refresh', () => {
       if (url === 'http://b') throw new Error('down');
       return url;
     });
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Available'));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Available'));
 
     await EpgService.load([source('http://a', ['a']), source('http://b', ['b'])]);
 
@@ -396,7 +426,7 @@ describe('EpgService cache and refresh', () => {
 
 describe('EpgService.reset', () => {
   it('clears merged data and loaded state', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Program'));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Program'));
     await EpgService.load([source('http://a', ['a'])]);
 
     EpgService.reset();
@@ -410,7 +440,7 @@ describe('EpgService.reset', () => {
     let resolveFetch!: (value: string) => void;
     vi.mocked(fetchMaybeGzipText).mockImplementationOnce(() =>
       new Promise(resolve => { resolveFetch = resolve; }));
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Program'));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Program'));
     const loading = EpgService.load([source('http://a', ['a'])]);
     await Promise.resolve();
     await Promise.resolve();
@@ -428,7 +458,7 @@ describe('EpgService.reset', () => {
 
 describe('EpgService channel pre-filter', () => {
   it('parses only the channels the source serves, by id and source name', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Program'));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Program'));
 
     await EpgService.load([source('http://a', ['a']), source('http://b', ['b'])], [
       channel({ id: 'a', name: 'My Alpha', sourceName: 'Alpha', playlistIds: ['a'] }),
@@ -443,7 +473,7 @@ describe('EpgService channel pre-filter', () => {
   });
 
   it('passes every channel to a manual feed and skips filtering without a playlist', async () => {
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Program'));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Program'));
 
     await EpgService.load([source('http://m', [], 'manual')], [
       channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
@@ -505,7 +535,7 @@ describe('EpgService channel pre-filter', () => {
       data: parsed('a', 'Alpha', 'Cached'),
       filter: { ids: ['b'], names: ['bravo'] },
     });
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
 
     await EpgService.load([source('http://a', ['a'])], [
       channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
@@ -531,7 +561,7 @@ describe('EpgService channel pre-filter', () => {
     ];
     await EpgService.load([source('http://a', ['a'])], channels);
 
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('b', 'Bravo', 'Fresh'));
+    parseXMLTVMock.mockReturnValue(parsed('b', 'Bravo', 'Fresh'));
     await EpgService.refresh();
 
     expect(fetchMaybeGzipText).toHaveBeenCalledTimes(2);
@@ -553,7 +583,7 @@ describe('EpgService channel pre-filter', () => {
       channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
       channel({ id: 'b', name: 'Bravo', playlistIds: ['a'] }),
     ];
-    vi.mocked(parseXMLTV).mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
     await EpgService.load([source('http://a', ['a'])], channels);
     expect(vi.mocked(setCachedEpg).mock.calls[0][2]).toEqual({
       ids: ['a', 'b'], names: ['alpha', 'bravo'],
@@ -607,7 +637,7 @@ describe('EpgService channel pre-filter', () => {
       expect(fetchMaybeGzipText).not.toHaveBeenCalled();
 
       vi.setSystemTime(NOON + CONFIG.EPG_REFRESH_INTERVAL + 1);
-      vi.mocked(parseXMLTV).mockReturnValue({
+      parseXMLTVMock.mockReturnValue({
         channels: {}, programmes: {}, tzOffsetMinutes: null,
       });
       await EpgService.refresh();

@@ -39,7 +39,7 @@ sample counts instead of comparing incompatible reports.
 |---|---|
 | Startup | Cached playlist, indexes, and EPG restoration until Channels is visible; hover-to-next-frame latency is regression-gated |
 | Cold load | Uncached 50,000-channel M3U fetch, production parse, index build, and first useful render |
-| Raw parsing | Production M3U and XMLTV parsers over generated 50,000-item source text, plus a provider-shaped guide parsed twice — whole feed vs. programmes pre-filtered to the 15% of channels a playlist keeps while retaining the lightweight XMLTV channel catalog for manual mapping, each bracketed by a forced GC so `parsers.xmltvCatalog` reports both duration and retained heap; filtered duration is regression-gated |
+| Raw parsing | Production M3U and XMLTV parsers over generated 50,000-item source text, plus a provider-shaped guide parsed twice — whole feed vs. programmes pre-filtered to the 15% of channels a playlist keeps while retaining the lightweight XMLTV channel catalog for manual mapping, each bracketed by a forced GC so `parsers.xmltvCatalog` reports both duration and retained heap; `parsers.xmltvPipelineBuffered` and `parsers.xmltvPipeline` fetch the same gzip guide through the legacy buffered and production worker-streaming paths, with end-to-end timing, maximum animation-frame gap, and separate forced-GC CDP page-heap sampling; production duration and frame gap are regression-gated |
 | Channel List | Bounded DOM size and D-pad handler p50/p95/max |
 | Recently Watched | Full rendering at the 50-entry product maximum, alternating 88px Live and 100px Catch-up rows |
 | Player Sidebar | Open latency, bounded DOM size, D-pad handler distribution, and frame-paced reveal of pre-decoded logos |
@@ -130,6 +130,22 @@ orchestration for the desktop benchmark, while `tv-runner.mjs` owns Node/CDP
 orchestration for the TV benchmark — connecting to the device, reloading the
 app, injecting the shared functions via `Runtime.evaluate`, and writing the
 report.
+
+The desktop XMLTV pipeline uses Playwright's immediate route fulfillment to
+isolate CPU and memory cost. The TV run starts a temporary LAN HTTP server on
+the benchmark host and sends the same gzip guide in 16 KiB chunks with 1ms
+between chunks, measuring real `ReadableStream` delivery and download/parse
+overlap. The server closes automatically after both buffered and streaming
+passes. Timing also records the largest animation-frame gap. During the
+separate memory pass, one persistent SSH session samples renderer RSS every
+10ms; this avoids per-sample SSH connection overhead and reports RSS peak,
+average, and delta alongside the CDP heap metrics.
+
+CDP page-heap readings do not include the worker's transient parse heap. The
+streaming report marks this explicitly and includes only the cloned result once
+it reaches the page. These heap readings and RSS deltas/high-water values remain
+informational because run order, process lifetime, and allocator reuse
+contaminate them. The comparator gates streaming duration and frame gap instead.
 
 Desktop and TV reports are intentionally incompatible. The TV comparator also
 requires the same app version, browser user agent, model, SDK version, scale,

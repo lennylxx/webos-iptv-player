@@ -352,10 +352,6 @@ export class XMLTVStreamParser {
   }
 }
 
-export function parseXMLTV(xmlString: string, options: XMLTVParseOptions = {}): ParsedEpg {
-  return parseXMLTVWithStats(xmlString, options).data;
-}
-
 export function parseXMLTVWithStats(
   xmlString: string,
   options: XMLTVParseOptions = {},

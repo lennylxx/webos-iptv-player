@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
+import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import {
   assertGroupBenchmarkScale,
@@ -12,6 +13,7 @@ import {
   assertXMLTVCatalogBenchmark,
   assertBenchmarkScale,
   buildM3UFixture,
+  buildXMLTVPipelineFixture,
   cleanupBenchmarkFixture,
   installBenchmarkFixture,
   installColdLoadFixture,
@@ -23,6 +25,7 @@ import {
   rebuildBenchmarkDatabase,
   runGroupBenchmark,
   runM3USearchBenchmark,
+  measureXMLTVPipelineComparison,
   measureXMLTVCatalogBenchmark,
   runRawParserBenchmarks,
   runBenchmarkSuites,
@@ -42,6 +45,7 @@ const FIXTURE = {
   directStorage: true,
 };
 const COLD_PLAYLIST_URL = 'http://host/cold-list.m3u';
+const XMLTV_PIPELINE_URL = 'http://host/benchmark-guide.xml.gz';
 
 test('records 50,000-item application benchmarks', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'The benchmark uses Chromium heap metrics');
@@ -51,12 +55,20 @@ test('records 50,000-item application benchmarks', async ({ page, browserName })
   }));
   await page.route('http://127.0.0.1:8890/**', (route) => route.abort());
   const coldPlaylist = buildM3UFixture(SCALE);
+  const xmltvPipelineFixture = buildXMLTVPipelineFixture(SCALE);
+  const compressedXMLTV = gzipSync(Buffer.from(xmltvPipelineFixture.text));
   await page.route('http://host/**', (route) => {
     const url = route.request().url();
     if (url === COLD_PLAYLIST_URL) {
       return route.fulfill({
         contentType: 'application/vnd.apple.mpegurl',
         body: coldPlaylist,
+      });
+    }
+    if (url === XMLTV_PIPELINE_URL) {
+      return route.fulfill({
+        contentType: 'application/gzip',
+        body: compressedXMLTV,
       });
     }
     if (/^\/\d+$/.test(new URL(url).pathname)) {
@@ -95,6 +107,27 @@ test('records 50,000-item application benchmarks', async ({ page, browserName })
       content: await readFile('test-output/benchmarks/parser-bundle.js', 'utf8'),
     });
     const parsers = await page.evaluate(runRawParserBenchmarks, { scale: SCALE });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const xmltvPipelineOptions = {
+      url: XMLTV_PIPELINE_URL,
+      compressedBytes: compressedXMLTV.byteLength,
+      uncompressedBytes: Buffer.byteLength(xmltvPipelineFixture.text),
+      channelIds: xmltvPipelineFixture.channelIds,
+      channelNames: xmltvPipelineFixture.channelNames,
+    };
+    const xmltvPipelineIo = {
+      evaluate: (fn: unknown, arg?: unknown) => page.evaluate(fn as never, arg),
+      collectGarbage: () => cdp.send('HeapProfiler.collectGarbage'),
+      memoryUsed: () => cdp.send('Runtime.getHeapUsage'),
+      delay: (milliseconds: number) =>
+        new Promise<void>(resolve => setTimeout(resolve, milliseconds)),
+    };
+    const xmltvPipeline = await measureXMLTVPipelineComparison(
+      xmltvPipelineOptions,
+      xmltvPipelineIo,
+    );
+    parsers.xmltvPipelineBuffered = xmltvPipeline.buffered;
+    parsers.xmltvPipeline = xmltvPipeline.streaming;
     await cdp.send('HeapProfiler.collectGarbage');
     const suites = await page.evaluate(runBenchmarkSuites, {
       keySamples: KEY_SAMPLES,
