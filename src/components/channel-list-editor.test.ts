@@ -34,7 +34,17 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
       applyCustomization: vi.fn(),
       setIncludeHidden: vi.fn(),
     },
-    epgMock: { findChannelId: () => null, getNowPlaying: () => null },
+    epgMock: {
+      mappingRevision: 0,
+      findChannelId: () => null,
+      getNowPlaying: () => null,
+      getMappingCandidates: vi.fn(() => [] as Array<{
+        id: string;
+        channelId: string;
+        name: string;
+        sourceName: string;
+      }>),
+    },
     storageMock: {
       getFavorites: () => data.favorites,
       setFavorites: vi.fn((favorites: string[]) => {
@@ -126,6 +136,7 @@ playlistMock.getGroupsForPlaylist = (playlist?: string) => {
 
 let container: HTMLElement;
 let onSelect: ReturnType<typeof vi.fn>;
+let onEpgMappingChanged: ReturnType<typeof vi.fn>;
 let list: ChannelList;
 
 beforeEach(() => {
@@ -147,10 +158,14 @@ beforeEach(() => {
   storageMock.toggleFavorite.mockClear();
   storageMock.setFavorites.mockClear();
   storageMock.setChannelCustomization.mockClear();
+  epgMock.mappingRevision = 0;
+  epgMock.getMappingCandidates.mockReset();
+  epgMock.getMappingCandidates.mockReturnValue([]);
   container = document.createElement('div');
   document.body.appendChild(container);
   onSelect = vi.fn();
-  list = new ChannelList(container, onSelect);
+  onEpgMappingChanged = vi.fn();
+  list = new ChannelList(container, onSelect, vi.fn(), onEpgMappingChanged);
 });
 
 function channelItems(): HTMLElement[] {
@@ -461,6 +476,16 @@ describe('ChannelList edit mode', () => {
     expect(toastMock.showToast).toHaveBeenLastCalledWith('Select a channel or group first.');
   });
 
+  it('does not map a hovered channel when none is selected', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+    list.handleAction('select');
+
+    expect(container.querySelector('.epg-mapping-picker')).toBeNull();
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Select a channel first.');
+  });
+
   it('opens rename from the clickable edit toolbar', () => {
     enterEdit();
     hover(channelItems()[0]);
@@ -474,6 +499,209 @@ describe('ChannelList edit mode', () => {
     document.elementFromPoint = originalElementFromPoint;
     expect(container.querySelector('.edit-text-input')).not.toBeNull();
   });
+
+  it('maps a selected channel to a searched XMLTV candidate and can restore automatic matching',
+    () => {
+      const mappedId = `${encodeURIComponent('http://host/epg')}::guide-a`;
+      epgMock.getMappingCandidates.mockReturnValue([{
+        id: mappedId,
+        channelId: 'guide-a',
+        name: 'Alpha Guide',
+        sourceName: 'Guide',
+      }]);
+      enterEdit();
+      hover(channelItems()[0]);
+      list.handleAction('select');
+      hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+      list.handleAction('select');
+
+      const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
+      expect(input.value).toBe('Alpha');
+      expect(container.querySelector('[data-epg-channel=""]')?.textContent)
+        .toContain('Automatic matching');
+      expect(container.querySelector(`[data-epg-channel="${mappedId}"]`)?.textContent)
+        .toContain('Alpha Guide');
+
+      hover(container.querySelector<HTMLElement>(`[data-epg-channel="${mappedId}"]`)!);
+      list.handleAction('select');
+      expect(ChannelCustomizationService.overrideFor(channelKey(data.raw[0]))?.epgChannelId)
+        .toBe(mappedId);
+      expect(onEpgMappingChanged).toHaveBeenCalledTimes(1);
+      expect(channelItems()[0].querySelector('.epg-mapped-badge')?.textContent)
+        .toBe('EPG mapped');
+
+      hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+      list.handleAction('select');
+      hover(container.querySelector<HTMLElement>('[data-epg-channel=""]')!);
+      list.handleAction('select');
+      expect(ChannelCustomizationService.overrideFor(channelKey(data.raw[0]))?.epgChannelId)
+        .toBeUndefined();
+      expect(onEpgMappingChanged).toHaveBeenCalledTimes(2);
+    });
+
+  it('updates EPG candidates as the mapping search input changes', () => {
+    enterEdit();
+    hover(channelItems()[1]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+    list.handleAction('select');
+    const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
+
+    input.value = 'Guide B';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(epgMock.getMappingCandidates).toHaveBeenLastCalledWith(data.raw[1], 'Guide B');
+  });
+
+  it('closes the EPG picker when Escape originates from the search input', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+    list.handleAction('select');
+    const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
+
+    input.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape',
+      keyCode: 27,
+      bubbles: true,
+    }));
+
+    expect(container.querySelector('.epg-mapping-picker')).toBeNull();
+  });
+
+  it('compacts the EPG picker while the webOS keyboard is visible', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+    list.handleAction('select');
+
+    document.dispatchEvent(new CustomEvent('keyboardStateChange', {
+      detail: { visibility: true },
+    }));
+    expect(container.querySelector('.epg-mapping-picker')?.classList)
+      .toContain('keyboard-visible');
+
+    document.dispatchEvent(new CustomEvent('keyboardStateChange', {
+      detail: { visibility: false },
+    }));
+    expect(container.querySelector('.epg-mapping-picker')?.classList)
+      .not.toContain('keyboard-visible');
+  });
+
+  it('rerenders the virtualized EPG range after the keyboard closes', async () => {
+    epgMock.getMappingCandidates.mockReturnValue(Array.from({ length: 120 }, (_, index) => ({
+      id: `source::guide-${String(index)}`,
+      channelId: `guide-${String(index)}`,
+      name: `Guide ${String(index)}`,
+      sourceName: 'Guide',
+    })));
+    const heightMock = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+      .mockImplementation(function mockClientHeight(this: HTMLElement): number {
+        if (!this.classList.contains('epg-mapping-list')) return 0;
+        return this.closest('.keyboard-visible') ? 144 : 420;
+      });
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+    list.handleAction('select');
+
+    document.dispatchEvent(new CustomEvent('keyboardStateChange', {
+      detail: { visibility: true },
+    }));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const compactCount = container.querySelectorAll('[data-epg-position]').length;
+
+    document.dispatchEvent(new CustomEvent('keyboardStateChange', {
+      detail: { visibility: false },
+    }));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const expandedCount = container.querySelectorAll('[data-epg-position]').length;
+    heightMock.mockRestore();
+
+    expect(expandedCount).toBeGreaterThan(compactCount);
+  });
+
+  it('keeps an empty EPG search focused when the pointer crosses candidates', () => {
+    epgMock.getMappingCandidates.mockReturnValue([{
+      id: 'source::guide-a',
+      channelId: 'guide-a',
+      name: 'Alpha Guide',
+      sourceName: 'Guide',
+    }]);
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+    list.handleAction('select');
+    const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    document.dispatchEvent(new CustomEvent('keyboardStateChange', {
+      detail: { visibility: true },
+    }));
+    const candidate = container.querySelector<HTMLElement>('[data-epg-position="1"]')!;
+    hover(candidate);
+    expect(candidate.classList).not.toContain('focused');
+    list.render();
+
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('refreshes an open picker when the EPG catalog finishes loading', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+    list.handleAction('select');
+    expect(container.querySelectorAll('[data-epg-position]')).toHaveLength(1);
+
+    epgMock.getMappingCandidates.mockReturnValue([{
+      id: 'source::guide-a',
+      channelId: 'guide-a',
+      name: 'Alpha Guide',
+      sourceName: 'Guide',
+    }]);
+    epgMock.mappingRevision++;
+    list.render();
+
+    expect(container.querySelector('[data-epg-channel="source::guide-a"]')).not.toBeNull();
+  });
+
+  it('virtualizes the complete EPG catalog and moves D-pad focus beyond the first window',
+    () => {
+      epgMock.getMappingCandidates.mockReturnValue(Array.from({ length: 120 }, (_, index) => ({
+        id: `source::guide-${String(index)}`,
+        channelId: `guide-${String(index)}`,
+        name: `Guide ${String(index).padStart(3, '0')}`,
+        sourceName: 'Guide',
+      })));
+      enterEdit();
+      hover(channelItems()[0]);
+      list.handleAction('select');
+      hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+      list.handleAction('select');
+
+      expect(container.querySelectorAll('[data-epg-position]').length).toBeLessThan(20);
+      expect(container.querySelector<HTMLElement>('.epg-mapping-spacer')?.style.height)
+        .toBe(`${String(121 * 72)}px`);
+
+      const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      expect(document.activeElement).toBe(
+        container.querySelector('[data-epg-position="0"]'),
+      );
+      for (let index = 0; index < 80; index++) list.handleAction('down');
+
+      expect(container.querySelector('[data-epg-position="80"]')).not.toBeNull();
+      expect(document.activeElement).toBe(
+        container.querySelector('[data-epg-position="80"]'),
+      );
+      expect(container.querySelector('.epg-mapping-list')?.scrollTop).toBeGreaterThan(0);
+    });
 
   it('blue renames the focused channel and an empty value restores the source name', () => {
     enterEdit();

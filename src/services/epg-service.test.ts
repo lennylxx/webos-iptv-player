@@ -1,7 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+const { channelOverrideMock, epgChannelIdsMock } = vi.hoisted(() => ({
+  channelOverrideMock: vi.fn(() => null as { epgChannelId?: string } | null),
+  epgChannelIdsMock: vi.fn(() => [] as string[]),
+}));
+
 vi.mock('./idb-cache', () => ({ getCachedEpg: vi.fn(), setCachedEpg: vi.fn(async () => {}) }));
 vi.mock('../utils/fetch-helper', () => ({ fetchMaybeGzipText: vi.fn(async (url: string) => url) }));
+vi.mock('./channel-customization', () => ({
+  ChannelCustomizationService: {
+    overrideFor: channelOverrideMock,
+    epgChannelIds: epgChannelIdsMock,
+  },
+}));
 vi.mock('../parsers/xmltv-parser', () => {
   const parseXMLTV = vi.fn();
   return {
@@ -57,6 +68,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOON);
   vi.clearAllMocks();
+  channelOverrideMock.mockReturnValue(null);
+  epgChannelIdsMock.mockReturnValue([]);
   EpgService.reset();
   vi.mocked(getCachedEpg).mockResolvedValue(null);
 });
@@ -166,6 +179,105 @@ describe('EpgService multi-source matching', () => {
 
     const id = EpgService.findChannelId(channel({ id: 'same', name: 'Alpha', playlistIds: ['a'] }));
     expect(EpgService.getNowPlaying(id!)?.title).toBe('Manual');
+  });
+
+  it('uses a manual channel mapping before id and name matching', async () => {
+    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.8', 'Bravo', 'Mapped'));
+    const mappedId = `${encodeURIComponent('http://a')}::epg.8`;
+    channelOverrideMock.mockReturnValue({ epgChannelId: mappedId });
+    epgChannelIdsMock.mockReturnValue([mappedId]);
+    const playlistChannel = channel({
+      id: 'wrong',
+      name: 'Alpha',
+      url: 'http://host/a',
+      playlistIds: ['a'],
+    });
+
+    await EpgService.load([source('http://a', ['a'])], [playlistChannel]);
+
+    const id = EpgService.findChannelId(playlistChannel);
+    expect(EpgService.getNowPlaying(id!)?.title).toBe('Mapped');
+    expect(vi.mocked(parseXMLTVWithStats).mock.calls[0][1]).toMatchObject({
+      channelIds: new Set(['wrong', 'epg.8']),
+      retainChannelCatalog: true,
+    });
+  });
+
+  it('collects sparse EPG mappings without per-channel customization lookups', async () => {
+    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.8', 'Alpha', 'Mapped'));
+    const channels = Array.from({ length: 1000 }, (_, index) => channel({
+      id: `ch${String(index)}`,
+      name: `Channel ${String(index)}`,
+      url: `http://host/${String(index)}`,
+      playlistIds: ['a'],
+    }));
+
+    await EpgService.load([source('http://a', ['a'])], channels);
+
+    expect(epgChannelIdsMock).toHaveBeenCalledTimes(1);
+    expect(channelOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it('lists searchable mapping candidates only from eligible feeds', async () => {
+    vi.mocked(parseXMLTV).mockImplementation((text) =>
+      text === 'http://a'
+        ? parsed('epg.9', 'Alpha Guide', 'A')
+        : parsed('epg.10', 'Alpha Other', 'B'));
+    const playlistChannel = channel({
+      name: 'Alpha',
+      url: 'http://host/a',
+      playlistIds: ['a'],
+    });
+    await EpgService.load([
+      source('http://a', ['a']),
+      source('http://b', ['b']),
+    ], [playlistChannel]);
+
+    expect(EpgService.getMappingCandidates(playlistChannel, 'guide')).toEqual([{
+      id: `${encodeURIComponent('http://a')}::epg.9`,
+      channelId: 'epg.9',
+      name: 'Alpha Guide',
+      sourceName: 'EPG 1',
+    }]);
+  });
+
+  it('keeps the selected mapping visible when it does not match the search', async () => {
+    vi.mocked(parseXMLTV).mockReturnValue(parsed('epg.9', 'Bravo Guide', 'A'));
+    const mappedId = `${encodeURIComponent('http://a')}::epg.9`;
+    channelOverrideMock.mockReturnValue({ epgChannelId: mappedId });
+    const playlistChannel = channel({
+      name: 'Alpha',
+      url: 'http://host/a',
+      playlistIds: ['a'],
+    });
+    await EpgService.load([source('http://a', ['a'])], [playlistChannel]);
+
+    expect(EpgService.getMappingCandidates(playlistChannel, 'Alpha')).toEqual([{
+      id: mappedId,
+      channelId: 'epg.9',
+      name: 'Bravo Guide',
+      sourceName: 'EPG 1',
+    }]);
+  });
+
+  it('returns the complete candidate catalog when no limit is requested', async () => {
+    const data = parsed('epg.0', 'Guide 000', 'A');
+    for (let index = 1; index < 80; index++) {
+      data.channels[`epg.${String(index)}`] = {
+        name: `Guide ${String(index).padStart(3, '0')}`,
+        icon: '',
+      };
+    }
+    vi.mocked(parseXMLTV).mockReturnValue(data);
+    const playlistChannel = channel({
+      name: 'Alpha',
+      url: 'http://host/a',
+      playlistIds: ['a'],
+    });
+    await EpgService.load([source('http://a', ['a'])], [playlistChannel]);
+
+    expect(EpgService.getMappingCandidates(playlistChannel, '')).toHaveLength(80);
+    expect(EpgService.getMappingCandidates(playlistChannel, '', 50)).toHaveLength(50);
   });
 });
 
@@ -408,6 +520,7 @@ describe('EpgService channel pre-filter', () => {
     const extra = parsed('b', 'Bravo', 'Extra');
     cached.channels.b = extra.channels.b;
     cached.programmes.b = extra.programmes.b;
+    cached.channelCatalogComplete = true;
     vi.mocked(getCachedEpg).mockResolvedValue({
       url: 'http://a',
       timestamp: NOON - CONFIG.EPG_REFRESH_INTERVAL + 1000,
@@ -426,7 +539,7 @@ describe('EpgService channel pre-filter', () => {
       NOON - CONFIG.EPG_REFRESH_INTERVAL + 1000,
     );
     const cachedData = vi.mocked(setCachedEpg).mock.calls[0][1];
-    expect(Object.keys(cachedData.channels)).toEqual(['a']);
+    expect(Object.keys(cachedData.channels)).toEqual(['a', 'b']);
     expect(Object.keys(cachedData.programmes)).toEqual(['a']);
     const id = EpgService.findChannelId(channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }));
     expect(EpgService.getNowPlaying(id!)?.title).toBe('Cached');

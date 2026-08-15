@@ -64,6 +64,15 @@ class ChannelCustomizationServiceImpl {
     return this.record.overrides[key] ?? null;
   }
 
+  epgChannelIds(): string[] {
+    const ids: string[] = [];
+    for (const key in this.record.overrides) {
+      const id = this.record.overrides[key].epgChannelId;
+      if (id) ids.push(id);
+    }
+    return ids;
+  }
+
   isHidden(key: string): boolean {
     return this.record.overrides[key]?.hidden === true;
   }
@@ -96,6 +105,15 @@ class ChannelCustomizationServiceImpl {
       else delete ov.group;
     });
     if (trimmed) this.addCustomGroup(trimmed);
+  }
+
+  /** An empty id restores automatic EPG matching. */
+  setEpgChannel(key: string, epgChannelId: string): void {
+    const trimmed = epgChannelId.trim();
+    this.mutate(key, (ov) => {
+      if (trimmed) ov.epgChannelId = trimmed;
+      else delete ov.epgChannelId;
+    });
   }
 
   /** Clear every customization of one channel. */

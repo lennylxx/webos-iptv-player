@@ -66,7 +66,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 - **Search** — across channels, EPG programs, movies, and series, with direct live, catch-up, and reminder actions
 - **Channel sidebar** — switch channels over the video with current-program info, organized by group
-- **Channel customization** — reorder, hide, rename, regroup, and manage favorites
+- **Channel customization** — reorder, hide, rename, regroup, manage favorites, and override an incorrect EPG match
 - **Auto-play and genre group icons** for faster browsing
 - **Full remote & Magic Remote** — spatial D-pad navigation and pointer control across every view
 - **Color themes** — choose from light and dark app-wide themes with live previews, plus Dark or Frosted player overlays; selections persist across launches
@@ -200,7 +200,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Xtream Account** — add, edit, or remove Xtream Codes accounts (portal URL + username + password). The playlist and EPG are derived from your credentials on Save.
 - **Playlists** — add, edit, or remove M3U URLs. Re-applied on Save.
 - **Upload Playlist** — QR code + LAN URL on the left, list of currently uploaded playlists on the right. Scan the QR from a phone/laptop on the same network to upload `.m3u` files; they appear in this list within milliseconds via Luna push.
-- **Channels** — reorder, hide, rename, or regroup entries; show hidden channels or reset customizations.
+- **Channels** — reorder, hide, rename, regroup, or manually map entries to XMLTV channels; show hidden channels or reset customizations.
 - **XMLTV URL** — set the program guide URL, also auto-detected from `x-tvg-url` in M3U playlists.
 - **EPG time zone** — show guide times in the TV's **Device** time zone or the guide **Feed** time zone.
 - **EPG time correction** — adjust each source independently in 15-minute steps.

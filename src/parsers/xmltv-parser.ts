@@ -15,6 +15,8 @@ export interface XMLTVParseOptions {
   channelIds?: ReadonlySet<string>;
   /** Lowercased display names that also select a channel, for id-less playlists. */
   channelNames?: ReadonlySet<string>;
+  /** Retain lightweight channel metadata while still filtering programme arrays. */
+  retainChannelCatalog?: boolean;
 }
 
 export interface XMLTVParseStats {
@@ -106,6 +108,7 @@ export class XMLTVStreamParser {
     return {
       channels: this.channels,
       programmes: this.programmes,
+      ...(this.options.retainChannelCatalog ? { channelCatalogComplete: true } : {}),
       sourceName: this.sourceName,
       tzOffsetMinutes: this.tzOffsetMinutes,
     };
@@ -240,9 +243,10 @@ export class XMLTVStreamParser {
       const names = this.options.channelNames;
       if (!names?.size || !displayNames.some((value) => names.has(value.toLowerCase()))) {
         this.stats.skippedFilter++;
-        return;
+        if (!this.options.retainChannelCatalog) return;
+      } else {
+        this.acceptedIds.add(id);
       }
-      this.acceptedIds.add(id);
     }
     const retainedNames = retainDisplayNames(displayNames, this.options.channelNames);
     const names = copyStrings(retainedNames.length ? retainedNames : [id]);

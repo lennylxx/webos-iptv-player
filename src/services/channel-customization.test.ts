@@ -123,6 +123,16 @@ describe('ChannelCustomizationService', () => {
     expect(ChannelCustomizationService.applyTo(fixture())[2].group).toBe('Sports');
   });
 
+  it('sets and clears a manual EPG channel mapping', () => {
+    ChannelCustomizationService.setEpgChannel(KEY_A, 'source::epg-a');
+    expect(ChannelCustomizationService.overrideFor(KEY_A)?.epgChannelId).toBe('source::epg-a');
+    expect(ChannelCustomizationService.epgChannelIds()).toEqual(['source::epg-a']);
+
+    ChannelCustomizationService.setEpgChannel(KEY_A, '  ');
+    expect(ChannelCustomizationService.overrideFor(KEY_A)).toBeNull();
+    expect(ChannelCustomizationService.epgChannelIds()).toEqual([]);
+  });
+
   it('renames a group without changing its key', () => {
     ChannelCustomizationService.renameGroup('News', 'Headlines');
     const channels = ChannelCustomizationService.applyTo(fixture());

@@ -5,10 +5,13 @@ import { channelKey, groupDisplayLabel } from '../utils/channel';
 import { PlaylistService } from '../services/playlist-service';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
 import { StorageService } from '../services/storage-service';
-import { BACK_ICON, CHECK_ICON } from './icons';
+import { EpgService } from '../services/epg-service';
+import type { EpgMappingCandidate } from '../services/epg-service';
+import { BACK_ICON, CHECK_ICON, GUIDE_ICON, SEARCH_ICON } from './icons';
 import { showToast } from './toast';
 import { t } from '../i18n';
 import { CONFIG } from '../config';
+import { VirtualList } from '../utils/virtual-list';
 
 type EditTarget = { kind: 'channel'; key: string } | { kind: 'group'; key: string };
 type DragCandidate = { target: EditTarget; x: number; y: number };
@@ -17,12 +20,16 @@ interface ChannelListEditorOptions {
   render: () => void;
   moveListFocus: (delta: number) => boolean;
   onChannelsChanged: () => void;
+  onEpgMappingChanged: () => void;
   getCurrentGroup: () => ChannelGroupId;
   getCurrentPlaylist: () => string;
   setLocation: (group: ChannelGroupId, playlist: string) => void;
 }
 
 const DRAG_START_DISTANCE = 8;
+const EPG_OPTION_HEIGHT = 72;
+const EPG_VIEWPORT_HEIGHT = 420;
+const EPG_OVERSCAN = 3;
 
 export class ChannelListEditor {
   private favoriteSelection: Set<string> | null = null;
@@ -31,6 +38,19 @@ export class ChannelListEditor {
   private renaming: EditTarget | null = null;
   private groupPickerFor: string | null = null;
   private newGroupOpen = false;
+  private epgPickerFor: string | null = null;
+  private epgQuery = '';
+  private epgCandidates: EpgMappingCandidate[] = [];
+  private epgCandidateRevision = -1;
+  private epgFocusPosition = -1;
+  private epgKeyboardVisible = false;
+  private readonly epgVirtualizer = new VirtualList({
+    itemSize: EPG_OPTION_HEIGHT,
+    overscan: EPG_OVERSCAN,
+    fallbackViewportSize: EPG_VIEWPORT_HEIGHT,
+  });
+  private epgScrollFrame: number | null = null;
+  private epgKeyboardFrame: number | null = null;
   private refocus: string | null = null;
   private dragCandidate: DragCandidate | null = null;
   private pointerDragging = false;
@@ -44,6 +64,16 @@ export class ChannelListEditor {
     private nav: SpatialNav,
     private options: ChannelListEditorOptions,
   ) {
+    this.container.addEventListener('nav:hover', (event: Event) => {
+      const target = event.target;
+      const active = document.activeElement;
+      if (!this.epgPickerFor || !this.epgKeyboardVisible
+          || !(target instanceof HTMLElement)
+          || target.dataset.epgPosition === undefined
+          || !(active instanceof HTMLInputElement)
+          || !active.classList.contains('epg-mapping-search')) return;
+      event.stopImmediatePropagation();
+    }, true);
     this.container.addEventListener('mousedown', (event: MouseEvent) => {
       this.onPointerDown(event);
     });
@@ -52,11 +82,83 @@ export class ChannelListEditor {
     });
     this.container.addEventListener('mouseup', () => this.finishPointerDrag());
     this.container.addEventListener('keydown', (event: KeyboardEvent) => {
-      if (!(event.target instanceof HTMLInputElement)
-          || (event.key !== 'Enter' && event.keyCode !== CONFIG.KEYS.ENTER)) return;
+      if (!(event.target instanceof HTMLInputElement)) return;
+      if (event.target.classList.contains('epg-mapping-search')
+          && (event.key === 'Escape' || event.keyCode === CONFIG.KEYS.ESC
+            || event.keyCode === CONFIG.KEYS.BACK)) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.handleBack();
+        return;
+      }
+      if (event.target.classList.contains('epg-mapping-search')
+          && (event.key === 'ArrowDown' || event.keyCode === CONFIG.KEYS.DOWN)) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.moveEpgFocus(1);
+        return;
+      }
+      if (event.key !== 'Enter' && event.keyCode !== CONFIG.KEYS.ENTER) return;
       event.preventDefault();
       event.stopPropagation();
-      this.commitTextInput();
+      if (event.target.classList.contains('epg-mapping-search')) {
+        this.moveEpgFocus(1);
+      } else {
+        this.commitTextInput();
+      }
+    });
+    this.container.addEventListener('input', (event: Event) => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement)
+          || !input.classList.contains('epg-mapping-search')) return;
+      this.epgQuery = input.value;
+      this.refreshEpgCandidates();
+      this.epgFocusPosition = -1;
+      this.epgVirtualizer.setScrollOffset(0);
+      this.options.render();
+    });
+    this.container.addEventListener('scroll', (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)
+          || !target.classList.contains('epg-mapping-list')) return;
+      if (Math.abs(target.scrollTop - this.epgVirtualizer.scrollOffset) < 1) return;
+      this.epgVirtualizer.setScrollOffset(target.scrollTop);
+      if (this.epgFocusPosition >= 0) {
+        const itemCount = this.epgCandidates.length + 1;
+        const viewportHeight = target.clientHeight || EPG_VIEWPORT_HEIGHT;
+        const firstVisible = Math.min(
+          itemCount - 1,
+          Math.ceil(target.scrollTop / EPG_OPTION_HEIGHT),
+        );
+        const lastVisible = Math.max(
+          firstVisible,
+          Math.min(
+            itemCount - 1,
+            Math.floor((target.scrollTop + viewportHeight) / EPG_OPTION_HEIGHT) - 1,
+          ),
+        );
+        this.epgFocusPosition = Math.max(
+          firstVisible,
+          Math.min(this.epgFocusPosition, lastVisible),
+        );
+      }
+      if (this.epgScrollFrame !== null) return;
+      this.epgScrollFrame = requestAnimationFrame(() => {
+        this.epgScrollFrame = null;
+        this.options.render();
+      });
+    }, true);
+    document.addEventListener('keyboardStateChange', (event: Event) => {
+      const visible = (event as CustomEvent<{ visibility?: boolean }>).detail?.visibility;
+      if (!this.epgPickerFor || typeof visible !== 'boolean') return;
+      this.epgKeyboardVisible = visible;
+      this.container.querySelector('.epg-mapping-picker')
+        ?.classList.toggle('keyboard-visible', visible);
+      if (this.epgKeyboardFrame !== null) cancelAnimationFrame(this.epgKeyboardFrame);
+      this.epgKeyboardFrame = requestAnimationFrame(() => {
+        this.epgKeyboardFrame = null;
+        if (this.epgPickerFor) this.options.render();
+      });
     });
   }
 
@@ -77,6 +179,15 @@ export class ChannelListEditor {
   }
 
   trackFocus(el: HTMLElement | null): void {
+    if (this.epgPickerFor && this.epgKeyboardVisible
+        && el?.dataset.epgPosition !== undefined) {
+      return;
+    }
+    if (this.epgPickerFor && el?.dataset.epgPosition !== undefined) {
+      this.epgFocusPosition = parseInt(el.dataset.epgPosition, 10);
+    } else if (this.epgPickerFor && el?.classList.contains('epg-mapping-search')) {
+      this.epgFocusPosition = -1;
+    }
     const target = el ? this.editTargetForElement(el) : null;
     if (target) this.editActionTarget = target;
   }
@@ -106,6 +217,13 @@ export class ChannelListEditor {
     this.renaming = null;
     this.groupPickerFor = null;
     this.newGroupOpen = false;
+    this.epgPickerFor = null;
+    this.epgQuery = '';
+    this.epgCandidates = [];
+    this.epgCandidateRevision = -1;
+    this.epgFocusPosition = -1;
+    this.epgKeyboardVisible = false;
+    this.epgVirtualizer.setScrollOffset(0);
     this.editActionTarget = null;
     if (wasEditingChannels) {
       PlaylistService.setIncludeHidden(false);
@@ -117,6 +235,17 @@ export class ChannelListEditor {
   handleBack(): boolean {
     if (this.newGroupOpen) {
       this.newGroupOpen = false;
+      this.options.render();
+      return true;
+    }
+    if (this.epgPickerFor) {
+      this.epgPickerFor = null;
+      this.epgQuery = '';
+      this.epgCandidates = [];
+      this.epgCandidateRevision = -1;
+      this.epgFocusPosition = -1;
+      this.epgKeyboardVisible = false;
+      this.epgVirtualizer.setScrollOffset(0);
       this.options.render();
       return true;
     }
@@ -191,12 +320,31 @@ export class ChannelListEditor {
   }
 
   focusGroupPicker(): HTMLElement | null {
-    if (!this.groupPickerFor) return null;
-    return this.container.querySelector<HTMLElement>('.group-picker [data-focusable]');
+    if (this.epgPickerFor) {
+      if (this.epgFocusPosition >= 0) {
+        return this.container.querySelector<HTMLElement>(
+          `[data-epg-position="${String(this.epgFocusPosition)}"]`,
+        );
+      }
+      return this.container.querySelector<HTMLElement>('.epg-mapping-search');
+    }
+    if (this.groupPickerFor) {
+      return this.container.querySelector<HTMLElement>('.group-picker [data-focusable]');
+    }
+    return null;
   }
 
   focusTextInput(): void {
-    const input = this.container.querySelector<HTMLInputElement>('.edit-text-input');
+    if (this.epgPickerFor && this.epgFocusPosition >= 0) {
+      const option = this.container.querySelector<HTMLElement>(
+        `[data-epg-position="${String(this.epgFocusPosition)}"]`,
+      );
+      if (option && document.activeElement !== option) option.focus({ preventScroll: true });
+      return;
+    }
+    const input = this.container.querySelector<HTMLInputElement>(
+      '.edit-text-input, .epg-mapping-search',
+    );
     if (input && document.activeElement !== input) {
       input.focus();
       input.select();
@@ -239,8 +387,10 @@ export class ChannelListEditor {
   renderChannelEditStatus(channel: Channel): Safe | string {
     const hidden = this.isChannelHidden(channel);
     const selected = this.isFavoriteSelected(channel);
+    const epgMapped = !!ChannelCustomizationService.overrideFor(channelKey(channel))?.epgChannelId;
     return html`
       ${hidden ? html`<div class="hidden-badge">${t('channel.editHidden')}</div>` : ''}
+      ${epgMapped ? html`<div class="epg-mapped-badge">${t('channel.editEpgMapped')}</div>` : ''}
       ${this.favoriteSelection
         ? html`<div class="favorite-checkbox">${selected ? raw(CHECK_ICON) : ''}</div>`
         : ''}
@@ -254,6 +404,7 @@ export class ChannelListEditor {
   }
 
   renderGroupPicker(): Safe | string {
+    if (this.epgPickerFor) return this.renderEpgPicker();
     if (!this.groupPickerFor) return '';
     return html`
       <div class="group-picker" data-nav-container>
@@ -291,9 +442,20 @@ export class ChannelListEditor {
       else if (action === 'select') this.chooseGroupOption();
       return true;
     }
+    if (this.epgPickerFor) {
+      if (action === 'up' || action === 'down') {
+        this.moveEpgFocus(action === 'up' ? -1 : 1);
+      }
+      else if (action === 'select') this.chooseEpgOption();
+      return true;
+    }
 
     const buttonAction = this.nav.focused?.dataset.editAction as Action | undefined;
     if (action === 'select' && buttonAction) return this.handleEditAction(buttonAction);
+    if (action === 'select' && this.nav.focused?.dataset.epgAction !== undefined) {
+      this.openEpgPicker();
+      return true;
+    }
 
     switch (action) {
       case 'yellow':
@@ -664,6 +826,149 @@ export class ChannelListEditor {
     this.options.render();
   }
 
+  private openEpgPicker(): void {
+    const target = this.grabbed;
+    if (!target || target.kind !== 'channel') {
+      showToast(t('channel.editSelectChannel'));
+      return;
+    }
+    const index = PlaylistService.indexOfKey(target.key);
+    const channel = PlaylistService.getByIndex(index);
+    if (!channel) return;
+    this.epgPickerFor = target.key;
+    this.epgQuery = channel.sourceName ?? channel.name;
+    this.refreshEpgCandidates();
+    this.epgFocusPosition = -1;
+    this.epgKeyboardVisible = false;
+    this.epgVirtualizer.setScrollOffset(0);
+    this.options.render();
+  }
+
+  private refreshEpgCandidates(): void {
+    const key = this.epgPickerFor;
+    const channel = key
+      ? PlaylistService.getByIndex(PlaylistService.indexOfKey(key))
+      : null;
+    this.epgCandidates = channel
+      ? EpgService.getMappingCandidates(channel, this.epgQuery)
+      : [];
+    this.epgCandidateRevision = EpgService.mappingRevision;
+  }
+
+  private moveEpgFocus(delta: number): void {
+    if (!this.epgPickerFor) return;
+    const itemCount = this.epgCandidates.length + 1;
+    const next = this.epgFocusPosition < 0
+      ? (delta > 0 ? 0 : -1)
+      : this.epgFocusPosition + delta;
+    if (next < 0) {
+      this.epgFocusPosition = -1;
+      this.options.render();
+      return;
+    }
+    this.epgFocusPosition = Math.min(itemCount - 1, next);
+    const list = this.container.querySelector<HTMLElement>('.epg-mapping-list');
+    this.epgVirtualizer.ensureVisible(
+      this.epgFocusPosition,
+      list?.clientHeight || EPG_VIEWPORT_HEIGHT,
+    );
+    this.options.render();
+  }
+
+  private chooseEpgOption(): void {
+    const id = this.nav.focused?.dataset.epgChannel;
+    const key = this.epgPickerFor;
+    if (id === undefined || !key) return;
+    ChannelCustomizationService.setEpgChannel(key, id);
+    this.epgPickerFor = null;
+    this.epgQuery = '';
+    this.epgCandidates = [];
+    this.epgCandidateRevision = -1;
+    this.epgFocusPosition = -1;
+    this.epgKeyboardVisible = false;
+    this.epgVirtualizer.setScrollOffset(0);
+    this.refocus = `ch:${PlaylistService.indexOfKey(key)}`;
+    this.options.onEpgMappingChanged();
+    this.options.render();
+  }
+
+  private renderEpgPicker(): Safe | string {
+    const key = this.epgPickerFor;
+    if (!key) return '';
+    const channel = PlaylistService.getByIndex(PlaylistService.indexOfKey(key));
+    if (!channel) return '';
+    if (this.epgCandidateRevision !== EpgService.mappingRevision) {
+      this.refreshEpgCandidates();
+    }
+    const current = ChannelCustomizationService.overrideFor(key)?.epgChannelId ?? '';
+    const candidates = this.epgCandidates;
+    const itemCount = candidates.length + 1;
+    const previousList = this.container.querySelector<HTMLElement>('.epg-mapping-list');
+    const viewportHeight = previousList?.clientHeight || EPG_VIEWPORT_HEIGHT;
+    const range = this.epgVirtualizer.getRange(itemCount, viewportHeight);
+    const candidateStart = Math.max(0, range.start - 1);
+    const candidateEnd = Math.max(0, range.end - 1);
+    const totalHeight = this.epgVirtualizer.getTotalSize(itemCount)
+      + (candidates.length ? 0 : 48);
+    return html`
+      <div class="group-picker epg-mapping-picker ${
+        this.epgKeyboardVisible ? 'keyboard-visible' : ''
+      }" data-nav-container>
+        <div class="epg-mapping-heading">
+          <div class="group-picker-title">${
+            t('channel.editEpgTitle', { name: channel.name })
+          }</div>
+        </div>
+        <label class="epg-mapping-search-wrap">
+          <span class="epg-mapping-search-icon">${raw(SEARCH_ICON)}</span>
+          <input class="epg-mapping-search" data-key="epg-search"
+                 type="text" value="${this.epgQuery}"
+                 placeholder="${t('channel.editEpgSearch')}">
+        </label>
+        <div class="group-picker-list epg-mapping-list">
+          <div class="epg-mapping-spacer" style="height:${totalHeight}px">
+            ${range.start === 0
+              ? html`
+                <div class="group-picker-option epg-mapping-option ${
+                  current ? '' : 'active'
+                }" style="top:0px" data-key="epg:auto" data-focusable
+                     tabindex="-1" data-epg-position="0" data-epg-channel="">
+                  <span>${t('channel.editEpgAutomatic')}</span>
+                </div>
+              `
+              : ''}
+            ${candidates.slice(candidateStart, candidateEnd).map((candidate, offset) => {
+              const position = candidateStart + offset + 1;
+              return html`
+                <div class="group-picker-option epg-mapping-option ${
+                  candidate.id === current ? 'active' : ''
+                }" style="top:${this.epgVirtualizer.getItemOffset(position)}px"
+                     data-key="epg:${candidate.id}" data-focusable
+                     tabindex="-1" data-epg-position="${position}"
+                     data-epg-channel="${candidate.id}">
+                  <span class="epg-mapping-name">${candidate.name}</span>
+                  <span class="epg-mapping-meta">${candidate.channelId} - ${
+                    candidate.sourceName
+                  }</span>
+                </div>
+              `;
+            })}
+            ${!candidates.length
+              ? html`<div class="epg-mapping-empty">${t('channel.editEpgEmpty')}</div>`
+              : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  syncEpgPickerScroll(): void {
+    const list = this.container.querySelector<HTMLElement>('.epg-mapping-list');
+    if (list && Math.abs(list.scrollTop - this.epgVirtualizer.scrollOffset) >= 1) {
+      list.scrollTop = this.epgVirtualizer.scrollOffset;
+    }
+  }
+
   /** Re-derive the channel list from the changed customization. */
   private applyEdit(): void {
     PlaylistService.applyCustomization();
@@ -695,6 +1000,11 @@ export class ChannelListEditor {
         <button class="edit-hint edit-action" data-key="edit:red" data-focusable
                 data-edit-action="red"><span class="edit-key key-red"></span>${
                   t('channel.editGroup')}</button>
+        <button class="edit-hint edit-action" data-key="edit:epg" data-focusable
+                data-epg-action>
+          <span class="edit-action-icon">${raw(GUIDE_ICON)}</span>
+          ${t('channel.editEpg')}
+        </button>
         <button class="edit-hint edit-action" data-key="edit:yellow" data-focusable
                 data-edit-action="yellow">
           <span class="edit-key key-yellow"></span>

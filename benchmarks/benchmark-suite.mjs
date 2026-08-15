@@ -803,7 +803,11 @@ export function runXMLTVCatalogPass(options) {
     const state = window.__IPTV_CATALOG_BENCHMARK__;
     if (!api || !state) throw new Error('Catalog benchmark was not prepared');
     const filter = options.filtered
-      ? { channelIds: state.channelIds, channelNames: state.channelNames }
+      ? {
+          channelIds: state.channelIds,
+          channelNames: state.channelNames,
+          retainChannelCatalog: true,
+        }
       : undefined;
     const started = performance.now();
     const result = api.parseXMLTV(state.text, filter);
@@ -812,6 +816,7 @@ export function runXMLTVCatalogPass(options) {
     return {
       durationMs: Math.round(durationMs * 10) / 10,
       channels: result.channels,
+      catalogChannels: result.catalogChannels || result.channels,
       programmes: result.programmes || 0,
       programmesSeen: result.programmesSeen || 0,
     };
@@ -1248,6 +1253,7 @@ export function assertXMLTVCatalogBenchmark(catalog) {
     throw new Error('Filtered XMLTV benchmark did not read the same source feed');
   }
   if (catalog.filtered.channels !== catalog.keptChannels
+      || catalog.filtered.catalogChannels !== catalog.sourceChannels
       || catalog.filtered.programmes >= catalog.unfiltered.programmes) {
     throw new Error('XMLTV channel filter did not retain the expected playlist subset');
   }

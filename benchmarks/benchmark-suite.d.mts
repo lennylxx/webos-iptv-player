@@ -82,6 +82,7 @@ export function runRawParserBenchmarks(
 export interface XMLTVCatalogPass {
   durationMs: number;
   channels: number;
+  catalogChannels: number;
   programmes: number;
   programmesSeen: number;
   retainedBytes: number;

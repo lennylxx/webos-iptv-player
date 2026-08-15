@@ -89,6 +89,16 @@ class App {
       this.views.channels,
       (idx, catchup) => this.playChannel(idx, catchup),
       () => this.player.syncCurrentIndex(),
+      () => {
+        const sources = this.epgSources();
+        if (!sources.length) return;
+        void EpgService.load(sources, PlaylistService.allChannels)
+          .then(() => {
+            this.channelList.render();
+            void this.search.refreshPrograms();
+          })
+          .catch(err => log.error('EPG mapping reload failed:', err));
+      },
     );
     this.player = new Player(this.views.player, () => {
       this.channelList.render();

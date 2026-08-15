@@ -1,7 +1,16 @@
-import { test, expect, routePlaylist, seedPlaylist, SEARCH_M3U, enterTab, type Page } from './helpers';
+import {
+  test,
+  expect,
+  routePlaylist,
+  seedPlaylist,
+  readUserDataStore,
+  SEARCH_M3U,
+  enterTab,
+  type Page,
+} from './helpers';
 
 // Channel customization: the in-place edit mode on the Live channel list —
-// reorder, hide, rename, regroup — plus its Settings entry point,
+// reorder, hide, rename, regroup, EPG mapping — plus its Settings entry point,
 // show-hidden toggle, and reset.
 
 const RED = 403;
@@ -138,6 +147,10 @@ test('blue renames a channel, and an empty rename restores the source name', asy
   // The source name stays visible while editing so the origin is still clear.
   await expect(page.locator('.channel-main .channel-item').first()
     .locator('.channel-source-name')).toContainText('Alpha News');
+  await expect.poll(async () => {
+    const records = await readUserDataStore<{ name?: string }>(page, 'channel-state');
+    return records.some(record => record.value.name === 'My Channel');
+  }).toBe(true);
 
   await page.reload();
   await expect(page.locator('#view-channels')).toBeVisible();
@@ -181,6 +194,85 @@ test('back cancels an open rename without changing the name', async ({ page }) =
   await expect(page.locator('.channel-main .channel-name').first()).toHaveText('Alpha News');
   // Still editing — one back closes the field, not the mode.
   await expect(page.locator('.edit-hints')).toBeVisible();
+});
+
+test('maps a channel to an XMLTV entry and keeps the override after reload', async ({ page }) => {
+  const playlist = SEARCH_M3U.replace('#EXTM3U', '#EXTM3U url-tvg="http://host/guide.xml"');
+  const guideChannels = Array.from({ length: 120 }, (_, index) => {
+    const number = String(index + 1).padStart(3, '0');
+    return `<channel id="guide-${number}"><display-name>Guide ${number}</display-name></channel>`;
+  }).join('\n');
+  await routePlaylist(page, playlist);
+  await page.route('**/guide.xml', route => route.fulfill({
+    status: 200,
+    contentType: 'application/xml',
+    body: `<?xml version="1.0" encoding="UTF-8"?><tv>
+<channel id="guide-beta"><display-name>Guide Beta</display-name></channel>
+${guideChannels}
+</tv>`,
+  }));
+  await seedPlaylist(page);
+  const guideResponse = page.waitForResponse('**/guide.xml');
+  await page.goto('/');
+  await guideResponse;
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await expect(page.locator('.channel-main .channel-item')).toHaveCount(4);
+
+  await key(page, YELLOW);
+  await focusChannel(page, 0);
+  await key(page, ENTER);
+  await page.locator('[data-epg-action]').click();
+  const search = page.locator('.epg-mapping-search');
+  await expect(search).toBeVisible();
+  await search.fill('');
+  const mappingList = page.locator('.epg-mapping-list');
+  expect(await mappingList.locator('[data-epg-position]').count()).toBeLessThan(20);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('[data-epg-position="1"]')).toBeFocused();
+  await mappingList.hover();
+  await page.mouse.wheel(0, 10000);
+  await expect(mappingList).toContainText('Guide 120');
+  const scrollState = await mappingList.evaluate((element) => {
+    const focused = document.activeElement as HTMLElement | null;
+    return {
+      scrollTop: element.scrollTop,
+      maxScrollTop: element.scrollHeight - element.clientHeight,
+      focusedTop: focused?.offsetTop ?? -1,
+      focusedBottom: (focused?.offsetTop ?? -1) + (focused?.offsetHeight ?? 0),
+      viewportBottom: element.scrollTop + element.clientHeight,
+    };
+  });
+  expect(scrollState.scrollTop).toBe(scrollState.maxScrollTop);
+  expect(scrollState.focusedTop).toBeGreaterThanOrEqual(scrollState.scrollTop);
+  expect(scrollState.focusedBottom).toBeLessThanOrEqual(scrollState.viewportBottom);
+  expect(await mappingList.locator('[data-epg-position]').count()).toBeLessThan(20);
+  await search.fill('Guide Beta');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('[data-epg-position="0"]')).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(search).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('[data-epg-channel]').filter({ hasText: 'Guide Beta' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.channel-main .channel-item').first()
+    .locator('.epg-mapped-badge')).toHaveText('EPG mapped');
+  await expect.poll(async () => {
+    const records = await readUserDataStore<{ epgChannelId?: string }>(page, 'channel-state');
+    return records.some(record => record.value.epgChannelId?.endsWith('::guide-beta'));
+  }).toBe(true);
+
+  await page.reload();
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await key(page, YELLOW);
+  await focusChannel(page, 0);
+  await key(page, ENTER);
+  await expect(page.locator('.channel-main .channel-item').first()
+    .locator('.epg-mapped-badge')).toHaveText('EPG mapped');
+  await page.locator('[data-epg-action]').click();
+  await expect(page.locator('[data-epg-channel]').filter({ hasText: 'Guide Beta' }))
+    .toHaveClass(/active/);
 });
 
 test('red moves a channel into another group', async ({ page }) => {

@@ -6,6 +6,8 @@ import { EpgTimeIndex } from '../utils/epg-time-index';
 import { CONFIG } from '../config';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
 import type { CachedEpgFilter } from './idb-cache';
+import { ChannelCustomizationService } from './channel-customization';
+import { channelKey } from '../utils/channel';
 
 const log = createLogger('EPG');
 
@@ -21,6 +23,13 @@ interface SourceFilter {
   names: Set<string>;
 }
 
+export interface EpgMappingCandidate {
+  id: string;
+  channelId: string;
+  name: string;
+  sourceName: string;
+}
+
 class EpgServiceImpl {
   channels: Record<string, EpgChannel> = {};
   programmes: Record<string, Programme[]> = {};
@@ -29,9 +38,15 @@ class EpgServiceImpl {
   loaded = false;
   private sources: EpgSource[] = [];
   private states = new Map<string, SourceState>();
+  private channelIdsByName = new Map<string, Map<string, string[]>>();
   private timeIndexes = new Map<string, { source: Programme[]; index: EpgTimeIndex }>();
   private playlistChannels: Channel[] | null = null;
   private revision = 0;
+  private mappingRevisionValue = 0;
+
+  get mappingRevision(): number {
+    return this.mappingRevisionValue;
+  }
 
   /**
    * Clear all in-memory state. Called when the user removes every configured
@@ -43,8 +58,10 @@ class EpgServiceImpl {
     this.programmes = {};
     this.tzOffsetMinutes = null;
     this.loaded = false;
+    this.mappingRevisionValue++;
     this.sources = [];
     this.states.clear();
+    this.channelIdsByName.clear();
     this.timeIndexes.clear();
     this.playlistChannels = null;
   }
@@ -57,6 +74,7 @@ class EpgServiceImpl {
     if (revision !== this.revision) return;
     this.rebuildIndexes();
     this.loaded = this.sources.length > 0;
+    this.mappingRevisionValue++;
   }
 
   async refresh(): Promise<void> {
@@ -70,6 +88,7 @@ class EpgServiceImpl {
     if (revision !== this.revision) return;
     this.rebuildIndexes();
     this.loaded = this.sources.length > 0;
+    this.mappingRevisionValue++;
   }
 
   getNowPlaying(channelId: string): Programme | null {
@@ -110,6 +129,8 @@ class EpgServiceImpl {
 
   findChannelId(channel: Channel): string | null {
     if (!this.sources.length) return this.findLegacyChannelId(channel);
+    const override = ChannelCustomizationService.overrideFor(channelKey(channel))?.epgChannelId;
+    if (override && this.channels[override]) return override;
     const candidates = this.sources.filter((source) =>
       source.kind === 'manual' || source.playlistIds.some((id) => channel.playlistIds.includes(id)));
 
@@ -125,14 +146,70 @@ class EpgServiceImpl {
     for (const source of candidates) {
       const state = this.states.get(source.url);
       if (!state) continue;
-      for (const id in state.data.channels) {
-        // A renamed channel keeps matching through its source name.
-        if (!matchesChannelName(state.data.channels[id], name, sourceName)) continue;
+      const index = this.channelIdsByName.get(source.url);
+      const ids = [
+        ...(index?.get(name) ?? []),
+        ...(sourceName && sourceName !== name ? index?.get(sourceName) ?? [] : []),
+      ];
+      for (const id of ids) {
         const key = this.channelKey(source.url, id);
         if (this.programmes[key]?.length) return key;
       }
     }
     return null;
+  }
+
+  getMappingCandidates(
+    channel: Channel,
+    query: string,
+    limit?: number,
+  ): EpgMappingCandidate[] {
+    const normalized = query.trim().toLowerCase();
+    const current = ChannelCustomizationService.overrideFor(channelKey(channel))?.epgChannelId;
+    const candidates: Array<EpgMappingCandidate & { score: number }> = [];
+    const sources = this.sources.filter((source) =>
+      source.kind === 'manual'
+      || source.playlistIds.some((id) => channel.playlistIds.includes(id)));
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+      const source = sources[sourceIndex];
+      const data = this.states.get(source.url)?.data;
+      if (!data) continue;
+      for (const id in data.channels) {
+        const epgChannel = data.channels[id];
+        const candidateId = this.channelKey(source.url, id);
+        const selected = candidateId === current;
+        const names = [epgChannel.name, ...(epgChannel.aliases ?? [])];
+        const fields = [id, ...names].map(value => value.toLowerCase());
+        const positions = normalized
+          ? fields.map(value => value.indexOf(normalized)).filter(position => position >= 0)
+          : [];
+        if (normalized && !positions.length && !selected) continue;
+        const exact = fields.some(value => value === normalized);
+        const prefix = fields.some(value => value.indexOf(normalized) === 0);
+        const position = positions.length ? Math.min(...positions) : 0;
+        candidates.push({
+          id: candidateId,
+          channelId: id,
+          name: epgChannel.name,
+          sourceName: data.sourceName?.trim() || `EPG ${String(sourceIndex + 1)}`,
+          score: selected
+            ? -1
+            : normalized
+            ? (exact ? 0 : prefix ? 100 : 200) + position + sourceIndex * 1000
+            : sourceIndex * 1000,
+        });
+      }
+    }
+    const sorted = candidates
+      .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name)
+        || a.channelId.localeCompare(b.channelId));
+    const visible = limit === undefined ? sorted : sorted.slice(0, Math.max(0, limit));
+    return visible.map(candidate => ({
+        id: candidate.id,
+        channelId: candidate.channelId,
+        name: candidate.name,
+        sourceName: candidate.sourceName,
+      }));
   }
 
   private setSources(sources: EpgSource[]): void {
@@ -153,7 +230,10 @@ class EpgServiceImpl {
     this.sources = merged;
     const active = new Set(merged.map((source) => source.url));
     for (const url of this.states.keys()) {
-      if (!active.has(url)) this.states.delete(url);
+      if (!active.has(url)) {
+        this.states.delete(url);
+        this.channelIdsByName.delete(url);
+      }
     }
   }
 
@@ -162,6 +242,7 @@ class EpgServiceImpl {
     const filter = this.filterFor(source);
     if (filter && isEmptyFilter(filter)) {
       this.states.delete(source.url);
+      this.channelIdsByName.delete(source.url);
       return;
     }
     try {
@@ -170,14 +251,16 @@ class EpgServiceImpl {
       if (cached) {
         const age = Date.now() - cached.timestamp;
         const hasTzField = 'tzOffsetMinutes' in cached.data;
+        const hasChannelCatalog = !cached.filter
+          || cached.data.channelCatalogComplete === true;
         const covered = covers(cached.filter, filter);
         const filtered = filterParsedEpg(cached.data, filter);
-        this.states.set(source.url, {
+        this.setState(source.url, {
           data: filtered.data,
           timestamp: cached.timestamp,
-          needsRefresh: !hasTzField || !covered,
+          needsRefresh: !hasTzField || !hasChannelCatalog || !covered,
         });
-        if (age < CONFIG.EPG_REFRESH_INTERVAL && hasTzField && covered) {
+        if (age < CONFIG.EPG_REFRESH_INTERVAL && hasTzField && hasChannelCatalog && covered) {
           if (filtered.changed || !filtersEqual(cached.filter, filter)) {
             await setCachedEpg(
               source.url,
@@ -205,6 +288,7 @@ class EpgServiceImpl {
     if (revision !== this.revision) return;
     if (filter && isEmptyFilter(filter)) {
       this.states.delete(source.url);
+      this.channelIdsByName.delete(source.url);
       return;
     }
     const done = log.time(`fetch '${source.url}'`);
@@ -215,7 +299,11 @@ class EpgServiceImpl {
         return;
       }
       const { data: result, stats } = parseXMLTVWithStats(text, filter
-        ? { channelIds: filter.ids, channelNames: filter.names }
+        ? {
+            channelIds: filter.ids,
+            channelNames: filter.names,
+            retainChannelCatalog: true,
+          }
         : {});
       const programmeCount = stats.programmesKept;
       // An empty parse is usually a transient upstream response; neither cache
@@ -225,7 +313,7 @@ class EpgServiceImpl {
         done();
         return;
       }
-      this.states.set(source.url, {
+      this.setState(source.url, {
         data: result,
         timestamp: Date.now(),
         needsRefresh: false,
@@ -252,6 +340,25 @@ class EpgServiceImpl {
     return false;
   }
 
+  private setState(url: string, state: SourceState): void {
+    this.states.set(url, state);
+    const index = new Map<string, string[]>();
+    for (const id in state.data.channels) {
+      const channel = state.data.channels[id];
+      const names = [channel.name, ...(channel.aliases ?? [])];
+      for (const value of names) {
+        const normalized = value.toLowerCase();
+        const ids = index.get(normalized);
+        if (ids) {
+          if (!ids.includes(id)) ids.push(id);
+        } else {
+          index.set(normalized, [id]);
+        }
+      }
+    }
+    this.channelIdsByName.set(url, index);
+  }
+
   /**
    * Restrict parsing to the channels this source actually serves. Both the
    * tvg-id and the source-side name are allowed, so a feed the playlist matches
@@ -261,6 +368,10 @@ class EpgServiceImpl {
     if (this.playlistChannels === null) return null;
     const ids = new Set<string>();
     const names = new Set<string>();
+    for (const override of ChannelCustomizationService.epgChannelIds()) {
+      const mapped = this.splitChannelKey(override);
+      if (mapped?.url === source.url) ids.add(mapped.id);
+    }
     for (const channel of this.playlistChannels) {
       if (source.kind !== 'manual'
         && !channel.playlistIds.some((id) => source.playlistIds.includes(id))) continue;
@@ -317,6 +428,19 @@ class EpgServiceImpl {
 
   private channelKey(url: string, id: string): string {
     return `${encodeURIComponent(url)}::${id}`;
+  }
+
+  private splitChannelKey(key: string): { url: string; id: string } | null {
+    const separator = key.indexOf('::');
+    if (separator < 0) return null;
+    try {
+      return {
+        url: decodeURIComponent(key.slice(0, separator)),
+        id: key.slice(separator + 2),
+      };
+    } catch {
+      return null;
+    }
   }
 
   private findLegacyChannelId(channel: Channel): string | null {
@@ -390,26 +514,20 @@ function filterParsedEpg(
     if (matchesAnyChannelName(channel, filter.names)) accepted.add(id);
   }
 
-  const channels: Record<string, EpgChannel> = {};
+  const channels = data.channels;
   const programmes: Record<string, Programme[]> = {};
-  let keptChannels = 0;
   let keptProgrammeChannels = 0;
-  for (const id in data.channels) {
-    if (!accepted.has(id)) continue;
-    channels[id] = data.channels[id];
-    keptChannels++;
-  }
   for (const id in data.programmes) {
     if (!accepted.has(id)) continue;
     programmes[id] = data.programmes[id];
     keptProgrammeChannels++;
   }
-  const changed = keptChannels !== Object.keys(data.channels).length
-    || keptProgrammeChannels !== Object.keys(data.programmes).length;
+  const changed = keptProgrammeChannels !== Object.keys(data.programmes).length;
   return {
     data: changed ? {
       channels,
       programmes,
+      channelCatalogComplete: data.channelCatalogComplete,
       sourceName: data.sourceName,
       tzOffsetMinutes: data.tzOffsetMinutes,
     } : data,

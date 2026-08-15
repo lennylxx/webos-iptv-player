@@ -112,6 +112,8 @@ export interface EpgChannel {
 export interface ParsedEpg {
   channels: Record<string, EpgChannel>;
   programmes: Record<string, Programme[]>;
+  /** True when `channels` contains the feed catalog even if programmes were filtered. */
+  channelCatalogComplete?: boolean;
   /** Optional human-readable feed name declared on the XMLTV root element. */
   sourceName?: string;
   /** Minutes east of UTC declared by the feed's timestamps (e.g. +0100 -> 60), or null if none carry an offset. */
@@ -150,6 +152,8 @@ export interface ChannelOverride {
   name?: string;
   /** Target group key. Absent = the source group. */
   group?: string;
+  /** Composite EPG source/channel key. Absent = use automatic matching. */
+  epgChannelId?: string;
   hidden?: boolean;
 }
 

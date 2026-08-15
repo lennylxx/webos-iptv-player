@@ -139,6 +139,24 @@ describe('parseXMLTV', () => {
     expect(Object.keys(result.programmes)).toEqual(['c2']);
   });
 
+  it('can retain the channel catalog while filtering programme arrays', () => {
+    const start = new Date();
+    const stop = new Date(start.getTime() + 60 * 60 * 1000);
+    const xml = `<tv>
+      <channel id="c1"><display-name>Alpha</display-name></channel>
+      <channel id="c2"><display-name>Bravo</display-name></channel>
+      <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>One</title></programme>
+      <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>Two</title></programme>
+    </tv>`;
+    const result = parseXMLTV(xml, {
+      channelIds: new Set(['c2']),
+      retainChannelCatalog: true,
+    });
+    expect(Object.keys(result.channels)).toEqual(['c1', 'c2']);
+    expect(Object.keys(result.programmes)).toEqual(['c2']);
+    expect(result.channelCatalogComplete).toBe(true);
+  });
+
   it('sorts only unordered schedules and preserves equal-time input order', () => {
     const now = new Date();
     const earlier = new Date(now.getTime() - 60 * 60 * 1000);

@@ -1,18 +1,18 @@
 {
   "version": 1,
   "target": "desktop-chromium",
-  "generatedAt": "2026-08-08T22:43:53.078Z",
+  "generatedAt": "2026-08-15T01:19:12.040Z",
   "scale": 50000,
   "keySamples": 30,
   "querySamples": 5,
   "cpuRate": 4,
   "browser": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36",
-  "fixtureSetupMs": 1783,
+  "fixtureSetupMs": 1789,
   "suites": {
     "startup": {
-      "readyMs": 903,
+      "readyMs": 898,
       "rendered": 35,
-      "hoverFrameMs": 0.7,
+      "hoverFrameMs": 0.9,
       "focusedSynchronously": true,
       "focusedAtFrame": true
     },
@@ -20,17 +20,17 @@
       "rendered": 35,
       "totalSize": "4_400_000px",
       "navigation": {
-        "p50": 13.8,
-        "p95": 15.2,
-        "max": 15.3,
-        "mean": 12.3,
+        "p50": 13.2,
+        "p95": 16.1,
+        "max": 16.7,
+        "mean": 12,
         "frame": {
-          "p50": 14.6,
-          "p95": 184,
-          "max": 223.8,
-          "mean": 29
+          "p50": 14.4,
+          "p95": 17.4,
+          "max": 22.5,
+          "mean": 14.1
         },
-        "framesOver50Ms": 3
+        "framesOver50Ms": 0
       }
     },
     "recentlyWatched": {
@@ -38,33 +38,33 @@
       "liveRendered": 25,
       "catchupRendered": 25,
       "navigation": {
-        "p50": 19.8,
-        "p95": 21.8,
-        "max": 25.1,
-        "mean": 20,
+        "p50": 20.5,
+        "p95": 24.6,
+        "max": 27.6,
+        "mean": 21.1,
         "frame": {
-          "p50": 20.2,
-          "p95": 22.3,
-          "max": 25.2,
-          "mean": 20.5
+          "p50": 21,
+          "p95": 24.9,
+          "max": 28.3,
+          "mean": 21.5
         },
         "framesOver50Ms": 0
       }
     },
     "sidebar": {
-      "openMs": 28.4,
+      "openMs": 423.8,
       "rendered": 34,
       "totalSize": "4_400_000px",
       "navigation": {
-        "p50": 7,
-        "p95": 9.8,
-        "max": 10.3,
-        "mean": 5.9,
+        "p50": 7.5,
+        "p95": 11.4,
+        "max": 11.6,
+        "mean": 6.2,
         "frame": {
-          "p50": 13.9,
-          "p95": 15.1,
-          "max": 16,
-          "mean": 12
+          "p50": 14,
+          "p95": 15.4,
+          "max": 15.5,
+          "mean": 13.8
         },
         "framesOver50Ms": 0
       },
@@ -75,40 +75,40 @@
         "revealed": 11,
         "maxPerFrame": 1,
         "frame": {
-          "p50": 16.6,
-          "p95": 29.4,
-          "max": 51.8,
-          "mean": 17.6
+          "p50": 16.7,
+          "p95": 18.3,
+          "max": 25.7,
+          "mean": 16.3
         }
       }
     },
     "epg": {
-      "openMs": 26.4,
-      "firstFrameMs": 69,
-      "maxLongTaskMs": 86,
+      "openMs": 29.7,
+      "firstFrameMs": 65.4,
+      "maxLongTaskMs": 81,
       "channelList": {
-        "p50": 15.7,
-        "p95": 20.1,
-        "max": 20.7,
-        "mean": 16.2,
+        "p50": 16.3,
+        "p95": 19.7,
+        "max": 25.8,
+        "mean": 17,
         "frame": {
-          "p50": 16.3,
-          "p95": 20.2,
-          "max": 21.8,
-          "mean": 16.6
+          "p50": 16.9,
+          "p95": 20.4,
+          "max": 26.4,
+          "mean": 17.5
         },
         "framesOver50Ms": 0
       },
       "programList": {
-        "p50": 7.5,
-        "p95": 23.2,
-        "max": 23.3,
-        "mean": 8.6,
+        "p50": 7.4,
+        "p95": 21.5,
+        "max": 21.6,
+        "mean": 8.4,
         "frame": {
           "p50": 14.9,
-          "p95": 23.9,
-          "max": 24.1,
-          "mean": 14.9
+          "p95": 21.6,
+          "max": 21.6,
+          "mean": 14.7
         },
         "framesOver50Ms": 0
       },
@@ -118,42 +118,42 @@
       "programTotalSize": "3_999_970px"
     },
     "movies": {
-      "openMs": 84.9,
-      "gridLoadMs": 82.8,
+      "openMs": 91.4,
+      "gridLoadMs": 82.1,
       "categoryRendered": 14,
       "categoryTotalSize": "15_998_100px",
       "rendered": 49,
       "totalSize": "2_821_480px",
       "navigation": {
         "p50": 6.4,
-        "p95": 7.1,
-        "max": 7.5,
-        "mean": 6.1,
+        "p95": 7.8,
+        "max": 7.9,
+        "mean": 6.2,
         "frame": {
-          "p50": 13.6,
-          "p95": 15.1,
-          "max": 15.6,
-          "mean": 13.6
+          "p50": 13.3,
+          "p95": 14.8,
+          "max": 15,
+          "mean": 13
         },
         "framesOver50Ms": 0
       }
     },
     "series": {
-      "openMs": 71.7,
-      "gridLoadMs": 73.1,
-      "detailLoadMs": 113.5,
+      "openMs": 76.4,
+      "gridLoadMs": 89,
+      "detailLoadMs": 109.4,
       "rendered": 49,
       "totalSize": "2_821_480px",
       "navigation": {
-        "p50": 6.1,
-        "p95": 6.9,
-        "max": 7.9,
-        "mean": 5.9,
+        "p50": 6.2,
+        "p95": 7.1,
+        "max": 8.2,
+        "mean": 6,
         "frame": {
-          "p50": 13.6,
-          "p95": 15.5,
-          "max": 15.7,
-          "mean": 13.2
+          "p50": 13.2,
+          "p95": 14.9,
+          "max": 15.1,
+          "mean": 13
         },
         "framesOver50Ms": 0
       },
@@ -161,14 +161,14 @@
         "rendered": 13,
         "totalSize": "6_900_000px",
         "navigation": {
-          "p50": 4.9,
-          "p95": 5.7,
+          "p50": 5.2,
+          "p95": 5.8,
           "max": 5.8,
-          "mean": 4.6,
+          "mean": 4.5,
           "frame": {
-            "p50": 14.5,
-            "p95": 15.3,
-            "max": 16.5,
+            "p50": 14,
+            "p95": 15.2,
+            "max": 17.1,
             "mean": 14
           },
           "framesOver50Ms": 0
@@ -177,98 +177,98 @@
     },
     "search": {
       "xtream": {
-        "initialOpenMs": 7.5,
+        "initialOpenMs": 6.9,
         "open": {
-          "p50": 3.3,
-          "p95": 5.5,
-          "max": 5.5,
-          "mean": 3
+          "p50": 4.3,
+          "p95": 5.7,
+          "max": 5.7,
+          "mean": 4.3
         },
         "queries": {
           "channelsBroad": {
-            "p50": 42,
-            "p95": 56.3,
-            "max": 56.3,
-            "mean": 44.3
+            "p50": 41.3,
+            "p95": 56.4,
+            "max": 56.4,
+            "mean": 43.9
           },
           "channelsSparse": {
-            "p50": 92.2,
-            "p95": 100.8,
-            "max": 100.8,
-            "mean": 93.7
-          },
-          "moviesBroad": {
-            "p50": 187,
-            "p95": 208,
-            "max": 208,
-            "mean": 188.7
-          },
-          "moviesSparse": {
-            "p50": 94.2,
-            "p95": 103.7,
-            "max": 103.7,
-            "mean": 94.6
-          },
-          "programsBroad": {
-            "p50": 73,
-            "p95": 82.9,
-            "max": 82.9,
-            "mean": 71.2
-          },
-          "programsSparse": {
-            "p50": 91.8,
-            "p95": 94.5,
-            "max": 94.5,
+            "p50": 93,
+            "p95": 93.9,
+            "max": 93.9,
             "mean": 91.7
           },
+          "moviesBroad": {
+            "p50": 190.6,
+            "p95": 210.4,
+            "max": 210.4,
+            "mean": 194.1
+          },
+          "moviesSparse": {
+            "p50": 95.1,
+            "p95": 104.7,
+            "max": 104.7,
+            "mean": 97.9
+          },
+          "programsBroad": {
+            "p50": 73.1,
+            "p95": 81.2,
+            "max": 81.2,
+            "mean": 71.3
+          },
+          "programsSparse": {
+            "p50": 94.3,
+            "p95": 99.1,
+            "max": 99.1,
+            "mean": 94.2
+          },
           "noMatch": {
-            "p50": 160.5,
-            "p95": 161.5,
-            "max": 161.5,
-            "mean": 158.9
+            "p50": 158.5,
+            "p95": 162.2,
+            "max": 162.2,
+            "mean": 158.6
           }
         },
         "renderedPrograms": 1,
         "programTotalSize": "109px"
       },
       "m3u": {
-        "initialOpenMs": 5.3,
+        "initialOpenMs": 6.8,
         "open": {
-          "p50": 2.3,
-          "p95": 4,
-          "max": 4,
-          "mean": 2.5
+          "p50": 3.4,
+          "p95": 5,
+          "max": 5,
+          "mean": 4
         },
         "queries": {
           "channelsBroad": {
-            "p50": 36.7,
-            "p95": 54.5,
-            "max": 54.5,
-            "mean": 42
+            "p50": 35.3,
+            "p95": 42.5,
+            "max": 42.5,
+            "mean": 37.1
           },
           "channelsSparse": {
-            "p50": 91.4,
-            "p95": 99.3,
-            "max": 99.3,
-            "mean": 93
+            "p50": 89.2,
+            "p95": 93.2,
+            "max": 93.2,
+            "mean": 89.6
           },
           "programsBroad": {
-            "p50": 60.2,
-            "p95": 73.4,
-            "max": 73.4,
-            "mean": 63.9
+            "p50": 59.3,
+            "p95": 72.7,
+            "max": 72.7,
+            "mean": 63.8
           },
           "programsSparse": {
-            "p50": 88.3,
-            "p95": 99.2,
-            "max": 99.2,
-            "mean": 90.5
+            "p50": 88.4,
+            "p95": 96,
+            "max": 96,
+            "mean": 89.9
           },
           "noMatch": {
-            "p50": 152.8,
-            "p95": 161.9,
-            "max": 161.9,
-            "mean": 153.8
+            "p50": 153.5,
+            "p95": 156.3,
+            "max": 156.3,
+            "mean": 153.3
           }
         },
         "renderedChannels": 0,
@@ -286,10 +286,10 @@
         "focusedConnected": true
       },
       "groupSwitching": {
-        "p50": 48.5,
-        "p95": 51.5,
-        "max": 51.5,
-        "mean": 42.6,
+        "p50": 33.6,
+        "p95": 34.3,
+        "max": 34.3,
+        "mean": 33.3,
         "states": [
           {
             "group": "builtin:all",
@@ -392,26 +392,26 @@
     },
     "stress": {
       "watchdogIntervalMs": 100,
-      "heartbeats": 95,
-      "maxEventLoopGapMs": 604.9,
+      "heartbeats": 106,
+      "maxEventLoopGapMs": 468.8,
       "freezeThresholdMs": 5000,
       "documentAlive": true
     },
     "longTasks": {
       "count": 45,
-      "totalMs": 5410,
-      "maxMs": 322
+      "totalMs": 4979,
+      "maxMs": 230
     },
-    "nodes": 1596,
+    "nodes": 1598,
     "parsers": {
       "m3u": {
-        "durationMs": 96,
+        "durationMs": 96.9,
         "bytes": 4111677,
         "channels": 50000,
         "groups": 100
       },
       "xmltv": {
-        "durationMs": 294,
+        "durationMs": 294.9,
         "bytes": 7577851,
         "channels": 1,
         "programmes": 50000
@@ -421,21 +421,23 @@
         "sourceChannels": 2000,
         "keptChannels": 300,
         "unfiltered": {
-          "durationMs": 465.7,
+          "durationMs": 489.4,
           "channels": 2000,
+          "catalogChannels": 2000,
           "programmes": 50000,
           "programmesSeen": 50000,
-          "retainedBytes": 22389104
+          "retainedBytes": 22395140
         },
         "filtered": {
-          "durationMs": 239.7,
+          "durationMs": 255.8,
           "channels": 300,
+          "catalogChannels": 2000,
           "programmes": 7500,
           "programmesSeen": 50000,
-          "retainedBytes": 3362596
+          "retainedBytes": 3554632
         },
-        "speedup": 1.9428452231956612,
-        "retainedHeapReductionPct": 84.9811050946925
+        "speedup": 1.9132134480062548,
+        "retainedHeapReductionPct": 84.12766341268686
       }
     },
     "groups": {
@@ -443,32 +445,32 @@
         "rendered": 38,
         "totalSize": "3_400_200px",
         "navigation": {
-          "p50": 18.7,
-          "p95": 26.3,
-          "max": 56.5,
-          "mean": 20.4,
+          "p50": 19.3,
+          "p95": 26.6,
+          "max": 51.5,
+          "mean": 21,
           "frame": {
-            "p50": 19.6,
-            "p95": 27.6,
-            "max": 57.1,
-            "mean": 21.2
+            "p50": 20.3,
+            "p95": 52.2,
+            "max": 52.8,
+            "mean": 22.7
           },
-          "framesOver50Ms": 1
+          "framesOver50Ms": 2
         }
       },
       "sidebar": {
         "rendered": 40,
         "totalSize": "3_200_190px",
         "navigation": {
-          "p50": 1.1,
-          "p95": 6.7,
-          "max": 8.2,
-          "mean": 1.6,
+          "p50": 1.2,
+          "p95": 6.5,
+          "max": 8.1,
+          "mean": 1.7,
           "frame": {
             "p50": 17,
-            "p95": 22.3,
-            "max": 37,
-            "mean": 15.4
+            "p95": 21.9,
+            "max": 39.6,
+            "mean": 15
           },
           "framesOver50Ms": 0
         }
@@ -477,38 +479,38 @@
         "rendered": 26,
         "totalSize": "2_200_090px",
         "navigation": {
-          "p50": 10.2,
-          "p95": 12.1,
-          "max": 12.8,
-          "mean": 10.2,
+          "p50": 10.4,
+          "p95": 12.4,
+          "max": 12.9,
+          "mean": 10.4,
           "frame": {
-            "p50": 13.8,
-            "p95": 25.3,
-            "max": 25.9,
-            "mean": 15.4
+            "p50": 10.9,
+            "p95": 26.6,
+            "max": 28.1,
+            "mean": 13.7
           },
           "framesOver50Ms": 0
         }
       },
-      "startupMs": 3410
+      "startupMs": 3119
     },
     "coldLoad": {
-      "readyMs": 914.5,
+      "readyMs": 919.7,
       "rendered": 35,
       "channels": 50000
     },
     "memory": {
-      "usedHeapMiB": 93.5,
-      "totalHeapMiB": 95.8,
+      "usedHeapMiB": 93.4,
+      "totalHeapMiB": 96,
       "retained": {
         "cycles": 3,
-        "beforeMiB": 114.8,
+        "beforeMiB": 114.5,
         "samplesMiB": [
-          93.6,
-          93.6,
-          93.5
+          93.3,
+          93.4,
+          93.4
         ],
-        "growthMiB": -0.1
+        "growthMiB": 0.1
       }
     }
   }

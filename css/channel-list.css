@@ -525,3 +525,152 @@
   border-radius: var(--radius);
   cursor: pointer;
 }
+
+.epg-mapping-picker {
+  top: 40px;
+  width: 780px;
+  max-width: 80vw;
+  max-height: 78%;
+  padding: 28px;
+  overflow: hidden;
+  transform: translateX(-50%);
+}
+
+.epg-mapping-picker.keyboard-visible .epg-mapping-list {
+  max-height: 24vh;
+}
+
+.epg-mapping-heading {
+  margin-bottom: 20px;
+}
+
+.epg-mapping-heading .group-picker-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epg-mapping-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 58px;
+  box-sizing: border-box;
+  margin-bottom: 18px;
+  padding: 0 18px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 2px solid transparent;
+  border-radius: 10px;
+  transition: var(--transition);
+}
+
+.epg-mapping-search-wrap:focus-within {
+  color: var(--accent);
+  background: rgb(var(--accent-rgb) / 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.epg-mapping-search-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+}
+
+.epg-mapping-search-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.epg-mapping-search {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  font-size: 22px;
+}
+
+.epg-mapping-search::placeholder {
+  color: var(--text-muted);
+}
+
+.epg-mapping-list {
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.epg-mapping-spacer {
+  position: relative;
+}
+
+.epg-mapping-option {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  height: 72px;
+  box-sizing: border-box;
+}
+
+.epg-mapping-option.active {
+  color: var(--accent);
+}
+
+.epg-mapping-meta,
+.epg-mapping-empty {
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.epg-mapping-empty {
+  position: absolute;
+  top: 78px;
+  right: 16px;
+  left: 16px;
+}
+
+.epg-mapped-badge {
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--success);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--success);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.edit-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+.edit-action-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

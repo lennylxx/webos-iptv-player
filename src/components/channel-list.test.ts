@@ -623,11 +623,13 @@ describe('ChannelList listener lifecycle', () => {
     document.body.appendChild(c);
     const spy = vi.spyOn(c, 'addEventListener');
     const l = new ChannelList(c, vi.fn());
+    const initialCount = spy.mock.calls.filter(([type]) => type === 'nav:hover').length;
     l.render();
     l.render();
     l.render();
-    const navHover = spy.mock.calls.filter(([type]) => type === 'nav:hover');
-    expect(navHover).toHaveLength(1);
+    const finalCount = spy.mock.calls.filter(([type]) => type === 'nav:hover').length;
+    expect(initialCount).toBeGreaterThan(0);
+    expect(finalCount).toBe(initialCount);
   });
 });
 

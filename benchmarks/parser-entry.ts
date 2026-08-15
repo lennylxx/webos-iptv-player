@@ -3,6 +3,7 @@ import { parseXMLTVWithStats } from '../src/parsers/xmltv-parser';
 
 interface BenchmarkParseResult {
   channels: number;
+  catalogChannels?: number;
   groups?: number;
   programmes?: number;
   programmesSeen?: number;
@@ -13,6 +14,7 @@ interface BenchmarkParseResult {
 interface BenchmarkXMLTVOptions {
   channelIds?: string[];
   channelNames?: string[];
+  retainChannelCatalog?: boolean;
 }
 
 interface BenchmarkParserApi {
@@ -40,9 +42,11 @@ window.__IPTV_BENCHMARK__ = {
     const { data, stats } = parseXMLTVWithStats(text, {
       channelIds: options?.channelIds ? new Set(options.channelIds) : undefined,
       channelNames: options?.channelNames ? new Set(options.channelNames) : undefined,
+      retainChannelCatalog: options?.retainChannelCatalog,
     });
     return {
-      channels: Object.keys(data.channels).length,
+      channels: Object.keys(data.programmes).length,
+      catalogChannels: Object.keys(data.channels).length,
       programmes: stats.programmesKept,
       programmesSeen: stats.programmesSeen,
       retained: data,

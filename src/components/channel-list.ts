@@ -57,6 +57,7 @@ export class ChannelList {
     container: HTMLElement,
     onChannelSelect: (index: number, catchup?: CatchupInfo) => void,
     onChannelsChanged: () => void = () => {},
+    onEpgMappingChanged: () => void = () => {},
   ) {
     this.container = container;
     this.onChannelSelect = onChannelSelect;
@@ -68,6 +69,7 @@ export class ChannelList {
       render: () => this.render(),
       moveListFocus: (delta) => this.moveVirtualFocus(delta),
       onChannelsChanged: () => this.onChannelsChanged(),
+      onEpgMappingChanged,
       getCurrentGroup: () => this.currentGroup,
       getCurrentPlaylist: () => this.currentPlaylist,
       setLocation: (group, playlist) => {
@@ -277,6 +279,7 @@ export class ChannelList {
         ${this.editor.renderGroupPicker()}
       </div>
     `);
+    this.editor.syncEpgPickerScroll();
 
     // Restore focus on the reused node (or fall back to a sensible default).
     let target: HTMLElement | null = null;
