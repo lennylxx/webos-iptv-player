@@ -81,7 +81,7 @@ const GROUP_ICON_RULES: IconRule[] = [
 function fold(value: string): string {
   return value
     .normalize('NFD')
-    .replace(/[\p{Diacritic}ٕٓٔ]/gu, '')  // accents + Arabic tashkeel/hamza/madda
+    .replace(/[\u0300-\u036fٕٓٔ]/gu, '')  // accents + Arabic tashkeel/hamza/madda
     .replace(/[آأإٱ]/gu, 'ا')   // آأإٱ -> ا
     .replace(/ى/gu, 'ي')                       // ى -> ي
     .replace(/ة/gu, 'ه')                       // ة -> ه
@@ -92,7 +92,7 @@ function fold(value: string): string {
 // \p{L}/\p{N} keep Cyrillic/Arabic/CJK letters intact; '+' preserves markers
 // like "18+". (Unicode property escapes need Chromium 64+; webOS 5 is 68.)
 function tokenize(folded: string): string[] {
-  return folded.split(/[^\p{L}\p{N}+]+/u).filter(Boolean);
+  return folded.split(/[^0-9A-Za-z\u00C0-\uFFFF+]+/u).filter(Boolean);
 }
 
 // Pre-fold keywords once so rules can be authored with or without accents.
@@ -106,7 +106,7 @@ function keywordHits(keyword: string, folded: string, tokens: string[]): boolean
   // avoids substring false-positives like "sport" in "passport"). CJK and
   // Arabic are excluded -> substring: CJK has no word boundaries, and Arabic
   // glues the definite article/clitics ("ال") onto the front of words.
-  if (/^[\p{L}\p{N}]+$/u.test(keyword) && !/[\p{sc=Han}\p{sc=Arabic}]/u.test(keyword)) {
+  if (/^[0-9A-Za-z\u00C0-\uFFFF]+$/u.test(keyword) && !/[\u3400-\u9FFF\uF900-\uFAFF\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/u.test(keyword)) {
     return tokens.some(token => token.startsWith(keyword));
   }
   // Phrase ("nat geo"), symbol ("18+"), CJK or Arabic keyword -> substring.

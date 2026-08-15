@@ -23,3 +23,51 @@
   .player-menu,
   .player-osd { background: rgb(10, 10, 15); }
 }
+
+/*
+ * webOS 4.x (Chromium 53) — CSS Grid fallback.
+ *
+ * Chromium 53 has no CSS Grid, so `display: grid` collapses to block and grid
+ * children stack vertically. This makes the settings menu render above the
+ * settings content (instead of beside it) and the theme swatches stack in a
+ * single column. `@supports not (display: grid)` targets exactly those engines,
+ * so webOS 5+ (which has Grid) is unaffected.
+ */
+@supports not (display: grid) {
+  /* Settings: nav sidebar beside content, not stacked on top. */
+  .settings-view {
+    display: -webkit-box;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-box-orient: horizontal;
+    -webkit-flex-direction: row;
+    flex-direction: row;
+  }
+  .settings-view > .settings-sidebar {
+    -webkit-flex: 0 0 300px;
+    flex: 0 0 300px;
+    margin-right: 32px;
+  }
+  .settings-view > .settings-main {
+    -webkit-box-flex: 1;
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-y: auto;
+  }
+
+  /* Theme picker: swatch tiles wrap into a grid instead of a vertical stack. */
+  .theme-swatch-grid {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+  }
+  .theme-swatch-grid > .theme-swatch {
+    -webkit-box-sizing: border-box;
+    box-sizing: border-box;
+    -webkit-flex: 0 0 18%;
+    flex: 0 0 18%;
+    margin: 0 1% 18px 1%;
+  }
+}
