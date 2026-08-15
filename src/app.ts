@@ -3,6 +3,7 @@ import { CONFIG } from './config';
 import { KeyHandler } from './navigation/key-handler';
 import { PlaylistService } from './services/playlist-service';
 import { EpgService } from './services/epg-service';
+import { ChannelHealthService } from './services/channel-health';
 import { StorageService } from './services/storage-service';
 import {
   clearAllCachedData,
@@ -107,7 +108,10 @@ class App {
       this.channelList.render();
       this.showView('channels');
     }, (idx, catchupStart) => this.channelList.setPlaying(idx, catchupStart),
-    () => !this.sidebar.visible && !this.menu.visible);
+    () => !this.sidebar.visible && !this.menu.visible,
+    () => {
+      this.sidebar.refresh();
+    });
     this.epgGrid = new EpgGrid(
       this.views.epg,
       (idx, catchup) => this.playChannel(idx, catchup),
@@ -596,6 +600,7 @@ class App {
       const loadingText = $('#loading-text');
       if (loadingText) loadingText.textContent = t('app.loadingChannels');
       await PlaylistService.load();
+      await ChannelHealthService.initialize();
       log.info('Channels loaded:', PlaylistService.channels.length,
         '| groups:', PlaylistService.groups.length,
         '| epgSources:', PlaylistService.epgSources);

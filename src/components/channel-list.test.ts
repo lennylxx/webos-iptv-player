@@ -3,7 +3,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
 import type { RecentlyWatchedItem } from '../services/recently-watched';
 
-const { data, customization, playlistMock, epgMock, storageMock, recentMock, toastMock } = vi.hoisted(() => {
+const {
+  data,
+  customization,
+  playlistMock,
+  epgMock,
+  storageMock,
+  recentMock,
+  toastMock,
+  healthMock,
+} = vi.hoisted(() => {
   const mk = (o: Partial<Channel>): Channel => ({
     id: '', name: '', logo: '', group: '', url: '', extras: null,
     playlistIds: [], catchup: '', catchupSource: '', catchupDays: 0, ...o,
@@ -58,6 +67,13 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
       catchupInfo: vi.fn(),
     },
     toastMock: { showToast: vi.fn() },
+    healthMock: {
+      records: {} as Record<string, 'healthy' | 'suspect' | 'unavailable'>,
+      getRecord: vi.fn((channel: Channel) => {
+        const status = healthMock.records[channel.url];
+        return status ? { status } : null;
+      }),
+    },
   };
 });
 
@@ -66,6 +82,7 @@ vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentMock }));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
+vi.mock('../services/channel-health', () => ({ ChannelHealthService: healthMock }));
 
 import { ChannelList } from './channel-list';
 import { setLocale } from '../i18n';
@@ -143,6 +160,7 @@ beforeEach(() => {
   recentMock.getItems.mockClear();
   recentMock.catchupInfo.mockReset();
   toastMock.showToast.mockClear();
+  healthMock.records = {};
   playlistMock.playlistTabs = [];
   storageMock.toggleFavorite.mockClear();
   storageMock.setFavorites.mockClear();
@@ -178,6 +196,17 @@ describe('ChannelList.render', () => {
     expect(container.querySelector('.channel-count')?.textContent).toBe('3 channels');
     expect(channelItems()).toHaveLength(3);
     expect(container.textContent).toContain('Alpha');
+  });
+
+  it('renders persisted channel health status', () => {
+    healthMock.records['http://host/a'] = 'suspect';
+    list.render();
+
+    const dot = channelItems()[0].querySelector('.channel-health-dot');
+    expect(dot?.textContent).toBe('');
+    expect(dot?.getAttribute('aria-label')).toBe('Suspect');
+    expect(dot?.classList)
+      .toContain('suspect');
   });
 
   it('renders normal channel and group content without editor inputs', () => {

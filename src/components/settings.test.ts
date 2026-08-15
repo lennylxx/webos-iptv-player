@@ -12,6 +12,7 @@ const {
   setupMock,
   uploadMock,
   xtreamMock,
+  healthMock,
 } = vi.hoisted(() => {
   const state = {
     playlists: [] as {
@@ -51,6 +52,7 @@ const {
           epg: { bytes: 92 * 1024 * 1024, entries: 2 },
           catalog: { bytes: 286 * 1024 * 1024, entries: 7 },
           subtitle: { bytes: 41 * 1024 * 1024, entries: 2 },
+          health: { bytes: 0, entries: 0 },
         },
         budgetBytes: 1024 * 1024 * 1024,
         originUsageBytes: null,
@@ -108,6 +110,23 @@ const {
     xtreamMock: {
       getAccountInfo: vi.fn(async (): Promise<XtreamAccountInfo | null> => null),
     },
+    healthMock: {
+      getSummary: vi.fn((channels: unknown[]) => ({
+        total: channels.length,
+        unknown: channels.length,
+        healthy: 0,
+        suspect: 0,
+        unavailable: 0,
+      })),
+      checkAll: vi.fn(async () => ({
+        total: 0,
+        unknown: 0,
+        healthy: 0,
+        suspect: 0,
+        unavailable: 0,
+      })),
+      reset: vi.fn(),
+    },
   };
 });
 
@@ -133,6 +152,7 @@ vi.mock('../services/reminder-service', () => ({
   },
 }));
 vi.mock('../services/setup-client', () => ({ SetupClient: setupMock }));
+vi.mock('../services/channel-health', () => ({ ChannelHealthService: healthMock }));
 
 import { Settings } from './settings';
 import { setLocale } from '../i18n';
@@ -155,6 +175,7 @@ beforeEach(() => {
   state.textSize = '100';
   state.epgOffsets = {};
   PlaylistService.epgSources = [];
+  PlaylistService.allChannels = [];
   PlaylistService.channels = [];
   storageMock.getSelectedXtreamAccountId.mockReturnValue(null);
   state.onlineSubtitles = {
@@ -197,6 +218,88 @@ describe('Settings.render', () => {
       .toContain('Choose category');
     expect(container.querySelector('.settings-nav-help')?.textContent)
       .toContain('Enter / return');
+  });
+
+  it('starts a manual channel health check from the Channels section', async () => {
+    PlaylistService.allChannels = [{
+      id: 'ch1',
+      name: 'Alpha',
+      logo: '',
+      group: '',
+      url: 'http://host/a',
+      extras: null,
+      playlistIds: [],
+      catchup: '',
+      catchupSource: '',
+      catchupDays: 0,
+    }];
+    PlaylistService.channels = PlaylistService.allChannels;
+    settings.render();
+
+    expect(container.querySelector('.channel-health-summary')?.textContent)
+      .toContain('Not checked: 1');
+    click('#check-channel-health');
+
+    await vi.waitFor(() => {
+      expect(healthMock.checkAll).toHaveBeenCalledWith(
+        PlaylistService.allChannels,
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+          onProgress: expect.any(Function),
+        }),
+      );
+      expect(toastMock.showToast).toHaveBeenCalledWith('Channel health check complete');
+    });
+  });
+
+  it('pauses, resumes, and cancels a channel health check', async () => {
+    PlaylistService.allChannels = [{
+      id: 'ch1',
+      name: 'Alpha',
+      logo: '',
+      group: '',
+      url: 'http://host/a',
+      extras: null,
+      playlistIds: [],
+      catchup: '',
+      catchupSource: '',
+      catchupDays: 0,
+    }];
+    PlaylistService.channels = PlaylistService.allChannels;
+    let options: {
+      signal?: AbortSignal;
+      waitWhilePaused?: () => Promise<void>;
+    } = {};
+    let finish: (() => void) | null = null;
+    healthMock.checkAll.mockImplementationOnce(async (_channels, value) => {
+      options = value;
+      await new Promise<void>(resolve => { finish = resolve; });
+      return {
+        total: 1,
+        unknown: 1,
+        healthy: 0,
+        suspect: 0,
+        unavailable: 0,
+      };
+    });
+    settings.render();
+    click('#check-channel-health');
+    await vi.waitFor(() => expect(container.querySelector('#pause-channel-health')).not.toBeNull());
+
+    click('#pause-channel-health');
+    expect(container.querySelector('#pause-channel-health')?.textContent?.trim()).toBe('Continue');
+    const resumed = options.waitWhilePaused?.();
+    click('#pause-channel-health');
+    await resumed;
+    expect(container.querySelector('#pause-channel-health')?.textContent?.trim()).toBe('Pause');
+
+    click('#pause-channel-health');
+    const cancelled = options.waitWhilePaused?.();
+    click('#cancel-channel-health');
+    await cancelled;
+    expect(options.signal?.aborted).toBe(true);
+    finish?.();
+    await vi.waitFor(() => expect(container.querySelector('#check-channel-health')).not.toBeNull());
   });
 
   it('groups language and time zone under General, with autoplay under Playback', () => {
@@ -438,9 +541,10 @@ describe('Settings.render', () => {
       ?.getAttribute('transform')).toBe('rotate(-90 60 60)');
     const breakdown = container.querySelector('.cache-usage-breakdown')!;
     expect(breakdown.previousElementSibling?.classList.contains('cache-usage-total')).toBe(true);
-    expect(breakdown.children).toHaveLength(4);
+    expect(breakdown.children).toHaveLength(5);
     expect(breakdown.textContent).toContain('286 MiB');
     expect(breakdown.textContent).toContain('92.0 MiB');
+    expect(breakdown.textContent).toContain('Channel Health');
   });
 });
 
@@ -676,6 +780,8 @@ describe('Settings editing', () => {
     click('#clear-cache');
     expect(document.querySelector('.confirmation-title')?.textContent).toBe('Clear cache?');
     expect(document.querySelector('.confirmation-message')?.textContent)
+      .toContain('channel health results');
+    expect(document.querySelector('.confirmation-message')?.textContent)
       .toContain('Accounts, settings, favorites, and viewing history are kept.');
     expect(cacheMock.clearAllCachedData).not.toHaveBeenCalled();
 
@@ -684,8 +790,50 @@ describe('Settings editing', () => {
 
     await vi.waitFor(() => {
       expect(cacheMock.clearAllCachedData).toHaveBeenCalled();
+      expect(healthMock.reset).toHaveBeenCalled();
+      expect(onChannelsChanged).toHaveBeenCalled();
       expect(toastMock.showToast).toHaveBeenCalledWith('Cache cleared');
     });
+  });
+
+  it('waits for an active health check to stop before clearing cache', async () => {
+    PlaylistService.allChannels = [{
+      id: 'ch1',
+      name: 'Alpha',
+      logo: '',
+      group: '',
+      url: 'http://host/a',
+      extras: null,
+      playlistIds: [],
+      catchup: '',
+      catchupSource: '',
+      catchupDays: 0,
+    }];
+    let signal: AbortSignal | undefined;
+    let finish: (() => void) | null = null;
+    healthMock.checkAll.mockImplementationOnce(async (_channels, options) => {
+      signal = options.signal;
+      await new Promise<void>(resolve => { finish = resolve; });
+      return {
+        total: 1,
+        unknown: 1,
+        healthy: 0,
+        suspect: 0,
+        unavailable: 0,
+      };
+    });
+    settings.render();
+    click('#check-channel-health');
+    await vi.waitFor(() => expect(signal).toBeDefined());
+
+    click('#clear-cache');
+    settings.handleAction('left');
+    settings.handleAction('select');
+
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+    expect(cacheMock.clearAllCachedData).not.toHaveBeenCalled();
+    finish?.();
+    await vi.waitFor(() => expect(cacheMock.clearAllCachedData).toHaveBeenCalled());
   });
 
   it('requires confirmation before requesting a full app reset', () => {

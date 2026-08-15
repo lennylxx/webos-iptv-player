@@ -3,13 +3,14 @@ import { createLogger } from '../utils/logger';
 const log = createLogger('PersistenceDB');
 
 const DB_NAME = 'iptv';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 export const EPG_STORE = 'epg-cache';
 export const CATALOG_STORE = 'catalog-cache';
 export const SUBTITLE_STORE = 'subtitle-cache';
 export const PLAYLIST_STORE = 'playlist-cache';
 export const STREAM_MIME_STORE = 'stream-mime-cache';
+export const CHANNEL_HEALTH_STORE = 'channel-health-cache';
 export const CACHE_META_STORE = 'cache-meta';
 export const CACHE_STORES = [
   EPG_STORE,
@@ -17,6 +18,7 @@ export const CACHE_STORES = [
   SUBTITLE_STORE,
   PLAYLIST_STORE,
   STREAM_MIME_STORE,
+  CHANNEL_HEALTH_STORE,
 ] as const;
 export type CacheStore = typeof CACHE_STORES[number];
 

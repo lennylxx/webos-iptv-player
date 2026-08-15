@@ -41,6 +41,17 @@ export interface Channel {
   catchupTimeOffsetMinutes?: number;
 }
 
+export type ChannelHealthStatus = 'healthy' | 'suspect' | 'unavailable';
+
+export interface ChannelHealthRecord {
+  status: ChannelHealthStatus;
+  consecutiveFailures: number;
+  lastCheckedAt: number;
+  lastHealthyAt?: number;
+  latencyMs?: number;
+  error?: string;
+}
+
 /** One playlist tab. `id` is the configured playlist's stable id (so two
  *  playlists sharing a name stay distinct); `name` is the display label. */
 export interface PlaylistTab {

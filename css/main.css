@@ -10,6 +10,9 @@
   --accent-dim: #0088aa;
   --accent-rgb: 0 212 255;
   --accent-glow: rgb(var(--accent-rgb) / 0.3);
+  --channel-health-healthy: #63d89b;
+  --channel-health-suspect: #f3c969;
+  --channel-health-unavailable: #ef7b7b;
   --danger: #ff4757;
   --danger-rgb: 255 71 87;
   --success: #2ed573;
@@ -29,6 +32,30 @@
   --radius: 8px;
   --transition: 0.2s ease;
   --font-scale: 1;
+}
+
+.channel-health-status {
+  color: var(--text-muted);
+}
+
+.channel-health-status.healthy {
+  color: var(--channel-health-healthy);
+}
+
+.channel-health-status.suspect {
+  color: var(--channel-health-suspect);
+}
+
+.channel-health-status.unavailable {
+  color: var(--channel-health-unavailable);
+}
+
+.channel-health-dot {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  background: currentColor;
+  border-radius: 50%;
 }
 
 /* App-wide font size. The ids are percentages (see TEXT_SIZES in

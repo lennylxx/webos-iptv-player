@@ -25,8 +25,6 @@ import {
   subscribeCdpLogs,
 } from './cdp-logs.mjs';
 
-export { redactLogText, serializeCdpLogEvent } from './cdp-logs.mjs';
-
 // ---------------------------------------------------------------------------
 // Pure metric + argument logic (no I/O). Isolated as functions and exported so
 // the runtime below stays thin and these can be unit-tested directly.

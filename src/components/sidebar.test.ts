@@ -4,7 +4,7 @@ import type { Channel } from '../types';
 import type { RecentlyWatchedItem } from '../services/recently-watched';
 import { CONFIG } from '../config';
 
-const { channels, epgMock, recentMock, toastMock } = vi.hoisted(() => {
+const { channels, epgMock, recentMock, toastMock, healthMock } = vi.hoisted(() => {
   function makeChannel(over: Partial<Channel>): Channel {
     return {
       id: '', name: '', logo: '', group: '', url: '', extras: null,
@@ -26,6 +26,13 @@ const { channels, epgMock, recentMock, toastMock } = vi.hoisted(() => {
       catchupInfo: vi.fn(),
     },
     toastMock: vi.fn(),
+    healthMock: {
+      records: {} as Record<string, 'healthy' | 'suspect' | 'unavailable'>,
+      getRecord: vi.fn((channel: Channel) => {
+        const status = healthMock.records[channel.id];
+        return status ? { status } : null;
+      }),
+    },
   };
 });
 
@@ -60,6 +67,7 @@ vi.mock('../services/epg-service', () => ({
 }));
 
 vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentMock }));
+vi.mock('../services/channel-health', () => ({ ChannelHealthService: healthMock }));
 vi.mock('./toast', () => ({ showToast: toastMock }));
 vi.mock('../workers/app-worker-client', async () => {
   const { ScopedSearchIndex } = await import('../workers/scoped-search-index');
@@ -106,6 +114,7 @@ beforeEach(() => {
   recentMock.catchupInfo.mockReset();
   epgMock.nowPlaying = null;
   toastMock.mockClear();
+  healthMock.records = {};
   sidebar = new Sidebar(container, getCurrentIndex, onSelect, getCurrentCatchupStart);
 });
 
@@ -146,6 +155,17 @@ describe('Sidebar', () => {
       expect(el.classList.contains('hidden')).toBe(false);
       expect(el.classList.contains('visible')).toBe(true);
       expect(el.classList.contains('channels-only')).toBe(true);
+    });
+
+    it('shows channel health as a dot without consuming label space', () => {
+      healthMock.records.b = 'suspect';
+
+      sidebar.show();
+
+      const dot = items()[1].querySelector('.channel-health-dot');
+      expect(dot?.classList).toContain('suspect');
+      expect(dot?.textContent).toBe('');
+      expect(dot?.getAttribute('aria-label')).toBe('Suspect');
     });
 
     it('OK on the search box gives it the caret at the end', () => {

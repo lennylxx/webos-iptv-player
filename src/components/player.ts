@@ -19,6 +19,7 @@ import { StallWatchdog, type StallProbe, type StallRecovery } from '../utils/sta
 import { resolutionBadge, hdrLabel, frameRateLabel, pickVariant, codecName, audioSummary, subtitleSummary, type StreamVariant, type MediaInfo } from '../utils/stream-info';
 import { extFromUrl, diagnosticStreamUrl } from '../utils/url';
 import { probeMedia } from '../services/media-probe';
+import { ChannelHealthService } from '../services/channel-health';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
 import { showToast } from './toast';
@@ -29,7 +30,6 @@ import {
   type PlayerOsdStreamInfo,
 } from './player-osd';
 import { PlayerTracks } from './player-tracks';
-export { ASS_SUBTITLE_BASE } from './player-tracks';
 
 const log = createLogger('Player');
 
@@ -41,6 +41,7 @@ export class Player {
   private onBack: () => void;
   private onTvPlaybackChanged: (channelIndex: number, catchupStart: number | null) => void;
   private canAutoRevealOsd: () => boolean;
+  private onChannelHealthChanged: () => void;
   private videoEl: HTMLVideoElement | null = null;
   private pipeline: PlayerPipeline;
   private tracks: PlayerTracks;
@@ -65,6 +66,8 @@ export class Player {
   private catchupSuspendPos = -1;
   private catchupFallbackActive = false;
   private playbackGeneration = 0;
+  private healthSuccessGeneration = -1;
+  private healthStartedAt = 0;
   private liveHistoryGeneration = -1;
   private liveHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   private errorAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -80,11 +83,13 @@ export class Player {
     onBack: () => void,
     onTvPlaybackChanged: (channelIndex: number, catchupStart: number | null) => void = () => {},
     canAutoRevealOsd: () => boolean = () => true,
+    onChannelHealthChanged: () => void = () => {},
   ) {
     this.container = container;
     this.onBack = onBack;
     this.onTvPlaybackChanged = onTvPlaybackChanged;
     this.canAutoRevealOsd = canAutoRevealOsd;
+    this.onChannelHealthChanged = onChannelHealthChanged;
     this.pipeline = new PlayerPipeline({
       playbackLabel: loadToken => this.playbackLabel(loadToken),
       mediaState: video => this.mediaState(video),
@@ -133,6 +138,7 @@ export class Player {
         log.error('Watchdog recovery exhausted; advancing channel',
           'event=playback.stall.exhausted', this.playbackLabel(),
           this.recoveryState(recovery));
+        this.markLiveUnavailable('stall_exhausted');
         this.channelUp();
       },
       pollMs: CONFIG.PLAYER.STALL_POLL_MS,
@@ -194,6 +200,7 @@ export class Player {
     el.textTracks?.addEventListener?.('addtrack', () => this.tracks.applyNativeSubtitleSelection());
     el.addEventListener('playing', () => {
       log.info('playing', this.videoLabel(el), this.mediaState(el));
+      this.markTrackedLiveHealthy();
       if (this.resyncing) this.endResync();
       this.confirmLiveHistory(el);
       if (this.osd.isVisible()) this.osd.resetTimer();
@@ -326,6 +333,7 @@ export class Player {
       this.errorAdvanceTimer = null;
     }
     this.playbackGeneration++;
+    this.healthStartedAt = Date.now();
     this.liveHistoryGeneration = -1;
   }
 
@@ -705,6 +713,7 @@ export class Player {
     }
     const v = this.videoEl;
     if (this.errorAdvanceTimer !== null) return;
+    this.markLiveUnavailable('playback_error');
     log.error('Video playback error', 'event=playback.video.error',
       this.playbackLabel(),
       v ? this.mediaState(v) : 'no video element',
@@ -716,6 +725,33 @@ export class Player {
       this.errorAdvanceTimer = null;
       this.channelUp();
     }, 2000);
+  }
+
+  private markLiveUnavailable(reason: string): void {
+    if (!this.currentChannel || this.catchupInfo || this.vod) return;
+    void ChannelHealthService.recordPlaybackFailure(this.currentChannel, reason)
+      .then(() => this.onChannelHealthChanged())
+      .catch(err => log.error(
+        'Channel health playback update failed',
+        'event=channel.health.playback.write.failed',
+        err,
+      ));
+  }
+
+  private markTrackedLiveHealthy(): void {
+    if (!this.currentChannel || this.catchupInfo || this.vod
+        || this.healthSuccessGeneration === this.playbackGeneration) return;
+    this.healthSuccessGeneration = this.playbackGeneration;
+    const latencyMs = Math.max(0, Date.now() - this.healthStartedAt);
+    void ChannelHealthService.recordPlaybackSuccess(this.currentChannel, latencyMs)
+      .then(changed => {
+        if (changed) this.onChannelHealthChanged();
+      })
+      .catch(err => log.error(
+        'Channel health playback update failed',
+        'event=channel.health.playback.write.failed',
+        err,
+      ));
   }
 
   showOSD(): void {

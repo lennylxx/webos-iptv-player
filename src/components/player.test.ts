@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { playlistMock } = vi.hoisted(() => ({
+const { healthMock, playlistMock } = vi.hoisted(() => ({
+  healthMock: {
+    recordPlaybackFailure: vi.fn().mockResolvedValue(undefined),
+    recordPlaybackSuccess: vi.fn().mockResolvedValue(false),
+  },
   playlistMock: { channels: [] as unknown[], getByIndex: vi.fn(), indexOf: vi.fn() },
 }));
 
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
+vi.mock('../services/channel-health', () => ({ ChannelHealthService: healthMock }));
 vi.mock('../services/epg-service', () => ({
   EpgService: { findChannelId: () => null, getNowPlaying: () => null, getUpcoming: () => [] },
 }));
@@ -155,6 +160,7 @@ let container: HTMLElement;
 let player: Player;
 let video: HTMLVideoElement;
 let allowAutoRevealOsd: boolean;
+let onHealthChanged: ReturnType<typeof vi.fn>;
 
 // The desktop path probes the stream's Content-Type before routing; stub it so
 // tests stay offline and deterministic (HLS → hls.js fallback sets video.src).
@@ -174,9 +180,19 @@ beforeEach(() => {
   document.body.appendChild(container);
   playlistMock.getByIndex.mockReturnValue(CHANNEL);
   playlistMock.indexOf.mockReturnValue(0);
+  healthMock.recordPlaybackFailure.mockClear();
+  healthMock.recordPlaybackSuccess.mockReset();
+  healthMock.recordPlaybackSuccess.mockResolvedValue(false);
   vi.mocked(probeMedia).mockResolvedValue(null);
   allowAutoRevealOsd = true;
-  player = new Player(container, vi.fn(), undefined, () => allowAutoRevealOsd);
+  onHealthChanged = vi.fn();
+  player = new Player(
+    container,
+    vi.fn(),
+    undefined,
+    () => allowAutoRevealOsd,
+    onHealthChanged,
+  );
   video = fakeVideo(120);
   player.init(video);
 });
@@ -466,16 +482,21 @@ describe('Player live playback', () => {
     expect(onPlaybackChanged).toHaveBeenLastCalledWith(-1, null);
   });
 
-  it('coalesces repeated playback errors into one channel advance', () => {
+  it('coalesces repeated playback errors into one channel advance', async () => {
     playlistMock.channels = [{}, {}];
     player.play(0);
     playlistMock.getByIndex.mockClear();
 
     for (let i = 0; i < 20; i++) video.dispatchEvent(new Event('error'));
+    await flush();
     vi.advanceTimersByTime(2000);
 
     expect(playlistMock.getByIndex).toHaveBeenCalledTimes(1);
     expect(playlistMock.getByIndex).toHaveBeenCalledWith(1);
+    expect(healthMock.recordPlaybackFailure).toHaveBeenCalledOnce();
+    expect(healthMock.recordPlaybackFailure)
+      .toHaveBeenCalledWith(CHANNEL, 'playback_error');
+    expect(onHealthChanged).toHaveBeenCalledOnce();
   });
 
   it('starts the OSD hide timer when startup playback begins', async () => {
@@ -489,6 +510,20 @@ describe('Player live playback', () => {
     vi.advanceTimersByTime(CONFIG.PLAYER.OSD_TIMEOUT);
 
     expect((container.querySelector('#player-osd') as HTMLElement).style.display).toBe('none');
+  });
+
+  it('refreshes health UI only when passive success updates a tracked channel', async () => {
+    healthMock.recordPlaybackSuccess.mockResolvedValueOnce(false);
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    await flush();
+    expect(onHealthChanged).not.toHaveBeenCalled();
+
+    healthMock.recordPlaybackSuccess.mockResolvedValueOnce(true);
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    await flush();
+    expect(onHealthChanged).toHaveBeenCalledOnce();
   });
 });
 

@@ -1,4 +1,12 @@
-import type { Action, BuiltinChannelGroup, CatchupInfo, Channel, ChannelGroupId, NumberEvent } from '../types';
+import type {
+  Action,
+  BuiltinChannelGroup,
+  CatchupInfo,
+  Channel,
+  ChannelGroupId,
+  ChannelHealthStatus,
+  NumberEvent,
+} from '../types';
 import { SpatialNav } from '../navigation/spatial-nav';
 import { html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
@@ -8,6 +16,7 @@ import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
+import { ChannelHealthService } from '../services/channel-health';
 import { groupIcon } from './group-icon';
 import { showToast } from './toast';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
@@ -488,6 +497,7 @@ export class ChannelList {
                 : '')}
         </div>
         ${this.editor.renderChannelEditStatus(ch)}
+        ${this.renderHealth(ch)}
         ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
       </div>
     `;
@@ -515,6 +525,7 @@ export class ChannelList {
             ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
           </div>
           <div class="recent-kind-badge live">${t('common.live')}</div>
+          ${this.renderHealth(item.channel)}
           ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
         </div>
       `;
@@ -559,6 +570,20 @@ export class ChannelList {
       <div class="channel-logo-wrap">
         ${logo}
       </div>
+    `;
+  }
+
+  private renderHealth(ch: Channel): Safe | string {
+    const status = ChannelHealthService.getRecord(ch)?.status;
+    if (!status) return '';
+    const labels: Record<ChannelHealthStatus, string> = {
+      healthy: t('channel.healthHealthy'),
+      suspect: t('channel.healthSuspect'),
+      unavailable: t('channel.healthUnavailable'),
+    };
+    return html`
+      <span class="channel-health-status channel-health-dot ${status}" title="${labels[status]}"
+            aria-label="${labels[status]}"></span>
     `;
   }
 

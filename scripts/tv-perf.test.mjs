@@ -5,7 +5,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { normalizeCdpLogEvent } from './cdp-logs.mjs';
+import {
+  normalizeCdpLogEvent,
+  redactLogText,
+  serializeCdpLogEvent,
+} from './cdp-logs.mjs';
 import {
   CSV_HEADER,
   formatCpuProfilePartPath,
@@ -17,8 +21,6 @@ import {
   normalizeMetrics,
   parsePerformanceArgs,
   runMonitor,
-  redactLogText,
-  serializeCdpLogEvent,
   serializeCsvRow,
   serializeJsonl,
   startCpuProfile,

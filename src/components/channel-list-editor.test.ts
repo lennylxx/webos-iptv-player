@@ -78,6 +78,9 @@ vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }
 vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentMock }));
+vi.mock('../services/channel-health', () => ({
+  ChannelHealthService: { getRecord: () => null },
+}));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 vi.mock('../workers/app-worker-client', async () => {
   const { ScopedSearchIndex } = await import('../workers/scoped-search-index');

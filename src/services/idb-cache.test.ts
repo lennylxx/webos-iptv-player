@@ -5,12 +5,14 @@ import type { Channel } from '../types';
 import {
   clearAllCachedData,
   clearCachedStreamMimes,
+  clearCachedChannelHealth,
   flushCacheWrites,
   getCacheUsage,
   getCachedCatalog,
   getCachedEpg,
   getCachedPlaylist,
   getCachedStreamMime,
+  getCachedChannelHealth,
   getCachedSubtitle,
   migrateLegacyStreamMimeCache,
   scheduleCachedPlaylist,
@@ -18,11 +20,13 @@ import {
   setCachedEpg,
   setCachedPlaylist,
   setCachedStreamMime,
+  setCachedChannelHealth,
   setCachedSubtitle,
 } from './idb-cache';
 import {
   CACHE_META_STORE,
   CATALOG_STORE,
+  CHANNEL_HEALTH_STORE,
   openPersistenceDb,
   requestResult,
   STREAM_MIME_STORE,
@@ -51,8 +55,44 @@ describe('idb-cache', () => {
 
   it('uses the next schema version after the published v3 database', async () => {
     const db = await openPersistenceDb();
-    expect(db?.version).toBe(4);
+    expect(db?.version).toBe(5);
     expect(db?.objectStoreNames.contains(STREAM_MIME_STORE)).toBe(true);
+  });
+
+  it('stores channel health records separately and accounts for them', async () => {
+    await setCachedChannelHealth({
+      ch1: { status: 'healthy' },
+      ch2: { status: 'suspect' },
+    });
+    await setCachedChannelHealth({ ch1: { status: 'unavailable' } });
+
+    expect(await getCachedChannelHealth()).toEqual({
+      ch1: { status: 'unavailable' },
+      ch2: { status: 'suspect' },
+    });
+    expect((await getCacheUsage()).categories.health.entries).toBe(2);
+
+    await clearCachedChannelHealth();
+    expect(await getCachedChannelHealth()).toEqual({});
+    expect((await getCacheUsage()).categories.health.entries).toBe(0);
+  });
+
+  it('treats a channel health cache read failure as an empty cache', async () => {
+    const transaction = IDBDatabase.prototype.transaction;
+    const transactionSpy = vi.spyOn(IDBDatabase.prototype, 'transaction').mockImplementation(function (
+      this: IDBDatabase,
+      storeNames: string | string[],
+      mode?: IDBTransactionMode,
+    ) {
+      if (storeNames === CHANNEL_HEALTH_STORE) throw new Error('read failed');
+      return transaction.call(this, storeNames, mode);
+    });
+
+    try {
+      expect(await getCachedChannelHealth()).toEqual({});
+    } finally {
+      transactionSpy.mockRestore();
+    }
   });
 
   it('round-trips a cached subtitle', async () => {
@@ -146,12 +186,14 @@ describe('idb-cache', () => {
     await setCachedEpg('http://host/epg', { channels: {}, programmes: {} });
     await setCachedCatalog('x1|categories', ['a']);
     await setCachedSubtitle('subdl:2', 'WEBVTT\n\nhi');
+    await setCachedChannelHealth({ ch1: { status: 'healthy' } });
 
     await clearAllCachedData();
 
     expect(await getCachedEpg('http://host/epg')).toBeNull();
     expect(await getCachedCatalog('x1|categories')).toBeNull();
     expect(await getCachedSubtitle('subdl:2')).toBeNull();
+    expect(await getCachedChannelHealth()).toEqual({});
   });
 
   it('stores parsed playlists outside localStorage', async () => {

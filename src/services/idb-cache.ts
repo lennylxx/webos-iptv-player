@@ -6,6 +6,7 @@ import {
   CACHE_STORES,
   cacheKeyPath,
   CATALOG_STORE,
+  CHANNEL_HEALTH_STORE,
   EPG_STORE,
   openPersistenceDb,
   PLAYLIST_STORE,
@@ -17,7 +18,7 @@ import {
 } from './idb-database';
 
 const log = createLogger('CacheStorage');
-const CACHE_CATEGORIES = ['playlist', 'epg', 'catalog', 'subtitle'] as const;
+const CACHE_CATEGORIES = ['playlist', 'epg', 'catalog', 'subtitle', 'health'] as const;
 const FALLBACK_BUDGET_BYTES = 384 * 1024 * 1024;
 const MAX_BUDGET_BYTES = 1024 * 1024 * 1024;
 const SUBTITLE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -198,6 +199,7 @@ function categoryForStore(store: CacheStore): CacheCategory {
     case CATALOG_STORE: return 'catalog';
     case STREAM_MIME_STORE: return 'catalog';
     case SUBTITLE_STORE: return 'subtitle';
+    case CHANNEL_HEALTH_STORE: return 'health';
   }
 }
 
@@ -207,6 +209,7 @@ function ttlFor(category: CacheCategory): number {
     case 'epg': return CONFIG.EPG_REFRESH_INTERVAL;
     case 'catalog': return CONFIG.XTREAM.CATALOG_TTL_MS;
     case 'subtitle': return SUBTITLE_TTL_MS;
+    case 'health': return 30 * 24 * 60 * 60 * 1000;
   }
 }
 
@@ -373,6 +376,7 @@ function emptyUsage(): Record<CacheCategory, CacheUsageEntry> {
     epg: { bytes: 0, entries: 0 },
     catalog: { bytes: 0, entries: 0 },
     subtitle: { bytes: 0, entries: 0 },
+    health: { bytes: 0, entries: 0 },
   };
 }
 
@@ -1059,6 +1063,46 @@ export async function setCachedSubtitle(key: string, text: string): Promise<void
     text,
     expiresAt: timestamp + SUBTITLE_TTL_MS,
   });
+}
+
+export async function getCachedChannelHealth<T>(): Promise<Record<string, T>> {
+  try {
+    await mutationChain;
+    const db = await openDb();
+    if (!db) return {};
+    const tx = db.transaction(CHANNEL_HEALTH_STORE, 'readonly');
+    const raw = await requestResult(
+      tx.objectStore(CHANNEL_HEALTH_STORE).getAll(),
+    ) as Record<string, unknown>[];
+    const records: Record<string, T> = {};
+    for (const item of raw) {
+      const key = item.key;
+      if (typeof key === 'string' && item.data !== undefined) records[key] = item.data as T;
+    }
+    return records;
+  } catch (err) {
+    log.warn(
+      'Channel health cache read failed',
+      'event=persistence.cache.read.failed',
+      'operation=read',
+      'category=health',
+      err,
+    );
+    return {};
+  }
+}
+
+export async function setCachedChannelHealth<T>(records: Record<string, T>): Promise<void> {
+  await Promise.all(Object.keys(records).map(key => putRaw(CHANNEL_HEALTH_STORE, {
+    key,
+    data: records[key],
+    timestamp: Date.now(),
+    expiresAt: null,
+  })));
+}
+
+export async function clearCachedChannelHealth(): Promise<void> {
+  await clearStore(CHANNEL_HEALTH_STORE);
 }
 
 export async function getCachedPlaylist(): Promise<{

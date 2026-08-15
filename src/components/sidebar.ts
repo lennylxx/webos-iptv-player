@@ -1,4 +1,11 @@
-import type { Action, BuiltinChannelGroup, CatchupInfo, Channel, ChannelGroupId } from '../types';
+import type {
+  Action,
+  BuiltinChannelGroup,
+  CatchupInfo,
+  Channel,
+  ChannelGroupId,
+  ChannelHealthStatus,
+} from '../types';
 import { CONFIG } from '../config';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
@@ -16,6 +23,7 @@ import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { WorkerListSearch } from '../workers/list-search-client';
 import { createLogger } from '../utils/logger';
+import { ChannelHealthService } from '../services/channel-health';
 
 const log = createLogger('Sidebar');
 
@@ -782,6 +790,7 @@ export class Sidebar {
                   <span class="ch-name"><span class="ch-name-text">${title}</span></span>
                   ${subtitle ? html`<span class="ch-now"><span class="ch-now-text">${subtitle}</span></span>` : ''}
                 </div>
+                ${this.renderHealthDot(ch)}
                 ${catchup ? html`<span class="sidebar-recent-kind">${t('common.catchup')}</span>` : ''}
               </div>
             `;
@@ -821,6 +830,7 @@ export class Sidebar {
         </div>
       `;
     }
+
     if (this.failedLogos.has(ch.logo)) return html`<div class="ch-logo-wrap"></div>`;
     if (this.decodedLogos.has(ch.logo) && !this.opening) {
       return html`
@@ -830,6 +840,20 @@ export class Sidebar {
       `;
     }
     return html`<div class="ch-logo-wrap" data-logo-src="${ch.logo}"></div>`;
+  }
+
+  private renderHealthDot(ch: Channel): Safe | string {
+    const status = ChannelHealthService.getRecord(ch)?.status;
+    if (!status) return '';
+    const labels: Record<ChannelHealthStatus, string> = {
+      healthy: t('channel.healthHealthy'),
+      suspect: t('channel.healthSuspect'),
+      unavailable: t('channel.healthUnavailable'),
+    };
+    return html`
+      <span class="channel-health-status channel-health-dot ${status}" title="${labels[status]}"
+            aria-label="${labels[status]}"></span>
+    `;
   }
 
   private preloadLogo(src: string): Promise<boolean> {

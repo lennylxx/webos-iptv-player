@@ -78,6 +78,14 @@ export const CONFIG = {
     MAX_VISIBLE_ITEMS: 50,
   },
 
+  CHANNEL_HEALTH: {
+    CONCURRENCY: 4,
+    TIMEOUT_MS: 8000,
+    MAX_PROBE_BYTES: 128 * 1024,
+    MAX_MANIFEST_DEPTH: 2,
+    FAILURES_UNTIL_UNAVAILABLE: 2,
+  },
+
   // Max characters shown for a reminder's programme title and channel name
   // before an ellipsis, so long names don't overflow the toast/alert/in-app prompt.
   REMINDER: {

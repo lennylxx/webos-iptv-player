@@ -14,6 +14,10 @@ import {
 import { UploadClient, uploadIdFromUrl } from '../services/upload-client';
 import { SetupClient } from '../services/setup-client';
 import { ReminderService } from '../services/reminder-service';
+import {
+  ChannelHealthService,
+  type ChannelHealthProgress,
+} from '../services/channel-health';
 import { createXtreamClient } from '../services/xtream-client';
 import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
 import { genPlaylistId, isSourceEnabled } from '../utils/playlist';
@@ -367,6 +371,11 @@ export class Settings {
   private categoryScrollFrame: number | null = null;
   private categorySyncFrame: number | null = null;
   private onManageReminders: () => void;
+  private healthController: AbortController | null = null;
+  private healthCheckPromise: Promise<void> | null = null;
+  private healthProgress: ChannelHealthProgress | null = null;
+  private healthPaused = false;
+  private healthResume: (() => void) | null = null;
 
   constructor(
     container: HTMLElement,
@@ -568,6 +577,7 @@ export class Settings {
 
             <div class="settings-section" id="channel-customization-settings">
               <h3 class="settings-section-title">${t('settings.channels')}</h3>
+              ${this.channelHealthPanel()}
               <div class="settings-item settings-item--action">
                 <div class="settings-item-title">${t('settings.editChannelList')}</div>
                 <button class="btn btn-secondary" data-focusable id="edit-channel-list"
@@ -994,6 +1004,18 @@ export class Settings {
     } else if (el.id === 'edit-channel-list') {
       this.saveShowHidden();
       this.onSave('edit-channels');
+    } else if (el.id === 'check-channel-health') {
+      if (!this.healthController) {
+        const check = this.startChannelHealthCheck();
+        this.healthCheckPromise = check;
+        void check.finally(() => {
+          if (this.healthCheckPromise === check) this.healthCheckPromise = null;
+        });
+      }
+    } else if (el.id === 'pause-channel-health') {
+      this.toggleChannelHealthPause();
+    } else if (el.id === 'cancel-channel-health') {
+      this.cancelChannelHealthCheck();
     } else if (el.id === 'manage-reminders') {
       this.onManageReminders();
     } else if (el.id === 'reset-customization') {
@@ -1037,6 +1059,129 @@ export class Settings {
       });
     } else if (el.tagName === 'INPUT') {
       (el as HTMLInputElement).focus();
+    }
+  }
+
+  private channelHealthPanel(): Safe {
+    const channels = PlaylistService.allChannels;
+    const summary = ChannelHealthService.getSummary(channels);
+    return html`
+      <div class="settings-item settings-item--action channel-health-panel">
+        <div class="settings-item-title">${t('settings.channelHealth')}</div>
+        ${this.healthController
+          ? html`
+            <div class="channel-health-actions">
+              <button class="btn btn-secondary" data-key="pause-channel-health"
+                      data-focusable id="pause-channel-health">
+                ${this.healthPaused
+                  ? t('common.continue')
+                  : t('common.pause')}
+              </button>
+              <button class="btn btn-danger" data-key="cancel-channel-health"
+                      data-focusable id="cancel-channel-health">${t('common.cancel')}</button>
+            </div>
+          `
+          : html`
+            <button class="btn btn-secondary" data-key="check-channel-health"
+                    data-focusable id="check-channel-health">
+              ${t('settings.checkChannelHealth')}
+            </button>
+          `}
+        ${this.healthProgress ? html`
+          <div class="channel-health-progress" aria-live="polite">
+            <div class="channel-health-progress-track">
+              <div class="channel-health-progress-fill"
+                   style="width:${this.healthProgress.total
+                     ? Math.round(this.healthProgress.completed / this.healthProgress.total * 100)
+                     : 0}%"></div>
+            </div>
+            <span>${t('settings.channelHealthProgress', {
+              completed: this.healthProgress.completed,
+              total: this.healthProgress.total,
+            })}</span>
+          </div>
+        ` : ''}
+        <div class="channel-health-summary">
+          <span class="channel-health-status healthy">${t('channel.healthHealthy')}: ${summary.healthy}</span>
+          <span class="channel-health-status suspect">${t('channel.healthSuspect')}: ${summary.suspect}</span>
+          <span class="channel-health-status unavailable">${t('channel.healthUnavailable')}: ${summary.unavailable}</span>
+          <span>${t('settings.channelHealthUnknown')}: ${summary.unknown}</span>
+        </div>
+        <div class="settings-item-hint">${t('settings.channelHealthHint')}</div>
+      </div>
+    `;
+  }
+
+  private updateChannelHealthPanel(): void {
+    const panel = $('.channel-health-panel', this.container);
+    if (panel) morph(panel, this.channelHealthPanel());
+  }
+
+  private toggleChannelHealthPause(): void {
+    if (!this.healthController) return;
+    this.healthPaused = !this.healthPaused;
+    if (!this.healthPaused) {
+      this.healthResume?.();
+      this.healthResume = null;
+    }
+    this.updateChannelHealthPanel();
+  }
+
+  private cancelChannelHealthCheck(): void {
+    this.healthController?.abort();
+    this.healthPaused = false;
+    this.healthResume?.();
+    this.healthResume = null;
+  }
+
+  private waitWhileChannelHealthPaused(): Promise<void> {
+    if (!this.healthPaused) return Promise.resolve();
+    return new Promise(resolve => {
+      this.healthResume = resolve;
+    });
+  }
+
+  private async startChannelHealthCheck(): Promise<void> {
+    const channels = PlaylistService.allChannels;
+    if (!channels.length) {
+      showToast(t('settings.channelHealthEmpty'));
+      return;
+    }
+    const controller = new AbortController();
+    this.healthController = controller;
+    this.healthPaused = false;
+    this.healthProgress = {
+      ...ChannelHealthService.getSummary(channels),
+      completed: 0,
+    };
+    this.updateChannelHealthPanel();
+    try {
+      await ChannelHealthService.checkAll(channels, {
+        signal: controller.signal,
+        waitWhilePaused: () => this.waitWhileChannelHealthPaused(),
+        onProgress: progress => {
+          if (this.healthController !== controller) return;
+          this.healthProgress = progress;
+          this.updateChannelHealthPanel();
+        },
+      });
+      if (!controller.signal.aborted) showToast(t('settings.channelHealthComplete'));
+    } catch (err) {
+      log.error(
+        'Channel health check failed',
+        'event=channel.health.check.failed',
+        err,
+      );
+      showToast(t('settings.channelHealthFailed'));
+    } finally {
+      if (this.healthController === controller) {
+        this.healthController = null;
+        this.healthPaused = false;
+        this.healthResume = null;
+        this.healthProgress = null;
+        this.updateChannelHealthPanel();
+        this.onChannelsChanged();
+      }
     }
   }
 
@@ -1098,13 +1243,22 @@ export class Settings {
         <span>${t('settings.epg')} <strong>${formatBytes(usage.categories.epg.bytes)}</strong></span>
         <span>${t('settings.moviesSeriesMediaData')} <strong>${formatBytes(usage.categories.catalog.bytes)}</strong></span>
         <span>${t('settings.onlineSubtitles')} <strong>${formatBytes(usage.categories.subtitle.bytes)}</strong></span>
+        <span>${t('settings.channelHealth')} <strong>${formatBytes(usage.categories.health.bytes)}</strong></span>
       </div>
     `);
   }
 
   private async clearCache(): Promise<void> {
     try {
+      const activeCheck = this.healthCheckPromise;
+      if (activeCheck) {
+        this.cancelChannelHealthCheck();
+        await activeCheck;
+      }
       await clearAllCachedData();
+      ChannelHealthService.reset();
+      this.updateChannelHealthPanel();
+      this.onChannelsChanged();
       await this.loadCacheUsage();
       showToast(t('settings.cacheCleared'));
     } catch (err) {

@@ -535,6 +535,48 @@
   min-width: 288px;
 }
 
+.channel-health-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.channel-health-actions .btn {
+  min-width: 180px;
+}
+
+.channel-health-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 18px;
+}
+
+.channel-health-progress {
+  display: flex;
+  max-width: 640px;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 18px;
+}
+
+.channel-health-progress-track {
+  height: 8px;
+  overflow: hidden;
+  flex: 1;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.channel-health-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 160ms ease;
+}
+
 .settings-maintenance {
   display: flex;
   gap: 16px;
