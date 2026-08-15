@@ -144,8 +144,8 @@
     },
     "epg": {
       "openMs": 21.7,
-      "firstFrameMs": 175.8,
-      "maxLongTaskMs": 192,
+      "firstFrameMs": 69.1,
+      "maxLongTaskMs": 75,
       "mapping": {
         "queries": {
           "empty": {

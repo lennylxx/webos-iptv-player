@@ -569,6 +569,36 @@ describe('EpgService channel pre-filter', () => {
     expect(EpgService.getNowPlaying(id!)?.title).toBe('Fresh');
   });
 
+  it('keeps derived indexes unchanged when every source is fresh', async () => {
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
+    await EpgService.load([source('http://a', ['a'])]);
+    const programmes = EpgService.programmes;
+    const mappingRevision = EpgService.mappingRevision;
+    vi.mocked(fetchMaybeGzipText).mockClear();
+
+    await EpgService.refresh();
+
+    expect(fetchMaybeGzipText).not.toHaveBeenCalled();
+    expect(EpgService.programmes).toBe(programmes);
+    expect(EpgService.mappingRevision).toBe(mappingRevision);
+  });
+
+  it('rebuilds derived indexes when an expired source is refreshed', async () => {
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Initial'));
+    await EpgService.load([source('http://a', ['a'])]);
+    const programmes = EpgService.programmes;
+    const mappingRevision = EpgService.mappingRevision;
+    vi.setSystemTime(NOON + CONFIG.EPG_REFRESH_INTERVAL);
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Updated'));
+
+    await EpgService.refresh();
+
+    expect(EpgService.programmes).not.toBe(programmes);
+    expect(EpgService.mappingRevision).toBe(mappingRevision + 1);
+    const id = EpgService.findChannelId(channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }));
+    expect(EpgService.getProgrammeAtStart(id!, h(-1).getTime())?.title).toBe('Updated');
+  });
+
   it('skips a source with no applicable playlist channels', async () => {
     await EpgService.load([source('http://a', ['a'])], [
       channel({ id: 'b', name: 'Bravo', playlistIds: ['b'] }),

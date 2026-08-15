@@ -103,14 +103,17 @@ class EpgServiceImpl {
   }
 
   async refresh(): Promise<void> {
+    const sourcesToRefresh = this.sources.filter((source) => {
+      const state = this.states.get(source.url);
+      return !state || state.needsRefresh
+        || Date.now() - state.timestamp >= CONFIG.EPG_REFRESH_INTERVAL;
+    });
+    if (!sourcesToRefresh.length) return;
+
     const revision = ++this.revision;
     this.mappedChannelIds = ChannelCustomizationService.epgChannelIds();
-    await Promise.all(this.sources.map(async (source) => {
-      const state = this.states.get(source.url);
-      if (state && !state.needsRefresh
-        && Date.now() - state.timestamp < CONFIG.EPG_REFRESH_INTERVAL) return;
-      await this.fetchSource(source, this.filterFor(source), revision);
-    }));
+    await Promise.all(sourcesToRefresh.map(source =>
+      this.fetchSource(source, this.filterFor(source), revision)));
     if (revision !== this.revision) return;
     this.rebuildIndexes();
     this.loaded = this.sources.length > 0;
