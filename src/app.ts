@@ -99,6 +99,9 @@ class App {
           })
           .catch(err => log.error('EPG mapping reload failed:', err));
       },
+      () => {
+        void this.search.refreshPrograms();
+      },
     );
     this.player = new Player(this.views.player, () => {
       this.channelList.render();

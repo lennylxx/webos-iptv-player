@@ -611,6 +611,11 @@
   overflow-y: auto;
   padding-right: 8px;
   border-top: 1px solid var(--border);
+  transition: max-height var(--transition);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .epg-mapping-list { transition: none; }
 }
 
 .epg-mapping-spacer {
@@ -634,6 +639,12 @@
   color: var(--accent);
 }
 
+.epg-mapping-option.pointer-hovered {
+  z-index: 10;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px var(--accent-glow);
+}
+
 .epg-mapping-meta,
 .epg-mapping-empty {
   color: var(--text-muted);
@@ -647,14 +658,110 @@
   left: 16px;
 }
 
-.epg-mapped-badge {
-  padding: 4px 8px;
-  border-radius: 4px;
-  color: var(--success);
+.epg-offset-picker {
+  width: 620px;
+  max-width: 80vw;
+  overflow: hidden;
+  text-align: center;
+}
+
+.epg-offset-picker .group-picker-title {
+  overflow: hidden;
+  font-size: 26px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epg-offset-current {
+  margin: 24px 0;
+  color: var(--accent);
+  font-size: 48px;
+  font-weight: 700;
+}
+
+.channel-epg-offset-controls {
+  display: grid;
+  grid-template-columns: 54px max-content 54px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.channel-epg-offset-controls button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 54px;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
   background: var(--bg-tertiary);
-  border: 1px solid var(--success);
+}
+
+.channel-epg-offset-step {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.channel-epg-offset-source {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.epg-offset-hint {
+  margin-top: 20px;
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.channel-edit-overlay-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+  color: var(--text-muted);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.epg-mapped-badge,
+.epg-offset-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
   font-size: 14px;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.epg-mapped-badge {
+  color: #2ed573;
+  border: 1px solid #2ed573;
+}
+
+.epg-offset-badge {
+  gap: 5px;
+  color: #3498db;
+  border: 1px solid #3498db;
+}
+
+.epg-offset-badge-icon,
+.epg-offset-badge-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.epg-offset-badge-icon {
+  display: inline-flex;
+}
+
+.epg-mapped-badge-value,
+.epg-offset-badge-value {
+  transform: translateY(1px);
 }
 
 .edit-action-icon {

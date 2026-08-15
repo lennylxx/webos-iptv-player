@@ -154,6 +154,8 @@ export interface ChannelOverride {
   group?: string;
   /** Composite EPG source/channel key. Absent = use automatic matching. */
   epgChannelId?: string;
+  /** Correction added to the EPG source offset. Absent = follow the source exactly. */
+  epgOffsetDeltaMinutes?: number;
   hidden?: boolean;
 }
 

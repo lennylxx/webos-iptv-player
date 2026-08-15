@@ -18,8 +18,8 @@ function emptyRecord(): ChannelCustomization {
 }
 
 /**
- * Local channel customization: reorder, hide, rename, and regroup channels and
- * groups without touching the source playlists.
+ * Local channel customization: reorder, hide, rename, regroup, and correct EPG
+ * matching or timing without touching the source playlists.
  *
  * Everything is keyed by `channelKey(ch)` (per stream) and by a
  * group key (the source group name, or a user-created one), so a provider
@@ -113,6 +113,20 @@ class ChannelCustomizationServiceImpl {
     this.mutate(key, (ov) => {
       if (trimmed) ov.epgChannelId = trimmed;
       else delete ov.epgChannelId;
+    });
+  }
+
+  /** A null or zero delta restores the correction configured for the EPG source. */
+  setEpgOffsetDelta(key: string, minutes: number | null): void {
+    this.mutate(key, (ov) => {
+      if (minutes === null || !Number.isFinite(minutes) || minutes === 0) {
+        delete ov.epgOffsetDeltaMinutes;
+        return;
+      }
+      ov.epgOffsetDeltaMinutes = Math.max(
+        -CONFIG.EPG.OFFSET_MAX_MINUTES * 2,
+        Math.min(CONFIG.EPG.OFFSET_MAX_MINUTES * 2, Math.round(minutes)),
+      );
     });
   }
 

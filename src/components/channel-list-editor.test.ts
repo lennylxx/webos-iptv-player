@@ -36,7 +36,9 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
     },
     epgMock: {
       mappingRevision: 0,
-      findChannelId: () => null,
+      programmes: {} as Record<string, unknown[]>,
+      findChannelId: vi.fn(() => null as string | null),
+      getSourceOffsetMinutes: vi.fn(() => 0),
       getNowPlaying: () => null,
       getMappingCandidates: vi.fn(() => [] as Array<{
         id: string;
@@ -137,6 +139,7 @@ playlistMock.getGroupsForPlaylist = (playlist?: string) => {
 let container: HTMLElement;
 let onSelect: ReturnType<typeof vi.fn>;
 let onEpgMappingChanged: ReturnType<typeof vi.fn>;
+let onEpgOffsetChanged: ReturnType<typeof vi.fn>;
 let list: ChannelList;
 
 beforeEach(() => {
@@ -159,13 +162,25 @@ beforeEach(() => {
   storageMock.setFavorites.mockClear();
   storageMock.setChannelCustomization.mockClear();
   epgMock.mappingRevision = 0;
+  epgMock.programmes = {};
+  epgMock.findChannelId.mockReset();
+  epgMock.findChannelId.mockReturnValue(null);
+  epgMock.getSourceOffsetMinutes.mockReset();
+  epgMock.getSourceOffsetMinutes.mockReturnValue(0);
   epgMock.getMappingCandidates.mockReset();
   epgMock.getMappingCandidates.mockReturnValue([]);
   container = document.createElement('div');
   document.body.appendChild(container);
   onSelect = vi.fn();
   onEpgMappingChanged = vi.fn();
-  list = new ChannelList(container, onSelect, vi.fn(), onEpgMappingChanged);
+  onEpgOffsetChanged = vi.fn();
+  list = new ChannelList(
+    container,
+    onSelect,
+    vi.fn(),
+    onEpgMappingChanged,
+    onEpgOffsetChanged,
+  );
 });
 
 function channelItems(): HTMLElement[] {
@@ -486,6 +501,65 @@ describe('ChannelList edit mode', () => {
     expect(toastMock.showToast).toHaveBeenLastCalledWith('Select a channel first.');
   });
 
+  it('does not adjust EPG time when no channel is selected or matched', () => {
+    enterEdit();
+    hover(container.querySelector<HTMLElement>('[data-epg-offset-action]')!);
+    list.handleAction('select');
+    expect(container.querySelector('.epg-offset-picker')).toBeNull();
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Select a channel first.');
+
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-offset-action]')!);
+    list.handleAction('select');
+    expect(container.querySelector('.epg-offset-picker')).toBeNull();
+    expect(toastMock.showToast).toHaveBeenLastCalledWith(
+      'No EPG data is available for this channel. Map it first.',
+    );
+  });
+
+  it('starts channel EPG correction from the source offset and restores inheritance', () => {
+    epgMock.findChannelId.mockReturnValue('source::a');
+    epgMock.programmes['source::a'] = [{}];
+    epgMock.getSourceOffsetMinutes.mockReturnValue(60);
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-offset-action]')!);
+    list.handleAction('select');
+
+    expect(container.querySelector('.epg-offset-current')?.textContent).toBe('+1 h');
+    expect(container.querySelector('.channel-edit-overlay-back')?.textContent)
+      .toContain('Back');
+    expect(container.querySelector('[data-epg-offset-reset]')?.textContent)
+      .toContain('Follow source (+1 h)');
+
+    list.handleAction('right');
+    const key = channelKey(data.raw[0]);
+    expect(ChannelCustomizationService.overrideFor(key)?.epgOffsetDeltaMinutes).toBe(15);
+    expect(container.querySelector('.epg-offset-current')?.textContent)
+      .toBe('+1 h 15 min');
+    expect(channelItems()[0].querySelector('.epg-offset-badge')?.textContent)
+      .toContain('+1 h 15 min');
+    expect(channelItems()[0].querySelector('.epg-offset-badge svg')).not.toBeNull();
+    expect(onEpgOffsetChanged).toHaveBeenCalledTimes(1);
+
+    list.handleAction('left');
+    expect(ChannelCustomizationService.overrideFor(key)?.epgOffsetDeltaMinutes).toBeUndefined();
+
+    list.handleAction('left');
+    expect(ChannelCustomizationService.overrideFor(key)?.epgOffsetDeltaMinutes).toBe(-15);
+    hover(container.querySelector<HTMLElement>('[data-epg-offset-reset]')!);
+    list.handleAction('select');
+    expect(ChannelCustomizationService.overrideFor(key)?.epgOffsetDeltaMinutes).toBeUndefined();
+    expect(container.querySelector('.epg-offset-current')?.textContent).toBe('+1 h');
+    expect(channelItems()[0].querySelector('.epg-offset-badge')).toBeNull();
+    expect(onEpgOffsetChanged).toHaveBeenCalledTimes(4);
+
+    expect(list.handleBack()).toBe(true);
+    expect(container.querySelector('.epg-offset-picker')).toBeNull();
+  });
+
   it('opens rename from the clickable edit toolbar', () => {
     enterEdit();
     hover(channelItems()[0]);
@@ -517,6 +591,8 @@ describe('ChannelList edit mode', () => {
 
       const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
       expect(input.value).toBe('Alpha');
+      expect(container.querySelector('.channel-edit-overlay-back')?.textContent)
+        .toContain('Back');
       expect(container.querySelector('[data-epg-channel=""]')?.textContent)
         .toContain('Automatic matching');
       expect(container.querySelector(`[data-epg-channel="${mappedId}"]`)?.textContent)
@@ -527,7 +603,7 @@ describe('ChannelList edit mode', () => {
       expect(ChannelCustomizationService.overrideFor(channelKey(data.raw[0]))?.epgChannelId)
         .toBe(mappedId);
       expect(onEpgMappingChanged).toHaveBeenCalledTimes(1);
-      expect(channelItems()[0].querySelector('.epg-mapped-badge')?.textContent)
+      expect(channelItems()[0].querySelector('.epg-mapped-badge')?.textContent?.trim())
         .toBe('EPG mapped');
 
       hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
@@ -646,9 +722,37 @@ describe('ChannelList edit mode', () => {
     const candidate = container.querySelector<HTMLElement>('[data-epg-position="1"]')!;
     hover(candidate);
     expect(candidate.classList).not.toContain('focused');
+    expect(candidate.classList).toContain('pointer-hovered');
+    expect(document.activeElement).toBe(input);
+    container.querySelector<HTMLElement>('.epg-mapping-search-wrap')!
+      .dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+    expect(candidate.classList).not.toContain('pointer-hovered');
     list.render();
 
     expect(document.activeElement).toBe(input);
+  });
+
+  it('focuses the EPG search when Magic Remote OK clicks its wrapper', () => {
+    epgMock.getMappingCandidates.mockReturnValue([{
+      id: 'source::guide-a',
+      channelId: 'guide-a',
+      name: 'Alpha Guide',
+      sourceName: 'Guide',
+    }]);
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+    list.handleAction('select');
+    const candidate = container.querySelector<HTMLElement>('[data-epg-position="1"]')!;
+    candidate.focus();
+    expect(document.activeElement).toBe(candidate);
+
+    container.querySelector<HTMLElement>('.epg-mapping-search-wrap')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(document.activeElement)
+      .toBe(container.querySelector<HTMLInputElement>('.epg-mapping-search'));
   });
 
   it('refreshes an open picker when the EPG catalog finishes loading', () => {

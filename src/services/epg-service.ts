@@ -1,4 +1,11 @@
-import type { Channel, EpgChannel, EpgSource, ParsedEpg, Programme } from '../types';
+import type {
+  Channel,
+  ChannelOverride,
+  EpgChannel,
+  EpgSource,
+  ParsedEpg,
+  Programme,
+} from '../types';
 import { parseXMLTVWithStats } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
@@ -40,6 +47,8 @@ class EpgServiceImpl {
   private states = new Map<string, SourceState>();
   private channelIdsByName = new Map<string, Map<string, string[]>>();
   private timeIndexes = new Map<string, { source: Programme[]; index: EpgTimeIndex }>();
+  private sourceOffsets = new Map<string, number>();
+  private derivedOffsets = new Map<string, { id: string; baseId: string; minutes: number }>();
   private playlistChannels: Channel[] | null = null;
   private revision = 0;
   private mappingRevisionValue = 0;
@@ -63,6 +72,8 @@ class EpgServiceImpl {
     this.states.clear();
     this.channelIdsByName.clear();
     this.timeIndexes.clear();
+    this.sourceOffsets.clear();
+    this.derivedOffsets.clear();
     this.playlistChannels = null;
   }
 
@@ -128,9 +139,22 @@ class EpgServiceImpl {
   }
 
   findChannelId(channel: Channel): string | null {
+    const override = ChannelCustomizationService.overrideFor(channelKey(channel));
+    const baseId = this.findBaseChannelId(channel, override);
+    return baseId ? this.applyChannelOffset(channel, baseId, override) : null;
+  }
+
+  getSourceOffsetMinutes(channel: Channel): number {
+    const override = ChannelCustomizationService.overrideFor(channelKey(channel));
+    const baseId = this.findBaseChannelId(channel, override);
+    return baseId ? this.sourceOffsets.get(baseId) ?? 0 : 0;
+  }
+
+  private findBaseChannelId(channel: Channel, override: ChannelOverride | null): string | null {
     if (!this.sources.length) return this.findLegacyChannelId(channel);
-    const override = ChannelCustomizationService.overrideFor(channelKey(channel))?.epgChannelId;
-    if (override && this.channels[override]) return override;
+    if (override?.epgChannelId && this.channels[override.epgChannelId]) {
+      return override.epgChannelId;
+    }
     const candidates = this.sources.filter((source) =>
       source.kind === 'manual' || source.playlistIds.some((id) => channel.playlistIds.includes(id)));
 
@@ -157,6 +181,49 @@ class EpgServiceImpl {
       }
     }
     return null;
+  }
+
+  private applyChannelOffset(
+    channel: Channel,
+    baseId: string,
+    override: ChannelOverride | null,
+  ): string {
+    const key = channelKey(channel);
+    const previous = this.derivedOffsets.get(key);
+    const deltaMinutes = override?.epgOffsetDeltaMinutes;
+    const sourceMinutes = this.sourceOffsets.get(baseId) ?? 0;
+    if (deltaMinutes === undefined || deltaMinutes === 0) {
+      this.removeDerivedOffset(key, previous);
+      return baseId;
+    }
+    const minutes = sourceMinutes + deltaMinutes;
+    if (previous?.baseId === baseId && previous.minutes === minutes) return previous.id;
+    this.removeDerivedOffset(key, previous);
+    const source = this.programmes[baseId];
+    if (!source) return baseId;
+    const id = `${baseId}::channel:${encodeURIComponent(key)}`;
+    const deltaMs = deltaMinutes * 60_000;
+    const shifted = source.map(programme => ({
+      ...programme,
+      start: new Date(programme.start.getTime() + deltaMs),
+      stop: new Date(programme.stop.getTime() + deltaMs),
+    }));
+    this.channels[id] = this.channels[baseId];
+    this.programmes[id] = shifted;
+    this.timeIndexes.set(id, { source: shifted, index: new EpgTimeIndex(shifted) });
+    this.derivedOffsets.set(key, { id, baseId, minutes });
+    return id;
+  }
+
+  private removeDerivedOffset(
+    key: string,
+    derived: { id: string } | undefined,
+  ): void {
+    if (!derived) return;
+    delete this.channels[derived.id];
+    delete this.programmes[derived.id];
+    this.timeIndexes.delete(derived.id);
+    this.derivedOffsets.delete(key);
   }
 
   getMappingCandidates(
@@ -387,6 +454,8 @@ class EpgServiceImpl {
     this.channels = {};
     this.programmes = {};
     this.timeIndexes.clear();
+    this.sourceOffsets.clear();
+    this.derivedOffsets.clear();
     this.tzOffsetMinutes = null;
     for (const source of this.sources) {
       const data = this.states.get(source.url)?.data;
@@ -399,7 +468,8 @@ class EpgServiceImpl {
       }
       for (const id in data.programmes) {
         const key = this.channelKey(source.url, id);
-        const offsetMs = (source.offsetMinutes ?? 0) * 60_000;
+        const offsetMinutes = source.offsetMinutes ?? 0;
+        const offsetMs = offsetMinutes * 60_000;
         const shiftedPrograms = offsetMs === 0
           ? data.programmes[id]
           : data.programmes[id].map(program => ({
@@ -408,6 +478,7 @@ class EpgServiceImpl {
               stop: new Date(program.stop.getTime() + offsetMs),
             }));
         this.programmes[key] = shiftedPrograms;
+        this.sourceOffsets.set(key, offsetMinutes);
         this.timeIndexes.set(key, {
           source: shiftedPrograms,
           index: new EpgTimeIndex(shiftedPrograms),

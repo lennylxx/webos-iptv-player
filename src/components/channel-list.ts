@@ -58,6 +58,7 @@ export class ChannelList {
     onChannelSelect: (index: number, catchup?: CatchupInfo) => void,
     onChannelsChanged: () => void = () => {},
     onEpgMappingChanged: () => void = () => {},
+    onEpgOffsetChanged: () => void = () => {},
   ) {
     this.container = container;
     this.onChannelSelect = onChannelSelect;
@@ -70,6 +71,7 @@ export class ChannelList {
       moveListFocus: (delta) => this.moveVirtualFocus(delta),
       onChannelsChanged: () => this.onChannelsChanged(),
       onEpgMappingChanged,
+      onEpgOffsetChanged,
       getCurrentGroup: () => this.currentGroup,
       getCurrentPlaylist: () => this.currentPlaylist,
       setLocation: (group, playlist) => {

@@ -14,6 +14,7 @@ vi.mock('./storage-service', () => ({ StorageService: storageMock }));
 
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
 import { channelKey } from '../utils/channel';
+import { CONFIG } from '../config';
 
 function channel(name: string, url: string, group = ''): Channel {
   return {
@@ -131,6 +132,21 @@ describe('ChannelCustomizationService', () => {
     ChannelCustomizationService.setEpgChannel(KEY_A, '  ');
     expect(ChannelCustomizationService.overrideFor(KEY_A)).toBeNull();
     expect(ChannelCustomizationService.epgChannelIds()).toEqual([]);
+  });
+
+  it('sets, bounds, and clears a per-channel EPG offset delta', () => {
+    ChannelCustomizationService.setEpgOffsetDelta(KEY_A, 15);
+    expect(ChannelCustomizationService.overrideFor(KEY_A)?.epgOffsetDeltaMinutes).toBe(15);
+
+    ChannelCustomizationService.setEpgOffsetDelta(
+      KEY_A,
+      CONFIG.EPG.OFFSET_MAX_MINUTES * 2 + 60,
+    );
+    expect(ChannelCustomizationService.overrideFor(KEY_A)?.epgOffsetDeltaMinutes)
+      .toBe(CONFIG.EPG.OFFSET_MAX_MINUTES * 2);
+
+    ChannelCustomizationService.setEpgOffsetDelta(KEY_A, null);
+    expect(ChannelCustomizationService.overrideFor(KEY_A)).toBeNull();
   });
 
   it('renames a group without changing its key', () => {

@@ -7,11 +7,12 @@ import { ChannelCustomizationService, groupKeyOf } from '../services/channel-cus
 import { StorageService } from '../services/storage-service';
 import { EpgService } from '../services/epg-service';
 import type { EpgMappingCandidate } from '../services/epg-service';
-import { BACK_ICON, CHECK_ICON, GUIDE_ICON, SEARCH_ICON } from './icons';
+import { BACK_ICON, CHECK_ICON, CLOCK_ICON, GUIDE_ICON, SEARCH_ICON } from './icons';
 import { showToast } from './toast';
 import { t } from '../i18n';
 import { CONFIG } from '../config';
 import { VirtualList } from '../utils/virtual-list';
+import { formatEpgOffset } from '../utils/epg-offset';
 
 type EditTarget = { kind: 'channel'; key: string } | { kind: 'group'; key: string };
 type DragCandidate = { target: EditTarget; x: number; y: number };
@@ -21,6 +22,7 @@ interface ChannelListEditorOptions {
   moveListFocus: (delta: number) => boolean;
   onChannelsChanged: () => void;
   onEpgMappingChanged: () => void;
+  onEpgOffsetChanged: () => void;
   getCurrentGroup: () => ChannelGroupId;
   getCurrentPlaylist: () => string;
   setLocation: (group: ChannelGroupId, playlist: string) => void;
@@ -39,6 +41,7 @@ export class ChannelListEditor {
   private groupPickerFor: string | null = null;
   private newGroupOpen = false;
   private epgPickerFor: string | null = null;
+  private epgOffsetFor: string | null = null;
   private epgQuery = '';
   private epgCandidates: EpgMappingCandidate[] = [];
   private epgCandidateRevision = -1;
@@ -72,15 +75,28 @@ export class ChannelListEditor {
           || target.dataset.epgPosition === undefined
           || !(active instanceof HTMLInputElement)
           || !active.classList.contains('epg-mapping-search')) return;
+      this.updateEpgPointerHover(target);
       event.stopImmediatePropagation();
     }, true);
     this.container.addEventListener('mousedown', (event: MouseEvent) => {
       this.onPointerDown(event);
     });
     this.container.addEventListener('mousemove', (event: MouseEvent) => {
+      if (event.target instanceof HTMLElement) this.updateEpgPointerHover(event.target);
       this.onPointerMove(event);
     });
     this.container.addEventListener('mouseup', () => this.finishPointerDrag());
+    this.container.addEventListener('click', (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const wrap = target.closest('.epg-mapping-search-wrap');
+      const input = wrap?.querySelector<HTMLInputElement>('.epg-mapping-search');
+      if (!input) return;
+      event.stopImmediatePropagation();
+      this.updateEpgPointerHover(null);
+      input.focus();
+      this.epgFocusPosition = -1;
+    });
     this.container.addEventListener('keydown', (event: KeyboardEvent) => {
       if (!(event.target instanceof HTMLInputElement)) return;
       if (event.target.classList.contains('epg-mapping-search')
@@ -152,6 +168,7 @@ export class ChannelListEditor {
       const visible = (event as CustomEvent<{ visibility?: boolean }>).detail?.visibility;
       if (!this.epgPickerFor || typeof visible !== 'boolean') return;
       this.epgKeyboardVisible = visible;
+      if (!visible) this.updateEpgPointerHover(null);
       this.container.querySelector('.epg-mapping-picker')
         ?.classList.toggle('keyboard-visible', visible);
       if (this.epgKeyboardFrame !== null) cancelAnimationFrame(this.epgKeyboardFrame);
@@ -218,6 +235,7 @@ export class ChannelListEditor {
     this.groupPickerFor = null;
     this.newGroupOpen = false;
     this.epgPickerFor = null;
+    this.epgOffsetFor = null;
     this.epgQuery = '';
     this.epgCandidates = [];
     this.epgCandidateRevision = -1;
@@ -230,6 +248,17 @@ export class ChannelListEditor {
       this.options.onChannelsChanged();
     }
     this.options.render();
+  }
+
+  private updateEpgPointerHover(target: HTMLElement | null): void {
+    const candidate = this.epgPickerFor && this.epgKeyboardVisible
+      ? target?.closest<HTMLElement>('[data-epg-position]') ?? null
+      : null;
+    this.container.querySelectorAll('.epg-mapping-option.pointer-hovered')
+      .forEach(element => {
+        if (element !== candidate) element.classList.remove('pointer-hovered');
+      });
+    candidate?.classList.add('pointer-hovered');
   }
 
   handleBack(): boolean {
@@ -246,6 +275,11 @@ export class ChannelListEditor {
       this.epgFocusPosition = -1;
       this.epgKeyboardVisible = false;
       this.epgVirtualizer.setScrollOffset(0);
+      this.options.render();
+      return true;
+    }
+    if (this.epgOffsetFor) {
+      this.epgOffsetFor = null;
       this.options.render();
       return true;
     }
@@ -320,6 +354,9 @@ export class ChannelListEditor {
   }
 
   focusGroupPicker(): HTMLElement | null {
+    if (this.epgOffsetFor) {
+      return this.container.querySelector<HTMLElement>('[data-epg-offset-reset]');
+    }
     if (this.epgPickerFor) {
       if (this.epgFocusPosition >= 0) {
         return this.container.querySelector<HTMLElement>(
@@ -387,10 +424,28 @@ export class ChannelListEditor {
   renderChannelEditStatus(channel: Channel): Safe | string {
     const hidden = this.isChannelHidden(channel);
     const selected = this.isFavoriteSelected(channel);
-    const epgMapped = !!ChannelCustomizationService.overrideFor(channelKey(channel))?.epgChannelId;
+    const override = ChannelCustomizationService.overrideFor(channelKey(channel));
+    const epgMapped = !!override?.epgChannelId;
+    const epgOffset = override?.epgOffsetDeltaMinutes === undefined
+      ? null
+      : EpgService.getSourceOffsetMinutes(channel) + override.epgOffsetDeltaMinutes;
     return html`
       ${hidden ? html`<div class="hidden-badge">${t('channel.editHidden')}</div>` : ''}
-      ${epgMapped ? html`<div class="epg-mapped-badge">${t('channel.editEpgMapped')}</div>` : ''}
+      ${epgMapped
+        ? html`
+          <div class="epg-mapped-badge">
+            <span class="epg-mapped-badge-value">${t('channel.editEpgMapped')}</span>
+          </div>
+        `
+        : ''}
+      ${epgOffset === null
+        ? ''
+        : html`
+          <div class="epg-offset-badge" aria-label="${t('settings.timeCorrection')}">
+            <span class="epg-offset-badge-icon">${raw(CLOCK_ICON)}</span>
+            <span class="epg-offset-badge-value">${formatEpgOffset(epgOffset)}</span>
+          </div>
+        `}
       ${this.favoriteSelection
         ? html`<div class="favorite-checkbox">${selected ? raw(CHECK_ICON) : ''}</div>`
         : ''}
@@ -404,6 +459,7 @@ export class ChannelListEditor {
   }
 
   renderGroupPicker(): Safe | string {
+    if (this.epgOffsetFor) return this.renderEpgOffsetPicker();
     if (this.epgPickerFor) return this.renderEpgPicker();
     if (!this.groupPickerFor) return '';
     return html`
@@ -449,11 +505,33 @@ export class ChannelListEditor {
       else if (action === 'select') this.chooseEpgOption();
       return true;
     }
+    if (this.epgOffsetFor) {
+      if (action === 'left' || action === 'right') {
+        this.adjustEpgOffset(
+          action === 'left'
+            ? -CONFIG.EPG.OFFSET_STEP_MINUTES
+            : CONFIG.EPG.OFFSET_STEP_MINUTES,
+        );
+      } else if (action === 'select') {
+        const delta = this.nav.focused?.dataset.epgOffsetDelta;
+        if (delta !== undefined) this.adjustEpgOffset(Number(delta));
+        else if (this.nav.focused?.dataset.epgOffsetReset !== undefined) {
+          this.resetEpgOffset();
+        }
+      } else if (action === 'up' || action === 'down') {
+        this.nav.move(action);
+      }
+      return true;
+    }
 
     const buttonAction = this.nav.focused?.dataset.editAction as Action | undefined;
     if (action === 'select' && buttonAction) return this.handleEditAction(buttonAction);
     if (action === 'select' && this.nav.focused?.dataset.epgAction !== undefined) {
       this.openEpgPicker();
+      return true;
+    }
+    if (action === 'select' && this.nav.focused?.dataset.epgOffsetAction !== undefined) {
+      this.openEpgOffsetPicker();
       return true;
     }
 
@@ -844,6 +922,97 @@ export class ChannelListEditor {
     this.options.render();
   }
 
+  private openEpgOffsetPicker(): void {
+    const target = this.grabbed;
+    if (!target || target.kind !== 'channel') {
+      showToast(t('channel.editSelectChannel'));
+      return;
+    }
+    const channel = PlaylistService.getByIndex(PlaylistService.indexOfKey(target.key));
+    const epgId = channel ? EpgService.findChannelId(channel) : null;
+    if (!channel || !epgId || !EpgService.programmes[epgId]?.length) {
+      showToast(t('channel.editEpgOffsetUnavailable'));
+      return;
+    }
+    this.epgOffsetFor = target.key;
+    this.options.render();
+  }
+
+  private adjustEpgOffset(delta: number): void {
+    const key = this.epgOffsetFor;
+    if (!key || !Number.isFinite(delta)) return;
+    const channel = PlaylistService.getByIndex(PlaylistService.indexOfKey(key));
+    if (!channel) return;
+    const source = EpgService.getSourceOffsetMinutes(channel);
+    const deltaMinutes =
+      ChannelCustomizationService.overrideFor(key)?.epgOffsetDeltaMinutes ?? 0;
+    const current = source + deltaMinutes;
+    const next = Math.max(
+      -CONFIG.EPG.OFFSET_MAX_MINUTES,
+      Math.min(CONFIG.EPG.OFFSET_MAX_MINUTES, current + delta),
+    );
+    ChannelCustomizationService.setEpgOffsetDelta(key, next - source);
+    this.options.onEpgOffsetChanged();
+    this.options.render();
+  }
+
+  private resetEpgOffset(): void {
+    const key = this.epgOffsetFor;
+    if (!key) return;
+    ChannelCustomizationService.setEpgOffsetDelta(key, null);
+    this.options.onEpgOffsetChanged();
+    this.options.render();
+  }
+
+  private renderEpgOffsetPicker(): Safe | string {
+    const key = this.epgOffsetFor;
+    if (!key) return '';
+    const channel = PlaylistService.getByIndex(PlaylistService.indexOfKey(key));
+    if (!channel) return '';
+    const source = EpgService.getSourceOffsetMinutes(channel);
+    const deltaMinutes =
+      ChannelCustomizationService.overrideFor(key)?.epgOffsetDeltaMinutes ?? 0;
+    const current = source + deltaMinutes;
+    return html`
+      <div class="group-picker epg-offset-picker" data-nav-container>
+        <div class="group-picker-title">${
+          t('settings.timeCorrection')
+        }: ${
+          channel.name
+        }</div>
+        <div class="epg-offset-current">${formatEpgOffset(current)}</div>
+        <div class="channel-epg-offset-controls">
+          <button class="group-picker-option channel-epg-offset-step"
+                  data-key="epg-offset:earlier"
+                  data-focusable data-epg-offset-delta="-${CONFIG.EPG.OFFSET_STEP_MINUTES}"
+                  aria-label="${t('settings.offsetEarlier')}">-</button>
+          <button class="group-picker-option channel-epg-offset-source"
+                  data-key="epg-offset:source"
+                  data-focusable data-epg-offset-reset>
+            ${t('channel.editEpgOffsetFollowSource', {
+              offset: formatEpgOffset(source),
+            })}
+          </button>
+          <button class="group-picker-option channel-epg-offset-step"
+                  data-key="epg-offset:later"
+                  data-focusable data-epg-offset-delta="${CONFIG.EPG.OFFSET_STEP_MINUTES}"
+                  aria-label="${t('settings.offsetLater')}">+</button>
+        </div>
+        <div class="epg-offset-hint">${t('channel.editEpgOffsetHint')}</div>
+        ${this.renderOverlayBackHint()}
+      </div>
+    `;
+  }
+
+  private renderOverlayBackHint(): Safe {
+    return html`
+      <div class="channel-edit-overlay-back">
+        <span class="edit-key key-back">${raw(BACK_ICON)}</span>
+        ${t('common.back')}
+      </div>
+    `;
+  }
+
   private refreshEpgCandidates(): void {
     const key = this.epgPickerFor;
     const channel = key
@@ -958,6 +1127,7 @@ export class ChannelListEditor {
               : ''}
           </div>
         </div>
+        ${this.renderOverlayBackHint()}
       </div>
     `;
   }
@@ -1004,6 +1174,11 @@ export class ChannelListEditor {
                 data-epg-action>
           <span class="edit-action-icon">${raw(GUIDE_ICON)}</span>
           ${t('channel.editEpg')}
+        </button>
+        <button class="edit-hint edit-action" data-key="edit:epg-offset" data-focusable
+                data-epg-offset-action>
+          <span class="edit-action-icon">${raw(CLOCK_ICON)}</span>
+          ${t('settings.timeCorrection')}
         </button>
         <button class="edit-hint edit-action" data-key="edit:yellow" data-focusable
                 data-edit-action="yellow">

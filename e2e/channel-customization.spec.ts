@@ -29,6 +29,13 @@ function key(page: Page, keyCode: number): Promise<void> {
   );
 }
 
+function xmltvDate(date: Date): string {
+  const part = (value: number): string => String(value).padStart(2, '0');
+  return `${String(date.getUTCFullYear())}${part(date.getUTCMonth() + 1)}${
+    part(date.getUTCDate())
+  }${part(date.getUTCHours())}${part(date.getUTCMinutes())}${part(date.getUTCSeconds())} +0000`;
+}
+
 function names(page: Page): Promise<string[]> {
   return page.locator('.channel-main .channel-name').allInnerTexts();
 }
@@ -56,6 +63,33 @@ test('yellow enters edit mode and shows the color-key hints; yellow again leaves
 
   await key(page, YELLOW);
   await expect(page.locator('.edit-hints')).toHaveCount(0);
+});
+
+test('the edit toolbar fits every locale with both EPG actions', async ({ page }) => {
+  await boot(page);
+  const locales = ['en', 'de', 'es', 'fr', 'it', 'pt-BR', 'ru', 'uk', 'zh-CN'];
+
+  for (const locale of locales) {
+    await page.evaluate(value => {
+      localStorage.setItem('iptv_locale', JSON.stringify(value));
+    }, locale);
+    await page.reload();
+    await expect(page.locator('#view-channels')).toBeVisible();
+    await key(page, YELLOW);
+
+    const layout = await page.locator('.edit-hints').evaluate((toolbar) => {
+      const children = Array.from(toolbar.children);
+      const last = children[children.length - 1]?.getBoundingClientRect();
+      const bounds = toolbar.getBoundingClientRect();
+      return {
+        overflow: toolbar.scrollWidth - toolbar.clientWidth,
+        contentRight: last?.right ?? 0,
+        availableRight: bounds.right - parseFloat(getComputedStyle(toolbar).paddingRight),
+      };
+    });
+    expect(layout.overflow, locale).toBeLessThanOrEqual(0);
+    expect(layout.contentRight, locale).toBeLessThanOrEqual(layout.availableRight + 1);
+  }
 });
 
 test('back leaves edit mode instead of leaving the channel list', async ({ page }) => {
@@ -197,6 +231,7 @@ test('back cancels an open rename without changing the name', async ({ page }) =
 });
 
 test('maps a channel to an XMLTV entry and keeps the override after reload', async ({ page }) => {
+  const now = Date.now();
   const playlist = SEARCH_M3U.replace('#EXTM3U', '#EXTM3U url-tvg="http://host/guide.xml"');
   const guideChannels = Array.from({ length: 120 }, (_, index) => {
     const number = String(index + 1).padStart(3, '0');
@@ -209,9 +244,18 @@ test('maps a channel to an XMLTV entry and keeps the override after reload', asy
     body: `<?xml version="1.0" encoding="UTF-8"?><tv>
 <channel id="guide-beta"><display-name>Guide Beta</display-name></channel>
 ${guideChannels}
+<programme channel="guide-beta" start="${xmltvDate(new Date(now - 86_400_000))}"
+           stop="${xmltvDate(new Date(now + 86_400_000))}">
+  <title>Beta Programme</title>
+</programme>
 </tv>`,
   }));
   await seedPlaylist(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_epg_offsets', JSON.stringify({
+      'http://host/guide.xml': 60,
+    }));
+  });
   const guideResponse = page.waitForResponse('**/guide.xml');
   await page.goto('/');
   await guideResponse;
@@ -255,13 +299,42 @@ ${guideChannels}
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('[data-epg-channel]').filter({ hasText: 'Guide Beta' })).toBeFocused();
+  const mappingReload = page.waitForResponse('**/guide.xml');
   await page.keyboard.press('Enter');
+  await mappingReload;
   await expect(page.locator('.channel-main .channel-item').first()
     .locator('.epg-mapped-badge')).toHaveText('EPG mapped');
   await expect.poll(async () => {
     const records = await readUserDataStore<{ epgChannelId?: string }>(page, 'channel-state');
     return records.some(record => record.value.epgChannelId?.endsWith('::guide-beta'));
   }).toBe(true);
+
+  await page.locator('[data-epg-offset-action]').click();
+  await expect(page.locator('.epg-offset-current')).toHaveText('+1 h');
+  const offsetLayout = await page.locator('.channel-epg-offset-controls')
+    .evaluate((controls) => {
+    const elements = Array.from(controls.querySelectorAll('button'));
+    const buttons = elements.map(button => button.getBoundingClientRect());
+    const bounds = controls.getBoundingClientRect();
+    return {
+      heights: elements.map(button => button.offsetHeight),
+      buttonsCenter: Math.round((buttons[0].left + buttons[2].right) / 2),
+      controlsCenter: Math.round((bounds.left + bounds.right) / 2),
+    };
+  });
+  expect(offsetLayout.heights).toEqual([54, 54, 54]);
+  expect(offsetLayout.buttonsCenter).toBeCloseTo(offsetLayout.controlsCenter, 0);
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('.epg-offset-current')).toHaveText('+1 h 15 min');
+  await expect(page.locator('.channel-main .channel-item').first()
+    .locator('.epg-offset-badge')).toContainText('+1 h 15 min');
+  await expect.poll(async () => {
+    const records = await readUserDataStore<{
+      epgOffsetDeltaMinutes?: number;
+    }>(page, 'channel-state');
+    return records.some(record => record.value.epgOffsetDeltaMinutes === 15);
+  }).toBe(true);
+  await key(page, BACK);
 
   await page.reload();
   await expect(page.locator('#view-channels')).toBeVisible();
@@ -273,6 +346,52 @@ ${guideChannels}
   await page.locator('[data-epg-action]').click();
   await expect(page.locator('[data-epg-channel]').filter({ hasText: 'Guide Beta' }))
     .toHaveClass(/active/);
+  await key(page, BACK);
+  await page.locator('[data-epg-offset-action]').click();
+  await expect(page.locator('.epg-offset-current')).toHaveText('+1 h 15 min');
+  await expect(page.locator('.channel-main .channel-item').first()
+    .locator('.epg-offset-badge')).toContainText('+1 h 15 min');
+
+  for (const locale of ['en', 'de', 'es', 'fr', 'it', 'pt-BR', 'ru', 'uk', 'zh-CN']) {
+    await page.evaluate(value => {
+      localStorage.setItem('iptv_locale', JSON.stringify(value));
+    }, locale);
+    await page.reload();
+    await expect(page.locator('#view-channels')).toBeVisible();
+    await key(page, YELLOW);
+    await focusChannel(page, 0);
+    await key(page, ENTER);
+    await page.locator('[data-epg-offset-action]').click();
+
+    const localizedLayout = await page.locator('.epg-offset-picker').evaluate((picker) => {
+      const source = picker.querySelector<HTMLElement>('.channel-epg-offset-source')!;
+      const controls = picker.querySelector<HTMLElement>('.channel-epg-offset-controls')!;
+      const buttons = Array.from(controls.querySelectorAll('button'));
+      const first = buttons[0].getBoundingClientRect();
+      const last = buttons[buttons.length - 1].getBoundingClientRect();
+      const bounds = controls.getBoundingClientRect();
+      const pickerBounds = picker.getBoundingClientRect();
+      const pickerStyle = getComputedStyle(picker);
+      const pickerLeft = pickerBounds.left + parseFloat(pickerStyle.paddingLeft);
+      const pickerRight = pickerBounds.right - parseFloat(pickerStyle.paddingRight);
+      return {
+        sourceFits: source.scrollWidth <= source.clientWidth,
+        sourceWidth: source.offsetWidth,
+        controlsFit: first.left >= pickerLeft - 1 && last.right <= pickerRight + 1,
+        whiteSpace: getComputedStyle(source).whiteSpace,
+        heights: buttons.map(button => button.offsetHeight),
+        buttonsCenter: Math.round((first.left + last.right) / 2),
+        controlsCenter: Math.round((bounds.left + bounds.right) / 2),
+      };
+    });
+    expect(localizedLayout.sourceFits, locale).toBe(true);
+    expect(localizedLayout.sourceWidth, locale).toBeLessThan(440);
+    expect(localizedLayout.controlsFit, locale).toBe(true);
+    expect(localizedLayout.whiteSpace, locale).toBe('nowrap');
+    expect(localizedLayout.heights, locale).toEqual([54, 54, 54]);
+    expect(localizedLayout.buttonsCenter, locale)
+      .toBeCloseTo(localizedLayout.controlsCenter, 0);
+  }
 });
 
 test('red moves a channel into another group', async ({ page }) => {

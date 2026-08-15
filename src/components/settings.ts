@@ -18,6 +18,7 @@ import { createXtreamClient } from '../services/xtream-client';
 import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
 import { genPlaylistId, isSourceEnabled } from '../utils/playlist';
 import { channelKey, legacyChannelKey } from '../utils/channel';
+import { formatEpgOffset } from '../utils/epg-offset';
 import { CONFIG } from '../config';
 import { THEMES, OVERLAY_STYLES, TEXT_SIZES, DEFAULT_TEXT_SIZE, type ThemeMeta, type OverlayStyle, type TextSize } from '../config/themes';
 import { previewTheme, applyTextSize } from '../services/theme-service';
@@ -54,18 +55,6 @@ function formatOffset(min: number): string {
   const sign = min > 0 ? '+' : '-';
   const abs = Math.abs(min);
   return `UTC${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
-}
-
-function formatCorrection(min: number): string {
-  if (!min) return t('settings.offsetZero');
-  const sign = min > 0 ? '+' : '-';
-  const abs = Math.abs(min);
-  const hours = Math.floor(abs / 60);
-  const minutes = abs % 60;
-  const value = hours
-    ? `${hours} ${t('settings.offsetHours')}${minutes ? ` ${minutes} ${t('settings.offsetMinutes')}` : ''}`
-    : `${minutes} ${t('settings.offsetMinutes')}`;
-  return `${sign}${value}`;
 }
 
 function correctedTime(min: number): string {
@@ -838,7 +827,7 @@ export class Settings {
                       aria-label="${t('settings.offsetEarlier')}">-</button>
               <button class="btn btn-secondary epg-offset-value" data-focusable
                       aria-label="${t('settings.offsetReset')}">
-                ${formatCorrection(offset)}
+                ${formatEpgOffset(offset)}
               </button>
               <button class="btn btn-secondary epg-offset-step" data-focusable
                       data-offset-delta="${CONFIG.EPG.OFFSET_STEP_MINUTES}"
@@ -847,7 +836,7 @@ export class Settings {
             : html`
               <button class="btn btn-secondary epg-offset-step" disabled>-</button>
               <button class="btn btn-secondary epg-offset-value" disabled>
-                ${formatCorrection(0)}
+                ${formatEpgOffset(0)}
               </button>
               <button class="btn btn-secondary epg-offset-step" disabled>+</button>
             `}
@@ -890,7 +879,7 @@ export class Settings {
     if (!source) return;
     const offset = this.epgOffsets[source] ?? 0;
     const value = $('.epg-offset-value', this.container);
-    if (value) value.textContent = formatCorrection(offset);
+    if (value) value.textContent = formatEpgOffset(offset);
     const preview = $('.epg-offset-preview', this.container);
     if (preview) morph(preview, correctionPreview(offset));
   }

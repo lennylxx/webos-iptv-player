@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const { channelOverrideMock, epgChannelIdsMock } = vi.hoisted(() => ({
-  channelOverrideMock: vi.fn(() => null as { epgChannelId?: string } | null),
+  channelOverrideMock: vi.fn(() => null as {
+    epgChannelId?: string;
+    epgOffsetDeltaMinutes?: number;
+  } | null),
   epgChannelIdsMock: vi.fn(() => [] as string[]),
 }));
 
@@ -39,6 +42,7 @@ import { parseXMLTV, parseXMLTVWithStats } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import type { Channel, EpgSource, ParsedEpg, Programme } from '../types';
 import { CONFIG } from '../config';
+import { channelKey } from '../utils/channel';
 
 function prog(over: Partial<Programme>): Programme {
   return {
@@ -117,6 +121,48 @@ describe('EpgService multi-source matching', () => {
     expect(EpgService.programmes[id!][0].start).toEqual(h(0));
     expect(EpgService.programmes[id!][0].stop).toEqual(h(2));
     expect(data.programmes.a[0].start.getTime()).toBe(originalStart);
+  });
+
+  it('overrides a source offset for only the customized playlist channel', async () => {
+    vi.mocked(parseXMLTV).mockReturnValue(parsed('shared', 'Alpha', 'Shifted'));
+    const customized = channel({
+      id: 'shared',
+      name: 'Alpha',
+      url: 'http://host/a',
+      playlistIds: ['a'],
+    });
+    const inherited = channel({
+      id: 'shared',
+      name: 'Alpha',
+      url: 'http://host/b',
+      playlistIds: ['a'],
+    });
+    channelOverrideMock.mockImplementation(key =>
+      key === channelKey(customized) ? { epgOffsetDeltaMinutes: 60 } : null);
+
+    await EpgService.load([
+      { ...source('http://a', ['a']), offsetMinutes: 60 },
+    ], [customized, inherited]);
+
+    const customizedId = EpgService.findChannelId(customized);
+    const inheritedId = EpgService.findChannelId(inherited);
+    expect(customizedId).not.toBe(inheritedId);
+    expect(EpgService.programmes[customizedId!][0].start).toEqual(h(1));
+    expect(EpgService.programmes[inheritedId!][0].start).toEqual(h(0));
+    expect(EpgService.getSourceOffsetMinutes(customized)).toBe(60);
+
+    channelOverrideMock.mockImplementation(key =>
+      key === channelKey(customized) ? { epgOffsetDeltaMinutes: -30 } : null);
+    const updatedId = EpgService.findChannelId(customized);
+    expect(EpgService.programmes[updatedId!][0].start).toEqual(h(-0.5));
+    expect(Object.keys(EpgService.programmes)
+      .filter(id => id.indexOf('::channel:') >= 0)).toHaveLength(1);
+
+    await EpgService.load([
+      { ...source('http://a', ['a']), offsetMinutes: 90 },
+    ], [customized, inherited]);
+    const inheritedSourceChangeId = EpgService.findChannelId(customized);
+    expect(EpgService.programmes[inheritedSourceChangeId!][0].start).toEqual(h(0));
   });
 
   it('keeps colliding XMLTV ids isolated and uses the channel owning playlist', async () => {

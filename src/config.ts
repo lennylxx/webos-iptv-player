@@ -5,7 +5,7 @@ export const CONFIG = {
 
   STORAGE_PREFIX: 'iptv_',
 
-  // Versioned channel customization record (reorder / hide / rename / regroup).
+  // Versioned channel customization record (order, display, grouping, and EPG overrides).
   // Bump when its shape changes so an older payload is ignored, not misapplied.
   CHANNEL_CUSTOMIZATION_VERSION: 1,
 
