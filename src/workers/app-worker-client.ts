@@ -12,6 +12,7 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
 function appWorkerClient(): WorkerRpcClient<AppWorkerTasks> {
   if (!client) {
+    // Chromium 68 has no module workers; esbuild emits this classic IIFE at a stable path.
     const url = new URL('js/app-worker.js', document.baseURI).href;
     const generation = nextGeneration++;
     const nextClient = new WorkerRpcClient<AppWorkerTasks>(new Worker(url), {

@@ -16,6 +16,12 @@ import ts from 'typescript';
 //                         (needs an `object` field); bundle scan only
 //              'global' → a global function call, bare `name(...)` or namespaced
 //                         `self`/`window`/`globalThis`.name(...); bundle scan only
+//              'constructor' → a global constructor call, `new name(...)`;
+//                              bundle scan only (eslint compat covers source)
+//              'worker-option' → a module Worker/SharedWorker constructor option;
+//                                bundle scan plus a dedicated eslint rule
+//              'postmessage-option' → object-form `postMessage` transfer options
+//              'listener-option' → AbortSignal-backed event-listener options
 //   object     for kind 'static' only: the owning built-in (e.g. 'Promise')
 //   minChrome  first Chrome version shipping the API (for messages)
 //   message    remediation hint (shared by both gates)
@@ -28,6 +34,19 @@ import ts from 'typescript';
 // 'static'/'global' entries are the bundle scanner's job because eslint's
 // `compat/compat` already flags those in first-party source.
 export const DENYLIST = [
+  // --- unsupported constructor options ---
+  { name: 'module worker', kind: 'worker-option', minChrome: 80, message: 'Module workers are Chrome 80+ — not on webOS 5 (Chromium 68). Bundle the worker as a classic script.' },
+  { name: 'postMessage transfer options', kind: 'postmessage-option', minChrome: 79, message: 'Object-form postMessage transfer options are Chrome 79+ — pass the transfer list array as the second argument on webOS 5.' },
+  { name: 'abortable event listener', kind: 'listener-option', minChrome: 88, message: 'addEventListener({ signal }) is Chrome 88+ — remove the listener explicitly on webOS 5.' },
+  // --- unsupported constructors ---
+  { name: 'OffscreenCanvas', kind: 'constructor', minChrome: 69, message: 'OffscreenCanvas is Chrome 69+ — not on webOS 5 (Chromium 68).' },
+  { name: 'TextEncoderStream', kind: 'constructor', minChrome: 71, message: 'TextEncoderStream is Chrome 71+ — not on webOS 5 (Chromium 68).' },
+  { name: 'TextDecoderStream', kind: 'constructor', minChrome: 71, message: 'TextDecoderStream is Chrome 71+ — not on webOS 5 (Chromium 68).' },
+  { name: 'CompressionStream', kind: 'constructor', minChrome: 80, message: 'CompressionStream is Chrome 80+ — not on webOS 5 (Chromium 68).' },
+  { name: 'DecompressionStream', kind: 'constructor', minChrome: 80, message: 'DecompressionStream is Chrome 80+ — not on webOS 5 (Chromium 68).' },
+  { name: 'WeakRef', kind: 'constructor', minChrome: 84, message: 'WeakRef is Chrome 84+ — not on webOS 5 (Chromium 68).' },
+  { name: 'FinalizationRegistry', kind: 'constructor', minChrome: 84, message: 'FinalizationRegistry is Chrome 84+ — not on webOS 5 (Chromium 68).' },
+  { name: 'AggregateError', kind: 'constructor', minChrome: 85, message: 'AggregateError is Chrome 85+ — not on webOS 5 (Chromium 68).' },
   // --- instance methods (also drive eslint no-restricted-syntax) ---
   { name: 'flat', kind: 'method', minChrome: 69, message: 'Array.prototype.flat is Chrome 69+ — not on webOS 5 (Chromium 68). Use reduce/concat.' },
   { name: 'flatMap', kind: 'method', minChrome: 69, message: 'Array.prototype.flatMap is Chrome 69+ — not on webOS 5 (Chromium 68).' },
@@ -72,6 +91,8 @@ export const ALLOWLIST = [
 //   method  → `recv.name(...)`   (any receiver; also computed `recv["name"](…)`)
 //   static  → `Object.name(...)` (bare-identifier owner must match `object`)
 //   global  → `name(...)` bare, or `self|window|globalThis .name(...)`
+//   constructor → `new name(...)`, bare or on a standard global namespace
+// Dedicated checks also cover unsupported literal option-object shapes.
 // It cannot know a receiver's TYPE (bundled deps are untyped JS), so a generic
 // method name can still match an unrelated object; keep such names out with
 // `scanBundle: false` (they stay enforced in first-party source by eslint).
@@ -94,16 +115,50 @@ function ownerIdentText(node) {
   return ts.isIdentifier(node.expression) ? node.expression.text : undefined;
 }
 
+function globalExpressionName(node) {
+  if (ts.isIdentifier(node)) return node.text;
+  if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return undefined;
+  const owner = ownerIdentText(node);
+  return owner !== undefined && NAMESPACES.has(owner) ? calledPropName(node) : undefined;
+}
+
+function objectProperty(node, wanted) {
+  if (!node || !ts.isObjectLiteralExpression(node)) return false;
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)
+      ? property.name.text
+      : undefined;
+    if (name === wanted) return property;
+  }
+  return undefined;
+}
+
+function hasLiteralObjectProperty(node, name, value) {
+  const property = objectProperty(node, name);
+  return !!property
+    && ts.isStringLiteralLike(property.initializer)
+    && property.initializer.text === value;
+}
+
 export function scanBundle(code, { denylist = DENYLIST, allowlist = ALLOWLIST } = {}) {
   const allowed = new Set(allowlist.map((a) => a.name));
   const active = denylist.filter((e) => e.scanBundle !== false && !allowed.has(e.name));
   const methods = new Map(); // name -> entry
   const statics = new Map(); // `${object}.${name}` -> entry
   const globals = new Map(); // name -> entry
+  const constructors = new Map(); // global constructor name -> entry
+  let moduleWorker;
+  let postMessageOptions;
+  let listenerOptions;
   for (const e of active) {
     if (e.kind === 'method') methods.set(e.name, e);
     else if (e.kind === 'static') statics.set(`${e.object}.${e.name}`, e);
-    else globals.set(e.name, e);
+    else if (e.kind === 'global') globals.set(e.name, e);
+    else if (e.kind === 'constructor') constructors.set(e.name, e);
+    else if (e.kind === 'worker-option') moduleWorker = e;
+    else if (e.kind === 'postmessage-option') postMessageOptions = e;
+    else if (e.kind === 'listener-option') listenerOptions = e;
   }
 
   const counts = new Map();
@@ -111,8 +166,29 @@ export function scanBundle(code, { denylist = DENYLIST, allowlist = ALLOWLIST } 
   const sf = ts.createSourceFile('bundle.js', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS);
 
   const walk = (node) => {
+    if (ts.isNewExpression(node)) {
+      const name = globalExpressionName(node.expression);
+      const constructor = name === undefined ? undefined : constructors.get(name);
+      if (constructor) bump(constructor);
+      if (moduleWorker
+          && (name === 'Worker' || name === 'SharedWorker')
+          && hasLiteralObjectProperty(node.arguments?.[1], 'type', 'module')) {
+        bump(moduleWorker);
+      }
+    }
     if (ts.isCallExpression(node)) {
       const callee = node.expression;
+      const calledName = ts.isIdentifier(callee) ? callee.text : calledPropName(callee);
+      if (postMessageOptions
+          && calledName === 'postMessage'
+          && objectProperty(node.arguments[1], 'transfer')) {
+        bump(postMessageOptions);
+      }
+      if (listenerOptions
+          && calledName === 'addEventListener'
+          && objectProperty(node.arguments[2], 'signal')) {
+        bump(listenerOptions);
+      }
       if (ts.isIdentifier(callee)) {
         const g = globals.get(callee.text);
         if (g) bump(g);

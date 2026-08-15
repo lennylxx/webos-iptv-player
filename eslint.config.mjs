@@ -2,17 +2,63 @@ import compat from 'eslint-plugin-compat';
 import tsParser from '@typescript-eslint/parser';
 import { DENYLIST } from './scripts/compat-gate.mjs';
 
+const entryByKind = new Map(DENYLIST.map((entry) => [entry.kind, entry]));
+
+function expressionName(node) {
+  if (node.type === 'Identifier') return node.name;
+  if (node.type !== 'MemberExpression') return undefined;
+  if (node.computed && node.property.type === 'Literal') return node.property.value;
+  return !node.computed && node.property.type === 'Identifier' ? node.property.name : undefined;
+}
+
+function objectProperty(node, name) {
+  if (!node || node.type !== 'ObjectExpression') return undefined;
+  return node.properties.find((property) =>
+    property.type === 'Property'
+    && ((property.key.type === 'Identifier' && property.key.name === name)
+      || (property.key.type === 'Literal' && property.key.value === name)));
+}
+
+const unsupportedPatterns = {
+  meta: { type: 'problem', schema: [] },
+  create(context) {
+    return {
+      NewExpression(node) {
+        const name = expressionName(node.callee);
+        const type = objectProperty(node.arguments[1], 'type');
+        if ((name === 'Worker' || name === 'SharedWorker')
+            && type?.value.type === 'Literal'
+            && type.value.value === 'module') {
+          context.report({ node, message: entryByKind.get('worker-option').message });
+        }
+      },
+      CallExpression(node) {
+        const name = expressionName(node.callee);
+        if (name === 'postMessage' && objectProperty(node.arguments[1], 'transfer')) {
+          context.report({ node, message: entryByKind.get('postmessage-option').message });
+        }
+        if (name === 'addEventListener' && objectProperty(node.arguments[2], 'signal')) {
+          context.report({ node, message: entryByKind.get('listener-option').message });
+        }
+      },
+    };
+  },
+};
+
 // webOS 5 ships Chromium 68. esbuild down-levels post-68 *syntax* (optional
 // chaining, etc.) but it does NOT polyfill missing *APIs*, which would silently
-// fail on a real webOS 5 TV. Two rules below close that gap, both keyed to the
+// fail on a real webOS 5 TV. Three rules below close that gap, all keyed to the
 // "browserslist" field in package.json (shared with the CSS gate):
 //   - compat/compat        — flags missing global/static APIs (structuredClone, …)
-//   - no-restricted-syntax — a denylist for the prototype methods compat can't see
-//                            (it can't infer `arr.flat()` is Array.prototype.flat)
+//   - no-restricted-syntax — a denylist for prototype methods compat can't see
+//   - unsupported-patterns — checks unsupported constructor/call option shapes
 export default [
   {
     files: ['src/**/*.ts'],
-    plugins: { compat },
+    plugins: {
+      compat,
+      'webos-compat': { rules: { 'unsupported-patterns': unsupportedPatterns } },
+    },
     languageOptions: {
       parser: tsParser,
       ecmaVersion: 'latest',
@@ -32,6 +78,7 @@ export default [
           message: e.message,
         })),
       ],
+      'webos-compat/unsupported-patterns': 'error',
     },
   },
   {
