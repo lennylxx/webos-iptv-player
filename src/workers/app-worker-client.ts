@@ -8,6 +8,7 @@ let client: WorkerRpcClient<AppWorkerTasks> | null = null;
 let currentGeneration: number | null = null;
 let nextGeneration = 1;
 let activeRequests = 0;
+let retainCount = 0;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
 function appWorkerClient(): WorkerRpcClient<AppWorkerTasks> {
@@ -53,10 +54,20 @@ export async function runAppWorkerTask<TaskName extends keyof AppWorkerTasks & s
     return await appWorkerClient().request(task, payload);
   } finally {
     activeRequests--;
-    if (activeRequests === 0) {
-      idleTimer = setTimeout(() => terminateAppWorker('idle'), IDLE_TERMINATION_MS);
-    }
+    scheduleIdleTermination();
   }
+}
+
+export function retainAppWorker(): () => void {
+  retainCount++;
+  clearIdleTimer();
+  let retained = true;
+  return () => {
+    if (!retained) return;
+    retained = false;
+    retainCount--;
+    scheduleIdleTermination();
+  };
 }
 
 export function isAppWorkerRunning(): boolean {
@@ -82,4 +93,10 @@ function clearIdleTimer(): void {
   if (idleTimer === null) return;
   clearTimeout(idleTimer);
   idleTimer = null;
+}
+
+function scheduleIdleTermination(): void {
+  if (activeRequests !== 0 || retainCount !== 0 || !client) return;
+  clearIdleTimer();
+  idleTimer = setTimeout(() => terminateAppWorker('idle'), IDLE_TERMINATION_MS);
 }

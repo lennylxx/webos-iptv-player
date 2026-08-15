@@ -185,102 +185,102 @@
     },
     "search": {
       "xtream": {
-        "initialOpenMs": 21.1,
+        "initialOpenMs": 30,
         "open": {
-          "p50": 14.2,
-          "p95": 16.9,
-          "max": 16.9,
-          "mean": 14.8
+          "p50": 19.4,
+          "p95": 24.4,
+          "max": 24.4,
+          "mean": 18.5
         },
         "queries": {
           "channelsBroad": {
-            "p50": 139.1,
-            "p95": 156.8,
-            "max": 156.8,
-            "mean": 128.8
+            "p50": 118.8,
+            "p95": 152.3,
+            "max": 152.3,
+            "mean": 116.5
           },
           "channelsSparse": {
-            "p50": 136.9,
-            "p95": 195.2,
-            "max": 195.2,
-            "mean": 159.5
+            "p50": 139.2,
+            "p95": 147.9,
+            "max": 147.9,
+            "mean": 136.2
           },
           "moviesBroad": {
-            "p50": 285.5,
-            "p95": 460.9,
-            "max": 460.9,
-            "mean": 325.5
+            "p50": 259.7,
+            "p95": 291.7,
+            "max": 291.7,
+            "mean": 266
           },
           "moviesSparse": {
-            "p50": 143.8,
-            "p95": 179.7,
-            "max": 179.7,
-            "mean": 151.8
+            "p50": 136.1,
+            "p95": 177.1,
+            "max": 177.1,
+            "mean": 140.4
           },
           "programsBroad": {
-            "p50": 119,
-            "p95": 151.7,
-            "max": 151.7,
-            "mean": 123.5
+            "p50": 122.9,
+            "p95": 137.4,
+            "max": 137.4,
+            "mean": 121.7
           },
           "programsSparse": {
-            "p50": 130.9,
-            "p95": 158.4,
-            "max": 158.4,
-            "mean": 134
+            "p50": 125.9,
+            "p95": 162.6,
+            "max": 162.6,
+            "mean": 134.4
           },
           "noMatch": {
-            "p50": 145.1,
-            "p95": 220.5,
-            "max": 220.5,
-            "mean": 173.7
+            "p50": 161.7,
+            "p95": 225.8,
+            "max": 225.8,
+            "mean": 174.7
           }
         },
-        "renderedPrograms": 1,
-        "programTotalSize": "109px"
+        "renderedPrograms": 16,
+        "programTotalSize": "21_800px"
       },
       "m3u": {
-        "initialOpenMs": 24.2,
+        "initialOpenMs": 24.4,
         "open": {
-          "p50": 15,
-          "p95": 24.1,
-          "max": 24.1,
-          "mean": 15.9
+          "p50": 14.3,
+          "p95": 25.7,
+          "max": 25.7,
+          "mean": 16.4
         },
         "queries": {
           "channelsBroad": {
-            "p50": 86.4,
-            "p95": 143.4,
-            "max": 143.4,
-            "mean": 95.6
+            "p50": 118.1,
+            "p95": 148.2,
+            "max": 148.2,
+            "mean": 118.5
           },
           "channelsSparse": {
-            "p50": 133.3,
-            "p95": 143.3,
-            "max": 143.3,
-            "mean": 130.3
+            "p50": 140.6,
+            "p95": 195.2,
+            "max": 195.2,
+            "mean": 156.3
           },
           "programsBroad": {
-            "p50": 106,
-            "p95": 191.4,
-            "max": 191.4,
-            "mean": 121.6
+            "p50": 111.6,
+            "p95": 226.1,
+            "max": 226.1,
+            "mean": 133.8
           },
           "programsSparse": {
-            "p50": 147.3,
-            "p95": 161.1,
-            "max": 161.1,
-            "mean": 143.2
+            "p50": 144.7,
+            "p95": 189.9,
+            "max": 189.9,
+            "mean": 155.3
           },
           "noMatch": {
-            "p50": 168.1,
-            "p95": 207,
-            "max": 207,
-            "mean": 174.9
+            "p50": 161.5,
+            "p95": 225.8,
+            "max": 225.8,
+            "mean": 181.4
           }
         },
         "renderedChannels": 0,
-        "renderedPrograms": 13,
+        "renderedPrograms": 16,
         "sparseSearch": {
           "channels": 1,
           "programs": 1
@@ -401,16 +401,16 @@
     "stress": {
       "watchdogIntervalMs": 100,
       "heartbeats": 219,
-      "maxEventLoopGapMs": 972.2,
+      "maxEventLoopGapMs": 873,
       "freezeThresholdMs": 5000,
       "documentAlive": true
     },
     "longTasks": {
-      "count": 128,
-      "totalMs": 17565,
-      "maxMs": 572
+      "count": 96,
+      "totalMs": 9596,
+      "maxMs": 609
     },
-    "nodes": 1599,
+    "nodes": 1623,
     "parsers": {
       "m3u": {
         "durationMs": 353.6,
@@ -563,17 +563,17 @@
       "channels": 50000
     },
     "memory": {
-      "usedHeapMiB": 95,
-      "totalHeapMiB": 99.4,
+      "usedHeapMiB": 68.9,
+      "totalHeapMiB": 72.7,
       "retained": {
         "cycles": 3,
-        "beforeMiB": 116.1,
+        "beforeMiB": 90.1,
         "samplesMiB": [
-          94.9,
-          95,
-          95
+          68.9,
+          68.9,
+          68.9
         ],
-        "growthMiB": 0.1
+        "growthMiB": 0
       },
       "rssMiB": 133,
       "highWaterMiB": 274.9

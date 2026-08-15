@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchAndParseXMLTV } from './xmltv-loader';
-import { terminateAppWorker } from '../workers/app-worker-client';
+import { retainAppWorker, terminateAppWorker } from '../workers/app-worker-client';
 
 class FakeWorker {
   static url = '';
@@ -124,6 +124,22 @@ describe('fetchAndParseXMLTV worker client', () => {
 
     await vi.advanceTimersByTimeAsync(1000);
 
+    expect(FakeWorker.terminations).toBe(1);
+  });
+
+  it('keeps the shared worker alive while a client retains it', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal('document', { baseURI: 'http://host/app/index.html' });
+    vi.stubGlobal('Worker', FakeWorker);
+
+    const release = retainAppWorker();
+    await fetchAndParseXMLTV('http://host/a');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeWorker.terminations).toBe(0);
+
+    release();
+    await vi.advanceTimersByTimeAsync(1000);
     expect(FakeWorker.terminations).toBe(1);
   });
 

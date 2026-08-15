@@ -56,9 +56,10 @@ sample counts instead of comparing incompatible reports.
 | Memory | Used/total V8 heap plus three post-GC reopen cycles to detect retained growth |
 
 The key distributions record both synchronous main-thread handler time and
-action-to-next-frame latency. Search-open and query distributions remain
-synchronous handler measurements. Long Task totals provide an independent view
-of main-thread stalls across the complete suite.
+action-to-next-frame latency. Search-open remains a synchronous handler
+measurement; query distributions run through the production worker and measure
+input-to-result-frame latency. Long Task totals provide an independent view of
+main-thread stalls across the complete suite.
 Structural assertions independently require every virtualized collection to
 retain a bounded DOM window and the full scale-derived scroll extent.
 Large extents use JavaScript-style digit separators, for example

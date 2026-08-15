@@ -1290,6 +1290,9 @@ export async function runViewReopenCycle() {
     click('[data-section="live"]');
     await waitFor('#view-channels:not(.hidden)');
     await settle();
+    // Retained-heap samples must exclude in-flight Search payloads and its
+    // one-second shared-worker idle grace period.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
     return { nodes: document.getElementsByTagName('*').length };
 }
 
@@ -1407,6 +1410,16 @@ export async function runM3USearchBenchmark(options) {
     }
     throw new Error(`Timed out waiting for ${selector}`);
   };
+  const waitForSearchQuery = async (query, timeout = 30_000) => {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      const view = document.querySelector('#view-search .search-view');
+      if (view?.dataset.searchQuery === query
+          && view.dataset.searchPending === 'false') return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`Timed out waiting for Search query '${query}'`);
+  };
   const icon = document.querySelector('[data-section="search"]');
   if (!icon) throw new Error('Missing M3U Search icon');
   const clickIcon = () => {
@@ -1437,10 +1450,11 @@ export async function runM3USearchBenchmark(options) {
     for (let index = 0; index < options.querySamples; index++) {
       input.value = '';
       input.dispatchEvent(new Event('input', { bubbles: true }));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await waitForSearchQuery('');
       input.value = query;
       const started = performance.now();
       input.dispatchEvent(new Event('input', { bubbles: true }));
+      await waitForSearchQuery(query);
       await new Promise((resolve) => requestAnimationFrame(() => {
         values.push(performance.now() - started);
         resolve();
@@ -1463,18 +1477,18 @@ export async function runM3USearchBenchmark(options) {
   };
   input.value = 'rarechannelneedle';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  await waitForSearchQuery('rarechannelneedle');
   const sparseSearch = {
     channels: document.querySelectorAll('.search-channel-row').length,
     programs: 0,
   };
   input.value = 'rareprogramneedle';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  await waitForSearchQuery('rareprogramneedle');
   sparseSearch.programs = document.querySelectorAll('.search-program-row').length;
   input.value = 'program';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  await waitForSearchQuery('program');
   return {
     initialOpenMs,
     open: distribution(openValues),
@@ -1779,16 +1793,27 @@ export async function runBenchmarkSuites(options) {
         framesOver50Ms: frameValues.filter(value => value > 50).length,
       };
     };
+    const waitForSearchQuery = async (query, timeout = 30_000) => {
+      const started = Date.now();
+      while (Date.now() - started < timeout) {
+        const view = document.querySelector('#view-search .search-view');
+        if (view?.dataset.searchQuery === query
+            && view.dataset.searchPending === 'false') return;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error(`Timed out waiting for Search query '${query}'`);
+    };
     const queryDistribution = async (query) => {
       const input = document.querySelector('.tab-bar-search-input');
       const values = [];
       for (let i = 0; i < options.querySamples; i++) {
         input.value = '';
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await waitForSearchQuery('');
         input.value = query;
         const started = performance.now();
         input.dispatchEvent(new Event('input', { bubbles: true }));
+        await waitForSearchQuery(query);
         await new Promise((resolve) => requestAnimationFrame(() => {
           values.push(performance.now() - started);
           resolve();
@@ -2117,7 +2142,7 @@ export async function runBenchmarkSuites(options) {
     };
     input.value = 'rarechannelneedle';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    await settle();
+    await waitForSearchQuery('rarechannelneedle');
     const sparseCounts = {
       channels: document.querySelectorAll(
         '#view-search .search-channel-row, #view-search .search-channel-tile',
@@ -2127,13 +2152,13 @@ export async function runBenchmarkSuites(options) {
     };
     input.value = 'raremovieneedle';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    await settle();
+    await waitForSearchQuery('raremovieneedle');
     sparseCounts.movies = document.querySelectorAll(
       '#view-search [data-search-virtual="movies"] .catalog-tile',
     ).length;
     input.value = 'rareprogramneedle';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    await settle();
+    await waitForSearchQuery('rareprogramneedle');
     sparseCounts.programs = document.querySelectorAll(
       '#view-search .search-program-row',
     ).length;
@@ -2143,6 +2168,7 @@ export async function runBenchmarkSuites(options) {
     }
     input.value = 'program';
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    await waitForSearchQuery('program');
     const search = {
       initialOpenMs: searchInitialOpenMs,
       open: searchOpen,

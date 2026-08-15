@@ -9,12 +9,10 @@ import { StorageService } from '../services/storage-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
 import { loadAllVodStreams, loadAllSeries } from '../services/xtream-catalog';
 import {
-  prepareSearchItem,
   prepareNameSearchItems,
+  prepareSearchItems,
   rankPreparedNamesTopK,
   rankPreparedTopK,
-  type PreparedNameSearchIndex,
-  type PreparedSearchItem,
 } from '../utils/channel-search';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { formatDayLabel, formatTime } from '../utils/time';
@@ -26,6 +24,12 @@ import { t } from '../i18n';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard, type VirtualScrollAxis } from '../utils/virtual-scroll';
 import { runInFrameSlices } from '../utils/frame-slices';
+import {
+  isAppWorkerRunning,
+  retainAppWorker,
+  runAppWorkerTask,
+} from '../workers/app-worker-client';
+import type { SearchIndexRequest, SearchQueryResponse } from '../workers/tasks';
 
 const log = createLogger('Search');
 const SEARCH_LIST_VIEWPORT = 420;
@@ -70,9 +74,7 @@ export class Search {
   private query = '';
   private allVod: VodItem[] = [];
   private allSeries: SeriesItem[] = [];
-  private programIndex: PreparedSearchItem<ProgramResult>[] = [];
-  private vodIndex: PreparedNameSearchIndex<VodItem> = { items: [], values: [] };
-  private seriesIndex: PreparedNameSearchIndex<SeriesItem> = { items: [], values: [] };
+  private programIndex: ProgramResult[] = [];
   private indexedChannels: Channel[] | null = null;
   private indexedProgrammes: Record<string, Programme[]> | null = null;
   private loadedFor: string | null = null;
@@ -89,11 +91,21 @@ export class Search {
   private scrollFrame: number | null = null;
   private queryFrame: number | null = null;
   private queryGeneration = 0;
+  private queryPromise: Promise<void> | null = null;
+  private queryPending = false;
   private catalogController: AbortController | null = null;
   private active = false;
   private programIndexGeneration = 0;
   private resultLimit: number = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
   private hasMoreResults = false;
+  private workerSession = 0;
+  private workerIndexReady = false;
+  private workerIndexedChannels: Channel[] | null = null;
+  private workerIndexedProgrammes: Record<string, Programme[]> | null = null;
+  private workerIndexedAccountId: string | null = null;
+  private workerIndexedVod: VodItem[] | null = null;
+  private workerIndexedSeries: SeriesItem[] | null = null;
+  private releaseWorker: (() => void) | null = null;
   private readonly scrollGuard = new VirtualScrollGuard();
 
   constructor(private container: HTMLElement, private handlers: SearchHandlers) {
@@ -116,37 +128,77 @@ export class Search {
 
   async open(account: PlaylistEntry | null): Promise<void> {
     this.active = true;
+    if (!isAppWorkerRunning()) this.invalidateWorkerIndex();
+    const reuseWorkerIndex = this.canReuseWorkerIndex(account);
+    if (!this.releaseWorker) this.releaseWorker = retainAppWorker();
     this.cancelScheduledQuery();
     this.catalogController?.abort();
     this.catalogController = null;
     if (this.loadedFor !== account?.id) {
       this.allVod = [];
       this.allSeries = [];
-      this.vodIndex = { items: [], values: [] };
-      this.seriesIndex = { items: [], values: [] };
       this.loadedFor = null;
     }
     this.account = account;
     this.query = '';
     this.resultLimit = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
     this.render();
+    if (reuseWorkerIndex) return;
+
+    const sessionId = ++this.workerSession;
+    this.invalidateWorkerIndex();
+    const workerReset = new Promise<boolean>((resolve, reject) => {
+      requestAnimationFrame(() => {
+        if (!this.active || sessionId !== this.workerSession) {
+          resolve(false);
+          return;
+        }
+        this.indexWorker({ sessionId, reset: true }).then(resolve, reject);
+      });
+    });
     let catalogLoad: Promise<void> | null = null;
     if (account) {
       this.catalogController = new AbortController();
-      catalogLoad = this.loadCatalog(account, this.catalogController.signal);
+      catalogLoad = this.loadCatalog(
+        account,
+        this.catalogController.signal,
+        sessionId,
+        workerReset,
+      );
     }
-    await this.buildProgramIndex(false);
+    const reset = await workerReset;
+    if (!reset || !this.active || sessionId !== this.workerSession) return;
+    const channelsIndexed = await this.indexWorker({
+      sessionId,
+      channels: PlaylistService.channels.map(channel => [
+        channel.name,
+        channel.group,
+        channel.sourceName ?? '',
+      ]),
+    });
+    if (!channelsIndexed || !this.active || sessionId !== this.workerSession) return;
+    await this.buildProgramIndex(false, sessionId);
     if (!this.active) return;
-    if (this.query.trim()) this.render();
+    const completedProgramGeneration = this.programIndexGeneration;
+    if (this.query.trim()) await this.startQuery(++this.queryGeneration);
     await catalogLoad;
+    if (!this.active
+        || sessionId !== this.workerSession
+        || completedProgramGeneration !== this.programIndexGeneration) return;
+    if (!account || this.loadedFor === account.id) this.markWorkerIndexReady(account);
   }
 
   /** The tab bar's search box drives the query; re-render the results for it. */
-  setQuery(query: string): void {
+  async setQuery(query: string): Promise<void> {
     this.cancelScheduledQuery();
     this.query = query;
     this.resultLimit = CONFIG.XTREAM.SEARCH_INITIAL_RESULTS;
-    this.render();
+    if (!query.trim()) {
+      this.clearResults();
+      this.render();
+      return;
+    }
+    await this.startQuery(this.queryGeneration);
   }
 
   scheduleQuery(query: string): void {
@@ -156,13 +208,14 @@ export class Search {
     if (this.queryFrame !== null) cancelAnimationFrame(this.queryFrame);
     if (!query.trim()) {
       this.queryFrame = null;
+      this.clearResults();
       this.render();
       return;
     }
     this.queryFrame = requestAnimationFrame(() => {
       this.queryFrame = null;
       if (generation !== this.queryGeneration) return;
-      this.render();
+      void this.startQuery(generation);
     });
   }
 
@@ -171,8 +224,10 @@ export class Search {
     this.indexedChannels = null;
     this.indexedProgrammes = null;
     if (!this.active) return;
-    await this.buildProgramIndex(true);
-    if (this.active && this.query.trim()) this.render();
+    await this.buildProgramIndex(true, this.workerSession);
+    if (this.active && this.query.trim()) {
+      await this.startQuery(++this.queryGeneration);
+    }
   }
 
   dismissPrompt(): void {
@@ -184,6 +239,10 @@ export class Search {
     this.programIndexGeneration++;
     this.catalogController?.abort();
     this.catalogController = null;
+    this.releaseWorker?.();
+    this.releaseWorker = null;
+    this.queryPending = false;
+    this.queryPromise = null;
   }
 
   handleAction(action: Action): void {
@@ -215,8 +274,21 @@ export class Search {
   // Load the whole catalogs once per account (cached in IndexedDB), guarding
   // against account-switch races so a stale in-flight load can't clobber the
   // current account's catalog. Non-blocking: open() already rendered the box.
-  private async loadCatalog(account: PlaylistEntry, signal: AbortSignal): Promise<void> {
-    if (this.loadedFor === account.id) return;
+  private async loadCatalog(
+    account: PlaylistEntry,
+    signal: AbortSignal,
+    sessionId: number,
+    workerReset: Promise<boolean>,
+  ): Promise<void> {
+    if (this.loadedFor === account.id) {
+      if (!await workerReset) return;
+      await this.indexWorker({
+        sessionId,
+        movies: this.allVod.map(item => item.name),
+        series: this.allSeries.map(item => item.name),
+      });
+      return;
+    }
     const [vod, series] = await Promise.all([
       captureCatalogLoad(loadAllVodStreams(account, signal)),
       captureCatalogLoad(loadAllSeries(account, signal)),
@@ -226,7 +298,6 @@ export class Search {
     if (signal.aborted || this.account?.id !== account.id) return;
     if (vod.ok) {
       this.allVod = vod.data;
-      this.vodIndex = prepareNameSearchItems(vod.data);
     } else {
       log.error(
         'Movie search catalog load failed',
@@ -237,7 +308,6 @@ export class Search {
     }
     if (series.ok) {
       this.allSeries = series.data;
-      this.seriesIndex = prepareNameSearchItems(series.data);
     } else {
       log.error(
         'Series search catalog load failed',
@@ -256,7 +326,14 @@ export class Search {
         'series',
       );
     }
-    if (this.query.trim()) this.render();
+    if (!await workerReset) return;
+    const indexed = await this.indexWorker({
+      sessionId,
+      ...(vod.ok ? { movies: vod.data.map(item => item.name) } : {}),
+      ...(series.ok ? { series: series.data.map(item => item.name) } : {}),
+    });
+    if (!indexed || signal.aborted || this.account?.id !== account.id) return;
+    if (this.query.trim()) await this.startQuery(++this.queryGeneration);
   }
 
   private onSelect(): void {
@@ -282,12 +359,22 @@ export class Search {
   /** Move focus into the first result (called when the tab bar's search box
    *  hands off with Enter / Down). */
   focusFirstResult(): void {
+    const focus = (): void => {
+      const first = this.container.querySelector<HTMLElement>(
+        '.search-results [data-focusable]',
+      );
+      if (first) this.nav.focus(first);
+    };
     if (this.queryFrame !== null) {
       this.cancelScheduledQuery();
-      this.render();
+      void this.startQuery(this.queryGeneration).then(focus);
+      return;
     }
-    const first = this.container.querySelector<HTMLElement>('.search-results [data-focusable]');
-    if (first) this.nav.focus(first);
+    if (this.queryPromise) {
+      void this.queryPromise.then(focus);
+      return;
+    }
+    focus();
   }
 
   private posterCell(name: string, poster: string): ReturnType<typeof html> {
@@ -413,10 +500,13 @@ export class Search {
     `;
   }
 
-  private async buildProgramIndex(force: boolean): Promise<void> {
+  private async buildProgramIndex(force: boolean, sessionId: number): Promise<void> {
     if (!force
         && this.indexedChannels === PlaylistService.channels
-        && this.indexedProgrammes === EpgService.programmes) return;
+        && this.indexedProgrammes === EpgService.programmes) {
+      await this.indexProgrammes(sessionId);
+      return;
+    }
     const generation = ++this.programIndexGeneration;
     const channels = PlaylistService.channels;
     const programmesByChannel = EpgService.programmes;
@@ -444,24 +534,216 @@ export class Search {
     }, { shouldContinue });
     if (!collected) return;
 
-    const prepared: PreparedSearchItem<ProgramResult>[] = [];
-    let index = 0;
-    const indexed = await runInFrameSlices(() => {
-      if (index >= programs.length) return true;
-      prepared.push(prepareSearchItem(programs[index++], result => [
+    this.programIndex = programs;
+    this.indexedChannels = channels;
+    this.indexedProgrammes = programmesByChannel;
+    await this.indexProgrammes(sessionId);
+  }
+
+  private indexProgrammes(sessionId: number): Promise<boolean> {
+    return this.indexWorker({
+      sessionId,
+      programmes: this.programIndex.map(result => [
         result.programme.title,
         result.programme.category,
         result.programme.description,
         result.channel.name,
         result.channel.group,
-      ]));
-      return false;
-    }, { shouldContinue });
-    if (!indexed || !shouldContinue()) return;
+      ]),
+    });
+  }
 
-    this.programIndex = prepared;
-    this.indexedChannels = channels;
-    this.indexedProgrammes = programmesByChannel;
+  private async indexWorker(request: SearchIndexRequest): Promise<boolean> {
+    const response = await runAppWorkerTask('search.index', request);
+    return response.accepted && request.sessionId === this.workerSession;
+  }
+
+  private startQuery(generation: number, preserveOffsets = false): Promise<void> {
+    const promise = this.runWorkerQuery(generation, preserveOffsets).catch(error => {
+      log.error(
+        'Search result update failed',
+        'event=search.results.update.failed',
+        error,
+      );
+    });
+    this.queryPromise = promise;
+    void promise.then(() => {
+      if (this.queryPromise === promise) this.queryPromise = null;
+    });
+    return promise;
+  }
+
+  private async runWorkerQuery(generation: number, preserveOffsets: boolean): Promise<void> {
+    const query = this.query;
+    const sessionId = this.workerSession;
+    if (!query.trim()) return;
+    if (!preserveOffsets) {
+      this.queryPending = true;
+      this.render();
+    }
+    let response: SearchQueryResponse | null;
+    let recoveryAttempted = false;
+    try {
+      response = await runAppWorkerTask('search.query', {
+        sessionId,
+        query,
+        limit: this.resultLimit,
+        includeCatalog: !!this.account,
+      });
+    } catch (error) {
+      if (generation !== this.queryGeneration || !this.active) return;
+      log.error(
+        'Search worker query failed; rebuilding its index',
+        'event=search.worker.query.failed',
+        error,
+      );
+      recoveryAttempted = true;
+      response = await this.recoverWorkerQuery(sessionId, query);
+    }
+    if (generation !== this.queryGeneration || sessionId !== this.workerSession || !this.active) {
+      return;
+    }
+    if (!response && !recoveryAttempted) {
+      log.error(
+        'Search worker lost its index; rebuilding it',
+        'event=search.worker.index.missing',
+        `session=${String(sessionId)}`,
+      );
+      response = await this.recoverWorkerQuery(sessionId, query);
+    }
+    if (!response) response = this.fallbackQuery(query);
+    this.applyQueryResponse(response);
+    this.queryPending = false;
+    if (!preserveOffsets) this.resetVirtualOffsets();
+    this.render();
+  }
+
+  private fallbackQuery(query: string): SearchQueryResponse {
+    const channels = PlaylistService.searchRanked(query, this.resultLimit);
+    const programmes = rankPreparedTopK(
+      prepareSearchItems(this.programIndex, result => [
+        result.programme.title,
+        result.programme.category,
+        result.programme.description,
+        result.channel.name,
+        result.channel.group,
+      ]),
+      query,
+      this.resultLimit,
+    );
+    const movies = this.account
+      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allVod), query, this.resultLimit)
+      : { items: [], hasMore: false };
+    const series = this.account
+      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allSeries), query, this.resultLimit)
+      : { items: [], hasMore: false };
+    return {
+      channels: {
+        indices: channels.items.map(channel => PlaylistService.indexOf(channel)),
+        hasMore: channels.hasMore,
+      },
+      programmes: {
+        indices: indicesOf(this.programIndex, programmes.items),
+        hasMore: programmes.hasMore,
+      },
+      movies: {
+        indices: indicesOf(this.allVod, movies.items),
+        hasMore: movies.hasMore,
+      },
+      series: {
+        indices: indicesOf(this.allSeries, series.items),
+        hasMore: series.hasMore,
+      },
+    };
+  }
+
+  private async recoverWorkerQuery(
+    sessionId: number,
+    query: string,
+  ): Promise<SearchQueryResponse | null> {
+    try {
+      const indexed = await this.indexWorker({
+        sessionId,
+        reset: true,
+        channels: PlaylistService.channels.map(channel => [
+          channel.name,
+          channel.group,
+          channel.sourceName ?? '',
+        ]),
+        programmes: this.programIndex.map(result => [
+          result.programme.title,
+          result.programme.category,
+          result.programme.description,
+          result.channel.name,
+          result.channel.group,
+        ]),
+        movies: this.allVod.map(item => item.name),
+        series: this.allSeries.map(item => item.name),
+      });
+      if (!indexed) return null;
+      this.markWorkerIndexReady(this.account);
+      return await runAppWorkerTask('search.query', {
+        sessionId,
+        query,
+        limit: this.resultLimit,
+        includeCatalog: !!this.account,
+      });
+    } catch (error) {
+      log.error(
+        'Search worker recovery failed; using main-thread fallback',
+        'event=search.worker.recovery.failed',
+        error,
+      );
+      return null;
+    }
+  }
+
+  private applyQueryResponse(response: SearchQueryResponse): void {
+    this.visibleChannels = itemsAt(PlaylistService.channels, response.channels.indices);
+    this.visiblePrograms = itemsAt(this.programIndex, response.programmes.indices);
+    this.visibleMovies = itemsAt(this.allVod, response.movies.indices);
+    this.visibleSeries = itemsAt(this.allSeries, response.series.indices);
+    this.hasMoreResults = response.channels.hasMore || response.programmes.hasMore
+      || response.movies.hasMore || response.series.hasMore;
+  }
+
+  private clearResults(): void {
+    this.visibleChannels = [];
+    this.visiblePrograms = [];
+    this.visibleMovies = [];
+    this.visibleSeries = [];
+    this.hasMoreResults = false;
+    this.queryPending = false;
+    this.resetVirtualOffsets();
+  }
+
+  private canReuseWorkerIndex(account: PlaylistEntry | null): boolean {
+    return this.workerIndexReady
+      && this.workerIndexedChannels === PlaylistService.channels
+      && this.workerIndexedProgrammes === EpgService.programmes
+      && this.workerIndexedAccountId === (account?.id ?? null)
+      && (!account
+        || (this.loadedFor === account.id
+          && this.workerIndexedVod === this.allVod
+          && this.workerIndexedSeries === this.allSeries));
+  }
+
+  private markWorkerIndexReady(account: PlaylistEntry | null): void {
+    this.workerIndexReady = true;
+    this.workerIndexedChannels = PlaylistService.channels;
+    this.workerIndexedProgrammes = EpgService.programmes;
+    this.workerIndexedAccountId = account?.id ?? null;
+    this.workerIndexedVod = this.allVod;
+    this.workerIndexedSeries = this.allSeries;
+  }
+
+  private invalidateWorkerIndex(): void {
+    this.workerIndexReady = false;
+    this.workerIndexedChannels = null;
+    this.workerIndexedProgrammes = null;
+    this.workerIndexedAccountId = null;
+    this.workerIndexedVod = null;
+    this.workerIndexedSeries = null;
   }
 
   private programRow(result: ProgramResult, index: number): ReturnType<typeof html> {
@@ -567,30 +849,9 @@ export class Search {
     this.handlers.onPlayChannel(channelIndex, catchup);
   }
 
-  private render(recompute = true): void {
+  private render(): void {
     const q = this.query.trim();
     const isXtream = !!this.account;
-    if (recompute) {
-      const channels = q
-        ? PlaylistService.searchRanked(this.query, this.resultLimit)
-        : { items: [], hasMore: false };
-      const programs = q
-        ? rankPreparedTopK(this.programIndex, this.query, this.resultLimit)
-        : { items: [], hasMore: false };
-      const movies = q && isXtream
-        ? rankPreparedNamesTopK(this.vodIndex, this.query, this.resultLimit)
-        : { items: [], hasMore: false };
-      const series = q && isXtream
-        ? rankPreparedNamesTopK(this.seriesIndex, this.query, this.resultLimit)
-        : { items: [], hasMore: false };
-      this.visibleChannels = channels.items;
-      this.visiblePrograms = programs.items;
-      this.visibleMovies = movies.items;
-      this.visibleSeries = series.items;
-      this.hasMoreResults = channels.hasMore || programs.hasMore
-        || movies.hasMore || series.hasMore;
-      this.resetVirtualOffsets();
-    }
 
     const hasResults = this.visibleChannels.length > 0 || this.visiblePrograms.length > 0
       || this.visibleMovies.length > 0 || this.visibleSeries.length > 0;
@@ -620,7 +881,7 @@ export class Search {
     // so the empty-query case renders nothing.
     // Xtream: horizontal poster rails for catalog results. M3U-only channels and
     // EPG programs use compact rows so their metadata remains readable.
-    const resultsBody = !q
+    const resultsBody = !q || this.queryPending
       ? html``
       : !hasResults
         ? html`<p class="catalog-hint search-empty">${t('search.empty')}</p>`
@@ -664,12 +925,13 @@ export class Search {
     morph(this.container, html`
       <div class="search-view ${isXtream ? '' : 'search-lists'} ${
         hasMixedLists ? 'search-lists-mixed' : ''
-      }" data-nav-container>
+      }" data-nav-container data-search-query="${q}"
+           data-search-pending="${this.queryPending ? 'true' : 'false'}">
         <div class="search-results">${resultsBody}</div>
       </div>
     `);
     this.restoreVirtualOffsets();
-    if (!recompute) this.nav.clearDetachedFocus();
+    this.nav.clearDetachedFocus();
   }
 
   private createVirtualizer(
@@ -734,7 +996,7 @@ export class Search {
       if (offset + viewport >= total - this.resultItemSize(key) * 2) {
         this.expandResults();
       }
-      this.render(false);
+      this.render();
     });
   }
 
@@ -775,7 +1037,7 @@ export class Search {
         ? scroll?.clientWidth || SEARCH_RAIL_VIEWPORT
         : scroll?.clientHeight || SEARCH_LIST_VIEWPORT,
     );
-    this.render(false);
+    this.render();
     this.nav.focus(
       this.container.querySelector<HTMLElement>(
         `[data-search-section="${key}"][data-search-index="${next}"] [data-focusable]`,
@@ -805,13 +1067,7 @@ export class Search {
       CONFIG.XTREAM.SEARCH_RESULT_CAP,
       this.resultLimit * CONFIG.XTREAM.SEARCH_EXPANSION_FACTOR,
     );
-    const offsets = Object.keys(this.virtualizers()).map(key => [
-      key,
-      this.virtualizers()[key].scrollOffset,
-    ] as const);
-    this.render();
-    for (const [key, offset] of offsets) this.virtualizers()[key].setScrollOffset(offset);
-    this.restoreVirtualOffsets();
+    void this.startQuery(++this.queryGeneration, true);
     return true;
   }
 
@@ -820,4 +1076,19 @@ export class Search {
     if (this.queryFrame !== null) cancelAnimationFrame(this.queryFrame);
     this.queryFrame = null;
   }
+}
+
+function itemsAt<T>(items: T[], indices: number[]): T[] {
+  const selected: T[] = [];
+  for (const index of indices) {
+    const item = items[index];
+    if (item !== undefined) selected.push(item);
+  }
+  return selected;
+}
+
+function indicesOf<T>(items: T[], selected: T[]): number[] {
+  const byItem = new Map<T, number>();
+  for (let index = 0; index < items.length; index++) byItem.set(items[index], index);
+  return selected.map(item => byItem.get(item) ?? -1);
 }
