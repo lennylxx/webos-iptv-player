@@ -42,8 +42,8 @@ sample counts instead of comparing incompatible reports.
 | Raw parsing | Production M3U and XMLTV parsers over generated 50,000-item source text, plus a provider-shaped guide parsed twice — whole feed vs. programmes pre-filtered to the 15% of channels a playlist keeps while retaining the lightweight XMLTV channel catalog for manual mapping, each bracketed by a forced GC so `parsers.xmltvCatalog` reports both duration and retained heap; `parsers.xmltvPipelineBuffered` and `parsers.xmltvPipeline` fetch the same gzip guide through the legacy buffered and production worker-streaming paths, with end-to-end timing, maximum animation-frame gap, and separate forced-GC CDP page-heap sampling; production duration and frame gap are regression-gated |
 | Channel List | Bounded DOM size and D-pad handler p50/p95/max |
 | Recently Watched | Full rendering at the 50-entry product maximum, alternating 88px Live and 100px Catch-up rows |
-| Player Sidebar | Open latency, bounded DOM size, D-pad handler distribution, and frame-paced reveal of pre-decoded logos |
-| EPG open | Red-key-to-visible and red-key-to-first-frame latency, plus the longest Long Task during that transition |
+| Player Sidebar | Open-to-visible latency, bounded DOM size, D-pad handler distribution, channel-search query handler/frame distributions, and a separately measured frame-paced reveal of pre-decoded logos |
+| EPG open, search, and mapping | Red-key-to-visible and red-key-to-first-frame latency, the longest Long Task during that transition, channel-search query distributions, and manual mapping query distributions over a 50,000-channel guide |
 | EPG Channel List | 50,000 channels, bounded DOM/extent, and navigation distribution under `epg.channelList` |
 | EPG Program List | 50,000 programs for one channel, bounded DOM/extent, and navigation distribution under `epg.programList` |
 | Groups | Repeated All/large/small switching plus a separate 50,000-unique-group reload covering Channel List, Sidebar, and EPG group navigation |
@@ -74,6 +74,13 @@ Xtream Search uses broad and no-match query shapes:
 
 Each collection also uses a unique synthetic needle query to capture the
 sparse-result case independently of broad-result sorting and rendering.
+
+Sidebar channel search, EPG channel search, and EPG mapping each record empty,
+broad, sparse, and no-match searches separately. Each result includes
+synchronous input-handler time and input-to-result-frame latency so worker
+ranking, result delivery, and rendering remain visible.
+These auxiliary searches run after the existing view and unified-search samples
+so their 50,000-item indexes do not change the workload of older metrics.
 
 This separates fixed full-scan cost from broad-result sorting and DOM work. It
 also gives future search indexing or worker implementations stable before/after

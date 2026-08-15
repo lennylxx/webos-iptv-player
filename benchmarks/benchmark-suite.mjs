@@ -223,6 +223,16 @@ export async function installBenchmarkFixture(options) {
       category: '',
       icon: '',
     }));
+    const epgChannels = {};
+    for (let index = 0; index < options.scale; index++) {
+      const id = index < 2 ? `ch${String(index)}` : `guide-${String(index)}`;
+      epgChannels[id] = {
+        name: index === options.scale - 1
+          ? 'RareGuideNeedle'
+          : `Guide ${String(index)}`,
+        icon: '',
+      };
+    }
     const categories = Array.from({ length: options.scale }, (_, index) => ({
       id: String(index + 7),
       name: `Category ${String(index + 7)}`,
@@ -273,10 +283,7 @@ export async function installBenchmarkFixture(options) {
       url: options.epgUrl,
       timestamp: Date.now(),
       data: {
-        channels: {
-          ch0: { name: 'Channel 0', icon: '' },
-          ch1: { name: 'Channel 1', icon: '' },
-        },
+        channels: epgChannels,
         programmes: { ch0: programs, ch1: transitionPrograms },
         tzOffsetMinutes: null,
       },
@@ -1821,6 +1828,48 @@ export async function runBenchmarkSuites(options) {
       }
       return distribution(values);
     };
+    const inputQueryDistribution = async (selector, query) => {
+      const handlerValues = [];
+      const frameValues = [];
+      const waitForResult = async () => {
+        const started = performance.now();
+        while (performance.now() - started < 30_000) {
+          const input = document.querySelector(selector);
+          if (input?.dataset.searchQuery === query
+              && input.dataset.searchPending === 'false') return;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        throw new Error(`Timed out waiting for search input ${selector}`);
+      };
+      for (let i = 0; i < options.querySamples; i++) {
+        let input = document.querySelector(selector);
+        if (!input) throw new Error(`Missing search input ${selector}`);
+        input.value = query === '' ? 'zzzz-reset' : '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        const resetQuery = query === '' ? 'zzzz-reset' : '';
+        while (true) {
+          input = document.querySelector(selector);
+          if (input?.dataset.searchQuery === resetQuery
+              && input.dataset.searchPending === 'false') break;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        input = document.querySelector(selector);
+        if (!input) throw new Error(`Search input disappeared ${selector}`);
+        input.value = query;
+        const started = performance.now();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        handlerValues.push(performance.now() - started);
+        await waitForResult();
+        await new Promise((resolve) => requestAnimationFrame(() => {
+          frameValues.push(performance.now() - started);
+          resolve();
+        }));
+      }
+      return {
+        handler: distribution(handlerValues),
+        frame: distribution(frameValues),
+      };
+    };
     const searchOpenDistribution = async () => {
       const icon = document.querySelector('[data-section="search"]');
       const slot = document.querySelector('.tab-bar-search');
@@ -1916,6 +1965,7 @@ export async function runBenchmarkSuites(options) {
     const sidebarStarted = performance.now();
     key('ArrowLeft', 37);
     await waitFor('#player-sidebar:not(.hidden)');
+    const sidebarOpenMs = round(performance.now() - sidebarStarted);
     document.querySelectorAll('#player-sidebar .ch-logo-wrap')
       .forEach((spacer, index) => {
         if (index >= 12) return;
@@ -1956,7 +2006,7 @@ export async function runBenchmarkSuites(options) {
       );
     }
     const sidebar = {
-      openMs: round(performance.now() - sidebarStarted),
+      openMs: sidebarOpenMs,
       rendered: document.querySelectorAll('.sidebar-ch-item').length,
       totalSize: pixelSize('.sidebar-channel-spacer', 'height'),
       navigation: await measureKeys('ArrowDown', 40),
@@ -1999,6 +2049,7 @@ export async function runBenchmarkSuites(options) {
     const epgMaxLongTaskMs = round(
       epgLongTasks.length ? Math.max(...epgLongTasks) : 0,
     );
+    click('#epg-channels [data-channel-idx="0"]');
     await waitFor('.epg-programme-item');
     click('#epg-channels [data-channel-idx="1"]');
     await settle();
@@ -2196,6 +2247,93 @@ export async function runBenchmarkSuites(options) {
       freezeThresholdMs: 5000,
       documentAlive: document.documentElement.isConnected,
     };
+
+    click('[data-section="live"]');
+    await waitFor('#view-channels:not(.hidden)');
+    const auxiliaryChannel = document.querySelector('.channel-main .channel-item');
+    if (!auxiliaryChannel) throw new Error('Missing channel for auxiliary search benchmarks');
+    auxiliaryChannel.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    key('Enter', 13);
+    await waitFor('#view-player:not(.hidden)');
+    key('ArrowLeft', 37);
+    await waitFor('#player-sidebar:not(.hidden)');
+    sidebar.search = {
+      queries: {
+        empty: await inputQueryDistribution('.sidebar-search-input', ''),
+        broad: await inputQueryDistribution('.sidebar-search-input', 'channel'),
+        sparse: await inputQueryDistribution('.sidebar-search-input', 'rarechannelneedle'),
+        noMatch: await inputQueryDistribution('.sidebar-search-input', 'zzzz-no-match'),
+      },
+    };
+    const sidebarSearchInput = document.querySelector('.sidebar-search-input');
+    sidebarSearchInput.value = 'rarechannelneedle';
+    sidebarSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    while (document.querySelector('.sidebar-search-input')?.dataset.searchPending === 'true') {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (document.querySelectorAll('.sidebar-ch-item').length !== 1) {
+      throw new Error('Sparse Sidebar search did not render one channel');
+    }
+    sidebarSearchInput.value = '';
+    sidebarSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    key('Backspace', 461);
+    key('Backspace', 461);
+    await waitFor('#view-channels:not(.hidden)');
+
+    key('', 403);
+    await waitFor('#view-epg:not(.hidden)');
+    const epgSearch = {
+      queries: {
+        empty: await inputQueryDistribution('.epg-search-input', ''),
+        broad: await inputQueryDistribution('.epg-search-input', 'channel'),
+        sparse: await inputQueryDistribution('.epg-search-input', 'rarechannelneedle'),
+        noMatch: await inputQueryDistribution('.epg-search-input', 'zzzz-no-match'),
+      },
+    };
+    const epgSearchInput = document.querySelector('.epg-search-input');
+    epgSearchInput.value = 'rarechannelneedle';
+    epgSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    while (document.querySelector('.epg-search-input')?.dataset.searchPending === 'true') {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (document.querySelectorAll('.epg-channel-item').length !== 1) {
+      throw new Error('Sparse EPG channel search did not render one channel');
+    }
+    epgSearchInput.value = '';
+    epgSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    key('Backspace', 461);
+    await waitFor('#view-channels:not(.hidden)');
+
+    key('', 405);
+    await waitFor('.edit-hints');
+    const editChannel = document.querySelector('.channel-main .channel-item');
+    if (!editChannel) throw new Error('Missing channel for EPG mapping benchmark');
+    editChannel.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    key('Enter', 13);
+    click('[data-epg-action]');
+    await waitFor('.epg-mapping-search');
+    const epgMapping = {
+      queries: {
+        empty: await inputQueryDistribution('.epg-mapping-search', ''),
+        broad: await inputQueryDistribution('.epg-mapping-search', 'guide'),
+        sparse: await inputQueryDistribution('.epg-mapping-search', 'rareguideneedle'),
+        noMatch: await inputQueryDistribution('.epg-mapping-search', 'zzzz-no-match'),
+      },
+    };
+    const sparseMappingInput = document.querySelector('.epg-mapping-search');
+    sparseMappingInput.value = 'rareguideneedle';
+    sparseMappingInput.dispatchEvent(new Event('input', { bubbles: true }));
+    while (document.querySelector('.epg-mapping-search')?.dataset.searchPending === 'true') {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (document.querySelectorAll('.epg-mapping-option[data-epg-channel]').length !== 2) {
+      throw new Error('Sparse EPG mapping search did not render auto plus one candidate');
+    }
+    key('Backspace', 461);
+    key('Backspace', 461);
+    await waitFor('#view-channels:not(.hidden)');
     return {
       channelList,
       recentlyWatched,
@@ -2204,6 +2342,8 @@ export async function runBenchmarkSuites(options) {
         openMs: epgOpenMs,
         firstFrameMs: epgFirstFrameMs,
         maxLongTaskMs: epgMaxLongTaskMs,
+        mapping: epgMapping,
+        search: epgSearch,
         channelList: epgChannels.navigation,
         programList: epgPrograms.navigation,
         renderedChannels: epgChannels.rendered,

@@ -61,6 +61,19 @@ vi.mock('../services/epg-service', () => ({
 
 vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentMock }));
 vi.mock('./toast', () => ({ showToast: toastMock }));
+vi.mock('../workers/app-worker-client', async () => {
+  const { ScopedSearchIndex } = await import('../workers/scoped-search-index');
+  const index = new ScopedSearchIndex();
+  return {
+    retainAppWorker: () => () => undefined,
+    runAppWorkerTask: (task: string, payload: never) => {
+      if (task === 'list-search.index') return Promise.resolve(index.indexList(payload));
+      if (task === 'list-search.query') return Promise.resolve(index.queryList(payload));
+      if (task === 'list-search.release') return Promise.resolve(index.releaseList(payload));
+      return Promise.reject(new Error(`Unexpected worker task: ${task}`));
+    },
+  };
+});
 
 import { Sidebar } from './sidebar';
 import { setLocale } from '../i18n';
@@ -371,18 +384,20 @@ describe('Sidebar', () => {
       expect(text.style.getPropertyValue('--scroll-dist')).toBe('-60px');
     });
 
-    it('typing in the search box filters channels across playlists', () => {
+    it('typing in the search box filters channels across playlists', async () => {
       const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
       search.value = 'char';
       search.dispatchEvent(new Event('input', { bubbles: true }));
+      await vi.waitFor(() => expect(items()).toHaveLength(1));
       const names = items().map(i => i.querySelector('.ch-name')?.textContent);
       expect(names).toEqual(['Charlie']);
     });
 
-    it('Enter in the search box drops focus onto the first result', () => {
+    it('Enter in the search box drops focus onto the first result', async () => {
       const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
       search.value = 'a';
       search.dispatchEvent(new Event('input', { bubbles: true }));
+      await vi.waitFor(() => expect(items().length).toBeGreaterThan(0));
       search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       expect(items()[0].classList.contains('focused')).toBe(true);
     });
@@ -1025,13 +1040,14 @@ describe('Sidebar', () => {
   });
 
   describe('search ranking', () => {
-    it('a search result reports its global channel index, not the filtered position', () => {
+    it('a search result reports its global channel index, not the filtered position', async () => {
       sidebar.show();
       highlightSearch();
       sidebar.handleAction('select'); // focus the search box
       const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
       search.value = 'charlie';
       search.dispatchEvent(new Event('input', { bubbles: true }));
+      await vi.waitFor(() => expect(items()).toHaveLength(1));
       expect(items().map(i => i.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
       sidebar.handleAction('down');   // enter the list at the single result
       sidebar.handleAction('select'); // pick it

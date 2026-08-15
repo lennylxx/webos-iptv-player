@@ -46,6 +46,7 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
         name: string;
         sourceName: string;
       }>),
+      getMappingSearchEntries: vi.fn(),
     },
     storageMock: {
       getFavorites: () => data.favorites,
@@ -78,6 +79,25 @@ vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentMock }));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
+vi.mock('../workers/app-worker-client', async () => {
+  const { ScopedSearchIndex } = await import('../workers/scoped-search-index');
+  const index = new ScopedSearchIndex();
+  return {
+    retainAppWorker: () => () => undefined,
+    runAppWorkerTask: (task: string, payload: never) => {
+      if (task === 'mapping-search.index') {
+        return Promise.resolve(index.indexMapping(payload));
+      }
+      if (task === 'mapping-search.query') {
+        return Promise.resolve(index.queryMapping(payload));
+      }
+      if (task === 'mapping-search.release') {
+        return Promise.resolve(index.releaseMapping(payload));
+      }
+      return Promise.reject(new Error(`Unexpected worker task: ${task}`));
+    },
+  };
+});
 
 import { ChannelList } from './channel-list';
 import { channelKey } from '../utils/channel';
@@ -169,6 +189,13 @@ beforeEach(() => {
   epgMock.getSourceOffsetMinutes.mockReturnValue(0);
   epgMock.getMappingCandidates.mockReset();
   epgMock.getMappingCandidates.mockReturnValue([]);
+  epgMock.getMappingSearchEntries.mockReset();
+  epgMock.getMappingSearchEntries.mockImplementation((channel: Channel) =>
+    epgMock.getMappingCandidates(channel, '').map(candidate => ({
+      ...candidate,
+      fields: [candidate.channelId, candidate.name, channel.name],
+      sourceIndex: 0,
+    })));
   container = document.createElement('div');
   document.body.appendChild(container);
   onSelect = vi.fn();
@@ -189,6 +216,13 @@ function channelItems(): HTMLElement[] {
 
 function hover(el: HTMLElement): void {
   el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+}
+
+async function waitForEpgSearch(): Promise<void> {
+  await vi.waitFor(() => {
+    expect(container.querySelector<HTMLInputElement>('.epg-mapping-search')
+      ?.dataset.searchPending).toBe('false');
+  });
 }
 
 describe('ChannelList edit mode', () => {
@@ -575,7 +609,7 @@ describe('ChannelList edit mode', () => {
   });
 
   it('maps a selected channel to a searched XMLTV candidate and can restore automatic matching',
-    () => {
+    async () => {
       const mappedId = `${encodeURIComponent('http://host/epg')}::guide-a`;
       epgMock.getMappingCandidates.mockReturnValue([{
         id: mappedId,
@@ -588,6 +622,7 @@ describe('ChannelList edit mode', () => {
       list.handleAction('select');
       hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
       list.handleAction('select');
+      await waitForEpgSearch();
 
       const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
       expect(input.value).toBe('Alpha');
@@ -608,6 +643,7 @@ describe('ChannelList edit mode', () => {
 
       hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
       list.handleAction('select');
+      await waitForEpgSearch();
       hover(container.querySelector<HTMLElement>('[data-epg-channel=""]')!);
       list.handleAction('select');
       expect(ChannelCustomizationService.overrideFor(channelKey(data.raw[0]))?.epgChannelId)
@@ -615,7 +651,7 @@ describe('ChannelList edit mode', () => {
       expect(onEpgMappingChanged).toHaveBeenCalledTimes(2);
     });
 
-  it('updates EPG candidates as the mapping search input changes', () => {
+  it('updates EPG candidates as the mapping search input changes', async () => {
     enterEdit();
     hover(channelItems()[1]);
     list.handleAction('select');
@@ -626,7 +662,8 @@ describe('ChannelList edit mode', () => {
     input.value = 'Guide B';
     input.dispatchEvent(new Event('input', { bubbles: true }));
 
-    expect(epgMock.getMappingCandidates).toHaveBeenLastCalledWith(data.raw[1], 'Guide B');
+    await waitForEpgSearch();
+    expect(input.dataset.searchQuery).toBe('Guide B');
   });
 
   it('closes the EPG picker when Escape originates from the search input', () => {
@@ -646,12 +683,13 @@ describe('ChannelList edit mode', () => {
     expect(container.querySelector('.epg-mapping-picker')).toBeNull();
   });
 
-  it('compacts the EPG picker while the webOS keyboard is visible', () => {
+  it('compacts the EPG picker while the webOS keyboard is visible', async () => {
     enterEdit();
     hover(channelItems()[0]);
     list.handleAction('select');
     hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
     list.handleAction('select');
+    await waitForEpgSearch();
 
     document.dispatchEvent(new CustomEvent('keyboardStateChange', {
       detail: { visibility: true },
@@ -683,6 +721,7 @@ describe('ChannelList edit mode', () => {
     list.handleAction('select');
     hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
     list.handleAction('select');
+    await waitForEpgSearch();
 
     document.dispatchEvent(new CustomEvent('keyboardStateChange', {
       detail: { visibility: true },
@@ -700,7 +739,7 @@ describe('ChannelList edit mode', () => {
     expect(expandedCount).toBeGreaterThan(compactCount);
   });
 
-  it('keeps an empty EPG search focused when the pointer crosses candidates', () => {
+  it('keeps an empty EPG search focused when the pointer crosses candidates', async () => {
     epgMock.getMappingCandidates.mockReturnValue([{
       id: 'source::guide-a',
       channelId: 'guide-a',
@@ -715,6 +754,7 @@ describe('ChannelList edit mode', () => {
     const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
     input.value = '';
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    await waitForEpgSearch();
 
     document.dispatchEvent(new CustomEvent('keyboardStateChange', {
       detail: { visibility: true },
@@ -732,7 +772,7 @@ describe('ChannelList edit mode', () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it('focuses the EPG search when Magic Remote OK clicks its wrapper', () => {
+  it('focuses the EPG search when Magic Remote OK clicks its wrapper', async () => {
     epgMock.getMappingCandidates.mockReturnValue([{
       id: 'source::guide-a',
       channelId: 'guide-a',
@@ -744,6 +784,7 @@ describe('ChannelList edit mode', () => {
     list.handleAction('select');
     hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
     list.handleAction('select');
+    await waitForEpgSearch();
     const candidate = container.querySelector<HTMLElement>('[data-epg-position="1"]')!;
     candidate.focus();
     expect(document.activeElement).toBe(candidate);
@@ -755,12 +796,13 @@ describe('ChannelList edit mode', () => {
       .toBe(container.querySelector<HTMLInputElement>('.epg-mapping-search'));
   });
 
-  it('refreshes an open picker when the EPG catalog finishes loading', () => {
+  it('refreshes an open picker when the EPG catalog finishes loading', async () => {
     enterEdit();
     hover(channelItems()[0]);
     list.handleAction('select');
     hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
     list.handleAction('select');
+    await waitForEpgSearch();
     expect(container.querySelectorAll('[data-epg-position]')).toHaveLength(1);
 
     epgMock.getMappingCandidates.mockReturnValue([{
@@ -771,12 +813,13 @@ describe('ChannelList edit mode', () => {
     }]);
     epgMock.mappingRevision++;
     list.render();
+    await waitForEpgSearch();
 
     expect(container.querySelector('[data-epg-channel="source::guide-a"]')).not.toBeNull();
   });
 
   it('virtualizes the complete EPG catalog and moves D-pad focus beyond the first window',
-    () => {
+    async () => {
       epgMock.getMappingCandidates.mockReturnValue(Array.from({ length: 120 }, (_, index) => ({
         id: `source::guide-${String(index)}`,
         channelId: `guide-${String(index)}`,
@@ -788,6 +831,7 @@ describe('ChannelList edit mode', () => {
       list.handleAction('select');
       hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
       list.handleAction('select');
+      await waitForEpgSearch();
 
       expect(container.querySelectorAll('[data-epg-position]').length).toBeLessThan(20);
       expect(container.querySelector<HTMLElement>('.epg-mapping-spacer')?.style.height)

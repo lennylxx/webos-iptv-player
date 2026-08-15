@@ -24,6 +24,10 @@ import { bellIcon, CHEVRON_LEFT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
+import { WorkerListSearch } from '../workers/list-search-client';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('EpgGrid');
 
 type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'legend' | 'programmes';
 type FilterFocus = 'group' | 'search';
@@ -77,6 +81,21 @@ export class EpgGrid {
   private groupOptionsPlaylist = '';
   private groupOptionsRevision = -1;
   private groupOptionsLocale: SupportedLocale | null = null;
+  private visibleChannelRoot: Channel[] | null = null;
+  private visibleChannelGroup: ChannelGroupId = 'builtin:all';
+  private visibleChannelPlaylist = '';
+  private visibleChannelRevision = -1;
+  private visibleChannels: VisibleChannel[] = [];
+  private channelSearchResults: VisibleChannel[] | null = null;
+  private channelSearchResultSource: VisibleChannel[] | null = null;
+  private channelSearchResultQuery = '';
+  private channelSearchPending = false;
+  private channelSearchGeneration = 0;
+  private readonly channelSearch = new WorkerListSearch(
+    'epg-grid',
+    'names',
+    (item: VisibleChannel) => [item.channel.name],
+  );
   private programmeSource: Programme[] | null = null;
   private programmeSizeKey = '';
   private programmeCount = 0;
@@ -138,6 +157,9 @@ export class EpgGrid {
 
   deactivateFilters(): void {
     this.groupOpen = false;
+    this.channelSearchGeneration++;
+    this.channelSearch.release();
+    this.channelSearchPending = false;
     this.container.querySelector<HTMLInputElement>('.epg-search-input')?.blur();
   }
 
@@ -193,18 +215,68 @@ export class EpgGrid {
   }
 
   private getVisibleChannels(): VisibleChannel[] {
-    const visible = PlaylistService.getByGroup(
-      this.selectedGroup,
-      this.selectedPlaylist || undefined,
-    ).map(channel => ({
-      channel,
-      globalIndex: PlaylistService.indexOf(channel),
-    }));
+    const scopeChanged = this.visibleChannelRoot !== PlaylistService.channels
+      || this.visibleChannelGroup !== this.selectedGroup
+      || this.visibleChannelPlaylist !== this.selectedPlaylist
+      || this.visibleChannelRevision !== PlaylistService.groupsRevision;
+    if (scopeChanged) {
+      const source = PlaylistService.getByGroup(
+        this.selectedGroup,
+        this.selectedPlaylist || undefined,
+      );
+      this.visibleChannelRoot = PlaylistService.channels;
+      this.visibleChannelGroup = this.selectedGroup;
+      this.visibleChannelPlaylist = this.selectedPlaylist;
+      this.visibleChannelRevision = PlaylistService.groupsRevision;
+      this.visibleChannels = source.map(channel => ({
+        channel,
+        globalIndex: PlaylistService.indexOf(channel),
+      }));
+      if (this.searchQuery.trim()) {
+        const generation = ++this.channelSearchGeneration;
+        this.channelSearchResults = null;
+        this.channelSearchResultSource = null;
+        this.channelSearchResultQuery = '';
+        this.channelSearchPending = true;
+        void this.updateChannelSearch(generation);
+      }
+    }
     const query = this.searchQuery.trim();
-    if (!query) return visible;
-    const ranked = rankByName(visible.map(item => item.channel), query);
-    const byChannel = new Map(visible.map(item => [item.channel, item]));
-    return ranked.map(channel => byChannel.get(channel)!);
+    if (!query) return this.visibleChannels;
+    return this.channelSearchResultSource === this.visibleChannels
+        && this.channelSearchResultQuery === query
+      ? this.channelSearchResults ?? []
+      : [];
+  }
+
+  private async updateChannelSearch(generation: number): Promise<void> {
+    const query = this.searchQuery.trim();
+    if (!query) return;
+    this.getVisibleChannels();
+    const source = this.visibleChannels;
+    let results: VisibleChannel[];
+    try {
+      results = await this.channelSearch.query(source, query);
+    } catch (error) {
+      if (generation !== this.channelSearchGeneration) return;
+      log.error(
+        'Worker search failed; using local ranking',
+        'event=search.worker.fallback.used',
+        'scope=list',
+        'owner=epg-grid',
+        error,
+      );
+      const ranked = rankByName(source.map(item => item.channel), query);
+      const byChannel = new Map(source.map(item => [item.channel, item]));
+      results = ranked.map(channel => byChannel.get(channel)!);
+    }
+    if (generation !== this.channelSearchGeneration
+        || query !== this.searchQuery.trim()) return;
+    this.channelSearchResults = results;
+    this.channelSearchResultSource = source;
+    this.channelSearchResultQuery = query;
+    this.channelSearchPending = false;
+    this.render();
   }
 
   private getGroupOptions(): GroupOption[] {
@@ -455,6 +527,8 @@ export class EpgGrid {
                 <span class="epg-search-icon">${raw(SEARCH_ICON)}</span>
                 <input type="text" class="epg-search-input" data-key="epg-search"
                        aria-label="${t('search.ariaChannels')}"
+                       data-search-query="${this.channelSearchResultQuery}"
+                       data-search-pending="${this.channelSearchPending ? 'true' : 'false'}"
                        placeholder="${t('common.search')}" value="${this.searchQuery}">
               </label>
             </div>
@@ -746,10 +820,16 @@ export class EpgGrid {
       const input = e.target as HTMLInputElement;
       if (!input.classList.contains('epg-search-input')) return;
       this.searchQuery = input.value;
+      const generation = ++this.channelSearchGeneration;
+      this.channelSearchResults = null;
+      this.channelSearchResultSource = null;
+      this.channelSearchResultQuery = '';
+      this.channelSearchPending = !!this.searchQuery.trim();
       this.focusCol = 'filters';
       this.filterFocus = 'search';
       this.groupOpen = false;
       this.render();
+      if (this.searchQuery.trim()) void this.updateChannelSearch(generation);
     });
 
     this.container.addEventListener('focusin', (e: FocusEvent) => {

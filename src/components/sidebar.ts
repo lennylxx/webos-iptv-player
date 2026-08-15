@@ -14,6 +14,10 @@ import { CHEVRON_LEFT_ICON } from './icons';
 import { showToast } from './toast';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
+import { WorkerListSearch } from '../workers/list-search-client';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('Sidebar');
 
 type SidebarEntry = { ch: Channel; globalIdx: number; recent?: RecentlyWatchedItem };
 type SidebarSource =
@@ -83,6 +87,21 @@ export class Sidebar {
   private pointerExitPending = false;
   private failedLogos = new Set<string>();
   private channelSource: SidebarSource | null = null;
+  private channelSearchResults: Channel[] | null = null;
+  private channelSearchResultSource: Channel[] | null = null;
+  private channelSearchResultQuery = '';
+  private channelSearchPending = false;
+  private channelSearchGeneration = 0;
+  private channelSearchScope: Channel[] = [];
+  private channelSearchRoot: Channel[] | null = null;
+  private channelSearchGroup: ChannelGroupId = 'builtin:all';
+  private channelSearchPlaylist = '';
+  private channelSearchRevision = -1;
+  private readonly channelSearch = new WorkerListSearch(
+    'sidebar',
+    'fields',
+    (channel: Channel) => [channel.name, channel.group, channel.sourceName ?? ''],
+  );
   private groupSource: SidebarGroup[] | null = null;
   private groupSourceChannels: Channel[] | null = null;
   private groupSourcePlaylist = '';
@@ -121,6 +140,7 @@ export class Sidebar {
 
   refresh(): void {
     if (!this.isVisible) return;
+    this.channelSearchRoot = null;
     this.channelSource = null;
     this.groupSource = null;
     this.focusCurrentChannel(false);
@@ -170,6 +190,12 @@ export class Sidebar {
     this.activePane = 'channels';
     this.groupsExpanded = false;
     this.searchQuery = '';
+    this.channelSearchGeneration++;
+    this.channelSearchResults = null;
+    this.channelSearchResultSource = null;
+    this.channelSearchResultQuery = '';
+    this.channelSearchPending = false;
+    this.channelSearchRoot = null;
     this.channelSource = null;
     this.groupSource = null;
     this.pointerAtGroupEdge = false;
@@ -190,6 +216,9 @@ export class Sidebar {
   hide(): void {
     if (!this.isVisible) return;
     this.isVisible = false;
+    this.channelSearchGeneration++;
+    this.channelSearch.release();
+    this.channelSearchPending = false;
     this.keyboardOn = false;
     this.opening = false;
     this.cancelLogoLoads();
@@ -322,11 +351,60 @@ export class Sidebar {
       this.channelSource = { kind: 'recent', items };
       return this.channelSource;
     }
-    let channels = PlaylistService.getByGroup(this.group, playlist);
+    let channels = this.searchScopedChannels();
     const q = this.searchQuery.trim();
-    if (q) channels = rankChannels(channels, q);
+    if (q) channels = this.channelSearchResultSource === channels
+        && this.channelSearchResultQuery === q
+        ? this.channelSearchResults ?? []
+        : [];
     this.channelSource = { kind: 'channels', channels };
     return this.channelSource;
+  }
+
+  private async updateChannelSearch(generation: number): Promise<void> {
+    const query = this.searchQuery.trim();
+    if (!query || !this.isVisible) return;
+    const source = this.searchScopedChannels();
+    let channels: Channel[];
+    try {
+      channels = await this.channelSearch.query(source, query);
+    } catch (error) {
+      if (generation !== this.channelSearchGeneration || !this.isVisible) return;
+      log.error(
+        'Worker search failed; using local ranking',
+        'event=search.worker.fallback.used',
+        'scope=list',
+        'owner=sidebar',
+        error,
+      );
+      channels = rankChannels(source, query);
+    }
+    if (generation !== this.channelSearchGeneration
+        || query !== this.searchQuery.trim()
+        || !this.isVisible) return;
+    this.channelSearchResults = channels;
+    this.channelSearchResultSource = source;
+    this.channelSearchResultQuery = query;
+    this.channelSearchPending = false;
+    this.channelSource = null;
+    this.render();
+  }
+
+  private searchScopedChannels(): Channel[] {
+    if (this.channelSearchRoot !== PlaylistService.channels
+        || this.channelSearchGroup !== this.group
+        || this.channelSearchPlaylist !== this.playlist
+        || this.channelSearchRevision !== PlaylistService.groupsRevision) {
+      this.channelSearchRoot = PlaylistService.channels;
+      this.channelSearchGroup = this.group;
+      this.channelSearchPlaylist = this.playlist;
+      this.channelSearchRevision = PlaylistService.groupsRevision;
+      this.channelSearchScope = PlaylistService.getByGroup(
+        this.group,
+        this.playlist || undefined,
+      );
+    }
+    return this.channelSearchScope;
   }
 
   private getChannelCount(): number {
@@ -657,6 +735,8 @@ export class Sidebar {
         <input type="text"
                class="sidebar-search-input ${this.activePane === 'channels' && this.channelFocusIdx === -1 ? 'focused' : ''}"
                data-key="search" aria-label="${t('search.ariaChannels')}"
+               data-search-query="${this.channelSearchResultQuery}"
+               data-search-pending="${this.channelSearchPending ? 'true' : 'false'}"
                placeholder="${searchPlaceholder}" value="${this.searchQuery}">
         ${showTabs ? html`
           <div class="sidebar-tabs">
@@ -900,11 +980,17 @@ export class Sidebar {
     el.addEventListener('input', (e: Event) => {
       if (!(e.target as HTMLElement).classList.contains('sidebar-search-input')) return;
       this.searchQuery = (e.target as HTMLInputElement).value;
+      const generation = ++this.channelSearchGeneration;
+      this.channelSearchResults = null;
+      this.channelSearchResultSource = null;
+      this.channelSearchResultQuery = '';
+      this.channelSearchPending = !!this.searchQuery.trim();
       this.channelSource = null;
       this.activePane = 'channels';
       this.channelFocusIdx = -1;
       this.setChannelScrollTop(0);
       this.render();
+      if (this.searchQuery.trim()) void this.updateChannelSearch(generation);
       this.resetTimer();
     });
 

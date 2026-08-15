@@ -67,6 +67,19 @@ const { storageMock } = vi.hoisted(() => ({
   },
 }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
+vi.mock('../workers/app-worker-client', async () => {
+  const { ScopedSearchIndex } = await import('../workers/scoped-search-index');
+  const index = new ScopedSearchIndex();
+  return {
+    retainAppWorker: () => () => undefined,
+    runAppWorkerTask: (task: string, payload: never) => {
+      if (task === 'list-search.index') return Promise.resolve(index.indexList(payload));
+      if (task === 'list-search.query') return Promise.resolve(index.queryList(payload));
+      if (task === 'list-search.release') return Promise.resolve(index.releaseList(payload));
+      return Promise.reject(new Error(`Unexpected worker task: ${task}`));
+    },
+  };
+});
 
 import { EpgGrid } from './epg-grid';
 import { setLocale } from '../i18n';
@@ -513,11 +526,12 @@ describe('EpgGrid group and channel filters', () => {
     expect(labels).toEqual(['All', 'Favorites', 'News']);
   });
 
-  it('searches channel names and preserves global indices', () => {
+  it('searches channel names and preserves global indices', async () => {
     const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
     input.value = 'Chan B';
     input.dispatchEvent(new Event('input', { bubbles: true }));
 
+    await vi.waitFor(() => expect(channelItems()).toHaveLength(1));
     expect(channelItems()).toHaveLength(1);
     expect(channelItems()[0].querySelector('.epg-ch-name')!.textContent).toBe('Chan B');
     expect(container.querySelector('[data-channel-idx="1"]')).not.toBeNull();
@@ -562,7 +576,7 @@ describe('EpgGrid group and channel filters', () => {
     expect(container.querySelector('.epg-group-option-label')?.textContent).toBe('全部');
   });
 
-  it('focuses search with Yellow and exits to results with ArrowDown', () => {
+  it('focuses search with Yellow and exits to results with ArrowDown', async () => {
     grid.handleAction('yellow');
     const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
     expect(document.activeElement).toBe(input);
@@ -570,6 +584,7 @@ describe('EpgGrid group and channel filters', () => {
 
     input.value = 'Chan B';
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => expect(channelItems()).toHaveLength(1));
     input.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'ArrowDown',
       bubbles: true,

@@ -6,13 +6,20 @@ import { PlaylistService } from '../services/playlist-service';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
 import { StorageService } from '../services/storage-service';
 import { EpgService } from '../services/epg-service';
-import type { EpgMappingCandidate } from '../services/epg-service';
+import type {
+  EpgMappingCandidate,
+  EpgMappingSearchEntry,
+} from '../services/epg-service';
 import { BACK_ICON, CHECK_ICON, CLOCK_ICON, GUIDE_ICON, SEARCH_ICON } from './icons';
 import { showToast } from './toast';
 import { t } from '../i18n';
 import { CONFIG } from '../config';
 import { VirtualList } from '../utils/virtual-list';
 import { formatEpgOffset } from '../utils/epg-offset';
+import { WorkerMappingSearch } from '../workers/mapping-search-client';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('ChannelEditor');
 
 type EditTarget = { kind: 'channel'; key: string } | { kind: 'group'; key: string };
 type DragCandidate = { target: EditTarget; x: number; y: number };
@@ -44,7 +51,15 @@ export class ChannelListEditor {
   private epgOffsetFor: string | null = null;
   private epgQuery = '';
   private epgCandidates: EpgMappingCandidate[] = [];
+  private epgMappingEntries: EpgMappingSearchEntry[] = [];
   private epgCandidateRevision = -1;
+  private epgSearchGeneration = 0;
+  private epgSearchPending = false;
+  private epgSearchResultQuery = '';
+  private epgPendingFocusDelta = 0;
+  private readonly epgSearch = new WorkerMappingSearch<EpgMappingSearchEntry>(
+    'epg-mapping',
+  );
   private epgFocusPosition = -1;
   private epgKeyboardVisible = false;
   private readonly epgVirtualizer = new VirtualList({
@@ -128,10 +143,15 @@ export class ChannelListEditor {
       if (!(input instanceof HTMLInputElement)
           || !input.classList.contains('epg-mapping-search')) return;
       this.epgQuery = input.value;
-      this.refreshEpgCandidates();
+      const generation = ++this.epgSearchGeneration;
+      this.epgSearchPending = true;
+      this.epgSearchResultQuery = '';
       this.epgFocusPosition = -1;
+      this.epgPendingFocusDelta = 0;
       this.epgVirtualizer.setScrollOffset(0);
-      this.options.render();
+      input.dataset.searchPending = 'true';
+      input.dataset.searchQuery = '';
+      void this.updateEpgCandidates(generation);
     });
     this.container.addEventListener('scroll', (event: Event) => {
       const target = event.target;
@@ -238,6 +258,7 @@ export class ChannelListEditor {
     this.epgOffsetFor = null;
     this.epgQuery = '';
     this.epgCandidates = [];
+    this.releaseEpgSearch();
     this.epgCandidateRevision = -1;
     this.epgFocusPosition = -1;
     this.epgKeyboardVisible = false;
@@ -271,6 +292,7 @@ export class ChannelListEditor {
       this.epgPickerFor = null;
       this.epgQuery = '';
       this.epgCandidates = [];
+      this.releaseEpgSearch();
       this.epgCandidateRevision = -1;
       this.epgFocusPosition = -1;
       this.epgKeyboardVisible = false;
@@ -915,7 +937,7 @@ export class ChannelListEditor {
     if (!channel) return;
     this.epgPickerFor = target.key;
     this.epgQuery = channel.sourceName ?? channel.name;
-    this.refreshEpgCandidates();
+    this.startEpgSearch(channel);
     this.epgFocusPosition = -1;
     this.epgKeyboardVisible = false;
     this.epgVirtualizer.setScrollOffset(0);
@@ -1013,19 +1035,82 @@ export class ChannelListEditor {
     `;
   }
 
-  private refreshEpgCandidates(): void {
+  private startEpgSearch(channel: Channel): void {
+    const generation = ++this.epgSearchGeneration;
+    this.epgMappingEntries = EpgService.getMappingSearchEntries(channel);
+    this.epgCandidates = [];
+    this.epgSearchPending = true;
+    this.epgSearchResultQuery = '';
+    this.epgPendingFocusDelta = 0;
+    this.epgCandidateRevision = EpgService.mappingRevision;
+    void this.updateEpgCandidates(generation);
+  }
+
+  private async updateEpgCandidates(generation: number): Promise<void> {
     const key = this.epgPickerFor;
     const channel = key
       ? PlaylistService.getByIndex(PlaylistService.indexOfKey(key))
       : null;
-    this.epgCandidates = channel
-      ? EpgService.getMappingCandidates(channel, this.epgQuery)
-      : [];
-    this.epgCandidateRevision = EpgService.mappingRevision;
+    if (!key || !channel) return;
+    const query = this.epgQuery;
+    try {
+      const candidates = await this.epgSearch.query(
+        this.epgMappingEntries,
+        query,
+        ChannelCustomizationService.overrideFor(key)?.epgChannelId ?? '',
+      );
+      if (generation !== this.epgSearchGeneration
+          || key !== this.epgPickerFor
+          || query !== this.epgQuery) return;
+      this.epgCandidates = candidates;
+    } catch (error) {
+      if (generation !== this.epgSearchGeneration || key !== this.epgPickerFor) return;
+      log.error(
+        'Worker search failed; using local ranking',
+        'event=search.worker.fallback.used',
+        'scope=mapping',
+        'owner=epg-mapping',
+        error,
+      );
+      this.epgCandidates = EpgService.getMappingCandidates(channel, query);
+    }
+    this.epgSearchPending = false;
+    this.epgSearchResultQuery = query;
+    while (this.epgPendingFocusDelta !== 0) {
+      const delta = this.epgPendingFocusDelta > 0 ? 1 : -1;
+      this.epgPendingFocusDelta -= delta;
+      const next = this.epgFocusPosition < 0
+        ? (delta > 0 ? 0 : -1)
+        : this.epgFocusPosition + delta;
+      this.epgFocusPosition = next < 0
+        ? -1
+        : Math.min(this.epgCandidates.length, next);
+    }
+    if (this.epgFocusPosition >= 0) {
+      const list = this.container.querySelector<HTMLElement>('.epg-mapping-list');
+      this.epgVirtualizer.ensureVisible(
+        this.epgFocusPosition,
+        list?.clientHeight || EPG_VIEWPORT_HEIGHT,
+      );
+    }
+    this.options.render();
+  }
+
+  private releaseEpgSearch(): void {
+    this.epgSearchGeneration++;
+    this.epgMappingEntries = [];
+    this.epgSearchPending = false;
+    this.epgSearchResultQuery = '';
+    this.epgPendingFocusDelta = 0;
+    this.epgSearch.release();
   }
 
   private moveEpgFocus(delta: number): void {
     if (!this.epgPickerFor) return;
+    if (this.epgSearchPending) {
+      this.epgPendingFocusDelta += delta;
+      return;
+    }
     const itemCount = this.epgCandidates.length + 1;
     const next = this.epgFocusPosition < 0
       ? (delta > 0 ? 0 : -1)
@@ -1052,6 +1137,7 @@ export class ChannelListEditor {
     this.epgPickerFor = null;
     this.epgQuery = '';
     this.epgCandidates = [];
+    this.releaseEpgSearch();
     this.epgCandidateRevision = -1;
     this.epgFocusPosition = -1;
     this.epgKeyboardVisible = false;
@@ -1067,7 +1153,7 @@ export class ChannelListEditor {
     const channel = PlaylistService.getByIndex(PlaylistService.indexOfKey(key));
     if (!channel) return '';
     if (this.epgCandidateRevision !== EpgService.mappingRevision) {
-      this.refreshEpgCandidates();
+      this.startEpgSearch(channel);
     }
     const current = ChannelCustomizationService.overrideFor(key)?.epgChannelId ?? '';
     const candidates = this.epgCandidates;
@@ -1092,6 +1178,8 @@ export class ChannelListEditor {
           <span class="epg-mapping-search-icon">${raw(SEARCH_ICON)}</span>
           <input class="epg-mapping-search" data-key="epg-search"
                  type="text" value="${this.epgQuery}"
+                 data-search-query="${this.epgSearchResultQuery}"
+                 data-search-pending="${this.epgSearchPending ? 'true' : 'false'}"
                  placeholder="${t('channel.editEpgSearch')}">
         </label>
         <div class="group-picker-list epg-mapping-list">

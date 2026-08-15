@@ -21,6 +21,7 @@ interface SourceState {
   data: ParsedEpg;
   timestamp: number;
   needsRefresh: boolean;
+  mappingIndex?: PreparedEpgMappingSearchEntry[];
 }
 
 /** The playlist channels a source is parsed down to. */
@@ -34,6 +35,17 @@ export interface EpgMappingCandidate {
   channelId: string;
   name: string;
   sourceName: string;
+}
+
+export interface EpgMappingSearchEntry extends EpgMappingCandidate {
+  fields: string[];
+  sourceIndex: number;
+}
+
+interface PreparedEpgMappingSearchEntry {
+  channelId: string;
+  name: string;
+  fields: string[];
 }
 
 class EpgServiceImpl {
@@ -229,6 +241,43 @@ class EpgServiceImpl {
     this.derivedOffsets.delete(key);
   }
 
+  getMappingSearchEntries(channel: Channel): EpgMappingSearchEntry[] {
+    const entries: EpgMappingSearchEntry[] = [];
+    const sources = this.sources.filter((source) =>
+      source.kind === 'manual'
+      || source.playlistIds.some((id) => channel.playlistIds.includes(id)));
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+      const source = sources[sourceIndex];
+      const state = this.states.get(source.url);
+      if (!state) continue;
+      const data = state.data;
+      if (!state.mappingIndex) {
+        state.mappingIndex = [];
+        for (const id in data.channels) {
+          const epgChannel = data.channels[id];
+          state.mappingIndex.push({
+            channelId: id,
+            name: epgChannel.name,
+            fields: [id, epgChannel.name, ...(epgChannel.aliases ?? [])]
+              .map(value => value.toLowerCase()),
+          });
+        }
+      }
+      for (const entry of state.mappingIndex) {
+        const candidateId = this.channelKey(source.url, entry.channelId);
+        entries.push({
+          id: candidateId,
+          channelId: entry.channelId,
+          name: entry.name,
+          sourceName: data.sourceName?.trim() || `EPG ${String(sourceIndex + 1)}`,
+          fields: entry.fields,
+          sourceIndex,
+        });
+      }
+    }
+    return entries;
+  }
+
   getMappingCandidates(
     channel: Channel,
     query: string,
@@ -237,38 +286,33 @@ class EpgServiceImpl {
     const normalized = query.trim().toLowerCase();
     const current = ChannelCustomizationService.overrideFor(channelKey(channel))?.epgChannelId;
     const candidates: Array<EpgMappingCandidate & { score: number }> = [];
-    const sources = this.sources.filter((source) =>
-      source.kind === 'manual'
-      || source.playlistIds.some((id) => channel.playlistIds.includes(id)));
-    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
-      const source = sources[sourceIndex];
-      const data = this.states.get(source.url)?.data;
-      if (!data) continue;
-      for (const id in data.channels) {
-        const epgChannel = data.channels[id];
-        const candidateId = this.channelKey(source.url, id);
-        const selected = candidateId === current;
-        const names = [epgChannel.name, ...(epgChannel.aliases ?? [])];
-        const fields = [id, ...names].map(value => value.toLowerCase());
-        const positions = normalized
-          ? fields.map(value => value.indexOf(normalized)).filter(position => position >= 0)
-          : [];
-        if (normalized && !positions.length && !selected) continue;
-        const exact = fields.some(value => value === normalized);
-        const prefix = fields.some(value => value.indexOf(normalized) === 0);
-        const position = positions.length ? Math.min(...positions) : 0;
+    for (const entry of this.getMappingSearchEntries(channel)) {
+        const selected = entry.id === current;
+        let exact = false;
+        let prefix = false;
+        let position = -1;
+        if (normalized) {
+          for (const field of entry.fields) {
+            const next = field.indexOf(normalized);
+            if (next < 0) continue;
+            if (position < 0 || next < position) position = next;
+            if (next === 0) prefix = true;
+            if (field === normalized) exact = true;
+          }
+          if (position < 0 && !selected) continue;
+        }
         candidates.push({
-          id: candidateId,
-          channelId: id,
-          name: epgChannel.name,
-          sourceName: data.sourceName?.trim() || `EPG ${String(sourceIndex + 1)}`,
+          id: entry.id,
+          channelId: entry.channelId,
+          name: entry.name,
+          sourceName: entry.sourceName,
           score: selected
             ? -1
             : normalized
-            ? (exact ? 0 : prefix ? 100 : 200) + position + sourceIndex * 1000
-            : sourceIndex * 1000,
+            ? (exact ? 0 : prefix ? 100 : 200) + Math.max(0, position)
+              + entry.sourceIndex * 1000
+            : entry.sourceIndex * 1000,
         });
-      }
     }
     const sorted = candidates
       .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name)

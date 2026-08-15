@@ -57,6 +57,45 @@ export interface SearchQueryResponse {
   series: SearchRankedIndices;
 }
 
+export interface ListSearchIndexRequest {
+  owner: string;
+  sessionId: number;
+  mode: 'fields' | 'names';
+  documents: string[][];
+}
+
+export interface ListSearchQueryRequest {
+  owner: string;
+  sessionId: number;
+  query: string;
+}
+
+export interface ScopedSearchReleaseRequest {
+  owner: string;
+  sessionId: number;
+}
+
+export interface MappingSearchDocument {
+  id: string;
+  channelId: string;
+  name: string;
+  fields: string[];
+  sourceIndex: number;
+}
+
+export interface MappingSearchIndexRequest {
+  owner: string;
+  sessionId: number;
+  documents: MappingSearchDocument[];
+}
+
+export interface MappingSearchQueryRequest {
+  owner: string;
+  sessionId: number;
+  query: string;
+  selectedId: string;
+}
+
 export interface AppWorkerTasks {
   'xmltv.load': {
     request: XMLTVWorkerRequest;
@@ -69,5 +108,29 @@ export interface AppWorkerTasks {
   'search.query': {
     request: SearchQueryRequest;
     response: SearchQueryResponse | null;
+  };
+  'list-search.index': {
+    request: ListSearchIndexRequest;
+    response: SearchIndexResponse;
+  };
+  'list-search.query': {
+    request: ListSearchQueryRequest;
+    response: SearchRankedIndices | null;
+  };
+  'list-search.release': {
+    request: ScopedSearchReleaseRequest;
+    response: SearchIndexResponse;
+  };
+  'mapping-search.index': {
+    request: MappingSearchIndexRequest;
+    response: SearchIndexResponse;
+  };
+  'mapping-search.query': {
+    request: MappingSearchQueryRequest;
+    response: SearchRankedIndices | null;
+  };
+  'mapping-search.release': {
+    request: ScopedSearchReleaseRequest;
+    response: SearchIndexResponse;
   };
 }

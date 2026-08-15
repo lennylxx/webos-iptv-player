@@ -595,6 +595,8 @@ export class Search {
       log.error(
         'Search worker query failed; rebuilding its index',
         'event=search.worker.query.failed',
+        'scope=unified',
+        `session=${String(sessionId)}`,
         error,
       );
       recoveryAttempted = true;
@@ -607,11 +609,20 @@ export class Search {
       log.error(
         'Search worker lost its index; rebuilding it',
         'event=search.worker.index.missing',
+        'scope=unified',
         `session=${String(sessionId)}`,
       );
       response = await this.recoverWorkerQuery(sessionId, query);
     }
-    if (!response) response = this.fallbackQuery(query);
+    if (!response) {
+      log.warn(
+        'Using main-thread search fallback',
+        'event=search.worker.fallback.used',
+        'scope=unified',
+        `session=${String(sessionId)}`,
+      );
+      response = this.fallbackQuery(query);
+    }
     this.applyQueryResponse(response);
     this.queryPending = false;
     if (!preserveOffsets) this.resetVirtualOffsets();
@@ -682,16 +693,27 @@ export class Search {
       });
       if (!indexed) return null;
       this.markWorkerIndexReady(this.account);
-      return await runAppWorkerTask('search.query', {
+      const response = await runAppWorkerTask('search.query', {
         sessionId,
         query,
         limit: this.resultLimit,
         includeCatalog: !!this.account,
       });
+      if (response) {
+        log.info(
+          'Search worker recovery completed',
+          'event=search.worker.recovery.completed',
+          'scope=unified',
+          `session=${String(sessionId)}`,
+        );
+      }
+      return response;
     } catch (error) {
       log.error(
         'Search worker recovery failed; using main-thread fallback',
         'event=search.worker.recovery.failed',
+        'scope=unified',
+        `session=${String(sessionId)}`,
         error,
       );
       return null;
@@ -735,15 +757,34 @@ export class Search {
     this.workerIndexedAccountId = account?.id ?? null;
     this.workerIndexedVod = this.allVod;
     this.workerIndexedSeries = this.allSeries;
+    log.info(
+      'Search worker index ready',
+      'event=search.worker.index.ready',
+      'scope=unified',
+      `session=${String(this.workerSession)}`,
+      `channels=${String(PlaylistService.channels.length)}`,
+      `programmes=${String(this.programIndex.length)}`,
+      `movies=${String(this.allVod.length)}`,
+      `series=${String(this.allSeries.length)}`,
+    );
   }
 
   private invalidateWorkerIndex(): void {
+    const wasReady = this.workerIndexReady;
     this.workerIndexReady = false;
     this.workerIndexedChannels = null;
     this.workerIndexedProgrammes = null;
     this.workerIndexedAccountId = null;
     this.workerIndexedVod = null;
     this.workerIndexedSeries = null;
+    if (wasReady) {
+      log.debug(
+        'Search worker index invalidated',
+        'event=search.worker.index.released',
+        'scope=unified',
+        `session=${String(this.workerSession)}`,
+      );
+    }
   }
 
   private programRow(result: ProgramResult, index: number): ReturnType<typeof html> {
