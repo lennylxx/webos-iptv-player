@@ -17,7 +17,7 @@ export const REMOVE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="current
 export const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6V4.5A2.5 2.5 0 0 1 11.5 2h1A2.5 2.5 0 0 1 15 4.5V6"/><rect x="3" y="6" width="18" height="4" rx="2"/><path d="M5 10v8.5A3.5 3.5 0 0 0 8.5 22h7a3.5 3.5 0 0 0 3.5-3.5V10M9 13v5M12 13v5M15 13v5"/></svg>';
 
 // Settings sidebar categories. Stroke/fill styling is supplied by settings.css.
-export const GLOBE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>';
+export const GLOBE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M4.2 8.5c2.2 1.1 4.9 1.7 7.8 1.7s5.6-.6 7.8-1.7M4.2 15.5c2.2-1.1 4.9-1.7 7.8-1.7s5.6.6 7.8 1.7M12 3c2.4 2.5 3.6 5.5 3.6 9s-1.2 6.5-3.6 9c-2.4-2.5-3.6-5.5-3.6-9S9.6 5.5 12 3z"/></svg>';
 export const SOURCES_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg>';
 export const GUIDE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="1"/><path d="M3 9h18M8 3v4M16 3v4M7 13h3M14 13h3M7 17h3"/></svg>';
 export const APPEARANCE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg>';

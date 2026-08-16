@@ -18,6 +18,75 @@
     justify-content: center;
     padding: 32px 16px;
   }
+  .language-picker {
+    position: fixed;
+    z-index: 10;
+    top: 16px;
+    right: 16px;
+  }
+  .language-trigger {
+    display: flex;
+    min-width: 58px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 11px;
+    color: #4c5875;
+    background: #ffffff;
+    border: 1px solid #dce2ed;
+    border-radius: 20px;
+    box-shadow: 0 4px 14px rgba(20, 28, 60, 0.08);
+    cursor: pointer;
+  }
+  .language-trigger:hover,
+  .language-trigger:focus-visible {
+    color: #4c7eff;
+    border-color: #a9c0f5;
+    outline: none;
+  }
+  .language-trigger svg { width: 20px; height: 20px; }
+  .language-current {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .language-menu {
+    position: absolute;
+    top: 48px;
+    right: 0;
+    width: 190px;
+    overflow: hidden;
+    padding: 6px;
+    background: #ffffff;
+    border: 1px solid #dce2ed;
+    border-radius: 8px;
+    box-shadow: 0 12px 30px rgba(20, 28, 60, 0.14);
+  }
+  .language-option {
+    display: block;
+    width: 100%;
+    padding: 9px 11px;
+    color: #4c5875;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+  }
+  .language-option:hover,
+  .language-option:focus-visible {
+    color: #1a2138;
+    background: #eef4ff;
+    outline: none;
+  }
+  .language-option.active {
+    color: #315fc9;
+    background: #eef4ff;
+    font-weight: 600;
+  }
   .card {
     background: #ffffff;
     width: 100%;
@@ -34,22 +103,40 @@
   .pair-instructions { color: #8a93a8; font-size: 14px; margin: 0 0 20px; }
   .pair-form { display: flex; flex-direction: column; align-items: center; }
   .pair-input {
-    width: 180px;
+    position: relative;
+    display: flex;
     height: 54px;
+    gap: 10px;
+  }
+  .pair-native-input {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    border: 0;
+    cursor: text;
+  }
+  .pair-slot {
+    display: flex;
+    width: 46px;
+    height: 54px;
+    align-items: center;
+    justify-content: center;
     border: 1px solid #dce2ed;
     border-radius: 8px;
     color: #1a2138;
-    font: inherit;
     font-size: 28px;
-    letter-spacing: 12px;
-    padding: 0 7px 0 19px;
-    text-align: center;
-    outline: none;
+    font-weight: 500;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  .pair-input:focus {
+  .pair-slot.active {
     border-color: #4c7eff;
     box-shadow: 0 0 0 3px rgba(76, 126, 255, 0.12);
   }
+  .pair-slot.filled { border-color: #a9c0f5; }
+  .pair-native-input:disabled ~ .pair-slot { opacity: 0.65; }
   .pair-status { min-height: 18px; margin: 10px 0 0; color: #c43b4d; font-size: 13px; }
 
   .drop {
@@ -413,13 +500,32 @@
 </style>
 </head>
 <body>
+  <div class="language-picker">
+    <button class="language-trigger" id="language-trigger" type="button"
+      aria-label="Language" aria-haspopup="menu" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M4.2 8.5c2.2 1.1 4.9 1.7 7.8 1.7s5.6-.6 7.8-1.7M4.2 15.5c2.2-1.1 4.9-1.7 7.8-1.7s5.6.6 7.8 1.7M12 3c2.4 2.5 3.6 5.5 3.6 9s-1.2 6.5-3.6 9c-2.4-2.5-3.6-5.5-3.6-9S9.6 5.5 12 3z"
+          fill="none" stroke="currentColor" stroke-width="1.8"/>
+      </svg>
+      <span class="language-current" id="language-current">EN</span>
+    </button>
+    <div class="language-menu" id="language-menu" role="menu" hidden></div>
+  </div>
+
   <div class="card pair-card" id="pair-card" hidden>
     <h1 class="pair-title">Connect to your TV</h1>
     <p class="pair-instructions">Enter the 4-digit code shown on your TV.</p>
     <form class="pair-form" id="pair-form">
-      <input class="pair-input" id="pair-code" type="text" inputmode="numeric"
-        pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code"
-        aria-label="Pairing code" required>
+      <div class="pair-input">
+        <input class="pair-native-input" id="pair-code" type="text" inputmode="numeric"
+          pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code"
+          aria-label="Pairing code" autofocus required>
+        <span class="pair-slot" aria-hidden="true"></span>
+        <span class="pair-slot" aria-hidden="true"></span>
+        <span class="pair-slot" aria-hidden="true"></span>
+        <span class="pair-slot" aria-hidden="true"></span>
+      </div>
       <p class="pair-status" aria-live="polite"></p>
     </form>
   </div>
@@ -574,8 +680,12 @@
   var pairCard = document.getElementById("pair-card");
   var pairForm = document.getElementById("pair-form");
   var pairCode = document.getElementById("pair-code");
+  var pairSlots = pairForm.querySelectorAll(".pair-slot");
   var pairStatus = pairForm.querySelector(".pair-status");
   var setupCard = document.getElementById("setup-card");
+  var languageTrigger = document.getElementById("language-trigger");
+  var languageMenu = document.getElementById("language-menu");
+  var languageCurrent = document.getElementById("language-current");
   var subtitleForm = document.querySelector('[data-action="online-subtitles"]');
   var subtitleState = document.getElementById("subtitle-state");
   var setupToken = new URLSearchParams(window.location.search).get("token") || "";
@@ -1132,10 +1242,47 @@
     },
   };
   var DEFAULT_LOCALE = "en";
+  var LOCALE_COOKIE = "iptv_setup_locale";
+  var LOCALE_NAMES = {
+    en: "English",
+    de: "Deutsch",
+    es: "Español",
+    fr: "Français",
+    it: "Italiano",
+    "pt-BR": "Português (Brasil)",
+    ru: "Русский",
+    uk: "Українська",
+    "zh-CN": "简体中文",
+  };
+  var LOCALE_CODES = {
+    en: "EN",
+    de: "DE",
+    es: "ES",
+    fr: "FR",
+    it: "IT",
+    "pt-BR": "PT",
+    ru: "RU",
+    uk: "UK",
+    "zh-CN": "ZH",
+  };
   var locale = resolveLocale();
   var messages = MESSAGES[locale].text;
 
+  function savedLocale() {
+    var cookies = document.cookie ? document.cookie.split(";") : [];
+    for (var i = 0; i < cookies.length; i += 1) {
+      var parts = cookies[i].trim().split("=");
+      if (parts.shift() === LOCALE_COOKIE) {
+        var value = decodeURIComponent(parts.join("="));
+        if (Object.prototype.hasOwnProperty.call(MESSAGES, value)) return value;
+      }
+    }
+    return "";
+  }
+
   function resolveLocale() {
+    var saved = savedLocale();
+    if (saved) return saved;
     var languages = navigator.languages && navigator.languages.length
       ? navigator.languages
       : [navigator.language || DEFAULT_LOCALE];
@@ -1153,6 +1300,33 @@
       }
     }
     return DEFAULT_LOCALE;
+  }
+
+  function saveLocale(value) {
+    document.cookie = LOCALE_COOKIE + "=" + encodeURIComponent(value) +
+      "; Path=/; Max-Age=31536000; SameSite=Lax";
+  }
+
+  function closeLanguageMenu() {
+    languageMenu.hidden = true;
+    languageTrigger.setAttribute("aria-expanded", "false");
+  }
+
+  function renderLanguageMenu() {
+    while (languageMenu.firstChild) languageMenu.removeChild(languageMenu.firstChild);
+    Object.keys(LOCALE_NAMES).forEach(function (value) {
+      var option = document.createElement("button");
+      option.type = "button";
+      option.className = "language-option" + (value === locale ? " active" : "");
+      option.setAttribute("role", "menuitemradio");
+      option.setAttribute("aria-checked", value === locale ? "true" : "false");
+      option.dataset.locale = value;
+      option.textContent = LOCALE_NAMES[value];
+      languageMenu.appendChild(option);
+    });
+    languageCurrent.textContent = LOCALE_CODES[locale];
+    languageTrigger.setAttribute("aria-label", "Language: " + LOCALE_NAMES[locale]);
+    languageTrigger.setAttribute("title", LOCALE_NAMES[locale]);
   }
 
   function tr(key, params) {
@@ -1173,6 +1347,7 @@
 
   function setStaticMessages() {
     document.documentElement.lang = locale;
+    renderLanguageMenu();
     document.title = tr("title");
     document.querySelector('meta[name="description"]').setAttribute("content", tr("subtitle"));
     document.querySelector(".pair-title").textContent = tr("pairTitle");
@@ -1195,6 +1370,43 @@
     document.querySelector(".empty").textContent = tr("empty");
   }
 
+  languageTrigger.addEventListener("click", function () {
+    var opening = languageMenu.hidden;
+    languageMenu.hidden = !opening;
+    languageTrigger.setAttribute("aria-expanded", opening ? "true" : "false");
+    if (opening) {
+      var active = languageMenu.querySelector(".active");
+      if (active) active.focus();
+    }
+  });
+
+  languageMenu.addEventListener("click", function (event) {
+    var option = event.target.closest("[data-locale]");
+    if (!option) return;
+    locale = option.dataset.locale;
+    messages = MESSAGES[locale].text;
+    saveLocale(locale);
+    closeLanguageMenu();
+    pairStatus.textContent = "";
+    setStaticMessages();
+    languageTrigger.focus();
+    if (!setupCard.hidden) {
+      refresh();
+      refreshSetupState();
+    }
+  });
+
+  document.addEventListener("click", function (event) {
+    if (!event.target.closest(".language-picker")) closeLanguageMenu();
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && !languageMenu.hidden) {
+      closeLanguageMenu();
+      languageTrigger.focus();
+    }
+  });
+
   function showSetup() {
     pairCard.hidden = true;
     setupCard.hidden = false;
@@ -1202,12 +1414,27 @@
     refreshSetupState();
   }
 
+  function updatePairSlots() {
+    var activeIndex = Math.min(pairCode.value.length, pairSlots.length - 1);
+    for (var i = 0; i < pairSlots.length; i += 1) {
+      pairSlots[i].textContent = pairCode.value.charAt(i);
+      pairSlots[i].classList.toggle("filled", i < pairCode.value.length);
+      pairSlots[i].classList.toggle(
+        "active",
+        document.activeElement === pairCode && i === activeIndex,
+      );
+    }
+  }
+
   pairCode.addEventListener("input", function () {
     pairCode.value = pairCode.value.replace(/[^0-9]/g, "").slice(0, 4);
+    updatePairSlots();
     if (pairCode.value.length === 4 && !pairCode.disabled) {
       pairForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     }
   });
+  pairCode.addEventListener("focus", updatePairSlots);
+  pairCode.addEventListener("blur", updatePairSlots);
 
   pairForm.addEventListener("submit", function (event) {
     event.preventDefault();

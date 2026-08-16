@@ -22,6 +22,30 @@ function response(data: unknown, status = 200): {
 }
 
 describe('setup page forms', () => {
+  it('switches language from the globe menu and saves it in a cookie', () => {
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host:1234/',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+      },
+    });
+
+    const trigger = dom.window.document.querySelector<HTMLButtonElement>('#language-trigger')!;
+    trigger.click();
+    const option = dom.window.document.querySelector<HTMLButtonElement>(
+      '[data-locale="zh-CN"]',
+    )!;
+    option.click();
+
+    expect(dom.window.document.documentElement.lang).toBe('zh-CN');
+    expect(dom.window.document.querySelector('.pair-title')!.textContent).toBe('连接电视');
+    expect(dom.window.document.querySelector('#language-current')!.textContent).toBe('ZH');
+    expect(dom.window.document.cookie).toContain('iptv_setup_locale=zh-CN');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    dom.window.close();
+  });
+
   it('connects automatically after the fourth pairing digit', async () => {
     const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
       if (url === '/pair' && options?.method === 'POST') {
@@ -46,6 +70,8 @@ describe('setup page forms', () => {
     const code = dom.window.document.querySelector<HTMLInputElement>('#pair-code')!;
     code.value = '1234';
     code.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(Array.from(dom.window.document.querySelectorAll('.pair-slot'))
+      .map(slot => slot.textContent)).toEqual(['1', '2', '3', '4']);
     await new Promise(resolve => setTimeout(resolve, 0));
 
     const request = fetchMock.mock.calls.find(call => call[0] === '/pair');
