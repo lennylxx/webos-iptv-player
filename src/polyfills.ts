@@ -2,14 +2,95 @@
 // - Object.entries / Object.values (Chrome 54): app and EPG object iteration.
 // - String.prototype.padStart (Chrome 57): time, URL and settings formatting.
 // - Intl.PluralRules (Chrome 63): localized plural selection in src/i18n.
+// - scrollIntoView options (Chrome 61): nearest/start element scrolling.
 // - ResizeObserver (Chrome 64): bundled assjs subtitle layout.
 // - AbortController (Chrome 66): app fetch cancellation and timeouts.
 // - Array.prototype.flatMap (Chrome 69): bundled assjs subtitle processing.
 // - Object.fromEntries (Chrome 73): bundled assjs subtitle processing.
 //
 // Imported first in both src/app.ts and src/workers/app-worker.ts so they
-// apply before any app or dependency code runs. Each install is guarded (only
-// patches when the API is absent), so native implementations are never replaced.
+// apply before any app or dependency code runs. Each install is guarded so
+// native behavior is retained wherever the platform supplies the required API.
+
+function scrollAxisOffset(
+  itemStart: number,
+  itemEnd: number,
+  viewportStart: number,
+  viewportEnd: number,
+  align: ScrollLogicalPosition,
+): number {
+  if (align === 'start') return itemStart - viewportStart;
+  if (align === 'end') return itemEnd - viewportEnd;
+  if (align === 'center') {
+    return (itemStart + itemEnd - viewportStart - viewportEnd) / 2;
+  }
+  if (itemStart < viewportStart) return itemStart - viewportStart;
+  if (itemEnd > viewportEnd) return itemEnd - viewportEnd;
+  return 0;
+}
+
+export function scrollIntoViewFallback(
+  element: Element,
+  options: ScrollIntoViewOptions,
+): void {
+  for (
+    let ancestor = element.parentElement;
+    ancestor && ancestor !== document.body;
+    ancestor = ancestor.parentElement
+  ) {
+    const style = getComputedStyle(ancestor);
+    const item = element.getBoundingClientRect();
+    const viewport = ancestor.getBoundingClientRect();
+
+    if (
+      ancestor.scrollHeight > ancestor.clientHeight
+      && (style.overflowY === 'auto' || style.overflowY === 'scroll')
+    ) {
+      ancestor.scrollTop += scrollAxisOffset(
+        item.top,
+        item.bottom,
+        viewport.top,
+        viewport.bottom,
+        options.block ?? 'start',
+      );
+    }
+
+    if (
+      ancestor.scrollWidth > ancestor.clientWidth
+      && (style.overflowX === 'auto' || style.overflowX === 'scroll')
+    ) {
+      ancestor.scrollLeft += scrollAxisOffset(
+        item.left,
+        item.right,
+        viewport.left,
+        viewport.right,
+        options.inline ?? 'nearest',
+      );
+    }
+  }
+}
+
+function installScrollIntoViewOptions(): void {
+  if (
+    typeof document === 'undefined'
+    || typeof Element === 'undefined'
+    || typeof document.documentElement.style.scrollBehavior === 'string'
+  ) return;
+
+  const nativeScrollIntoView = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function (
+    arg?: boolean | ScrollIntoViewOptions,
+  ): void {
+    if (typeof arg !== 'object' || arg === null) {
+      if (arg === undefined) nativeScrollIntoView.call(this);
+      else nativeScrollIntoView.call(this, arg);
+      return;
+    }
+    scrollIntoViewFallback(this, arg);
+  };
+}
+
+installScrollIntoViewOptions();
 
 type LegacyAbortListener = EventListenerOrEventListenerObject;
 

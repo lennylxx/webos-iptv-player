@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   flatMapPolyfill,
@@ -5,8 +6,23 @@ import {
   objectEntriesPolyfill,
   objectValuesPolyfill,
   padStartPolyfill,
+  scrollIntoViewFallback,
   selectPluralCategory,
 } from './polyfills';
+
+function rect(top: number, bottom: number, left = 0, right = 100): DOMRect {
+  return {
+    top,
+    bottom,
+    left,
+    right,
+    width: right - left,
+    height: bottom - top,
+    x: left,
+    y: top,
+    toJSON() {},
+  } as DOMRect;
+}
 
 describe('flatMapPolyfill', () => {
   it('maps and flattens one level', () => {
@@ -129,6 +145,142 @@ describe('Intl.PluralRules polyfill', () => {
       vi.unstubAllGlobals();
       vi.resetModules();
     }
+  });
+});
+
+describe('scrollIntoView options polyfill', () => {
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    'scrollIntoView',
+  );
+  const style = document.documentElement.style;
+  const originalScrollBehavior = Object.getOwnPropertyDescriptor(style, 'scrollBehavior');
+
+  beforeEach(() => {
+    vi.resetModules();
+    document.body.innerHTML = '';
+  });
+
+  afterEach(() => {
+    if (originalScrollIntoView) {
+      Object.defineProperty(Element.prototype, 'scrollIntoView', originalScrollIntoView);
+    } else {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+    if (originalScrollBehavior) {
+      Object.defineProperty(style, 'scrollBehavior', originalScrollBehavior);
+    } else {
+      Reflect.deleteProperty(style, 'scrollBehavior');
+    }
+    vi.resetModules();
+  });
+
+  it('does not move a nearest-aligned item that is already visible', () => {
+    const scroller = document.createElement('div');
+    const item = document.createElement('button');
+    scroller.appendChild(item);
+    document.body.appendChild(scroller);
+    scroller.style.overflowY = 'auto';
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 800 },
+    });
+    scroller.scrollTop = 100;
+    scroller.getBoundingClientRect = vi.fn(() => rect(0, 200));
+    item.getBoundingClientRect = vi.fn(() => rect(40, 80));
+
+    scrollIntoViewFallback(item, { block: 'nearest', inline: 'nearest' });
+
+    expect(scroller.scrollTop).toBe(100);
+  });
+
+  it('moves only enough to reveal an item below the viewport', () => {
+    const scroller = document.createElement('div');
+    const item = document.createElement('button');
+    scroller.appendChild(item);
+    document.body.appendChild(scroller);
+    scroller.style.overflowY = 'auto';
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 800 },
+    });
+    scroller.scrollTop = 100;
+    scroller.getBoundingClientRect = vi.fn(() => rect(0, 200));
+    item.getBoundingClientRect = vi.fn(() => rect(240, 280));
+
+    scrollIntoViewFallback(item, { block: 'nearest', inline: 'nearest' });
+
+    expect(scroller.scrollTop).toBe(180);
+  });
+
+  it('supports start alignment for settings category navigation', () => {
+    const scroller = document.createElement('div');
+    const item = document.createElement('section');
+    scroller.appendChild(item);
+    document.body.appendChild(scroller);
+    scroller.style.overflowY = 'auto';
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 800 },
+    });
+    scroller.scrollTop = 50;
+    scroller.getBoundingClientRect = vi.fn(() => rect(20, 220));
+    item.getBoundingClientRect = vi.fn(() => rect(140, 180));
+
+    scrollIntoViewFallback(item, { block: 'start', inline: 'nearest' });
+
+    expect(scroller.scrollTop).toBe(170);
+  });
+
+  it('uses the fallback for options but preserves legacy boolean calls', async () => {
+    const nativeScrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: nativeScrollIntoView,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(style, 'scrollBehavior', {
+      value: undefined,
+      configurable: true,
+    });
+    await import('./polyfills');
+
+    const scroller = document.createElement('div');
+    const item = document.createElement('button');
+    scroller.appendChild(item);
+    document.body.appendChild(scroller);
+    scroller.style.overflowY = 'auto';
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 800 },
+    });
+    scroller.scrollTop = 100;
+    scroller.getBoundingClientRect = vi.fn(() => rect(0, 200));
+    item.getBoundingClientRect = vi.fn(() => rect(240, 280));
+
+    item.scrollIntoView({ block: 'nearest' });
+    expect(scroller.scrollTop).toBe(180);
+    expect(nativeScrollIntoView).not.toHaveBeenCalled();
+
+    item.scrollIntoView(false);
+    expect(nativeScrollIntoView).toHaveBeenCalledWith(false);
+  });
+
+  it('leaves the native method untouched when options are supported', async () => {
+    const nativeScrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: nativeScrollIntoView,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(style, 'scrollBehavior', {
+      value: '',
+      configurable: true,
+    });
+
+    await import('./polyfills');
+
+    expect(Element.prototype.scrollIntoView).toBe(nativeScrollIntoView);
   });
 });
 

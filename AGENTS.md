@@ -141,6 +141,20 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
   in both `src/app.ts` and the `src/workers/app-worker.ts` entry) — e.g.
   `Array.prototype.flatMap` and `Object.fromEntries`, both used unguarded by the
   bundled `assjs`. **Don't change the target without reason.**
+- **Flex-gap fallback and auto margins.** webOS 4 lacks flex `gap`, so the build
+  appends `> * + *` margins from `scripts/css-transforms.mjs` to
+  `dist/css/legacy-webos.css`. Because that stylesheet loads last, a generated
+  margin can override a flex child's `margin-left: auto` when specificity ties.
+  Give intentional auto-margin rules higher specificity than the generated
+  parent/sibling selector, and test with the fallback rule loaded after the
+  component CSS.
+- **`scrollIntoView` options need a fallback.** Chromium 53 exposes
+  `scrollIntoView` but predates its options object and treats that object like
+  the legacy `true` argument, aligning hovered items to the top. Pointer hover
+  can then create a scroll/focus feedback loop that races to the end of a list.
+  `src/polyfills.ts` detects `scrollBehavior` support and wraps the native
+  method on webOS 4: options objects use a manual nearest/start fallback, while
+  no-argument and boolean calls retain native behavior.
 - **Build-time constants** `__APP_VERSION__`, `__APP_ID__`, `__SERVICE_ID__` are
   injected via esbuild `define`. Keep all three in lockstep across
   `esbuild.config.mjs` (build), `vitest.config.ts` (tests), and the `declare const`

@@ -66,6 +66,7 @@ test('player sidebar focuses the playing channel; search still filters', async (
   const sidebar = page.locator('#player-sidebar');
   await expect(sidebar).toBeVisible();
   const search = page.locator('.sidebar-search-input');
+  await expect(search).toBeVisible();
   await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Beta News');
   await expect(search).not.toHaveClass(/focused/);
   await expect(search).not.toBeFocused();
