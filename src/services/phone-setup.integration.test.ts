@@ -62,7 +62,7 @@ describe('phone setup synchronization', () => {
       type: 'online-subtitles',
       preferredLanguage: '',
       subdlApiKey: 'k1',
-      opensubtitles: { apiKey: 'k2', username: 'u2', password: 'p2' },
+      opensubtitles: { apiKey: 'k2', username: 'u2', password: 'password-secret' },
     });
 
     await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
@@ -94,7 +94,7 @@ describe('phone setup synchronization', () => {
       opensubtitles: {
         apiKey: 'k2',
         username: 'u2',
-        password: 'p2',
+        password: 'password-secret',
         token: '',
         tokenTs: 0,
       },
@@ -128,7 +128,7 @@ describe('phone setup synchronization', () => {
     });
     expect((state as { xtreamAccounts: Array<Record<string, unknown>> })
       .xtreamAccounts[0]).not.toHaveProperty('password');
-    expect(JSON.stringify(state)).not.toContain('p2');
+    expect(JSON.stringify(state)).not.toContain('password-secret');
 
     const xtreamId = StorageService.getPlaylists()
       .find(item => item.source === 'xtream')!.id;
