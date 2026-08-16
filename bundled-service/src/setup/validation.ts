@@ -1,3 +1,5 @@
+import { parseUrl } from '../compat';
+
 export function objectValue(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Invalid setup request');
@@ -21,13 +23,13 @@ export function stringValue(
 
 export function httpUrl(value: unknown, field: string): string {
   const text = stringValue(value, field, 4096);
-  let parsed: URL;
+  let parsed: ReturnType<typeof parseUrl>;
   try {
-    parsed = new URL(text);
+    parsed = parseUrl(text);
   } catch {
     throw new Error(`Invalid ${field}`);
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) {
     throw new Error(`Invalid ${field}`);
   }
   return text;
@@ -43,7 +45,7 @@ const SUBTITLE_LANGUAGES = [
 ];
 
 export function subtitleLanguage(value: unknown): string {
-  if (typeof value !== 'string' || !SUBTITLE_LANGUAGES.includes(value)) {
+  if (typeof value !== 'string' || SUBTITLE_LANGUAGES.indexOf(value) < 0) {
     throw new Error('Invalid preferred subtitle language');
   }
   return value;

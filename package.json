@@ -10,6 +10,10 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && node esbuild.config.mjs",
+    "service:typecheck": "tsc -p bundled-service/tsconfig.json --noEmit",
+    "service:build": "rm -rf build/bundled-service && tsc -p bundled-service/tsconfig.json && node scripts/service-compat-gate.mjs build/bundled-service",
+    "service:smoke": "npm run service:build && node scripts/run-service-smoke.mjs",
+    "service:smoke:matrix": "npm run service:build && node scripts/run-service-smoke.mjs --matrix",
     "manifest": "node scripts/generate-homebrew-manifest.mjs",
     "package": "bash build.sh",
     "clean": "rm -rf dist build test-output *.ipk *.manifest.json",

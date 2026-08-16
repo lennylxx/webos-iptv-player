@@ -4,6 +4,11 @@ A bundled webOS JS service that lets a phone or computer on the same LAN
 configure Playlist URLs, Xtream accounts, and an EPG URL, or upload an `.m3u`
 playlist to the TV. The TV-side app consumes these changes through Luna.
 
+The service targets webOS TV 4.x's Node.js 0.12.2 runtime. TypeScript emits
+ES5/CommonJS, and `scripts/service-compat-gate.mjs` scans the final JavaScript
+for newer syntax and APIs. `bundled-service/src/compat.ts` prefers native APIs
+on newer TVs and supplies focused fallbacks for Node 0.12.
+
 ## Architecture
 
 ```
@@ -57,7 +62,7 @@ When a phone uploads, deletes, or submits a source change, the TV updates
 within milliseconds. There is **no background polling**.
 
 A successful POST or DELETE on the HTTP side calls an `onChange` hook,
-which iterates a `Set<msg>` of active `serviceEvents` subscribers and calls
+which iterates the active `serviceEvents` subscriber list and calls
 `msg.respond({event})` on each one. Upload events refresh `/uploads`.
 Setup events make `SetupClient` consume the pending actions, update the
 existing `StorageService` models, publish a sanitized `/setup-state` snapshot,

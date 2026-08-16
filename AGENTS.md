@@ -8,18 +8,20 @@ esbuild and packaged as a webOS `.ipk`. A separate bundled webOS JS service
 ## Commands
 
 ```bash
-npm install            # setup
-npm run typecheck      # tsc --noEmit (TS strict mode — see TS strictness)
-npm run lint           # stylelint + eslint webOS 4 / Chromium 53 browser-compat gate
-npm run build          # typecheck + esbuild bundle into dist/
-npm run preview        # build + serve dist/ at http://localhost:3000 (desktop video via hls.js/mpegts.js)
-npm test               # vitest run (unit/integration)
-npm run test:watch     # vitest watch
-npm run test:e2e       # Playwright against the preview server
-npm run test:all       # lint + unit + e2e
-npm run screenshots    # regenerate README screenshots
-./build.sh             # package the IPK (needs ares-package from @webos-tools/cli)
-./build.sh --install [device]   # build + ares-install + cold-restart on a TV
+npm install                    # setup
+npm run typecheck              # tsc --noEmit (TS strict mode — see TS strictness)
+npm run service:smoke          # build + gate + real Node.js 0.12.2 service smoke
+npm run service:smoke:matrix   # representative webOS 4-26 Node runtime matrix
+npm run lint                   # stylelint + eslint webOS 4 / Chromium 53 browser-compat gate
+npm run build                  # typecheck + esbuild bundle into dist/
+npm run preview                # build + serve dist/ at http://localhost:3000 (desktop video via hls.js/mpegts.js)
+npm test                       # vitest run (unit/integration)
+npm run test:watch             # vitest watch
+npm run test:e2e               # Playwright against the preview server
+npm run test:all               # lint + unit + e2e
+npm run screenshots            # regenerate README screenshots
+./build.sh                     # package the IPK (needs ares-package from @webos-tools/cli)
+./build.sh --install [device]  # build + ares-install + cold-restart on a TV
 ```
 
 Run a single test by file or name:
@@ -51,6 +53,13 @@ change.
 `npm run lint` and the compatibility gate, `vitest run`, the esbuild bundle, and
 packages the IPK. Pushes/PRs to `main` build; tagged `v*` pushes publish a GitHub
 release with the `.ipk`.
+
+After bundled-service changes, run `npm run service:smoke`. It downloads the
+official Node.js 0.12.2 archive, verifies its published SHA-256, caches it under
+the user cache directory, then parses and exercises the compiled service with
+that exact runtime. CI runs `npm run service:smoke:matrix` across Node.js 0.12.2,
+8.12.0, 12.21.0, 16.19.1, and 20.12.2, representing webOS 4 through 26. On
+Apple Silicon, Node 16/20 use arm64 while older releases use x64 through Rosetta.
 
 ## Versioning
 
@@ -108,6 +117,8 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
   `fireReminderAlert` for reminders) and over HTTP; changes push
   `serviceEvents` without polling. Its lifecycle is tied to app
   `visibilitychange`. `index.ts` wires `lan/`, `setup/`, and `reminder/`.
+  It targets webOS 4's Node.js 0.12.2: compile to ES5/CommonJS, route newer
+  Node APIs through `compat.ts`, and gate the final JavaScript build.
   **Read `docs/lan-service.md` before changing it**, and keep the Luna/HTTP
   contract aligned with `setup-client.ts` and `upload-client.ts`.
 

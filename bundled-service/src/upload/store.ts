@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { mkdirRecursive, stringEndsWith } from '../compat';
 
 export interface UploadMeta {
   id: string;
@@ -24,7 +25,7 @@ export function resolveDataDir(envOverride?: string): string {
 
   for (const dir of candidates) {
     try {
-      fs.mkdirSync(dir, { recursive: true });
+      mkdirRecursive(dir);
       const probe = path.join(dir, '.probe');
       fs.writeFileSync(probe, 'ok');
       fs.unlinkSync(probe);
@@ -37,7 +38,7 @@ export function resolveDataDir(envOverride?: string): string {
   }
 
   const fallback = '/tmp/iptv-uploads';
-  try { fs.mkdirSync(fallback, { recursive: true }); } catch { /* ignore */ }
+  try { mkdirRecursive(fallback); } catch { /* ignore */ }
   console.warn('[upload] resolveDataDir: all candidates failed, falling back to ' + fallback);
   return fallback;
 }
@@ -89,7 +90,7 @@ export class UploadStore {
     }
     const out: UploadMeta[] = [];
     for (const file of entries) {
-      if (!file.endsWith('.json')) continue;
+      if (!stringEndsWith(file, '.json')) continue;
       try {
         const meta = JSON.parse(
           fs.readFileSync(path.join(this.dataDir, file), 'utf-8'),

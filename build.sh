@@ -33,6 +33,8 @@ npm run build
 info "Building service..."
 rm -rf build/bundled-service
 npx tsc -p bundled-service/tsconfig.json
+node scripts/service-compat-gate.mjs build/bundled-service
+node scripts/run-service-smoke.mjs
 cp bundled-service/package.json build/bundled-service/
 cp bundled-service/src/services.json build/bundled-service/
 cp bundled-service/src/setup/setup-page.html build/bundled-service/setup/
