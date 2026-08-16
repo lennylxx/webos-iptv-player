@@ -91,7 +91,13 @@ const define = {
 // Target Chromium 68 — the engine on webOS 5. This down-levels ES2020+
 // syntax (`?.`, `??`, etc.) which would otherwise fail to parse on
 // webOS 5/6 and leave the app stuck on the loading screen.
-const TARGET = ['chrome68'];
+// Default target is Chromium 68 (webOS 5), the project's baseline. Builders
+// targeting older TVs (webOS 4.x / Chromium 53) can override without editing
+// this file, e.g. `WEBOS_TARGET=chrome53,es2015 npm run build`. The default is
+// unchanged, so shipped builds are unaffected.
+const TARGET = (process.env.WEBOS_TARGET
+  ? process.env.WEBOS_TARGET.split(',').map((t) => t.trim()).filter(Boolean)
+  : ['chrome68']);
 
 // Shared config for the main app bundle (src/app.ts). The shipped build and
 // compat-gate scan use the same tree-shaken graph.

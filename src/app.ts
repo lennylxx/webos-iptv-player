@@ -1,3 +1,4 @@
+import './polyfills-legacy';
 import './polyfills';
 import { CONFIG } from './config';
 import { KeyHandler } from './navigation/key-handler';
