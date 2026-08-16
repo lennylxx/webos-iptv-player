@@ -790,8 +790,9 @@ export class Sidebar {
                   <span class="ch-name"><span class="ch-name-text">${title}</span></span>
                   ${subtitle ? html`<span class="ch-now"><span class="ch-now-text">${subtitle}</span></span>` : ''}
                 </div>
-                ${this.renderHealthDot(ch)}
-                ${catchup ? html`<span class="sidebar-recent-kind">${t('common.catchup')}</span>` : ''}
+                ${catchup
+                  ? html`<span class="sidebar-recent-kind">${t('common.catchup')}</span>`
+                  : this.renderHealthDot(ch)}
               </div>
             `;
           })}

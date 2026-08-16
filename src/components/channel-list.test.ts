@@ -505,6 +505,24 @@ describe('ChannelList interaction', () => {
     expect(onSelect).toHaveBeenCalledWith(1);
   });
 
+  it('places recent live health before the Live badge', () => {
+    recentMock.items = [{
+      kind: 'live',
+      channel: data.channels[1],
+      channelIndex: 1,
+      updatedAt: 1000,
+    }];
+    healthMock.records[data.channels[1].url] = 'suspect';
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
+    list.handleAction('select');
+
+    const row = channelItems()[0];
+    const dot = row.querySelector('.channel-health-dot');
+    const badge = row.querySelector('.recent-kind-badge');
+    expect(dot?.nextElementSibling).toBe(badge);
+  });
+
   it('selecting a recent Catch-up row resumes directly', async () => {
     const catchup = {
       kind: 'catchup' as const,

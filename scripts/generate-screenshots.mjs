@@ -108,6 +108,11 @@ const CHANNELS = buildChannels();
 const TOTAL = CHANNELS.length;
 const SPLIT = 78; // News+Sports+Movies in playlist 1, the rest in playlist 2
 const FAVORITE_IDS = ['ch1', 'ch3', 'ch6', 'ch20', 'ch45', 'ch70', 'ch110', 'ch140'];
+const HEALTH_FIXTURE = [
+  { index: 0, status: 'unavailable', consecutiveFailures: 2, error: 'timeout' },
+  { index: 1, status: 'suspect', consecutiveFailures: 1, error: 'network' },
+  { index: 2, status: 'healthy', consecutiveFailures: 0, latencyMs: 180 },
+];
 // The hero channel advertises catch-up (time-shift), so its already-aired
 // programs can carry resume markers in the guide (epg-catchup-resume shot).
 const CATCHUP_IDS = new Set(['ch0']);
@@ -486,6 +491,7 @@ async function setupPage(page, {
   catchup = false,
   recently = false,
   reminderManager = false,
+  customization = false,
 } = {}) {
   // Freeze the clock before any app code runs (real timers keep working).
   await page.addInitScript((fixed) => {
@@ -522,6 +528,33 @@ async function setupPage(page, {
           { name: 'Playlist 2', url: 'https://demo.local/playlist2.m3u' },
         ],
   });
+
+  if (customization) {
+    await page.addInitScript(({ url, epgChannelId }) => {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < url.length; i++) {
+        h ^= url.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+      }
+      const key = (h >>> 0).toString(16).padStart(8, '0');
+      localStorage.setItem('iptv_channel_custom', JSON.stringify({
+        version: 1,
+        overrides: {
+          [key]: {
+            epgChannelId,
+            epgOffsetDeltaMinutes: 30,
+          },
+        },
+        order: [],
+        groupOrder: [],
+        groupOverrides: {},
+        customGroups: [],
+      }));
+    }, {
+      url: 'https://demo.local/stream/ch1.m3u8',
+      epgChannelId: `${encodeURIComponent('https://demo.local/epg.xml')}::ch1`,
+    });
+  }
 
   // Pre-set one reminder so the EPG shows the "set" bell. The program starts after
   // the frozen clock, so it's a future reminder (no due prompt fires). Compute the
@@ -686,6 +719,44 @@ async function remote(page, keyCode) {
 const clearToasts = (page) =>
   page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
 
+async function seedChannelHealth(page) {
+  await page.evaluate(({ fixture, channels, now }) => new Promise((resolve, reject) => {
+    const channelKey = (url) => {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < url.length; i++) {
+        h ^= url.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+      }
+      return (h >>> 0).toString(16).padStart(8, '0');
+    };
+    const request = indexedDB.open('iptv', 5);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction('channel-health-cache', 'readwrite');
+      const store = transaction.objectStore('channel-health-cache');
+      for (const item of fixture) {
+        const channel = channels[item.index];
+        const key = channelKey(`https://demo.local/stream/${channel.id}.m3u8`);
+        const data = {
+          status: item.status,
+          consecutiveFailures: item.consecutiveFailures,
+          lastCheckedAt: now,
+          ...(item.status === 'healthy' ? { lastHealthyAt: now } : {}),
+          ...(item.latencyMs === undefined ? {} : { latencyMs: item.latencyMs }),
+          ...(item.error === undefined ? {} : { error: item.error }),
+        };
+        store.put({ key, data, timestamp: now, expiresAt: null });
+      }
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => reject(transaction.error);
+    };
+  }), { fixture: HEALTH_FIXTURE, channels: CHANNELS, now: NOW });
+}
+
 // Enter a docked tab-bar section (or expand Search) via a coordinate mouseup —
 // the bar activates on a mouseup hit-test (Magic Remote OK fires no click).
 async function enterTab(page, section) {
@@ -716,11 +787,18 @@ async function shoot(page, name) {
   }
 }
 
-async function gotoChannels(page, base) {
+async function gotoChannels(page, base, { health = false } = {}) {
   await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
   await page.locator('#view-channels').waitFor({ state: 'visible' });
   await page.locator('.channel-main .channel-now').first().waitFor({ state: 'visible', timeout: 20_000 });
   await page.locator('.group-icon .group-logo').first().waitFor({ state: 'visible' });
+  if (health) {
+    await seedChannelHealth(page);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('#view-channels').waitFor({ state: 'visible' });
+    await page.locator('.channel-health-dot.unavailable').first()
+      .waitFor({ state: 'visible', timeout: 20_000 });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -746,8 +824,8 @@ const newPage = async (opts) => {
 try {
   // 1) Channel list (the hero) — first channel playing + focused, no OSD.
   {
-    const { context, page } = await newPage({ recently: true });
-    await gotoChannels(page, base);
+    const { context, page } = await newPage({ recently: true, customization: true });
+    await gotoChannels(page, base, { health: true });
     await page.keyboard.press('Enter');     // play the focused (first) channel...
     await page.locator('#player-osd .osd-programme-title').waitFor({ state: 'visible' });
     await remote(page, 27);                 // ...then Back, so the list marks it playing (▶) — no OSD
@@ -762,10 +840,12 @@ try {
   // 1b) Recently Watched — resumable catch-up mixed with recently played live channels.
   {
     const { context, page } = await newPage({ recently: true });
-    await gotoChannels(page, base);
+    await gotoChannels(page, base, { health: true });
     await page.locator('[data-group="builtin:recently-watched"]').click();
     await page.locator('.channel-main .recent-catchup').waitFor({ state: 'visible' });
     await page.locator('.channel-main .recent-live').first().waitFor({ state: 'visible' });
+    await page.locator('.recent-live .channel-health-dot.suspect')
+      .waitFor({ state: 'visible' });
     await clearToasts(page);
     await page.waitForTimeout(400);
     await shoot(page, 'recently-watched.png');
@@ -956,7 +1036,7 @@ try {
   // 4) Playback overlays — grouped channel switcher (left) + action menu (right), no OSD.
   {
     const { context, page } = await newPage({ fakeStream: true, recently: true });
-    await gotoChannels(page, base);
+    await gotoChannels(page, base, { health: true });
     // hls.js requests the (aborted) media playlists only after parsing the master, so
     // this confirms the audio/subtitle track lists are populated before the menu opens
     // — it renders once, on open, and isn't re-rendered when tracks arrive later.

@@ -524,8 +524,8 @@ export class ChannelList {
             <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${item.channel.name}</div>
             ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
           </div>
-          <div class="recent-kind-badge live">${t('common.live')}</div>
           ${this.renderHealth(item.channel)}
+          <div class="recent-kind-badge live">${t('common.live')}</div>
           ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
         </div>
       `;

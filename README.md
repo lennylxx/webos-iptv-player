@@ -8,7 +8,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Channel list | Recently watched |
 | --- | --- |
-| ![Channel list](https://github.com/user-attachments/assets/99dfb28e-0f47-461c-92d6-70c9fb285b7b) | ![Recently watched](https://github.com/user-attachments/assets/d28e6147-03c8-402e-b697-70ac524dc1d9) |
+| ![Channel list](https://github.com/user-attachments/assets/ec5dab43-3b1e-4b90-a20f-71514b8a605b) | ![Recently watched](https://github.com/user-attachments/assets/529c23e4-5fe4-4fbf-bae8-f62ce6008e33) |
 
 | Program guide | Catch-up resume |
 | --- | --- |
@@ -16,7 +16,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Channel info | Playback overlays |
 | --- | --- |
-| ![Channel info](https://github.com/user-attachments/assets/e0dd4fbf-b6b4-46f6-a8e8-7235c66d9512) | ![Playback overlays](https://github.com/user-attachments/assets/b1734ae5-637e-4759-ae88-227d832294e4) |
+| ![Channel info](https://github.com/user-attachments/assets/e0dd4fbf-b6b4-46f6-a8e8-7235c66d9512) | ![Playback overlays](https://github.com/user-attachments/assets/1a2a3fe7-55ca-4a7c-ac05-a38c4f578e41) |
 
 | Subtitles | Subtitle search |
 | --- | --- |
@@ -49,6 +49,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 **Live TV & on-demand**
 
 - **Program guide (EPG)** — three-pane guide with an auto-derived date range, per-source time correction, and caching for instant reopen
+- **Channel health** — check live streams and mark them as healthy, suspect, or unavailable
 - **Reminders** — flag an upcoming program and get notified at air time, even with the app closed, to tune straight in
 - **Recently Watched** — return to recent live channels or resume partially watched catch-up programs
 - **Movies & Series** — browse an Xtream account's VOD catalogs, with Continue Watching and account-scoped Watchlist rails
@@ -200,7 +201,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Xtream Account** — add, edit, or remove Xtream Codes accounts (portal URL + username + password). The playlist and EPG are derived from your credentials on Save.
 - **Playlists** — add, edit, or remove M3U URLs. Re-applied on Save.
 - **Upload Playlist** — QR code + LAN URL on the left, list of currently uploaded playlists on the right. Scan the QR from a phone/laptop on the same network to upload `.m3u` files; they appear in this list within milliseconds via Luna push.
-- **Channels** — reorder, hide, rename, regroup, manually map entries to XMLTV channels, or correct one channel's EPG time; show hidden channels or reset customizations.
+- **Channels** — check live-stream health; reorder, hide, rename, regroup, manually map entries to XMLTV channels, or correct one channel's EPG time; show hidden channels or reset customizations.
 - **XMLTV URL** — set the program guide URL, also auto-detected from `x-tvg-url` in M3U playlists.
 - **EPG time zone** — show guide times in the TV's **Device** time zone or the guide **Feed** time zone.
 - **EPG time correction** — adjust each source independently in 15-minute steps.

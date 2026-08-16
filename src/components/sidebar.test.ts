@@ -731,6 +731,33 @@ describe('Sidebar', () => {
       expect(sidebar.visible).toBe(false);
     });
 
+    it('does not show live health on a recent Catch-up row', () => {
+      recentMock.items = [{
+        kind: 'catchup',
+        channel: channels[0],
+        channelIndex: 0,
+        updatedAt: 1000,
+        progress: {
+          channelKey: 'a',
+          progStart: 1000,
+          progEnd: 61000,
+          position: 30,
+          duration: 60,
+          updatedAt: 1000,
+          title: 'Program Alpha',
+          completed: false,
+        },
+      }];
+      healthMock.records.a = 'healthy';
+      sidebar.refresh();
+      sidebar.handleAction('left');
+      groupItems()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+      const row = items()[0];
+      expect(row.querySelector('.sidebar-recent-kind')).not.toBeNull();
+      expect(row.querySelector('.channel-health-dot')).toBeNull();
+    });
+
     it('marks only the exact recent playback as playing', () => {
       getCurrentCatchupStart.mockReturnValue(2000);
       recentMock.items = [
