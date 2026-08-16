@@ -1,21 +1,21 @@
 /*
  * Legacy webOS compatibility.
  *
- * Flex `gap` shipped in Chromium 84, so webOS 5 (Chromium 68) and webOS 6 (79)
- * ignore it. The flex-`gap` fallback below is GENERATED at build time from the
- * source CSS (generateGapFallback in esbuild.config.mjs) and appended here: for
- * each flex container that sets `gap`, a `> * + *` margin on the main axis
- * (column -> margin-top, row -> margin-left), wrapped in `@supports not (inset: 0)`.
- * `inset` is Chromium 87, so the margins apply on webOS 5/6 and are skipped on
- * webOS 22+ (87) where native gap works. This file used to hand-maintain that
- * list, but it drifted out of sync with the source; generating from source removes
- * that drift. Only the hand-written backdrop-filter fallback below lives here
- * permanently.
+ * - webOS 4 / Chromium 53: no Grid, flex gap, backdrop-filter, or inset.
+ * - webOS 5 / Chromium 68: Grid, but no flex gap, backdrop-filter, or inset.
+ * - webOS 6 / Chromium 79: Grid and backdrop-filter, but no flex gap or inset.
+ * - webOS 22 / Chromium 87+: supports all four features.
  *
- * `backdrop-filter` shipped in Chromium 76, so webOS 5 (68) ignores it and falls
- * back to the rgba background. The existing alphas (0.75–0.92) stay readable, but
- * we make the panels fully opaque on webOS 5 for safety. webOS 6 (79) supports
- * backdrop-filter, so it isn't covered here.
+ * The build generates a margin fallback for every top-level flex container
+ * with `gap` and appends it here under `@supports not (inset: 0)`. `inset` is a
+ * proxy for the targeted webOS versions, not an exact flex-gap test: Chromium
+ * 84-86 would receive both gap and margins, but no targeted webOS release uses
+ * that engine range. Generating the margin rules keeps them synchronized with
+ * source `gap` declarations; Grid and backdrop-filter fallbacks remain
+ * hand-written because their layout and contrast behavior is context-specific.
+ *
+ * Without backdrop-filter, translucent player panels lose contrast over video;
+ * the fallback below makes them fully opaque.
  */
 
 @supports not (backdrop-filter: blur(1px)) {
@@ -70,4 +70,53 @@
     flex: 0 0 18%;
     margin: 0 1% 18px 1%;
   }
+
+  .reminder-day-heading,
+  .reminder-manager-row,
+  .channel-epg-offset-controls {
+    display: flex;
+  }
+
+  .reminder-day-line,
+  .reminder-manager-details {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .dropdown {
+    display: inline-block;
+  }
+
+  .dropdown-sizer {
+    display: none;
+  }
+
+  .reminder-day-label {
+    flex: 0 0 112px;
+  }
+
+  .reminder-manager-time {
+    flex: 0 0 150px;
+  }
+
+  .reminder-manager-remove {
+    flex: 0 0 164px;
+  }
+
+  .channel-epg-offset-controls {
+    margin-right: auto;
+    margin-left: auto;
+  }
+
+  .channel-epg-offset-controls button {
+    flex: 0 0 54px;
+  }
+}
+
+/* Chrome 53 lacks :focus-within (used by .epg-mapping-search's container to
+   highlight the field via a wrapper); this direct :focus fallback keeps the
+   same affordance for pointer/remote focus on webOS 4. See stylelint.config.js's
+   css-focus-within ignore comment for the modern-CSS side of this pairing. */
+.epg-mapping-search:focus {
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Channel } from '../types';
 import {
   prepareSearchItems,
@@ -36,9 +36,38 @@ describe('rankByName', () => {
     expect(names(rankByName(cs, 'alpha'))).toEqual(['Alpha', 'Alpha HD', 'HD Alpha', 'XAlpha']);
   });
 
+  it('treats Unicode punctuation as a word boundary', () => {
+    const cs = [ch('AlphaNews'), ch('Alpha—News')];
+    expect(names(rankByName(cs, 'news'))).toEqual(['Alpha—News', 'AlphaNews']);
+  });
+
   it('breaks ties by earlier match position', () => {
     const cs = [ch('XXAlpha'), ch('XAlpha')]; // both mid-word; pos 2 vs pos 1
     expect(names(rankByName(cs, 'alpha'))).toEqual(['XAlpha', 'XXAlpha']);
+  });
+
+  describe('Chrome 53 Unicode fallback', () => {
+    it('keeps Unicode punctuation as a search boundary', async () => {
+      const NativeRegExp = RegExp;
+      const LegacyRegExp = function (pattern?: string | RegExp, flags?: string): RegExp {
+        if (typeof pattern === 'string' && pattern.includes('\\p{')) {
+          throw new SyntaxError('Unsupported Unicode property escape');
+        }
+        return new NativeRegExp(pattern, flags);
+      } as RegExpConstructor;
+
+      vi.stubGlobal('RegExp', LegacyRegExp);
+      vi.resetModules();
+      try {
+        const { rankByName: fallbackRankByName } = await import('./channel-search');
+        const channels = [ch('AlphaNews'), ch('Alpha—News')];
+        expect(names(fallbackRankByName(channels, 'news')))
+          .toEqual(['Alpha—News', 'AlphaNews']);
+      } finally {
+        vi.unstubAllGlobals();
+        vi.resetModules();
+      }
+    });
   });
 
   it('breaks remaining ties by shorter name', () => {
@@ -46,7 +75,7 @@ describe('rankByName', () => {
     expect(names(rankByName(cs, 'alpha'))).toEqual(['Alpha HD', 'Alpha International']);
   });
 
-  it('breaks full ties by original order (deterministic on Chrome 68 unstable sort)', () => {
+  it('breaks full ties by original order on legacy Chromium unstable sort', () => {
     const cs = [ch('Alpha', 'a'), ch('Alpha', 'b'), ch('Alpha', 'c')];
     expect(rankByName(cs, 'alpha').map(c => c.id)).toEqual(['a', 'b', 'c']);
   });

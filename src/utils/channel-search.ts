@@ -1,3 +1,9 @@
+import {
+  isLetterOrNumber,
+  splitLetterNumberTokens,
+  stripCombiningDiacritics,
+} from './unicode-text';
+
 const SYNONYM_GROUPS = [
   ['sports', 'sport', 'footy', 'football', 'soccer', 'athletics'],
   ['kids', 'kid', 'children', 'child', 'cartoons', 'cartoon', 'animation', 'animated'],
@@ -10,11 +16,11 @@ const SYNONYM_GROUPS = [
 const STOP_WORDS = new Set(['find', 'me', 'show', 'watch', 'for', 'please', 'channel', 'channels', 'program', 'programs']);
 
 function fold(value: string): string {
-  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return stripCombiningDiacritics(value.normalize('NFD')).toLowerCase();
 }
 
 function splitFolded(value: string): string[] {
-  return value.split(/[^0-9A-Za-z\u00C0-\uFFFF]+/u).filter(Boolean);
+  return splitLetterNumberTokens(value);
 }
 
 function tokens(value: string): string[] {
@@ -174,7 +180,7 @@ function directScore<T>(
       ? 0
       : pos === 0
         ? 1
-        : !/[0-9A-Za-z\u00C0-\uFFFF]/u.test(value[pos - 1]) ? 2 : 3;
+        : !isLetterOrNumber(value[pos - 1]) ? 2 : 3;
     const score = tier * 1000 + fieldIndex * 100 + pos * 10 + value.length;
     if (best === null || score < best) best = score;
   }
@@ -310,7 +316,7 @@ export function rankPreparedNamesTopK<T>(
       ? 0
       : pos === 0
         ? 1
-        : !/[0-9A-Za-z\u00C0-\uFFFF]/u.test(value[pos - 1]) ? 2 : 3;
+        : !isLetterOrNumber(value[pos - 1]) ? 2 : 3;
     matches++;
     heap.add({
       item: index.items[i],

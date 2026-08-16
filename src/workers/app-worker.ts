@@ -1,3 +1,4 @@
+import '../polyfills';
 import { fetchAndParseXMLTVInWorker } from '../parsers/xmltv-loader';
 import { exposeWorkerTasks, type WorkerTaskHandlers } from './worker-rpc';
 import { SearchWorkerIndex } from './search-index';

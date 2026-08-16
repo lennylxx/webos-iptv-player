@@ -22,8 +22,8 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-# Lint (webOS 5 / Chromium 68 compat gate), then build (type-check + bundle)
-info "Linting (webOS 5 / Chromium 68 compat gate)..."
+# Lint (webOS 4 / Chromium 53 compat gate), then build (type-check + bundle)
+info "Linting (webOS 4 / Chromium 53 compat gate)..."
 npm run lint
 
 info "Building app (type-check + esbuild bundle)..."

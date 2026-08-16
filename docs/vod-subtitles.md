@@ -64,7 +64,7 @@ ASS/SSA carry positioning, styling and karaoke a `<track>` can't express, so the
 [`assjs`](https://github.com/weizhenye/ass) (MIT) — a DOM/CSS ASS renderer. DOM/CSS was chosen
 over libass/WASM so **the browser does font fallback** (the TV's system fonts, incl. CJK, with
 **no bundled fonts**) and it stays small (tens of KB) and degrades feature-by-feature on old
-browsers rather than breaking — so the core renders on the Chromium-68 floor (webOS 5), while
+browsers rather than breaking — so the core renders at the compatibility floor, while
 newer TVs get the advanced tags. `assjs` is loaded with a **lazy dynamic `import('assjs')`** that
 esbuild keeps in a deferred `__esm` wrapper, so a TV that never plays ASS never runs it; an import
 or fetch failure logs a warning and leaves subtitles off (never a crash or blank screen).

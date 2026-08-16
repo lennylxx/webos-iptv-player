@@ -1,5 +1,5 @@
 // Deterministic avatar visuals for an Xtream account label. Pure and unit-tested
-// so the switcher component just renders the result. Chromium-68-safe (no
+// so the switcher component just renders the result. Legacy-safe (no
 // Unicode property escapes): letters outside ASCII are detected via case folding.
 
 // A stable hue in [0,360) from the label, at fixed saturation/lightness so the

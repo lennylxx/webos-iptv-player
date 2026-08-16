@@ -236,7 +236,7 @@ class ChannelCustomizationServiceImpl {
       kept.push({ ch, rank: rank.get(key) ?? d.order.length + i, index: i });
     }
 
-    // Chrome 68's sort is not stable — the index tiebreak keeps it deterministic.
+    // Legacy Chromium sort is not stable — the index tiebreak keeps it deterministic.
     kept.sort((a, b) => a.rank - b.rank || a.index - b.index);
     return kept.map((entry) => entry.ch);
   }

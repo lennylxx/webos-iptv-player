@@ -31,7 +31,7 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit && npx tsc -p bundled-service/tsconfig.json && npm run benchmark:typecheck
 
-      - name: Lint (webOS 5 / Chromium 68 compat gate)
+      - name: Lint and compatibility gate
         run: npm run lint
 
       - name: Unit tests

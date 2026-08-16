@@ -1,6 +1,10 @@
 import * as esbuild from 'esbuild';
 import { mkdir, readFile } from 'node:fs/promises';
-import { formatViolations, scanBundle } from '../scripts/compat-gate.mjs';
+import {
+  LEGACY_JS_BANNER,
+  formatViolations,
+  scanBundle,
+} from '../scripts/compat-gate.mjs';
 
 const outfile = 'test-output/benchmarks/parser-bundle.js';
 const appinfo = JSON.parse(await readFile('appinfo.json', 'utf8'));
@@ -17,7 +21,8 @@ await esbuild.build({
   bundle: true,
   outfile,
   format: 'iife',
-  target: ['chrome68'],
+  target: ['chrome53'],
+  banner: { js: LEGACY_JS_BANNER },
   define,
   minify: true,
 });
@@ -25,7 +30,8 @@ const scan = await esbuild.build({
   entryPoints: ['benchmarks/parser-entry.ts'],
   bundle: true,
   format: 'iife',
-  target: ['chrome68'],
+  target: ['chrome53'],
+  banner: { js: LEGACY_JS_BANNER },
   define,
   minify: false,
   write: false,

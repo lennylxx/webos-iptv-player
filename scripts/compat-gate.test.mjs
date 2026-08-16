@@ -72,11 +72,45 @@ describe('compat gate unsupported constructors', () => {
     ]);
   });
 
-  it('allows constructors available in Chrome 68', () => {
+  it('allows supported or polyfilled constructors', () => {
     expect(scanBundle(`
       new Worker('/worker.js');
       new TextDecoder('utf-8');
       new AbortController();
+      new Intl.PluralRules('en');
+    `)).toEqual([]);
+  });
+
+  it('detects nested built-in constructors before applying the polyfill allowlist', () => {
+    expect(scanBundle(
+      `new Intl.PluralRules('en');`,
+      { allowlist: [] },
+    )).toEqual([
+      expect.objectContaining({
+        name: 'PluralRules',
+        kind: 'constructor',
+        minChrome: 63,
+        count: 1,
+      }),
+    ]);
+  });
+});
+
+describe('compat gate unsupported instance methods', () => {
+  it('rejects any receiver calling a denylisted method name, e.g. .finally()', () => {
+    const violations = scanBundle(`
+      check.finally(cleanup);
+      Promise.resolve().finally(() => {});
+    `);
+
+    expect(violations).toEqual([
+      expect.objectContaining({ name: 'finally', kind: 'method', minChrome: 63, count: 2 }),
+    ]);
+  });
+
+  it('allows guarded/polyfilled method names, e.g. padStart', () => {
+    expect(scanBundle(`
+      value.padStart(3, '0');
     `)).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@ import { t } from '../i18n';
 
 const PROVIDER_LABEL: Record<string, string> = { opensubtitles: 'OpenSubtitles', subdl: 'SubDL', assrt: 'Assrt' };
 
-// Group digits into thousands (chrome68-safe, no Intl/locale dependency).
+// Group digits into thousands (Chromium 53-safe, no Intl/locale dependency).
 function formatCount(n: number): string {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }

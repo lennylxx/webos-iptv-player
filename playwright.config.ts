@@ -4,7 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 const baseURL = 'http://localhost:3000';
 
 // End-to-end tests drive the real app in headless Chromium (close to the
-// webOS 5/6 Chromium engine). The preview harness builds the app and serves
+// legacy webOS Chromium engine). The preview harness builds the app and serves
 // dist/ on baseURL.
 export default defineConfig({
   testDir: './e2e',

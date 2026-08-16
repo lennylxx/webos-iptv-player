@@ -3,14 +3,14 @@
 IPTV player for LG webOS TVs. Vanilla TypeScript (no UI framework), bundled with
 esbuild and packaged as a webOS `.ipk`. A separate bundled webOS JS service
 (`bundled-service/`) provides LAN M3U uploads over Luna + HTTP. App id
-`com.lennylxx.iptv`; targets webOS 5+.
+`com.lennylxx.iptv`; targets webOS 4+.
 
 ## Commands
 
 ```bash
 npm install            # setup
 npm run typecheck      # tsc --noEmit (TS strict mode — see TS strictness)
-npm run lint           # stylelint + eslint webOS 5 / Chromium 68 browser-compat gate
+npm run lint           # stylelint + eslint webOS 4 / Chromium 53 browser-compat gate
 npm run build          # typecheck + esbuild bundle into dist/
 npm run preview        # build + serve dist/ at http://localhost:3000 (desktop video via hls.js/mpegts.js)
 npm test               # vitest run (unit/integration)
@@ -30,7 +30,7 @@ npx vitest run -t "parses catchup-source"
 ```
 
 There is **no Prettier/autoformatter**, but ESLint + stylelint are a real static
-gate (`npm run lint`) alongside `tsc` strictness — see the webOS 5 compat gate under
+gate (`npm run lint`) alongside `tsc` strictness — see the webOS 4 compat gate under
 Conventions. Run `npm run typecheck`, `npm run lint`, and the relevant tests before
 considering a change done.
 
@@ -48,7 +48,7 @@ change.
 ## CI
 
 `.github/workflows/build.yml` runs typecheck (app, `service`, **and** `benchmarks`),
-`npm run lint` (the Chromium-68 compat gate), `vitest run`, the esbuild bundle, and
+`npm run lint` and the compatibility gate, `vitest run`, the esbuild bundle, and
 packages the IPK. Pushes/PRs to `main` build; tagged `v*` pushes publish a GitHub
 release with the `.ipk`.
 
@@ -113,22 +113,23 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
 
 ## Conventions
 
-- **webOS 5 target.** esbuild builds with `target: ['chrome68']` (webOS 5's
+- **webOS 4 target.** esbuild builds with `target: ['chrome53']` (webOS 4's
   Chromium). Modern syntax (`?.`, `??`, …) is fine — esbuild down-levels it — but
   modern *APIs* aren't polyfilled and silently fail on a real TV. `npm run lint` is
   the guard: `eslint-plugin-compat` plus a method denylist in `eslint.config.mjs`
   (derived from the shared `DENYLIST` in `scripts/compat-gate.mjs`, keyed to the
-  `chrome 68` `browserslist`) flags post-68 APIs — `.flat()`, `.at()`, `replaceAll`,
+  `chrome 53` `browserslist`) flags post-53 APIs — `.flat()`, `.at()`, `replaceAll`,
   `structuredClone`, … — that would otherwise hang the app on a blank loading
   screen. A second, **build-time** gate in `esbuild.config.mjs` AST-scans a
   non-minified build of the app bundle (`scanBundle` in `scripts/compat-gate.mjs`,
   parsing with the TypeScript compiler API — so string/comment hits and `typeof`
-  guards are ignored) to catch post-68 APIs pulled in by **dependencies**, which
+  guards are ignored) to catch post-53 APIs pulled in by **dependencies**, which
   the source lint never sees; these fail the build too. That one file holds the
   `DENYLIST` and the `ALLOWLIST` of accepted (`polyfilled`/`guarded`/`accepted-risk`)
   exceptions. Polyfilled fixes are installed in `src/polyfills.ts` (imported first
-  in `src/app.ts`) — e.g. `Array.prototype.flatMap` and `Object.fromEntries`, both
-  used unguarded by the bundled `assjs`. **Don't change the target without reason.**
+  in both `src/app.ts` and the `src/workers/app-worker.ts` entry) — e.g.
+  `Array.prototype.flatMap` and `Object.fromEntries`, both used unguarded by the
+  bundled `assjs`. **Don't change the target without reason.**
 - **Build-time constants** `__APP_VERSION__`, `__APP_ID__`, `__SERVICE_ID__` are
   injected via esbuild `define`. Keep all three in lockstep across
   `esbuild.config.mjs` (build), `vitest.config.ts` (tests), and the `declare const`
