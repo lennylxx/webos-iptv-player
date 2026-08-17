@@ -254,6 +254,9 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
 ## Git
 
 - Commit **directly to `main`** — no feature branch, no PR for this repo.
+- Upload README/GitHub media with
+  `gh image --repo lennylxx/webos-iptv-player -- <files>`; it prints
+  ready-to-use Markdown attachment URLs.
 - **Never run `git add` and `git commit` in the same command.** Staging and
   committing must be separate user-visible steps.
 - **No auto-injected/bot trailers** in commit messages — this means **no

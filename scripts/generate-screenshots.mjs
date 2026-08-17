@@ -1155,6 +1155,7 @@ try {
       v.classList.add('active');
       await v.play().catch(() => { /* ignore */ });
       await new Promise((r) => setTimeout(r, 500)); // let a few frames flow (readyState↑)
+      for (let i = 0; i < v.textTracks.length; i++) v.textTracks[i].mode = 'disabled';
       const track = v.addTextTrack('subtitles', 'Subtitles', 'en');
       track.mode = 'showing';
       for (const cue of cues) {

@@ -1,8 +1,22 @@
-# webOS IPTV Player
-
-An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, XMLTV program guides, and catch-up/timeshift playback.
-
-![icon](assets/icon.svg)
+<div align="center">
+  <img src="assets/icon.svg" alt="webOS IPTV Player icon">
+  <h1>webOS IPTV Player</h1>
+  <p>An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, XMLTV program guides, and catch-up/timeshift playback.</p>
+  <p>
+  <a href="#supported-webos-versions">
+    <img src="https://img.shields.io/badge/webOS-4%2B-e6007e?logo=webos&logoColor=white" alt="webOS 4+">
+  </a>
+  <a href="https://github.com/lennylxx/webos-iptv-player/releases/latest">
+    <img src="https://img.shields.io/github/v/release/lennylxx/webos-iptv-player" alt="Latest release">
+  </a>
+  <a href="https://github.com/lennylxx/webos-iptv-player/releases">
+    <img src="https://img.shields.io/github/downloads/lennylxx/webos-iptv-player/total" alt="GitHub downloads">
+  </a>
+  <a href="https://lennylxx.github.io/webos-iptv-player/">
+    <img src="https://img.shields.io/badge/Website-222?logo=github" alt="Project website">
+  </a>
+  </p>
+</div>
 
 ## Screenshots
 
@@ -20,7 +34,7 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Subtitles | Subtitle search |
 | --- | --- |
-| ![Subtitles](https://github.com/user-attachments/assets/dd680a0f-2817-4905-94fb-80225f515a1e) | ![Subtitle search](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) |
+| ![Subtitles](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) | ![Subtitle search](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) |
 
 | Movies | Movie detail |
 | --- | --- |
@@ -32,11 +46,11 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 | Settings | Theme picker |
 | --- | --- |
-| ![Settings](https://github.com/user-attachments/assets/fb86992b-91f6-43c3-94dc-0b4435751eb5) | ![Theme picker](https://github.com/user-attachments/assets/90ecc674-1421-42a5-8c10-248697cce305) |
+| ![Settings](https://github.com/user-attachments/assets/0813b5a4-41ce-4a13-b398-8e7bb213de64) | ![Theme picker](https://github.com/user-attachments/assets/90ecc674-1421-42a5-8c10-248697cce305) |
 
 | Reminder manager | LAN setup |
 | --- | --- |
-| ![Reminder manager](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) | ![LAN setup](https://github.com/user-attachments/assets/5cb397f8-d2f1-4274-80e6-1395c16af87c) |
+| ![Reminder manager](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) | ![LAN setup](https://github.com/user-attachments/assets/fda1f741-bf92-45fd-b7c5-e2ed555cdc92) |
 
 ## Features
 
