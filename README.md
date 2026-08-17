@@ -3,18 +3,10 @@
   <h1>webOS IPTV Player</h1>
   <p>An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, XMLTV program guides, and catch-up/timeshift playback.</p>
   <p>
-  <a href="#supported-webos-versions">
-    <img src="https://img.shields.io/badge/webOS-4%2B-e6007e?logo=webos&logoColor=white" alt="webOS 4+">
-  </a>
-  <a href="https://github.com/lennylxx/webos-iptv-player/releases/latest">
-    <img src="https://img.shields.io/github/v/release/lennylxx/webos-iptv-player" alt="Latest release">
-  </a>
-  <a href="https://github.com/lennylxx/webos-iptv-player/releases">
-    <img src="https://img.shields.io/github/downloads/lennylxx/webos-iptv-player/total" alt="GitHub downloads">
-  </a>
-  <a href="https://lennylxx.github.io/webos-iptv-player/">
-    <img src="https://img.shields.io/badge/Website-222?logo=github" alt="Project website">
-  </a>
+  <a href="#supported-webos-versions"><img src="https://img.shields.io/badge/webOS-4%2B-e6007e?logo=webos&logoColor=white" alt="webOS 4+"></a>
+  <a href="https://github.com/lennylxx/webos-iptv-player/releases/latest"><img src="https://img.shields.io/github/v/release/lennylxx/webos-iptv-player" alt="Latest release"></a>
+  <a href="https://github.com/lennylxx/webos-iptv-player/releases"><img src="https://img.shields.io/github/downloads/lennylxx/webos-iptv-player/total" alt="GitHub downloads"></a>
+  <a href="https://lennylxx.github.io/webos-iptv-player/"><img src="https://img.shields.io/badge/Website-222?logo=github" alt="Project website"></a>
   </p>
 </div>
 
