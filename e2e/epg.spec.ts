@@ -82,7 +82,7 @@ test.describe('EPG live badge', () => {
 
   test('with reduced motion the LIVE badge still shows, but the pulse is disabled', async ({ page }) => {
     // epg.css has `@media (prefers-reduced-motion: reduce) { .epg-now-dot { animation: none } }`.
-    // Modern engines honor it (webOS 5 / Chromium 68 ignores it and keeps pulsing —
+    // Modern engines honor it (legacy webOS ignores it and keeps pulsing —
     // both acceptable). Verify the off-switch on an engine that honors it.
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await setup(page);

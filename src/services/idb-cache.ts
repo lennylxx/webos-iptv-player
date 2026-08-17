@@ -499,9 +499,11 @@ async function readMetadata(): Promise<{
 
 async function storageEstimate(): Promise<{ usage: number | null; quota: number | null }> {
   try {
+    // StorageManager is absent on webOS 4; guard before accessing it.
     if (typeof navigator === 'undefined' || !navigator.storage?.estimate) {
       return { usage: null, quota: null };
     }
+    // eslint-disable-next-line compat/compat
     const estimate = await navigator.storage.estimate();
     return {
       usage: typeof estimate.usage === 'number' ? estimate.usage : null,

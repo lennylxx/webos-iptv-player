@@ -3,7 +3,7 @@ import { StorageService } from './storage-service';
 
 // Theme switching is a single attribute write on <html>; the CSS variable
 // overrides live in css/themes.css keyed by `[data-theme="<id>"]`. No runtime
-// color math (keeps us within the Chromium-68 target).
+// color math, keeping the runtime compatible with older engines.
 
 function setThemeAttr(id: string | null | undefined): void {
   document.documentElement.dataset.theme = isValidTheme(id) ? id : DEFAULT_THEME;

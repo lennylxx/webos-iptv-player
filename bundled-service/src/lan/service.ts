@@ -49,7 +49,7 @@ export function registerLanService(service: LunaService, dataDir: string): void 
   const pendingStarts: Array<{ respond: (r: unknown) => void }> = [];
   // Subscribers to the `serviceEvents` push channel. Each entry is a Luna msg
   // retained from a subscribe request; the service calls msg.respond() to push.
-  const subscribers = new Set<LunaMsg>();
+  const subscribers: LunaMsg[] = [];
   const setupActions = new SetupActionStore();
   const setupState = new SetupStateStore();
   // The HTTP server is bound eagerly at wire-up AND lazily on `start` after a
@@ -60,14 +60,16 @@ export function registerLanService(service: LunaService, dataDir: string): void 
   let bindInProgress = false;
 
   function broadcastChange(event: ServiceChangeEvent): void {
-    if (subscribers.size === 0) return;
-    console.log('[lan] broadcasting ' + event + ' to ' + subscribers.size + ' subscriber(s)');
-    for (const sub of subscribers) {
+    if (subscribers.length === 0) return;
+    console.log('[lan] broadcasting ' + event + ' to ' + subscribers.length + ' subscriber(s)');
+    for (let i = 0; i < subscribers.length;) {
+      const sub = subscribers[i];
       try {
         sub.respond({ event });
+        i++;
       } catch (e) {
         console.warn('[lan] subscriber respond failed, dropping:', e);
-        subscribers.delete(sub);
+        subscribers.splice(i, 1);
       }
     }
   }
@@ -127,8 +129,8 @@ export function registerLanService(service: LunaService, dataDir: string): void 
     console.log('[lan] stop method invoked');
     // Drop all push subscribers — their connections are scoped to this
     // service lifetime and would be stale after a restart anyway.
-    const droppedSubs = subscribers.size;
-    subscribers.clear();
+    const droppedSubs = subscribers.length;
+    subscribers.length = 0;
     try {
       service.activityManager.complete('keepAlive', () => {
         console.log('[lan] keepAlive activity completed');
@@ -154,15 +156,16 @@ export function registerLanService(service: LunaService, dataDir: string): void 
   // msg.respond({event}) whenever uploads mutate or a setup action is queued.
   service.register('serviceEvents', (msg) => {
     if (msg.isSubscription) {
-      subscribers.add(msg);
-      console.log('[lan] serviceEvents subscriber added, total=' + subscribers.size);
+      if (subscribers.indexOf(msg) < 0) subscribers.push(msg);
+      console.log('[lan] serviceEvents subscriber added, total=' + subscribers.length);
       // Per webos-service API: clients drop themselves by closing their end,
       // which the lib surfaces as a 'cancel' event on the msg. msg.cancel()
       // (no-arg) is a server-side trigger that we never need to call.
       if (typeof msg.on === 'function') {
         msg.on('cancel', () => {
-          subscribers.delete(msg);
-          console.log('[lan] serviceEvents subscriber cancelled, total=' + subscribers.size);
+          const index = subscribers.indexOf(msg);
+          if (index >= 0) subscribers.splice(index, 1);
+          console.log('[lan] serviceEvents subscriber cancelled, total=' + subscribers.length);
         });
       }
     }

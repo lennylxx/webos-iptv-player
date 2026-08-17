@@ -39,8 +39,8 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-# webOS 5 / Chromium 68 compatibility gate (CSS features + JS APIs)
-info "Linting (webOS 5 / Chromium 68 compat gate)..."
+# webOS 4 / Chromium 53 compatibility gate (CSS features + JS APIs)
+info "Linting (webOS 4 / Chromium 53 compat gate)..."
 npm run lint
 
 if [ "$MODE" = "unit" ] || [ "$MODE" = "all" ]; then

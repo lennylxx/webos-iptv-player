@@ -24,7 +24,7 @@ interface AssInstance {
 /**
  * Renders `.ass` / `.ssa` sidecar subtitles for VOD with `assjs` — a DOM/CSS ASS
  * renderer, so the browser does font fallback (no bundled fonts) and it degrades
- * gracefully on the Chromium-68 floor. assjs is loaded with a lazy dynamic
+ * gracefully at the compatibility floor. assjs is loaded with a lazy dynamic
  * `import('assjs')`, so a TV that never plays ASS never loads it. One track draws
  * at a time, into an `#ass-overlay` positioned over the video plane.
  */

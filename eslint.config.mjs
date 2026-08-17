@@ -1,8 +1,11 @@
 import compat from 'eslint-plugin-compat';
 import tsParser from '@typescript-eslint/parser';
-import { DENYLIST } from './scripts/compat-gate.mjs';
+import { ALLOWLIST, DENYLIST } from './scripts/compat-gate.mjs';
 
 const entryByKind = new Map(DENYLIST.map((entry) => [entry.kind, entry]));
+const polyfilled = new Set(
+  ALLOWLIST.filter((entry) => entry.reason === 'polyfilled').map((entry) => entry.name),
+);
 
 function expressionName(node) {
   if (node.type === 'Identifier') return node.name;
@@ -45,9 +48,9 @@ const unsupportedPatterns = {
   },
 };
 
-// webOS 5 ships Chromium 68. esbuild down-levels post-68 *syntax* (optional
+// webOS 4 ships Chromium 53. esbuild down-levels post-53 *syntax* (optional
 // chaining, etc.) but it does NOT polyfill missing *APIs*, which would silently
-// fail on a real webOS 5 TV. Three rules below close that gap, all keyed to the
+// fail on a real webOS 4 TV. Three rules below close that gap, all keyed to the
 // "browserslist" field in package.json (shared with the CSS gate):
 //   - compat/compat        — flags missing global/static APIs (structuredClone, …)
 //   - no-restricted-syntax — a denylist for prototype methods compat can't see
@@ -64,16 +67,32 @@ export default [
       ecmaVersion: 'latest',
       sourceType: 'module',
     },
+    settings: {
+      // eslint-plugin-compat matches these against each rule's protoChainId
+      // (from ast-metadata-inferer), which — despite the plugin's own README
+      // example ("Array.prototype.push") — omits "prototype" for inferred
+      // instance-method call sites: it's "String.padStart", not
+      // "String.prototype.padStart" (verified against the installed
+      // ast-metadata-inferer package data; the latter form silently matches
+      // nothing).
+      polyfills: [
+        'AbortController',
+        'Intl.PluralRules',
+        'Object.entries',
+        'Object.values',
+        'String.padStart',
+      ],
+    },
     rules: {
       'compat/compat': 'error',
       // eslint-plugin-compat catches global/static APIs (structuredClone,
       // Promise.allSettled, …) but NOT prototype *instance* methods, because it
       // can't infer that `arr.flat()` is Array.prototype.flat from the AST. Close
-      // that blind spot with a name-based denylist of distinctive post-68 methods.
+      // that blind spot with a name-based denylist of distinctive post-53 methods.
       // (If a custom object legitimately has one of these names, disable per-line.)
       'no-restricted-syntax': [
         'error',
-        ...DENYLIST.filter((e) => e.kind === 'method').map((e) => ({
+        ...DENYLIST.filter((e) => e.kind === 'method' && !polyfilled.has(e.name)).map((e) => ({
           selector: `CallExpression > MemberExpression[property.name='${e.name}']`,
           message: e.message,
         })),
@@ -82,8 +101,8 @@ export default [
     },
   },
   {
-    // Tests run in Node under vitest, never on the webOS 5 WebView, so the
-    // Chromium-68 compatibility gates don't apply to them.
+    // Tests run in Node under vitest, never on the webOS 4 WebView, so the
+    // Chromium-53 compatibility gates don't apply to them.
     files: ['src/**/*.test.ts'],
     plugins: { compat },
     rules: {

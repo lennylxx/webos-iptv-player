@@ -80,23 +80,23 @@ An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, 
 
 ## Supported webOS versions
 
-The app runs on **webOS 5.0 (2020) and newer**. Its baseline is the Chromium 68
-engine on webOS 5; every later release ships a newer Chromium, so the app is
+The app runs on **webOS 4.0 (2018) and newer**. Its baseline is the Chromium 53
+engine on webOS 4; every later release ships a newer Chromium, so the app is
 forward-compatible. Features only newer engines support natively (flex `gap`,
 `backdrop-filter`, …) get feature-detected fallbacks on the older ones.
 
-| webOS version | Released | Chromium engine | Supported |
-| --- | --- | --- | --- |
-| webOS 5.0 | 2020 | 68 | ✅ (minimum) |
-| webOS 6.0 | 2021 | 79 | ✅ |
-| webOS 22 | 2022 | 87 | ✅ |
-| webOS 23 | 2023 | 94 | ✅ |
-| webOS 24 | 2024 | 108 | ✅ |
-| webOS 25 | 2025 | 120 | ✅ |
-| webOS 26 | 2026 | 132 | ✅ |
+| webOS version | Released | Chromium engine | Bundled service Node.js | Supported |
+| --- | --- | --- | --- | --- |
+| webOS 4.x | 2018–2019 | 53 | 0.12.2 | ✅ (minimum) |
+| webOS 5.0 | 2020 | 68 | 8.12.0 | ✅ |
+| webOS 6.0 | 2021 | 79 | 8.12.0 | ✅ |
+| webOS 22 | 2022 | 87 | 12.21.0 | ✅ |
+| webOS 23 | 2023 | 94 | 12.22.2 | ✅ |
+| webOS 24 | 2024 | 108 | 16.19.1 | ✅ |
+| webOS 25 | 2025 | 120 | 16.20.2 | ✅ |
+| webOS 26 | 2026 | 132 | 20.12.2 | ✅ |
 
-webOS 4.x and older (Chromium 53 and earlier) lack JavaScript and CSS features
-the app relies on, and are not supported.
+webOS 3.x and older (Chromium 38 and earlier) are not supported.
 
 ## Prerequisites
 

@@ -3,23 +3,25 @@
 IPTV player for LG webOS TVs. Vanilla TypeScript (no UI framework), bundled with
 esbuild and packaged as a webOS `.ipk`. A separate bundled webOS JS service
 (`bundled-service/`) provides LAN M3U uploads over Luna + HTTP. App id
-`com.lennylxx.iptv`; targets webOS 5+.
+`com.lennylxx.iptv`; targets webOS 4+.
 
 ## Commands
 
 ```bash
-npm install            # setup
-npm run typecheck      # tsc --noEmit (TS strict mode — see TS strictness)
-npm run lint           # stylelint + eslint webOS 5 / Chromium 68 browser-compat gate
-npm run build          # typecheck + esbuild bundle into dist/
-npm run preview        # build + serve dist/ at http://localhost:3000 (desktop video via hls.js/mpegts.js)
-npm test               # vitest run (unit/integration)
-npm run test:watch     # vitest watch
-npm run test:e2e       # Playwright against the preview server
-npm run test:all       # lint + unit + e2e
-npm run screenshots    # regenerate README screenshots
-./build.sh             # package the IPK (needs ares-package from @webos-tools/cli)
-./build.sh --install [device]   # build + ares-install + cold-restart on a TV
+npm install                    # setup
+npm run typecheck              # tsc --noEmit (TS strict mode — see TS strictness)
+npm run service:smoke          # build + gate + real Node.js 0.12.2 service smoke
+npm run service:smoke:matrix   # representative webOS 4-26 Node runtime matrix
+npm run lint                   # stylelint + eslint webOS 4 / Chromium 53 browser-compat gate
+npm run build                  # typecheck + esbuild bundle into dist/
+npm run preview                # build + serve dist/ at http://localhost:3000 (desktop video via hls.js/mpegts.js)
+npm test                       # vitest run (unit/integration)
+npm run test:watch             # vitest watch
+npm run test:e2e               # Playwright against the preview server
+npm run test:all               # lint + unit + e2e
+npm run screenshots            # regenerate README screenshots
+./build.sh                     # package the IPK (needs ares-package from @webos-tools/cli)
+./build.sh --install [device]  # build + ares-install + cold-restart on a TV
 ```
 
 Run a single test by file or name:
@@ -30,7 +32,7 @@ npx vitest run -t "parses catchup-source"
 ```
 
 There is **no Prettier/autoformatter**, but ESLint + stylelint are a real static
-gate (`npm run lint`) alongside `tsc` strictness — see the webOS 5 compat gate under
+gate (`npm run lint`) alongside `tsc` strictness — see the webOS 4 compat gate under
 Conventions. Run `npm run typecheck`, `npm run lint`, and the relevant tests before
 considering a change done.
 
@@ -48,9 +50,16 @@ change.
 ## CI
 
 `.github/workflows/build.yml` runs typecheck (app, `service`, **and** `benchmarks`),
-`npm run lint` (the Chromium-68 compat gate), `vitest run`, the esbuild bundle, and
+`npm run lint` and the compatibility gate, `vitest run`, the esbuild bundle, and
 packages the IPK. Pushes/PRs to `main` build; tagged `v*` pushes publish a GitHub
 release with the `.ipk`.
+
+After bundled-service changes, run `npm run service:smoke`. It downloads the
+official Node.js 0.12.2 archive, verifies its published SHA-256, caches it under
+the user cache directory, then parses and exercises the compiled service with
+that exact runtime. CI runs `npm run service:smoke:matrix` across Node.js 0.12.2,
+8.12.0, 12.21.0, 16.19.1, and 20.12.2, representing webOS 4 through 26. On
+Apple Silicon, Node 16/20 use arm64 while older releases use x64 through Rosetta.
 
 ## Versioning
 
@@ -108,27 +117,44 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
   `fireReminderAlert` for reminders) and over HTTP; changes push
   `serviceEvents` without polling. Its lifecycle is tied to app
   `visibilitychange`. `index.ts` wires `lan/`, `setup/`, and `reminder/`.
+  It targets webOS 4's Node.js 0.12.2: compile to ES5/CommonJS, route newer
+  Node APIs through `compat.ts`, and gate the final JavaScript build.
   **Read `docs/lan-service.md` before changing it**, and keep the Luna/HTTP
   contract aligned with `setup-client.ts` and `upload-client.ts`.
 
 ## Conventions
 
-- **webOS 5 target.** esbuild builds with `target: ['chrome68']` (webOS 5's
+- **webOS 4 target.** esbuild builds with `target: ['chrome53']` (webOS 4's
   Chromium). Modern syntax (`?.`, `??`, …) is fine — esbuild down-levels it — but
   modern *APIs* aren't polyfilled and silently fail on a real TV. `npm run lint` is
   the guard: `eslint-plugin-compat` plus a method denylist in `eslint.config.mjs`
   (derived from the shared `DENYLIST` in `scripts/compat-gate.mjs`, keyed to the
-  `chrome 68` `browserslist`) flags post-68 APIs — `.flat()`, `.at()`, `replaceAll`,
+  `chrome 53` `browserslist`) flags post-53 APIs — `.flat()`, `.at()`, `replaceAll`,
   `structuredClone`, … — that would otherwise hang the app on a blank loading
   screen. A second, **build-time** gate in `esbuild.config.mjs` AST-scans a
   non-minified build of the app bundle (`scanBundle` in `scripts/compat-gate.mjs`,
   parsing with the TypeScript compiler API — so string/comment hits and `typeof`
-  guards are ignored) to catch post-68 APIs pulled in by **dependencies**, which
+  guards are ignored) to catch post-53 APIs pulled in by **dependencies**, which
   the source lint never sees; these fail the build too. That one file holds the
   `DENYLIST` and the `ALLOWLIST` of accepted (`polyfilled`/`guarded`/`accepted-risk`)
   exceptions. Polyfilled fixes are installed in `src/polyfills.ts` (imported first
-  in `src/app.ts`) — e.g. `Array.prototype.flatMap` and `Object.fromEntries`, both
-  used unguarded by the bundled `assjs`. **Don't change the target without reason.**
+  in both `src/app.ts` and the `src/workers/app-worker.ts` entry) — e.g.
+  `Array.prototype.flatMap` and `Object.fromEntries`, both used unguarded by the
+  bundled `assjs`. **Don't change the target without reason.**
+- **Flex-gap fallback and auto margins.** webOS 4 lacks flex `gap`, so the build
+  appends `> * + *` margins from `scripts/css-transforms.mjs` to
+  `dist/css/legacy-webos.css`. Because that stylesheet loads last, a generated
+  margin can override a flex child's `margin-left: auto` when specificity ties.
+  Give intentional auto-margin rules higher specificity than the generated
+  parent/sibling selector, and test with the fallback rule loaded after the
+  component CSS.
+- **`scrollIntoView` options need a fallback.** Chromium 53 exposes
+  `scrollIntoView` but predates its options object and treats that object like
+  the legacy `true` argument, aligning hovered items to the top. Pointer hover
+  can then create a scroll/focus feedback loop that races to the end of a list.
+  `src/polyfills.ts` detects `scrollBehavior` support and wraps the native
+  method on webOS 4: options objects use a manual nearest/start fallback, while
+  no-argument and boolean calls retain native behavior.
 - **Build-time constants** `__APP_VERSION__`, `__APP_ID__`, `__SERVICE_ID__` are
   injected via esbuild `define`. Keep all three in lockstep across
   `esbuild.config.mjs` (build), `vitest.config.ts` (tests), and the `declare const`

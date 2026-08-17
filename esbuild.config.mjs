@@ -1,7 +1,15 @@
 import * as esbuild from 'esbuild';
 import { cpSync, readFileSync, writeFileSync, readdirSync, appendFileSync, rmSync, mkdirSync } from 'fs';
-import postcss from 'postcss';
-import { scanBundle, formatViolations } from './scripts/compat-gate.mjs';
+import {
+  LEGACY_JS_BANNER,
+  scanBundle,
+  formatViolations,
+} from './scripts/compat-gate.mjs';
+import {
+  convertLegacyColorSyntax,
+  generateFlexGapFallback,
+  scaleFontSizes,
+} from './scripts/css-transforms.mjs';
 
 const isPreview = process.argv.includes('--preview');
 // Read version from package.json (single source of truth)
@@ -14,45 +22,12 @@ if (appinfo.version !== version) {
   writeFileSync('appinfo.json', JSON.stringify(appinfo, null, 2) + '\n');
 }
 
-// Build the flex-`gap` fallback appended to legacy-webos.css (see that file's
-// header for the rationale). For each top-level flex container that sets `gap`,
-// emit a `> * + *` margin on the main axis: column → margin-top, row → margin-left.
-function generateGapFallback(srcDir) {
-  const rules = [];
-  for (const file of readdirSync(srcDir)) {
-    if (!file.endsWith('.css')) continue;
-    postcss.parse(readFileSync(`${srcDir}/${file}`, 'utf8')).walkRules((rule) => {
-      if (rule.parent.type !== 'root') return; // skip @media/@supports-nested rules
-      let gap;
-      let column = false;
-      rule.walkDecls((decl) => {
-        if (decl.prop === 'flex-direction' && decl.value.trim().startsWith('column')) column = true;
-        if (decl.prop === 'gap' || decl.prop === 'row-gap' || decl.prop === 'column-gap') gap = decl.value.trim();
-      });
-      if (!gap) return;
-      const margin = column ? 'margin-top' : 'margin-left';
-      // Expand grouped selectors so the child combinator binds to each one.
-      const selector = rule.selector.split(',').map((s) => `${s.trim()} > * + *`).join(', ');
-      rules.push(`  ${selector} { ${margin}: ${gap}; }`);
-    });
-  }
-  return `\n/* AUTO-GENERATED from source \`gap\` declarations (esbuild.config.mjs) — do not edit. */\n@supports not (inset: 0) {\n${rules.join('\n')}\n}\n`;
-}
-
-// Apply the app-wide text scale while keeping source styles in pixels.
-function scaleFontSizes(outDir) {
+function transformStylesheets(outDir) {
   for (const file of readdirSync(outDir)) {
     if (!file.endsWith('.css')) continue;
     const path = `${outDir}/${file}`;
-    const root = postcss.parse(readFileSync(path, 'utf8'));
-    root.walkDecls('font-size', (decl) => {
-      if (decl.parent.type === 'rule' && decl.parent.selector.includes('::cue')) return;
-      decl.value = decl.value.replace(
-        /(-?\d*\.?\d+)px\b/g,
-        (px) => `calc(${px} * var(--font-scale))`,
-      );
-    });
-    writeFileSync(path, root.toString());
+    const css = convertLegacyColorSyntax(readFileSync(path, 'utf8'));
+    writeFileSync(path, scaleFontSizes(css));
   }
 }
 
@@ -72,8 +47,11 @@ rmSync('dist/resources', { recursive: true, force: true });
 cpSync('resources', 'dist/resources', { recursive: true });
 cpSync('css', 'dist/css', { recursive: true });
 // Append the generated flex-`gap` fallback to legacy-webos.css (loaded last).
-appendFileSync('dist/css/legacy-webos.css', generateGapFallback('css'));
-scaleFontSizes('dist/css');
+const sourceStylesheets = readdirSync('css')
+  .filter((file) => file.endsWith('.css'))
+  .map((file) => readFileSync(`css/${file}`, 'utf8'));
+appendFileSync('dist/css/legacy-webos.css', generateFlexGapFallback(sourceStylesheets));
+transformStylesheets('dist/css');
 cpSync('webOSjs/webOS.js', 'dist/webOSjs/webOS.js');
 cpSync('assets/icon80.png', 'dist/icon.png');
 cpSync('assets/icon130.png', 'dist/largeIcon.png');
@@ -88,16 +66,10 @@ const define = {
   '__SERVICE_ID__': JSON.stringify(serviceId),
   '__ENABLE_PSEUDO_LOCALE__': JSON.stringify(isPreview),
 };
-// Target Chromium 68 — the engine on webOS 5. This down-levels ES2020+
+// Target Chromium 53 — the engine on webOS 4. This down-levels newer
 // syntax (`?.`, `??`, etc.) which would otherwise fail to parse on
-// webOS 5/6 and leave the app stuck on the loading screen.
-// Default target is Chromium 68 (webOS 5), the project's baseline. Builders
-// targeting older TVs (webOS 4.x / Chromium 53) can override without editing
-// this file, e.g. `WEBOS_TARGET=chrome53,es2015 npm run build`. The default is
-// unchanged, so shipped builds are unaffected.
-const TARGET = (process.env.WEBOS_TARGET
-  ? process.env.WEBOS_TARGET.split(',').map((t) => t.trim()).filter(Boolean)
-  : ['chrome68']);
+// older TVs and leave the app stuck on the loading screen.
+const TARGET = ['chrome53'];
 
 // Shared config for the main app bundle (src/app.ts). The shipped build and
 // compat-gate scan use the same tree-shaken graph.
@@ -107,6 +79,7 @@ const appBuild = {
   outfile: 'dist/js/app.js',
   format: 'iife',
   target: TARGET,
+  banner: { js: LEGACY_JS_BANNER },
   external: ['hls.js', 'mpegts.js'],
   define,
 };
@@ -116,6 +89,7 @@ const workerBuild = {
   outfile: 'dist/js/app-worker.js',
   format: 'iife',
   target: TARGET,
+  banner: { js: LEGACY_JS_BANNER },
   define,
 };
 const shippedBuilds = [
@@ -127,7 +101,7 @@ const shippedBuilds = [
 await Promise.all(shippedBuilds.map(({ config }) =>
   esbuild.build({ ...config, minify: true })));
 
-// webOS 5 (Chromium 68) bundle compat gate. Down-leveling handles post-68
+// webOS 4 (Chromium 53) bundle compat gate. Down-leveling handles post-53
 // *syntax*, but not *APIs* — and dependencies get bundled in without passing
 // through the eslint source gate. Scan a NON-minified build of the same entry
 // (same tree-shaken graph, readable identifiers) for banned APIs.
@@ -138,7 +112,7 @@ for (const { name, config } of shippedBuilds) {
     throw new Error(`${name} bundle:\n${formatViolations(violations)}`);
   }
 }
-console.log('Compat gate: app and worker bundles are Chromium-68 clean.');
+console.log('Compat gate: app and worker bundles are Chromium-53 clean.');
 
 // Desktop-only playback libraries. Production builds neither reference nor
 // generate this bundle, so it cannot leak into the IPK.

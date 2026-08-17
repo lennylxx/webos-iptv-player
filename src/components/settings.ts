@@ -1008,9 +1008,10 @@ export class Settings {
       if (!this.healthController) {
         const check = this.startChannelHealthCheck();
         this.healthCheckPromise = check;
-        void check.finally(() => {
+        const clearHealthCheckPromise = () => {
           if (this.healthCheckPromise === check) this.healthCheckPromise = null;
-        });
+        };
+        void check.then(clearHealthCheckPromise, clearHealthCheckPromise);
       }
     } else if (el.id === 'pause-channel-health') {
       this.toggleChannelHealthPause();

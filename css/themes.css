@@ -9,9 +9,8 @@
  * in that theme's colors. Loaded after main.css, so equal-specificity rules win
  * by source order for the root element.
  *
- * `--accent-rgb` / `--danger-rgb` / `--warning-rgb` hold space-separated RGB
- * triplets so translucent tints derive from the theme via `rgb(var(--x-rgb) / a)`
- * (Chromium 66+, safe on webOS 5's Chromium 68) instead of hard-coded rgba().
+ * RGB triplets such as `--accent-rgb`, `--danger-rgb`, and `--warning-rgb`
+ * are converted to legacy-compatible colors at build time.
  */
 
 /* Midnight — the default. Mirrors main.css :root so an explicit

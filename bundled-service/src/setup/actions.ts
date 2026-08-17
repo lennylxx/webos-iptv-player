@@ -122,7 +122,13 @@ export class SetupActionStore {
   }
 
   remove(id: number): boolean {
-    const index = this.actions.findIndex(action => action.id === id);
+    let index = -1;
+    for (let i = 0; i < this.actions.length; i++) {
+      if (this.actions[i].id === id) {
+        index = i;
+        break;
+      }
+    }
     if (index < 0) return false;
     this.actions.splice(index, 1);
     return true;

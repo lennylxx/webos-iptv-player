@@ -28,10 +28,16 @@ jobs:
       - name: Install webOS CLI
         run: npm install -g @webos-tools/cli@3.2.5
 
+      - name: Cache service runtimes
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/webos-iptv-player/node-runtimes
+          key: service-node-runtimes-v1-${{ runner.os }}-${{ runner.arch }}
+
       - name: Type check
         run: npx tsc --noEmit && npx tsc -p bundled-service/tsconfig.json && npm run benchmark:typecheck
 
-      - name: Lint (webOS 5 / Chromium 68 compat gate)
+      - name: Lint and compatibility gate
         run: npm run lint
 
       - name: Unit tests
@@ -58,6 +64,8 @@ jobs:
         run: |
           rm -rf build/bundled-service
           npx tsc -p bundled-service/tsconfig.json
+          node scripts/service-compat-gate.mjs build/bundled-service
+          node scripts/run-service-smoke.mjs --matrix
           cp bundled-service/package.json build/bundled-service/
           cp bundled-service/src/services.json build/bundled-service/
           cp bundled-service/src/setup/setup-page.html build/bundled-service/setup/

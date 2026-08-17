@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { matchGroupIcon, groupIcon } from './group-icon';
 
 describe('matchGroupIcon', () => {
@@ -42,6 +42,13 @@ describe('matchGroupIcon', () => {
     it('uses token-prefix matching to avoid substring false-positives', () => {
       // "sport" is a substring of "passport" but not a token prefix.
       expect(matchGroupIcon('Passport Services')).toBeNull();
+      expect(matchGroupIcon('αsports')).toBeNull();
+    });
+
+    it('splits tokens on Unicode punctuation and whitespace', () => {
+      expect(matchGroupIcon('HD—Sports')).toBe('soccer_ball');
+      expect(matchGroupIcon('UK\u2003Sports')).toBe('soccer_ball');
+      expect(matchGroupIcon('Sports•News')).toBe('soccer_ball');
     });
 
     it('resolves overlaps by rule priority (first match wins)', () => {
@@ -55,6 +62,8 @@ describe('matchGroupIcon', () => {
     });
 
     it('returns null for groups with no genre signal', () => {
+      expect(matchGroupIcon('')).toBeNull();
+      expect(matchGroupIcon('— •')).toBeNull();
       expect(matchGroupIcon('Uncategorized')).toBeNull();
       expect(matchGroupIcon('Random Channel 42')).toBeNull();
     });
@@ -104,8 +113,10 @@ describe('matchGroupIcon', () => {
     it('Arabic, incl. the definite article (ال) and inflections', () => {
       expect(matchGroupIcon('رياضة')).toBe('soccer_ball');
       expect(matchGroupIcon('الرياضة')).toBe('soccer_ball');      // "the sports"
+      expect(matchGroupIcon('الرِّيَاضَة')).toBe('soccer_ball');
       expect(matchGroupIcon('قنوات رياضية')).toBe('soccer_ball'); // adjective form
       expect(matchGroupIcon('الأخبار')).toBe('newspaper');        // the news
+      expect(matchGroupIcon('أَخْبَار')).toBe('newspaper');
       expect(matchGroupIcon('قناة الأطفال')).toBe('teddy_bear');  // kids channel
       expect(matchGroupIcon('أفلام')).toBe('clapper_board');      // movies
       expect(matchGroupIcon('مسلسلات')).toBe('television');       // series
@@ -134,5 +145,32 @@ describe('groupIcon (rendered HTML)', () => {
 
   it('falls back to the play-triangle glyph for unmatched groups', () => {
     expect(groupIcon('Uncategorized')).toBe('&#9654;');
+  });
+});
+
+describe('Chrome 53 fallback', () => {
+  it('matches with explicit ranges when Unicode properties are unavailable', async () => {
+    const NativeRegExp = RegExp;
+    const LegacyRegExp = function (pattern?: string | RegExp, flags?: string): RegExp {
+      if (typeof pattern === 'string' && pattern.includes('\\p{')) {
+        throw new SyntaxError('Unsupported Unicode property escape');
+      }
+      return new NativeRegExp(pattern, flags);
+    } as RegExpConstructor;
+
+    vi.stubGlobal('RegExp', LegacyRegExp);
+    vi.resetModules();
+    try {
+      const { matchGroupIcon: fallbackMatchGroupIcon } = await import('./group-icon');
+      expect(fallbackMatchGroupIcon('HD—Sports')).toBe('soccer_ball');
+      expect(fallbackMatchGroupIcon('UK\u2003Sports')).toBe('soccer_ball');
+      expect(fallbackMatchGroupIcon('أَخْبَار')).toBe('newspaper');
+      expect(fallbackMatchGroupIcon('الرِّيَاضَة')).toBe('soccer_ball');
+      expect(fallbackMatchGroupIcon('Passport Services')).toBeNull();
+      expect(fallbackMatchGroupIcon('— •')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
   });
 });
