@@ -7,12 +7,18 @@
  * - webOS 22 / Chromium 87+: supports all four features.
  *
  * The build generates a margin fallback for every top-level flex container
- * with `gap` and appends it here under `@supports not (inset: 0)`. `inset` is a
- * proxy for the targeted webOS versions, not an exact flex-gap test: Chromium
- * 84-86 would receive both gap and margins, but no targeted webOS release uses
- * that engine range. Generating the margin rules keeps them synchronized with
- * source `gap` declarations; Grid and backdrop-filter fallbacks remain
- * hand-written because their layout and contrast behavior is context-specific.
+ * with `gap` and writes it to the companion legacy-webos-base.css under
+ * `@supports not (inset: 0)`. `inset` is a proxy for the targeted webOS
+ * versions, not an exact flex-gap test: Chromium 84-86 would receive both gap
+ * and margins, but no targeted webOS release uses that engine range.
+ * Generating the margin rules keeps them synchronized with source `gap`
+ * declarations; Grid and backdrop-filter fallbacks remain hand-written because
+ * their layout and contrast behavior is context-specific.
+ *
+ * Load order carries meaning. This file is linked LAST because every rule in it
+ * must beat component CSS. The generated margins are the opposite — defaults a
+ * component may override — so they are linked FIRST; see the header of
+ * legacy-webos-base.css.
  *
  * Without backdrop-filter, translucent player panels lose contrast over video;
  * the fallback below makes them fully opaque.
@@ -43,9 +49,12 @@
     -webkit-flex-direction: row;
     flex-direction: row;
   }
+  /* `flex: 0 0 auto` stands in for the `max-content` grid track: the sidebar
+     sizes to its longest label, clamped by its own min/max-width. A fixed
+     basis would clip the widest localized labels. */
   .settings-view > .settings-sidebar {
-    -webkit-flex: 0 0 300px;
-    flex: 0 0 300px;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
     margin-right: 32px;
   }
   .settings-view > .settings-main {
@@ -111,12 +120,12 @@
   .channel-epg-offset-controls button {
     flex: 0 0 54px;
   }
-}
 
-/* Chrome 53 lacks :focus-within (used by .epg-mapping-search's container to
-   highlight the field via a wrapper); this direct :focus fallback keeps the
-   same affordance for pointer/remote focus on webOS 4. See stylelint.config.js's
-   css-focus-within ignore comment for the modern-CSS side of this pairing. */
-.epg-mapping-search:focus {
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  /* Fallback for engines without :focus-within, which the wrapper uses to
+     highlight this field. Safe inside the Grid guard: Grid (Chrome 57)
+     predates :focus-within (60), and unguarded it would stack a second
+     glow ring. */
+  .epg-mapping-search:focus {
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
 }

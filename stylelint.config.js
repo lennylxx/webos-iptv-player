@@ -14,9 +14,9 @@ module.exports = {
         severity: 'error',
         ignore: [
           // Flex gap gets a margin-based fallback generated at build time and
-          // appended to legacy-webos.css (see esbuild.config.mjs).
+          // written to legacy-webos-base.css (see esbuild.config.mjs).
           'flexbox-gap',
-          // legacy-webos.css supplies flex equivalents for every grid layout.
+          // legacy-webos-overrides.css supplies flex equivalents for every grid layout.
           'css-grid',
           // Only hidden/auto/scroll/visible + text-overflow:ellipsis are used —
           // all fully supported on 53. doiuse flags newer values we do not use.

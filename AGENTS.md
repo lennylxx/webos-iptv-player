@@ -17,7 +17,7 @@ npm run build                  # typecheck + esbuild bundle into dist/
 npm run preview                # build + serve dist/ at http://localhost:3000 (desktop video via hls.js/mpegts.js)
 npm test                       # vitest run (unit/integration)
 npm run test:watch             # vitest watch
-npm run test:e2e               # Playwright against the preview server
+npm run test:e2e               # Playwright against the preview server (2 projects)
 npm run test:all               # lint + unit + e2e
 npm run screenshots            # regenerate README screenshots
 ./build.sh                     # package the IPK (needs ares-package from @webos-tools/cli)
@@ -139,15 +139,74 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
   `DENYLIST` and the `ALLOWLIST` of accepted (`polyfilled`/`guarded`/`accepted-risk`)
   exceptions. Polyfilled fixes are installed in `src/polyfills.ts` (imported first
   in both `src/app.ts` and the `src/workers/app-worker.ts` entry) — e.g.
-  `Array.prototype.flatMap` and `Object.fromEntries`, both used unguarded by the
-  bundled `assjs`. **Don't change the target without reason.**
-- **Flex-gap fallback and auto margins.** webOS 4 lacks flex `gap`, so the build
-  appends `> * + *` margins from `scripts/css-transforms.mjs` to
-  `dist/css/legacy-webos.css`. Because that stylesheet loads last, a generated
-  margin can override a flex child's `margin-left: auto` when specificity ties.
-  Give intentional auto-margin rules higher specificity than the generated
-  parent/sibling selector, and test with the fallback rule loaded after the
-  component CSS.
+  `Array.prototype.flatMap`, `Object.fromEntries`, `ParentNode.append` and
+  `Node.getRootNode`, all used unguarded by the bundled `assjs`. **Don't change the target without reason.**
+- **Two legacy stylesheets, and load order is the contract.** webOS 4/5/6 lack
+  flex `gap`, so every build regenerates `> * + *` margins from
+  `scripts/css-transforms.mjs` into the checked-in `css/legacy-webos-base.css`
+  (auto-generated — never hand-edit; commit the regenerated file). It is linked
+  **first**, so a component rule of equal specificity — a `margin: auto` in
+  particular — still wins. `css/legacy-webos-overrides.css` is hand-written and
+  linked **last**, because its Grid and backdrop-filter fallbacks must beat
+  component CSS. Put a new legacy rule in the file matching its intent; don't
+  reach for extra selector specificity to force the cascade. The component
+  stylesheets between them are order-independent: settle a cross-file tie with a
+  compound selector (`.playlist-tabs.epg-playlist-tabs`), not with link order.
+- **Simulate webOS 4 — modern Chromium can't see its failures.** Playwright's
+  engine satisfies every `@supports` guard and has every API, so a broken
+  fallback ships green (one did). `npm run test:e2e` therefore runs the whole
+  suite twice: the `chromium` project as usual, and `chromium-53-simulation`,
+  which degrades both axes of webOS 4's engine from
+  `scripts/chromium-53-simulation.mjs`.
+  - *Cascade* — the project sends an `x-legacy-engine` header and the preview
+    server rewrites each stylesheet: `@supports not (...)` blocks hoisted in
+    place, `gap` stripped everywhere, unparsable syntax discarded. Hoisting
+    every guard at once models Chromium 53, the only target below the Grid
+    cutoff; webOS 5/6 need a subset, so the oldest target covers them.
+    **Never let a modern selector share a rule with a legacy one**: the engine
+    drops an unsupported *declaration* alone, but a *whole rule* whose selector
+    list holds an unknown pseudo-class — `.x.focused, .x:focus-within { }`
+    loses both on webOS 4.
+  - *APIs* — every API newer than Chromium 53 (derived from
+    `@mdn/browser-compat-data`) is deleted before the app loads, CSSOM
+    reflections included, since `style.someProperty` is how code
+    feature-detects CSS. This covers what the static gate cannot: APIs the
+    denylist never named, calls reached only at runtime, and whether the
+    `src/polyfills.ts` installs take effect. `addInitScript` reaches page
+    realms only, so the worker — the M3U/XMLTV parser and the search index,
+    the least forgiving code in the app — gets the same removal from a prelude
+    `scripts/serve.mjs` prepends to its bundle. `KEEP_GLOBALS` exempts what the
+    harness or the desktop-only preview needs and nothing more: exempting
+    `AbortController` for hls.js silently cost the app's own polyfill its
+    coverage.
+
+  Writing a test: assert legacy layout with geometry (`getBoundingClientRect`),
+  which holds in both projects, and guard one that *introspects* through a
+  newer API — rather than exercises app behavior — with `isChromium53()` from
+  `e2e/helpers.ts`. It is a simulation, not an emulation: it removes what the
+  source declares, but cannot reproduce layout or V8 behavior that differs at
+  equal feature support, so engine-level checks still need a real device.
+- **The fallbacks must also stay inert on a modern TV.** A leaked fallback is
+  not a no-op — it double-applies on top of the real feature, the way an
+  unguarded `:focus` ring once stacked a second glow inside a `:focus-within`
+  one. So every rule in both legacy stylesheets sits under a top-level
+  `@supports not (...)`, and every `src/polyfills.ts` install is
+  feature-detected. Three checks pin that:
+  - `e2e/legacy-fallbacks.spec.ts` — `chromium` asserts each legacy `@supports`
+    condition evaluates false and each polyfilled API is still `[native code]`;
+    `chromium-53-simulation` asserts the same APIs are ours.
+  - `scripts/css-transforms.test.mjs` — catches an unguarded rule without a
+    browser.
+  - `scripts/polyfilled-apis.mjs` — the polyfill list, pinned by discovery
+    rather than by documentation: the simulation scans the built-in surface for
+    non-native functions and requires each to be a listed entry, so a polyfill
+    added anywhere fails the suite (that is how the esbuild banner's
+    `Object.getOwnPropertyDescriptors` turned up). Every entry must also be
+    reachable by the removal set — `simulationCoverageGap()` has to stay empty,
+    or discovery could never notice an install go missing. Declare an install
+    gated on something else through `INSTALLED_WITH`: `fetch` is wrapped only
+    because `AbortController` was replaced, and `scrollIntoView` is gated on
+    CSS `scroll-behavior`.
 - **`scrollIntoView` options need a fallback.** Chromium 53 exposes
   `scrollIntoView` but predates its options object and treats that object like
   the legacy `true` argument, aligning hovered items to the top. Pointer hover

@@ -22,7 +22,7 @@
 :lang(zh-CN) .epg-view { --epg-time-col-width: 103px; }
 :lang(en-XA) .epg-view { --epg-time-col-width: 117px; }
 
-.epg-channel-pane-header > .epg-page-info {
+.epg-page-info {
   min-width: 0;
   margin-left: auto;
   color: var(--text-muted);
@@ -93,7 +93,8 @@
   border-right: 1px solid var(--border);
 }
 
-.epg-playlist-tabs {
+/* Compound so it outranks .playlist-tabs regardless of stylesheet order. */
+.playlist-tabs.epg-playlist-tabs {
   gap: 2px;
   padding: 8px 12px 0;
   background: var(--bg-secondary);
@@ -314,7 +315,16 @@
   border-radius: 6px;
 }
 
-.epg-search-wrap.focused,
+.epg-search-wrap.focused {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgb(var(--accent-rgb) / 0.1);
+  outline: 1px solid var(--accent);
+}
+
+/* Kept in its own rule: Chromium 53 (webOS 4) drops an entire rule whose
+   selector list holds a pseudo-class it cannot parse, so pairing this with
+   `.focused` above would take the D-pad focus styling down with it. */
 .epg-search-wrap:focus-within {
   color: var(--accent);
   border-color: var(--accent);

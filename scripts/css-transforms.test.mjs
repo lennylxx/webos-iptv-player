@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   convertLegacyColorSyntax,
   generateFlexGapFallback,
+  linkedStylesheets,
   scaleFontSizes,
 } from './css-transforms.mjs';
 
@@ -40,6 +41,83 @@ describe('generateFlexGapFallback', () => {
     expect(out).not.toContain('.grid >');
     expect(out).not.toContain('.nested >');
   });
+
+  it('resolves the flex context declared by another rule with the same selector', () => {
+    const out = generateFlexGapFallback([`
+      .badge { display: inline-flex; align-items: center; }
+      .badge { gap: 5px; }
+    `]);
+    expect(out).toContain('.badge > * + * { margin-left: 5px; }');
+  });
+
+  it('resolves the flex context from the selector it narrows', () => {
+    const out = generateFlexGapFallback([`
+      .row { display: flex; gap: 16px; }
+      #host .row { gap: 12px; }
+    `]);
+    expect(out).toContain('#host .row > * + * { margin-left: 12px; }');
+  });
+
+  it('emits for a gap rule whose flex context comes from a companion class', () => {
+    const out = generateFlexGapFallback([`
+      .tabs { display: flex; gap: 4px; }
+      .scoped-tabs { gap: 2px; }
+    `]);
+    expect(out).toContain('.scoped-tabs > * + * { margin-left: 2px; }');
+  });
+
+  it('zeroes the other axis when a rule flips direction over a base container', () => {
+    const out = generateFlexGapFallback([`
+      .card { display: flex; flex-direction: column; gap: 16px; }
+      .card-wide { flex-direction: row; gap: 24px; }
+    `]);
+    expect(out).toContain('.card > * + * { margin-top: 16px; }');
+    expect(out).toContain('.card-wide > * + * { margin-left: 24px; margin-top: 0; }');
+  });
+
+  it('keeps a gap reset so it can override an inherited fallback margin', () => {
+    const out = generateFlexGapFallback([`
+      .action { display: flex; gap: 8px; }
+      .action[data-variant="bare"] { gap: 0; }
+    `]);
+    expect(out).toContain('.action[data-variant="bare"] > * + * { margin-left: 0; }');
+  });
+
+  it('excludes a grid container that declares display in a separate rule', () => {
+    const out = generateFlexGapFallback([`
+      .panel { display: grid; grid-template-columns: 1fr 1fr; }
+      .panel { gap: 18px; }
+    `]);
+    expect(out).not.toContain('.panel >');
+  });
+
+  it('matches the checked-in css/legacy-webos-base.css', () => {
+    const cssDir = new URL('../css/', import.meta.url);
+    const generated = 'legacy-webos-base.css';
+    const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const sources = linkedStylesheets(indexHtml, readdirSync(cssDir), generated)
+      .map((file) => readFileSync(new URL(file, cssDir), 'utf8'));
+    expect(readFileSync(new URL(generated, cssDir), 'utf8'))
+      .toBe(generateFlexGapFallback(sources));
+  });
+});
+
+describe('legacy stylesheets', () => {
+  // A fallback that is not wrapped in an `@supports not (...)` guard also lands
+  // on a modern TV, where it double-applies on top of the real feature. e2e
+  // proves this in a browser; here it fails without one.
+  for (const file of ['legacy-webos-base.css', 'legacy-webos-overrides.css']) {
+    it(`wraps every rule in css/${file} in an @supports guard`, () => {
+      const css = readFileSync(new URL(`../css/${file}`, import.meta.url), 'utf8');
+      const unguarded = [];
+      postcss.parse(css).each((node) => {
+        if (node.type === 'comment') return;
+        if (node.type === 'atrule' && node.name === 'supports' && node.params.startsWith('not ')) return;
+        unguarded.push(node.type === 'rule' ? node.selector : `@${node.name} ${node.params}`);
+      });
+      expect(unguarded).toEqual([]);
+    });
+  }
 });
 
 describe('scaleFontSizes', () => {

@@ -79,7 +79,7 @@ body.tabbar-docked #view-epg .epg-view {
   color: var(--text-primary);
 }
 
-.tab-bar-inner > .tab-bar-search {
+.tab-bar-search {
   flex-shrink: 0;
   margin-left: auto;
   display: flex;

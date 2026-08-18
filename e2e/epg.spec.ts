@@ -1,4 +1,4 @@
-import { test, expect, type Page, routePlaylist } from './helpers';
+import { test, expect, isChromium53, type Page, routePlaylist } from './helpers';
 
 // EPG guide: the LIVE badge and the day/time-zone handling. Both need a fixed
 // clock and a UTC device zone so wall-clock == absolute time.
@@ -65,13 +65,17 @@ test.describe('EPG live badge', () => {
     // keyframes) can't tell "looping" from "frozen". The test's fixed clock freezes
     // the timeline so we can't sample motion, but the Web Animations API proves it
     // is RUNNING and its keyframes genuinely VARY the opacity — i.e. it really pulses.
-    const anim = await dot.evaluate((el) => {
-      const a = el.getAnimations()[0];
-      const opacities = (a.effect as KeyframeEffect).getKeyframes().map((k) => k.opacity);
-      return { playState: a.playState, distinctOpacities: new Set(opacities).size };
-    });
-    expect(anim.playState).toBe('running');     // active, not paused/idle/finished
-    expect(anim.distinctOpacities).toBeGreaterThan(1); // opacity changes across the cycle → it pulses
+    // (getAnimations() landed in Chrome 84, so this check is modern-engine only —
+    // the CSS assertions above still run on the legacy engine.)
+    if (!isChromium53()) {
+      const anim = await dot.evaluate((el) => {
+        const a = el.getAnimations()[0];
+        const opacities = (a.effect as KeyframeEffect).getKeyframes().map((k) => k.opacity);
+        return { playState: a.playState, distinctOpacities: new Set(opacities).size };
+      });
+      expect(anim.playState).toBe('running');     // active, not paused/idle/finished
+      expect(anim.distinctOpacities).toBeGreaterThan(1); // opacity changes across the cycle → it pulses
+    }
 
     // Only the airing row gets a badge; the ended row is "past" and unbadged.
     await expect(page.locator('#epg-programmes .epg-now-badge')).toHaveCount(1);
@@ -80,10 +84,40 @@ test.describe('EPG live badge', () => {
     await expect(earlier.locator('.epg-now-badge')).toHaveCount(0);
   });
 
+  // The search box's focus styling is reached two ways: a `.focused` class the
+  // D-pad path adds, and `:focus-within` for pointer focus. Chromium 53 does
+  // not know `:focus-within`, and an engine drops a whole rule whose selector
+  // list contains one it cannot parse — so sharing a rule would silently kill
+  // the `.focused` styling too. The class is applied directly here because the
+  // contract under test is the CSS, not the navigation that sets it.
+  test('the EPG search box keeps its focus styling without :focus-within', async ({ page }) => {
+    await setup(page);
+    await page.goto('/');
+    await expect(page.locator('#view-channels')).toBeVisible();
+    await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
+    await expect(page.locator('#view-epg')).toBeVisible();
+
+    const wrap = page.locator('.epg-search-wrap');
+    await expect(wrap).toHaveCount(1);
+    const styles = await wrap.evaluate((element) => {
+      const read = (): { outline: string; border: string } => {
+        const computed = getComputedStyle(element);
+        return { outline: computed.outlineStyle, border: computed.borderTopColor };
+      };
+      const idle = read();
+      element.classList.add('focused');
+      return { idle, focused: read() };
+    });
+
+    expect(styles.focused.outline).not.toBe('none');
+    expect(styles.focused.border).not.toBe(styles.idle.border);
+  });
+
   test('with reduced motion the LIVE badge still shows, but the pulse is disabled', async ({ page }) => {
     // epg.css has `@media (prefers-reduced-motion: reduce) { .epg-now-dot { animation: none } }`.
     // Modern engines honor it (legacy webOS ignores it and keeps pulsing —
     // both acceptable). Verify the off-switch on an engine that honors it.
+    test.skip(isChromium53(), 'legacy webOS ignores reduced motion and lacks getAnimations');
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await setup(page);
     await page.goto('/');

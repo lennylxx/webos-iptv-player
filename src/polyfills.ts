@@ -7,6 +7,8 @@
 // - AbortController (Chrome 66): app fetch cancellation and timeouts.
 // - Array.prototype.flatMap (Chrome 69): bundled assjs subtitle processing.
 // - Object.fromEntries (Chrome 73): bundled assjs subtitle processing.
+// - ParentNode.append (Chrome 54): bundled assjs subtitle rendering.
+// - Node.getRootNode (Chrome 54): bundled assjs subtitle rendering.
 //
 // Imported first in both src/app.ts and src/workers/app-worker.ts so they
 // apply before any app or dependency code runs. Each install is guarded so
@@ -157,10 +159,17 @@ function installAbortController(): void {
     const signal = init?.signal;
     if (!signal) return nativeFetch(input, init);
     if (signal.aborted) return Promise.reject(abortError());
+    // Chromium 53's fetch has no `signal` member and ignores it, but forwarding
+    // the stand-in signal is still wrong: any engine that does know the member
+    // rejects an object that is not a real AbortSignal. Abort is handled here.
+    const rest: RequestInit = {};
+    for (const key in init) {
+      if (key !== 'signal') (rest as Record<string, unknown>)[key] = (init as Record<string, unknown>)[key];
+    }
     return new Promise<Response>((resolve, reject) => {
       const onAbort = () => reject(abortError());
       signal.addEventListener('abort', onAbort, { once: true });
-      nativeFetch(input, init).then(
+      nativeFetch(input, rest).then(
         response => {
           signal.removeEventListener('abort', onAbort);
           resolve(response);
@@ -344,4 +353,29 @@ export function fromEntriesPolyfill(
 
 if (!(Object as any).fromEntries) {
   (Object as unknown as { fromEntries: typeof fromEntriesPolyfill }).fromEntries = fromEntriesPolyfill;
+}
+
+export function appendPolyfill(this: Node, ...nodes: (Node | string)[]): void {
+  for (const node of nodes) {
+    this.appendChild(typeof node === 'string' ? document.createTextNode(node) : node);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  for (const ctor of [Element, Document, DocumentFragment]) {
+    if (ctor && !(ctor.prototype as any).append) {
+      (ctor.prototype as unknown as { append: typeof appendPolyfill }).append = appendPolyfill;
+    }
+  }
+}
+
+export function getRootNodePolyfill(this: Node): Node {
+  let node: Node = this;
+  while (node.parentNode) node = node.parentNode;
+  return node;
+}
+
+if (typeof window !== 'undefined' && !(Node.prototype as any).getRootNode) {
+  (Node.prototype as unknown as { getRootNode: typeof getRootNodePolyfill }).getRootNode =
+    getRootNodePolyfill;
 }

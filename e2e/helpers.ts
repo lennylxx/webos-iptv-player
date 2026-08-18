@@ -1,4 +1,5 @@
 import { test as base, expect, type Page } from '@playwright/test';
+import { postTargetApis, removeApis } from '../scripts/chromium-53-simulation.mjs';
 
 export { expect, type Page };
 
@@ -145,11 +146,25 @@ export async function measureRowTextFit(
   );
 }
 
+// Computed once per worker: walking the compat data per test is wasteful.
+const POST_TARGET_APIS = postTargetApis();
+
 // Every spec imports `test` from here; it auto-stubs the service probe
 // before each test so no file has to repeat it.
 export const test = base.extend({
-  page: async ({ page }, use) => {
+  page: async ({ page }, use, testInfo) => {
+    // The simulation project strips every API Chromium 53 lacks before the app
+    // loads, so unguarded use fails here instead of on a TV.
+    if (testInfo.project.name === 'chromium-53-simulation') {
+      await page.addInitScript(removeApis, POST_TARGET_APIS);
+    }
     await stubUploadService(page);
     await use(page);
   },
 });
+
+// The simulation project runs with Chromium 53's API surface. Assertions that
+// merely *introspect* through a newer API (rather than exercise app behavior)
+// cannot run there; the behavior they observe is covered by the `chromium`
+// project.
+export const isChromium53 = (): boolean => test.info().project.name === 'chromium-53-simulation';

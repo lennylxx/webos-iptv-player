@@ -180,11 +180,6 @@ test('M3U-only shows a docked bar with Live/Guide/Settings/Search only (no Movie
   // With no Xtream account the account slot is empty and collapses, so the
   // search magnifier stays flush against the bar's right edge (no dangling gap).
   await expect(page.locator('.account-avatar')).toHaveCount(0);
-  // Simulate the later-loaded webOS 4 flex-gap fallback. Its sibling margin
-  // must not override the search slot's auto margin.
-  await page.addStyleTag({
-    content: '.tab-bar-inner > * + * { margin-left: 32px; }',
-  });
   const inner = (await page.locator('.tab-bar-inner').boundingBox())!;
   const icon = (await page.locator('.tab-bar-search .search-icon').boundingBox())!;
   expect((inner.x + inner.width) - (icon.x + icon.width)).toBeLessThan(4);

@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import { cpSync, readFileSync, writeFileSync, readdirSync, appendFileSync, rmSync, mkdirSync } from 'fs';
+import { cpSync, readFileSync, writeFileSync, readdirSync, rmSync, mkdirSync } from 'fs';
 import {
   LEGACY_JS_BANNER,
   scanBundle,
@@ -8,10 +8,13 @@ import {
 import {
   convertLegacyColorSyntax,
   generateFlexGapFallback,
+  linkedStylesheets,
   scaleFontSizes,
 } from './scripts/css-transforms.mjs';
 
 const isPreview = process.argv.includes('--preview');
+// Checked-in but regenerated on every build; never a source input.
+const GENERATED_STYLESHEET = 'legacy-webos-base.css';
 // Read version from package.json (single source of truth)
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
 
@@ -45,12 +48,11 @@ writeFileSync('dist/index.html', outputIndexHtml);
 cpSync('appinfo.json', 'dist/appinfo.json');
 rmSync('dist/resources', { recursive: true, force: true });
 cpSync('resources', 'dist/resources', { recursive: true });
-cpSync('css', 'dist/css', { recursive: true });
-// Append the generated flex-`gap` fallback to legacy-webos.css (loaded last).
-const sourceStylesheets = readdirSync('css')
-  .filter((file) => file.endsWith('.css'))
+// Refresh the flex-`gap` fallback; see its header for the cascade rationale.
+const sourceStylesheets = linkedStylesheets(indexHtml, readdirSync('css'), GENERATED_STYLESHEET)
   .map((file) => readFileSync(`css/${file}`, 'utf8'));
-appendFileSync('dist/css/legacy-webos.css', generateFlexGapFallback(sourceStylesheets));
+writeFileSync(`css/${GENERATED_STYLESHEET}`, generateFlexGapFallback(sourceStylesheets));
+cpSync('css', 'dist/css', { recursive: true });
 transformStylesheets('dist/css');
 cpSync('webOSjs/webOS.js', 'dist/webOSjs/webOS.js');
 cpSync('assets/icon80.png', 'dist/icon.png');

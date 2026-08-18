@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { LEGACY_HEADER } from './scripts/chromium-53-simulation.mjs';
 
 // The preview server (scripts/serve.mjs) listens on port 3000.
 const baseURL = 'http://localhost:3000';
@@ -24,6 +25,17 @@ export default defineConfig({
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1920, height: 1080 },
+      },
+    },
+    // The same suite against a simulated webOS 4 engine, degraded on two axes, both from scripts/chromium-53-simulation.mjs:
+    // - CSS: the preview server rewrites each stylesheet through simulateLegacyEngine() — legacy fallbacks on, post-53 syntax dropped.
+    // - JS: removeApis() deletes every API newer than Chromium 53 before the app loads.
+    {
+      name: 'chromium-53-simulation',
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1920, height: 1080 },
+        extraHTTPHeaders: { [LEGACY_HEADER]: '1' },
       },
     },
   ],

@@ -43,7 +43,10 @@ async function setup(page: Page, seed?: Seed): Promise<void> {
     const stable = url.split('#')[0].split('?')[0];
     let h = 0x811c9dc5;
     for (let i = 0; i < stable.length; i++) { h ^= stable.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-    const key = (h >>> 0).toString(16).padStart(8, '0');
+    // No padStart: init scripts run before the app installs its polyfills, and
+    // the simulation project has already removed the post-Chromium-53 API.
+    let key = (h >>> 0).toString(16);
+    while (key.length < 8) key = `0${key}`;
     const rec = {
       [`${key}|${s.startMs}`]: {
         channelKey: key, progStart: s.startMs, progEnd: s.endMs,

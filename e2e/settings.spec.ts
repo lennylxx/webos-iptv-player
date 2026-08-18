@@ -785,3 +785,51 @@ test.describe('Settings upload', () => {
     await expect(page.locator('#upload-entries .empty-hint')).toBeVisible();
   });
 });
+
+test.describe('Settings phone setup card', () => {
+  // The QR sits beside its instructions via flex `gap`, so on webOS the spacing
+  // comes entirely from the generated margin fallback. Under the
+  // `chromium-53-simulation` project this is the regression guard for that
+  // generator: a dropped rule collapses the gap to 0 and knocks the text out
+  // of alignment.
+  test('keeps the QR spaced from its instructions', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { webOS: unknown }).webOS = {
+        service: {
+          request(_uri: string, opts: { method: string; onSuccess?: (r: unknown) => void }) {
+            opts.onSuccess?.(opts.method === 'start'
+              ? { returnValue: true, port: 8890 }
+              : { returnValue: true });
+          },
+        },
+      };
+    });
+    await page.route('http://127.0.0.1:8890/info', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ip: '10.0.0.2',
+        port: 8890,
+        setupUrl: 'http://10.0.0.2:8890/setup',
+        manualUrl: 'http://10.0.0.2:8890',
+        pairingCode: '123456',
+      }),
+    }));
+
+    await page.goto('/');
+    await page.locator('[data-settings-target="general"]').click();
+    await expect(page.locator('.setup-qr')).toBeVisible();
+
+    const layout = await page.evaluate(() => {
+      const qr = document.querySelector('.setup-qr')!.getBoundingClientRect();
+      const text = document.querySelector('.setup-instructions')!.getBoundingClientRect();
+      return {
+        gap: Math.round(text.left - qr.right),
+        centerOffset: Math.round((text.top + text.height / 2) - (qr.top + qr.height / 2)),
+      };
+    });
+
+    expect(layout.gap).toBe(24);
+    expect(layout.centerOffset).toBe(0);
+  });
+});

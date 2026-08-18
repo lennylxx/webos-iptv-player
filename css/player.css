@@ -530,7 +530,7 @@
   white-space: nowrap;
 }
 
-.player-sidebar .sidebar-channel-title > .sidebar-picker-arrow {
+.player-sidebar .sidebar-picker-arrow {
   width: 28px;
   height: 28px;
   margin-left: auto;
@@ -941,7 +941,7 @@
 .menu-icon.subtitle svg { display: block; width: 18px; height: 18px; }
 
 /* Current audio track shown on the "Audio Track" row */
-.player-menu .menu-item > .menu-item-value {
+.player-menu .menu-item-value {
   margin-left: auto;
   padding-left: 12px;
   font-size: 16px;
