@@ -36,6 +36,7 @@ if (!response.ok) {
 let pageHtml = await response.text();
 
 pageHtml = pageHtml
+  .replaceAll('<br>\n', '\n')
   .replaceAll(
     '<table role="table">',
     '<table role="table" style="width:100%;table-layout:fixed">',
@@ -83,4 +84,72 @@ for (const attachmentUrl of attachmentUrls) {
   }
 }
 
-await writeFile(outputPath, pageHtml);
+const pageDocument = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>webOS IPTV Player</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #1f2328;
+      background: #fff;
+      font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: 100%;
+      max-width: 1056px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+    h1, h2 {
+      padding-bottom: .3em;
+      border-bottom: 1px solid #d0d7de;
+    }
+    a { color: #0969da; }
+    pre {
+      max-width: 100%;
+      padding: 16px;
+      overflow-x: auto;
+      background: #f6f8fa;
+      border-radius: 6px;
+    }
+    code {
+      padding: .2em .4em;
+      background: #eff1f3;
+      border-radius: 6px;
+    }
+    pre code {
+      padding: 0;
+      background: transparent;
+    }
+    markdown-accessiblity-table {
+      display: block;
+      max-width: 100%;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 6px 13px;
+      border: 1px solid #d0d7de;
+    }
+    tr:nth-child(2n) { background: #f6f8fa; }
+    @media (max-width: 600px) {
+      main { padding: 20px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+${pageHtml}
+  </main>
+</body>
+</html>
+`;
+
+await writeFile(outputPath, pageDocument);
