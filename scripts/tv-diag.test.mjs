@@ -4,6 +4,7 @@ import {
   DiagnosticRedactor,
   assembleDiagnosticReport,
   extractDiagnosticTimeline,
+  extractInputTimeline,
   extractXtreamTimeline,
   normalizeNetworkRecords,
   parseNativeMetricOutput,
@@ -335,6 +336,69 @@ describe('diagnostic report assembly', () => {
     ]);
   });
 
+  it('extracts remote-control input events into their own timeline', () => {
+    const logs = [
+      {
+        observedAt: '2026-01-01T00:00:00.000Z',
+        source: 'console',
+        level: 'log',
+        text: '[Key] Key down event=key.down code=52 action=number target=app',
+      },
+      {
+        observedAt: '2026-01-01T00:00:00.500Z',
+        source: 'console',
+        level: 'log',
+        text: '[Key] Number entry event=key.number number=42 handler=set',
+      },
+      {
+        observedAt: '2026-01-01T00:00:00.600Z',
+        source: 'console',
+        level: 'log',
+        text: '[App] Key routed event=key.action action=number'
+          + ' view=player consumer=view_player number=42',
+      },
+      {
+        observedAt: '2026-01-01T00:00:00.700Z',
+        source: 'console',
+        level: 'log',
+        text: '[Key] Key down event=key.down code=999 action=unmapped target=app',
+      },
+      {
+        observedAt: '2026-01-01T00:00:00.800Z',
+        source: 'console',
+        level: 'log',
+        text: '[Key] Key ignored event=key.ignored reason=text_input',
+      },
+      {
+        observedAt: '2026-01-01T00:00:01.000Z',
+        source: 'console',
+        level: 'log',
+        text: '[Player] event=playback.path.native session=1 load=1',
+      },
+    ];
+
+    expect(extractInputTimeline(logs)).toEqual([
+      expect.objectContaining({ event: 'key.down', code: 52, action: 'number' }),
+      expect.objectContaining({ event: 'key.number', number: 42 }),
+      expect.objectContaining({
+        event: 'key.action',
+        action: 'number',
+        view: 'player',
+        consumer: 'view_player',
+        number: 42,
+      }),
+      expect.objectContaining({
+        event: 'key.down', code: 999, action: 'unmapped', target: 'app',
+      }),
+      expect.objectContaining({ event: 'key.ignored', reason: 'text_input', code: null }),
+    ]);
+
+    // Input stays out of the playback timeline: a press per line would bury it.
+    expect(extractDiagnosticTimeline(logs)).toEqual([
+      expect.objectContaining({ code: 'playback.path.native' }),
+    ]);
+  });
+
   it('extracts structured Xtream request failures from natural-language logs', () => {
     const timeline = extractXtreamTimeline([
       {
@@ -424,12 +488,21 @@ describe('diagnostic report assembly', () => {
         level: 'error',
         text: '[AppWorker] App worker failed event=worker.lifecycle.failed'
           + ' generation=2 active=1 reason=execution_error',
+      }, {
+        observedAt: '2026-01-01T00:00:05.000Z',
+        source: 'console',
+        level: 'log',
+        text: '[App] Key routed event=key.action action=number'
+          + ' view=player consumer=view_player number=42',
       }],
       networkEvents: [],
     });
     const serialized = JSON.stringify(report);
-    expect(report.schemaVersion).toBe(2);
+    expect(report.schemaVersion).toBe(3);
     expect(report.diagnostics).toHaveLength(4);
+    expect(report.input).toEqual([
+      expect.objectContaining({ event: 'key.action', view: 'player', number: 42 }),
+    ]);
     expect(report).not.toHaveProperty('playback');
     expect(serialized).not.toContain('user1');
     expect(serialized).not.toContain('pass1');
@@ -438,6 +511,10 @@ describe('diagnostic report assembly', () => {
     expect(summary).toContain('webview=200');
     expect(summary).toContain('playback.path.native');
     expect(summary).toContain('Diagnostic events: 4');
+    expect(summary).toContain('Input events: 1');
+    expect(summary).toContain(
+      'key.action number=42 action=number view=player consumer=view_player',
+    );
     expect(summary).toContain('epg.mapping.stale count=2 reason=missing_channel');
     expect(summary).toContain(
       'worker.lifecycle.failed generation=2 active=1 reason=execution_error',

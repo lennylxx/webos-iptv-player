@@ -289,6 +289,9 @@ export function extractDiagnosticTimeline(logs) {
   for (const entry of logs) {
     const code = entry.text.match(/\bevent=([a-z0-9_.-]+)/i)?.[1];
     if (!code) continue;
+    // Input events get their own timeline: one line per press would bury the
+    // playback/EPG events this list exists for.
+    if (code.startsWith('key.')) continue;
     const session = Number(entry.text.match(/\bsession=(\d+)/)?.[1] ?? NaN);
     const load = Number(entry.text.match(/\bload=(\d+)/)?.[1] ?? NaN);
     const count = Number(entry.text.match(/\bcount=(\d+)/)?.[1] ?? NaN);
@@ -335,6 +338,32 @@ export function extractXtreamTimeline(logs) {
       items: Number.isFinite(items) ? items : null,
       timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : null,
       limitBytes: Number.isFinite(limitBytes) ? limitBytes : null,
+      level: entry.level,
+      text: entry.text,
+    });
+  }
+  return timeline;
+}
+
+export function extractInputTimeline(logs) {
+  const timeline = [];
+  for (const entry of logs) {
+    const event = entry.text.match(/\bevent=(key\.[a-z0-9_.-]+)/i)?.[1];
+    if (!event) continue;
+    const code = Number(entry.text.match(/\bcode=(\d+)/)?.[1] ?? NaN);
+    const digit = Number(entry.text.match(/\bdigit=(\d+)/)?.[1] ?? NaN);
+    const number = Number(entry.text.match(/\bnumber=(\d+)/)?.[1] ?? NaN);
+    timeline.push({
+      observedAt: entry.observedAt,
+      event,
+      code: Number.isFinite(code) ? code : null,
+      digit: Number.isFinite(digit) ? digit : null,
+      number: Number.isFinite(number) ? number : null,
+      action: entry.text.match(/\baction=([a-z0-9_-]+)/i)?.[1] ?? '',
+      view: entry.text.match(/\bview=([a-z0-9_-]+)/i)?.[1] ?? '',
+      consumer: entry.text.match(/\bconsumer=([a-z0-9_-]+)/i)?.[1] ?? '',
+      target: entry.text.match(/\btarget=([a-z0-9_-]+)/i)?.[1] ?? '',
+      reason: entry.text.match(/\breason=([a-z0-9_-]+)/i)?.[1] ?? '',
       level: entry.level,
       text: entry.text,
     });
@@ -405,7 +434,7 @@ export function assembleDiagnosticReport({
     } : null,
   } : null;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     capturedAt,
     redacted: !full,
     app,
@@ -415,6 +444,7 @@ export function assembleDiagnosticReport({
     nativeMetrics,
     playlists,
     diagnostics: extractDiagnosticTimeline(safeLogs),
+    input: extractInputTimeline(safeLogs),
     xtream: extractXtreamTimeline(safeLogs),
     logs: safeLogs,
     network: normalizeNetworkRecords(networkEvents, redactor),
@@ -487,6 +517,20 @@ export function formatDiagnosticSummary(report) {
     if (event.active != null) fields.push(`active=${String(event.active)}`);
     if (event.reason) fields.push(`reason=${event.reason}`);
     lines.push(`- ${event.code}${fields.length ? ` ${fields.join(' ')}` : ''}`);
+  }
+  const input = report.input ?? [];
+  lines.push(`Input events: ${String(input.length)}`);
+  for (const event of input) {
+    const fields = [];
+    if (event.code != null) fields.push(`code=${String(event.code)}`);
+    if (event.digit != null) fields.push(`digit=${String(event.digit)}`);
+    if (event.number != null) fields.push(`number=${String(event.number)}`);
+    if (event.action) fields.push(`action=${event.action}`);
+    if (event.view) fields.push(`view=${event.view}`);
+    if (event.consumer) fields.push(`consumer=${event.consumer}`);
+    if (event.target) fields.push(`target=${event.target}`);
+    if (event.reason) fields.push(`reason=${event.reason}`);
+    lines.push(`- ${event.event}${fields.length ? ` ${fields.join(' ')}` : ''}`);
   }
   lines.push(`Xtream events: ${String(report.xtream?.length ?? 0)}`);
   for (const event of report.xtream ?? []) {
@@ -1099,7 +1143,8 @@ export async function captureDiagnostics(options, overrides = {}) {
 const HELP_TEXT = `Usage: scripts/tv.sh diag [options]
 
 Capture a redacted TV diagnostics report with CDP logs, network activity,
-playlist probes, diagnostic events, media state, and optional native metrics.
+playlist probes, diagnostic events, remote-control input, media state, and
+optional native metrics.
 
 Options:
   --app <id>             webOS app id (default: ${DEFAULT_APP_ID})

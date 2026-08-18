@@ -27,7 +27,8 @@
 @supports not (backdrop-filter: blur(1px)) {
   .player-sidebar { background: rgb(20, 20, 35); }
   .player-menu,
-  .player-osd { background: rgb(10, 10, 15); }
+  .player-osd,
+  .number-entry { background: rgb(10, 10, 15); }
 }
 
 /*

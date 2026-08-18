@@ -1,8 +1,10 @@
 import { CONFIG } from '../config';
+import { createLogger } from '../utils/logger';
 import type { Action, NumberEvent } from '../types';
 
 type ActionHandler = (action: Action, event?: NumberEvent) => void;
 
+const log = createLogger('Key');
 const K = CONFIG.KEYS;
 
 const ACTION_MAP: Record<number, Action> = {
@@ -41,6 +43,7 @@ const INPUT_PASSTHROUGH_KEYS = new Set<number>([
 let activeHandler: ActionHandler | null = null;
 let numberBuffer = '';
 let numberTimer: ReturnType<typeof setTimeout> | null = null;
+let channelCount: (() => number) | null = null;
 let wheelWarmedUp = true;
 let wheelIdleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -53,24 +56,85 @@ function hasScrollableAncestor(el: HTMLElement | null): boolean {
   return false;
 }
 
+// A number can never exceed the highest channel there is, so 350 channels cap
+// entry at three digits — and the buffer can no longer grow without bound.
+function maxNumberDigits(): number {
+  const count = channelCount?.() ?? 0;
+  if (count <= 0) return CONFIG.PLAYER.CHANNEL_NUMBER_MAX_DIGITS;
+  return String(count).length;
+}
+
+function flushNumber(): void {
+  if (numberTimer) clearTimeout(numberTimer);
+  numberTimer = null;
+  if (!numberBuffer) return;
+  const num = parseInt(numberBuffer, 10);
+  numberBuffer = '';
+  log.debug('Number entry', 'event=key.number', `number=${num}`,
+    `handler=${activeHandler ? 'set' : 'none'}`);
+  if (activeHandler) activeHandler('number', { number: num });
+}
+
+// Any other key abandons a half-typed number. Without this the digits merge
+// across the interruption: Up pressed between "2" and "1" still tuned 21.
+function cancelNumber(): void {
+  if (!numberBuffer) return;
+  if (numberTimer) clearTimeout(numberTimer);
+  numberTimer = null;
+  const length = numberBuffer.length;
+  numberBuffer = '';
+  log.debug('Number entry cancelled', 'event=key.number.cancelled', `digits=${length}`);
+  if (activeHandler) activeHandler('number_cancel');
+}
+
 function handleNumber(digit: number): void {
+  // At the cap the number still waits out the debounce: tuning on the keypress
+  // itself gave no chance to read back what was typed.
+  if (numberBuffer.length >= maxNumberDigits()) {
+    log.debug('Number entry at cap', 'event=key.number.capped',
+      `digits=${numberBuffer.length}`);
+    return;
+  }
   numberBuffer += digit;
   if (numberTimer) clearTimeout(numberTimer);
-  numberTimer = setTimeout(() => {
-    const num = parseInt(numberBuffer, 10);
-    numberBuffer = '';
-    if (activeHandler) activeHandler('number', { number: num });
-  }, CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+  numberTimer = null;
+  // Echo each digit immediately: the flush is a second away, and without this
+  // the TV shows nothing at all while a multi-digit number is being typed.
+  const digits = numberBuffer;
+  if (activeHandler) activeHandler('number_input', { number: parseInt(digits, 10), digits });
+  numberTimer = setTimeout(flushNumber, CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
 }
 
 export const KeyHandler = {
   init(): void {
+    // Capture phase, and logging only: components with their own keydown
+    // listeners stop propagation, so a bubble-phase log never sees those
+    // presses — and a button that "does nothing" must still leave a trace.
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+      const code = e.keyCode;
+      const tag = (e.target as HTMLElement).tagName;
+      const inText = tag === 'INPUT' || tag === 'TEXTAREA';
+      const mapped = ACTION_MAP[code];
+      const isDigit = code >= K.NUM_0 && code <= K.NUM_9;
+      const remoteButton = mapped !== undefined || INPUT_PASSTHROUGH_KEYS.has(code);
+      // Character keys typed into a text field keep their code out of the log:
+      // it would spell out the search query into a shareable diag report.
+      const codeField = inText && !remoteButton ? 'code=hidden' : `code=${code}`;
+      log.debug('Key down', 'event=key.down', codeField,
+        `action=${mapped ?? (isDigit ? 'number' : 'unmapped')}`,
+        `target=${inText ? 'text_input' : 'app'}`);
+    }, true);
+
     document.addEventListener('keydown', (e: KeyboardEvent) => {
       // Let input fields handle their own text-editing keys, but dedicated
       // remote-control buttons (Back, colored, channel, media) must still reach
       // the app — see INPUT_PASSTHROUGH_KEYS.
       const tag = (e.target as HTMLElement).tagName;
-      if ((tag === 'INPUT' || tag === 'TEXTAREA') && !INPUT_PASSTHROUGH_KEYS.has(e.keyCode)) return;
+      if ((tag === 'INPUT' || tag === 'TEXTAREA') && !INPUT_PASSTHROUGH_KEYS.has(e.keyCode)) {
+        // No code here on purpose: it would spell out what is being typed.
+        log.debug('Key ignored', 'event=key.ignored', 'reason=text_input');
+        return;
+      }
 
       const keyCode = e.keyCode;
 
@@ -81,6 +145,7 @@ export const KeyHandler = {
       }
 
       const action = ACTION_MAP[keyCode];
+      cancelNumber();
       if (action) {
         e.preventDefault();
         if (activeHandler) activeHandler(action);
@@ -149,5 +214,11 @@ export const KeyHandler = {
 
   setHandler(handler: ActionHandler): void {
     activeHandler = handler;
+  },
+
+  // Direct entry is capped at the width of the highest channel number, which
+  // changes with the playlist — read it live rather than pushing it on reload.
+  setChannelCount(count: () => number): void {
+    channelCount = count;
   },
 };

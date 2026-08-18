@@ -413,7 +413,8 @@ export class ChannelList {
         if (!event) break;
         const num = event.number - 1;
         if (num >= 0 && num < PlaylistService.channels.length) {
-          this.playingIndex = num;
+          this.setPlaying(num);
+          this.revealChannel(num);
           this.onChannelSelect(num);
         }
         break;
@@ -457,8 +458,42 @@ export class ChannelList {
     this.playingCatchupStart = catchupStart ?? null;
   }
 
-  /** On entering the view: highlight the first channel (else the first focusable). */
+  private channelPosition(globalIdx: number): number {
+    return PlaylistService
+      .getByGroup(this.currentGroup, this.currentPlaylist || undefined)
+      .findIndex(ch => PlaylistService.indexOf(ch) === globalIdx);
+  }
+
+  // A channel named by global index can sit outside the current filter and
+  // outside the virtualized window: widen, center, then focus.
+  private revealChannel(globalIdx: number): boolean {
+    let position = this.channelPosition(globalIdx);
+    if (position < 0 && this.currentGroup !== 'builtin:all') {
+      this.currentGroup = 'builtin:all';
+      position = this.channelPosition(globalIdx);
+    }
+    if (position < 0 && this.currentPlaylist) {
+      this.currentPlaylist = '';
+      position = this.channelPosition(globalIdx);
+    }
+    if (position < 0) return false;
+    const main = this.container.querySelector<HTMLElement>('.channel-main');
+    this.channelVirtualizer.centerOn(position, main?.clientHeight || CHANNEL_VIEWPORT_FALLBACK);
+    this.render(false);
+    const target = this.container.querySelector<HTMLElement>(
+      `[data-list-position="${String(position)}"]`,
+    );
+    if (target) this.nav.focus(target);
+    return true;
+  }
+
+  /**
+   * On entering the view: the playing channel, however it was tuned — else the
+   * first channel, else the first focusable. Reveals rather than searching the
+   * rendered rows, which left focus on the previously tuned one.
+   */
   highlightEntryPoint(): void {
+    if (this.playingIndex >= 0 && this.revealChannel(this.playingIndex)) return;
     const entry = this.container.querySelector<HTMLElement>('.channel-main [data-channel-index]')
       ?? this.container.querySelector<HTMLElement>('[data-focusable]');
     if (entry) this.nav.focus(entry);

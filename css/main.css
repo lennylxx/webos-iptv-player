@@ -211,6 +211,89 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   transform: translateX(-50%) translateY(0);
 }
 
+/* Direct channel entry: the digits typed so far, echoed until they tune. */
+.number-entry {
+  position: fixed;
+  top: 108px;
+  right: 64px;
+  padding: 20px 26px 16px;
+  /* Same surface as the player OSD (palette in player.css), which it shares the
+     screen with; `[data-overlay]` swaps both to frosted at once. */
+  background: rgba(30, 30, 50, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(16px);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 0 18px var(--accent-glow);
+  text-align: center;
+  opacity: 0;
+  transform: translateY(-12px) scale(0.94);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.number-entry.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.number-entry-digits {
+  display: block;
+  white-space: nowrap;
+}
+
+.number-entry-digit {
+  display: inline-block;
+  min-width: 42px;
+  padding: 4px 0;
+  color: var(--text-primary);
+  font-size: 68px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 0 18px var(--accent-glow);
+  animation: number-entry-pop 0.22s ease-out;
+}
+
+/* Runs down as the entry debounce does, so the wait before it tunes is visible. */
+.number-entry-countdown {
+  display: block;
+  overflow: hidden;
+  height: 4px;
+  margin-top: 14px;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.number-entry-countdown-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  animation: number-entry-countdown linear forwards;
+}
+
+/* Transform only: animating opacity left the glyph painted faded once it ended. */
+@keyframes number-entry-pop {
+  from {
+    transform: translateY(6px) scale(0.6);
+  }
+
+  to {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes number-entry-countdown {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
+}
+
 
 /* Empty state */
 .empty-state {

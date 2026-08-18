@@ -7,6 +7,7 @@ import {
   seedPlaylist,
   neuterVideo,
   measureRowTextFit,
+  enterTab,
   SEARCH_M3U,
 } from './helpers';
 
@@ -633,3 +634,163 @@ test.describe('DVR', () => {
     expect(state.currentTime).toBe(57);
   });
 });
+
+// Direct channel entry from the player view (issue #40): the digits are
+// buffered by KeyHandler and delivered as a single `number` action.
+// The `[Key]`/`[App]` console lines are what `scripts/tv.sh diag` scrapes into
+// its input timeline, so these tests assert the emitted text too (the parsing
+// side is pinned in scripts/tv-diag.test.mjs and key-handler.test.ts).
+function captureKeyLogs(page: Page): () => string[] {
+  const lines: string[] = [];
+  page.on('console', (message) => lines.push(message.text()));
+  return () => lines.filter((line) => line.includes('event=key.'));
+}
+
+async function playFirstChannel(page: Page, body: string): Promise<void> {
+  await routePlaylist(page, body);
+  await routeLiveManifest(page);
+  await neuterVideo(page);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator('.osd-channel-number')).toHaveText('1');
+}
+
+test('a number key tunes that channel directly from the player view', async ({ page }) => {
+  await playFirstChannel(page, SEARCH_M3U);
+
+  await page.keyboard.press('3');
+
+  await expect(page.locator('.osd-channel-number')).toHaveText('3');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Alpha Movies');
+});
+
+test('consecutive digits tune the multi-digit channel number', async ({ page }) => {
+  const lines = ['#EXTM3U'];
+  for (let index = 1; index <= 12; index++) {
+    lines.push(`#EXTINF:-1 group-title="Group",Channel ${String(index)}`,
+      `http://streams.example.com/${String(index)}.m3u8`);
+  }
+  await playFirstChannel(page, lines.join('\n'));
+
+  await page.keyboard.press('1');
+  await page.keyboard.press('2');
+
+  await expect(page.locator('.osd-channel-number')).toHaveText('12');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Channel 12');
+});
+
+test('a channel number past the end of the list keeps the current channel', async ({ page }) => {
+  const keyLogs = captureKeyLogs(page);
+  await playFirstChannel(page, SEARCH_M3U);
+
+  await page.keyboard.press('9');
+
+  // Wait for the rejection itself, so this can't pass by asserting before the
+  // digit-buffer timeout has even fired.
+  await expect.poll(() => keyLogs().some((line) => line.includes('event=key.number.rejected')))
+    .toBe(true);
+  await expect(page.locator('.osd-channel-number')).toHaveText('1');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Alpha News');
+});
+
+// The whole point of the key logging is that `scripts/tv.sh diag` can report a
+// dead button, so assert the fields its input timeline reads.
+test('direct channel entry lands in the tv-diag input timeline', async ({ page }) => {
+  const keyLogs = captureKeyLogs(page);
+  await playFirstChannel(page, SEARCH_M3U);
+
+  await page.keyboard.press('3');
+  await expect(page.locator('.osd-channel-number')).toHaveText('3');
+
+  const text = keyLogs().join('\n');
+  expect(text).toContain('event=key.down code=51 action=number');
+  expect(text).toContain('event=key.number number=3');
+  expect(text).toContain(
+    'event=key.action action=number view=player consumer=view_player number=3',
+  );
+  expect(text).toContain('event=key.number.accepted number=3 index=2');
+});
+
+test('an unmapped remote code is reported instead of vanishing', async ({ page }) => {
+  const keyLogs = captureKeyLogs(page);
+  await playFirstChannel(page, SEARCH_M3U);
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 1234, bubbles: true })));
+
+  await expect.poll(() => keyLogs().join('\n'))
+    .toContain('event=key.down code=1234 action=unmapped');
+});
+
+test('typing digits echoes them on screen until they tune', async ({ page }) => {
+  await playFirstChannel(page, SEARCH_M3U);
+  const indicator = page.locator('.number-entry');
+  const digits = page.locator('.number-entry-digits');
+  await expect(indicator).toHaveCount(0);
+
+  await page.keyboard.press('3');
+  // `.visible` drives opacity, and an opacity-0 node still counts as visible
+  // to Playwright — so assert the state class, not toBeVisible().
+  await expect(indicator).toHaveClass(/visible/);
+  await expect(digits).toHaveText('3');
+
+  // The indicator clears when the buffered digits finally tune.
+  await expect(page.locator('.osd-channel-number')).toHaveText('3');
+  await expect(indicator).not.toHaveClass(/visible/);
+});
+
+test('the digit echo grows with each key of a multi-digit number', async ({ page }) => {
+  const lines = ['#EXTM3U'];
+  for (let index = 1; index <= 12; index++) {
+    lines.push(`#EXTINF:-1 group-title="Group",Channel ${String(index)}`,
+      `http://streams.example.com/${String(index)}.m3u8`);
+  }
+  await playFirstChannel(page, lines.join('\n'));
+  const indicator = page.locator('.number-entry');
+  const digits = page.locator('.number-entry-digits');
+
+  await page.keyboard.press('1');
+  await expect(digits).toHaveText('1');
+  await page.keyboard.press('2');
+  await expect(digits).toHaveText('12');
+
+  await expect(page.locator('.osd-channel-number')).toHaveText('12');
+  await expect(indicator).not.toHaveClass(/visible/);
+});
+
+// A "dead button" report is only answerable if every press is in the log —
+// including the ones a focused component swallows before they can bubble.
+test('every key press is logged, not just the digits', async ({ page }) => {
+  const keyLogs = captureKeyLogs(page);
+  await playFirstChannel(page, SEARCH_M3U);
+
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  // A code this remote map has no entry for — the "dead button" case.
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 457, bubbles: true })));
+
+  await expect.poll(() => keyLogs()).toEqual(expect.arrayContaining([
+    expect.stringContaining('event=key.down code=40 action=down target=app'),
+    expect.stringContaining('event=key.down code=13 action=select target=app'),
+    expect.stringContaining('event=key.down code=457 action=unmapped target=app'),
+  ]));
+});
+
+test('a press swallowed by the search box is still logged, without its code',
+  async ({ page }) => {
+    const keyLogs = captureKeyLogs(page);
+    await playFirstChannel(page, SEARCH_M3U);
+
+    await pressRemoteBack(page);
+    await expect(page.locator('#view-channels')).toBeVisible();
+    await enterTab(page, 'search');
+    await page.locator('.tab-bar-search-input').press('7');
+
+    // The digit reaches the query, so its code must stay out of the report.
+    await expect.poll(() => keyLogs().filter((line) => line.includes('target=text_input')))
+      .toEqual([expect.stringContaining('event=key.down code=hidden')]);
+  });

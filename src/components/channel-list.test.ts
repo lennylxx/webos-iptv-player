@@ -635,6 +635,25 @@ describe('ChannelList interaction', () => {
     expect(onSelect).toHaveBeenCalledWith(1);
   });
 
+  it('a number action focuses and marks the channel it tuned', () => {
+    list.handleAction('number', { number: 2 });
+    expect(channelItems()[1].classList.contains('focused')).toBe(true);
+    expect(channelItems()[1].classList.contains('playing')).toBe(true);
+  });
+
+  it('widens a filtered group so the tuned channel is reachable on return', () => {
+    hover(container.querySelector<HTMLElement>('[data-group="source:Sports"]')!);
+    list.handleAction('select');
+    expect(channelItems()).toHaveLength(1); // Bravo only
+
+    list.handleAction('number', { number: 1 }); // Alpha, outside the Sports group
+
+    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(channelItems()).toHaveLength(3);
+    expect(channelItems()[0].classList.contains('focused')).toBe(true);
+    expect(channelItems()[0].classList.contains('playing')).toBe(true);
+  });
+
   it('ignores an out-of-range number', () => {
     list.handleAction('number', { number: 99 });
     expect(onSelect).not.toHaveBeenCalled();
@@ -648,6 +667,27 @@ describe('ChannelList interaction', () => {
 
   it('highlightEntryPoint focuses the first channel without taking the caret', () => {
     list.highlightEntryPoint();
+    expect(channelItems()[0].classList.contains('focused')).toBe(true);
+  });
+
+  // However the channel was tuned — a number typed in the player, ch+/-, the
+  // sidebar — coming back to the list has to land on what is playing.
+  it('highlightEntryPoint focuses the playing channel, not the first one', () => {
+    list.setPlaying(2); // tuned elsewhere: the list never rendered a selection
+    list.highlightEntryPoint();
+    expect(channelItems()[2].classList.contains('focused')).toBe(true);
+    expect(channelItems()[0].classList.contains('focused')).toBe(false);
+  });
+
+  it('highlightEntryPoint widens a filtered group to reach the playing channel', () => {
+    hover(container.querySelector<HTMLElement>('[data-group="source:Sports"]')!);
+    list.handleAction('select');
+    expect(channelItems()).toHaveLength(1); // Bravo only
+
+    list.setPlaying(0); // Alpha: playing, but outside the Sports filter
+    list.highlightEntryPoint();
+
+    expect(channelItems()).toHaveLength(3);
     expect(channelItems()[0].classList.contains('focused')).toBe(true);
   });
 });

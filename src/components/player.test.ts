@@ -1390,3 +1390,38 @@ describe('Player subtitle-offset overlay', () => {
     expect(p.subtitleOffsetOpen()).toBe(false);
   });
 });
+
+describe('Player channel number entry', () => {
+  beforeEach(() => {
+    playlistMock.channels = [CHANNEL, CHANNEL_NO_CATCHUP, XTREAM_CHANNEL];
+  });
+  afterEach(() => {
+    playlistMock.channels = [];
+  });
+
+  it('jumps to the 1-based channel number the digits spelled out', () => {
+    const play = vi.spyOn(player, 'play').mockImplementation(() => {});
+
+    player.handleAction('number', { number: 2 });
+
+    expect(play).toHaveBeenCalledWith(1);
+  });
+
+  it('ignores a number outside the channel list instead of switching', () => {
+    const play = vi.spyOn(player, 'play').mockImplementation(() => {});
+
+    player.handleAction('number', { number: 0 });
+    player.handleAction('number', { number: 4 });
+
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it('ignores channel numbers during VOD playback', () => {
+    const play = vi.spyOn(player, 'play').mockImplementation(() => {});
+    (player as unknown as { vod: unknown }).vod = { title: 'Movie' };
+
+    player.handleAction('number', { number: 2 });
+
+    expect(play).not.toHaveBeenCalled();
+  });
+});

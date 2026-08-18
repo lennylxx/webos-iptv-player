@@ -141,3 +141,85 @@ test('M3U-only Search fills the view when Channels is the only section', async (
   });
   expect(fill.height).toBeGreaterThan(fill.available - 4);
 });
+
+test('the list follows the playing channel however it was tuned', async ({ page }) => {
+  const lines = ['#EXTM3U'];
+  for (let index = 1; index <= 300; index++) {
+    lines.push(`#EXTINF:-1 group-title="Group",Channel ${String(index)}`,
+      `http://streams.example.com/${String(index)}.m3u8`);
+  }
+  await routePlaylist(page, lines.join('\n'));
+  await routeLiveManifest(page);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  // Tune far down the list, so the virtualized window is centered on 123...
+  await page.keyboard.press('1');
+  await page.keyboard.press('2');
+  await page.keyboard.press('3');
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator('.osd-channel-number')).toHaveText('123');
+
+  // ...then tune again from the player, to a channel that window cannot hold.
+  await page.keyboard.press('4');
+  await expect(page.locator('.osd-channel-number')).toHaveText('4');
+
+  // The sidebar opens on what is playing.
+  await page.keyboard.press('ArrowLeft');
+  const sidebarFocused = page.locator('#player-sidebar .sidebar-ch-item.focused');
+  await expect(sidebarFocused).toContainText('Channel 4');
+  await expect(sidebarFocused).toHaveClass(/playing/);
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  // And so does the list — not the row it was parked on before.
+  const focused = page.locator('.channel-main .channel-item.focused');
+  await expect(focused).toContainText('Channel 4');
+  await expect(focused).toHaveClass(/playing/);
+
+  const list = page.locator('.channel-main');
+  const [row, viewport] = await Promise.all([focused.boundingBox(), list.boundingBox()]);
+  expect(row!.y).toBeGreaterThanOrEqual(viewport!.y);
+  expect(row!.y + row!.height).toBeLessThanOrEqual(viewport!.y + viewport!.height);
+});
+
+test('direct channel entry scrolls the list to the tuned channel and keeps it on return', async ({ page }) => {
+  const lines = ['#EXTM3U'];
+  for (let index = 1; index <= 300; index++) {
+    lines.push(`#EXTINF:-1 group-title="Group",Channel ${String(index)}`,
+      `http://streams.example.com/${String(index)}.m3u8`);
+  }
+  await routePlaylist(page, lines.join('\n'));
+  await routeLiveManifest(page);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  // Channel 215 is far outside the virtualized window rendered at startup.
+  await expect(page.locator('.channel-main .channel-item')).not.toHaveCount(300);
+
+  await page.keyboard.press('2');
+  await page.keyboard.press('1');
+  await page.keyboard.press('5');
+
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator('.osd-channel-number')).toHaveText('215');
+
+  // Back to the list: the tuned row is focused, marked playing, and on screen.
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  const focused = page.locator('.channel-main .channel-item.focused');
+  await expect(focused).toContainText('Channel 215');
+  await expect(focused).toHaveClass(/playing/);
+
+  const list = page.locator('.channel-main');
+  const [row, viewport] = await Promise.all([focused.boundingBox(), list.boundingBox()]);
+  expect(row!.y).toBeGreaterThanOrEqual(viewport!.y);
+  expect(row!.y + row!.height).toBeLessThanOrEqual(viewport!.y + viewport!.height);
+});

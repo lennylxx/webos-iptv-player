@@ -22,7 +22,10 @@ export const CONFIG = {
     MANIFEST_TIMEOUT: 5000,
     MANIFEST_MAX_BYTES: 256 * 1024,
     STREAM_MIME_CACHE_TTL: 7 * 24 * 60 * 60 * 1000,
-    CHANNEL_NUMBER_TIMEOUT: 2000,
+    // Long enough to type a second or third digit, short enough that a
+    // full-width number does not feel stalled once it can no longer grow.
+    CHANNEL_NUMBER_TIMEOUT: 1200,
+    CHANNEL_NUMBER_MAX_DIGITS: 4,  // fallback cap until the channel count is known
     SEEK_STEP: 30,              // seconds per Left/Right press while seeking catch-up or live DVR
     HLS_MAX_RECOVERIES: 3,      // bounded hls.js fatal-error retries before giving up → next channel
     STALL_POLL_MS: 2000,        // native stall watchdog: currentTime poll interval

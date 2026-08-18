@@ -236,10 +236,12 @@ export type Action =
   | 'channel_up' | 'channel_down'
   | 'play' | 'pause' | 'stop'
   | 'rewind' | 'fast_forward'
-  | 'number';
+  | 'number' | 'number_input' | 'number_cancel';
 
 export interface NumberEvent {
   number: number;
+  /** The raw digits typed so far, for the on-screen entry indicator. */
+  digits?: string;
 }
 
 /** A selectable audio track exposed by the active player (the picker's view model). */

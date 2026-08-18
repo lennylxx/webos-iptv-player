@@ -32,6 +32,11 @@ describe('KeyHandler', () => {
     vi.useFakeTimers();
     handler = vi.fn();
     KeyHandler.setHandler(handler as (a: Action, e?: NumberEvent) => void);
+    KeyHandler.setChannelCount(() => 0); // module state persists: back to "unknown"
+    // Same reason: a half-typed number left buffered by the previous test would
+    // prepend its digits to this one. Any non-digit key abandons it.
+    press(K.BACK);
+    handler.mockClear();
   });
 
   afterEach(() => {
@@ -108,12 +113,27 @@ describe('KeyHandler', () => {
   });
 
   describe('channel number entry', () => {
+    it('echoes each digit as it is typed, before the flush', () => {
+      press(K.NUM_0 + 2);
+      expect(handler).toHaveBeenCalledWith('number_input', { number: 2, digits: '2' });
+      press(K.NUM_0 + 1);
+      expect(handler).toHaveBeenCalledWith('number_input', { number: 21, digits: '21' });
+      press(K.NUM_0 + 5);
+      expect(handler).toHaveBeenCalledWith('number_input', { number: 215, digits: '215' });
+
+      // Still one tune, after the timeout.
+      expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
+      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      expect(handler).toHaveBeenCalledWith('number', { number: 215 });
+    });
+
     it('buffers consecutive digits and fires a single number action', () => {
+      const tunes = () => handler.mock.calls.filter(([action]) => action === 'number');
       press(K.NUM_0 + 4);
       press(K.NUM_0 + 2);
-      expect(handler).not.toHaveBeenCalled(); // waits for the timeout
+      expect(tunes()).toHaveLength(0); // waits for the timeout (only echoes so far)
       vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
-      expect(handler).toHaveBeenCalledTimes(1);
+      expect(tunes()).toHaveLength(1);
       expect(handler).toHaveBeenCalledWith('number', { number: 42 });
     });
 
@@ -122,9 +142,131 @@ describe('KeyHandler', () => {
       vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT - 1);
       press(K.NUM_0 + 7);
       vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT - 1);
-      expect(handler).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
       vi.advanceTimersByTime(1);
       expect(handler).toHaveBeenCalledWith('number', { number: 17 });
+    });
+
+    it('ignores digits past the width of the channel count', () => {
+      KeyHandler.setChannelCount(() => 350);
+      press(K.NUM_0 + 2);
+      press(K.NUM_0 + 1);
+      press(K.NUM_0 + 5);
+      // The fourth digit cannot reach a channel, so it never joins the buffer.
+      press(K.NUM_0 + 9);
+      expect(handler).not.toHaveBeenCalledWith('number_input', { number: 2159, digits: '2159' });
+
+      // And the wait still belongs to the number that was typed.
+      expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
+      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      expect(handler).toHaveBeenCalledWith('number', { number: 215 });
+    });
+
+    it('starts a fresh number after the capped one tunes', () => {
+      KeyHandler.setChannelCount(() => 99);
+      press(K.NUM_0 + 4);
+      press(K.NUM_0 + 2);
+      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      expect(handler).toHaveBeenCalledWith('number', { number: 42 });
+      press(K.NUM_0 + 7);
+      expect(handler).toHaveBeenCalledWith('number_input', { number: 7, digits: '7' });
+    });
+
+    it('falls back to a fixed cap until the channel count is known', () => {
+      for (const d of [1, 2, 3, 4]) press(K.NUM_0 + d);
+      press(K.NUM_0 + 5);
+      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      expect(handler).toHaveBeenCalledWith('number', { number: 1234 });
+    });
+
+    it('abandons a half-typed number when another key is pressed', () => {
+      press(K.NUM_0 + 2);
+      press(K.NUM_0 + 1);
+      press(K.UP);
+      expect(handler).toHaveBeenCalledWith('number_cancel');
+      expect(handler).toHaveBeenCalledWith('up');
+
+      // The abandoned digits must not merge into what comes next.
+      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
+      press(K.NUM_0 + 5);
+      expect(handler).toHaveBeenCalledWith('number_input', { number: 5, digits: '5' });
+    });
+
+    it('does not announce a cancel when no number is being typed', () => {
+      press(K.UP);
+      expect(handler).not.toHaveBeenCalledWith('number_cancel');
+    });
+  });
+
+  // `scripts/tv.sh diag` reads these console lines back into its input timeline,
+  // so parse the real output with the real extractor: a "dead button" report is
+  // only answerable if the press, the mapping, and the buffer flush are visible.
+  describe('diagnostic logging', () => {
+    it('emits key events that the tv-diag input timeline can parse', async () => {
+      const { extractInputTimeline } = await import('../../scripts/tv-diag.mjs');
+      const lines: Array<{ observedAt: string; level: string; text: string }> = [];
+      const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+        lines.push({
+          observedAt: '2026-01-01T00:00:00.000Z',
+          level: 'log',
+          text: args.map(String).join(' '),
+        });
+      });
+
+      press(K.NUM_0 + 4);
+      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      press(K.RED);
+      press(4242); // a code this remote map has no entry for
+      const input = document.createElement('input');
+      document.body.appendChild(input);
+      press(K.NUM_0 + 1, input);
+      spy.mockRestore();
+
+      expect(extractInputTimeline(lines)).toEqual([
+        expect.objectContaining({
+          event: 'key.down', code: K.NUM_0 + 4, action: 'number', target: 'app',
+        }),
+        expect.objectContaining({ event: 'key.number', number: 4 }),
+        expect.objectContaining({ event: 'key.down', code: K.RED, action: 'red', target: 'app' }),
+        expect.objectContaining({ event: 'key.down', code: 4242, action: 'unmapped' }),
+        // Never the code: it would spell out what is being typed.
+        expect.objectContaining({ event: 'key.down', code: null, target: 'text_input' }),
+        expect.objectContaining({ event: 'key.ignored', reason: 'text_input', code: null }),
+      ]);
+    });
+
+    it('logs a press a focused component swallows before it can bubble', () => {
+      const lines: string[] = [];
+      const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(' '));
+      });
+
+      // Search boxes, the list editor and the EPG grid all stop propagation.
+      const swallower = document.createElement('div');
+      document.body.appendChild(swallower);
+      swallower.addEventListener('keydown', (e) => { e.stopPropagation(); });
+      press(K.RED, swallower);
+      spy.mockRestore();
+
+      expect(lines).toContainEqual(
+        expect.stringContaining(`event=key.down code=${String(K.RED)} action=red`));
+      expect(handler).not.toHaveBeenCalledWith('red', expect.anything());
+    });
+
+    it('keeps a remote button\'s code while a text field has focus', () => {
+      const lines: string[] = [];
+      const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(' '));
+      });
+
+      const input = document.createElement('input');
+      document.body.appendChild(input);
+      press(K.BACK, input);
+      spy.mockRestore();
+
+      expect(lines).toContainEqual(
+        expect.stringContaining(`event=key.down code=${String(K.BACK)}`));
     });
   });
 

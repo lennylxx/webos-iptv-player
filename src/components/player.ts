@@ -3,6 +3,7 @@ import type {
   AudioTrackOption,
   CatchupInfo,
   Channel,
+  NumberEvent,
   SubtitleTrackOption,
   VodPlayback,
   VodQueueItem,
@@ -1039,7 +1040,7 @@ export class Player {
     this.tracks.selectSubtitleTrack(index);
   }
 
-  handleAction(action: Action): void {
+  handleAction(action: Action, event?: NumberEvent): void {
     // Any non-OK button means 5-way/button input, so a tracked cursor position
     // is stale — drop it so OK toggles the OSD rather than seeking.
     if (action !== 'select') this.osd.clearPointer();
@@ -1088,6 +1089,23 @@ export class Player {
       case 'fast_forward':
         this.goToLive();
         break;
+      case 'number':
+        if (event) this.playChannelNumber(event.number);
+        break;
     }
+  }
+
+  // Channel numbers are 1-based, matching the OSD readout (currentIndexAnchor + 1).
+  private playChannelNumber(number: number): void {
+    const index = number - 1;
+    if (index < 0 || index >= PlaylistService.channels.length) {
+      log.debug('Channel number out of range', 'event=key.number.rejected',
+        `number=${number}`, 'reason=out_of_range');
+      this.showOSD();
+      return;
+    }
+    log.debug('Channel number jump', 'event=key.number.accepted',
+      `number=${number}`, `index=${index}`);
+    this.play(index);
   }
 }

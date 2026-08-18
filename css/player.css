@@ -62,7 +62,8 @@
 .player-sidebar,
 .player-menu,
 .subs-overlay,
-.subs-offset-card {
+.subs-offset-card,
+.number-entry {
   --text-primary: #e8e8e8;
   --text-secondary: #a0a0b0;
   --text-muted: #666680;
@@ -80,7 +81,8 @@
 [data-overlay="frosted"] .player-sidebar,
 [data-overlay="frosted"] .player-menu,
 [data-overlay="frosted"] .subs-overlay,
-[data-overlay="frosted"] .subs-offset-card {
+[data-overlay="frosted"] .subs-offset-card,
+[data-overlay="frosted"] .number-entry {
   background: rgba(244, 246, 249, 0.85);
   border-color: rgba(0, 0, 0, 0.1);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);

@@ -23,6 +23,7 @@ import { Movies } from './components/movies';
 import { Series } from './components/series';
 import { Search } from './components/search';
 import { showToast } from './components/toast';
+import { showNumberEntry, hideNumberEntry } from './components/number-entry';
 import { ReminderService } from './services/reminder-service';
 import { ReminderPrompt } from './components/reminder-prompt';
 import { ReminderManager } from './components/reminder-manager';
@@ -221,6 +222,7 @@ class App {
 
     KeyHandler.init();
     KeyHandler.setHandler((action, event) => this.handleKey(action, event));
+    KeyHandler.setChannelCount(() => PlaylistService.channels.length);
 
     this.initSidebarTrigger();
 
@@ -932,8 +934,31 @@ class App {
     });
   }
 
+  // Which modal/overlay is holding input, for the key diagnostic timeline: a
+  // "button does nothing" report is usually an unexpected consumer, not a lost key.
+  private keyConsumer(currentView: string): string {
+    if (this.reminderPrompt.visible) return 'reminder_prompt';
+    if (this.epgGrid.isPromptVisible) return 'epg_prompt';
+    if (this.settings.isPromptVisible) return 'settings_prompt';
+    if (this.reminderManager.isPromptVisible) return 'reminder_manager_prompt';
+    if (this.tabBar.focused) return 'tab_bar';
+    if (currentView === 'player' && this.player.subtitleOffsetOpen()) return 'subtitle_offset';
+    return `view_${currentView}`;
+  }
+
   private handleKey(action: Action, event?: NumberEvent): void {
     const currentView = this.viewStack[this.viewStack.length - 1];
+
+    log.debug('Key routed', 'event=key.action', `action=${action}`,
+      `view=${currentView}`, `consumer=${this.keyConsumer(currentView)}`,
+      `number=${event ? String(event.number) : 'none'}`);
+
+    // The digit OSD is body-mounted and outlives every view, so an abandoned
+    // entry must be cleared before a modal gets a chance to swallow this.
+    if (action === 'number_cancel') {
+      hideNumberEntry();
+      return;
+    }
 
     // A reminder prompt overlays every view and consumes input first.
     if (this.reminderPrompt.visible) {
@@ -968,6 +993,16 @@ class App {
       this.player.handleSubtitleOffsetAction(action);
       return;
     }
+
+    // Direct channel entry: echo the digits while KeyHandler buffers them, in
+    // the two views that act on them (the guide and prompts ignore numbers).
+    if (action === 'number_input') {
+      if (currentView === 'channels' || currentView === 'player') {
+        showNumberEntry(event?.digits ?? '');
+      }
+      return;
+    }
+    if (action === 'number') hideNumberEntry();
 
     // Global shortcuts
     // While the channel list is in edit mode the color keys belong to the editor.
@@ -1072,7 +1107,7 @@ class App {
             if (action === 'up' || action === 'down' || action === 'select') this.menu.handleAction(action);
             else if (action === 'left') this.menu.hide();
           } else {
-            this.player.handleAction(action);
+            this.player.handleAction(action, event);
           }
           break;
         }
@@ -1080,7 +1115,7 @@ class App {
         // opening the sidebar/menu (which stay reachable once the OSD hides).
         if ((action === 'left' || action === 'right')
             && !this.sidebar.visible && !this.menu.visible && this.player.canSeek()) {
-          this.player.handleAction(action);
+          this.player.handleAction(action, event);
           break;
         }
         if (action === 'left') {
@@ -1102,7 +1137,7 @@ class App {
         )) {
           this.menu.handleAction(action);
         } else {
-          this.player.handleAction(action);
+          this.player.handleAction(action, event);
         }
         break;
       case 'epg':
