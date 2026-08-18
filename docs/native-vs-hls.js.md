@@ -39,7 +39,7 @@ by-capability (what each engine can decode at all, for things the live content d
 |---|---|---|
 | **Audio-track selection** (same-language renditions) | ❌ **collapse bug** — picks the wrong rendition (plays *audio description* when you select the main track); unfixable at the HTML5 `audioTracks` layer | ✅ all renditions correct (hls.js demuxes them) |
 | Subtitle rendering | Blink `::cue` (entities + `<c.class>` speaker colors work) | Blink `::cue` — **identical** (our injected `VTTCue`s render the same way) |
-| Subtitle sync | ✅ live-edge anchor — approximate but **matches the audio** on-device | ✅ exact (hls.js owns video+subs) |
+| Subtitle sync | ✅ reconstructed timeline anchor from the video playlist; live-edge fallback when PDT is unavailable | ✅ exact (hls.js owns video+subs) |
 | Subtitle robustness | self-render: must handle feed-divergence, sliding windows, X-TIMESTAMP-MAP, fMP4/encrypted detection itself | hls.js handles it all |
 
 ### Resources & code

@@ -2,8 +2,8 @@
 
 How this app switches between multiple audio tracks (multi-language / accessibility
 renditions) when playing through the **native `<video>` element** on webOS — the path used
-on-device (`src/components/player.ts`, the `isWebOS` branch; helpers in
-`src/utils/audio-tracks.ts`). Everything below was **verified on-device** (firmware
+on-device (`src/components/player-tracks.ts` and `src/components/player-pipeline.ts`;
+helpers in `src/utils/audio-tracks.ts`). Everything below was **verified on-device** (firmware
 `33.31.61`, Chromium 120, UA `Web0S; Linux/SmartTV`, an LG OLED C5), not just inferred from
 binaries.
 
@@ -107,8 +107,9 @@ match** (so a collapsed list isn't mislabelled):
 
 - `parseAudioRenditions()` and `mergeManifestNames()` in `src/utils/audio-tracks.ts` (pure,
   unit-tested).
-- `Player.loadManifestAudio()` fetches/parses on tune-in (webOS HLS only) and re-applies the
-  saved pick once the names are known. Degrades to generic labels on a fetch/parse failure.
+- `PlayerPipeline` fetches/parses the manifest on tune-in; `PlayerTracks.applyManifest()`
+  receives the names and re-applies the saved pick. It degrades to generic labels on a
+  fetch/parse failure.
 
 ## Per-track-source memory
 
@@ -123,7 +124,7 @@ tracks alone can't be keyed, but a VOD container's tracks usually carry real lab
 The desktop preview drives playback with **hls.js**, which exposes every rendition with real
 names — switch with `hls.audioTrack = i` (and read `hls.audioTracks`). The native-path manifest
 overlay is webOS-only. `mpegts.js` exposes only the first audio track (no switching). See the
-`this.hls` branches in `player.ts`.
+hls.js accessors in `player-pipeline.ts` and their selection paths in `player-tracks.ts`.
 
 ## Evidence (firmware `33.31.61`, Chromium 120, chassis `o22n3` / `papikonda`)
 

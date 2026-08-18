@@ -24,7 +24,7 @@ export type Section = typeof SECTIONS[number]['id'];
 type SectionDef = typeof SECTIONS[number];
 
 // Xtream accounts get the full set; M3U-only accounts have no VOD/series catalog,
-// so they see Live, Settings and Search only.
+// so they see Live, Guide, Settings and Search only.
 const FULL_SECTIONS: readonly SectionDef[] = SECTIONS;
 const LITE_SECTIONS: readonly SectionDef[] = SECTIONS.filter((s) => !s.xtreamOnly);
 

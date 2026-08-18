@@ -26,9 +26,9 @@ on newer TVs and supplies focused fallbacks for Node 0.12.
 
 ## APIs
 
-The service exposes **4 Luna methods** and the HTTP routes below.
+The service exposes the Luna methods and HTTP routes below.
 
-Luna (called by the in-app `SetupClient`, `UploadClient`, and `app.ts`):
+Luna (called by the app's LAN/reminder clients and by Activity Manager):
 
 | Method | Subscribe? | Purpose |
 |---|---|---|
@@ -36,6 +36,8 @@ Luna (called by the in-app `SetupClient`, `UploadClient`, and `app.ts`):
 | `stop` | no | Close the HTTP server and release the keepAlive activity. |
 | `heartbeat` | no | Liveness probe; returns `{running, port}`. |
 | `serviceEvents` | **yes** | Push channel for `uploads-changed` and `setup-changed` events. |
+| `getDevMode` | no | Report whether Developer Mode is available for interactive reminder alerts. |
+| `fireReminderAlert` | no | Raise the Developer Mode reminder alert requested by Activity Manager. |
 
 HTTP (called by phones, and by the app for reconcile):
 
@@ -144,7 +146,7 @@ the HTTP server is torn down. Luna respawns the process on cold start
   content-agnostic and could carry an XMLTV file just as easily, but it
   would be the wrong model for EPG:
   - **EPG is time-sensitive; an upload is a frozen snapshot.** The app
-    refreshes EPG every 12h and keeps only a ±7-day programme window
+    refreshes EPG periodically and keeps only a ±7-day program window
     (`src/services/epg-service.ts`, `src/parsers/xmltv-parser.ts`). An
     uploaded XMLTV file is stale within a day or two and effectively
     empty within a week — so the user would have to re-upload every

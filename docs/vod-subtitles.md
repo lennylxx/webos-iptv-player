@@ -1,14 +1,14 @@
 # VOD subtitles (Xtream movies & episodes)
 
 How this app handles subtitles for **VOD** — Xtream movies and series episodes, played as
-progressive `<video src>` (mp4/mkv) with `this.hls` null. Two independent sources feed one
+progressive `<video src>` (mp4/mkv) through the native pipeline. Two independent sources feed one
 picker: subtitles muxed **in the container**, and **sidecar** files listed by the panel. Sidecars
 render one of two ways by format: SRT/WebVTT as native `<track>`s, ASS/SSA through an `assjs`
 overlay.
 
 | | |
 |---|---|
-| **Code** | `src/components/player.ts`, `src/services/vod-subtitles.ts`, `src/services/ass-subtitles.ts`, `src/utils/srt.ts`, `src/services/xtream-client.ts`, `src/utils/subtitle-tracks.ts` |
+| **Code** | `src/components/player-tracks.ts`, `src/components/player-pipeline.ts`, `src/services/vod-subtitles.ts`, `src/services/ass-subtitles.ts`, `src/utils/srt.ts`, `src/services/xtream-client.ts`, `src/utils/subtitle-tracks.ts` |
 | **Live/HLS counterpart** | [`hls-subtitles.md`](hls-subtitles.md) |
 | **Audio counterpart** | [`audio-track-selection.md`](audio-track-selection.md) |
 
@@ -23,7 +23,7 @@ overlay.
   `vod:<account>:<kind>:<itemId>` key — the same key the VOD audio memory uses.
 - Blink draws the native-track cues (like the HLS self-render path), so `::cue` styling applies
   on-device; `assjs` draws ASS cues as HTML/CSS in the overlay.
-- The player can also **search online** for a subtitle (SubDL & OpenSubtitles, see below) — always
+- The player can also **search online** for a subtitle (SubDL, OpenSubtitles, and Assrt) — always
   offered for VOD once a provider is configured, not only when the bundled tracks come up empty;
   downloaded results reuse the in-memory-text paths for SRT/WebVTT/ASS and are cached to
   avoid re-fetching on replay.
@@ -97,8 +97,8 @@ language. Downloaded subtitles reuse the sidecar paths (SRT/WebVTT → native `<
 | | |
 |---|---|
 | **Code** | `src/services/subtitle-search/` (types, subdl-provider, opensubtitles-provider, assrt-provider, subtitle-search-service), `src/components/subtitle-search-overlay.ts`, `src/utils/unzip.ts`, `src/utils/subtitle-decode.ts` |
-| **Player integration** | `src/components/player.ts` (`openSubtitleSearch`, `applyOnlineSubtitle`, `restoreOnlineSubtitle`) |
-| **Cache** | `src/services/idb-cache.ts`, `src/services/storage-service.ts` (`online_sub_picks`) |
+| **Player integration** | `src/components/player-tracks.ts` (`openSubtitleSearch`, `applyOnlineSubtitle`, `restoreOnlineSubtitle`) |
+| **Persistence** | Downloaded text in `src/services/idb-cache.ts`; picks in the `online-sub-picks` user store through `src/services/storage-service.ts` |
 | **Settings** | `src/components/settings.ts` (Online Subtitles block) |
 
 ### Providers
@@ -110,7 +110,7 @@ a factory reading its config from `StorageService`.
   by `firstSubtitleFromZip` (`src/utils/unzip.ts`, a lazy `import('fflate')`).
 - **OpenSubtitles** — `api.opensubtitles.com` (REST). Needs an `Api-Key` header **and**
   username/password: the provider logs in for a token, caches it, and does one silent re-login +
-  retry on `401`. It is the only provider that reports a **download count**.
+  retry on `401`. Its results include a **download count**.
 - **Assrt** — `api.assrt.net`, a Chinese-subtitle community with a JSON API and no WAF. Ships a
   built-in shared token (`DEFAULT_ASSRT_TOKEN`), so `isConfigured()` is always true and Assrt is
   **on by default** (the "Search online…" entry therefore shows for every VOD); a personal token
@@ -132,9 +132,9 @@ for episodes, and `title` as the always-available fallback.
 The subtitle picker gains a **"Search online…"** entry (index `-3`, `SEARCH_ONLINE_INDEX`), shown
 only for VOD with a provider configured. It opens a `SubtitleSearchOverlay` that shows "Searching…"
 then a D-pad list. Each row reads `<Provider> · <Language> · <ReleaseName> · HI` with the
-**download count** right-aligned as a `DOWNLOAD_ICON` badge — present only on OpenSubtitles rows
-(SubDL/Assrt don't expose one). All provider text is untrusted, rendered through `html` (escaped).
-Selection is wired via `mouseup` hit-testing for the Magic Remote (a `click` would fail on the TV).
+**download count** right-aligned as a `DOWNLOAD_ICON` badge when the provider supplies one.
+All provider text is untrusted, rendered through `html` (escaped). Selection is wired through
+the overlay's `click` handler so desktop pointers and the Magic Remote use the same activation path.
 
 A **persistent search box** sits above the list, prefilled with the detected title. Opening runs
 the structured search automatically; pressing **Up** from the top result focuses the box, and
@@ -149,11 +149,11 @@ search errors render inline **without auto-closing**, so the user can retry (onl
 
 `applyOnlineSubtitle` downloads the subtitle (`{ text, format }`), caches the text in IndexedDB
 (`setCachedSubtitle`, keyed `<providerId>:<id>`), and saves the pick metadata per item
-(`online_sub_picks`, keyed `<accountId>|<kind>|<itemId>`). The text is handed to the existing
+in the `online-sub-picks` user store, keyed `<accountId>|<kind>|<itemId>`. The text is handed to the existing
 renderers as an in-memory sidecar (a `text` field instead of a `url`): SRT/WebVTT via
 `VodSubtitles.addOnline`, ASS/SSA via a synthetic `vodAssSidecars` entry.
 
-On replay, `restoreOnlineSubtitle` reads `online_sub_picks`, tries the IndexedDB cache first (a
+On replay, `restoreOnlineSubtitle` reads the saved pick, tries the IndexedDB cache first (a
 hit never calls the provider — important for OpenSubtitles' ~5 downloads/day free tier), and only
 re-downloads on a cache miss.
 

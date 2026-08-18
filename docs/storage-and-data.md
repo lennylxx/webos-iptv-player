@@ -10,7 +10,7 @@ downloaded data that can be recreated.
 | --- | --- | --- | --- |
 | Setup and preferences | Playlist and EPG sources, Xtream account details, theme, language, text size, time zone, active account and channel | Small app-private browser storage | No |
 | Personal data | Favorites, reminders, channel order and names, hidden channels, Watchlist, Recently Watched, playback progress, audio and subtitle choices | App-private database on the TV | No |
-| Downloaded cache | Parsed playlists, program guides, movie and series catalogs, media metadata, downloaded subtitles | App-private database on the TV | Yes |
+| Downloaded cache | Parsed playlists, program guides, movie and series catalogs, media metadata, downloaded subtitles, channel health results | App-private database on the TV | Yes |
 | LAN-uploaded playlists | Original M3U files uploaded from another device | Private storage owned by the bundled upload service | No |
 
 ## Implementation architecture
@@ -25,7 +25,7 @@ flowchart LR
     UI["UI components"]
     Storage["StorageService"]
     UserData["idb-user-data"]
-    Producers["Cache producers<br/>Playlist / EPG / Catalog<br/>Media / Subtitles"]
+    Producers["Cache producers<br/>Playlist / EPG / Catalog<br/>Media / Subtitles / Channel health"]
     Cache["idb-cache<br/>TTL / LRU / budgets"]
     Database["idb-database<br/>schema / transactions"]
     Reminders["ReminderService"]
@@ -45,7 +45,7 @@ flowchart LR
   subgraph IDB["IndexedDB: iptv"]
     direction TB
     UserStores["User stores<br/>favorites / reminders / channel state<br/>watchlist / progress / history / subtitle picks"]
-    CacheStores["Cache stores<br/>playlist / EPG / catalog / stream MIME<br/>subtitles / metadata"]
+    CacheStores["Cache stores<br/>playlist / EPG / catalog / stream MIME<br/>subtitles / channel health / metadata"]
   end
 
   Activity["Activity Manager<br/>reminder schedules"]
@@ -112,9 +112,8 @@ successful save.
 
 ### IndexedDB schema
 
-The database is named `iptv` and currently uses schema version 4. webOS already
-isolates IndexedDB by application origin, so object-store names do not repeat
-the `iptv_` prefix.
+The database is named `iptv`. webOS already isolates IndexedDB by application
+origin, so object-store names do not repeat the `iptv_` prefix.
 
 #### User-data stores
 
@@ -158,7 +157,8 @@ eviction algorithm.
 | `catalog-cache` | `key` | `expiresAt`, `lastAccessedAt` | Xtream categories, VOD/series lists and details, and media-container probes |
 | `stream-mime-cache` | `key` | `expiresAt`, `lastAccessedAt` | Normalized provider route mapped to detected MIME and probe time; accounted and evicted in the `catalog` category |
 | `subtitle-cache` | `key` | `expiresAt`, `lastAccessedAt` | Provider/result key and downloaded SRT, WebVTT, ASS, or SSA text |
-| `cache-meta` | `category` | None | `{bytes, entries, updatedAt}` for `playlist`, `epg`, `catalog`, `subtitle`, and `total` |
+| `channel-health-cache` | `key` | `expiresAt`, `lastAccessedAt` | Per-channel healthy, suspect, or unavailable status from the latest stream check |
+| `cache-meta` | `category` | None | `{bytes, entries, updatedAt}` for `playlist`, `epg`, `catalog`, `subtitle`, `health`, and `total` |
 
 Known `catalog-cache` key families are:
 
@@ -184,7 +184,7 @@ Cache payloads are normalized to a shared envelope:
 
 ```ts
 interface CacheFields {
-  cacheCategory: 'playlist' | 'epg' | 'catalog' | 'subtitle';
+  cacheCategory: 'playlist' | 'epg' | 'catalog' | 'subtitle' | 'health';
   createdAt: number;
   updatedAt: number;
   lastAccessedAt: number;
@@ -217,6 +217,7 @@ invalidates a structurally valid but now unrelated parsed playlist.
 | Media probe | No expiry | Stored in the catalog category and still subject to LRU/budget cleanup |
 | Stream MIME probe | 7 days | Expired reads become misses; records participate in catalog LRU and accounting |
 | Downloaded subtitle | 30 days | An expired read becomes a miss and deletes the record |
+| Channel health result | 30 days | Expired results are discarded; a new health check replaces results for checked channels |
 
 Reads update `lastAccessedAt` in a best-effort follow-up transaction. Failure to
 write this bookkeeping does not turn a valid cache hit into a miss.
@@ -251,6 +252,7 @@ breakdown:
 - Program guide
 - Catalog and media metadata
 - Subtitles
+- Channel health results
 
 The second number is a **soft cache budget**, not reserved or currently used
 space. For example, `1.8 MiB / 75 MiB` means the managed cache currently uses
@@ -312,7 +314,8 @@ behavior among the records known to the cache manager.
 
 ### Clear Cache
 
-**Clear Cache** removes downloaded and processed data only. It keeps:
+**Clear Cache** removes downloaded and processed data, including cached channel
+health results. It keeps:
 
 - Accounts and source settings
 - App preferences
@@ -408,7 +411,7 @@ explicit exit. A failed flush triggers one recovery attempt:
 3. Wait for the write chain again.
 
 If recovery succeeds, the flush emits a recovered event. If it still fails, an
-explicit exit is cancelled, the app remains open, and a save-failure toast is
+explicit exit is canceled, the app remains open, and a save-failure toast is
 shown instead of silently losing the latest changes.
 
 When IndexedDB cannot open, initialization logs the failure. Destructive

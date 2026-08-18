@@ -70,7 +70,7 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
 
 ## Architecture
 
-- **Entry `src/app.ts`** — the `App` class instantiates every component, owns a
+- **Entry `src/app.ts`** — the `App` class instantiates the top-level components, owns a
   `viewStack`, and routes remote-control input. `KeyHandler`
   (`src/navigation/key-handler.ts`) maps key codes (`CONFIG.KEYS`) to a small
   `Action` union (`up`/`down`/`select`/`red`/… in `src/types.ts`); `App.handleKey`
@@ -79,24 +79,29 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
   `settings`, `loading`, plus the Xtream `movies`/`series` catalogs and `search`)
   toggled with `show`/`hide` from `src/utils/dom.ts`.
 - **Sections & Xtream catalog** — a persistent `TabBar` (`src/components/tab-bar.ts`)
-  docks the **Live / Movies / Series / Settings / Search** sections above the views and
+  docks the **Live / Guide / Movies / Series / Settings / Search** sections above the views and
   hosts the multi-account avatar switcher (`account-switcher.ts`); `App` owns section
   switching and a `viewStack`. Movies/Series (`movies.ts`, `series.ts`) share the
   browse/grid/detail machinery in `CatalogView` (`catalog-view.ts`) over the per-account
   `xtream-catalog` cache, with a **Continue Watching** resume rail. `search.ts` ranks
-  channels, movies, and series in one view. Movies/Series/Search need an Xtream account;
-  M3U-only setups see Live/Settings/Search only.
+  channels, programs, movies, and series in one view; Movies/Series require an Xtream
+  account, while Search remains available for channels and programs. M3U-only setups
+  see Live/Guide/Settings/Search.
 - **Components** (`src/components/`) own a DOM subtree and re-render through
   `morph()` (`src/utils/morph.ts`), a keyed in-place DOM reconciler fed by the
   `html` tagged template. Reused nodes keep their listeners, focus, and scroll — so
   list items carry a stable `data-key`. **Do not rebuild subtrees with
   `innerHTML =`**; build a `Safe` with `` html`…` `` and pass it to `morph`. Bind
-  listeners once (delegated), not per render.
-- **Services** (`src/services/`) are singletons (exported object or single class
-  instance): `PlaylistService`, `EpgService`, `StorageService`, `SetupClient`,
-  `UploadClient`, `ReminderService`, `idb-cache`. `StorageService` wraps `localStorage` with the
-  `iptv_` prefix + JSON and evicts the playlist cache on quota errors. EPG is cached
-  in IndexedDB for instant reopen. `ReminderService` stores reminders, schedules an
+  listeners once (delegated), not per render. `Player` delegates media loading and
+  desktop hls.js/mpegts.js access to `PlayerPipeline` (`player-pipeline.ts`) and
+  audio/subtitle state to `PlayerTracks` (`player-tracks.ts`).
+- **Services** (`src/services/`) expose application-facing facades such as
+  `PlaylistService`, `EpgService`, `StorageService`, `SetupClient`, `UploadClient`,
+  and `ReminderService`. `StorageService` keeps boot-critical configuration under
+  `iptv_` localStorage keys and fronts durable user records from `idb-user-data`;
+  `idb-cache` owns disposable IndexedDB data and `idb-database` owns the shared
+  schema/transactions. A localStorage quota error evicts parsed-playlist and
+  stream-MIME caches before retrying. `ReminderService` stores reminders, schedules an
   Activity Manager callback per reminder (dev-mode alert vs. retail toast), and
   resolves a launch param back to a channel. Xtream access goes through the
   `xtream-client` factory (`createXtreamClient`) and the IndexedDB-backed `xtream-catalog`
@@ -218,7 +223,7 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
   injected via esbuild `define`. Keep all three in lockstep across
   `esbuild.config.mjs` (build), `vitest.config.ts` (tests), and the `declare const`
   in `src/globals.d.ts`.
-- **XSS safety.** Channel names, programme titles, group titles, and logo URLs come
+- **XSS safety.** Channel names, program titles, group titles, and logo URLs come
   from untrusted M3U/XMLTV. Always interpolate them through the `html` tagged
   template (auto HTML-escapes); only wrap genuinely trusted markup in `raw(...)`.
   There are e2e tests guarding this — don't regress it.

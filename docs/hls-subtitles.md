@@ -6,7 +6,7 @@ types**, how each maps to a render path, and the device-verified behavior behind
 | | |
 |---|---|
 | **Platform** | webOS TV **10.3.1**, Chromium/Blink **120** |
-| **Code** | `src/services/hls-subtitles.ts`, `src/utils/webvtt.ts`, `src/utils/subtitle-tracks.ts`, `css/player.css` |
+| **Code** | `src/components/player-tracks.ts`, `src/services/hls-subtitles.ts`, `src/utils/webvtt.ts`, `src/utils/subtitle-tracks.ts`, `css/player.css` |
 | **Specs** | RFC 8216 (HLS), draft-pantos-hls-rfc8216bis (X-TIMESTAMP-MAP, fMP4/IMSC), W3C WebVTT |
 
 ---
@@ -265,7 +265,7 @@ styling aren't usable, so pipeline captions render only in the TV's default styl
 
 608/708 rides the **video ES**, is demuxed as a **real pipeline track**, and is drawn by the native
 compositor. `parseClosedCaptions` + a single "Closed Captions" picker entry are wired on the webOS native
-path (`src/utils/subtitle-tracks.ts`, `src/components/player.ts`).
+path (`src/utils/subtitle-tracks.ts`, `src/components/player-tracks.ts`).
 
 - **Not surfaced as a `TextTrack`.** ✅ `textTracks` stays empty 20 s+, no `addtrack`, no vendor caption
   property. So the picker is **blind** to 608 — it must be detected from the manifest's
