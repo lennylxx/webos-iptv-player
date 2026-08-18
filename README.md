@@ -107,7 +107,7 @@ webOS 3.x and older (Chromium 38 and earlier) are not supported.
 ## Prerequisites
 
 Command-line installation and local builds require
-[Node.js](https://nodejs.org/) (v18+) and the
+[Node.js](https://nodejs.org/) (v22+) and the
 [webOS CLI tools](https://webostv.developer.lge.com/develop/tools/cli-installation):
 
 ```bash
@@ -190,6 +190,26 @@ npm install
 
 If no device name is given, the default device from `ares-setup-device` is used.
 
+### Debug on a TV
+
+`scripts/tv.sh` reads the connection details for the default
+`ares-setup-device` device, so keys and passphrases do not need to be copied
+into commands.
+
+```bash
+scripts/tv.sh logs --app com.lennylxx.iptv       # Stream the app's DevTools console
+scripts/tv.sh eval 'document.visibilityState'    # Evaluate JavaScript in the app page
+scripts/tv.sh perf --duration 30                 # Sample CPU, heap, DOM, and layout
+scripts/tv.sh diag                               # Capture a redacted diagnostics report
+scripts/tv.sh run 'uname -a'                     # Run a TV command over SSH
+scripts/tv.sh push ./file.txt /tmp/file.txt      # Copy a local file to the TV
+scripts/tv.sh shell                              # Open an interactive SSH session
+TV_DEVICE=tv2 scripts/tv.sh logs                 # Select a non-default configured TV
+```
+
+Run `scripts/tv.sh perf --help` or `scripts/tv.sh diag --help` for capture and
+output options.
+
 ### Preview in Browser
 
 ```bash
@@ -204,8 +224,8 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 
 - **Language** — follow the TV's system language when supported, or choose a language explicitly.
 - **Device Setup** — scan the QR code to configure the app from a phone, or open the shown URL on a computer and enter the pairing code.
-- **Xtream Account** — add, edit, or remove Xtream Codes accounts (portal URL + username + password). The playlist and EPG are derived from your credentials on Save.
-- **Playlists** — add, edit, or remove M3U URLs. Re-applied on Save.
+- **Xtream Accounts** — add, edit, remove, or temporarily disable accounts; check credentials, connection usage, and expiry; and choose TS, HLS, or Auto for live streams. The playlist and EPG are derived from the account credentials on Save.
+- **Playlists** — add, edit, remove, or temporarily disable M3U URLs. Re-applied on Save.
 - **Upload Playlist** — QR code + LAN URL on the left, list of currently uploaded playlists on the right. Scan the QR from a phone/laptop on the same network to upload `.m3u` files; they appear in this list within milliseconds via Luna push.
 - **Channels** — check live-stream health; reorder, hide, rename, regroup, manually map entries to XMLTV channels, or correct one channel's EPG time; show hidden channels or reset customizations.
 - **XMLTV URL** — set the program guide URL, also auto-detected from `x-tvg-url` in M3U playlists.
