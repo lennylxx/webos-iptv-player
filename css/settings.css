@@ -388,8 +388,8 @@
   display: flex;
   justify-content: flex-end;
   gap: 16px;
-  margin-top: 32px;
-  padding: 20px 0 8px;
+  margin: 32px -12px 0;
+  padding: 20px 12px 8px;
   background: var(--bg-primary);
   border-top: 1px solid var(--border);
 }

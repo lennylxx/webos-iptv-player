@@ -508,6 +508,17 @@ export class ChannelListEditor {
     `;
   }
 
+  // The picker is an overlay drawn over the still-navigable channel list, so an
+  // untrapped move from its first/last option scores an item behind it. The
+  // restriction is released straight after: the picker is re-morphed on every
+  // render, so a held element goes stale.
+  private movePickerFocus(action: 'up' | 'down'): void {
+    const picker = this.container.querySelector<HTMLElement>('.group-picker');
+    this.nav.setRestrict(picker);
+    this.nav.move(action);
+    this.nav.setRestrict(null);
+  }
+
   private handleEditAction(action: Action): boolean {
     // The inline field owns typing; select commits, back cancels via handleBack.
     if (this.renaming || this.newGroupOpen) {
@@ -516,7 +527,7 @@ export class ChannelListEditor {
     }
 
     if (this.groupPickerFor) {
-      if (action === 'up' || action === 'down') this.nav.move(action);
+      if (action === 'up' || action === 'down') this.movePickerFocus(action);
       else if (action === 'select') this.chooseGroupOption();
       return true;
     }
@@ -541,7 +552,7 @@ export class ChannelListEditor {
           this.resetEpgOffset();
         }
       } else if (action === 'up' || action === 'down') {
-        this.nav.move(action);
+        this.movePickerFocus(action);
       }
       return true;
     }

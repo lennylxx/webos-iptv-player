@@ -180,6 +180,37 @@ function hover(el: HTMLElement): void {
 }
 
 describe('ChannelList.render', () => {
+  // With no channels the entry point falls through to the first focusable,
+  // taken in DOM order with no geometry to fall back on — so measurement is
+  // the only thing keeping focus off an invisible control. Rects are stubbed
+  // because jsdom has no layout.
+  it('an empty list falls back to the first visible focusable', () => {
+    const savedChannels = data.channels.slice();
+    const savedByGroup = playlistMock.getByGroup;
+    const savedCount = playlistMock.getGroupCount;
+    playlistMock.getByGroup = () => [];
+    playlistMock.getGroupCount = () => 0;
+    data.channels.length = 0;
+
+    const original = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function stub(this: Element): DOMRect {
+      const collapsed = this.classList.contains('channel-edit-btn');
+      const size = collapsed ? 0 : 100;
+      return { width: size, height: size, top: 0, left: 0, bottom: size, right: size } as DOMRect;
+    };
+    try {
+      list.render();
+    } finally {
+      Element.prototype.getBoundingClientRect = original;
+      playlistMock.getByGroup = savedByGroup;
+      playlistMock.getGroupCount = savedCount;
+      data.channels.push(...savedChannels);
+    }
+
+    expect(container.querySelector('.channel-edit-btn')!.classList.contains('focused')).toBe(false);
+    expect(container.querySelector('.group-item')!.classList.contains('focused')).toBe(true);
+  });
+
   it('initial focus is the first channel when channels exist', () => {
     list.render();
     expect(channelItems()[0].classList.contains('focused')).toBe(true);

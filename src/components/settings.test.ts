@@ -387,6 +387,35 @@ describe('Settings.render', () => {
     expect(container.querySelector('#auto-play .toggle-option.active')!.getAttribute('data-value')).toBe('on');
   });
 
+  // Left moves within a row by measuring peers, and a collapsed control has no
+  // vertical overlap with its row, so the overlap guard alone rejects it. With
+  // the leading swatch collapsed the second one has no peer to its left, so
+  // left leaves the row for the category sidebar.
+  it('left skips a collapsed peer instead of focusing it', () => {
+    settings.render();
+
+    const swatches = Array.from(container.querySelectorAll<HTMLElement>('.theme-swatch'));
+    expect(swatches.length).toBeGreaterThan(1);
+    swatches[1].dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+
+    const original = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function stub(this: Element): DOMRect {
+      const index = swatches.indexOf(this as HTMLElement);
+      if (index < 0) return { width: 0, height: 0, top: 0, left: 0, bottom: 0, right: 0 } as DOMRect;
+      if (index === 0) return { width: 0, height: 0, top: 0, left: 0, bottom: 0, right: 0 } as DOMRect;
+      const left = 110 * index;
+      return { width: 100, height: 100, top: 0, left, bottom: 100, right: left + 100 } as DOMRect;
+    };
+    try {
+      settings.handleAction('left');
+    } finally {
+      Element.prototype.getBoundingClientRect = original;
+    }
+
+    expect(swatches[0].classList.contains('focused')).toBe(false);
+    expect(container.querySelector('.settings-nav-item.focused')).not.toBeNull();
+  });
+
   it('adjusts and resets a manual EPG source offset with remote actions', () => {
     state.epg = 'http://host/epg.xml';
     settings.render();
@@ -1084,7 +1113,6 @@ describe('Settings.handleAction', () => {
 
     expect(settings.dismissDropdown()).toBe(true);
     expect(container.querySelector('#app-language')?.classList.contains('open')).toBe(false);
-    expect(container.querySelector('#app-language .dropdown-option:not(.hidden)')).toBeNull();
     expect(container.querySelector('#app-language .dropdown-trigger')?.classList.contains('focused'))
       .toBe(true);
     expect(settings.dismissDropdown()).toBe(false);
@@ -1095,7 +1123,6 @@ describe('Settings.handleAction', () => {
     click('#app-language [data-dropdown-trigger]');
     click('.settings-title');
     expect(container.querySelector('#app-language')?.classList.contains('open')).toBe(false);
-    expect(container.querySelector('#app-language .dropdown-option:not(.hidden)')).toBeNull();
   });
 
   it('closes an open dropdown before moving left to the category sidebar', () => {
@@ -1108,6 +1135,26 @@ describe('Settings.handleAction', () => {
     expect(container.querySelector('[data-settings-target="general"]')
       ?.classList.contains('focused')).toBe(true);
     expect(settings.dismissDropdown()).toBe(false);
+  });
+
+  it('keeps remote actions in an open dropdown after pointer focus escapes', () => {
+    settings.render();
+    click('#app-language [data-dropdown-trigger]');
+    const save = container.querySelector<HTMLElement>('#save-settings')!;
+    save.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+
+    settings.handleAction('down');
+
+    expect(container.querySelector('#app-language')?.classList.contains('open')).toBe(true);
+    expect(container.querySelector('#app-language .dropdown-option.focused')).not.toBeNull();
+    expect(storageMock.setPlaylists).not.toHaveBeenCalled();
+
+    save.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    settings.handleAction('select');
+
+    expect(container.querySelector('#app-language .dropdown-option.active')
+      ?.classList.contains('focused')).toBe(true);
+    expect(storageMock.setPlaylists).not.toHaveBeenCalled();
   });
 
   it('select activates the focused control (remote OK)', () => {

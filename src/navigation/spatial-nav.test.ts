@@ -171,15 +171,154 @@ describe('SpatialNav', () => {
       expect(nav.focused).toBe(near);
     });
 
-    it('ignores hidden elements', () => {
+    // Rects are explicit here because jsdom has no layout; a stylesheet-hidden
+    // element is proven in e2e/settings.spec.ts and e2e/movies.spec.ts.
+    it('ignores zero-sized elements', () => {
       const cur = focusable({ x: 0, y: 0 });
-      const hidden = focusable({ x: 0, y: 100 });
-      hidden.classList.add('hidden');
+      const collapsed = focusable({ x: 0, y: 100, w: 0, h: 0 });
       const visible = focusable({ x: 0, y: 200 });
-      const nav = new SpatialNav(makeContainer(cur, hidden, visible));
+      const nav = new SpatialNav(makeContainer(cur, collapsed, visible));
       nav.focus(cur);
       nav.move('down');
       expect(nav.focused).toBe(visible);
+    });
+
+    it('ignores elements hidden with visibility', () => {
+      const cur = focusable({ x: 0, y: 0 });
+      const invisible = focusable({ x: 0, y: 100 });
+      invisible.style.visibility = 'hidden';
+      const visible = focusable({ x: 0, y: 200 });
+      const nav = new SpatialNav(makeContainer(cur, invisible, visible));
+      nav.focus(cur);
+      nav.move('down');
+      expect(nav.focused).toBe(visible);
+    });
+
+    // focusFirst takes DOM order, not geometry, so a hidden leading element is
+    // picked outright — no scoring to save it.
+    it('focusFirst skips a hidden leading element', () => {
+      const collapsed = focusable({ x: 0, y: 0, w: 0, h: 0 });
+      const visible = focusable({ x: 0, y: 100 });
+      const nav = new SpatialNav(makeContainer(collapsed, visible));
+      nav.focusFirst();
+      expect(nav.focused).toBe(visible);
+    });
+
+    // A view seeded with focus before it is shown measures zero everywhere;
+    // filtering all of it out would leave focus nowhere.
+    it('falls back to unmeasured elements when nothing has been laid out', () => {
+      const a = focusable({ x: 0, y: 0, w: 0, h: 0 });
+      const b = focusable({ x: 0, y: 0, w: 0, h: 0 });
+      const nav = new SpatialNav(makeContainer(a, b));
+      nav.focusFirst();
+      expect(nav.focused).toBe(a);
+    });
+  });
+
+  describe('setRestrict', () => {
+    function makeRestricted(): {
+      nav: SpatialNav; outside: HTMLElement; inside: HTMLElement; dialog: HTMLElement;
+    } {
+      const outside = focusable({ x: 0, y: 0 });
+      const dialog = document.createElement('div');
+      const inside = focusable({ x: 0, y: 100 });
+      const other = focusable({ x: 0, y: 200 });
+      dialog.appendChild(inside);
+      dialog.appendChild(other);
+      const container = makeContainer(outside, dialog);
+      return { nav: new SpatialNav(container), outside, inside, dialog };
+    }
+
+    it('keeps d-pad inside the restricted subtree', () => {
+      const { nav, inside, dialog } = makeRestricted();
+      nav.focus(inside);
+      nav.setRestrict(dialog);
+      expect(nav.move('up')).toBe(false); // the element above is outside
+      expect(nav.focused).toBe(inside);
+    });
+
+    // One keypress is one step: entering the trap must land on its first
+    // element, not enter and then move off it.
+    it('enters at the first element when focus was outside', () => {
+      const { nav, outside, inside, dialog } = makeRestricted();
+      nav.focus(outside);
+      nav.setRestrict(dialog);
+      expect(nav.focused).toBe(outside);
+      expect(nav.move('down')).toBe(true);
+      expect(nav.focused).toBe(inside);
+    });
+
+    it('releases the trap on null', () => {
+      const { nav, outside, inside, dialog } = makeRestricted();
+      nav.focus(inside);
+      nav.setRestrict(dialog);
+      nav.setRestrict(null);
+      expect(nav.move('up')).toBe(true);
+      expect(nav.focused).toBe(outside);
+    });
+  });
+
+  describe('data-nav-enter="last-focused"', () => {
+    function makeTwoContainers(enterTo?: string): {
+      nav: SpatialNav; sidebarTop: HTMLElement; listTop: HTMLElement; listBottom: HTMLElement;
+    } {
+      const sidebar = document.createElement('div');
+      sidebar.setAttribute('data-nav-container', '');
+      const sidebarTop = focusable({ x: 0, y: 0 });
+      const sidebarBottom = focusable({ x: 0, y: 100 });
+      sidebar.appendChild(sidebarTop);
+      sidebar.appendChild(sidebarBottom);
+
+      const list = document.createElement('div');
+      list.setAttribute('data-nav-container', '');
+      if (enterTo) list.setAttribute('data-nav-enter', enterTo);
+      const listTop = focusable({ x: 200, y: 0 });
+      const listBottom = focusable({ x: 200, y: 100 });
+      list.appendChild(listTop);
+      list.appendChild(listBottom);
+
+      const container = makeContainer(sidebar, list);
+      return { nav: new SpatialNav(container), sidebarTop, listTop, listBottom };
+    }
+
+    it('returns to the last focused element when re-entering', () => {
+      const { nav, sidebarTop, listBottom } = makeTwoContainers('last-focused');
+      nav.focus(listBottom);
+      nav.focus(sidebarTop);
+      nav.move('right');
+      expect(nav.focused).toBe(listBottom); // not the geometrically nearest listTop
+    });
+
+    it('uses geometry for a container that has not been visited', () => {
+      const { nav, sidebarTop, listTop } = makeTwoContainers('last-focused');
+      nav.focus(sidebarTop);
+      nav.move('right');
+      expect(nav.focused).toBe(listTop);
+    });
+
+    it('does not apply while moving within the same container', () => {
+      const { nav, listTop, listBottom } = makeTwoContainers('last-focused');
+      nav.focus(listBottom);
+      nav.focus(listTop);
+      nav.move('down');
+      expect(nav.focused).toBe(listBottom);
+    });
+
+    it('stays geometric without the opt-in attribute', () => {
+      const { nav, sidebarTop, listTop, listBottom } = makeTwoContainers();
+      nav.focus(listBottom);
+      nav.focus(sidebarTop);
+      nav.move('right');
+      expect(nav.focused).toBe(listTop);
+    });
+
+    it('falls back to geometry when the remembered element is gone', () => {
+      const { nav, sidebarTop, listTop, listBottom } = makeTwoContainers('last-focused');
+      nav.focus(listBottom);
+      nav.focus(sidebarTop);
+      listBottom.remove();
+      nav.move('right');
+      expect(nav.focused).toBe(listTop);
     });
   });
 

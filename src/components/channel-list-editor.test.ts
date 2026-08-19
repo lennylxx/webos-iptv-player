@@ -931,6 +931,31 @@ describe('ChannelList edit mode', () => {
     expect(data.raw[0].sourceGroup).toBe('News');
   });
 
+  it('traps d-pad inside the group picker overlay', () => {
+    enterEdit();
+    hover(channelItems()[0]);
+    list.handleAction('select');
+    list.handleAction('red');
+
+    // jsdom has no layout, so place the overlay below the list explicitly:
+    // without a trap, "up" from the first option scores a channel behind it.
+    const stub = (el: HTMLElement, y: number): void => {
+      el.getBoundingClientRect = () =>
+        ({ left: 0, top: y, width: 100, height: 40, right: 100, bottom: y + 40,
+          x: 0, y, toJSON() {} }) as DOMRect;
+    };
+    channelItems().forEach((el, i) => stub(el, i * 40));
+    const options = Array.from(container.querySelectorAll<HTMLElement>('.group-picker-option'));
+    options.forEach((el, i) => stub(el, 400 + i * 40));
+
+    hover(options[0]);
+    list.handleAction('up');
+    expect(container.querySelector('.focused')?.closest('.group-picker')).not.toBeNull();
+
+    list.handleAction('down');
+    expect(container.querySelector('.focused')?.closest('.group-picker')).not.toBeNull();
+  });
+
   it('red can create a new group for the focused channel', () => {
     enterEdit();
     hover(channelItems()[0]);

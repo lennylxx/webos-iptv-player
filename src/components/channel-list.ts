@@ -259,7 +259,7 @@ export class ChannelList {
             </div>
           </div>
         </div>
-        <div class="channel-main" data-nav-container>
+        <div class="channel-main" data-nav-container data-nav-enter="last-focused">
           <div class="channel-list-scroll ${showingRecent ? 'recent-list' : ''}">
             ${showingRecent
               ? (this.recentItems.length
@@ -308,9 +308,8 @@ export class ChannelList {
       // Default focus: the first channel (an empty list falls through to the
       // first focusable — a group or playlist tab — below).
       const target0 = this.container.querySelector<HTMLElement>('.channel-main [data-channel-index]');
-      target = playingChannel
-        ?? target0
-        ?? this.container.querySelector<HTMLElement>('[data-focusable]');
+      target = playingChannel ?? target0;
+      if (!target) this.nav.focusFirst();
     }
     if (target) {
       this.nav.focus(target);
@@ -494,9 +493,9 @@ export class ChannelList {
    */
   highlightEntryPoint(): void {
     if (this.playingIndex >= 0 && this.revealChannel(this.playingIndex)) return;
-    const entry = this.container.querySelector<HTMLElement>('.channel-main [data-channel-index]')
-      ?? this.container.querySelector<HTMLElement>('[data-focusable]');
+    const entry = this.container.querySelector<HTMLElement>('.channel-main [data-channel-index]');
     if (entry) this.nav.focus(entry);
+    else this.nav.focusFirst();
   }
 
   private renderChannel(ch: Channel, favs: string[], position: number, top: number): Safe {

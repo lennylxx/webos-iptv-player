@@ -223,3 +223,33 @@ test('direct channel entry scrolls the list to the tuned channel and keeps it on
   expect(row!.y).toBeGreaterThanOrEqual(viewport!.y);
   expect(row!.y + row!.height).toBeLessThanOrEqual(viewport!.y + viewport!.height);
 });
+
+// Geometry alone puts re-entry focus on whichever row sits nearest the
+// sidebar, which is not where the eye left off after scrolling. `.channel-main`
+// opts into last-focused re-entry so the row you left is the row you return to.
+test('returning from the sidebar restores the channel you left', async ({ page }) => {
+  const lines = ['#EXTM3U'];
+  for (let i = 1; i <= 40; i++) {
+    lines.push(`#EXTINF:-1 tvg-id="c${i}" group-title="${i <= 20 ? 'Alpha' : 'Bravo'}",Ch ${i}`);
+    lines.push(`http://host/${i}.m3u8`);
+  }
+  await routePlaylist(page, lines.join('\n'));
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+  for (let i = 0; i < 14; i++) await page.keyboard.press('ArrowDown');
+
+  const key = () => page.evaluate(() =>
+    document.querySelector('#view-channels .channel-main .focused')?.getAttribute('data-key') ?? null);
+  const left = await key();
+  expect(left).not.toBeNull();
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#view-channels .sidebar .focused')).toHaveCount(1);
+
+  // Right may hop within the sidebar before crossing back into the list.
+  for (let i = 0; i < 4 && (await key()) === null; i++) await page.keyboard.press('ArrowRight');
+  expect(await key()).toBe(left);
+});

@@ -34,6 +34,93 @@ test.describe('Settings navigation', () => {
     await expect(page.locator('#view-settings')).toBeVisible();
   });
 
+  // A closed menu is `display: none` from the stylesheet, so its options carry
+  // no hiding of their own and SpatialNav must keep d-pad out on measurement.
+  // jsdom has no layout, so a real engine is the only place this can be checked.
+  test('a closed dropdown keeps its options out of d-pad navigation', async ({ page }) => {
+    await page.goto('/');
+    const dropdown = page.locator('#app-language');
+    const options = dropdown.locator('.dropdown-option');
+    await expect(options.first()).not.toBeVisible();
+
+    // The trigger is the first control of its pane, so nothing legitimate sits
+    // above it. A hidden option measures as a zero-sized box at the viewport
+    // origin, which is above everything and in the same container, so it is the
+    // one thing Up could reach if measurement did not rule it out.
+    await dropdown.locator('.dropdown-trigger')
+      .evaluate(el => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+    await page.keyboard.press('ArrowUp');
+
+    expect(await page.locator('.dropdown-option.focused').count()).toBe(0);
+  });
+
+  test('an open dropdown keeps d-pad inside its own options', async ({ page }) => {
+    await page.goto('/');
+    const dropdown = page.locator('#app-language');
+    await dropdown.locator('.dropdown-trigger').click();
+    await expect(dropdown).toHaveClass(/open/);
+
+    const optionCount = await dropdown.locator('.dropdown-option').count();
+    expect(optionCount).toBeGreaterThan(1);
+
+    // Walk past the end of the list; every step must stay among the options.
+    for (let step = 0; step < optionCount + 3; step++) {
+      await page.keyboard.press('ArrowDown');
+      const inside = await page.evaluate(() =>
+        !!document.querySelector('#view-settings .focused')?.closest('.dropdown.open'));
+      expect(inside).toBe(true);
+    }
+  });
+
+  // Pointer hover can move focus to the view behind an open menu. The next
+  // keypress must re-enter the menu rather than continue through the background.
+  test('an open dropdown recaptures focus after pointer hover escapes', async ({ page }) => {
+    await page.goto('/');
+    const dropdown = page.locator('#app-language');
+    const trigger = dropdown.locator('.dropdown-trigger');
+    const outside = page.locator('[data-settings-target="appearance"]');
+
+    await trigger.evaluate(el => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+    await page.keyboard.press('Enter');
+    await expect(dropdown).toHaveClass(/open/);
+
+    await outside.dispatchEvent('mouseover');
+    await expect(outside).toHaveClass(/focused/);
+
+    await page.keyboard.press('ArrowDown');
+
+    const index = await page.evaluate(() => {
+      const options = Array.from(document.querySelectorAll('#app-language .dropdown-option'));
+      return options.findIndex(o => o.classList.contains('focused'));
+    });
+    expect(index).toBe(0);
+  });
+
+  // Entering a category focuses its first element in DOM order, with no
+  // geometry to fall back on — so the visibility check is the only thing
+  // standing between focus and an invisible element. A stylesheet rule is the
+  // case no attribute selector on the element could ever catch, and jsdom
+  // applies no stylesheets, so this needs a real engine.
+  test('entering a category skips a first control hidden by a stylesheet', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#view-settings')).toBeVisible();
+
+    const swatches = page.locator('#settings-appearance .theme-swatch');
+    const names = await swatches.evaluateAll(els => els.map(el => el.getAttribute('data-theme')));
+    expect(names.length).toBeGreaterThan(1);
+
+    await page.addStyleTag({
+      content: `#settings-appearance [data-theme="${names[0]}"] { display: none; }`,
+    });
+
+    await page.locator('[data-settings-target="appearance"]').click();
+    await page.keyboard.press('ArrowRight');
+
+    const focused = await page.evaluate(() =>
+      document.querySelector('#view-settings .focused')?.getAttribute('data-theme') ?? null);
+    expect(focused).toBe(names[1]);
+  });
+
   test('keeps dropdown spacing aligned with adjacent settings', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#os-pref-lang')).toBeAttached();
@@ -63,6 +150,28 @@ test.describe('Settings navigation', () => {
     expect(gaps.dropdownTitle).toBe(10);
     expect(gaps.dropdownToNextTitle).toBe(gaps.inputToNextTitle);
     expect(gaps.dropdownToNextTitle).toBe(12);
+  });
+
+  test('the sticky action bar covers focus glow at the scroll viewport edges', async ({ page }) => {
+    await page.goto('/');
+    const main = page.locator('.settings-main');
+    const actions = page.locator('.settings-actions');
+    const reset = page.locator('#reset-app');
+
+    await reset.evaluate(el =>
+      el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+    await expect(reset).toHaveClass(/focused/);
+
+    const [mainBox, actionBox, resetBox] = await Promise.all([
+      main.boundingBox(),
+      actions.boundingBox(),
+      reset.boundingBox(),
+    ]);
+    expect(mainBox).not.toBeNull();
+    expect(actionBox).not.toBeNull();
+    expect(resetBox).not.toBeNull();
+    expect(actionBox!.x).toBeLessThanOrEqual(mainBox!.x);
+    expect(actionBox!.x).toBeLessThan(resetBox!.x);
   });
 
   test('clicking Cancel in settings (opened via the tab bar) returns to the channel list, not the player', async ({ page }) => {

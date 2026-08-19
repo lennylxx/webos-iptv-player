@@ -396,9 +396,11 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       this.nav.clearDetachedFocus();
       return;
     }
-    const restore = (prevKey && this.container.querySelector<HTMLElement>(`[data-focusable][data-key="${prevKey}"]`))
-      || this.container.querySelector<HTMLElement>('[data-focusable]');
-    this.nav.focus(restore);
+    const restore = prevKey
+      ? this.container.querySelector<HTMLElement>(`[data-focusable][data-key="${prevKey}"]`)
+      : null;
+    if (restore) this.nav.focus(restore);
+    else if (!this.nav.focusFirst()) this.nav.focus(null);
   }
 
   protected moveExtraFocus(action: Action): boolean {

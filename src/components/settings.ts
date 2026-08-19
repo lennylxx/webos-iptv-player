@@ -1,4 +1,4 @@
-import type { Action, EpgSource, PlaylistEntry, TzMode } from '../types';
+import type { Action, EpgSource, NavDirection, PlaylistEntry, TzMode } from '../types';
 import { $, $$, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SpatialNav } from '../navigation/spatial-nav';
@@ -227,9 +227,7 @@ function settingsNavItem(category: typeof SETTINGS_CATEGORIES[number], active: b
 
 /** Custom single-select dropdown — remote/D-pad friendly and app-styled (the app
  *  uses no native `<select>`). The trigger toggles the menu; each option carries a
- *  `data-dropdown-value`; the chosen value lives on the root's `data-value`. Closed
- *  options carry `.hidden` so SpatialNav skips them (its candidate filter honors
- *  `.hidden` / inline `display:none`, not CSS-class display). */
+ *  `data-dropdown-value`; the chosen value lives on the root's `data-value`. */
 function dropdown(id: string, options: { value: string; label: string }[], active: string) {
   const current = options.find(o => o.value === active) ?? options[0];
   return html`
@@ -243,7 +241,7 @@ function dropdown(id: string, options: { value: string; label: string }[], activ
       </button>
       <div class="dropdown-menu">
         ${options.map(o => html`
-          <button class="dropdown-option hidden ${o.value === active ? 'active' : ''}"
+          <button class="dropdown-option ${o.value === active ? 'active' : ''}"
                   data-focusable data-dropdown-value="${o.value}">${o.label}</button>
         `)}
       </div>
@@ -894,6 +892,22 @@ export class Settings {
     if (preview) morph(preview, correctionPreview(offset));
   }
 
+  // An open dropdown menu is absolutely positioned over the settings pane, so an
+  // untrapped move scores items behind it. The restriction is released straight
+  // after: the pane is re-morphed on every render, so a held element goes stale.
+  private moveFocus(action: NavDirection): void {
+    const open = this.container.querySelector<HTMLElement>('.dropdown.open');
+    this.nav.setRestrict(open?.querySelector<HTMLElement>('.dropdown-menu') ?? null);
+    this.nav.move(action);
+    this.nav.setRestrict(null);
+  }
+
+  private restoreOpenDropdownFocus(open: HTMLElement): void {
+    const option = open.querySelector<HTMLElement>('.dropdown-option.active')
+      ?? open.querySelector<HTMLElement>('.dropdown-option');
+    if (option) this.nav.focus(option);
+  }
+
   handleAction(action: Action): void {
     if (this.confirmationPrompt.visible) {
       this.confirmationPrompt.handleAction(action);
@@ -903,7 +917,7 @@ export class Settings {
     switch (action) {
       case 'up':
       case 'down':
-        this.nav.move(action);
+        this.moveFocus(action);
         break;
 
       case 'right':
@@ -911,7 +925,7 @@ export class Settings {
           this.focusCategoryFirst(this.nav.focused.dataset.settingsTarget as SettingsCategory);
           break;
         }
-        this.nav.move(action);
+        this.moveFocus(action);
         break;
 
       case 'left':
@@ -920,7 +934,7 @@ export class Settings {
           break;
         }
         {
-          const openDropdown = this.nav.focused?.closest<HTMLElement>('.dropdown.open');
+          const openDropdown = this.container.querySelector<HTMLElement>('.dropdown.open');
           if (openDropdown) this.closeDropdown(openDropdown);
           const peer = this.leftPeer(this.nav.focused);
           if (peer) this.nav.focus(peer);
@@ -931,6 +945,11 @@ export class Settings {
       case 'select': {
         const focused = this.nav.focused;
         if (!focused) break;
+        const openDropdown = this.container.querySelector<HTMLElement>('.dropdown.open');
+        if (openDropdown && !openDropdown.contains(focused)) {
+          this.restoreOpenDropdownFocus(openDropdown);
+          break;
+        }
         this.activate(focused);
         break;
       }
@@ -1373,9 +1392,7 @@ export class Settings {
     const rect = el.getBoundingClientRect();
     let best: HTMLElement | null = null;
     let bestScore = Infinity;
-    for (const candidate of group.querySelectorAll<HTMLElement>(
-      '[data-focusable]:not(.hidden):not([style*="display: none"])',
-    )) {
+    for (const candidate of group.querySelectorAll<HTMLElement>('[data-focusable]')) {
       if (candidate === el) continue;
       const other = candidate.getBoundingClientRect();
       const overlap = Math.min(rect.bottom, other.bottom) - Math.max(rect.top, other.top);
@@ -1396,14 +1413,16 @@ export class Settings {
     if (active) this.nav.focus(active);
   }
 
+  // Entry takes the pane's first focusable in DOM order, with no geometry to
+  // fall back on, so measurement is what keeps focus off an invisible control —
+  // a closed menu's options stay focusable.
   private focusCategoryFirst(category: SettingsCategory): void {
-    const first = this.container.querySelector<HTMLElement>(
-      `#settings-${category} [data-focusable]:not(.hidden):not([style*="display: none"])`,
-    );
-    if (first) {
-      this.setActiveCategory(category);
-      this.nav.focus(first);
-    }
+    const pane = this.container.querySelector<HTMLElement>(`#settings-${category}`);
+    if (!pane) return;
+    this.nav.setRestrict(pane);
+    const focused = this.nav.focusFirst();
+    this.nav.setRestrict(null);
+    if (focused) this.setActiveCategory(category);
   }
 
   private syncCategoryFromScroll(main: HTMLElement): void {
@@ -1432,8 +1451,8 @@ export class Settings {
     previewTheme(id);
   }
 
-  // Open/close a custom dropdown. Closed options carry `.hidden` so SpatialNav
-  // skips them; opening reveals them and moves focus to the active/first option.
+  // Opening moves focus to the active option, or the first one when the stored
+  // value is no longer offered.
   private toggleDropdown(dd: HTMLElement | null): void {
     if (!dd) return;
     const open = !dd.classList.contains('open');
@@ -1444,14 +1463,12 @@ export class Settings {
       return;
     }
     dd.classList.toggle('open', open);
-    dd.querySelectorAll('.dropdown-option').forEach(o => o.classList.toggle('hidden', !open));
     const opt = dd.querySelector<HTMLElement>('.dropdown-option.active') ?? dd.querySelector<HTMLElement>('.dropdown-option');
     if (opt) this.nav.focus(opt);
   }
 
   private closeDropdown(dd: HTMLElement): void {
     dd.classList.remove('open');
-    dd.querySelectorAll('.dropdown-option').forEach(o => o.classList.add('hidden'));
     const trigger = dd.querySelector<HTMLElement>('.dropdown-trigger');
     if (trigger) this.nav.focus(trigger);
   }
@@ -1464,12 +1481,12 @@ export class Settings {
   }
 
   // Commit a dropdown option: record it on the root's data-value, update the
-  // trigger label, re-hide the options, and return focus to the trigger.
+  // trigger label, close the menu, and return focus to the trigger.
   private selectDropdownOption(el: HTMLElement): void {
     const dd = el.closest<HTMLElement>('.dropdown');
     if (!dd) return;
     dd.dataset.value = el.dataset.dropdownValue ?? '';
-    dd.querySelectorAll('.dropdown-option').forEach(o => { o.classList.remove('active'); o.classList.add('hidden'); });
+    dd.querySelectorAll('.dropdown-option').forEach(o => o.classList.remove('active'));
     el.classList.add('active');
     const cur = dd.querySelector('.dropdown-current');
     if (cur) cur.textContent = el.textContent;

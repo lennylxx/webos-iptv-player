@@ -264,3 +264,28 @@ test('a VOD ASS sidecar renders through the assjs overlay when selected', async 
   await page.keyboard.press('Enter');
   await expect(page.locator('#ass-overlay')).toContainText('ASS Cue 1');
 });
+
+// Opening a detail with no remembered key focuses its first control in DOM
+// order, with no geometry to fall back on, so measurement is the only thing
+// keeping focus off a hidden one. A stylesheet rule is the case no selector on
+// the element itself can catch, and jsdom applies no CSS.
+test('a detail whose first control is hidden focuses the next visible one', async ({ page }) => {
+  await seedMovies(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'movies');
+  await expect(page.locator('#view-movies')).toBeVisible();
+
+  await page.addStyleTag({
+    content: '#view-movies .detail-btn[data-key="play"] { display: none; }',
+  });
+
+  await page.locator('.catalog-tile[data-item-id="10"]')
+    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .detail-plot')).toContainText('A plot.');
+
+  const focused = await page.evaluate(() =>
+    document.querySelector('#view-movies .focused')?.getAttribute('data-key') ?? null);
+  expect(focused).toBe('watchlist');
+});
