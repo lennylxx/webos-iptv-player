@@ -137,7 +137,7 @@ export class PlayerPipeline {
         log.info('Selected webOS native playback', 'event=playback.path.native',
           this.callbacks.playbackLabel(token),
           'reason=direct', 'url=', safeUrl,
-          '| webOS native VOD | MIME', mime);
+          '| webOS native VOD | MIME', mime || '(sniffed)');
         this.playNative(url, mime);
         return;
       }

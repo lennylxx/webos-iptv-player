@@ -4,6 +4,8 @@ export function extFromUrl(url: string): string {
 }
 
 // Progressive-container MIME by file extension, for VOD played natively on webOS.
+// An unknown or extension-less URL returns '', and the caller then omits the
+// `type` attribute so the TV sniffs the container itself.
 export function containerMime(url: string): string {
   switch (extFromUrl(url)) {
     case 'mp4': case 'm4v': return 'video/mp4';
@@ -12,7 +14,7 @@ export function containerMime(url: string): string {
     case 'mov': return 'video/quicktime';
     case 'webm': return 'video/webm';
     case 'ts': return 'video/mp2t';
-    default: return 'video/mp4';
+    default: return '';
   }
 }
 

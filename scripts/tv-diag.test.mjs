@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+// jsdom, because the active probe is stringified and evaluated inside the
+// TV's webview; every other case here is a pure function.
+import { beforeEach, describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
   DiagnosticRedactor,
@@ -9,6 +12,7 @@ import {
   normalizeNetworkRecords,
   parseNativeMetricOutput,
   parseDiagnosticArgs,
+  activeProbeExpression,
   formatDiagnosticSummary,
   runNativeProbe,
   inspectorWebSocketUrl,
@@ -439,14 +443,23 @@ describe('diagnostic report assembly', () => {
       probe: {
         state: {
           view: 'view-player',
-          channels: 2,
+          channelsRendered: 1,
           media: {
             src: 'http://host/live/user1/pass1/7.ts',
+            sources: [{
+              src: 'http://host/movie/user1/pass1/7.mkv',
+              type: 'video/x-matroska',
+              canPlayType: '',
+            }],
             readyState: 4,
             networkState: 2,
             paused: false,
             currentTime: 12,
             error: null,
+          },
+          codecSupport: {
+            'video/mp4': 'probably',
+            'video/x-matroska': '',
           },
         },
         storage: {},
@@ -494,12 +507,18 @@ describe('diagnostic report assembly', () => {
         level: 'log',
         text: '[App] Key routed event=key.action action=number'
           + ' view=player consumer=view_player number=42',
+      }, {
+        observedAt: '2026-01-01T00:00:06.000Z',
+        source: 'console',
+        level: 'warning',
+        text: '[Playlist] Playlist load completed event=playlist.load.completed'
+          + ' source=network channels=0 all=0 groups=0 epg=1 sources=1 failed=1',
       }],
       networkEvents: [],
     });
     const serialized = JSON.stringify(report);
     expect(report.schemaVersion).toBe(3);
-    expect(report.diagnostics).toHaveLength(4);
+    expect(report.diagnostics).toHaveLength(5);
     expect(report.input).toEqual([
       expect.objectContaining({ event: 'key.action', view: 'player', number: 42 }),
     ]);
@@ -510,7 +529,7 @@ describe('diagnostic report assembly', () => {
     const summary = formatDiagnosticSummary(report);
     expect(summary).toContain('webview=200');
     expect(summary).toContain('playback.path.native');
-    expect(summary).toContain('Diagnostic events: 4');
+    expect(summary).toContain('Diagnostic events: 5');
     expect(summary).toContain('Input events: 1');
     expect(summary).toContain(
       'key.action number=42 action=number view=player consumer=view_player',
@@ -524,6 +543,28 @@ describe('diagnostic report assembly', () => {
         + ' timeoutMs=30000 limitBytes=33554432',
     );
     expect(summary).toContain('Media: playing');
+    expect(summary).toContain('channels=0 (network) rendered=1');
+    expect(summary).toContain('playlist.load.completed channels=0 source=network failed=1');
+    expect(summary).toContain(
+      'Media source: type=video/x-matroska canPlayType="" — source skipped without an error event',
+    );
+    expect(summary).toContain('Codec support: 1/2 playable | rejected: video/x-matroska');
+  });
+
+  it('reports catalog counts as unknown when the app exposes no snapshot', () => {
+    const summary = formatDiagnosticSummary({
+      capturedAt: '2026-01-01T00:00:00.000Z',
+      app: {},
+      environment: {},
+      state: { view: 'view-channels', channelsRendered: 0 },
+      playlists: [],
+      diagnostics: [],
+      logs: [],
+      network: [],
+    });
+
+    expect(summary).toContain('channels=? rendered=0');
+    expect(summary).not.toContain('Codec support');
   });
 
   it('keeps long probe failures concise in the terminal summary', () => {
@@ -559,5 +600,51 @@ describe('diagnostic report assembly', () => {
 
     expect(summary).toContain('Diagnostic events: 1');
     expect(summary).toContain('playback.path.native session=1');
+  });
+});
+
+describe('active diagnostics probe', () => {
+  // The probe is stringified and evaluated inside the TV's webview, so run it
+  // the same way here: a real DOM, no bundler, no module scope.
+  const runProbe = () => (0, eval)(activeProbeExpression);
+
+  beforeEach(() => {
+    localStorage.clear();
+    document.body.innerHTML = '';
+    window.fetch = () => Promise.reject(new Error('offline'));
+  });
+
+  it('reports only rendered rows, leaving the catalog size to the load event', async () => {
+    document.body.innerHTML = '<div class="channel-item"></div><div class="channel-item"></div>';
+
+    const probe = await runProbe();
+
+    expect(probe.state.channelsRendered).toBe(2);
+    expect(probe.state).not.toHaveProperty('channels');
+  });
+
+  it('captures each <source> type with its canPlayType verdict', async () => {
+    document.body.innerHTML =
+      '<video><source src="http://host/movie/u1/p1/7.mkv" type="video/x-matroska"></video>';
+    const video = document.querySelector('video');
+    video.canPlayType = (type) => (type === 'video/mp4' ? 'probably' : '');
+
+    const probe = await runProbe();
+
+    expect(probe.state.media.sources).toEqual([{
+      src: 'http://host/movie/u1/p1/7.mkv',
+      type: 'video/x-matroska',
+      canPlayType: '',
+    }]);
+    expect(probe.state.codecSupport['video/mp4']).toBe('probably');
+    expect(probe.state.codecSupport['video/x-matroska']).toBe('');
+  });
+
+  it('probes container support even with no <video> on the page', async () => {
+    const probe = await runProbe();
+
+    expect(probe.state.media).toBeNull();
+    expect(Object.keys(probe.state.codecSupport)).toContain('video/x-matroska');
+    expect(Object.keys(probe.state.codecSupport)).toContain('audio/mp4; codecs="ec-3"');
   });
 });

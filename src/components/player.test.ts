@@ -85,6 +85,9 @@ function fakeVideo(duration: number): HTMLVideoElement {
     set src(v: string) { src = v; },
     classList: { add() {}, remove() {} },
     canPlayType: () => '',
+    get currentSrc() { return src; },
+    getAttribute: () => null,
+    querySelector: () => null,
     play: () => { paused = false; return Promise.resolve(); },
     pause() { paused = true; },
     load() {}, removeAttribute() {}, appendChild() {}, set innerHTML(_: string) {},
@@ -109,6 +112,9 @@ function fakeAsyncSeekVideo(duration: number) {
     set src(v: string) { src = v; },
     classList: { add() {}, remove() {} },
     canPlayType: () => '',
+    get currentSrc() { return src; },
+    getAttribute: () => null,
+    querySelector: () => null,
     play: () => { paused = false; return Promise.resolve(); },
     pause() { paused = true; },
     load() {}, removeAttribute() {}, appendChild() {}, set innerHTML(_: string) {},
@@ -144,6 +150,9 @@ function fakeLiveVideo(start: number, end: number, currentTime = 0) {
     seekable: { length: 1, start: () => w.start, end: () => w.end },
     classList: { add() {}, remove() {} },
     canPlayType: () => '',
+    get currentSrc() { return src; },
+    getAttribute: () => null,
+    querySelector: () => null,
     play: () => { paused = false; return Promise.resolve(); },
     pause() { paused = true; },
     load() {}, removeAttribute() {}, appendChild() {}, set innerHTML(_: string) {},
@@ -480,6 +489,37 @@ describe('Player live playback', () => {
     expect(player.getCurrentIndex()).toBe(-1);
     expect(player.getCurrentChannel()).toBe(CHANNEL);
     expect(onPlaybackChanged).toHaveBeenLastCalledWith(-1, null);
+  });
+
+  it('ignores the outgoing stream\'s state until the new source is attached', async () => {
+    playlistMock.channels = [{}, {}];
+    // Left over from the channel that just failed; the next load has not
+    // reached the element yet (webOS probes the content type first).
+    Object.assign(video, { readyState: 0, networkState: 3 });
+    player.play(0);
+    await flush();
+    playlistMock.getByIndex.mockClear();
+    healthMock.recordPlaybackFailure.mockClear();
+
+    vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_TIMEOUT);
+
+    expect(healthMock.recordPlaybackFailure).not.toHaveBeenCalled();
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
+  });
+
+  it('leaves a live stream that never starts to the stall watchdog', async () => {
+    playlistMock.channels = [{}, {}];
+    Object.assign(video, { readyState: 0, networkState: 2 });
+    player.play(0);
+    await flush();
+    video.dispatchEvent(new Event('loadstart'));
+    playlistMock.getByIndex.mockClear();
+    healthMock.recordPlaybackFailure.mockClear();
+
+    vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_TIMEOUT * 2);
+
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
+    expect(healthMock.recordPlaybackFailure).not.toHaveBeenCalled();
   });
 
   it('coalesces repeated playback errors into one channel advance', async () => {
@@ -994,6 +1034,94 @@ describe('Player VOD mode', () => {
     expect(showToast).toHaveBeenCalled();
   });
 
+  it('surfaces a source the element refused, which fires no error event', () => {
+    const video = fakeVideo(3600);
+    // NETWORK_NO_SOURCE: every <source> was skipped, so no 'error' ever arrives.
+    Object.assign(video, { readyState: 0, networkState: 3 });
+    player.init(video);
+    const r = req();
+    player.playVod(r);
+    video.dispatchEvent(new Event('loadstart'));
+    vi.mocked(showToast).mockClear();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_POLL_MS);
+
+    // A rejected source never becomes currentSrc, so the URL comes from the request.
+    expect(logged.mock.calls[0].join(' ')).toContain('url=http://host:8080/movie/***/***/10.mp4');
+    logged.mockRestore();
+    expect(showToast).toHaveBeenCalledWith('Unable to play this video.');
+    expect(r.onBack).toHaveBeenCalled();
+    expect(player.isVod()).toBe(false);
+  });
+
+  it('surfaces a VOD stream that never produces a frame', () => {
+    const video = fakeVideo(3600);
+    Object.assign(video, { readyState: 0, networkState: 2 }); // NETWORK_LOADING forever
+    player.init(video);
+    const r = req();
+    player.playVod(r);
+    video.dispatchEvent(new Event('loadstart'));
+    vi.mocked(showToast).mockClear();
+
+    vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_TIMEOUT);
+
+    expect(showToast).toHaveBeenCalledWith('Unable to play this video.');
+    expect(r.onBack).toHaveBeenCalled();
+  });
+
+  it('stops watching once the stream starts', () => {
+    const video = fakeVideo(3600);
+    Object.assign(video, { readyState: 0, networkState: 2 });
+    player.init(video);
+    player.playVod(req());
+    video.dispatchEvent(new Event('loadstart'));
+    vi.mocked(showToast).mockClear();
+    Object.assign(video, { readyState: 4 });
+
+    vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_TIMEOUT * 2);
+
+    expect(showToast).not.toHaveBeenCalled();
+    expect(player.isVod()).toBe(true);
+  });
+
+  it('does not fail a VOD that was still loading when the app was hidden', () => {
+    const video = fakeVideo(3600);
+    Object.assign(video, { readyState: 0, networkState: 2 });
+    player.init(video);
+    const r = req();
+    player.playVod(r);
+    video.dispatchEvent(new Event('loadstart'));
+    vi.mocked(showToast).mockClear();
+
+    player.suspend();
+    vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_TIMEOUT * 2);
+
+    expect(showToast).not.toHaveBeenCalled();
+    expect(r.onBack).not.toHaveBeenCalled();
+  });
+
+  it('does not re-arm the startup watchdog for a VOD that already played', () => {
+    const video = fakeVideo(3600);
+    Object.assign(video, { readyState: 0, networkState: 2 });
+    player.init(video);
+    const r = req();
+    player.playVod(r);
+    video.dispatchEvent(new Event('loadstart'));
+    video.dispatchEvent(new Event('loadeddata')); // first frame decoded
+    player.suspend();
+    // Back from hidden mid-seek: readyState drops below HAVE_CURRENT_DATA
+    // without the stream having failed to start.
+    Object.assign(video, { readyState: 1 });
+    vi.mocked(showToast).mockClear();
+
+    player.resume();
+    vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_TIMEOUT * 2);
+
+    expect(showToast).not.toHaveBeenCalled();
+    expect(r.onBack).not.toHaveBeenCalled();
+  });
+
   it('does not clobber the resume point when Back is pressed before metadata loads', () => {
     const video = fakeVideo(NaN); // duration NaN — metadata not loaded yet
     player.init(video);
@@ -1018,9 +1146,9 @@ describe('containerMime', () => {
     expect(containerMime('http://host/movie/u/p/10.mkv#frag')).toBe('video/x-matroska');
   });
 
-  it('defaults to video/mp4 for unknown or extension-less URLs', () => {
-    expect(containerMime('http://host/movie/u/p/10.xyz')).toBe('video/mp4');
-    expect(containerMime('http://host/movie/u/p/10')).toBe('video/mp4');
+  it('claims no type for unknown or extension-less URLs', () => {
+    expect(containerMime('http://host/movie/u/p/10.xyz')).toBe('');
+    expect(containerMime('http://host/movie/u/p/10')).toBe('');
   });
 });
 

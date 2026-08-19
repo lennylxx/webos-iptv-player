@@ -295,6 +295,9 @@ export function extractDiagnosticTimeline(logs) {
     const session = Number(entry.text.match(/\bsession=(\d+)/)?.[1] ?? NaN);
     const load = Number(entry.text.match(/\bload=(\d+)/)?.[1] ?? NaN);
     const count = Number(entry.text.match(/\bcount=(\d+)/)?.[1] ?? NaN);
+    const channels = Number(entry.text.match(/\bchannels=(\d+)/)?.[1] ?? NaN);
+    const failed = Number(entry.text.match(/\bfailed=(\d+)/)?.[1] ?? NaN);
+    const source = entry.text.match(/\bsource=([a-z0-9_-]+)/i)?.[1] ?? '';
     const generation = Number(entry.text.match(/\bgeneration=(\d+)/)?.[1] ?? NaN);
     const active = Number(entry.text.match(/\bactive=(\d+)/)?.[1] ?? NaN);
     const reason = entry.text.match(/\breason=([a-z0-9_-]+)/i)?.[1] ?? '';
@@ -304,6 +307,9 @@ export function extractDiagnosticTimeline(logs) {
       session: Number.isFinite(session) ? session : null,
       load: Number.isFinite(load) ? load : null,
       count: Number.isFinite(count) ? count : null,
+      channels: Number.isFinite(channels) ? channels : null,
+      failed: Number.isFinite(failed) ? failed : null,
+      source,
       generation: Number.isFinite(generation) ? generation : null,
       active: Number.isFinite(active) ? active : null,
       reason,
@@ -428,6 +434,10 @@ export function assembleDiagnosticReport({
   const media = probeState.media ? {
     ...probeState.media,
     src: redactor.url(probeState.media.src ?? ''),
+    sources: (probeState.media.sources ?? []).map((source) => ({
+      ...source,
+      src: redactor.url(source.src ?? ''),
+    })),
     error: probeState.media.error ? {
       ...probeState.media.error,
       message: redactor.text(probeState.media.error.message ?? ''),
@@ -458,11 +468,18 @@ export function formatDiagnosticSummary(report) {
     const firstLine = error.split(/\r?\n/)[0];
     return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
   };
+  const state = report.state ?? {};
+  const countText = (value) => (value == null ? '?' : String(value));
+  const loads = (report.diagnostics ?? [])
+    .filter((event) => event.code === 'playlist.load.completed');
+  const lastLoad = loads.length ? loads[loads.length - 1] : null;
   const lines = [
     `Diagnostics captured: ${report.capturedAt}`,
     `App: ${report.app?.id ?? '?'} ${report.app?.version ?? '?'}`,
     `Environment: ${report.environment?.userAgent ?? '?'}`,
-    `State: ${report.state?.view ?? '?'} | channels=${String(report.state?.channels ?? 0)}`,
+    `State: ${state.view ?? '?'} | channels=${countText(lastLoad?.channels)}`
+    + `${lastLoad?.source ? ` (${lastLoad.source})` : ''}`
+    + ` rendered=${countText(state.channelsRendered ?? state.channels)}`,
     `Playlists: ${String(report.playlists?.length ?? 0)}`,
   ];
   if (report.state?.media) {
@@ -470,6 +487,21 @@ export function formatDiagnosticSummary(report) {
     lines.push(
       `Media: ${media.paused ? 'paused' : 'playing'} | ready=${String(media.readyState)}`
       + ` network=${String(media.networkState)} time=${String(media.currentTime)}s`,
+    );
+    for (const source of media.sources ?? []) {
+      const verdict = source.canPlayType
+        ? `canPlayType=${source.canPlayType}`
+        : 'canPlayType="" — source skipped without an error event';
+      lines.push(`Media source: type=${source.type || '(none)'} ${verdict}`);
+    }
+  }
+  const codecSupport = state.codecSupport ?? null;
+  if (codecSupport) {
+    const types = Object.keys(codecSupport);
+    const rejected = types.filter((type) => !codecSupport[type]);
+    lines.push(
+      `Codec support: ${String(types.length - rejected.length)}/${String(types.length)} playable`
+      + `${rejected.length ? ` | rejected: ${rejected.join(', ')}` : ''}`,
     );
   }
   if (report.nativeMetrics?.error) {
@@ -513,6 +545,9 @@ export function formatDiagnosticSummary(report) {
     if (event.session != null) fields.push(`session=${String(event.session)}`);
     if (event.load != null) fields.push(`load=${String(event.load)}`);
     if (event.count != null) fields.push(`count=${String(event.count)}`);
+    if (event.channels != null) fields.push(`channels=${String(event.channels)}`);
+    if (event.source) fields.push(`source=${event.source}`);
+    if (event.failed != null) fields.push(`failed=${String(event.failed)}`);
     if (event.generation != null) fields.push(`generation=${String(event.generation)}`);
     if (event.active != null) fields.push(`active=${String(event.active)}`);
     if (event.reason) fields.push(`reason=${event.reason}`);
@@ -553,7 +588,27 @@ export function formatDiagnosticSummary(report) {
   return lines.join('\n');
 }
 
-const activeProbeExpression = `(${function activeProbe(previewBytes) {
+export const activeProbeExpression = `(${function activeProbe(previewBytes) {
+  // The containers the app hands to <source type>, plus the codecs a webOS
+  // pipeline can refuse silently. A rejected type makes the resource selection
+  // algorithm skip the source without firing `error` — a black screen with no
+  // diagnosis unless the verdict is captured here.
+  const CODEC_PROBES = [
+    'video/mp4',
+    'video/x-matroska',
+    'video/x-msvideo',
+    'video/quicktime',
+    'video/webm',
+    'video/mp2t',
+    'video/x-flv',
+    'application/vnd.apple.mpegurl',
+    'video/mp4; codecs="avc1.640028"',
+    'video/mp4; codecs="hvc1.1.6.L93.B0"',
+    'video/mp4; codecs="dvh1.05.06"',
+    'audio/mp4; codecs="mp4a.40.2"',
+    'audio/mp4; codecs="ac-3"',
+    'audio/mp4; codecs="ec-3"',
+  ];
   const getPlaylists = () => {
     try { return JSON.parse(localStorage.getItem('iptv_playlists') || '[]'); } catch { return []; }
   };
@@ -660,6 +715,19 @@ const activeProbeExpression = `(${function activeProbe(previewBytes) {
     const visible = [...document.querySelectorAll('.view')]
       .find((element) => !element.classList.contains('hidden'));
     const video = document.querySelector('video');
+    const capabilityVideo = video || document.createElement('video');
+    const canPlay = (type) => {
+      if (!type) return '';
+      try { return capabilityVideo.canPlayType(type) || ''; } catch { return ''; }
+    };
+    const codecSupport = {};
+    for (const type of CODEC_PROBES) codecSupport[type] = canPlay(type);
+    const sources = video
+      ? [...video.querySelectorAll('source')].map((element) => {
+        const type = element.getAttribute('type') || '';
+        return { src: element.src || element.getAttribute('src') || '', type, canPlayType: canPlay(type) };
+      })
+      : [];
     return {
       app: { id: app.id || '', version: app.version || '' },
       state: {
@@ -668,9 +736,12 @@ const activeProbeExpression = `(${function activeProbe(previewBytes) {
           const loading = document.querySelector('#view-loading');
           return loading ? !loading.classList.contains('hidden') : false;
         })(),
-        channels: document.querySelectorAll('.channel-item').length,
+        // Rendered rows only — the channel list is virtualized, so the loaded
+        // catalog size comes from the playlist.load.completed event instead.
+        channelsRendered: document.querySelectorAll('.channel-item').length,
         media: video ? {
           src: video.currentSrc || video.src || '',
+          sources,
           readyState: video.readyState,
           networkState: video.networkState,
           paused: video.paused,
@@ -685,6 +756,7 @@ const activeProbeExpression = `(${function activeProbe(previewBytes) {
             message: video.error.message || '',
           } : null,
         } : null,
+        codecSupport,
       },
       storage: {
         localStorageChars: storageChars,

@@ -17,6 +17,7 @@ import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { CONFIG } from '../config';
 import { StallWatchdog, type StallProbe, type StallRecovery } from '../utils/stall-watchdog';
+import { StartupWatchdog, type StartupFailure, type StartupProbe } from '../utils/startup-watchdog';
 import { resolutionBadge, hdrLabel, frameRateLabel, pickVariant, codecName, audioSummary, subtitleSummary, type StreamVariant, type MediaInfo } from '../utils/stream-info';
 import { extFromUrl, diagnosticStreamUrl } from '../utils/url';
 import { probeMedia } from '../services/media-probe';
@@ -79,6 +80,8 @@ export class Player {
   private manifestVariants: StreamVariant[] = []; // HLS master variants for best-effort codec readout
   private vodInfo: MediaInfo | null = null; // container-header stream info for the active VOD (codec/fps/HDR)
   private stallWatchdog: StallWatchdog;
+  private startupWatchdog: StartupWatchdog;
+  private startupPending = false;
   constructor(
     container: HTMLElement,
     onBack: () => void,
@@ -146,6 +149,16 @@ export class Player {
       freezeTicks: CONFIG.PLAYER.STALL_FREEZE_TICKS,
       maxReloads: CONFIG.PLAYER.STALL_MAX_RELOADS,
     });
+    this.startupWatchdog = new StartupWatchdog({
+      probe: (): StartupProbe => {
+        const v = this.videoEl;
+        if (!v) return { readyState: 0, networkState: 0 };
+        return { readyState: v.readyState, networkState: v.networkState };
+      },
+      onFailure: (failure, probe, elapsedMs) => this.onStartupFailure(failure, probe, elapsedMs),
+      pollMs: CONFIG.PLAYER.STARTUP_POLL_MS,
+      timeoutMs: CONFIG.PLAYER.STARTUP_TIMEOUT,
+    });
   }
 
   init(videoEl: HTMLVideoElement): void {
@@ -177,6 +190,15 @@ export class Player {
 
   private bindVideoEvents(el: HTMLVideoElement): void {
     el.addEventListener('error', () => this.onError());
+    // Resource selection starts here. Until then readyState/networkState still
+    // describe the previous stream — on webOS the content-type probe can defer
+    // the attach by up to MANIFEST_TIMEOUT — and recreateVideoEl() loads a
+    // sourceless element, which is not a startup attempt.
+    el.addEventListener('loadstart', () => {
+      if (el !== this.videoEl) return;
+      if (!el.currentSrc && !el.getAttribute('src') && !el.querySelector('source')) return;
+      this.startupWatchdog.start();
+    });
     el.addEventListener('loadedmetadata', () => {
       log.info('loadedmetadata', this.videoLabel(el), el.videoWidth + 'x' + el.videoHeight,
         this.mediaState(el), '| pendingResume:', this.pendingResumeSecs);
@@ -191,6 +213,10 @@ export class Player {
       this.tracks.applyNativeSubtitleSelection();
       if (this.osd.isVisible()) this.osd.render();
     });
+    // The watchdog's own success condition — a decoded first frame, whether or
+    // not playback was allowed to begin (autoplay can be rejected, or the user
+    // can pause while the spinner is up).
+    el.addEventListener('loadeddata', () => { this.startupPending = false; });
     // Intrinsic size changes mid-stream (ABR up/down-switch) so the OSD pills
     // (resolution, and on hls.js the codec/HDR/fps) reflect the live variant.
     el.addEventListener('resize', () => {
@@ -201,6 +227,7 @@ export class Player {
     el.textTracks?.addEventListener?.('addtrack', () => this.tracks.applyNativeSubtitleSelection());
     el.addEventListener('playing', () => {
       log.info('playing', this.videoLabel(el), this.mediaState(el));
+      this.startupWatchdog.stop();
       this.markTrackedLiveHealthy();
       if (this.resyncing) this.endResync();
       this.confirmLiveHistory(el);
@@ -249,6 +276,7 @@ export class Player {
   }
 
   suspend(): void {
+    this.startupWatchdog.stop();
     if (!this.videoEl || !this.currentChannel) return;
     if (this.wasPlayingBeforeHide) return; // already suspended
     this.wasPlayingBeforeHide = !this.videoEl.paused;
@@ -295,7 +323,12 @@ export class Player {
   }
 
   resume(): void {
-    if (!this.videoEl || !this.currentChannel) return;
+    if (!this.videoEl) return;
+    // A stream still starting when we were hidden gets a fresh budget. Element
+    // state alone can't say that: a seek into an unbuffered region also drops
+    // readyState below HAVE_CURRENT_DATA.
+    if (this.startupPending && this.videoEl.readyState < 2) this.startupWatchdog.start();
+    if (!this.currentChannel) return;
     if (this.wasPlayingBeforeHide) {
       this.wasPlayingBeforeHide = false;
       this.playResolved(this.currentChannel, this.currentIndex, this.catchupInfo || undefined);
@@ -610,6 +643,8 @@ export class Player {
     if (this.vod) this.saveVodResume();
     this.saveCatchupProgress(); // save before the video element is torn down
     this.stallWatchdog.stop();
+    this.startupPending = false;
+    this.startupWatchdog.stop();
     this.tracks.stop();
     this.pipeline.destroy();
     if (this.videoEl) {
@@ -677,7 +712,49 @@ export class Player {
   private loadStream(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
     this.tracks.resetForLoad();
     this.manifestVariants = [];
+    this.startupPending = true;
+    this.startupWatchdog.stop();
     this.pipeline.load(url, extras, opts);
+  }
+
+  /**
+   * A stream that never produced a frame. `unsupported` means the element
+   * rejected every source it was offered — a reload would re-offer the same one,
+   * so surface it. A `timeout` on live/catch-up belongs to the stall watchdog,
+   * whose in-place reload can still recover a transient failure; record it and
+   * leave that recovery alone.
+   */
+  private onStartupFailure(
+    failure: StartupFailure,
+    probe: StartupProbe,
+    elapsedMs: number,
+  ): void {
+    const v = this.videoEl;
+    const source = v?.querySelector('source');
+    const declaredType = source?.getAttribute('type') ?? '';
+    // A source rejected on its declared type never becomes currentSrc.
+    const url = v?.currentSrc || source?.getAttribute('src') ||
+      this.vod?.url || this.currentChannel?.url || '';
+    const deferred = failure === 'timeout' && !this.vod;
+    const detail = [
+      `reason=${failure}`,
+      `handled=${deferred ? 'deferred' : 'error'}`,
+      `elapsedMs=${String(elapsedMs)}`,
+      `ready=${String(probe.readyState)}`,
+      `network=${String(probe.networkState)}`,
+      `type=${declaredType || '(none)'}`,
+      `canPlayType=${declaredType && v ? v.canPlayType(declaredType) || '(rejected)' : 'n/a'}`,
+      `url=${diagnosticStreamUrl(url)}`,
+    ];
+    if (deferred) {
+      log.warn('Stream produced no frame', 'event=playback.startup.failed',
+        this.playbackLabel(), ...detail);
+      return;
+    }
+    log.error('Stream never started', 'event=playback.startup.failed',
+      this.playbackLabel(), ...detail);
+    this.startupPending = false;
+    this.onError();
   }
 
   private applyPipelineManifest(manifest: PipelineManifest): void {

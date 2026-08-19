@@ -93,6 +93,7 @@ class PlaylistServiceImpl {
     );
     if (!enabledIds.size) {
       this.reset();
+      this.logLoadCompleted('none', 0, 0);
       return [];
     }
     const cached = await getCachedPlaylist();
@@ -121,6 +122,7 @@ class PlaylistServiceImpl {
       this.applyCustomization();
       this.buildPlaylistTabs();
       StorageService.migrateFavoriteKeys(this.channels);
+      this.logLoadCompleted('cache', enabledIds.size, 0);
       return this.channels;
     }
     log.info('Cache miss — refreshing from network');
@@ -133,6 +135,7 @@ class PlaylistServiceImpl {
     if (!playlists.length) {
       log.info('No playlist sources enabled');
       this.reset();
+      this.logLoadCompleted('none', 0, 0);
       done();
       return [];
     }
@@ -140,7 +143,7 @@ class PlaylistServiceImpl {
     const allChannels: Channel[] = [];
     const byUrl = new Map<string, Channel>();
     const epgSources: EpgSource[] = [];
-    let allPlaylistsLoaded = true;
+    let failedPlaylists = 0;
     const addEpgSource = (url: string, playlistId: string, kind: EpgSource['kind']): void => {
       const existing = epgSources.find((source) => source.url === url);
       if (existing) {
@@ -221,7 +224,7 @@ class PlaylistServiceImpl {
           addEpgSource(epg, plKey, 'm3u');
         }
       } catch (err) {
-        allPlaylistsLoaded = false;
+        failedPlaylists++;
         if (pl.source === 'xtream') {
           log.error(
             `Failed to load Xtream playlist '${pl.name || pl.url}'`,
@@ -239,7 +242,7 @@ class PlaylistServiceImpl {
     this.epgSources = epgSources;
     // Cache the raw parse: customization is a view over it, so an edit re-sorts
     // memory instead of forcing a re-fetch.
-    if (allPlaylistsLoaded) {
+    if (!failedPlaylists) {
       scheduleCachedPlaylist(allChannels, epgSources);
     } else {
       log.warn('Skipping cache write because one or more playlists failed');
@@ -248,8 +251,33 @@ class PlaylistServiceImpl {
     this.buildPlaylistTabs();
     StorageService.migrateFavoriteKeys(this.channels);
     log.info('Refresh complete:', allChannels.length, 'total channels,', epgSources.length, 'epg sources');
+    this.logLoadCompleted('network', playlists.length, failedPlaylists);
     done();
     return this.channels;
+  }
+
+  /**
+   * One structured line per load so a diagnostics report can tie an empty
+   * channel list to the sources that produced it — the rendered list is
+   * virtualized, so its DOM row count says nothing about the catalog.
+   */
+  private logLoadCompleted(
+    source: 'cache' | 'network' | 'none',
+    sources: number,
+    failed: number,
+  ): void {
+    const level = failed || (sources && !this.channels.length) ? 'warn' : 'info';
+    log[level](
+      'Playlist load completed',
+      'event=playlist.load.completed',
+      `source=${source}`,
+      `channels=${this.channels.length}`,
+      `all=${this.allChannels.length}`,
+      `groups=${this.groups.length}`,
+      `epg=${this.epgSources.length}`,
+      `sources=${sources}`,
+      `failed=${failed}`,
+    );
   }
 
   private async applyXtreamCatchup(

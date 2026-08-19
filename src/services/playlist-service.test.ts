@@ -244,6 +244,33 @@ describe('PlaylistService.refresh', () => {
     expect(channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
     expect(cacheMock.scheduleCachedPlaylist).not.toHaveBeenCalled();
   });
+
+  it('logs the loaded catalog size for a diagnostics report', async () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await PlaylistService.refresh();
+    expect(info.mock.calls.map(args => args.join(' '))).toContainEqual(
+      expect.stringContaining(
+        'event=playlist.load.completed source=network channels=3 all=3'
+        + ' groups=3 epg=1 sources=2 failed=0',
+      ),
+    );
+    info.mockRestore();
+  });
+
+  it('warns with the failed source count when a playlist load fails', async () => {
+    fetchTextMock.mockRejectedValue(new Error('down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await PlaylistService.refresh();
+    expect(warn.mock.calls.map(args => args.join(' '))).toContainEqual(
+      expect.stringContaining(
+        'event=playlist.load.completed source=network channels=0 all=0'
+        + ' groups=0 epg=0 sources=2 failed=2',
+      ),
+    );
+    warn.mockRestore();
+    error.mockRestore();
+  });
 });
 
 describe('PlaylistService.refresh (xtream source)', () => {
