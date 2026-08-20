@@ -1,3 +1,5 @@
+import type { FetchPrefixVerdict } from './fetch-helper';
+
 // A stream URL's file extension, lowercased (empty if none).
 export function extFromUrl(url: string): string {
   return (url.split('?')[0].split('#')[0].match(/\.([a-z0-9]+)$/i)?.[1] ?? '').toLowerCase();
@@ -69,6 +71,10 @@ export function streamUrlMime(url: string): string {
     return 'video/x-flv';
   }
   if (/\.m3u8?(?:[?#]|$)/i.test(url)) return 'application/vnd.apple.mpegurl';
+  if (/\.mpd(?:[?#]|$)/i.test(url) ||
+      /[?&](?:extension|output|output_format)=mpd(?:[&#]|$)/i.test(url)) {
+    return 'application/dash+xml';
+  }
   return '';
 }
 
@@ -79,13 +85,68 @@ export function streamMime(contentType: string): string {
   if (type.includes('mpegurl') || type.includes('m3u8')) {
     return 'application/vnd.apple.mpegurl';
   }
+  if (type.includes('dash+xml') || type.includes('dash.mpd')) {
+    return 'application/dash+xml';
+  }
   if (/^(?:video|audio)\//.test(type)) return type;
   return '';
 }
 
+// An XML prologue, comments and a doctype may precede the root element, and the
+// root may carry a namespace prefix.
+export function isMpdText(xml: string): boolean {
+  let text = xml.replace(/^\uFEFF/, '').replace(/^\s+/, '');
+  for (;;) {
+    let end = -1;
+    if (text.indexOf('<?') === 0) end = text.indexOf('?>') + 2;
+    else if (text.indexOf('<!--') === 0) end = text.indexOf('-->') + 3;
+    else if (text.indexOf('<!') === 0) end = text.indexOf('>') + 1;
+    else break;
+    if (end <= 0) return false;
+    text = text.slice(end).replace(/^\s+/, '');
+  }
+  return /^<(?:[A-Za-z0-9_.-]+:)?MPD[\s/>]/.test(text);
+}
+
+export function mpdOpeningVerdict(
+  bytes: Uint8Array,
+  complete: boolean,
+): FetchPrefixVerdict {
+  let text = new TextDecoder().decode(bytes)
+    .replace(/^\uFEFF/, '')
+    .replace(/^\s+/, '');
+  if (isMpdText(text)) return 'match';
+  for (;;) {
+    if (!text) return complete ? 'mismatch' : 'undecided';
+    let end = -1;
+    let closeLength = 0;
+    if (text.indexOf('<?') === 0) {
+      end = text.indexOf('?>');
+      closeLength = 2;
+    } else if (text.indexOf('<!--') === 0) {
+      end = text.indexOf('-->');
+      closeLength = 3;
+    } else if (text.indexOf('<!') === 0) {
+      end = text.indexOf('>');
+      closeLength = 1;
+    } else {
+      break;
+    }
+    if (end < 0) return complete ? 'mismatch' : 'undecided';
+    text = text.slice(end + closeLength).replace(/^\s+/, '');
+    if (isMpdText(text)) return 'match';
+  }
+  const root = /^<([A-Za-z0-9_.:-]+)([\s/>])/.exec(text);
+  if (root) {
+    return /^(?:[A-Za-z0-9_.-]+:)?MPD$/.test(root[1]) ? 'match' : 'mismatch';
+  }
+  return !complete && text.indexOf('<') === 0 ? 'undecided' : 'mismatch';
+}
+
 export function sniffStreamContentType(contentType: string, prefix: Uint8Array): string {
   const type = contentType.toLowerCase().split(';')[0].trim();
-  if (type !== 'application/octet-stream') return type;
+  const genericXml = type === 'application/xml' || type === 'text/xml';
+  if (type !== 'application/octet-stream' && !genericXml) return type;
 
   const packetSizes = [188, 192, 204];
   for (const packetSize of packetSizes) {
@@ -99,5 +160,8 @@ export function sniffStreamContentType(contentType: string, prefix: Uint8Array):
   }
 
   const text = new TextDecoder().decode(prefix.slice(0, 7));
-  return text === '#EXTM3U' ? 'application/vnd.apple.mpegurl' : type;
+  if (text === '#EXTM3U') return 'application/vnd.apple.mpegurl';
+  return isMpdText(new TextDecoder().decode(prefix.slice(0, 512)))
+    ? 'application/dash+xml'
+    : type;
 }

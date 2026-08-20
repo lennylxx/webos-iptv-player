@@ -93,8 +93,11 @@ syncs it into `appinfo.json` and the `__APP_VERSION__` build constant;
   list items carry a stable `data-key`. **Do not rebuild subtrees with
   `innerHTML =`**; build a `Safe` with `` html`…` `` and pass it to `morph`. Bind
   listeners once (delegated), not per render. `Player` delegates media loading and
-  desktop hls.js/mpegts.js access to `PlayerPipeline` (`player-pipeline.ts`) and
-  audio/subtitle state to `PlayerTracks` (`player-tracks.ts`).
+  desktop hls.js/mpegts.js/dash.js access to `PlayerPipeline` (`player-pipeline.ts`) and
+  audio/subtitle state to `PlayerTracks` (`player-tracks.ts`). A desktop MSE library
+  owns its own tracks behind the `MseEngine` adapters in `src/components/mse/`
+  (`isMseActive()`); on webOS everything plays natively, DASH included — see
+  `docs/mpeg-dash.md`.
 - **Services** (`src/services/`) expose application-facing facades such as
   `PlaylistService`, `EpgService`, `StorageService`, `SetupClient`, `UploadClient`,
   and `ReminderService`. `StorageService` keeps boot-critical configuration under

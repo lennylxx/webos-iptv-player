@@ -97,3 +97,249 @@ describe('PlayerPipeline webOS stream MIME cache', () => {
     expect(video.play).toHaveBeenCalledOnce();
   });
 });
+
+describe('PlayerPipeline webOS DASH', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    cacheMocks.getCachedStreamMime.mockReset();
+    cacheMocks.setCachedStreamMime.mockReset();
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      value: 'webOS',
+    });
+  });
+
+  async function pipelineFor(video: HTMLVideoElement) {
+    const { PlayerPipeline } = await import('./player-pipeline');
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    pipeline.setVideoElement(video);
+    return Object.assign(pipeline, { opts });
+  }
+
+  const MPD = `<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic">
+  <Period>
+    <AdaptationSet contentType="audio" lang="l1" label="Track 1">
+      <Representation id="a1" codecs="mp4a.40.2"/>
+    </AdaptationSet>
+    <AdaptationSet contentType="audio" lang="l2" label="Track 2">
+      <Representation id="a2" codecs="mp4a.40.2"/>
+    </AdaptationSet>
+    <AdaptationSet contentType="text" mimeType="text/vtt" lang="l1" label="Track 1">
+      <Representation id="s1"/>
+    </AdaptationSet>
+  </Period>
+</MPD>`;
+
+  it('parses a fetched MPD into audio and subtitle labels', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(MPD)));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+
+    pipeline.load('http://host/a.mpd', null);
+
+    await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+    const manifest = vi.mocked(pipeline.opts.onManifest).mock.calls[0][0];
+    expect(manifest.audio.map(a => a.name)).toEqual(['Track 1', 'Track 2']);
+    expect(manifest.subtitles.map(s => s.lang)).toEqual(['l1']);
+    expect(manifest.masterUrl).toBe('http://host/a.mpd');
+  });
+
+  it.each([
+    ['whitespace', ` \n${MPD.replace('<?xml version="1.0"?>\n', '')}`],
+    ['comment', `<!-- lead -->\n${MPD.replace('<?xml version="1.0"?>\n', '')}`],
+    ['doctype', `<!DOCTYPE MPD>\n${MPD.replace('<?xml version="1.0"?>\n', '')}`],
+    [
+      'namespace prefix',
+      MPD
+        .replace('<MPD xmlns=', '<dash:MPD xmlns:dash=')
+        .replace('</MPD>', '</dash:MPD>'),
+    ],
+  ])('accepts an MPD with a legal %s opening', async (_name, body) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body)));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+
+    pipeline.load('http://host/a.mpd', null);
+
+    await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+    expect(vi.mocked(pipeline.opts.onManifest).mock.calls[0][0].audio).toHaveLength(2);
+  });
+
+  it('accepts an MPD larger than the HLS manifest byte budget', async () => {
+    const padded = MPD + `<!--${'x'.repeat(400 * 1024)}-->`;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(padded)));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+
+    pipeline.load('http://host/a.mpd', null);
+
+    await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+    expect(vi.mocked(pipeline.opts.onManifest).mock.calls[0][0].audio).toHaveLength(2);
+  });
+
+  it('takes the error path immediately for a DRM-protected MPD', async () => {
+    const drm = MPD.replace('<Period>',
+      '<Period><AdaptationSet contentType="video" mimeType="video/mp4">' +
+      '<ContentProtection schemeIdUri="urn:uuid:00000000-0000-0000-0000-000000000000"/>' +
+      '<Representation id="v1" width="1920" height="1080" codecs="avc1.640028"/>' +
+      '</AdaptationSet>');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(drm)));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+
+    pipeline.load('http://host/a.mpd', null);
+
+    await vi.waitFor(() => expect(pipeline.opts.onError).toHaveBeenCalledOnce());
+    expect(pipeline.opts.onManifest).not.toHaveBeenCalled();
+  });
+
+  it('does not reject an MPD with only the generic MP4 protection descriptor', async () => {
+    const generic = MPD.replace('<Period>',
+      '<Period><AdaptationSet contentType="video" mimeType="video/mp4">' +
+      '<ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc"/>' +
+      '<Representation id="v1" width="1920" height="1080" codecs="avc1.640028"/>' +
+      '</AdaptationSet>');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(generic)));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+
+    pipeline.load('http://host/a.mpd', null);
+
+    await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+    expect(pipeline.opts.onError).not.toHaveBeenCalled();
+  });
+
+  it('ignores a DRM verdict from a superseded load', async () => {
+    const drm = MPD.replace('</MPD>',
+      '<ContentProtection schemeIdUri="urn:uuid:0"/></MPD>');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(drm)));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+
+    pipeline.load('http://host/a.mpd', null);
+    pipeline.load('http://host/b.m3u8', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledTimes(2));
+    expect(pipeline.opts.onError).not.toHaveBeenCalled();
+  });
+
+  it('plays an .mpd URL natively with the MPEG-DASH media option', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(MPD));
+    vi.stubGlobal('fetch', fetchMock);
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+    const { parseMediaOption } = await import('../utils/webos-media-option');
+
+    pipeline.load('http://host/a.mpd', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    const source = video.querySelector('source');
+    expect(source?.src).toBe('http://host/a.mpd');
+    expect(parseMediaOption(source?.type ?? ''))
+      .toEqual({ mediaTransportType: 'MPEG-DASH' });
+    expect(source?.type).not.toContain('application/dash+xml');
+    expect(cacheMocks.getCachedStreamMime).not.toHaveBeenCalled();
+  });
+
+  it('plays a cached DASH route without probing', async () => {
+    cacheMocks.getCachedStreamMime.mockResolvedValue('application/dash+xml');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(MPD)));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+    const { parseMediaOption } = await import('../utils/webos-media-option');
+
+    pipeline.load('http://host/live/ch1', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(cacheMocks.getCachedStreamMime).toHaveBeenCalledWith('http://host/live');
+    // A cached classification skips probing and storage; routing still fetches
+    // the MPD for track labels.
+    expect(cacheMocks.setCachedStreamMime).not.toHaveBeenCalled();
+    expect(parseMediaOption(video.querySelector('source')?.type ?? ''))
+      .toEqual({ mediaTransportType: 'MPEG-DASH' });
+    await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+  });
+
+  it('caches and plays a DASH route discovered by the content-type probe', async () => {
+    cacheMocks.getCachedStreamMime.mockResolvedValue(null);
+    cacheMocks.setCachedStreamMime.mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('', { headers: { 'content-type': 'application/dash+xml' } }),
+    ));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+    const { parseMediaOption } = await import('../utils/webos-media-option');
+
+    pipeline.load('http://host/live/ch1', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(cacheMocks.setCachedStreamMime)
+      .toHaveBeenCalledWith('http://host/live', 'application/dash+xml');
+    expect(parseMediaOption(video.querySelector('source')?.type ?? ''))
+      .toEqual({ mediaTransportType: 'MPEG-DASH' });
+  });
+
+  it('plays an extension-less MPD detected by sniffing the body', async () => {
+    cacheMocks.getCachedStreamMime.mockResolvedValue(null);
+    cacheMocks.setCachedStreamMime.mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('<?xml version="1.0"?><MPD type="dynamic"></MPD>',
+        { headers: { 'content-type': 'application/octet-stream' } }),
+    ));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+    const { parseMediaOption } = await import('../utils/webos-media-option');
+
+    pipeline.load('http://host/live/ch1', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(parseMediaOption(video.querySelector('source')?.type ?? ''))
+      .toEqual({ mediaTransportType: 'MPEG-DASH' });
+    // A sniffed classification is cached like any other, keyed by route.
+    expect(cacheMocks.setCachedStreamMime)
+      .toHaveBeenCalledWith('http://host/live', 'application/dash+xml');
+  });
+
+  it.each(['application/xml', 'text/xml'])(
+    'plays an extension-less MPD served as %s',
+    async contentType => {
+      cacheMocks.getCachedStreamMime.mockResolvedValue(null);
+      cacheMocks.setCachedStreamMime.mockResolvedValue(undefined);
+      vi.stubGlobal('fetch', vi.fn(async () =>
+        new Response('<?xml version="1.0"?><MPD type="dynamic"></MPD>', {
+          headers: { 'content-type': contentType },
+        })));
+      const video = videoElement();
+      const pipeline = await pipelineFor(video);
+      const { parseMediaOption } = await import('../utils/webos-media-option');
+
+      pipeline.load('http://host/live/1', null);
+
+      await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+      expect(parseMediaOption(video.querySelector('source')?.type ?? ''))
+        .toEqual({ mediaTransportType: 'MPEG-DASH' });
+      expect(cacheMocks.setCachedStreamMime)
+        .toHaveBeenCalledWith('http://host/live', 'application/dash+xml');
+    },
+  );
+
+  it('omits the type attribute when the bare source spelling is selected', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const { CONFIG } = await import('../config');
+    const previous = CONFIG.PLAYER.DASH_SOURCE;
+    CONFIG.PLAYER.DASH_SOURCE = 'bare';
+    try {
+      const video = videoElement();
+      const pipeline = await pipelineFor(video);
+
+      pipeline.load('http://host/a.mpd', null);
+
+      await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+      expect(video.querySelector('source')?.getAttribute('type')).toBeNull();
+    } finally {
+      CONFIG.PLAYER.DASH_SOURCE = previous;
+    }
+  });
+});

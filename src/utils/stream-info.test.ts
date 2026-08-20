@@ -133,6 +133,8 @@ describe('codecName', () => {
     expect(codecName('dvav.09.06')).toBe('Dolby Vision');
     expect(codecName('dva1.09.06')).toBe('Dolby Vision');
     expect(codecName('dav1.10.09')).toBe('Dolby Vision');
+    expect(codecName('dvc1.20.09')).toBe('Dolby Vision');
+    expect(codecName('vvc1.1.L153')).toBe('VVC');
   });
   it('returns "" for empty or unknown', () => {
     expect(codecName('')).toBe('');

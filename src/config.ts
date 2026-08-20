@@ -21,6 +21,13 @@ export const CONFIG = {
     BUFFER_LENGTH: 30,
     MANIFEST_TIMEOUT: 5000,
     MANIFEST_MAX_BYTES: 256 * 1024,
+    // Long live SegmentTimelines need a larger budget so the parser receives
+    // complete MPD XML.
+    MPD_MAX_BYTES: 1024 * 1024,
+    // mediaOption selects the native MPEG-DASH transport deterministically;
+    // bare delegates selection to URI typefinding for provider compatibility.
+    DASH_SOURCE: 'mediaOption' as 'mediaOption' | 'bare',
+    DASH_MAX_RECOVERIES: 3,     // bounded dash.js fatal-error retries (desktop preview)
     STREAM_MIME_CACHE_TTL: 7 * 24 * 60 * 60 * 1000,
     // Long enough to type a second or third digit, short enough that a
     // full-width number does not feel stalled once it can no longer grow.
@@ -36,6 +43,7 @@ export const CONFIG = {
     DVR_MIN_WINDOW: 10,         // live DVR: a seekable window must exceed this (s) to offer timeshift
     DVR_LIVE_EDGE: 10,          // within this many seconds of the window end counts as "at live"
     DVR_GO_LIVE_PAD: 3,         // Go-to-Live seeks to seekable.end minus this (s), avoiding a stall at the edge
+    DVR_OLDEST_PAD: 3,          // Rewind stays inside the sliding window so its next refresh cannot strand playback
     RESYNC_SEEK_BACK: 0.5,      // manual A/V resync: seconds to seek back to force a native-pipeline flush
     RESYNC_TIMEOUT: 8000,       // ms safety cap to clear the "Resyncing…" message if `playing` never fires
     SUBTITLE_OFFSET_STEP: 0.25, // seconds per Left/Right press in the subtitle-sync adjuster

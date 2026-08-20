@@ -310,12 +310,26 @@ export interface SubtitlePref {
   cc?: boolean;
 }
 
-/** A subtitle rendition declared in an HLS master playlist (EXT-X-MEDIA:TYPE=SUBTITLES). */
+export interface DashSubtitleSegment {
+  url: string;
+  start: number;
+  duration: number;
+  range?: string;
+}
+
+export interface DashSubtitleSource {
+  kind: 'webvtt' | 'native';
+  url?: string;
+  segments?: DashSubtitleSegment[];
+}
+
+/** A subtitle rendition declared by an HLS master or DASH MPD. */
 export interface ManifestSubtitle {
   name: string;
   lang: string;
   isDefault: boolean;
   isForced: boolean;
+  dash?: DashSubtitleSource;
 }
 
 /** An in-band closed-caption track declared in an HLS master

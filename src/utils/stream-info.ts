@@ -62,7 +62,8 @@ const CODECS: Record<string, { kind: 'video' | 'audio'; name: string }> = {
   hevc: { kind: 'video', name: 'HEVC' }, // hls.js' normalized alias, not a manifest fourCC — defensive
   dvh1: { kind: 'video', name: 'Dolby Vision' }, dvhe: { kind: 'video', name: 'Dolby Vision' },
   dvav: { kind: 'video', name: 'Dolby Vision' }, dva1: { kind: 'video', name: 'Dolby Vision' },
-  dav1: { kind: 'video', name: 'Dolby Vision' },
+  dav1: { kind: 'video', name: 'Dolby Vision' }, dvc1: { kind: 'video', name: 'Dolby Vision' },
+  vvc1: { kind: 'video', name: 'VVC' }, vvi1: { kind: 'video', name: 'VVC' },
   vp09: { kind: 'video', name: 'VP9' }, vp9: { kind: 'video', name: 'VP9' },
   vp08: { kind: 'video', name: 'VP8' }, vp8: { kind: 'video', name: 'VP8' },
   av01: { kind: 'video', name: 'AV1' }, mp4v: { kind: 'video', name: 'MPEG-4' },

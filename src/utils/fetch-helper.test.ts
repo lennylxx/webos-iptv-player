@@ -8,6 +8,7 @@ import {
   fetchWithTimeout,
   fetchWithRetry,
 } from './fetch-helper';
+import { mpdOpeningVerdict } from './url';
 
 function okResponse(body = 'body'): Response {
   return {
@@ -147,6 +148,128 @@ describe('fetchLimitedText', () => {
 
     await expect(fetchLimitedText('http://host/a', 256 * 1024, 5000, undefined, '#EXTM3U'))
       .rejects.toThrow('does not begin with #EXTM3U');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('accepts a payload matching any one of several required prefixes', async () => {
+    const bytes = new TextEncoder().encode('<MPD type="static"></MPD>');
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: bytes })
+      .mockResolvedValueOnce({ done: true, value: undefined });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read, cancel: vi.fn() }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://host/a', 1024, 5000, undefined, ['<?xml', '<MPD']))
+      .resolves.toBe('<MPD type="static"></MPD>');
+  });
+
+  it('accepts a payload matching the longer of the candidate prefixes', async () => {
+    const bytes = new TextEncoder().encode('<?xml version="1.0"?><MPD/>');
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: bytes })
+      .mockResolvedValueOnce({ done: true, value: undefined });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read, cancel: vi.fn() }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://host/a', 1024, 5000, undefined, ['<?xml', '<MPD']))
+      .resolves.toContain('<MPD/>');
+  });
+
+  it('waits for enough bytes before judging a prefix split across chunks', async () => {
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('<M') })
+      .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('PD/>') })
+      .mockResolvedValueOnce({ done: true, value: undefined });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read, cancel: vi.fn() }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://host/a', 1024, 5000, undefined, ['<?xml', '<MPD']))
+      .resolves.toBe('<MPD/>');
+  });
+
+  it('tolerates a UTF-8 BOM ahead of a required prefix', async () => {
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('<MPD/>')]);
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: bytes })
+      .mockResolvedValueOnce({ done: true, value: undefined });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read, cancel: vi.fn() }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://host/a', 1024, 5000, undefined, ['<?xml', '<MPD']))
+      .resolves.toContain('<MPD/>');
+  });
+
+  it('cancels as soon as a payload can match none of the required prefixes', async () => {
+    const cancel = vi.fn(async () => {});
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('<html><body>') })
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array(1024) });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read, cancel }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://host/a', 1024, 5000, undefined, ['<?xml', '<MPD']))
+      .rejects.toMatchObject({ code: 'invalid_content' });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('rejects a bounded read when the response exposes no stream reader', async () => {
+    const arrayBuffer = vi.fn(async () =>
+      new TextEncoder().encode('<html></html>').buffer);
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      arrayBuffer,
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://host/a', 1024, 5000, undefined, ['<?xml', '<MPD']))
+      .rejects.toMatchObject({ code: 'too_large' });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('does not trust Content-Length without a stream reader', async () => {
+    const arrayBuffer = vi.fn(async () => new Uint8Array(2 * 1024 * 1024).buffer);
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ 'content-length': '8' }),
+      arrayBuffer,
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText('http://host/a', 1024, 5000))
+      .rejects.toMatchObject({ code: 'too_large' });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-MPD stream before reading later chunks', async () => {
+    const cancel = vi.fn(async () => {});
+    const read = vi.fn()
+      .mockResolvedValueOnce({
+        done: false,
+        value: new TextEncoder().encode('<html><body>provider error</body></html>'),
+      })
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array(1024) });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read, cancel }) },
+    } as unknown as Response)));
+
+    await expect(fetchLimitedText(
+      'http://host/a.mpd',
+      1024 * 1024,
+      5000,
+      undefined,
+      mpdOpeningVerdict,
+    )).rejects.toMatchObject({ code: 'invalid_content' });
     expect(read).toHaveBeenCalledTimes(1);
     expect(cancel).toHaveBeenCalled();
   });

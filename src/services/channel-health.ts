@@ -2,6 +2,7 @@ import { CONFIG } from '../config';
 import type { Channel, ChannelHealthRecord, ChannelHealthStatus } from '../types';
 import { channelKey } from '../utils/channel';
 import { createLogger } from '../utils/logger';
+import { isMpdText } from '../utils/url';
 import {
   clearCachedChannelHealth,
   getCachedChannelHealth,
@@ -175,6 +176,9 @@ async function probeUrl(
       || lower.indexOf('{"') === 0) {
     throw new Error('invalid_content');
   }
+  // XML media probes accept MPD roots; other XML responses are provider errors.
+  if (text.indexOf('<') === 0 && !isMpdText(text)) throw new Error('invalid_content');
+  // MPD segment URLs are template-derived, so manifest validation completes the probe.
   if (text.indexOf('#EXTM3U') !== 0) return;
   if (depth >= CONFIG.CHANNEL_HEALTH.MAX_MANIFEST_DEPTH) {
     throw new Error('manifest_depth');

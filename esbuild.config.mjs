@@ -60,7 +60,7 @@ cpSync('assets/icon130.png', 'dist/largeIcon.png');
 cpSync('assets/group-icons', 'dist/assets/group-icons', { recursive: true });
 cpSync('assets/icons', 'dist/assets/icons', { recursive: true });
 
-// Main app bundle — excludes hls.js and mpegts.js (only needed on desktop).
+// Main app bundle — excludes hls.js, mpegts.js and dashjs (only needed on desktop).
 const serviceId = JSON.parse(readFileSync('bundled-service/src/services.json', 'utf8')).id;
 const define = {
   '__APP_VERSION__': JSON.stringify(version),
@@ -82,7 +82,7 @@ const appBuild = {
   format: 'iife',
   target: TARGET,
   banner: { js: LEGACY_JS_BANNER },
-  external: ['hls.js', 'mpegts.js'],
+  external: ['hls.js', 'mpegts.js', 'dashjs'],
   define,
 };
 const workerBuild = {

@@ -15,6 +15,12 @@ export class FetchTextError extends Error {
   }
 }
 
+export type FetchPrefixVerdict = 'match' | 'mismatch' | 'undecided';
+export type FetchPrefixValidator = (
+  bytes: Uint8Array,
+  complete: boolean,
+) => FetchPrefixVerdict;
+
 export async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
@@ -60,12 +66,41 @@ export async function fetchPlaylistText(url: string, timeout = 30000): Promise<s
   }
 }
 
+const UTF8_BOM = [0xef, 0xbb, 0xbf];
+
+// Longest run of bytes that could still be leading BOM without being one yet.
+function bomLength(bytes: readonly number[]): number {
+  for (let i = 0; i < UTF8_BOM.length; i++) {
+    if (i >= bytes.length) return -1; // undecided — need more bytes
+    if (bytes[i] !== UTF8_BOM[i]) return 0;
+  }
+  return UTF8_BOM.length;
+}
+
+// Compare bytes against ASCII candidate prefixes after an optional UTF-8 BOM;
+// byte-wise matching keeps prefix checks independent of text decoding.
+function matchPrefixes(bytes: readonly number[], prefixes: readonly string[]): FetchPrefixVerdict {
+  const bom = bomLength(bytes);
+  if (bom < 0) return 'undecided';
+  const body = bytes.slice(bom);
+  let undecided = false;
+  for (const prefix of prefixes) {
+    let ok = true;
+    for (let i = 0; i < prefix.length; i++) {
+      if (i >= body.length) { undecided = true; ok = false; break; }
+      if (body[i] !== prefix.charCodeAt(i)) { ok = false; break; }
+    }
+    if (ok) return 'match';
+  }
+  return undecided ? 'undecided' : 'mismatch';
+}
+
 export async function fetchLimitedText(
   url: string,
   maxBytes: number,
   timeout: number,
   signal?: AbortSignal,
-  requiredPrefix?: string,
+  requiredPrefix?: string | readonly string[] | FetchPrefixValidator,
 ): Promise<string> {
   const controller = new AbortController();
   let timedOut = false;
@@ -77,6 +112,27 @@ export async function fetchLimitedText(
   const timer = setTimeout(onTimeout, timeout);
   if (signal?.aborted) abort();
   else signal?.addEventListener('abort', abort);
+
+  const validator = typeof requiredPrefix === 'function' ? requiredPrefix : null;
+  const prefixes: readonly string[] = typeof requiredPrefix === 'string'
+    ? [requiredPrefix]
+    : requiredPrefix === undefined || typeof requiredPrefix === 'function'
+      ? []
+      : requiredPrefix;
+  const prefixError = () => new FetchTextError(
+    'invalid_content',
+    validator
+      ? 'Response has an invalid opening'
+      : `Response does not begin with ${prefixes.join(' or ')}`,
+  );
+  const hasPrefixCheck = !!validator || prefixes.length > 0;
+  const prefixProbeLength = validator
+    ? 8192
+    : prefixes.reduce((n, p) => Math.max(n, p.length), 0) + UTF8_BOM.length;
+  const checkPrefix = (bytes: Uint8Array, complete: boolean): FetchPrefixVerdict =>
+    validator
+      ? validator(bytes, complete)
+      : matchPrefixes(Array.from(bytes), prefixes);
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   let complete = false;
@@ -93,15 +149,16 @@ export async function fetchLimitedText(
       ? response.body.getReader()
       : null;
     if (!reader) {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.length > maxBytes) {
-        throw new FetchTextError('too_large', `Response exceeds ${maxBytes} bytes`);
-      }
-      return new TextDecoder().decode(bytes);
+      throw new FetchTextError(
+        'too_large',
+        'Response size cannot be bounded without a stream reader',
+      );
     }
 
     const chunks: Uint8Array[] = [];
     let length = 0;
+    const head: number[] = [];
+    let prefixSettled = !hasPrefixCheck;
     while (true) {
       const { done, value } = await reader.read();
       if (done) { complete = true; break; }
@@ -111,21 +168,20 @@ export async function fetchLimitedText(
         throw new FetchTextError('too_large', `Response exceeds ${maxBytes} bytes`);
       }
       chunks.push(value);
-      if (requiredPrefix && length >= requiredPrefix.length) {
-        let offset = 0;
-        for (const chunk of chunks) {
-          for (let i = 0; i < chunk.length && offset < requiredPrefix.length; i++, offset++) {
-            if (chunk[i] !== requiredPrefix.charCodeAt(offset)) {
-              throw new FetchTextError(
-                'invalid_content',
-                `Response does not begin with ${requiredPrefix}`,
-              );
-            }
-          }
-          if (offset === requiredPrefix.length) break;
+      if (!prefixSettled) {
+        for (let i = 0; i < value.length && head.length < prefixProbeLength; i++) {
+          head.push(value[i]);
+        }
+        const verdict = checkPrefix(new Uint8Array(head), false);
+        if (verdict === 'mismatch') throw prefixError();
+        if (verdict === 'match') prefixSettled = true;
+        if (verdict === 'undecided' && head.length === prefixProbeLength) {
+          throw prefixError();
         }
       }
     }
+    if (!prefixSettled
+        && checkPrefix(new Uint8Array(head), true) !== 'match') throw prefixError();
 
     const bytes = new Uint8Array(length);
     let offset = 0;
@@ -133,14 +189,7 @@ export async function fetchLimitedText(
       bytes.set(chunk, offset);
       offset += chunk.length;
     }
-    const text = new TextDecoder().decode(bytes);
-    if (requiredPrefix && !text.startsWith(requiredPrefix)) {
-      throw new FetchTextError(
-        'invalid_content',
-        `Response does not begin with ${requiredPrefix}`,
-      );
-    }
-    return text;
+    return new TextDecoder().decode(bytes);
   } catch (err) {
     if (err instanceof FetchTextError) throw err;
     if (signal?.aborted) throw new FetchTextError('aborted', 'Request was cancelled');

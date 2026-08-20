@@ -7,12 +7,16 @@ const PORT = 3000;
 const DIR = 'dist';
 
 const MIME = {
+  '.css': 'text/css',
   '.html': 'text/html',
   '.js': 'application/javascript',
-  '.css': 'text/css',
-  '.png': 'image/png',
   '.json': 'application/json',
+  '.m3u8': 'application/vnd.apple.mpegurl',
+  '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.ts': 'video/mp2t',
+  '.ttml': 'application/ttml+xml',
+  '.vtt': 'text/vtt',
   '.xml': 'application/xml',
 };
 

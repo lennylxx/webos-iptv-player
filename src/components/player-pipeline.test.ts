@@ -80,6 +80,71 @@ const fakeMpegts = {
   createPlayer: vi.fn(() => new FakeMpegtsPlayer()),
 };
 
+const ROLE_SCHEME = 'urn:mpeg:dash:role:2011';
+const CHANNELS_SCHEME =
+  'urn:mpeg:dash:23003:3:audio_channel_configuration:2011';
+
+class FakeDashPlayer {
+  readonly initialize = vi.fn();
+  readonly updateSettings = vi.fn();
+  readonly destroy = vi.fn();
+  readonly setCurrentTrack = vi.fn();
+  readonly setTextTrack = vi.fn();
+  readonly listeners = new Map<string, (data?: unknown) => void>();
+  currentTextTrackIndex = 0;
+  // dash.js represents Role and AudioChannelConfiguration as DescriptorType objects.
+  tracks: Record<string, unknown[]> = {
+    audio: [
+      { index: 1, lang: 'l1', labels: [{ text: 'Track 1' }],
+        roles: [{ schemeIdUri: ROLE_SCHEME, value: 'main', id: '' }],
+        codec: 'audio/mp4;codecs="mp4a.40.2"',
+        audioChannelConfiguration: [{ schemeIdUri: CHANNELS_SCHEME, value: '2', id: '' }] },
+      { index: 2, lang: 'l2', labels: [], roles: null,
+        codec: 'audio/mp4;codecs="ec-3"',
+        audioChannelConfiguration: [{ schemeIdUri: CHANNELS_SCHEME, value: '6', id: '' }] },
+    ],
+    text: [
+      { index: 3, lang: 'l1', labels: [{ text: 'Track 1' }],
+        roles: [{ schemeIdUri: ROLE_SCHEME, value: 'main', id: '' }] },
+      { index: 4, lang: 'l2', labels: [],
+        roles: [{ schemeIdUri: ROLE_SCHEME, value: 'forced-subtitle', id: '' }] },
+    ],
+    video: [{ codec: 'video/mp4;codecs="hvc1.2.4.L120.90"' }],
+  };
+
+  getTracksFor(type: string): unknown[] {
+    return this.tracks[type] ?? [];
+  }
+
+  getCurrentTrackFor(type: string): unknown {
+    return this.tracks[type]?.[type === 'audio' ? 1 : 0] ?? null;
+  }
+
+  getCurrentTextTrackIndex(): number {
+    return this.currentTextTrackIndex;
+  }
+
+  on(event: string, listener: (data?: unknown) => void): void {
+    this.listeners.set(event, listener);
+  }
+
+  emit(event: string, data?: unknown): void {
+    this.listeners.get(event)?.(data);
+  }
+}
+
+const fakeDashjs = {
+  MediaPlayer: Object.assign(() => ({ create: () => new FakeDashPlayer() }), {
+    events: {
+      ERROR: 'error',
+      FRAGMENT_LOADING_COMPLETED: 'fragmentLoadingCompleted',
+      STREAM_INITIALIZED: 'streamInitialized',
+    },
+  }),
+};
+
+let lastDashPlayer: FakeDashPlayer | null = null;
+
 function callbacks(overrides: Partial<PlayerPipelineOptions> = {}): PlayerPipelineOptions {
   return {
     playbackLabel: token => `load=${String(token)}`,
@@ -106,6 +171,15 @@ function contentTypeResponse(contentType: string): Response {
 function installPreviewGlobals(): void {
   vi.stubGlobal('__Hls', FakeHls);
   vi.stubGlobal('__mpegts', fakeMpegts);
+  vi.stubGlobal('__dashjs', {
+    ...fakeDashjs,
+    MediaPlayer: Object.assign(() => ({
+      create: () => {
+        lastDashPlayer = new FakeDashPlayer();
+        return lastDashPlayer;
+      },
+    }), { events: fakeDashjs.MediaPlayer.events }),
+  });
 }
 
 async function settle(): Promise<void> {
@@ -114,6 +188,7 @@ async function settle(): Promise<void> {
 }
 
 afterEach(() => {
+  lastDashPlayer = null;
   FakeHls.instances.length = 0;
   FakeHls.isSupported.mockClear();
   fakeMpegts.isSupported.mockClear();
@@ -134,7 +209,7 @@ describe('PlayerPipeline desktop routing', () => {
 
     expect(video.src).toBe('http://host/a');
     expect(video.play).toHaveBeenCalledOnce();
-    expect(pipeline.isHlsActive()).toBe(false);
+    expect(pipeline.isMseActive()).toBe(false);
   });
 
   it('routes detected HLS through hls.js', async () => {
@@ -157,7 +232,7 @@ describe('PlayerPipeline desktop routing', () => {
       enableWorker: false,
     });
     expect(hls.config.xhrSetup).toBeTypeOf('function');
-    expect(pipeline.isHlsActive()).toBe(true);
+    expect(pipeline.isMseActive()).toBe(true);
   });
 
   it.each([
@@ -246,7 +321,7 @@ describe('PlayerPipeline loader lifecycle', () => {
 
     expect(hls.destroy).toHaveBeenCalledOnce();
     expect(player.destroy).toHaveBeenCalledOnce();
-    expect(hlsPipeline.isHlsActive()).toBe(false);
+    expect(hlsPipeline.isMseActive()).toBe(false);
   });
 
   it('destroy aborts manifest work', async () => {
@@ -332,16 +407,16 @@ describe('PlayerPipeline HLS integration', () => {
     await settle();
     const hls = FakeHls.instances[0];
 
-    expect(pipeline.hlsAudioOptions()).toEqual([
+    expect(pipeline.mseAudioOptions()).toEqual([
       { index: 0, name: 'Track 1', lang: 'l1', isDefault: true, active: false },
       { index: 1, name: 'Track 2', lang: 'l2', isDefault: false, active: true },
     ]);
-    expect(pipeline.setHlsAudioTrack(0)).toBe(true);
+    expect(pipeline.setMseAudioTrack(0)).toBe(true);
     expect(hls.audioTrack).toBe(0);
-    expect(pipeline.setHlsAudioTrack(9)).toBe(false);
-    expect(pipeline.setHlsSubtitleTrack(-1)).toBe(true);
+    expect(pipeline.setMseAudioTrack(9)).toBe(false);
+    expect(pipeline.setMseSubtitleTrack(-1)).toBe(true);
     expect(hls.subtitleDisplay).toBe(false);
-    expect(pipeline.setHlsSubtitleTrack(1)).toBe(true);
+    expect(pipeline.setMseSubtitleTrack(1)).toBe(true);
     expect(hls.subtitleTrack).toBe(1);
     expect(pipeline.streamInfo()).toEqual({
       videoCodec: 'avc1.640028',
@@ -350,6 +425,120 @@ describe('PlayerPipeline HLS integration', () => {
       frameRate: 30,
       audioChannels: '2',
     });
+  });
+});
+
+
+describe('PlayerPipeline desktop DASH', () => {
+  async function loadDash(url = 'http://host/a', contentType = 'application/dash+xml') {
+    installPreviewGlobals();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(contentTypeResponse(contentType)));
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    const video = videoElement();
+    pipeline.setVideoElement(video);
+    pipeline.load(url, null);
+    await settle();
+    return { pipeline, video, opts };
+  }
+
+  it('routes a detected DASH content type through dash.js', async () => {
+    const { pipeline, video } = await loadDash();
+
+    expect(lastDashPlayer?.initialize).toHaveBeenCalledWith(video, 'http://host/a', true);
+    expect(pipeline.isMseActive()).toBe(true);
+  });
+
+  it('routes an .mpd URL through dash.js when the probe is inconclusive', async () => {
+    const { pipeline } = await loadDash('http://host/a.mpd', 'application/octet-stream');
+
+    expect(lastDashPlayer?.initialize).toHaveBeenCalledWith(
+      expect.anything(), 'http://host/a.mpd', true,
+    );
+    expect(pipeline.isMseActive()).toBe(true);
+  });
+
+  it('exposes DASH track controls', async () => {
+    const { pipeline } = await loadDash();
+    const player = lastDashPlayer;
+
+    expect(pipeline.mseAudioOptions()).toEqual([
+      { index: 0, name: 'Track 1', lang: 'l1', isDefault: true, active: false },
+      { index: 1, name: '', lang: 'l2', isDefault: false, active: true },
+    ]);
+    expect(pipeline.setMseAudioTrack(0)).toBe(true);
+    expect(player?.setCurrentTrack).toHaveBeenCalledWith(player?.tracks.audio[0]);
+    expect(pipeline.setMseAudioTrack(9)).toBe(false);
+
+    expect(pipeline.mseSubtitleOptions()).toEqual([
+      { index: 0, name: 'Track 1', lang: 'l1', isDefault: true, isForced: false, active: true },
+      { index: 1, name: '', lang: 'l2', isDefault: false, isForced: true, active: false },
+    ]);
+    expect(pipeline.setMseSubtitleTrack(-1)).toBe(true);
+    expect(player?.setTextTrack).toHaveBeenCalledWith(-1);
+    expect(pipeline.setMseSubtitleTrack(1)).toBe(true);
+    expect(player?.setTextTrack).toHaveBeenCalledWith(1);
+  });
+
+  it('reports the playing codecs to the OSD', async () => {
+    const { pipeline } = await loadDash();
+
+    expect(pipeline.streamInfo()).toEqual({
+      videoCodec: 'hvc1.2.4.L120.90',
+      audioCodec: 'ec-3',
+      videoRange: '',
+      frameRate: 0,
+      audioChannels: '6',
+    });
+  });
+
+  it('reapplies track picks once dash.js knows the streams', async () => {
+    const { opts } = await loadDash();
+
+    lastDashPlayer?.emit('streamInitialized');
+
+    expect(opts.onAudioTracksUpdated).toHaveBeenCalledOnce();
+    expect(opts.onSubtitleTracksUpdated).toHaveBeenCalledOnce();
+  });
+
+  it('gives up on a dash.js stream after the recovery budget', async () => {
+    const { opts } = await loadDash();
+
+    for (let i = 0; i < CONFIG.PLAYER.DASH_MAX_RECOVERIES; i++) {
+      lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
+    }
+    expect(opts.onError).not.toHaveBeenCalled();
+
+    lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
+    expect(opts.onError).toHaveBeenCalledOnce();
+  });
+
+  it('refills the dash.js recovery budget after a media segment loads', async () => {
+    const { opts } = await loadDash();
+
+    for (let i = 0; i < CONFIG.PLAYER.DASH_MAX_RECOVERIES; i++) {
+      lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
+    }
+    lastDashPlayer?.emit('fragmentLoadingCompleted', {
+      request: { type: 'MediaSegment' },
+    });
+    for (let i = 0; i < CONFIG.PLAYER.DASH_MAX_RECOVERIES; i++) {
+      lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
+    }
+
+    expect(opts.onError).not.toHaveBeenCalled();
+    lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
+    expect(opts.onError).toHaveBeenCalledOnce();
+  });
+
+  it('destroys the dash.js player when the pipeline tears down', async () => {
+    const { pipeline } = await loadDash();
+    const player = lastDashPlayer;
+
+    pipeline.destroy();
+
+    expect(player?.destroy).toHaveBeenCalledOnce();
+    expect(pipeline.isMseActive()).toBe(false);
   });
 });
 

@@ -15,6 +15,7 @@ import type {
 } from '../types';
 import { StorageService } from '../services/storage-service';
 import { HlsSubtitles } from '../services/hls-subtitles';
+import { DashSubtitles } from '../services/dash-subtitles';
 import { VodSubtitles } from '../services/vod-subtitles';
 import { AssSubtitles, isAssSidecar } from '../services/ass-subtitles';
 import { getCachedSubtitle, setCachedSubtitle } from '../services/idb-cache';
@@ -51,7 +52,7 @@ import type {
 import type { PipelineManifest, PlayerPipeline } from './player-pipeline';
 
 const log = createLogger('Player');
-const isWebOS = /webOS|Web0S/i.test(navigator.userAgent);
+const isWebOS = (): boolean => /webOS|Web0S/i.test(navigator.userAgent);
 
 // Picker sentinel for the in-band CEA-608/708 toggle. -1 is the synthetic "Off"
 // row; -2 is the single closed-caption entry, drawn by the native compositor via
@@ -75,12 +76,15 @@ interface PlayerTracksOptions {
 
 export class PlayerTracks {
   private manifestAudio: ManifestAudio[] = []; // real track names parsed from the HLS master (webOS)
-  private manifestSubtitles: ManifestSubtitle[] = []; // subtitle names parsed from the HLS master (webOS)
+  private manifestSubtitles: ManifestSubtitle[] = []; // subtitle names parsed from the stream manifest (webOS)
   private manifestClosedCaptions: ManifestClosedCaption[] = []; // CEA-608/708 declared in the HLS master (webOS)
   private ccEnabled = false; // live state of the native caption compositor (setSubtitleEnable)
+  private ccPending: boolean | null = null;
+  private ccRequestSeq = 0;
   private selfRenderIndex = -1; // manifest subtitle rendition currently self-rendered (-1 = off)
   private masterUrl = ''; // HLS master URL of the active stream, for re-pointing self-render
   private subs = new HlsSubtitles(); // self-rendered subtitles on the webOS native path
+  private dashSubs = new DashSubtitles(); // self-rendered DASH WebVTT on the native path
   private vodSubs = new VodSubtitles(); // sidecar SRT/WebVTT tracks for VOD (Xtream)
   private assSubs = new AssSubtitles(); // sidecar ASS/SSA subtitles for VOD, drawn by assjs
   private vodAssSidecars: SidecarSubtitle[] = []; // the ASS/SSA sidecars of the current VOD item
@@ -99,9 +103,12 @@ export class PlayerTracks {
     this.manifestSubtitles = [];
     this.manifestClosedCaptions = [];
     this.ccEnabled = false; // fresh pipeline — captions start off (608 doesn't auto-draw)
+    this.ccPending = null;
+    this.ccRequestSeq++;
     this.selfRenderIndex = -1;
     this.masterUrl = '';
     this.subs.stop();
+    this.dashSubs.stop();
   }
 
   applyManifest(manifest: PipelineManifest): void {
@@ -130,10 +137,12 @@ export class PlayerTracks {
 
   suspend(): void {
     this.subs.stop();
+    this.dashSubs.stop();
   }
 
   stop(): void {
     this.subs.stop();
+    this.dashSubs.stop();
     this.vodSubs.clear();
     this.assSubs.destroy();
     this.vodAssSidecars = [];
@@ -183,7 +192,7 @@ export class PlayerTracks {
   // Whether an offset-capable subtitle is currently active (a subtitle is on and it's a
   // path whose cues we can shift — not the native-compositor CC).
   private subtitleOffsetAvailable(): boolean {
-    if (this.pipeline.isHlsActive()) return this.pipeline.hlsSubtitleOptions().some(o => o.active);
+    if (this.pipeline.isMseActive()) return this.pipeline.mseSubtitleOptions().some(o => o.active);
     if (this.ccEnabled) return false;
     if (this.options.getVod()) {
       if (this.activeAssIndex >= 0) return true;
@@ -222,13 +231,15 @@ export class PlayerTracks {
   private applySubtitleOffset(): void {
     const seconds = this.subtitleOffsetS;
     this.subs.setOffset(seconds);
+    this.dashSubs.setOffset(seconds);
     this.vodSubs.setOffset(seconds);
     this.assSubs.setOffset(seconds);
     const list = this.options.getVideoElement()?.textTracks;
     if (list) for (let i = 0; i < list.length; i++) {
       const track = list[i];
       if (track.kind !== 'subtitles' && track.kind !== 'captions') continue;
-      if (this.subs.owns(track) || this.vodSubs.owns(track)) continue; // an engine already shifted these
+      if (this.subs.owns(track) || this.dashSubs.owns(track)
+          || this.vodSubs.owns(track)) continue; // an engine already shifted these
       shiftForeignTrack(track, seconds);
     }
   }
@@ -403,7 +414,7 @@ export class PlayerTracks {
    * manifest — see the manifest handling in PlayerPipeline).
    */
   private audioOptions(): AudioOption[] {
-    if (this.pipeline.isHlsActive()) return this.pipeline.hlsAudioOptions();
+    if (this.pipeline.isMseActive()) return this.pipeline.mseAudioOptions();
     const list = this.options.getVideoElement()?.audioTracks;
     if (!list) return [];
     return mergeManifestNames(nativeAudioOptions(list), this.manifestAudio);
@@ -447,8 +458,8 @@ export class PlayerTracks {
   selectAudioTrack(index: number): void {
     const option = this.displayAudioOptions().find(item => item.index === index);
     if (!option || !option.available) return;
-    if (this.pipeline.isHlsActive()) {
-      if (!this.pipeline.setHlsAudioTrack(index)) return;
+    if (this.pipeline.isMseActive()) {
+      if (!this.pipeline.setMseAudioTrack(index)) return;
     } else {
       const list = this.options.getVideoElement()?.audioTracks;
       if (!list || index < 0 || index >= list.length) return;
@@ -487,7 +498,7 @@ export class PlayerTracks {
   // Re-apply the remembered choice on tune-in; with no saved pick the stream
   // default stands. hls.js drives its own rendition, so the two paths are split.
   applyHlsAudioSelection(): void {
-    if (!this.pipeline.isHlsActive()) return;
+    if (!this.pipeline.isMseActive()) return;
     const options = this.audioOptions();
     if (options.length < 2) return;
     const pref = StorageService.getAudioPref(
@@ -496,11 +507,11 @@ export class PlayerTracks {
     );
     const index = chooseAudioIndex(options, pref);
     this.logAudioChoice('hls', options, pref, index);
-    if (index >= 0) this.pipeline.setHlsAudioTrack(index);
+    if (index >= 0) this.pipeline.setMseAudioTrack(index);
   }
 
   applyNativeAudioSelection(): void {
-    if (this.pipeline.isHlsActive()) return; // hls.js owns the rendition; videoEl exposes only the active one
+    if (this.pipeline.isMseActive()) return; // hls.js owns the rendition; videoEl exposes only the active one
     const list = this.options.getVideoElement()?.audioTracks;
     if (!list || list.length < 2) return;
     const options = this.audioOptions();
@@ -521,7 +532,7 @@ export class PlayerTracks {
    * manifest — see the manifest handling in PlayerPipeline).
    */
   private subtitleOptions(): SubtitleOption[] {
-    if (this.pipeline.isHlsActive()) return this.pipeline.hlsSubtitleOptions();
+    if (this.pipeline.isMseActive()) return this.pipeline.mseSubtitleOptions();
     // VOD: in-container + SRT/WebVTT sidecars surface as switchable native
     // textTracks; ASS/SSA sidecars can't, so they're appended as synthetic
     // options at ASS_SUBTITLE_BASE + i (assjs draws them).
@@ -541,12 +552,19 @@ export class PlayerTracks {
     // webOS native live/catch-up: in-manifest WebVTT is self-rendered (not surfaced
     // as switchable textTracks), so the choices are the parsed master renditions and
     // the active one is what we self-render.
-    return manifestSubtitleOptions(this.manifestSubtitles, this.selfRenderIndex);
+    const options = manifestSubtitleOptions(this.manifestSubtitles, this.selfRenderIndex);
+    const native = options.filter(option =>
+      this.manifestSubtitles[option.index]?.dash?.kind === 'native');
+    const exposedNative = native.find(option => option.isForced)
+      ?? native.find(option => option.isDefault)
+      ?? native[0];
+    return options.filter(option =>
+      this.manifestSubtitles[option.index]?.dash?.kind !== 'native'
+      || option.index === exposedNative?.index);
   }
 
-  // Picker-facing options. Unlike audio — where webOS collapses same-language
-  // renditions so unreachable ones are grayed (displayAudioOptions) — every
-  // subtitle rendition is self-renderable, so all are selectable.
+  // Each displayed rendition has a distinct control path. Native DASH exposes
+  // one compositor toggle because setSubtitleEnable cannot select a rendition.
   private displaySubtitleOptions(): Array<SubtitleOption & { available: boolean }> {
     return this.subtitleOptions().map(option => ({ ...option, available: true }));
   }
@@ -565,7 +583,7 @@ export class PlayerTracks {
       tracks.push({
         index: CC_SUBTITLE_INDEX,
         label: closedCaptionLabel(this.manifestClosedCaptions),
-        active: this.ccEnabled,
+        active: this.ccEnabled && this.selfRenderIndex < 0,
         available: true,
       });
     }
@@ -583,7 +601,7 @@ export class PlayerTracks {
   // In-band CC is offered only on the native pipeline (setSubtitleEnable is a
   // webOS Luna verb) and only when the master advertises CLOSED-CAPTIONS.
   private ccAvailable(): boolean {
-    return isWebOS && this.manifestClosedCaptions.length > 0;
+    return isWebOS() && this.manifestClosedCaptions.length > 0;
   }
 
   /** Switch the active subtitle (index -1 = off, -2 = in-band CC) and remember it
@@ -596,6 +614,7 @@ export class PlayerTracks {
     }
     if (index === CC_SUBTITLE_INDEX) {
       this.subs.stop(); // self-render and the native compositor can't both draw
+      this.dashSubs.stop();
       this.selfRenderIndex = -1;
       this.setNativeCC(true);
       this.rememberSubtitle({ off: false, cc: true, name: '', lang: '' });
@@ -619,12 +638,13 @@ export class PlayerTracks {
     showToast(t('player.subtitlesTrack', { name: subtitleLabel(option) }));
   }
 
-  // Toggle the native caption compositor (CEA-608/708, also IMSC) via Luna. Only
+  // Toggle the native caption compositor (CEA-608/708, IMSC/stpp and wvtt) via Luna. Only
   // fires on a real state change, and needs the pipeline's mediaId — exposed on
   // the native element once decoding starts. selectTrack is deliberately avoided:
   // it decode-freezes the video, so this is enable/disable only.
   private setNativeCC(enable: boolean): void {
-    if (!isWebOS || enable === this.ccEnabled) return;
+    if (!isWebOS() || this.ccPending === enable
+        || (this.ccPending === null && enable === this.ccEnabled)) return;
     const video = this.options.getVideoElement() as
       (HTMLVideoElement & { mediaId?: string }) | null;
     const mediaId = video?.mediaId;
@@ -642,18 +662,27 @@ export class PlayerTracks {
     };
     const request = webOSWindow.webOS?.service?.request;
     if (!request) return;
+    const requestSeq = ++this.ccRequestSeq;
+    this.ccPending = enable;
     request('luna://com.webos.media', {
       method: 'setSubtitleEnable',
       parameters: { mediaId, enable },
-      onSuccess: () => log.info('CC: setSubtitleEnable', enable, 'ok'),
-      onFailure: (error) =>
-        log.warn('CC: setSubtitleEnable failed:', JSON.stringify(error)),
+      onSuccess: () => {
+        if (requestSeq !== this.ccRequestSeq) return;
+        this.ccEnabled = enable;
+        this.ccPending = null;
+        log.info('CC: setSubtitleEnable', enable, 'ok');
+      },
+      onFailure: (error) => {
+        if (requestSeq !== this.ccRequestSeq) return;
+        this.ccPending = null;
+        log.warn('CC: setSubtitleEnable failed:', JSON.stringify(error));
+      },
     });
-    this.ccEnabled = enable;
   }
 
-  // Route a subtitle pick to the active engine (index -1 = off). hls.js (preview)
-  // drives its own rendition; the webOS native path self-renders the chosen WebVTT
+  // Route a subtitle pick to the active engine (index -1 = off). stpp and wvtt
+  // use the native compositor; the webOS native path self-renders the chosen WebVTT
   // rendition. selectTrack is never used — it decode-freezes the video on webOS.
   private applySubtitleChoice(index: number): void {
     this.applySubtitleChoiceRaw(index);
@@ -661,8 +690,8 @@ export class PlayerTracks {
   }
 
   private applySubtitleChoiceRaw(index: number): void {
-    if (this.pipeline.isHlsActive()) {
-      this.pipeline.setHlsSubtitleTrack(index);
+    if (this.pipeline.isMseActive()) {
+      this.pipeline.setMseSubtitleTrack(index);
       return;
     }
     // VOD: an ASS/SSA sidecar (index >= ASS_SUBTITLE_BASE) is drawn by assjs;
@@ -699,14 +728,29 @@ export class PlayerTracks {
     const video = this.options.getVideoElement();
     if (!manifest || !video || !this.masterUrl) {
       this.subs.stop();
+      this.dashSubs.stop();
+      this.setNativeCC(false);
       this.selfRenderIndex = -1;
       return;
     }
     this.selfRenderIndex = index;
-    void this.subs.start(video, this.masterUrl, {
+    const want = {
       name: manifest.name,
       lang: manifest.lang,
-    });
+    };
+    if (manifest.dash?.kind === 'native') {
+      this.subs.stop();
+      this.dashSubs.stop();
+      this.setNativeCC(true);
+    } else if (manifest.dash?.kind === 'webvtt') {
+      this.subs.stop();
+      this.setNativeCC(false);
+      void this.dashSubs.start(video, this.masterUrl, want);
+    } else {
+      this.dashSubs.stop();
+      this.setNativeCC(false);
+      void this.subs.start(video, this.masterUrl, want);
+    }
   }
 
   // Spec-correct tune-in default for self-rendered WebVTT: subtitles stay off
@@ -714,7 +758,7 @@ export class PlayerTracks {
   // DEFAULT=YES does not auto-enable — per HLS it only marks the preferred
   // rendition once subtitles are on. A saved CC pick is applied separately.
   private applySelfRenderSelection(): void {
-    if (this.pipeline.isHlsActive()) return;
+    if (this.pipeline.isMseActive()) return;
     const pref = StorageService.getSubtitlePref(
       this.preferenceKey(),
       this.legacyPreferenceKey(),
@@ -724,10 +768,7 @@ export class PlayerTracks {
       this.applySubtitleChoice(-1);
       return;
     } // CC path owns it
-    const options = manifestSubtitleOptions(
-      this.manifestSubtitles,
-      this.selfRenderIndex,
-    );
+    const options = this.subtitleOptions();
     const index = chooseSubtitleIndex(options, pref);
     this.logSubtitleChoice('self-render', options, pref, index);
     this.applySubtitleChoice(index);
@@ -768,7 +809,7 @@ export class PlayerTracks {
   // off unless the stream marks one forced. hls.js drives its own rendition, so
   // the two paths are split like audio.
   applyHlsSubtitleSelection(): void {
-    if (!this.pipeline.isHlsActive()) return;
+    if (!this.pipeline.isMseActive()) return;
     const options = this.subtitleOptions();
     if (!options.length) return;
     const pref = StorageService.getSubtitlePref(
@@ -777,7 +818,7 @@ export class PlayerTracks {
     );
     const index = chooseSubtitleIndex(options, pref);
     this.logSubtitleChoice('hls', options, pref, index);
-    this.pipeline.setHlsSubtitleTrack(index);
+    this.pipeline.setMseSubtitleTrack(index);
     this.loadSubtitleOffset();
   }
 
@@ -786,7 +827,7 @@ export class PlayerTracks {
   // and after the manifest parse). VOD picks from the in-container textTracks;
   // live/catch-up WebVTT is handled by applySelfRenderSelection, CC below.
   applyNativeSubtitleSelection(): void {
-    if (this.pipeline.isHlsActive()) return; // hls.js owns the rendition and its native text tracks
+    if (this.pipeline.isMseActive()) return; // hls.js owns the rendition and its native text tracks
     const pref = StorageService.getSubtitlePref(
       this.preferenceKey(),
       this.legacyPreferenceKey(),
@@ -802,7 +843,23 @@ export class PlayerTracks {
     }
     if (this.ccAvailable() && pref?.cc) {
       this.subs.stop(); // self-render and the native compositor can't both draw
+      this.dashSubs.stop();
       this.selfRenderIndex = -1;
+      this.setNativeCC(true);
+      return;
+    }
+    const selected = this.manifestSubtitles[this.selfRenderIndex];
+    if (selected?.dash?.kind === 'native') this.setNativeCC(true);
+  }
+
+  reapplyNativeSubtitleCompositor(): void {
+    if (this.pipeline.isMseActive() || this.options.getVod()) return;
+    const pref = StorageService.getSubtitlePref(
+      this.preferenceKey(),
+      this.legacyPreferenceKey(),
+    );
+    const selected = this.manifestSubtitles[this.selfRenderIndex];
+    if ((this.ccAvailable() && pref?.cc) || selected?.dash?.kind === 'native') {
       this.setNativeCC(true);
     }
   }

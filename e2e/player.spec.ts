@@ -621,13 +621,13 @@ test.describe('DVR', () => {
 
   test('Go-to-Live control seeks to the live edge on a pointer release', async ({ page }) => {
     await gotoDvrPlayer(page);
-    // Rewind to the oldest point, then jump to live by pointer; read seek back in the
-    // same task that dispatches it (seekable.end 60 minus the go-live pad 3 = 57).
+    // Rewind inside the oldest edge, then jump to live by pointer; read seek back
+    // in the same task that dispatches it (window 0–60, both pads 3).
     const rewound = await page.evaluate(() => {
       document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 412, bubbles: true }));
       return (document.getElementById('video-player') as HTMLVideoElement).currentTime;
     });
-    expect(rewound).toBe(0);
+    expect(rewound).toBe(3);
 
     const state = await okAndReadVideo(page, '[data-golive]');
 

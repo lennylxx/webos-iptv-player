@@ -1,6 +1,7 @@
-import { parseWebVTT, applyCueSettings, type VttCueSettings } from '../utils/webvtt';
+import { parseWebVTT } from '../utils/webvtt';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
+import { WebVttCueTrack } from './webvtt-cue-track';
 
 const log = createLogger('HlsSubs');
 
@@ -27,14 +28,12 @@ interface MediaPlaylist { segs: Segment[]; unsupported: 'fmp4' | 'encrypted' | n
  */
 export class HlsSubtitles {
   private video: HTMLVideoElement | null = null;
-  private track: TextTrack | null = null;
-  private trackVideo: HTMLVideoElement | null = null; // element the track belongs to (for reuse)
+  private cueTrack = new WebVttCueTrack();
   private timer: ReturnType<typeof setInterval> | null = null;
   private seen = new Set<string>();
   private subsUrl = '';
   private gen = 0;            // bumped on stop(); in-flight async bails when it changes
   private _active = false;
-  private offset = 0; // per-stream subtitle timing offset (seconds; + = later)
   private loggedNoAnchor = false; // one-shot: warn once when cues can't be anchored
   private addedKeys = new Map<string, number>(); // dedup repeated cues (key -> cue wall ms)
   // Reconstructed getStartDate (see maybeCalibrate), since webOS returns NaN for HLS.
@@ -47,6 +46,10 @@ export class HlsSubtitles {
   /** True once we own subtitle rendering — the native picker must defer to us. */
   get active(): boolean {
     return this._active;
+  }
+
+  private get track(): TextTrack | null {
+    return this.cueTrack.current;
   }
 
   async start(video: HTMLVideoElement, masterUrl: string, want?: { name?: string; lang?: string }): Promise<void> {
@@ -68,12 +71,7 @@ export class HlsSubtitles {
       this.reconStartDateMs = null; this.calibAt = 0; this.startDateSamples = []; this.videoHasNoPdt = false;
       this._active = true; // claim ownership before addTextTrack fires its addtrack event
       this.loggedNoAnchor = false;
-      // Reuse one track per element — TextTracks can't be removed, only disabled.
-      if (!this.track || this.trackVideo !== video) {
-        this.track = video.addTextTrack('subtitles', t('player.subtitles'), rend.lang || 'und');
-        this.trackVideo = video;
-      }
-      this.track.mode = 'showing';
+      this.cueTrack.attach(video, t('player.subtitles'), rend.lang || 'und');
       log.info('subtitles on:', rend.name || rend.lang || '?', '| playlist', this.subsUrl);
       await this.refresh(gen);
       this.timer = setInterval(() => void this.refresh(gen), POLL_MS);
@@ -87,12 +85,11 @@ export class HlsSubtitles {
     this.gen++;
     this._active = false;
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
-    this.clearCues();
-    if (this.track) this.track.mode = 'disabled';
+    this.cueTrack.disable();
     this.seen.clear();
     this.addedKeys.clear();
     this.subsUrl = '';
-    // Keep this.track / trackVideo so the next start() on the same element reuses it.
+    // Keep the shared cue track so the next start on this element reuses it.
   }
 
   private async refresh(gen: number): Promise<void> {
@@ -153,9 +150,12 @@ export class HlsSubtitles {
           if (this.addedKeys.has(key)) continue;
           this.addedKeys.set(key, wallMs);
           const start = wallToMediaSeconds(anchor, wallMs);
-          try {
-            this.track.addCue(this.makeCue(start, start + (c.end - c.start), c.text, c.settings)); added++;
-          } catch { /* invalid */ }
+          if (this.cueTrack.add(
+            start,
+            start + (c.end - c.start),
+            c.text,
+            c.settings,
+          )) added++;
         }
       }
       this.seen = new Set([...this.seen].filter(u => windowUris.has(u))); // bound to the window
@@ -172,27 +172,12 @@ export class HlsSubtitles {
   /** Shift all self-rendered cues (and any added later) by `seconds` relative to their true
    *  media time. Positive = subtitles appear later. */
   setOffset(seconds: number): void {
-    const delta = seconds - this.offset;
-    this.offset = seconds;
-    if (!delta || !this.track || !this.track.cues) return;
-    const cues = this.track.cues;
-    for (let i = 0; i < cues.length; i++) {
-      const c = cues[i] as VTTCue;
-      c.startTime += delta;
-      c.endTime += delta;
-    }
+    this.cueTrack.setOffset(seconds);
   }
 
   /** True when `track` is the TextTrack this instance self-renders into. */
   owns(track: TextTrack): boolean {
-    return this.track === track;
-  }
-
-  // Build a cue at (start, end) media time with the active offset baked in.
-  private makeCue(startMedia: number, endMedia: number, text: string, settings?: VttCueSettings): VTTCue {
-    const cue = new VTTCue(startMedia + this.offset, endMedia + this.offset, text);
-    if (settings) { try { applyCueSettings(cue, settings); } catch { /* positioning unsupported */ } }
-    return cue;
+    return this.cueTrack.owns(track);
   }
 
   // A caption that spans segment boundaries is re-emitted as several same-text cues —
@@ -265,12 +250,7 @@ export class HlsSubtitles {
   }
 
   private prune(): void {
-    const cues = this.track?.cues;
-    if (!cues || !this.track) return;
-    const cutoff = (this.video?.currentTime ?? 0) - CUE_RETENTION_S;
-    for (let i = cues.length - 1; i >= 0; i--) {
-      if (cues[i].endTime < cutoff) this.track.removeCue(cues[i]);
-    }
+    this.cueTrack.prune((this.video?.currentTime ?? 0) - CUE_RETENTION_S);
   }
 
   // Bound the dedup map: keep only keys from roughly the last 90s of subtitle time.
@@ -280,11 +260,6 @@ export class HlsSubtitles {
     for (const [k, w] of this.addedKeys) if (w < max - 90000) this.addedKeys.delete(k);
   }
 
-  private clearCues(): void {
-    const cues = this.track?.cues;
-    if (!cues || !this.track) return;
-    for (let i = cues.length - 1; i >= 0; i--) this.track.removeCue(cues[i]);
-  }
 }
 
 // Place a wall-clock instant on the video media timeline. The anchor pins one

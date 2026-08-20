@@ -65,6 +65,7 @@
 **Playback**
 
 - **Native HDR & Dolby passthrough** — the stream goes straight to the TV's decoder, so HDR10, HLG, Dolby Vision®, and Dolby Atmos® pass through untouched — **[Why native instead of hls.js? See the on-device comparison](docs/native-vs-hls.js.md)**
+- **MPEG-DASH playback** — play `.mpd` channels through the native webOS pipeline or dash.js in the desktop preview, with MPD track metadata, live DVR, self-rendered raw WebVTT, and native IMSC/`stpp` and `wvtt` subtitles ([details](docs/mpeg-dash.md))
 - **Audio & subtitle tracks** — pick from the player menu, remembered per channel or VOD item; subtitles cover in-manifest WebVTT and CEA-608/708 (live), in-container / sidecar SRT/WebVTT/ASS (VOD), and online search (SubDL, OpenSubtitles, and Assrt) with a manual title box; online search remains available when bundled tracks exist, and subtitle timing can be adjusted live
 - **On-screen display** — program title, progress, and a live stream-info readout (resolution, HDR, frame rate, codec, audio channels)
 - **Resync A/V** (🔄) — one tap on the playback bar re-locks audio and video that drift apart during a long catch-up or on-demand stream
@@ -82,7 +83,7 @@
 
 **Development**
 
-- **Desktop preview** — browser-based playback via HLS.js and mpegts.js
+- **Desktop preview** — browser-based playback via HLS.js, mpegts.js, and dash.js
 
 ## Supported webOS versions
 
@@ -216,7 +217,7 @@ output options.
 npm run preview
 ```
 
-Opens at http://localhost:3000. Video playback uses HLS.js/mpegts.js on desktop since browsers lack native TS/HLS support.
+Opens at http://localhost:3000. Video playback uses HLS.js, mpegts.js, and dash.js on desktop.
 
 ## Settings
 
@@ -267,6 +268,7 @@ some of the features above:
 - [`docs/native-vs-hls.js.md`](docs/native-vs-hls.js.md) — why on-device playback uses the native `<video>` pipeline (HDR & Dolby passthrough) instead of hls.js
 - [`docs/audio-track-selection.md`](docs/audio-track-selection.md) — how audio-track switching works on the native webOS player
 - [`docs/hls-subtitles.md`](docs/hls-subtitles.md) — how live HLS subtitles are handled on webOS (in-manifest types and their render paths)
+- [`docs/mpeg-dash.md`](docs/mpeg-dash.md) — how DASH detection, native playback, subtitles, and live DVR work
 - [`docs/vod-subtitles.md`](docs/vod-subtitles.md) — how VOD (Xtream movies & episodes) subtitles work: in-container tracks plus sidecar SRT/WebVTT/ASS, and online subtitle search (SubDL, OpenSubtitles, Assrt)
 - [`docs/storage-and-data.md`](docs/storage-and-data.md) — what the app stores, where it lives, and how user data is separated from disposable caches
 - [`docs/lan-service.md`](docs/lan-service.md) — phone setup and M3U uploads over the bundled LAN service

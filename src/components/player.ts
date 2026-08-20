@@ -228,6 +228,7 @@ export class Player {
     el.addEventListener('playing', () => {
       log.info('playing', this.videoLabel(el), this.mediaState(el));
       this.startupWatchdog.stop();
+      this.tracks.reapplyNativeSubtitleCompositor();
       this.markTrackedLiveHealthy();
       if (this.resyncing) this.endResync();
       this.confirmLiveHistory(el);
@@ -241,8 +242,15 @@ export class Player {
       log.debug('stalled event', this.videoLabel(el), this.mediaState(el));
     });
     el.addEventListener('timeupdate', () => {
+      this.reconcileLiveDvrPosition(el);
       this.reconcilePendingSeek(el);
       this.refreshProgress();
+    });
+    el.addEventListener('progress', () => {
+      this.reconcileLiveDvrPosition(el);
+    });
+    el.addEventListener('durationchange', () => {
+      this.reconcileLiveDvrPosition(el);
     });
     el.addEventListener('seeked', () => {
       log.info('seeked', this.videoLabel(el), this.mediaState(el));
@@ -876,10 +884,12 @@ export class Player {
     if (!v) return;
     const win = this.liveDvrWindow();
     if (win) {
-      // Live DVR: clamp within the retained window; seeking to/near the edge snaps
-      // to the live edge (a small pad back so playback does not stall at the tip).
+      // Live DVR: seeking near the end snaps to the live edge (a small pad back
+      // so playback does not stall at the tip), while rewinding stays inside
+      // the oldest edge of the sliding manifest.
       const liveEdge = win.end - CONFIG.PLAYER.DVR_GO_LIVE_PAD;
-      this.pendingSeekTarget = time >= liveEdge ? liveEdge : Math.max(win.start, time);
+      const oldest = this.oldestDvrTarget(win);
+      this.pendingSeekTarget = time >= liveEdge ? liveEdge : Math.max(oldest, time);
     } else if (Number.isFinite(v.duration) && v.duration > 0) {
       this.pendingSeekTarget = Math.max(0, Math.min(v.duration, time));
     } else {
@@ -901,6 +911,23 @@ export class Player {
     }
   }
 
+  private oldestDvrTarget(win: DvrWindow): number {
+    const liveEdge = win.end - CONFIG.PLAYER.DVR_GO_LIVE_PAD;
+    return Math.min(liveEdge, win.start + Math.min(
+      CONFIG.PLAYER.DVR_OLDEST_PAD,
+      win.length / 2,
+    ));
+  }
+
+  private reconcileLiveDvrPosition(el: HTMLVideoElement): void {
+    if (el !== this.videoEl || el.seeking) return;
+    const win = this.liveDvrWindow();
+    if (!win || el.currentTime >= win.start) return;
+    const target = this.oldestDvrTarget(win);
+    this.pendingSeekTarget = target;
+    el.currentTime = target;
+  }
+
   private goToLive(): void {
     const win = this.liveDvrWindow();
     if (win) this.seekTo(win.end);
@@ -908,7 +935,7 @@ export class Player {
 
   private goToOldest(): void {
     const win = this.liveDvrWindow();
-    if (win) this.seekTo(win.start);
+    if (win) this.seekTo(this.oldestDvrTarget(win));
   }
 
   /** Manually re-lock audio/video that has drifted over a long continuous
@@ -945,7 +972,9 @@ export class Player {
     if (!v) return;
     if (v.paused) {
       const win = this.liveDvrWindow();
-      if (win && v.currentTime < win.start) v.currentTime = win.start;
+      if (win && v.currentTime < win.start) {
+        v.currentTime = this.oldestDvrTarget(win);
+      }
       v.play?.().catch(() => {});
       this.stopDvrPauseTick();
     } else {
@@ -1003,7 +1032,7 @@ export class Player {
     const lvl = this.pipeline.streamInfo();
     const info = this.vod ? this.vodInfo : null; // container-header readout for VOD; null on the Live path
     const badge = resolutionBadge((v ? v.videoHeight : 0) || info?.height || 0);
-    const variant = !this.pipeline.isHlsActive() && v
+    const variant = !this.pipeline.isMseActive() && v
       ? pickVariant(this.manifestVariants, v.videoWidth, v.videoHeight)
       : null;
     const vCodec = codecName(lvl?.videoCodec ?? variant?.videoCodec ?? info?.videoCodec ?? '');

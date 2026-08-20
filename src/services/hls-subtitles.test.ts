@@ -1,5 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
-import { HlsSubtitles } from './hls-subtitles';
+import { describe, it, expect } from 'vitest';
 import { wallToMediaSeconds, newestPdt, oldestPdt, lowPercentile, cueKey, parseMediaPlaylist, pickVideoVariant, planSameTextMerges } from './hls-subtitles';
 
 // Synthetic timeline mirroring a live HLS stream: media-time 0 maps to wall clock
@@ -218,45 +217,5 @@ describe('pickVideoVariant', () => {
   it('returns null for a master with no video variant (bare media playlist)', () => {
     const media = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg0.ts';
     expect(pickVideoVariant(media)).toBeNull();
-  });
-});
-
-class FakeVTTCue {
-  constructor(public startTime: number, public endTime: number, public text: string) {}
-}
-interface FakeTrack { cues: FakeVTTCue[] }
-
-describe('HlsSubtitles.setOffset', () => {
-  it('shifts existing cues by the delta and is absolute across calls', () => {
-    const subs = new HlsSubtitles();
-    const track: FakeTrack = { cues: [new FakeVTTCue(10, 12, 'a'), new FakeVTTCue(20, 22, 'b')] };
-    (subs as unknown as { track: FakeTrack }).track = track;
-    subs.setOffset(2);
-    expect(track.cues.map((c) => [c.startTime, c.endTime])).toEqual([[12, 14], [22, 24]]);
-    subs.setOffset(3);
-    expect(track.cues.map((c) => [c.startTime, c.endTime])).toEqual([[13, 15], [23, 25]]);
-    subs.setOffset(0);
-    expect(track.cues.map((c) => [c.startTime, c.endTime])).toEqual([[10, 12], [20, 22]]);
-  });
-
-  it('stores the offset without a track and bakes it into new cues', () => {
-    vi.stubGlobal('VTTCue', FakeVTTCue);
-    try {
-      const subs = new HlsSubtitles();
-      subs.setOffset(1.5);
-      const cue = (subs as unknown as { makeCue(a: number, b: number, t: string): FakeVTTCue })
-        .makeCue(10, 12, 'hi');
-      expect([cue.startTime, cue.endTime]).toEqual([11.5, 13.5]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it('owns only its own track', () => {
-    const subs = new HlsSubtitles();
-    const track = {} as TextTrack;
-    (subs as unknown as { track: TextTrack }).track = track;
-    expect(subs.owns(track)).toBe(true);
-    expect(subs.owns({} as TextTrack)).toBe(false);
   });
 });

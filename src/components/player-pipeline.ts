@@ -1,29 +1,53 @@
 import type { AudioOption, ManifestAudio, ManifestClosedCaption, ManifestSubtitle, SubtitleOption } from '../types';
 import { CONFIG } from '../config';
 import { getCachedStreamMime, setCachedStreamMime } from '../services/idb-cache';
-import { hlsAudioOptions, parseAudioRenditions } from '../utils/audio-tracks';
-import { fetchLimitedText } from '../utils/fetch-helper';
+import { parseMpd } from '../parsers/mpd-manifest';
+import { parseAudioRenditions } from '../utils/audio-tracks';
+import { FetchTextError, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
 import { createLogger } from '../utils/logger';
-import { parseClosedCaptions, parseSubtitleRenditions, hlsSubtitleOptions } from '../utils/subtitle-tracks';
+import { parseClosedCaptions, parseSubtitleRenditions } from '../utils/subtitle-tracks';
 import { parseVariants, type StreamVariant } from '../utils/stream-info';
+import { mediaOptionSourceType } from '../utils/webos-media-option';
+import { createDashEngine, type DashPlayerLike } from './mse/dash-engine';
+import { createHlsEngine } from './mse/hls-engine';
+import type { MseEngine, PipelineStreamInfo } from './mse/engine';
 import {
   containerMime,
   diagnosticStreamUrl,
   sniffStreamContentType,
+  isMpdText,
+  mpdOpeningVerdict,
   streamMime,
   streamRouteKey,
   streamUrlMime,
 } from '../utils/url';
 
 const log = createLogger('Player');
+
 const isWebOS = /webOS|Web0S/i.test(navigator.userAgent);
 
-// hls.js and mpegts.js are loaded as globals via preview-libs.js (desktop preview only)
+// hls.js, mpegts.js and dash.js are loaded as globals via preview-libs.js
+// (desktop preview only)
 const win = window as unknown as Record<string, unknown>;
 
 type HlsType = typeof import('hls.js').default;
 type MpegtsType = typeof import('mpegts.js').default;
+
+interface DashjsNamespace {
+  MediaPlayer: {
+    (): { create(): DashPlayerLike & {
+      initialize(video: HTMLVideoElement, url: string, autoplay: boolean): void;
+      updateSettings(settings: Record<string, unknown>): void;
+      on(event: string, listener: (data?: unknown) => void): void;
+    } };
+    events: {
+      ERROR: string;
+      FRAGMENT_LOADING_COMPLETED: string;
+      STREAM_INITIALIZED: string;
+    };
+  };
+}
 
 export interface PipelineManifest {
   audio: ManifestAudio[];
@@ -31,14 +55,6 @@ export interface PipelineManifest {
   closedCaptions: ManifestClosedCaption[];
   variants: StreamVariant[];
   masterUrl: string;
-}
-
-export interface PipelineStreamInfo {
-  videoCodec: string;
-  audioCodec: string;
-  videoRange: string;
-  frameRate: number;
-  audioChannels: string;
 }
 
 export interface PlayerPipelineOptions {
@@ -55,8 +71,10 @@ export class PlayerPipeline {
   private videoEl: HTMLVideoElement | null = null;
   private hls: InstanceType<HlsType> | null = null;
   private mpegtsPlayer: { destroy(): void } | null = null;
+  private engine: MseEngine | null = null;
   private loadToken = 0;
   private hlsRecoveries = 0;
+  private dashRecoveries = 0;
   private manifestSeq = 0;
   private manifestController: AbortController | null = null;
   private videoLoadLabels = new WeakMap<HTMLVideoElement, string>();
@@ -75,43 +93,29 @@ export class PlayerPipeline {
     return this.videoLoadLabels.get(el) ?? this.callbacks.playbackLabel(this.loadToken);
   }
 
-  isHlsActive(): boolean {
-    return this.hls !== null;
+  // "An MSE library owns the tracks" — hls.js or dash.js in the desktop preview.
+  isMseActive(): boolean {
+    return this.engine !== null;
   }
 
-  hlsAudioOptions(): AudioOption[] {
-    return this.hls ? hlsAudioOptions(this.hls.audioTracks || [], this.hls.audioTrack) : [];
+  mseAudioOptions(): AudioOption[] {
+    return this.engine?.audioOptions() ?? [];
   }
 
-  setHlsAudioTrack(index: number): boolean {
-    if (!this.hls || index < 0 || index >= (this.hls.audioTracks?.length || 0)) return false;
-    this.hls.audioTrack = index;
-    return true;
+  setMseAudioTrack(index: number): boolean {
+    return this.engine?.setAudioTrack(index) ?? false;
   }
 
-  hlsSubtitleOptions(): SubtitleOption[] {
-    return this.hls ? hlsSubtitleOptions(this.hls.subtitleTracks || [], this.hls.subtitleTrack) : [];
+  mseSubtitleOptions(): SubtitleOption[] {
+    return this.engine?.subtitleOptions() ?? [];
   }
 
-  setHlsSubtitleTrack(index: number): boolean {
-    if (!this.hls) return false;
-    this.hls.subtitleDisplay = index >= 0;
-    if (index < (this.hls.subtitleTracks?.length || 0)) this.hls.subtitleTrack = index;
-    return true;
+  setMseSubtitleTrack(index: number): boolean {
+    return this.engine?.setSubtitleTrack(index) ?? false;
   }
 
   streamInfo(): PipelineStreamInfo | null {
-    const hls = this.hls;
-    if (!hls) return null;
-    const level = hls.loadLevelObj;
-    const channels = hls.audioTracks?.[hls.audioTrack]?.channels ?? '';
-    return {
-      videoCodec: level?.videoCodec ?? '',
-      audioCodec: level?.audioCodec ?? '',
-      videoRange: level?.videoRange ?? '',
-      frameRate: level?.frameRate ?? 0,
-      audioChannels: channels,
-    };
+    return this.engine?.streamInfo() ?? null;
   }
 
   load(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
@@ -127,6 +131,7 @@ export class PlayerPipeline {
     const isTsUrl = urlMime === 'video/mp2t';
     const isFlvUrl = urlMime === 'video/x-flv';
     const isHlsUrl = urlMime === 'application/vnd.apple.mpegurl';
+    const isDashUrl = urlMime === 'application/dash+xml';
 
     // webOS: the TV's hardware HLS/TS decoders beat MSE libraries, so play
     // natively. Explicit extensions and previously verified routes avoid a
@@ -141,16 +146,19 @@ export class PlayerPipeline {
         this.playNative(url, mime);
         return;
       }
-      if (isTsUrl || isFlvUrl || isHlsUrl) {
+      if (isTsUrl || isFlvUrl || isHlsUrl || isDashUrl) {
         const mime = isFlvUrl ? 'video/x-flv'
           : isTsUrl ? 'video/mp2t'
+          : isDashUrl ? 'application/dash+xml'
           : 'application/vnd.apple.mpegurl';
         log.info('Selected webOS native playback', 'event=playback.path.native',
           this.callbacks.playbackLabel(token),
           'reason=url', 'url=', safeUrl,
           '| webOS native | catchup:', this.callbacks.isCatchup(), '| MIME', mime);
-        if (isHlsUrl) void this.loadManifest(url, this.manifestSeq, token);
-        this.playNative(url, mime);
+        if (isHlsUrl || isDashUrl) {
+          void this.loadManifest(url, this.manifestSeq, token, isDashUrl ? 'dash' : 'hls');
+        }
+        this.playNativeMime(url, mime);
         return;
       }
       const routeKey = streamRouteKey(url);
@@ -164,8 +172,10 @@ export class PlayerPipeline {
             '| catchup:', this.callbacks.isCatchup());
           if (cachedMime === 'application/vnd.apple.mpegurl') {
             void this.loadManifest(url, this.manifestSeq, token);
+          } else if (cachedMime === 'application/dash+xml') {
+            void this.loadManifest(url, this.manifestSeq, token, 'dash');
           }
-          this.playNative(url, cachedMime);
+          this.playNativeMime(url, cachedMime);
           return;
         }
         void this.detectContentType(url, token).then(contentType => {
@@ -182,8 +192,10 @@ export class PlayerPipeline {
             '| catchup:', this.callbacks.isCatchup(), '| MIME', mime || '(auto)');
           if (mime === 'application/vnd.apple.mpegurl') {
             void this.loadManifest(url, this.manifestSeq, token);
+          } else if (mime === 'application/dash+xml') {
+            void this.loadManifest(url, this.manifestSeq, token, 'dash');
           }
-          this.playNative(url, mime);
+          this.playNativeMime(url, mime);
         });
       });
       return;
@@ -207,16 +219,23 @@ export class PlayerPipeline {
       if (token !== this.loadToken || !this.videoEl) return;
       const isFlv = isFlvUrl || ct.includes('flv');
       const isTs = isTsUrl || ct.includes('mp2t');
-      const isDirect = !isTs && !isFlv && /^(?:video|audio)\//.test(ct);
-      const isHls = !isTs && !isFlv && !isDirect;
+      const isDash = !isTs && !isFlv &&
+        (isDashUrl || ct.includes('dash+xml') || ct.includes('dash.mpd'));
+      const isDirect = !isTs && !isFlv && !isDash && /^(?:video|audio)\//.test(ct);
+      const isHls = !isTs && !isFlv && !isDash && !isDirect;
       log.info('loadStream', this.callbacks.playbackLabel(token), 'url=', safeUrl,
         '| content-type:', ct || '(none)', '| catchup:', this.callbacks.isCatchup(),
-        '| isHls:', isHls, '| isTs:', isTs, '| isFlv:', isFlv);
+        '| isHls:', isHls, '| isTs:', isTs, '| isFlv:', isFlv, '| isDash:', isDash);
       if (isTs || isFlv) {
         log.info('Selected mpegts.js playback', 'event=playback.path.mpegts',
           this.callbacks.playbackLabel(token),
           'reason=probe');
         this.loadWithMpegts(url, isFlv, token);
+      } else if (isDash) {
+        log.info('Selected dash.js playback', 'event=playback.path.dash',
+          this.callbacks.playbackLabel(token),
+          'reason=probe');
+        this.loadWithDash(url, token);
       } else if (isDirect) {
         log.info('Selected direct playback', 'event=playback.path.direct',
           this.callbacks.playbackLabel(token),
@@ -244,10 +263,12 @@ export class PlayerPipeline {
   }
 
   private destroyLoaders(): void {
-    if (this.hls) {
-      this.hls.destroy();
-      this.hls = null;
+    // The engine owns its library instance, hls.js included.
+    if (this.engine) {
+      this.engine.destroy();
+      this.engine = null;
     }
+    this.hls = null;
     if (this.mpegtsPlayer) {
       this.mpegtsPlayer.destroy();
       this.mpegtsPlayer = null;
@@ -265,7 +286,11 @@ export class PlayerPipeline {
     try {
       const res = await fetch(url, { signal: controller.signal });
       const ct = (res.headers.get('content-type') || '').toLowerCase();
-      if (ct.split(';')[0].trim() !== 'application/octet-stream') {
+      const baseType = ct.split(';')[0].trim();
+      const sniffBody = baseType === 'application/octet-stream'
+        || baseType === 'application/xml'
+        || baseType === 'text/xml';
+      if (!sniffBody) {
         res.body?.cancel().catch(() => {});
         return ct;
       }
@@ -296,6 +321,27 @@ export class PlayerPipeline {
       if (reader) void reader.cancel().catch(() => {});
       clearTimeout(timer);
     }
+  }
+
+  // DASH keeps application/dash+xml for classification and uses mediaOption on
+  // the source element to select the native MPEG-DASH transport.
+  private playNativeMime(url: string, mime: string): void {
+    if (mime === 'application/dash+xml') {
+      this.playNativeDash(url);
+      return;
+    }
+    this.playNative(url, mime);
+  }
+
+  private playNativeDash(url: string): void {
+    const bare = CONFIG.PLAYER.DASH_SOURCE === 'bare';
+    const type = bare
+      ? ''
+      : mediaOptionSourceType('video/mp4', { mediaTransportType: 'MPEG-DASH' });
+    log.info('Native DASH source', 'event=playback.path.native.dash',
+      this.callbacks.playbackLabel(this.loadToken),
+      `hint=${bare ? 'none' : 'mediaOption'}`);
+    this.playNative(url, type);
   }
 
   private playNative(url: string, mime: string): void {
@@ -348,6 +394,7 @@ export class PlayerPipeline {
       this.hlsRecoveries = 0;
       const hls = new Hls(hlsConfig);
       this.hls = hls;
+      this.engine = createHlsEngine(hls);
       hls.loadSource(url);
       hls.attachMedia(this.videoEl);
       // The audio/subtitle track lists aren't ready at MANIFEST_PARSED — hls.js
@@ -399,6 +446,54 @@ export class PlayerPipeline {
     }
   }
 
+  private loadWithDash(url: string, loadToken: number): void {
+    if (!this.videoEl) return;
+    const dashjs = win.__dashjs as DashjsNamespace | undefined;
+    try {
+      if (!dashjs) {
+        log.warn('dash.js unavailable; using direct playback',
+          'event=playback.path.direct', this.callbacks.playbackLabel(loadToken),
+          'reason=dash-unavailable');
+        this.videoEl.src = url;
+        this.videoEl.play().catch(() => {});
+        return;
+      }
+      this.dashRecoveries = 0;
+      const player = dashjs.MediaPlayer().create();
+      player.updateSettings({
+        streaming: { buffer: { bufferTimeDefault: CONFIG.PLAYER.BUFFER_LENGTH } },
+      });
+      player.initialize(this.videoEl, url, true);
+      this.engine = createDashEngine(player);
+      // dash.js resolves its rendition lists only once the streams are known,
+      // so the saved picks are applied there, as with hls.js.
+      player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+        this.callbacks.onAudioTracksUpdated();
+        this.callbacks.onSubtitleTracksUpdated();
+      });
+      player.on(dashjs.MediaPlayer.events.FRAGMENT_LOADING_COMPLETED, data => {
+        const request = (data as { request?: { type?: string } } | undefined)?.request;
+        if (request?.type === 'MediaSegment') this.dashRecoveries = 0;
+      });
+      // dash.js retries internally, so give it a bounded budget before zapping
+      // to the next channel.
+      player.on(dashjs.MediaPlayer.events.ERROR, (data?: unknown) => {
+        log.warn('dash.js error', 'event=playback.dash.error',
+          this.callbacks.playbackLabel(loadToken), data);
+        if (this.dashRecoveries >= CONFIG.PLAYER.DASH_MAX_RECOVERIES) {
+          this.callbacks.onError();
+          return;
+        }
+        this.dashRecoveries++;
+      });
+    } catch (error) {
+      log.warn('dash.js initialization failed; using direct playback',
+        'event=playback.dash.init.failed', this.callbacks.playbackLabel(loadToken), error);
+      this.videoEl.src = url;
+      this.videoEl.play().catch(() => {});
+    }
+  }
+
   private loadWithMpegts(url: string, isFlv: boolean, loadToken: number): void {
     if (!this.videoEl) return;
     const mpegts = win.__mpegts as MpegtsType | undefined;
@@ -438,7 +533,10 @@ export class PlayerPipeline {
   // "Audio 2" / "Subtitle 2". Native audio/text tracks carry no usable
   // name/language on webOS, so this is the only source. The Player re-applies
   // saved picks when the parsed manifest is delivered.
-  private async loadManifest(url: string, seq: number, loadToken: number): Promise<void> {
+  private async loadManifest(
+    url: string, seq: number, loadToken: number, format: 'hls' | 'dash' = 'hls',
+  ): Promise<void> {
+    const dash = format === 'dash';
     const controller = new AbortController();
     const started = Date.now();
     this.manifestController?.abort();
@@ -446,19 +544,30 @@ export class PlayerPipeline {
     try {
       const text = await fetchLimitedText(
         url,
-        CONFIG.PLAYER.MANIFEST_MAX_BYTES,
+        dash ? CONFIG.PLAYER.MPD_MAX_BYTES : CONFIG.PLAYER.MANIFEST_MAX_BYTES,
         CONFIG.PLAYER.MANIFEST_TIMEOUT,
         controller.signal,
-        '#EXTM3U',
+        dash ? mpdOpeningVerdict : '#EXTM3U',
       );
       if (seq !== this.manifestSeq) return;
+      if (dash && !isMpdText(text)) {
+        throw new FetchTextError('invalid_content', 'Response is not an MPD');
+      }
       log.debug('Manifest fetched', 'event=playback.manifest.fetched',
         this.callbacks.playbackLabel(loadToken),
-        `bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
-      const audio = parseAudioRenditions(text);
-      const subtitles = parseSubtitleRenditions(text);
-      const closedCaptions = parseClosedCaptions(text);
-      const variants = parseVariants(text);
+        `format=${format} bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
+      const parsed = dash ? parseMpd(text, url) : null;
+      // ContentProtection triggers channel fallback before the startup watchdog.
+      if (parsed?.hasContentProtection) {
+        log.warn('MPD is DRM protected; abandoning playback', 'event=playback.dash.drm',
+          this.callbacks.playbackLabel(loadToken));
+        if (loadToken === this.loadToken) this.callbacks.onError();
+        return;
+      }
+      const audio = parsed ? parsed.audio : parseAudioRenditions(text);
+      const subtitles = parsed ? parsed.subtitles : parseSubtitleRenditions(text);
+      const closedCaptions = parsed ? parsed.closedCaptions : parseClosedCaptions(text);
+      const variants = parsed ? parsed.variants : parseVariants(text);
       if (audio.length >= 2) {
         log.info('manifest audio:', audio.map(r => r.name || r.lang || '?').join(', '));
       }

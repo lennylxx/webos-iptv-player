@@ -82,6 +82,35 @@ describe('ChannelHealthService', () => {
     );
   });
 
+  it('accepts an MPD manifest without following its templated segments', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      '<?xml version="1.0"?><MPD type="dynamic"><Period/></MPD>',
+      { status: 200, headers: { 'content-type': 'application/dash+xml' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const item = channel('http://host/a.mpd');
+
+    await ChannelHealthService.checkAll([item]);
+
+    expect(ChannelHealthService.getRecord(item)?.status).toBe('healthy');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an XML error page served in place of a manifest', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      '<?xml version="1.0"?><error code="401">no</error>',
+      { status: 200, headers: { 'content-type': 'application/xml' } },
+    )));
+    const item = channel('http://host/a.mpd');
+
+    await ChannelHealthService.checkAll([item]);
+
+    expect(ChannelHealthService.getRecord(item)).toMatchObject({
+      status: 'suspect',
+      error: 'invalid_content',
+    });
+  });
+
   it('requires two consecutive failures before marking a stream unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
     const item = channel('http://host/a');

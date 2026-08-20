@@ -73,11 +73,11 @@ const CHANNEL: Channel = {
 
 function pipeline(overrides: Partial<PlayerPipeline> = {}): PlayerPipeline {
   return {
-    isHlsActive: () => false,
-    hlsAudioOptions: () => [],
-    setHlsAudioTrack: () => false,
-    hlsSubtitleOptions: () => [],
-    setHlsSubtitleTrack: () => false,
+    isMseActive: () => false,
+    mseAudioOptions: () => [],
+    setMseAudioTrack: () => false,
+    mseSubtitleOptions: () => [],
+    setMseSubtitleTrack: () => false,
     ...overrides,
   } as PlayerPipeline;
 }
@@ -255,6 +255,7 @@ describe('PlayerTracks', () => {
       setOffset: ReturnType<typeof vi.fn>;
       owns: ReturnType<typeof vi.fn>;
     };
+    let dashSubs: typeof subs;
 
     const rendition = (
       name: string,
@@ -275,11 +276,19 @@ describe('PlayerTracks', () => {
         setOffset: vi.fn(),
         owns: vi.fn(() => false),
       };
+      dashSubs = {
+        start: vi.fn(),
+        stop: vi.fn(),
+        active: false,
+        setOffset: vi.fn(),
+        owns: vi.fn(() => false),
+      };
       video = { textTracks: { length: 0 } } as unknown as HTMLVideoElement;
       channel = CHANNEL;
       vod = null;
       const internals = trackInternals(tracks);
       internals.subs = subs;
+      internals.dashSubs = dashSubs;
       internals.manifestSubtitles = manifestSubtitles;
       internals.masterUrl = 'http://host/master.m3u8';
       internals.selfRenderIndex = selfRenderIndex;
@@ -351,10 +360,146 @@ describe('PlayerTracks', () => {
       setup([rendition('Track 1', 'l1')], 0);
       tracks.selectSubtitleTrack(-1);
       expect(subs.stop).toHaveBeenCalled();
+      expect(dashSubs.stop).toHaveBeenCalled();
       expect(StorageService.setSubtitlePref).toHaveBeenCalledWith(
         channelKey(CHANNEL),
         { off: true, name: '', lang: '' },
       );
+    });
+
+    it('routes DASH WebVTT to the DASH self-renderer', () => {
+      setup([{
+        ...rendition('Track 1', 'l1'),
+        dash: { kind: 'webvtt', url: 'http://host/sub.vtt' },
+      }]);
+      trackInternals(tracks).masterUrl = 'http://host/stream.mpd';
+
+      tracks.selectSubtitleTrack(0);
+
+      expect(subs.start).not.toHaveBeenCalled();
+      expect(dashSubs.start).toHaveBeenCalledWith(
+        video,
+        'http://host/stream.mpd',
+        { name: 'Track 1', lang: 'l1' },
+      );
+    });
+
+    it.each(['stpp', 'wvtt'])(
+      'routes DASH %s to the native compositor without self-rendering',
+      () => {
+      setup([{
+        ...rendition('Track 1', 'l1'),
+        dash: { kind: 'native' },
+      }]);
+      const nativeToggle = vi.fn();
+      trackInternals(tracks).setNativeCC = nativeToggle;
+
+      tracks.selectSubtitleTrack(0);
+
+      expect(subs.start).not.toHaveBeenCalled();
+      expect(dashSubs.start).not.toHaveBeenCalled();
+      expect(nativeToggle).toHaveBeenCalledWith(true);
+      expect(tracks.getSubtitleTracks()[0].active).toBe(true);
+      },
+    );
+
+    it('exposes only one native DASH compositor rendition', () => {
+      setup([
+        {
+          ...rendition('Track 1', 'l1'),
+          dash: { kind: 'native' },
+        },
+        {
+          ...rendition('Track 2', 'l2', { isDefault: true }),
+          dash: { kind: 'native' },
+        },
+        {
+          ...rendition('Track 3', 'l3'),
+          dash: { kind: 'webvtt', url: 'http://host/sub.vtt' },
+        },
+      ]);
+
+      expect(tracks.getSubtitleTracks().map(item => item.label))
+        .toEqual(['Track 2', 'Track 3']);
+    });
+
+    it('does not restore a hidden native DASH rendition', () => {
+      setup([
+        {
+          ...rendition('Track 1', 'l1', { isDefault: true }),
+          dash: { kind: 'native' },
+        },
+        {
+          ...rendition('Track 2', 'l2'),
+          dash: { kind: 'native' },
+        },
+      ]);
+      vi.mocked(StorageService.getSubtitlePref).mockReturnValue({
+        off: false,
+        name: 'Track 2',
+        lang: 'l2',
+      });
+      const nativeToggle = vi.fn();
+      trackInternals(tracks).setNativeCC = nativeToggle;
+
+      applySelfRender();
+
+      expect(nativeToggle).toHaveBeenCalledWith(false);
+      expect(trackInternals(tracks).selfRenderIndex).toBe(-1);
+    });
+
+    it('does not reselect VOD subtitles when reapplying the native compositor', () => {
+      setup([]);
+      vod = {
+        accountId: 'acc1',
+        kind: 'movie',
+        itemId: 'item1',
+        title: 'Alpha',
+        url: 'http://host/a',
+        resumeSecs: 0,
+        durationSecs: 0,
+        subtitles: [],
+      };
+      const apply = vi.spyOn(
+        tracks as unknown as { applyNativeSubtitleSelection(): void },
+        'applyNativeSubtitleSelection',
+      );
+
+      tracks.reapplyNativeSubtitleCompositor();
+
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it('retries the native compositor after a Luna failure', () => {
+      const userAgent = vi.spyOn(window.navigator, 'userAgent', 'get')
+        .mockReturnValue('webOS');
+      const requests: Array<{
+        onSuccess?: () => void;
+        onFailure?: (error: unknown) => void;
+      }> = [];
+      vi.stubGlobal('webOS', {
+        service: {
+          request: (_uri: string, options: typeof requests[number]) => {
+            requests.push(options);
+          },
+        },
+      });
+      setup([{
+        ...rendition('Track 1', 'l1'),
+        dash: { kind: 'native' },
+      }]);
+      (video as HTMLVideoElement & { mediaId?: string }).mediaId = 'media1';
+
+      tracks.selectSubtitleTrack(0);
+      expect(trackInternals(tracks).ccEnabled).toBe(false);
+      requests[0].onFailure?.({ errorCode: 1 });
+      tracks.reapplyNativeSubtitleCompositor();
+      expect(requests).toHaveLength(2);
+      requests[1].onSuccess?.();
+      expect(trackInternals(tracks).ccEnabled).toBe(true);
+
+      userAgent.mockRestore();
+      vi.unstubAllGlobals();
     });
 
     it('lists the manifest renditions with the self-rendered one active and all selectable', () => {

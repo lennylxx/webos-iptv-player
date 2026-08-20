@@ -631,10 +631,25 @@ describe('Player Recently Watched recording', () => {
   });
 });
 
+describe('Player native subtitle retry', () => {
+  it('re-applies only the native subtitle compositor once playback starts', () => {
+    const apply = vi.fn();
+    const internals = player as unknown as {
+      tracks: { reapplyNativeSubtitleCompositor: () => void };
+    };
+    internals.tracks.reapplyNativeSubtitleCompositor = apply;
+
+    video.dispatchEvent(new Event('playing'));
+
+    expect(apply).toHaveBeenCalledOnce();
+  });
+});
+
 describe('Player live DVR', () => {
   let live: HTMLVideoElement;
   let setWindow: (s: number, e: number) => void;
   const PAD = CONFIG.PLAYER.DVR_GO_LIVE_PAD;
+  const OLDEST_PAD = CONFIG.PLAYER.DVR_OLDEST_PAD;
 
   beforeEach(() => {
     ({ video: live, setWindow } = fakeLiveVideo(0, 60, 60)); // 60s window, at the live edge
@@ -667,7 +682,7 @@ describe('Player live DVR', () => {
 
   it('rewind jumps to the oldest point, fast_forward to live', () => {
     player.handleAction('rewind');
-    expect(live.currentTime).toBe(0);
+    expect(live.currentTime).toBe(OLDEST_PAD);
     player.handleAction('fast_forward');
     expect(live.currentTime).toBe(60 - PAD);
   });
@@ -682,11 +697,21 @@ describe('Player live DVR', () => {
   });
 
   it('clamps to the window start when resuming after it rolled past the paused point', () => {
-    player.handleAction('rewind'); // to 0
+    player.handleAction('rewind');
     player.handleAction('pause');
     setWindow(20, 80); // window rolled forward while paused
     player.handleAction('play');
-    expect(live.currentTime).toBe(20);
+    expect(live.currentTime).toBe(20 + OLDEST_PAD);
+  });
+
+  it('re-enters the sliding window when a manifest refresh overtakes playback', () => {
+    player.handleAction('rewind');
+    expect(live.currentTime).toBe(OLDEST_PAD);
+
+    setWindow(10, 70);
+    live.dispatchEvent(new Event('progress'));
+
+    expect(live.currentTime).toBe(10 + OLDEST_PAD);
   });
 
   // The OSD controls are driven from click by coordinates, like the seek bar.
@@ -698,8 +723,8 @@ describe('Player live DVR', () => {
   });
 
   it('a pointer release on the Go-to-Live control seeks to the live edge', () => {
-    player.handleAction('rewind'); // move to the oldest point (0)
-    expect(live.currentTime).toBe(0);
+    player.handleAction('rewind');
+    expect(live.currentTime).toBe(OLDEST_PAD);
     const btn = container.querySelector('[data-golive]') as HTMLElement;
     btn.getBoundingClientRect = () => ({ left: 500, right: 560, width: 60, top: 0, bottom: 32 }) as DOMRect;
     container.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 530, clientY: 16 }));
