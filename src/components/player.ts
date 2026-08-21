@@ -66,7 +66,8 @@ export class Player {
   // Position (seconds) saved from the video element before suspend() destroys it.
   // play() consumes this to restore the position on resume; -1 = not pending.
   private catchupSuspendPos = -1;
-  private catchupFallbackActive = false;
+  private catchupSourceIndex = 0;
+  private catchupVariantConfirmed = false;
   private playbackGeneration = 0;
   private healthSuccessGeneration = -1;
   private healthStartedAt = 0;
@@ -216,7 +217,10 @@ export class Player {
     // The watchdog's own success condition — a decoded first frame, whether or
     // not playback was allowed to begin (autoplay can be rejected, or the user
     // can pause while the spinner is up).
-    el.addEventListener('loadeddata', () => { this.startupPending = false; });
+    el.addEventListener('loadeddata', () => {
+      this.startupPending = false;
+      if (this.catchupInfo) this.catchupVariantConfirmed = true;
+    });
     // Intrinsic size changes mid-stream (ABR up/down-switch) so the OSD pills
     // (resolution, and on hls.js the codec/HDR/fps) reflect the live variant.
     el.addEventListener('resize', () => {
@@ -227,6 +231,7 @@ export class Player {
     el.textTracks?.addEventListener?.('addtrack', () => this.tracks.applyNativeSubtitleSelection());
     el.addEventListener('playing', () => {
       log.info('playing', this.videoLabel(el), this.mediaState(el));
+      if (this.catchupInfo) this.catchupVariantConfirmed = true;
       this.startupWatchdog.stop();
       this.tracks.reapplyNativeSubtitleCompositor();
       this.markTrackedLiveHealthy();
@@ -345,10 +350,19 @@ export class Player {
 
   // Resolve the playable URL for a channel, applying the catch-up template when
   // a catch-up window is active. Shared by play() and the stall reload path.
-  private resolveStreamUrl(channel: Channel, catchup: CatchupInfo | null, fallback = false): string {
+  private xtreamCatchupSources(channel: Channel): Array<{ kind: string; url: string }> {
+    if (channel.catchupSources?.length) return channel.catchupSources;
+    const sources = [{ kind: 'path-ts', url: channel.catchupSource }];
+    if (channel.catchupFallbackSource) {
+      sources.push({ kind: 'legacy-ts', url: channel.catchupFallbackSource });
+    }
+    return sources;
+  }
+
+  private resolveStreamUrl(channel: Channel, catchup: CatchupInfo | null): string {
     if (catchup && channel.catchupSource) {
-      let source = fallback && channel.catchupFallbackSource
-        ? channel.catchupFallbackSource
+      let source = channel.catchup === 'xtream'
+        ? this.xtreamCatchupSources(channel)[this.catchupSourceIndex]?.url || channel.catchupSource
         : channel.catchupSource;
       if (channel.catchup === 'xtream') {
         const durationMinutes = Math.max(1, Math.ceil((catchup.end - catchup.start) / 60));
@@ -434,7 +448,8 @@ export class Player {
     if (channelIndex >= 0) this.currentIndexAnchor = channelIndex;
     this.catchupInfo = catchup || null;
     this.onTvPlaybackChanged(channelIndex, catchup ? catchup.start * 1000 : null);
-    this.catchupFallbackActive = false;
+    this.catchupSourceIndex = 0;
+    this.catchupVariantConfirmed = false;
     this.vod = null;
     this.catchupCheckpointAt = Date.now(); // reset periodic-save timer for the new session
     this.osd.clearFailedIcons();
@@ -607,7 +622,7 @@ export class Player {
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
     this.loadStream(
-      this.resolveStreamUrl(this.currentChannel, this.catchupInfo, this.catchupFallbackActive),
+      this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
       this.currentChannel.extras,
     );
   }
@@ -669,7 +684,8 @@ export class Player {
     this.pendingSeekTarget = null;
     this.catchupCheckpointAt = 0;
     this.catchupSuspendPos = -1;
-    this.catchupFallbackActive = false;
+    this.catchupSourceIndex = 0;
+    this.catchupVariantConfirmed = false;
     this.resyncing = false;
     if (this.resyncTimer) { clearTimeout(this.resyncTimer); this.resyncTimer = null; }
   }
@@ -783,19 +799,38 @@ export class Player {
       return;
     }
     if (this.catchupInfo && this.currentChannel?.catchup === 'xtream' &&
-        this.currentChannel.catchupFallbackSource && !this.catchupFallbackActive) {
-      this.catchupFallbackActive = true;
-      log.warn('Xtream catch-up failed; trying the legacy endpoint',
-        'event=playback.catchup.fallback', this.playbackLabel(),
-        'reason=xtream-path-failed');
-      this.osd.updateMessage(t('player.retryingCatchup'));
-      this.recreateVideoEl();
-      this.videoEl?.classList.add('active');
-      this.loadStream(
-        this.resolveStreamUrl(this.currentChannel, this.catchupInfo, true),
-        this.currentChannel.extras,
+        !this.catchupVariantConfirmed) {
+      const sources = this.xtreamCatchupSources(this.currentChannel);
+      const nextIndex = this.catchupSourceIndex + 1;
+      if (nextIndex < sources.length) {
+        const position = this.videoEl?.currentTime ?? 0;
+        if (position > 0) this.pendingResumeSecs = Math.max(this.pendingResumeSecs, position);
+        this.catchupSourceIndex = nextIndex;
+        this.catchupVariantConfirmed = false;
+        log.warn('Xtream catch-up failed; trying the next endpoint',
+          'event=xtream.catchup.variant.attempted',
+          `variant=${sources[nextIndex].kind}`,
+          `attempt=${nextIndex + 1}`,
+          `total=${sources.length}`,
+          this.playbackLabel());
+        this.osd.updateMessage(t('player.retryingCatchup'));
+        this.recreateVideoEl();
+        this.videoEl?.classList.add('active');
+        this.loadStream(
+          this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
+          this.currentChannel.extras,
+        );
+        return;
+      }
+      const current = sources[this.catchupSourceIndex];
+      log.warn(
+        'Xtream catch-up endpoint variants exhausted',
+        'event=xtream.catchup.variant.failed',
+        `variant=${current?.kind || 'unknown'}`,
+        `attempt=${this.catchupSourceIndex + 1}`,
+        `total=${sources.length}`,
+        this.playbackLabel(),
       );
-      return;
     }
     const v = this.videoEl;
     if (this.errorAdvanceTimer !== null) return;

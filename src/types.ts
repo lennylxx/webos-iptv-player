@@ -1,3 +1,16 @@
+export type XtreamCatchupSourceKind =
+  | 'path-ts'
+  | 'path-bare'
+  | 'path-hls'
+  | 'legacy-ts'
+  | 'legacy-bare'
+  | 'legacy-hls';
+
+export interface XtreamCatchupSource {
+  kind: XtreamCatchupSourceKind;
+  url: string;
+}
+
 export interface Channel {
   id: string;
   name: string;
@@ -29,8 +42,11 @@ export interface Channel {
   playlistIds: string[];
   catchup: string;
   catchupSource: string;
+  // TODO(cleanup, post-1.13.0): remove after cached channels all carry catchupSources.
   /** Alternate legacy endpoint used when an Xtream path-form timeshift fails. */
   catchupFallbackSource?: string;
+  /** Ordered, bounded Xtream endpoint variants attempted for this channel. */
+  catchupSources?: XtreamCatchupSource[];
   /** Xtream account and stream identity used for program-level archive checks. */
   catchupAccountId?: string;
   catchupStreamId?: string;

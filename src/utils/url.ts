@@ -64,13 +64,17 @@ export function diagnosticStreamUrl(url: string): string {
 }
 
 export function streamUrlMime(url: string): string {
-  if (/\.ts(?:[?#]|$)/i.test(url) || /[?&]extension=ts(?:[&#]|$)/i.test(url)) {
+  if (/\.ts(?:[?#]|$)/i.test(url) ||
+      /[?&](?:extension|output|output_format)=ts(?:[&#]|$)/i.test(url)) {
     return 'video/mp2t';
   }
   if (/\.flv(?:[?#]|$)/i.test(url) || /[?&]extension=flv(?:[&#]|$)/i.test(url)) {
     return 'video/x-flv';
   }
-  if (/\.m3u8?(?:[?#]|$)/i.test(url)) return 'application/vnd.apple.mpegurl';
+  if (/\.m3u8?(?:[?#]|$)/i.test(url) ||
+      /[?&](?:extension|output|output_format)=m3u8?(?:[&#]|$)/i.test(url)) {
+    return 'application/vnd.apple.mpegurl';
+  }
   if (/\.mpd(?:[?#]|$)/i.test(url) ||
       /[?&](?:extension|output|output_format)=mpd(?:[&#]|$)/i.test(url)) {
     return 'application/dash+xml';

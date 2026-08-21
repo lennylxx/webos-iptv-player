@@ -4,10 +4,13 @@ import {
   xtreamPlaylistUrl,
   xtreamEpgUrl,
   xtreamPlayerApi,
+  xtreamLiveUrl,
   xtreamVodUrl,
   xtreamEpisodeUrl,
   xtreamCatchupSource,
   xtreamCatchupFallbackSource,
+  xtreamCatchupSources,
+  xtreamCredentialsFromLiveUrl,
   xtreamLiveStreamId,
   formatXtreamCatchupStart,
   normalizeXtreamLiveOutputPreference,
@@ -119,6 +122,23 @@ describe('xtreamVodUrl', () => {
   it('builds /movie/{user}/{pass}/{id}.{ext} on the normalized base', () => {
     expect(xtreamVodUrl(creds, '10', 'mp4')).toBe('http://host:8080/movie/u1/p1/10.mp4');
   });
+
+  describe('xtreamLiveUrl', () => {
+    it('builds the selected live stream format', () => {
+      expect(xtreamLiveUrl(creds, '10', 'ts'))
+        .toBe('http://host:8080/live/u1/p1/10.ts');
+      expect(xtreamLiveUrl(creds, '10', 'm3u8'))
+        .toBe('http://host:8080/live/u1/p1/10.m3u8');
+    });
+
+    it('URL-encodes credentials and the stream id', () => {
+      expect(xtreamLiveUrl(
+        { baseUrl: 'http://host', username: 'u 1', password: 'p/1' },
+        'a/b',
+        'ts',
+      )).toBe('http://host/live/u%201/p%2F1/a%2Fb.ts');
+    });
+  });
   it('normalizes a bare host and strips a trailing slash', () => {
     expect(xtreamVodUrl({ baseUrl: 'host:8080/', username: 'u1', password: 'p1' }, '10', 'mkv'))
       .toBe('http://host:8080/movie/u1/p1/10.mkv');
@@ -136,6 +156,62 @@ describe('xtreamEpisodeUrl', () => {
 });
 
 describe('Xtream catch-up URLs', () => {
+  it('recovers credentials and output from standard live URLs', () => {
+    expect(xtreamCredentialsFromLiveUrl('http://host:8080/live/u%201/p%2F1/42.m3u8'))
+      .toEqual({
+        credentials: {
+          baseUrl: 'http://host:8080',
+          username: 'u 1',
+          password: 'p/1',
+        },
+        streamId: '42',
+        output: 'm3u8',
+      });
+    expect(xtreamCredentialsFromLiveUrl('http://host/u1/p1/43'))
+      .toMatchObject({ streamId: '43', output: 'ts' });
+  });
+
+  it('does not infer credentials from unrelated or query-based URLs', () => {
+    expect(xtreamCredentialsFromLiveUrl('http://host/proxy/play/42.ts')).toBeNull();
+    expect(xtreamCredentialsFromLiveUrl('http://host/play?stream_id=42')).toBeNull();
+    expect(xtreamCredentialsFromLiveUrl('not a url')).toBeNull();
+  });
+
+  it('builds the bounded TS-first catch-up candidate sequence', () => {
+    expect(xtreamCatchupSources(creds, '42', 'ts')).toEqual([
+      { kind: 'path-ts', url: 'http://host:8080/timeshift/u1/p1/{duration}/{start}/42.ts' },
+      { kind: 'path-bare', url: 'http://host:8080/timeshift/u1/p1/{duration}/{start}/42' },
+      { kind: 'path-hls', url: 'http://host:8080/timeshift/u1/p1/{duration}/{start}/42.m3u8' },
+      {
+        kind: 'legacy-ts',
+        url: 'http://host:8080/streaming/timeshift.php?username=u1&password=p1'
+          + '&stream=42&start={start}&duration={duration}&extension=ts',
+      },
+      {
+        kind: 'legacy-bare',
+        url: 'http://host:8080/streaming/timeshift.php?username=u1&password=p1'
+          + '&stream=42&start={start}&duration={duration}',
+      },
+      {
+        kind: 'legacy-hls',
+        url: 'http://host:8080/streaming/timeshift.php?username=u1&password=p1'
+          + '&stream=42&start={start}&duration={duration}&extension=m3u8',
+      },
+    ]);
+  });
+
+  it('puts HLS candidates first when HLS is selected', () => {
+    expect(xtreamCatchupSources(creds, '42', 'm3u8').map(source => source.kind))
+      .toEqual([
+        'path-hls',
+        'path-bare',
+        'path-ts',
+        'legacy-hls',
+        'legacy-bare',
+        'legacy-ts',
+      ]);
+  });
+
   it('builds a timeshift template with encoded credentials', () => {
     expect(xtreamCatchupSource(
       { baseUrl: 'http://host', username: 'u 1', password: 'p/1' },
@@ -153,9 +229,14 @@ describe('Xtream catch-up URLs', () => {
     );
   });
 
-  it('extracts ids from standard and legacy live URLs only', () => {
+  it('extracts ids from standard and query-based live URLs', () => {
     expect(xtreamLiveStreamId('http://host/live/u1/p1/42.ts')).toBe('42');
     expect(xtreamLiveStreamId('http://host/u1/p1/43.m3u8')).toBe('43');
+    expect(xtreamLiveStreamId('http://host/play?stream_id=44')).toBe('44');
+    expect(xtreamLiveStreamId('http://host/play?stream=45')).toBe('45');
+    expect(xtreamLiveStreamId('http://host/play?id=46', new Set(['46']))).toBe('46');
+    expect(xtreamLiveStreamId('http://host/play?id=46', new Set(['47']))).toBe('');
+    expect(xtreamLiveStreamId('http://host/live/u1/p1/47.ts?stream_id=99')).toBe('47');
     expect(xtreamLiveStreamId('http://host/movie/u1/p1/42.mp4')).toBe('');
     expect(xtreamLiveStreamId('not a url')).toBe('');
   });

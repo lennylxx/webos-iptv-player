@@ -59,6 +59,41 @@ describe('parseM3U', () => {
     expect(ch.name).toBe('Display, Name');
   });
 
+  it('infers Xtream catch-up candidates for catchup=xc', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 catchup="xc" catchup-days="3",Alpha',
+      'http://host:8080/live/u1/p1/42.m3u8',
+    ].join('\n');
+    const channel = parseM3U(m3u).channels[0];
+    expect(channel).toMatchObject({
+      catchup: 'xtream',
+      catchupDays: 3,
+      catchupStreamId: '42',
+      catchupSource: 'http://host:8080/timeshift/u1/p1/{duration}/{start}/42.m3u8',
+    });
+    expect(channel.catchupSources?.map(source => source.kind)).toEqual([
+      'path-hls',
+      'path-bare',
+      'path-ts',
+      'legacy-hls',
+      'legacy-bare',
+      'legacy-ts',
+    ]);
+  });
+
+  it('keeps an explicit catchup-source instead of inferring catchup=xc', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 catchup="xc" catchup-source="http://host/archive/{utc}",Alpha',
+      'http://host/live/u1/p1/42.ts',
+    ].join('\n');
+    const channel = parseM3U(m3u).channels[0];
+    expect(channel.catchup).toBe('xc');
+    expect(channel.catchupSource).toBe('http://host/archive/{utc}');
+    expect(channel.catchupSources).toBeUndefined();
+  });
+
   it('matches attribute names without regard to case', () => {
     const m3u = [
       '#EXTM3U X-TVG-URL="http://host/guide.xml"',

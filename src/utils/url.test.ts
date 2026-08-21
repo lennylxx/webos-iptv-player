@@ -27,8 +27,13 @@ describe('streamUrlMime', () => {
   it('keeps the existing TS, FLV and HLS classifications', () => {
     expect(streamUrlMime('http://host/a.ts')).toBe('video/mp2t');
     expect(streamUrlMime('http://host/a?extension=ts')).toBe('video/mp2t');
+    expect(streamUrlMime('http://host/a?output=ts')).toBe('video/mp2t');
+    expect(streamUrlMime('http://host/a?output_format=ts')).toBe('video/mp2t');
     expect(streamUrlMime('http://host/a.flv')).toBe('video/x-flv');
     expect(streamUrlMime('http://host/a.m3u8')).toBe('application/vnd.apple.mpegurl');
+    expect(streamUrlMime('http://host/a?output=m3u8')).toBe('application/vnd.apple.mpegurl');
+    expect(streamUrlMime('http://host/a?output_format=m3u8'))
+      .toBe('application/vnd.apple.mpegurl');
     expect(streamUrlMime('http://host/a')).toBe('');
   });
 

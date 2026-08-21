@@ -3,6 +3,8 @@
 // playlist, xmltv.php EPG, and player_api.php JSON endpoints. Kept dependency-
 // free and unit-tested so the stateful client/service layers just compose it.
 
+import type { XtreamCatchupSource } from '../types';
+
 export interface XtreamCredentials {
   /** Portal base, e.g. `http://host:8080`. Normalized lazily by each builder. */
   baseUrl: string;
@@ -12,6 +14,12 @@ export interface XtreamCredentials {
 
 export type XtreamLiveOutput = 'ts' | 'm3u8';
 export type XtreamLiveOutputPreference = XtreamLiveOutput | 'auto';
+
+export interface XtreamLiveUrlParts {
+  credentials: XtreamCredentials;
+  streamId: string;
+  output: XtreamLiveOutput;
+}
 
 export function normalizeXtreamLiveOutputPreference(
   value: unknown,
@@ -72,6 +80,37 @@ export function xtreamPlayerApi(
   return url;
 }
 
+/** Live stream URL built from a Player API stream id. */
+export function xtreamLiveUrl(c: XtreamCredentials, streamId: string, output: XtreamLiveOutput): string {
+  const base = normalizeXtreamBaseUrl(c.baseUrl);
+  return `${base}/live/${encodeURIComponent(c.username)}/${encodeURIComponent(c.password)}/${encodeURIComponent(streamId)}.${output}`;
+}
+
+/** Recover an Xtream account only from unambiguous standard live URL shapes. */
+export function xtreamCredentialsFromLiveUrl(url: string): XtreamLiveUrlParts | null {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    const prefixed = parts[0]?.toLowerCase() === 'live';
+    if ((prefixed && parts.length !== 4) || (!prefixed && parts.length !== 3)) return null;
+    const usernameIndex = prefixed ? 1 : 0;
+    const streamPart = parts[usernameIndex + 2];
+    const match = streamPart.match(/^([^/.]+)(?:\.(ts|m3u8))?$/i);
+    if (!match || (!prefixed && match[2])) return null;
+    return {
+      credentials: {
+        baseUrl: parsed.origin,
+        username: decodeURIComponent(parts[usernameIndex]),
+        password: decodeURIComponent(parts[usernameIndex + 1]),
+      },
+      streamId: decodeURIComponent(match[1]),
+      output: match[2]?.toLowerCase() === 'm3u8' ? 'm3u8' : 'ts',
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** VOD (movie) stream URL: `{base}/movie/{user}/{pass}/{streamId}.{ext}`.
  *  Played by the native pipeline; container_extension comes from the catalog. */
 export function xtreamVodUrl(c: XtreamCredentials, streamId: string, ext: string): string {
@@ -87,26 +126,61 @@ export function xtreamEpisodeUrl(c: XtreamCredentials, episodeId: string, ext: s
 
 /** Xtream archive URL template. Duration is in minutes; start is provider-local
  *  wall-clock time and is resolved when the EPG program is selected. */
+// TODO(cleanup, post-1.13.0): remove after all callers use xtreamCatchupSources.
 export function xtreamCatchupSource(c: XtreamCredentials, streamId: string): string {
-  const base = normalizeXtreamBaseUrl(c.baseUrl);
-  return `${base}/timeshift/${encodeURIComponent(c.username)}/${encodeURIComponent(c.password)}/{duration}/{start}/${streamId}.ts`;
+  return xtreamCatchupSources(c, streamId, 'ts')[0].url;
 }
 
 /** Legacy Xtream archive template used by panels without the path-form route. */
+// TODO(cleanup, post-1.13.0): remove after all callers use xtreamCatchupSources.
 export function xtreamCatchupFallbackSource(c: XtreamCredentials, streamId: string): string {
+  return xtreamCatchupSources(c, streamId, 'ts')[3].url;
+}
+
+/** Ordered timeshift variants used by incompatible Xtream panel families. */
+export function xtreamCatchupSources(
+  c: XtreamCredentials,
+  streamId: string,
+  preferred: XtreamLiveOutput = 'ts',
+): XtreamCatchupSource[] {
   const base = normalizeXtreamBaseUrl(c.baseUrl);
-  return `${base}/streaming/timeshift.php?username=${encodeURIComponent(c.username)}` +
-    `&password=${encodeURIComponent(c.password)}&stream=${encodeURIComponent(streamId)}` +
-    '&start={start}&duration={duration}&extension=ts';
+  const username = encodeURIComponent(c.username);
+  const password = encodeURIComponent(c.password);
+  const id = encodeURIComponent(streamId);
+  const first = preferred === 'm3u8'
+    ? { extension: 'm3u8', kind: 'hls' as const }
+    : { extension: 'ts', kind: 'ts' as const };
+  const last = preferred === 'm3u8'
+    ? { extension: 'ts', kind: 'ts' as const }
+    : { extension: 'm3u8', kind: 'hls' as const };
+  const path = `${base}/timeshift/${username}/${password}/{duration}/{start}/${id}`;
+  const legacy = `${base}/streaming/timeshift.php?username=${username}&password=${password}` +
+    `&stream=${id}&start={start}&duration={duration}`;
+  return [
+    { kind: `path-${first.kind}`, url: `${path}.${first.extension}` },
+    { kind: 'path-bare', url: path },
+    { kind: `path-${last.kind}`, url: `${path}.${last.extension}` },
+    { kind: `legacy-${first.kind}`, url: `${legacy}&extension=${first.extension}` },
+    { kind: 'legacy-bare', url: legacy },
+    { kind: `legacy-${last.kind}`, url: `${legacy}&extension=${last.extension}` },
+  ];
 }
 
 /** Extract the stream id from standard Xtream live URL variants. */
-export function xtreamLiveStreamId(url: string): string {
+export function xtreamLiveStreamId(url: string, knownIds?: ReadonlySet<string>): string {
   try {
-    const parts = new URL(url).pathname.split('/').filter(Boolean);
-    if (parts.includes('movie') || parts.includes('series') || parts.length < 3) return '';
-    const match = parts[parts.length - 1].match(/^([^/.]+)(?:\.[^/]*)?$/);
-    return match ? decodeURIComponent(match[1]) : '';
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    if (parts.includes('movie') || parts.includes('series')) return '';
+    if (parts.length >= 3) {
+      const match = parts[parts.length - 1].match(/^([^/.]+)(?:\.[^/]*)?$/);
+      if (match) return decodeURIComponent(match[1]);
+    }
+    const explicit = parsed.searchParams.get('stream_id') || parsed.searchParams.get('stream');
+    if (explicit) return explicit;
+    const generic = parsed.searchParams.get('id');
+    if (generic && knownIds?.has(generic)) return generic;
+    return '';
   } catch {
     return '';
   }

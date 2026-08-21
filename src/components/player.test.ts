@@ -64,6 +64,21 @@ const XTREAM_CHANNEL = {
   catchupSource: 'http://host/timeshift/u1/p1/{duration}/{start}/42.ts',
   catchupFallbackSource: 'http://host/streaming/timeshift.php?username=u1&password=p1' +
     '&stream=42&start={start}&duration={duration}&extension=ts',
+  catchupSources: [
+    {
+      kind: 'path-ts' as const,
+      url: 'http://host/timeshift/u1/p1/{duration}/{start}/42.ts',
+    },
+    {
+      kind: 'path-bare' as const,
+      url: 'http://host/timeshift/u1/p1/{duration}/{start}/42',
+    },
+    {
+      kind: 'legacy-ts' as const,
+      url: 'http://host/streaming/timeshift.php?username=u1&password=p1'
+        + '&stream=42&start={start}&duration={duration}&extension=ts',
+    },
+  ],
   catchupTimeZone: 'America/New_York',
 };
 // 120-second catch-up programme.
@@ -419,7 +434,7 @@ describe('Player catch-up completion', () => {
       .toContain('/timeshift/u1/p1/62/2026-07-21:15-30/42.ts');
   });
 
-  it('retries a failed Xtream catch-up through the legacy PHP endpoint', async () => {
+  it('tries each Xtream catch-up candidate once in order', async () => {
     HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
     HTMLMediaElement.prototype.pause = vi.fn();
     HTMLMediaElement.prototype.load = vi.fn();
@@ -428,6 +443,7 @@ describe('Player catch-up completion', () => {
     player.init(realVideo);
     playlistMock.getByIndex.mockReturnValue(XTREAM_CHANNEL);
     const start = Date.UTC(2026, 6, 21, 19, 30) / 1000;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     player.play(0, { ...CATCHUP, start, end: start + 3600 });
     await flush();
@@ -435,14 +451,54 @@ describe('Player catch-up completion', () => {
 
     realVideo.dispatchEvent(new Event('error'));
     await flush();
-    const fallbackVideo = container.querySelector('video')!;
-    expect(fallbackVideo.src).toContain(
+    const bareVideo = container.querySelector('video')!;
+    expect(bareVideo.src).toContain(
+      '/timeshift/u1/p1/60/2026-07-21:15-30/42',
+    );
+    expect(bareVideo.src).not.toContain('42.ts');
+
+    bareVideo.dispatchEvent(new Event('error'));
+    await flush();
+    const legacyVideo = container.querySelector('video')!;
+    expect(legacyVideo.src).toContain(
       '/streaming/timeshift.php?username=u1&password=p1&stream=42' +
       '&start=2026-07-21:15-30&duration=60&extension=ts',
     );
 
-    fallbackVideo.dispatchEvent(new Event('error'));
-    expect(container.querySelector('video')).toBe(fallbackVideo);
+    legacyVideo.dispatchEvent(new Event('error'));
+    expect(container.querySelector('video')).toBe(legacyVideo);
+    expect(warn.mock.calls.map(args => args.join(' '))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'event=xtream.catchup.variant.attempted variant=path-bare attempt=2 total=3',
+        ),
+        expect.stringContaining(
+          'event=xtream.catchup.variant.attempted variant=legacy-ts attempt=3 total=3',
+        ),
+        expect.stringContaining(
+          'event=xtream.catchup.variant.failed variant=legacy-ts attempt=3 total=3',
+        ),
+      ]),
+    );
+    warn.mockRestore();
+  });
+
+  it('does not switch catch-up variants after playback starts', async () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const realVideo = document.createElement('video');
+    container.appendChild(realVideo);
+    player.init(realVideo);
+    playlistMock.getByIndex.mockReturnValue(XTREAM_CHANNEL);
+
+    player.play(0, CATCHUP);
+    await flush();
+    realVideo.dispatchEvent(new Event('playing'));
+    realVideo.dispatchEvent(new Event('error'));
+
+    expect(container.querySelector('video')).toBe(realVideo);
+    expect(container.querySelector('video')!.src).toContain('/42.ts');
   });
 
   it('resumes the channel live stream when the catch-up programme ends', async () => {

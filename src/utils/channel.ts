@@ -45,7 +45,7 @@ function queryParamName(part: string): string {
   }
 }
 
-function stableStreamUrl(url: string): string {
+export function stableStreamUrl(url: string): string {
   const withoutFragment = url.split('#')[0];
   const queryAt = withoutFragment.indexOf('?');
   if (queryAt < 0) return withoutFragment;

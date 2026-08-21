@@ -1,18 +1,27 @@
-import type { Channel, ChannelGroupId, EpgSource, PlaylistTab } from '../types';
+import {
+  UNCATEGORIZED_GROUP,
+  type Channel,
+  type ChannelGroupId,
+  type EpgSource,
+  type ParsedPlaylist,
+  type PlaylistTab,
+} from '../types';
 import { parseM3U } from '../parsers/m3u-parser';
 import { fetchPlaylistText } from '../utils/fetch-helper';
 import {
   xtreamPlaylistUrl,
   xtreamEpgUrl,
-  xtreamCatchupSource,
-  xtreamCatchupFallbackSource,
+  xtreamCatchupSources,
+  xtreamLiveUrl,
   xtreamLiveStreamId,
   resolveXtreamLiveOutput,
   type XtreamCredentials,
+  type XtreamLiveOutput,
 } from '../utils/xtream-url';
 import {
   channelKey,
   legacyChannelKey,
+  stableStreamUrl,
 } from '../utils/channel';
 import {
   prepareSearchItem,
@@ -23,11 +32,57 @@ import {
 import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
-import { createXtreamClient } from './xtream-client';
+import {
+  createXtreamClient,
+  type XtreamLiveCategory,
+  type XtreamLiveStream,
+} from './xtream-client';
 import { getCachedPlaylist, scheduleCachedPlaylist } from './idb-cache';
 import { isSourceEnabled } from '../utils/playlist';
 
 const log = createLogger('Playlist');
+
+function usableDirectSource(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? value : '';
+  } catch {
+    return '';
+  }
+}
+
+function xtreamLivePlaylist(
+  credentials: XtreamCredentials,
+  output: XtreamLiveOutput,
+  categories: XtreamLiveCategory[],
+  streams: XtreamLiveStream[],
+): ParsedPlaylist {
+  const categoryNames = new Map(categories.map(category => [category.id, category.name]));
+  const channels: Channel[] = streams.map(stream => ({
+    id: stream.epgChannelId || stream.streamId,
+    name: stream.name || stream.streamId,
+    logo: stream.icon,
+    group: categoryNames.get(stream.categoryId) || UNCATEGORIZED_GROUP,
+    url: usableDirectSource(stream.directSource)
+      || xtreamLiveUrl(credentials, stream.streamId, output),
+    extras: null,
+    playlistIds: [],
+    catchup: '',
+    catchupSource: '',
+    catchupDays: 0,
+    catchupStreamId: stream.streamId,
+  }));
+  const groups = Array.from(new Set(channels.map(channel => channel.group)));
+  return {
+    channels,
+    groups,
+    epgUrl: '',
+    epgUrls: [],
+    headerAttributes: {},
+    format: 'unknown',
+    issues: [],
+  };
+}
 
 class PlaylistServiceImpl {
   /** Every parsed channel, hidden ones included. Edit mode reads this. */
@@ -161,25 +216,82 @@ class PlaylistServiceImpl {
       // An xtream account derives get.php (playlist) and xmltv.php (EPG) from its
       // credentials; everything downstream is the existing M3U path.
       let fetchUrl = pl.url;
+      let xtreamCredentials: XtreamCredentials | null = null;
+      let xtreamOutput: XtreamLiveOutput = 'ts';
       if (pl.source === 'xtream' && pl.xtream) {
         const credentials = { baseUrl: pl.url, ...pl.xtream };
+        xtreamCredentials = credentials;
         let allowedOutputFormats: string[] = [];
         if (pl.xtream.liveOutput === 'auto') {
           allowedOutputFormats =
             (await createXtreamClient(credentials).getAccountInfo())?.allowedOutputFormats ?? [];
         }
+        xtreamOutput = resolveXtreamLiveOutput(pl.xtream.liveOutput, allowedOutputFormats);
         fetchUrl = xtreamPlaylistUrl(
           credentials,
-          resolveXtreamLiveOutput(pl.xtream.liveOutput, allowedOutputFormats),
+          xtreamOutput,
         );
       }
       const plDone = log.time(`fetch '${pl.name || pl.url}'`);
       try {
-        const text = await fetchPlaylistText(fetchUrl, 60000);
-        log.info('Fetched', pl.name || pl.url, '|', text.length, 'bytes');
-        const parsed = parseM3U(text, fetchUrl);
-        if (pl.source === 'xtream' && pl.xtream) {
-          await this.applyXtreamCatchup(parsed.channels, { baseUrl: pl.url, ...pl.xtream }, plKey);
+        let parsed: ParsedPlaylist | null = null;
+        let playlistError: unknown;
+        try {
+          const text = await fetchPlaylistText(fetchUrl, 60000);
+          log.info('Fetched', pl.name || pl.url, '|', text.length, 'bytes');
+          parsed = parseM3U(text, fetchUrl);
+        } catch (err) {
+          playlistError = err;
+          if (!xtreamCredentials) throw err;
+          log.warn(
+            'Xtream playlist failed; trying the Player API live catalog',
+            'event=xtream.live_fallback.used',
+            'reason=request_failed',
+          );
+        }
+
+        let fallbackStreams: XtreamLiveStream[] | undefined;
+        if (xtreamCredentials && (!parsed || !parsed.channels.length)) {
+          if (parsed) {
+            log.warn(
+              'Xtream playlist contained no channels; trying the Player API live catalog',
+              'event=xtream.live_fallback.used',
+              'reason=no_channels',
+            );
+          }
+          const client = createXtreamClient(xtreamCredentials);
+          const [categories, streams] = await Promise.all([
+            client.getLiveCategories(),
+            client.getLiveStreams(),
+          ]);
+          fallbackStreams = streams;
+          log.info(
+            'Xtream Player API live catalog completed',
+            'event=xtream.live_api.completed',
+            `categories=${categories.length}`,
+            `streams=${streams.length}`,
+          );
+          if (streams.length) {
+            parsed = xtreamLivePlaylist(
+              xtreamCredentials,
+              xtreamOutput,
+              categories,
+              streams,
+            );
+          } else if (!parsed && playlistError) {
+            throw playlistError;
+          }
+        }
+        if (!parsed) throw new Error('Xtream source returned no playlist or live catalog');
+
+        if (xtreamCredentials) {
+          await this.applyXtreamCatchup(
+            parsed.channels,
+            xtreamCredentials,
+            plKey,
+            xtreamOutput,
+            fallbackStreams,
+          );
         }
         if (parsed.issues.length) {
           log.warn('Playlist diagnostics:',
@@ -284,33 +396,62 @@ class PlaylistServiceImpl {
     channels: Channel[],
     credentials: XtreamCredentials,
     accountId: string,
+    output: XtreamLiveOutput,
+    knownStreams?: XtreamLiveStream[],
   ): Promise<void> {
     const client = createXtreamClient(credentials);
-    const streams = await client.getLiveStreams();
+    const streams = knownStreams ?? await client.getLiveStreams();
     const archived = new Map(streams
       .filter(stream => stream.archive)
       .map(stream => [stream.streamId, stream]));
     if (!archived.size) return;
 
     const clock = await client.getServerClock();
+    const knownIds = new Set(streams.map(stream => stream.streamId));
+    const streamByDirectSource = new Map(streams
+      .filter(stream => usableDirectSource(stream.directSource))
+      .map(stream => [stableStreamUrl(stream.directSource), stream]));
     let enabled = 0;
+    let unmatched = 0;
     for (const channel of channels) {
-      const streamId = xtreamLiveStreamId(channel.url);
+      const extractedId = channel.catchupStreamId || xtreamLiveStreamId(channel.url, knownIds);
+      const streamId = (extractedId && knownIds.has(extractedId) ? extractedId : '')
+        || streamByDirectSource.get(stableStreamUrl(channel.url))?.streamId
+        || '';
       const stream = archived.get(streamId);
-      if (!stream) continue;
-      channel.catchupAccountId = accountId;
+      if (!stream) {
+        if (!streamId) unmatched++;
+        continue;
+      }
       channel.catchupStreamId = streamId;
+      channel.catchupAccountId = accountId;
       if (!channel.catchupSource) {
+        const sources = xtreamCatchupSources(credentials, streamId, output);
         channel.catchup = 'xtream';
-        channel.catchupSource = xtreamCatchupSource(credentials, streamId);
-        channel.catchupFallbackSource = xtreamCatchupFallbackSource(credentials, streamId);
+        channel.catchupSource = sources[0].url;
+        channel.catchupFallbackSource = sources[3].url;
+        channel.catchupSources = sources;
         channel.catchupDays = stream.archiveDurationDays;
         enabled++;
       }
       if (clock?.timeZone) channel.catchupTimeZone = clock.timeZone;
       if (clock?.offsetMinutes != null) channel.catchupTimeOffsetMinutes = clock.offsetMinutes;
     }
-    log.info('Enabled Xtream catch-up for', enabled, 'channels');
+    log.info(
+      'Xtream catch-up matching completed',
+      'event=xtream.catchup.matched',
+      `streams=${streams.length}`,
+      `archived=${archived.size}`,
+      `enabled=${enabled}`,
+      `unmatched=${unmatched}`,
+    );
+    if (unmatched) {
+      log.warn(
+        'Xtream catch-up streams could not be matched',
+        'event=xtream.catchup.unmatched',
+        `channels=${unmatched}`,
+      );
+    }
   }
 
   /**

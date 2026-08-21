@@ -5,6 +5,10 @@ import type {
   PlaylistParseIssue,
 } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
+import {
+  xtreamCatchupSources,
+  xtreamCredentialsFromLiveUrl,
+} from '../utils/xtream-url';
 
 export interface M3UParseOptions {
   maxChannels?: number;
@@ -156,6 +160,21 @@ export function parseM3U(
         }
         if (!current) current = emptyChannel(nameFromUrl(line));
         current.url = line;
+        if (current.catchup.toLowerCase() === 'xc' && !current.catchupSource) {
+          const inferred = xtreamCredentialsFromLiveUrl(line);
+          if (inferred) {
+            const sources = xtreamCatchupSources(
+              inferred.credentials,
+              inferred.streamId,
+              inferred.output,
+            );
+            current.catchup = 'xtream';
+            current.catchupSource = sources[0].url;
+            current.catchupFallbackSource = sources[3].url;
+            current.catchupSources = sources;
+            current.catchupStreamId = inferred.streamId;
+          }
+        }
         if (current.group) groupSet.add(current.group);
         for (const group of current.sourceGroups ?? []) groupSet.add(group);
         channels.push(current);

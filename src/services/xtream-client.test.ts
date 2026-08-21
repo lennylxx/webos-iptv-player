@@ -110,15 +110,58 @@ describe('XtreamClient.getAccountInfo', () => {
 });
 
 describe('XtreamClient live archive metadata', () => {
+  it('lists live categories', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify([
+      { category_id: 1, category_name: 'Alpha', parent_id: 0 },
+      { category_name: 'missing id' },
+    ]));
+    expect(await createXtreamClient(creds).getLiveCategories()).toEqual([
+      { id: '1', name: 'Alpha', parentId: '0' },
+    ]);
+    expect(fetchTextMock).toHaveBeenCalledWith(
+      expect.stringContaining('action=get_live_categories'),
+      expect.any(Number),
+      expect.any(Number),
+      undefined,
+    );
+  });
+
   it('normalizes archive flags and retention days', async () => {
     fetchTextMock.mockResolvedValue(JSON.stringify([
-      { stream_id: 10, tv_archive: 1, tv_archive_duration: '7' },
+      {
+        stream_id: 10,
+        name: 'Alpha',
+        stream_icon: 'http://host/a.png',
+        epg_channel_id: 'epg-1',
+        category_id: 2,
+        direct_source: 'http://host/direct/10',
+        tv_archive: 1,
+        tv_archive_duration: '7',
+      },
       { stream_id: '11', tv_archive: '0', tv_archive_duration: 0 },
       { tv_archive: 1, tv_archive_duration: 3 },
     ]));
     expect(await createXtreamClient(creds).getLiveStreams()).toEqual([
-      { streamId: '10', archive: true, archiveDurationDays: 7 },
-      { streamId: '11', archive: false, archiveDurationDays: 0 },
+      {
+        streamId: '10',
+        name: 'Alpha',
+        icon: 'http://host/a.png',
+        epgChannelId: 'epg-1',
+        categoryId: '2',
+        directSource: 'http://host/direct/10',
+        archive: true,
+        archiveDurationDays: 7,
+      },
+      {
+        streamId: '11',
+        name: '',
+        icon: '',
+        epgChannelId: '',
+        categoryId: '',
+        directSource: '',
+        archive: false,
+        archiveDurationDays: 0,
+      },
     ]);
     expect(fetchTextMock).toHaveBeenCalledWith(
       expect.stringContaining('action=get_live_streams'),
@@ -189,6 +232,22 @@ describe('XtreamClient program archive listings', () => {
     expect(await createXtreamClient(creds).getArchiveListings('101')).toBeNull();
     fetchTextMock.mockResolvedValue('<html>nope</html>');
     expect(await createXtreamClient(creds).getArchiveListings('101')).toBeNull();
+  });
+
+  it('falls back to the historical get_simple_date_table spelling', async () => {
+    fetchTextMock
+      .mockResolvedValueOnce(JSON.stringify({ server_info: {} }))
+      .mockResolvedValueOnce(JSON.stringify({
+        epg_listings: [
+          { start_timestamp: 100, stop_timestamp: 200, has_archive: 1 },
+        ],
+      }));
+
+    expect(await createXtreamClient(creds).getArchiveListings('101')).toEqual([
+      { start: 100, stop: 200, hasArchive: true },
+    ]);
+    expect(fetchTextMock.mock.calls.map(([url]) => new URL(url).searchParams.get('action')))
+      .toEqual(['get_simple_data_table', 'get_simple_date_table']);
   });
 });
 

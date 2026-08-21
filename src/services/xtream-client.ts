@@ -46,8 +46,19 @@ export interface XtreamAccountInfo {
 
 export interface XtreamLiveStream {
   streamId: string;
+  name: string;
+  icon: string;
+  epgChannelId: string;
+  categoryId: string;
+  directSource: string;
   archive: boolean;
   archiveDurationDays: number;
+}
+
+export interface XtreamLiveCategory {
+  id: string;
+  name: string;
+  parentId: string;
 }
 
 export interface XtreamServerClock {
@@ -225,10 +236,31 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
       return arr
         .map((stream) => ({
           streamId: toStr(stream.stream_id),
+          name: toStr(stream.name),
+          icon: toStr(stream.stream_icon),
+          epgChannelId: toStr(stream.epg_channel_id),
+          categoryId: toStr(stream.category_id),
+          directSource: toStr(stream.direct_source),
           archive: stream.tv_archive === 1 || stream.tv_archive === '1' || stream.tv_archive === true,
           archiveDurationDays: Math.max(0, toNumber(stream.tv_archive_duration)),
         }))
         .filter(stream => stream.streamId !== '');
+    },
+
+    async getLiveCategories(signal?: AbortSignal): Promise<XtreamLiveCategory[]> {
+      const arr = asArray(await fetchJson(
+        xtreamPlayerApi(creds, 'get_live_categories'),
+        CATALOG_TIMEOUT,
+        CONFIG.XTREAM.CATEGORY_MAX_BYTES,
+        signal,
+      ));
+      return arr
+        .map((category) => ({
+          id: toStr(category.category_id),
+          name: toStr(category.category_name),
+          parentId: toStr(category.parent_id),
+        }))
+        .filter(category => category.id !== '');
     },
 
     async getServerClock(signal?: AbortSignal): Promise<XtreamServerClock | null> {
@@ -252,14 +284,23 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
       streamId: string,
       signal?: AbortSignal,
     ): Promise<XtreamArchiveListing[] | null> {
-      const data = await fetchJson(
-        xtreamPlayerApi(creds, 'get_simple_data_table', { stream_id: streamId }),
+      const request = (action: string): Promise<unknown> => fetchJson(
+        xtreamPlayerApi(creds, action, { stream_id: streamId }),
         CATALOG_TIMEOUT,
         CONFIG.XTREAM.DETAIL_MAX_BYTES,
         signal,
       );
-      if (!data || typeof data !== 'object') return null;
-      const raw = (data as { epg_listings?: unknown }).epg_listings;
+      let data = await request('get_simple_data_table');
+      let raw = data && typeof data === 'object'
+        ? (data as { epg_listings?: unknown }).epg_listings
+        : undefined;
+      if (!Array.isArray(raw)) {
+        // Some legacy panels shipped `date` instead of Xtream's `data` action spelling.
+        data = await request('get_simple_date_table');
+        raw = data && typeof data === 'object'
+          ? (data as { epg_listings?: unknown }).epg_listings
+          : undefined;
+      }
       if (!Array.isArray(raw)) return null;
       return asArray(raw)
         .map((listing) => {
