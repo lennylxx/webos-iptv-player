@@ -1,5 +1,6 @@
 import type { SubtitleProvider, SubtitleQuery, OnlineSubtitleResult, SubtitleText } from './types';
 import { StorageService } from '../storage-service';
+import { CONFIG } from '../../config';
 import { createSubdlProvider } from './subdl-provider';
 import { createOpenSubtitlesProvider } from './opensubtitles-provider';
 import { createAssrtProvider } from './assrt-provider';
@@ -33,6 +34,25 @@ function langMatches(resultLang: string, preferred: string): boolean {
   return base(resultLang) === base(preferred);
 }
 
+// The providers are searched together, so the slowest one decides when results
+// appear. Assrt in particular is always "configured" (it has a default token),
+// so an unreachable endpoint would otherwise hold the overlay on "Searching…"
+// for the whole 30s fetch timeout while the others already have answers.
+function withTimeout(
+  run: () => Promise<OnlineSubtitleResult[]>,
+  id: string,
+): Promise<OnlineSubtitleResult[]> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      log.warn(id, 'search timed out after', CONFIG.PLAYER.SUBTITLE_SEARCH_TIMEOUT, 'ms');
+      resolve([]);
+    }, CONFIG.PLAYER.SUBTITLE_SEARCH_TIMEOUT);
+    const done = (results: OnlineSubtitleResult[]) => { clearTimeout(timer); resolve(results); };
+    const failed = (e: unknown) => { clearTimeout(timer); log.warn(id, 'search failed:', e); resolve([]); };
+    try { run().then(done, failed); } catch (e) { failed(e); }
+  });
+}
+
 export class SubtitleSearchService {
   constructor(private readonly providers: SubtitleProvider[] = buildProviders()) {}
 
@@ -45,10 +65,7 @@ export class SubtitleSearchService {
   async search(q: SubtitleQuery): Promise<OnlineSubtitleResult[]> {
     const providers = this.configured();
     if (!providers.length) { log.info('online search skipped — no providers configured'); return []; }
-    const settled = await Promise.all(providers.map(async (p) => {
-      try { return await p.search(q); }
-      catch (e) { log.warn(p.id, 'search failed:', e); return [] as OnlineSubtitleResult[]; }
-    }));
+    const settled = await Promise.all(providers.map((p) => withTimeout(() => p.search(q), p.id)));
     const merged = settled.reduce<OnlineSubtitleResult[]>((acc, arr) => acc.concat(arr), []);
     const pref = this.preferredLanguage();
     const rank = (x: OnlineSubtitleResult) => (langMatches(x.language, pref) ? 0 : 1);

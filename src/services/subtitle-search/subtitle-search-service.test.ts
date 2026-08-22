@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { StorageService } from '../storage-service';
 import { SubtitleSearchService } from './subtitle-search-service';
+import { CONFIG } from '../../config';
 import type { OnlineSubtitleResult } from './types';
 
 function r(over: Partial<OnlineSubtitleResult>): OnlineSubtitleResult {
@@ -45,5 +46,34 @@ describe('subtitleSearchService', () => {
     const out = await subtitleSearchService.search({ type: 'movie', title: 'Alpha' });
     expect(out).toHaveLength(1);
     expect(out[0].providerId).toBe('opensubtitles');
+  });
+
+  // Assrt is always "configured" — it falls back to a public token — so an
+  // unreachable endpoint must not hold the whole search on "Searching…".
+  it('drops a provider that never answers and keeps the rest', async () => {
+    vi.useFakeTimers();
+    try {
+      StorageService.setOnlineSubtitleConfig({
+        preferredLanguage: '',
+        subdl: { apiKey: 'k' },
+        assrt: { apiKey: '' },
+        opensubtitles: { apiKey: 'a', username: 'u', password: 'p', token: '', tokenTs: 0 },
+      });
+      const subtitleSearchService = new SubtitleSearchService([
+        { id: 'assrt', label: 'Assrt', isConfigured: () => true,
+          search: () => new Promise(() => { /* never settles */ }),
+          download: async () => ({ text: '', format: 'srt' }) },
+        { id: 'opensubtitles', label: 'OpenSubtitles', isConfigured: () => true,
+          search: async () => [r({ providerId: 'opensubtitles', language: 'en' })],
+          download: async () => ({ text: 'ok', format: 'srt' }) },
+      ]);
+      const pending = subtitleSearchService.search({ type: 'movie', title: 'Alpha' });
+      await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.SUBTITLE_SEARCH_TIMEOUT + 1);
+      const out = await pending;
+      expect(out).toHaveLength(1);
+      expect(out[0].providerId).toBe('opensubtitles');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

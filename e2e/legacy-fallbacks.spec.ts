@@ -300,8 +300,8 @@ test('no flex-gap container separates an element from loose text in the catalog'
     const real = window.fetch;
     window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
       const url = typeof input === 'string' ? input : String((input as Request).url ?? input);
-      // Assrt reports itself configured unconditionally, so its request has to
-      // be answered too or the merged search never settles.
+      // Assrt reports itself configured unconditionally, so answer it too:
+      // otherwise the merged search waits out its timeout on every run.
       if (url.indexOf('api.assrt.net') !== -1) {
         return Promise.resolve(new Response(JSON.stringify({ sub: { subs: [] } }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }));
