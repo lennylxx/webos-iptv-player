@@ -11,6 +11,39 @@ const MODERN_RGB_USAGE_RE = /rgb\(\s*var\((--[\w-]+)\)\s*\/\s*([^()]+)\)/g;
 
 const GRID_DISPLAY_RE = /\bgrid\b/;
 
+// A grid whose columns are an explicit heterogeneous track list holds one row
+// and no more: every child lands in a declared track. `repeat()` sizes a track
+// list to content that outruns it, so those wrap and stay out.
+function isSingleRowGrid(templateColumns) {
+  return postcss.list.space(templateColumns).length > 1;
+}
+
+// Grid containers the hand-written `@supports not (display: grid)` fallbacks
+// already space themselves — with their own margins, or by wrapping — so a
+// generated sibling margin would stack on top or land on a wrapped row. A
+// fallback that only swaps `display` leaves the spacing to be regenerated.
+function collectGridOverrides(stylesheets) {
+  const claimed = new Set();
+  for (const css of stylesheets) {
+    postcss.parse(css).walkAtRules('supports', (atRule) => {
+      if (!GRID_DISPLAY_RE.test(atRule.params)) return;
+      atRule.walkRules((rule) => {
+        let spaces = false;
+        rule.walkDecls((decl) => {
+          // `auto` margins centre a container; they do not space its children.
+          if (/^margin(-|$)/.test(decl.prop) && !/\bauto\b/.test(decl.value)) spaces = true;
+          if (decl.prop === 'flex-wrap' && decl.value.trim() !== 'nowrap') spaces = true;
+        });
+        if (!spaces) return;
+        for (const part of selectorParts(rule.selector)) {
+          for (const compound of part.split(/[\s>+~]+/).filter(Boolean)) claimed.add(compound);
+        }
+      });
+    });
+  }
+  return claimed;
+}
+
 const selectorParts = (selector) => selector.split(',').map((part) => part.trim());
 
 // The rightmost compound of a descendant selector, so an override like
@@ -61,6 +94,7 @@ export function linkedStylesheets(indexHtml, cssDirFiles, generated) {
 export function generateFlexGapFallback(stylesheets) {
   const rules = [];
   const context = collectFlexContext(stylesheets);
+  const gridOverrides = collectGridOverrides(stylesheets);
 
   for (const css of stylesheets) {
     postcss.parse(css).walkRules((rule) => {
@@ -70,6 +104,7 @@ export function generateFlexGapFallback(stylesheets) {
       let gap = '';
       let rowGap = '';
       let columnGap = '';
+      let templateColumns = '';
 
       rule.walkDecls((decl) => {
         const value = decl.value.trim();
@@ -78,6 +113,7 @@ export function generateFlexGapFallback(stylesheets) {
         if (decl.prop === 'gap') gap = value;
         if (decl.prop === 'row-gap') rowGap = value;
         if (decl.prop === 'column-gap') columnGap = value;
+        if (decl.prop === 'grid-template-columns') templateColumns = value;
       });
 
       if (!gap && !rowGap && !columnGap) return;
@@ -91,13 +127,18 @@ export function generateFlexGapFallback(stylesheets) {
         return '';
       };
 
-      // Grid gap has its own fallback (`@supports not (display: grid)`), and a
-      // sibling margin there would stack on top of it. Everything else is a flex
-      // container: emit unless the resolved display says otherwise.
-      if (GRID_DISPLAY_RE.test(display || inherited('display'))) return;
+      // A grid usually degrades to some inline/float layout the override sheet
+      // writes by hand, and a sibling margin would stack on top of that. One
+      // grid does not: an explicit heterogeneous track list no override claims
+      // can only ever be one row, so the same `> * + *` margin-left a flex row
+      // gets is provably right there.
+      const resolvedDisplay = display || inherited('display');
+      const isGrid = GRID_DISPLAY_RE.test(resolvedDisplay);
+      if (isGrid && (!isSingleRowGrid(templateColumns)
+          || parts.some((part) => gridOverrides.has(lastCompound(part))))) return;
 
       const resolvedDirection = direction || inherited('flex-direction') || 'row';
-      const column = resolvedDirection.startsWith('column');
+      const column = !isGrid && resolvedDirection.startsWith('column');
       const gapValues = postcss.list.space(gap);
       const shorthandRowGap = gapValues[0] || '';
       const shorthandColumnGap = gapValues[1] || shorthandRowGap;
@@ -109,7 +150,7 @@ export function generateFlexGapFallback(stylesheets) {
       // A rule that flips direction without redeclaring `display` overrides a base
       // flex container, whose fallback margin sits on the other axis. That margin
       // is not ours to inherit, so zero it — real gap never spans both axes.
-      const reset = direction && !display ? ` ${column ? 'margin-left' : 'margin-top'}: 0;` : '';
+      const reset = !isGrid && direction && !display ? ` ${column ? 'margin-left' : 'margin-top'}: 0;` : '';
       const selector = parts.map((part) => `${part} > * + *`).join(', ');
       rules.push(`  ${selector} { ${margin}: ${spacing};${reset} }`);
     });

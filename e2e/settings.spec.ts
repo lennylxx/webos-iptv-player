@@ -152,26 +152,32 @@ test.describe('Settings navigation', () => {
     expect(gaps.dropdownToNextTitle).toBe(12);
   });
 
-  test('the sticky action bar covers focus glow at the scroll viewport edges', async ({ page }) => {
+  test('the action bar sits below the scroll viewport and stays put while scrolling', async ({ page }) => {
     await page.goto('/');
     const main = page.locator('.settings-main');
+    const scroll = page.locator('.settings-scroll');
     const actions = page.locator('.settings-actions');
-    const reset = page.locator('#reset-app');
 
-    await reset.evaluate(el =>
-      el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-    await expect(reset).toHaveClass(/focused/);
-
-    const [mainBox, actionBox, resetBox] = await Promise.all([
+    const [mainBox, scrollBox, actionBox] = await Promise.all([
       main.boundingBox(),
+      scroll.boundingBox(),
       actions.boundingBox(),
-      reset.boundingBox(),
     ]);
     expect(mainBox).not.toBeNull();
+    expect(scrollBox).not.toBeNull();
     expect(actionBox).not.toBeNull();
-    expect(resetBox).not.toBeNull();
     expect(actionBox!.x).toBeLessThanOrEqual(mainBox!.x);
-    expect(actionBox!.x).toBeLessThan(resetBox!.x);
+    expect(actionBox!.y).toBeGreaterThanOrEqual(scrollBox!.y + scrollBox!.height - 1);
+    expect(actionBox!.y + actionBox!.height).toBeLessThanOrEqual(mainBox!.y + mainBox!.height + 1);
+
+    // `position: sticky` is Chromium 56, so the bar must hold its place
+    // through the layout itself rather than through the scroll position.
+    await scroll.evaluate((el) => {
+      el.style.scrollBehavior = 'auto';
+      el.scrollTop = el.scrollHeight;
+    });
+    const scrolled = await actions.boundingBox();
+    expect(scrolled!.y).toBeCloseTo(actionBox!.y, 0);
   });
 
   test('clicking Cancel in settings (opened via the tab bar) returns to the channel list, not the player', async ({ page }) => {
@@ -210,7 +216,7 @@ test.describe('Settings navigation', () => {
 
     await appearance.click();
     await expect(appearance).toHaveClass(/active/);
-    await page.locator('.settings-main').evaluate((main) => {
+    await page.locator('.settings-scroll').evaluate((main) => {
       (main as HTMLElement).style.scrollBehavior = 'auto';
       main.scrollTop = main.scrollHeight;
       main.dispatchEvent(new Event('scroll'));

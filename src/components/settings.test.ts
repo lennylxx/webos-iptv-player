@@ -1199,7 +1199,7 @@ describe('Settings.handleAction', () => {
 
   it('updates the weak active category when content scrolling reaches the bottom', async () => {
     settings.render();
-    const main = container.querySelector<HTMLElement>('.settings-main')!;
+    const main = container.querySelector<HTMLElement>('.settings-scroll')!;
     Object.defineProperties(main, {
       scrollTop: { value: 900, configurable: true },
       clientHeight: { value: 100, configurable: true },

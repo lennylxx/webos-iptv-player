@@ -20,6 +20,7 @@
   .edit-action[data-edit-action="yellow"] > * + * { margin-left: 0; }
   .epg-mapping-search-wrap > * + * { margin-left: 12px; }
   .epg-mapping-option > * + * { margin-top: 3px; }
+  .channel-epg-offset-controls > * + * { margin-left: 14px; }
   .channel-edit-overlay-back > * + * { margin-left: 8px; }
   .epg-offset-badge > * + * { margin-left: 5px; }
   .osd-channel > * + * { margin-left: 16px; }
@@ -84,7 +85,9 @@
   .tsp-dots > * + * { margin-left: 8px; }
   .reminder-manager-back > * + *, .reminder-manager-clear > * + *, .reminder-manager-remove > * + * { margin-left: 10px; }
   .reminder-manager-list > * + * { margin-top: 28px; }
+  .reminder-day-heading > * + * { margin-left: 16px; }
   .reminder-day-cards > * + * { margin-top: 12px; }
+  .reminder-manager-row > * + * { margin-left: 24px; }
   .reminder-manager-time > * + * { margin-left: 10px; }
   .reminder-manager-empty > * + * { margin-top: 22px; }
   .tab-bar-inner > * + * { margin-left: 32px; }
