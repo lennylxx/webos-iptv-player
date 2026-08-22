@@ -78,13 +78,13 @@ export class ReminderManager {
             <button class="reminder-manager-back" data-focusable
                     data-reminder-action="back">
               <span class="reminder-manager-button-icon">${raw(BACK_ICON)}</span>
-              ${t('common.back')}
+              <span>${t('common.back')}</span>
             </button>
             ${reminders.length
               ? html`<button class="reminder-manager-clear" data-focusable
                              data-reminder-action="clear">
                        <span class="reminder-manager-button-icon">${raw(TRASH_ICON)}</span>
-                       ${t('reminderManager.clearAll')}
+                       <span>${t('reminderManager.clearAll')}</span>
                      </button>`
               : ''}
           </div>
@@ -160,7 +160,7 @@ export class ReminderManager {
       <div class="reminder-manager-row" data-key="${reminder.channelKey}|${reminder.startMs}">
         <time class="reminder-manager-time" datetime="${new Date(reminder.startMs).toISOString()}">
           <span class="reminder-manager-time-icon">${raw(CLOCK_ICON)}</span>
-          ${formatTime(start)}
+          <span>${formatTime(start)}</span>
         </time>
         <div class="reminder-manager-details">
           <div class="reminder-manager-program">${reminder.title}</div>
@@ -170,7 +170,7 @@ export class ReminderManager {
                 data-reminder-action="remove" data-channel-key="${reminder.channelKey}"
                 data-start-ms="${reminder.startMs}">
           <span class="reminder-manager-button-icon">${raw(REMOVE_ICON)}</span>
-          ${t('common.remove')}
+          <span>${t('common.remove')}</span>
         </button>
       </div>
     `;

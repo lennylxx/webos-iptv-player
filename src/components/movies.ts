@@ -243,14 +243,14 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
           <div class="detail-actions">
             ${saved ? html`
               <button class="detail-btn detail-btn-primary" data-focusable data-key="resume" data-action="resume">
-                <span class="detail-btn-icon">${raw(PLAY_ICON)}</span>${t('common.resume')}
+                <span class="detail-btn-icon">${raw(PLAY_ICON)}</span><span>${t('common.resume')}</span>
               </button>` : ''}
             <button class="detail-btn ${saved ? '' : 'detail-btn-primary'}" data-focusable data-key="play" data-action="play">
-              <span class="detail-btn-icon">${raw(PLAY_ICON)}</span>${t(saved ? 'catalog.playFromStart' : 'catalog.play')}
+              <span class="detail-btn-icon">${raw(PLAY_ICON)}</span><span>${t(saved ? 'catalog.playFromStart' : 'catalog.play')}</span>
             </button>
             <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
               <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>
-              ${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}
+              <span>${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}</span>
             </button>
           </div>
         </div>

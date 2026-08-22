@@ -583,15 +583,15 @@ export class EpgGrid {
               </div>
               <div class="epg-legend">
                 <span class="epg-legend-item state-past">
-                  <i class="epg-legend-dot"></i>${t('epg.aired')}
+                  <i class="epg-legend-dot"></i><span>${t('epg.aired')}</span>
                 </span>
                 <span class="epg-legend-item state-future">
-                  <i class="epg-legend-dot"></i>${t('epg.upcoming')}
+                  <i class="epg-legend-dot"></i><span>${t('epg.upcoming')}</span>
                 </span>
                 <button type="button"
                         class="epg-legend-item epg-reminder-entry ${this.focusCol === 'legend' ? 'focused' : ''}"
                         data-epg-reminders aria-label="${t('reminderManager.title')}">
-                  ${raw(bellIcon(true))}${t('epg.reminder')}
+                  ${raw(bellIcon(true))}<span>${t('epg.reminder')}</span>
                 </button>
               </div>
             </div>
@@ -625,12 +625,12 @@ export class EpgGrid {
                           <span class="epg-prog-time">${formatTime(p.start)}</span>
                           <span class="epg-prog-dur">${state === 'past'
                             ? raw(REPLAY_ICON)
-                            : ''}${formatDuration(stopMs - startMs)}</span>
+                            : ''}<span>${formatDuration(stopMs - startMs)}</span></span>
                         </div>
                         <div class="epg-prog-body">
                           <div class="epg-prog-title">
-                            ${current ? html`<span class="epg-now-badge"><span class="epg-now-dot"></span>${t('common.live')}</span>` : ''}
-                            ${p.title}
+                            ${current ? html`<span class="epg-now-badge"><span class="epg-now-dot"></span><span>${t('common.live')}</span></span>` : ''}
+                            <span>${p.title}</span>
                             ${state === 'future' && channel ? raw(bellIcon(ReminderService.has(channelKey(channel), startMs))) : ''}
                             ${progress ? html`<span class="epg-catchup-badge ${progress.completed ? 'watched' : 'resume'}">${t(progress.completed ? 'epg.watched' : 'common.resume')}</span>` : ''}
                           </div>

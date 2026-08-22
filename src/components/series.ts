@@ -321,7 +321,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
             <div class="detail-actions">
               <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
                 <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>
-                ${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}
+                <span>${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}</span>
               </button>
             </div>
             ${this.detailLoading

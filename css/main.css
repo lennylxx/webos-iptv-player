@@ -421,7 +421,6 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   vertical-align: -3px;
 }
 .epg-prog-title .epg-bell-glyph { margin-left: 8px; }
-.epg-legend-item .epg-bell-glyph { margin-right: 6px; }
 .epg-bell-glyph.unset { color: var(--text-muted); opacity: 0.5; }
 .epg-bell-glyph.set {
   color: var(--warning);

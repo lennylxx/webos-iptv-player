@@ -162,7 +162,7 @@ export class PlayerOsd {
             <div class="osd-programme-info">
               <div class="osd-programme-title">${catchup.title}</div>
               <div class="osd-programme-time">
-                ${formatTime(start)} - ${formatTime(end)}
+                <span>${formatTime(start)} - ${formatTime(end)}</span>
                 <span class="osd-remaining">${formatDuration(end.getTime() - start.getTime())}</span>
               </div>
             </div>
@@ -197,7 +197,7 @@ export class PlayerOsd {
           <div class="osd-programme-info">
             <div class="osd-programme-title">${nowPlaying.title}</div>
             <div class="osd-programme-time">
-              ${formatTime(nowPlaying.start)} - ${formatTime(nowPlaying.stop)}
+              <span>${formatTime(nowPlaying.start)} - ${formatTime(nowPlaying.stop)}</span>
               <span class="osd-remaining">${t('player.remaining', {
                 duration: formatDuration(nowPlaying.stop.getTime() - Date.now()),
               })}</span>

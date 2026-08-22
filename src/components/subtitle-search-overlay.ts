@@ -176,7 +176,7 @@ export class SubtitleSearchOverlay {
             <div class="subs-row ${i === this.focusIdx ? 'focused' : ''}"
                  data-key="${r.providerId}:${r.id}:${i}" data-focusable data-result-index="${i}">
               <span class="subs-row-label">${this.label(r)}</span>
-              ${r.downloads ? html`<span class="subs-count" title="${t('subtitle.downloads')}">${raw(DOWNLOAD_ICON)}${formatCount(r.downloads)}</span>` : ''}
+              ${r.downloads ? html`<span class="subs-count" title="${t('subtitle.downloads')}">${raw(DOWNLOAD_ICON)}<span>${formatCount(r.downloads)}</span></span>` : ''}
             </div>
           `)}
         </div>

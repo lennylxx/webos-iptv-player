@@ -1259,9 +1259,12 @@ class App {
         this.tabBar.refresh();
         ReminderService.reschedulePending();
       }
+      // Republish on 'apply' too: subtitle credentials and other display-only
+      // settings never reach the phone page otherwise. Advisory, so it never
+      // holds up closing Settings.
+      void SetupClient.publishState();
     }
     if (action === 'reload') {
-      await SetupClient.publishState();
       await clearCachedPlaylist();
       this.showView('channels');
       await this.loadData();

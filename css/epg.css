@@ -66,8 +66,6 @@
   background: rgb(var(--accent-rgb) / 0.14);
 }
 
-.epg-reminder-entry .epg-bell-glyph { margin-right: 0; }
-
 .epg-legend-dot {
   width: 11px;
   height: 11px;

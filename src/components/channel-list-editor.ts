@@ -1258,33 +1258,33 @@ export class ChannelListEditor {
     const grabbed = !!this.grabbed;
     return html`
       <div class="edit-hints">
-        <span class="edit-hint"><span class="edit-key key-ok">OK</span>${
-          grabbed ? t('channel.editDrop') : t('channel.editGrab')}</span>
+        <span class="edit-hint"><span class="edit-key key-ok">OK</span><span>${
+          grabbed ? t('channel.editDrop') : t('channel.editGrab')}</span></span>
         <button class="edit-hint edit-action" data-key="edit:green" data-focusable
-                data-edit-action="green"><span class="edit-key key-green"></span>${
-                  t('channel.editHide')}</button>
+                data-edit-action="green"><span class="edit-key key-green"></span><span>${
+                  t('channel.editHide')}</span></button>
         <button class="edit-hint edit-action" data-key="edit:blue" data-focusable
-                data-edit-action="blue"><span class="edit-key key-blue"></span>${
-                  t('channel.editRename')}</button>
+                data-edit-action="blue"><span class="edit-key key-blue"></span><span>${
+                  t('channel.editRename')}</span></button>
         <button class="edit-hint edit-action" data-key="edit:red" data-focusable
-                data-edit-action="red"><span class="edit-key key-red"></span>${
-                  t('channel.editGroup')}</button>
+                data-edit-action="red"><span class="edit-key key-red"></span><span>${
+                  t('channel.editGroup')}</span></button>
         <button class="edit-hint edit-action" data-key="edit:epg" data-focusable
                 data-epg-action>
           <span class="edit-action-icon">${raw(GUIDE_ICON)}</span>
-          ${t('channel.editEpg')}
+          <span>${t('channel.editEpg')}</span>
         </button>
         <button class="edit-hint edit-action" data-key="edit:epg-offset" data-focusable
                 data-epg-offset-action>
           <span class="edit-action-icon">${raw(CLOCK_ICON)}</span>
-          ${t('settings.timeCorrection')}
+          <span>${t('settings.timeCorrection')}</span>
         </button>
         <button class="edit-hint edit-action" data-key="edit:yellow" data-focusable
                 data-edit-action="yellow">
           <span class="edit-key key-yellow"></span>
           <span class="edit-key-separator">/</span>
           <span class="edit-key key-back">${raw(BACK_ICON)}</span>
-          ${t('channel.editDone')}
+          <span>${t('channel.editDone')}</span>
         </button>
       </div>
     `;
@@ -1301,20 +1301,20 @@ export class ChannelListEditor {
       : t('channel.favoriteSelectAll');
     return html`
       <div class="edit-hints favorite-hints">
-        <span class="edit-hint"><span class="edit-key key-ok">OK</span>${
-          t('channel.favoriteSelect')}</span>
+        <span class="edit-hint"><span class="edit-key key-ok">OK</span><span>${
+          t('channel.favoriteSelect')}</span></span>
         <button class="edit-hint edit-action" data-key="favorite:blue" data-focusable
-                data-favorite-action="blue"><span class="edit-key key-blue"></span>${
-                  selectAllLabel}</button>
+                data-favorite-action="blue"><span class="edit-key key-blue"></span><span>${
+                  selectAllLabel}</span></button>
         <button class="edit-hint edit-action" data-key="favorite:red" data-focusable
-                data-favorite-action="red"><span class="edit-key key-red"></span>${
-                  t('channel.favoriteRemoveSelected', { count: selected })}</button>
+                data-favorite-action="red"><span class="edit-key key-red"></span><span>${
+                  t('channel.favoriteRemoveSelected', { count: selected })}</span></button>
         <button class="edit-hint edit-action" data-key="favorite:yellow" data-focusable
                 data-favorite-action="yellow">
           <span class="edit-key key-yellow"></span>
           <span class="edit-key-separator">/</span>
           <span class="edit-key key-back">${raw(BACK_ICON)}</span>
-          ${t('channel.editDone')}
+          <span>${t('channel.editDone')}</span>
         </button>
       </div>
     `;

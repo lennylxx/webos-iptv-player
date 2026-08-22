@@ -254,20 +254,23 @@ export class PlayerMenu {
           <div class="menu-item ${i === this.focusIdx ? 'focused' : ''}"
                data-key="${item.action}"
                data-focusable data-menu-action="${item.action}">
-            <span class="menu-dot ${item.color}"></span> ${t(item.labelKey)}
+            <span class="menu-dot ${item.color}"></span>
+            <span class="menu-item-label">${t(item.labelKey)}</span>
           </div>
         `)}
         ${audioShown ? html`
           <div class="menu-item ${audioRowIdx === this.focusIdx ? 'focused' : ''}"
                data-focusable data-menu-action="${OPEN_AUDIO}">
-            <span class="menu-icon audio">♫</span> ${t('player.audioTrack')}
+            <span class="menu-icon audio">♫</span>
+            <span class="menu-item-label">${t('player.audioTrack')}</span>
             <span class="menu-item-value">${activeTrack?.label || ''}</span>
           </div>
         ` : ''}
         ${subtitles.length >= 1 ? html`
           <div class="menu-item ${subsRowIdx === this.focusIdx ? 'focused' : ''}"
                data-focusable data-menu-action="${OPEN_SUBS}">
-            <span class="menu-icon subtitle">${raw(SUBTITLE_ICON)}</span> ${t('player.subtitles')}
+            <span class="menu-icon subtitle">${raw(SUBTITLE_ICON)}</span>
+            <span class="menu-item-label">${t('player.subtitles')}</span>
             <span class="menu-item-value">${activeSub?.label || t('common.off')}</span>
           </div>
         ` : ''}
@@ -288,7 +291,8 @@ export class PlayerMenu {
       <div class="menu-items">
         <div class="menu-item ${this.focusIdx === 0 ? 'focused' : ''}"
              data-focusable data-menu-action="${BACK}">
-          <span class="menu-check menu-back">‹</span> ${t('common.back')}
+          <span class="menu-check menu-back">‹</span>
+          <span class="menu-item-label">${t('common.back')}</span>
         </div>
         ${tracks.map((t, i) => html`
           <div class="menu-item ${this.focusIdx === i + 1 ? 'focused' : ''} ${t.available === false ? 'unavailable' : ''}"
@@ -315,7 +319,8 @@ export class PlayerMenu {
       <div class="menu-items">
         <div class="menu-item ${this.focusIdx === 0 ? 'focused' : ''}"
              data-focusable data-menu-action="${BACK}">
-          <span class="menu-check menu-back">‹</span> ${t('common.back')}
+          <span class="menu-check menu-back">‹</span>
+          <span class="menu-item-label">${t('common.back')}</span>
         </div>
         <div class="menu-item ${this.focusIdx === 1 ? 'focused' : ''}"
              data-focusable data-menu-action="${PICK_SUB}" data-track-index="-1">
