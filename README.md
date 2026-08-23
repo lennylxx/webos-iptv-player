@@ -2,6 +2,7 @@
   <img src="assets/icon.svg" alt="webOS IPTV Player icon">
   <h1>webOS IPTV Player</h1>
   <p>An IPTV player for LG webOS TVs. Supports M3U playlists, Xtream Codes accounts, XMLTV program guides, and catch-up/timeshift playback.</p>
+  <p>English | <a href="README.zh-CN.md">简体中文</a></p>
   <p>
   <a href="#supported-webos-versions"><img src="https://img.shields.io/badge/webOS-4%2B-e6007e?logo=webos&logoColor=white" alt="webOS 4+"></a>
   <a href="https://github.com/lennylxx/webos-iptv-player/releases/latest"><img src="https://img.shields.io/github/v/release/lennylxx/webos-iptv-player" alt="Latest release"></a>
