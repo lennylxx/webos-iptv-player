@@ -69,6 +69,7 @@
 - **MPEG-DASH playback** — play `.mpd` channels through the native webOS pipeline or dash.js in the desktop preview, with MPD track metadata, live DVR, self-rendered raw WebVTT, and native IMSC/`stpp` and `wvtt` subtitles ([details](docs/mpeg-dash.md))
 - **Audio & subtitle tracks** — pick from the player menu, remembered per channel or VOD item; subtitles cover in-manifest WebVTT and CEA-608/708 (live), in-container / sidecar SRT/WebVTT/ASS (VOD), and online search (SubDL, OpenSubtitles, and Assrt) with a manual title box; online search remains available when bundled tracks exist, and subtitle timing can be adjusted live
 - **On-screen display** — program title, progress, and a live stream-info readout (resolution, HDR, frame rate, codec, audio channels)
+- **Automatic playback recovery** — detect streams that fail to start or stall, reload transient failures, and advance to the next live channel when recovery is exhausted
 - **Resync A/V** (🔄) — one tap on the playback bar re-locks audio and video that drift apart during a long catch-up or on-demand stream
 
 **Navigation**
@@ -228,9 +229,9 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Device Setup** — scan the QR code to configure the app from a phone, or open the shown URL on a computer and enter the pairing code.
 - **Xtream Accounts** — add, edit, remove, or temporarily disable accounts; check credentials, connection usage, and expiry; and choose TS, HLS, or Auto for live streams. The playlist and EPG are derived from the account credentials on Save.
 - **Playlists** — add, edit, remove, or temporarily disable M3U URLs. Re-applied on Save.
-- **Upload Playlist** — QR code + LAN URL on the left, list of currently uploaded playlists on the right. Scan the QR from a phone/laptop on the same network to upload `.m3u` files; they appear in this list within milliseconds via Luna push.
+- **Upload Playlists** — lists playlists uploaded through Device Setup, with controls to temporarily disable or remove each upload. New uploads appear automatically through Luna push.
 - **Channels** — check live-stream health; reorder, hide, rename, regroup, manually map entries to XMLTV channels, or correct one channel's EPG time; show hidden channels or reset customizations.
-- **XMLTV URL** — set the program guide URL, also auto-detected from `x-tvg-url` in M3U playlists.
+- **XMLTV URL** — set the program guide URL, also auto-detected from `url-tvg`, `x-tvg-url`, or `tvg-url` in M3U playlists.
 - **EPG time zone** — show guide times in the TV's **Device** time zone or the guide **Feed** time zone.
 - **EPG time correction** — adjust each source independently in 15-minute steps.
 - **Program reminders** — open the date-grouped Reminder Manager to review or remove upcoming reminders.
