@@ -125,6 +125,7 @@ describe('PlayerOsd', () => {
       streamInfo: {
         resolution: { tier: 'hd', label: 'Info 1' },
         hdr: 'HDR',
+        drm: 'PlayReady',
         fps: '30',
         videoCodec: 'Codec 1',
         audioCodec: 'Codec 2',
@@ -138,8 +139,10 @@ describe('PlayerOsd', () => {
     expect(container.textContent).toContain('Programme 2');
     expect(container.textContent).toContain('Info 1');
     expect(container.textContent).toContain('HDR');
+    expect(container.textContent).toContain('PlayReady');
     expect(container.textContent).toContain('30fps');
     expect(container.textContent).toContain('Codec 1');
+    expect(container.textContent).toContain('Audio Track: Track 1');
 
     state = snapshot({
       playback: playback(120, 30),
@@ -166,6 +169,26 @@ describe('PlayerOsd', () => {
     expect(container.textContent).toContain('Video 2');
     expect(container.querySelector('[data-next-play]')).not.toBeNull();
     expect(container.querySelector('[data-next-cancel]')).not.toBeNull();
+  });
+
+  it('does not repeat an audio-track prefix already present in the name', () => {
+    state = snapshot({
+      streamInfo: {
+        resolution: null,
+        hdr: '',
+        drm: '',
+        fps: '',
+        videoCodec: '',
+        audioCodec: '',
+        audio: 'Audio Track 1',
+        subtitle: '',
+      },
+    });
+
+    osd.show();
+
+    expect(container.textContent).toContain('Audio Track 1');
+    expect(container.textContent).not.toContain('Audio Track: Audio Track 1');
   });
 
   it('refreshes progress and switches an open Live OSD to the DVR layout', () => {

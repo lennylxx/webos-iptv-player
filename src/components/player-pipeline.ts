@@ -1,7 +1,12 @@
 import type { AudioOption, ManifestAudio, ManifestClosedCaption, ManifestSubtitle, SubtitleOption } from '../types';
 import { CONFIG } from '../config';
 import { getCachedStreamMime, setCachedStreamMime } from '../services/idb-cache';
-import { parseMpd } from '../parsers/mpd-manifest';
+import { parseMpd, type MpdManifest } from '../parsers/mpd-manifest';
+import {
+  nativeDrmConfig,
+  PlayReadyDrm,
+  type PlayReadyConfig,
+} from '../services/playready-drm';
 import { parseAudioRenditions } from '../utils/audio-tracks';
 import { FetchTextError, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
@@ -78,6 +83,8 @@ export class PlayerPipeline {
   private manifestSeq = 0;
   private manifestController: AbortController | null = null;
   private videoLoadLabels = new WeakMap<HTMLVideoElement, string>();
+  private playReadyDrm = new PlayReadyDrm();
+  private activeDrm = '';
 
   constructor(private callbacks: PlayerPipelineOptions) {}
 
@@ -118,6 +125,10 @@ export class PlayerPipeline {
     return this.engine?.streamInfo() ?? null;
   }
 
+  drmLabel(): string {
+    return this.activeDrm;
+  }
+
   load(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
     const videoEl = this.videoEl;
     if (!videoEl) return;
@@ -126,6 +137,8 @@ export class PlayerPipeline {
     const safeUrl = diagnosticStreamUrl(url);
     this.cancelManifest();
     this.destroyLoaders();
+    this.playReadyDrm.release();
+    this.activeDrm = '';
 
     const urlMime = streamUrlMime(url);
     const isTsUrl = urlMime === 'video/mp2t';
@@ -155,8 +168,12 @@ export class PlayerPipeline {
           this.callbacks.playbackLabel(token),
           'reason=url', 'url=', safeUrl,
           '| webOS native | catchup:', this.callbacks.isCatchup(), '| MIME', mime);
-        if (isHlsUrl || isDashUrl) {
-          void this.loadManifest(url, this.manifestSeq, token, isDashUrl ? 'dash' : 'hls');
+        if (isDashUrl) {
+          this.loadNativeDash(url, extras, token);
+          return;
+        }
+        if (isHlsUrl) {
+          void this.loadManifest(url, this.manifestSeq, token);
         }
         this.playNativeMime(url, mime);
         return;
@@ -173,7 +190,8 @@ export class PlayerPipeline {
           if (cachedMime === 'application/vnd.apple.mpegurl') {
             void this.loadManifest(url, this.manifestSeq, token);
           } else if (cachedMime === 'application/dash+xml') {
-            void this.loadManifest(url, this.manifestSeq, token, 'dash');
+            this.loadNativeDash(url, extras, token);
+            return;
           }
           this.playNativeMime(url, cachedMime);
           return;
@@ -193,7 +211,8 @@ export class PlayerPipeline {
           if (mime === 'application/vnd.apple.mpegurl') {
             void this.loadManifest(url, this.manifestSeq, token);
           } else if (mime === 'application/dash+xml') {
-            void this.loadManifest(url, this.manifestSeq, token, 'dash');
+            this.loadNativeDash(url, extras, token);
+            return;
           }
           this.playNativeMime(url, mime);
         });
@@ -260,6 +279,8 @@ export class PlayerPipeline {
     this.loadToken++;
     this.cancelManifest();
     this.destroyLoaders();
+    this.playReadyDrm.release();
+    this.activeDrm = '';
   }
 
   private destroyLoaders(): void {
@@ -333,15 +354,77 @@ export class PlayerPipeline {
     this.playNative(url, mime);
   }
 
-  private playNativeDash(url: string): void {
+  private playNativeDash(url: string, clientId = ''): void {
     const bare = CONFIG.PLAYER.DASH_SOURCE === 'bare';
-    const type = bare
+    const type = bare && !clientId
       ? ''
-      : mediaOptionSourceType('video/mp4', { mediaTransportType: 'MPEG-DASH' });
+      : mediaOptionSourceType('video/mp4', {
+        mediaTransportType: 'MPEG-DASH',
+        ...(clientId ? {
+          option: { drm: { type: 'playready' as const, clientId } },
+        } : {}),
+      });
     log.info('Native DASH source', 'event=playback.path.native.dash',
       this.callbacks.playbackLabel(this.loadToken),
-      `hint=${bare ? 'none' : 'mediaOption'}`);
+      `hint=${bare && !clientId ? 'none' : 'mediaOption'}`,
+      `drm=${clientId ? 'playready' : 'none'}`);
     this.playNative(url, type);
+  }
+
+  private loadNativeDash(
+    url: string,
+    extras: Record<string, string> | null,
+    loadToken: number,
+  ): void {
+    const seq = this.manifestSeq;
+    void this.loadManifest(url, seq, loadToken, 'dash').then(parsed => {
+      if (loadToken !== this.loadToken || !this.videoEl) return;
+      const configured = nativeDrmConfig(extras);
+      const detected = parsed?.drm;
+      if (configured?.type === 'unsupported' || detected?.type === 'unsupported') {
+        const value = configured?.type === 'unsupported' ? configured.value : detected?.scheme;
+        log.warn('Unsupported native DASH DRM', 'event=playback.dash.drm.unsupported',
+          this.callbacks.playbackLabel(loadToken), `type=${value || 'unknown'}`);
+        this.callbacks.onError();
+        return;
+      }
+      if (configured?.type !== 'playready' && detected?.type !== 'playready') {
+        this.playNativeDash(url);
+        return;
+      }
+      const config: PlayReadyConfig = configured?.type === 'playready'
+        ? configured
+        : {
+            type: 'playready',
+            licenseUrl: '',
+            customData: '',
+            unsupportedOptions: [],
+          };
+      if (config.unsupportedOptions.length) {
+        log.warn('Ignoring unsupported native PlayReady options',
+          'event=playback.dash.drm.options.unsupported',
+          this.callbacks.playbackLabel(loadToken),
+          `options=${config.unsupportedOptions.join(',')}`);
+      }
+      void this.playReadyDrm.prepare(config, response => {
+        if (loadToken !== this.loadToken) return;
+        log.warn('PlayReady rights error', 'event=playback.dash.drm.rights',
+          this.callbacks.playbackLabel(loadToken),
+          `state=${String(response.errorState ?? '')}`);
+        this.callbacks.onError();
+      }).then(clientId => {
+        if (!clientId || loadToken !== this.loadToken || !this.videoEl) return;
+        log.info('PlayReady DRM ready', 'event=playback.dash.drm.ready',
+          this.callbacks.playbackLabel(loadToken));
+        this.activeDrm = 'PlayReady';
+        this.playNativeDash(url, clientId);
+      }).catch(error => {
+        if (loadToken !== this.loadToken) return;
+        log.warn('PlayReady setup failed', 'event=playback.dash.drm.failed',
+          this.callbacks.playbackLabel(loadToken), error);
+        this.callbacks.onError();
+      });
+    });
   }
 
   private playNative(url: string, mime: string): void {
@@ -535,7 +618,7 @@ export class PlayerPipeline {
   // saved picks when the parsed manifest is delivered.
   private async loadManifest(
     url: string, seq: number, loadToken: number, format: 'hls' | 'dash' = 'hls',
-  ): Promise<void> {
+  ): Promise<MpdManifest | null> {
     const dash = format === 'dash';
     const controller = new AbortController();
     const started = Date.now();
@@ -549,7 +632,7 @@ export class PlayerPipeline {
         controller.signal,
         dash ? mpdOpeningVerdict : '#EXTM3U',
       );
-      if (seq !== this.manifestSeq) return;
+      if (seq !== this.manifestSeq) return null;
       if (dash && !isMpdText(text)) {
         throw new FetchTextError('invalid_content', 'Response is not an MPD');
       }
@@ -557,13 +640,6 @@ export class PlayerPipeline {
         this.callbacks.playbackLabel(loadToken),
         `format=${format} bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
       const parsed = dash ? parseMpd(text, url) : null;
-      // ContentProtection triggers channel fallback before the startup watchdog.
-      if (parsed?.hasContentProtection) {
-        log.warn('MPD is DRM protected; abandoning playback', 'event=playback.dash.drm',
-          this.callbacks.playbackLabel(loadToken));
-        if (loadToken === this.loadToken) this.callbacks.onError();
-        return;
-      }
       const audio = parsed ? parsed.audio : parseAudioRenditions(text);
       const subtitles = parsed ? parsed.subtitles : parseSubtitleRenditions(text);
       const closedCaptions = parsed ? parsed.closedCaptions : parseClosedCaptions(text);
@@ -586,11 +662,13 @@ export class PlayerPipeline {
         variants,
         masterUrl: subtitles.length ? url : '',
       });
+      return parsed;
     } catch (e) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return null;
       log.warn('Manifest fetch failed', 'event=playback.manifest.failed',
         this.callbacks.playbackLabel(loadToken),
         `elapsed=${String(Date.now() - started)}ms`, e);
+      return null;
     } finally {
       if (this.manifestController === controller) this.manifestController = null;
     }

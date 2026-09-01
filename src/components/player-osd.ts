@@ -30,6 +30,7 @@ export interface PlayerOsdStreamInfo {
     label: string;
   } | null;
   hdr: string;
+  drm: string;
   fps: string;
   videoCodec: string;
   audioCodec: string;
@@ -47,6 +48,11 @@ export interface PlayerOsdOptions {
   onResync: () => void;
   onPlayNext: () => void;
   onCancelNext: () => void;
+}
+
+function audioTrackText(name: string): string {
+  const label = t('player.audioTrack');
+  return name === label || name.startsWith(`${label} `) ? name : `${label}: ${name}`;
 }
 
 export class PlayerOsd {
@@ -391,7 +397,7 @@ export class PlayerOsd {
     `;
   }
 
-  // The stream-info badges (resolution / HDR / fps / codecs / audio / subtitle),
+  // The stream-info badges (resolution / HDR / DRM / fps / codecs / audio / subtitle),
   // shared by the Live and VOD OSD.
   private renderStreamInfo(info: PlayerOsdStreamInfo | null): Safe | string {
     if (!info) return '';
@@ -403,10 +409,11 @@ export class PlayerOsd {
             }</span>`
           : ''}
         ${info.hdr ? html`<span class="si-badge si-badge--hdr">${info.hdr}</span>` : ''}
+        ${info.drm ? html`<span class="si-pill">${info.drm}</span>` : ''}
         ${info.fps ? html`<span class="si-pill">${info.fps}fps</span>` : ''}
         ${info.videoCodec ? html`<span class="si-pill">${info.videoCodec}</span>` : ''}
         ${info.audioCodec ? html`<span class="si-pill">${info.audioCodec}</span>` : ''}
-        ${info.audio ? html`<span class="si-text">${info.audio}</span>` : ''}
+        ${info.audio ? html`<span class="si-text">${audioTrackText(info.audio)}</span>` : ''}
         ${info.subtitle ? html`<span class="si-text">${t('player.subtitlesTrack', { name: info.subtitle })}</span>` : ''}
       </div>
     `;

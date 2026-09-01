@@ -10,6 +10,12 @@ export interface MpdManifest {
   variants: StreamVariant[];
   isLive: boolean;
   hasContentProtection: boolean;
+  drm: MpdDrmInfo | null;
+}
+
+export interface MpdDrmInfo {
+  type: 'playready' | 'unsupported';
+  scheme: string;
 }
 
 const ROLE_SCHEME = 'urn:mpeg:dash:role:2011';
@@ -19,18 +25,23 @@ const CEA708_SCHEME = 'urn:scte:dash:cc:cea-708:2015';
 const WEBVTT_MIMES = ['text/vtt', 'application/x-subtitle-vtt'];
 const SUBTITLE_MIMES = WEBVTT_MIMES.concat(['application/ttml+xml']);
 const MP4_PROTECTION_SCHEME = 'urn:mpeg:dash:mp4protection:2011';
+export const PLAYREADY_SCHEME = 'urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95';
 const DV_CODECS = ['dvh1', 'dvhe', 'dvav', 'dva1', 'dav1', 'dvc1'];
 
 const EMPTY: MpdManifest = {
   audio: [], subtitles: [], closedCaptions: [], variants: [],
-  isLive: false, hasContentProtection: false,
+  isLive: false, hasContentProtection: false, drm: null,
 };
 
-function hasDrmProtection(root: Element): boolean {
-  return descendants(root, 'ContentProtection').some(element => {
-    const scheme = (element.getAttribute('schemeIdUri') || '').toLowerCase();
-    return scheme !== MP4_PROTECTION_SCHEME;
-  });
+function drmProtection(root: Element): MpdDrmInfo | null {
+  const schemes = descendants(root, 'ContentProtection').map(element =>
+    (element.getAttribute('schemeIdUri') || '').toLowerCase()).filter(scheme =>
+    scheme && scheme !== MP4_PROTECTION_SCHEME);
+  if (schemes.indexOf(PLAYREADY_SCHEME) >= 0) {
+    return { type: 'playready', scheme: PLAYREADY_SCHEME };
+  }
+  const scheme = schemes[0];
+  return scheme ? { type: 'unsupported', scheme } : null;
 }
 
 // localName lookup — an MPD may be served with a default namespace or a prefix,
@@ -500,8 +511,9 @@ export function parseMpd(
 
   const period = descendants(root, 'Period')[0];
   if (!period) {
+    const drm = drmProtection(root);
     return { ...EMPTY, isLive: root.getAttribute('type') === 'dynamic',
-      hasContentProtection: hasDrmProtection(root) };
+      hasContentProtection: !!drm, drm };
   }
 
   const audio: ManifestAudio[] = [];
@@ -579,13 +591,15 @@ export function parseMpd(
     }
   }
 
+  const drm = drmProtection(root);
   return {
     audio,
     subtitles,
     closedCaptions,
     variants,
     isLive: root.getAttribute('type') === 'dynamic',
-    hasContentProtection: hasDrmProtection(root),
+    hasContentProtection: !!drm,
+    drm,
   };
 }
 

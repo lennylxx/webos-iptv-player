@@ -192,7 +192,7 @@ describe('PlayerPipeline webOS DASH', () => {
     pipeline.load('http://host/a.mpd', null);
 
     await vi.waitFor(() => expect(pipeline.opts.onError).toHaveBeenCalledOnce());
-    expect(pipeline.opts.onManifest).not.toHaveBeenCalled();
+    expect(pipeline.opts.onManifest).toHaveBeenCalledOnce();
   });
 
   it('does not reject an MPD with only the generic MP4 protection descriptor', async () => {
@@ -221,8 +221,64 @@ describe('PlayerPipeline webOS DASH', () => {
     pipeline.load('http://host/a.mpd', null);
     pipeline.load('http://host/b.m3u8', null);
 
-    await vi.waitFor(() => expect(video.play).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
     expect(pipeline.opts.onError).not.toHaveBeenCalled();
+  });
+
+  it('prepares PlayReady before attaching the native DASH source', async () => {
+    const playReady = MPD.replace('<Period>',
+      '<Period><AdaptationSet contentType="video" mimeType="video/mp4">' +
+      '<ContentProtection ' +
+      'schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"/>' +
+      '<Representation id="v1" width="1920" height="1080" codecs="avc1.640028"/>' +
+      '</AdaptationSet>');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(playReady)));
+    const request = vi.fn((_uri: string, options: {
+      method: string;
+      onSuccess?: (response: Record<string, unknown>) => void;
+    }) => {
+      if (options.method === 'load') {
+        options.onSuccess?.({ returnValue: true, clientId: 'client-1' });
+      } else if (options.method === 'sendDrmMessage') {
+        options.onSuccess?.({ returnValue: true, resultCode: 0, msgId: 'msg-1' });
+      } else if (options.method === 'unload') {
+        options.onSuccess?.({ returnValue: true });
+      }
+      return { cancel: vi.fn() };
+    });
+    Object.defineProperty(window, 'webOS', {
+      configurable: true,
+      value: { service: { request } },
+    });
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+    const { parseMediaOption } = await import('../utils/webos-media-option');
+
+    pipeline.load('http://host/a.mpd', {
+      'inputstream.adaptive.license_type': 'com.microsoft.playready',
+      'inputstream.adaptive.license_key': 'http://host/license|x-token=v|R{SSM}|',
+    });
+
+    expect(pipeline.drmLabel()).toBe('');
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(pipeline.drmLabel()).toBe('PlayReady');
+    expect(request.mock.calls.map(call => call[1].method)).toEqual([
+      'load',
+      'getRightsError',
+      'sendDrmMessage',
+    ]);
+    expect(parseMediaOption(video.querySelector('source')?.type ?? '')).toEqual({
+      mediaTransportType: 'MPEG-DASH',
+      option: {
+        drm: {
+          type: 'playready',
+          clientId: 'client-1',
+        },
+      },
+    });
+
+    pipeline.destroy();
+    expect(pipeline.drmLabel()).toBe('');
   });
 
   it('plays an .mpd URL natively with the MPEG-DASH media option', async () => {

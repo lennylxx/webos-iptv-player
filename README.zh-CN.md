@@ -67,6 +67,7 @@
 
 - **原生 HDR 与 Dolby 直通** — 视频流直接交由电视的原生解码器处理，完整保留 HDR10、HLG、Dolby Vision® 和 Dolby Atmos® — **[为何选择原生播放而非 hls.js？查看真机对比](docs/native-vs-hls.js.md)**
 - **MPEG-DASH 播放** — `.mpd` 频道在 webOS 上使用原生媒体管线播放，在桌面预览中使用 dash.js；支持 MPD 轨道元数据、直播时移、自渲染原始 WebVTT 字幕，以及原生 IMSC/`stpp` 和 `wvtt` 字幕（[详情](docs/mpeg-dash.md)）
+- **原生 PlayReady DRM** — 在兼容的 webOS 电视上，通过 LG DRM 服务和原生硬件媒体管线播放受保护的 MPEG-DASH 频道，并从 Kodi 风格的 M3U 属性读取授权设置（[详情](docs/mpeg-dash.md)）
 - **音轨与字幕轨道** — 可从播放器菜单中选择，并按频道或点播项目分别记忆。直播字幕支持 HLS 清单内的 WebVTT 和 CEA-608/708；点播字幕支持内封字幕及外挂 SRT、WebVTT、ASS。还可通过 SubDL、OpenSubtitles 和 Assrt 在线搜索，或手动输入片名；即使媒体自带字幕，在线搜索仍然可用，并支持播放期间实时调整字幕同步
 - **OSD（屏幕显示）** — 显示节目名称、播放进度及码流信息，包括分辨率、HDR、帧率、编解码器和音频声道
 - **自动播放故障恢复** — 检测无法开始播放或播放卡住的流，自动重新加载临时故障；若多次恢复失败，则切换至下一个直播频道

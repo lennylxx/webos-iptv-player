@@ -1,7 +1,13 @@
 // webOS selects the native media transport from mediaTransportType encoded in
 // the source type's mediaOption parameter.
 export interface WebOSMediaOption {
-  mediaTransportType: 'MPEG-DASH' | 'HLS' | 'MSIIS';
+  mediaTransportType: 'MPEG-DASH' | 'HLS' | 'MSIIS' | 'PLAYREADY';
+  option?: {
+    drm?: {
+      type: 'playready';
+      clientId: string;
+    };
+  };
 }
 
 export function mediaOptionSourceType(mime: string, option: WebOSMediaOption): string {

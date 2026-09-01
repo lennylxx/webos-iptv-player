@@ -122,12 +122,51 @@ boundaries:
 
 The pads are configured by `DVR_GO_LIVE_PAD` and `DVR_OLDEST_PAD`.
 
-## Errors
+## Native PlayReady DRM
 
-A DRM-specific `ContentProtection` scheme triggers `event=playback.dash.drm`
-and the normal channel fallback before the startup watchdog expires. The
-generic `mp4protection` descriptor alone does not mark a stream as DRM.
-DRM license negotiation is not implemented.
+The webOS native path supports PlayReady-protected DASH. Before attaching the
+source, the player:
+
+1. loads a `playready` client through `com.webos.service.drm`;
+2. subscribes to rights errors;
+3. sends post-acquisition license-server and optional custom-data messages; and
+4. attaches the DASH source with the DRM `clientId` in `mediaOption`.
+
+Playlist entries may use Kodi 22's DRM JSON:
+
+```text
+#KODIPROP:inputstream.adaptive.drm={"com.microsoft.playready":{"license":{"server_url":"http://host/license"},"optional_key_req_params":{"custom_data":"token"}}}
+```
+
+Kodi 21's simple form is also supported:
+
+```text
+#KODIPROP:inputstream.adaptive.drm_legacy=com.microsoft.playready|http://host/license
+```
+
+The deprecated properties remain accepted for older playlists:
+
+```text
+#KODIPROP:inputstream.adaptive.license_type=com.microsoft.playready
+#KODIPROP:inputstream.adaptive.license_key=http://host/license|x-token=v|R{SSM}|
+#KODIPROP:drm_custom_data=token
+```
+
+The native client consumes the license URL and PlayReady custom data. Arbitrary
+license-request headers, request/response recipes, server certificates and
+custom PSSH data are recognized but cannot be applied through the webOS DRM
+service; the player logs
+`event=playback.dash.drm.options.unsupported` and continues with the supported
+settings. Kodi's deprecated `license_data` property means initialization/PSSH
+data and is not treated as PlayReady custom data. If no license URL is
+configured, the client uses the URL in the content's PlayReady header.
+
+The DRM client and rights-error subscription are released on channel changes,
+player teardown and app suspension. Widevine and unknown protection schemes
+trigger `event=playback.dash.drm.unsupported` and normal channel fallback.
+The generic `mp4protection` descriptor alone does not mark a stream as DRM.
+Once the native DRM client is ready, the player OSD shows a `PlayReady` stream
+information pill.
 
 Native playback errors use the existing video-element error path. Desktop
 dashjs errors use a bounded retry budget before invoking the same channel
@@ -153,7 +192,7 @@ WebVTT, `stpp`, `wvtt`, dynamic MPDs and DVR were tested on webOS TV 10.3.1.
 
 ## Known limitations
 
-- DRM-protected DASH is rejected.
+- Native DRM support is PlayReady-only; Widevine requires a future EME path.
 - Metadata and subtitle discovery use the first Period.
 - Multi-Period subtitle continuation, xlink, encrypted WebVTT, BaseURL failover
   and UTCTiming correction are not implemented.

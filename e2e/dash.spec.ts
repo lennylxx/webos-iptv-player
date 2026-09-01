@@ -181,6 +181,7 @@ test('loads the real dash.js engine in the desktop preview', async ({ page }) =>
   await page.waitForFunction(() =>
     typeof (window as unknown as { __dashjs?: { MediaPlayer?: unknown } })
       .__dashjs?.MediaPlayer === 'function');
+  await expect(page.locator('#view-channels')).toBeVisible();
 
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();

@@ -1079,12 +1079,14 @@ export class Player {
     const aCodec = aCodecName && atmos ? `${aCodecName} Atmos` : aCodecName;
     const hdr = hdrLabel(lvl?.videoRange ?? variant?.videoRange ?? info?.hdr ?? '');
     const fps = frameRateLabel(lvl?.frameRate ?? variant?.frameRate ?? info?.fps ?? 0);
+    const drm = this.pipeline.drmLabel();
     const audio = audioSummary(this.tracks.getAudioTracks());
     const subtitle = subtitleSummary(this.tracks.getSubtitleTracks());
-    if (!(badge || hdr || fps || vCodec || aCodec || audio || subtitle)) return null;
+    if (!(badge || hdr || drm || fps || vCodec || aCodec || audio || subtitle)) return null;
     return {
       resolution: badge,
       hdr,
+      drm,
       fps,
       videoCodec: vCodec,
       audioCodec: aCodec,

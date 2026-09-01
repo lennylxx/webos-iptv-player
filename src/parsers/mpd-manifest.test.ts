@@ -24,6 +24,7 @@ describe('parseMpd', () => {
     const r = parseMpd(mpd(`<Period>${VIDEO_SET}</Period>`));
     expect(r.isLive).toBe(false);
     expect(r.hasContentProtection).toBe(false);
+    expect(r.drm).toBeNull();
   });
 
   it('flags a dynamic manifest as live', () => {
@@ -38,6 +39,23 @@ describe('parseMpd', () => {
         <Representation id="v1" width="1920" height="1080" codecs="avc1.640028"/>
       </AdaptationSet></Period>`));
     expect(r.hasContentProtection).toBe(true);
+    expect(r.drm).toEqual({
+      type: 'unsupported',
+      scheme: 'urn:uuid:00000000-0000-0000-0000-000000000000',
+    });
+  });
+
+  it('identifies PlayReady ContentProtection', () => {
+    const r = parseMpd(mpd(`<Period>
+      <AdaptationSet contentType="video" mimeType="video/mp4">
+        <ContentProtection
+          schemeIdUri="urn:uuid:9A04F079-9840-4286-AB92-E65BE0885F95"/>
+        <Representation id="v1" width="1920" height="1080" codecs="avc1.640028"/>
+      </AdaptationSet></Period>`));
+    expect(r.drm).toEqual({
+      type: 'playready',
+      scheme: 'urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95',
+    });
   });
 
   it('does not treat the generic MP4 protection descriptor as DRM by itself', () => {
@@ -371,7 +389,7 @@ describe('parseMpd', () => {
 
   it('returns an empty result for malformed, truncated and non-MPD XML', () => {
     const empty = { audio: [], subtitles: [], closedCaptions: [], variants: [],
-      isLive: false, hasContentProtection: false };
+      isLive: false, hasContentProtection: false, drm: null };
     expect(parseMpd('<MPD><Period><AdaptationSet')).toEqual(empty);
     expect(parseMpd('')).toEqual(empty);
     expect(parseMpd('<html><body>error</body></html>')).toEqual(empty);
