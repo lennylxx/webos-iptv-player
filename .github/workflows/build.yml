@@ -29,7 +29,7 @@ jobs:
         run: npm install -g @webos-tools/cli@3.2.5
 
       - name: Cache service runtimes
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/webos-iptv-player/node-runtimes
           key: service-node-runtimes-v1-${{ runner.os }}-${{ runner.arch }}
