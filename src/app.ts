@@ -228,7 +228,6 @@ class App {
 
     done();
     this.enterChannelsAfterUploadSync = StorageService.getPlaylists().length === 0;
-    const bundledServiceReady = this.startBundledService();
     this.bindBundledServiceLifecycle();
     this.bindReminderLifecycle();
     // Register a retail-safe callback immediately. If Developer Mode is
@@ -237,6 +236,9 @@ class App {
     await this.loadData();
     // Cold launch from a "Watch now" alert: channels are loaded now, so tune.
     this.handleLaunchParams(this.coldLaunchParams());
+    // Spawning the service process can synchronously stall Luna on a cold TV.
+    // Keep LAN setup off the critical path so cached channels render first.
+    const bundledServiceReady = this.startBundledService();
     void bundledServiceReady
       .then((started) => started ? this.finishBundledServiceInit() : undefined)
       .catch(err => log.error('Bundled service initialization failed:', err));

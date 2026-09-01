@@ -9,6 +9,7 @@ import {
 
 interface StartupProbe {
   starts: number;
+  loadingAtStart: boolean[];
   subscriptions: number;
   activities: Array<{ name: string; method: string; replace: boolean }>;
 }
@@ -30,7 +31,12 @@ async function installStartupHarness(
       onSuccess?: Cb;
       onFailure?: Cb;
     };
-    const probe: StartupProbe = { starts: 0, subscriptions: 0, activities: [] };
+    const probe: StartupProbe = {
+      starts: 0,
+      loadingAtStart: [],
+      subscriptions: 0,
+      activities: [],
+    };
     const pendingStarts: Cb[] = [];
     let visibility = initialVisibility;
     Object.defineProperty(document, 'visibilityState', {
@@ -59,6 +65,10 @@ async function installStartupHarness(
         request: (_uri: string, opts: LunaOpts) => {
           if (opts.method === 'start') {
             probe.starts++;
+            const loading = document.querySelector<HTMLElement>('#view-loading');
+            probe.loadingAtStart.push(loading !== null
+              && loading.style.display !== 'none'
+              && !loading.classList.contains('hidden'));
             if (opts.onSuccess) pendingStarts.push(opts.onSuccess);
           } else if (opts.method === 'serviceEvents') {
             probe.subscriptions++;
@@ -114,7 +124,11 @@ test('channels render while service startup is pending without duplicate work', 
 
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
-  expect(await startupProbe(page)).toMatchObject({ starts: 1, subscriptions: 0 });
+  expect(await startupProbe(page)).toMatchObject({
+    starts: 1,
+    loadingAtStart: [false],
+    subscriptions: 0,
+  });
 
   await page.evaluate(() => {
     (window as unknown as { __showApp__: () => void }).__showApp__();
