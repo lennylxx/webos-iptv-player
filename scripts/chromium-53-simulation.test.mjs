@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { postTargetApis, removeApis, simulateLegacyEngine } from './chromium-53-simulation.mjs';
 
-const { globals, members } = postTargetApis();
+const { globals, members, cssProperties } = postTargetApis();
 const hasMember = (owner, member) => members.some(([o, m]) => o === owner && m === member);
 
 describe('postTargetApis', () => {
@@ -24,6 +24,14 @@ describe('postTargetApis', () => {
     // Chromium 53 has had since Chrome 1.
     expect(hasMember('Element', 'scrollLeft')).toBe(false);
     expect(hasMember('Element', 'scrollTo')).toBe(true); // genuinely Chrome 61
+  });
+
+  it('does not treat prefixed or alternative names as canonical support', () => {
+    expect(globals).toContain('DOMMatrix'); // only WebKitCSSMatrix existed
+    expect(hasMember('Element', 'requestFullscreen')).toBe(true); // webkit-prefixed in 53
+    expect(cssProperties).toContain('marginBlockStart'); // -webkit-margin-before in 53
+    expect(cssProperties).toContain('marginBlockEnd'); // -webkit-margin-after in 53
+    expect(cssProperties).toContain('userSelect'); // only -webkit-user-select in 53
   });
 
   it('exempts globals the harness or desktop-only preview needs', () => {

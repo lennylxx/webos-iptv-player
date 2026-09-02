@@ -58,7 +58,10 @@ const isPostTarget = (compat) => {
   const ranges = Array.isArray(support) ? support : [support];
   let knownLater = false;
   for (const range of ranges) {
-    if (range.flags) continue;
+    // A prefixed or alternatively named API does not make the canonical name
+    // available. Chromium 53 may expose `webkitRequestFullscreen`, for
+    // example, while still lacking `requestFullscreen`.
+    if (range.flags || range.prefix || range.alternative_name) continue;
     // `true` means supported since an unknown version — assume it predates the
     // target rather than delete an API the TV may well have.
     if (range.version_added === true) return false;
