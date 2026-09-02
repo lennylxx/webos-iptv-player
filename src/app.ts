@@ -94,10 +94,13 @@ class App {
       () => {
         const sources = this.epgSources();
         if (!sources.length) return;
-        void EpgService.load(sources, PlaylistService.allChannels)
+        void EpgService.load(
+          sources,
+          PlaylistService.allChannels,
+          () => this.refreshEpgDependentViews(),
+        )
           .then(() => {
-            this.channelList.render();
-            void this.search.refreshPrograms();
+            this.refreshEpgDependentViews();
           })
           .catch(err => log.error('EPG mapping reload failed:', err));
       },
@@ -643,18 +646,19 @@ class App {
       }
 
       if (epgSources.length) {
-        EpgService.load(epgSources, PlaylistService.allChannels)
+        EpgService.load(
+          epgSources,
+          PlaylistService.allChannels,
+          () => this.refreshEpgDependentViews(),
+        )
           .then(() => {
-            this.applyDisplayTz();
-            this.channelList.render();
-            void this.search.refreshPrograms();
+            this.refreshEpgDependentViews();
           })
           .catch(err => log.error('EPG load failed:', err));
-        this.epgRefreshTimer = setInterval(() => EpgService.refresh()
+        this.epgRefreshTimer = setInterval(() =>
+          EpgService.refresh(() => this.refreshEpgDependentViews())
           .then(() => {
-            this.applyDisplayTz();
-            this.channelList.render();
-            void this.search.refreshPrograms();
+            this.refreshEpgDependentViews();
           })
           .catch(err => log.error('EPG refresh failed:', err)),
         CONFIG.EPG_REFRESH_INTERVAL);
@@ -797,11 +801,19 @@ class App {
     this.epgGrid.focusChannel(this.player.getCurrentIndex());
     this.showView('epg');
     this.epgGrid.render();
-    EpgService.refresh().then(() => {
-      this.applyDisplayTz();
+    const renderEpg = () => {
+      this.refreshEpgDependentViews();
       this.epgGrid.render();
-      void this.search.refreshPrograms();
+    };
+    EpgService.refresh(renderEpg).then(() => {
+      renderEpg();
     });
+  }
+
+  private refreshEpgDependentViews(): void {
+    this.applyDisplayTz();
+    this.channelList.render();
+    void this.search.refreshPrograms();
   }
 
   private openReminderManager(origin: 'settings' | 'epg'): void {

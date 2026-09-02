@@ -397,6 +397,75 @@ describe('EpgService cache and refresh', () => {
     expect(EpgService.getNowPlaying(id!)?.title).toBe('Cached');
   });
 
+  it('publishes stale cached programmes while their refresh is in flight', async () => {
+    let resolveFetch!: (value: string) => void;
+    vi.mocked(getCachedEpg).mockResolvedValue({
+      url: 'http://a',
+      timestamp: NOON - 24 * 3600_000,
+      data: parsed('a', 'Alpha', 'Cached'),
+    });
+    vi.mocked(fetchMaybeGzipText).mockImplementationOnce(() =>
+      new Promise(resolve => { resolveFetch = resolve; }));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
+    const onDataPublished = vi.fn();
+
+    const loading = EpgService.load(
+      [source('http://a', ['a'])],
+      undefined,
+      onDataPublished,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchMaybeGzipText).toHaveBeenCalled();
+    expect(onDataPublished).toHaveBeenCalledTimes(1);
+    const cachedId = EpgService.findChannelId(
+      channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
+    );
+    expect(EpgService.getNowPlaying(cachedId!)?.title).toBe('Cached');
+
+    resolveFetch('xml');
+    await loading;
+
+    const freshId = EpgService.findChannelId(
+      channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
+    );
+    expect(EpgService.getNowPlaying(freshId!)?.title).toBe('Fresh');
+    expect(onDataPublished).toHaveBeenCalledTimes(2);
+  });
+
+  it('publishes fetched programmes before their cache write completes', async () => {
+    let resolveCacheWrite!: () => void;
+    let markCacheWriteStarted!: () => void;
+    const cacheWriteStarted = new Promise<void>(resolve => {
+      markCacheWriteStarted = resolve;
+    });
+    vi.mocked(setCachedEpg).mockImplementationOnce(() => {
+      markCacheWriteStarted();
+      return new Promise(resolve => { resolveCacheWrite = resolve; });
+    });
+    vi.mocked(fetchMaybeGzipText).mockResolvedValue('xml');
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
+    const onDataPublished = vi.fn();
+
+    const loading = EpgService.load(
+      [source('http://a', ['a'])],
+      undefined,
+      onDataPublished,
+    );
+    await cacheWriteStarted;
+
+    expect(setCachedEpg).toHaveBeenCalled();
+    expect(onDataPublished).toHaveBeenCalledTimes(1);
+    const id = EpgService.findChannelId(
+      channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
+    );
+    expect(EpgService.getNowPlaying(id!)?.title).toBe('Fresh');
+
+    resolveCacheWrite();
+    await loading;
+  });
+
   it('does not cache a feed with zero programmes', async () => {
     parseXMLTVMock.mockReturnValue({
       channels: { a: { name: 'Alpha', icon: '' } },

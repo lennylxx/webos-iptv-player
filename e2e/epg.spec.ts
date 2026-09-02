@@ -1,8 +1,83 @@
-import { test, expect, isChromium53, type Page, routePlaylist } from './helpers';
+import {
+  test,
+  expect,
+  isChromium53,
+  type Page,
+  routePlaylist,
+  seedPlaylist,
+} from './helpers';
 
 // EPG guide: the LIVE badge and the day/time-zone handling. Both need a fixed
 // clock and a UTC device zone so wall-clock == absolute time.
 test.use({ timezoneId: 'UTC' });
+
+test('stale cached EPG stays visible while a refresh is in flight', async ({ page }) => {
+  const now = new Date('2024-03-09T12:00:00Z');
+  const epgUrl = 'http://epg.example.com/guide.xml';
+  const epg = (title: string) => `<?xml version="1.0" encoding="UTF-8"?><tv>
+<channel id="one"><display-name>Channel One</display-name></channel>
+<programme channel="one" start="20240309110000 +0000" stop="20240309130000 +0000"><title>${title}</title></programme>
+</tv>`;
+  let epgRequests = 0;
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+
+  await routePlaylist(page);
+  await seedPlaylist(page);
+  await page.clock.setFixedTime(now);
+  await page.route('**/guide.xml', async (route) => {
+    epgRequests++;
+    if (epgRequests > 1) await refreshGate;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/xml',
+      body: epg(epgRequests === 1 ? 'Cached Show' : 'Fresh Show'),
+    });
+  });
+
+  try {
+    await page.goto('/');
+    const nowPlaying = page.locator('.channel-main .channel-item').first().locator('.channel-now');
+    await expect(nowPlaying).toHaveText('Cached Show');
+
+    await page.evaluate(({ url, timestamp }) => new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open('iptv');
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction('epg-cache', 'readwrite');
+        const store = tx.objectStore('epg-cache');
+        const read = store.get(url);
+        read.onerror = () => reject(read.error);
+        read.onsuccess = () => {
+          if (!read.result) {
+            reject(new Error('EPG cache entry was not stored'));
+            return;
+          }
+          store.put({ ...read.result, timestamp });
+        };
+        tx.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      };
+    }), {
+      url: epgUrl,
+      timestamp: now.getTime() - 24 * 60 * 60 * 1000,
+    });
+
+    await page.reload();
+    await expect.poll(() => epgRequests).toBe(2);
+    await expect(nowPlaying).toHaveText('Cached Show');
+
+    releaseRefresh();
+    await expect(nowPlaying).toHaveText('Fresh Show');
+  } finally {
+    releaseRefresh();
+  }
+});
 
 test.describe('EPG live badge', () => {
   // Fixed "now" placed inside the middle program so exactly one row is airing.
