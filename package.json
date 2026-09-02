@@ -39,7 +39,7 @@
     "benchmark:tv:cleanup": "node benchmarks/tv-runner.mjs --cleanup"
   },
   "devDependencies": {
-    "@mdn/browser-compat-data": "6.1.5",
+    "@mdn/browser-compat-data": "8.0.13",
     "@playwright/test": "^1.62.1",
     "@types/node": "^26.4.0",
     "@typescript-eslint/parser": "^8.68.0",
