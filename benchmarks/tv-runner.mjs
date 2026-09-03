@@ -111,20 +111,39 @@ async function installParserBundle(client) {
 
 async function readDevice(client) {
   return evaluate(client, async () => {
-    const info = await new Promise((resolve) => {
-      if (!window.webOS || !window.webOS.deviceInfo) {
+    let deviceInfo = {};
+    try {
+      deviceInfo = JSON.parse(window.PalmSystem && window.PalmSystem.deviceInfo || '{}');
+    } catch (_error) {
+      deviceInfo = {};
+    }
+    const systemInfo = await new Promise((resolve) => {
+      if (typeof window.PalmServiceBridge !== 'function') {
         resolve({});
         return;
       }
-      const timer = setTimeout(() => resolve({}), 2000);
-      window.webOS.deviceInfo((value) => {
+      const bridge = new window.PalmServiceBridge();
+      const timer = setTimeout(() => {
+        try { bridge.cancel(); } catch (_error) { /* best-effort diagnostic cleanup */ }
+        resolve({});
+      }, 2000);
+      bridge.onservicecallback = (message) => {
         clearTimeout(timer);
-        resolve(value || {});
-      });
+        try {
+          resolve(JSON.parse(message) || {});
+        } catch (_error) {
+          resolve({});
+        }
+        try { bridge.cancel(); } catch (_error) { /* best-effort diagnostic cleanup */ }
+      };
+      bridge.call(
+        'luna://com.webos.service.tv.systemproperty/getSystemInfo',
+        JSON.stringify({ keys: ['modelName', 'sdkVersion'] }),
+      );
     });
     return {
-      modelName: info.modelName || '',
-      sdkVersion: info.sdkVersion || '',
+      modelName: systemInfo.modelName || deviceInfo.modelName || '',
+      sdkVersion: systemInfo.sdkVersion || '',
       screen: `${String(screen.width)}x${String(screen.height)}`,
       userAgent: navigator.userAgent,
     };

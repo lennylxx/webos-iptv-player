@@ -780,7 +780,7 @@ test.describe('Settings upload', () => {
     //   → app's subscription onSuccess fires → settings.refreshUploads() →
     //   UploadClient.reconcile() → fetch /uploads → storage write → morph().
     //
-    // Playwright can't drive a real Luna bus, so we fake `window.webOS.service`
+    // Playwright can't drive a real Luna bus, so we fake PalmServiceBridge
     // in an init script (captures the serviceEvents onSuccess so the test can
     // synthesize a push) and route the in-app HTTP fetches to a small
     // mutable fixture. Everything else — Settings render, UploadClient,
@@ -820,12 +820,11 @@ test.describe('Settings upload', () => {
       }),
     );
 
-    // Fake Luna shim — installed before the app bundle runs.
+    // Fake PalmServiceBridge — installed before the app bundle runs.
     await page.addInitScript(() => {
       type Cb = (resp: unknown) => void;
-      type LunaOpts = { method?: string; subscribe?: boolean; onSuccess?: Cb; onFailure?: Cb };
       const win = window as unknown as {
-        webOS?: unknown;
+        PalmServiceBridge?: unknown;
         __eventCallbacks__?: Cb[];
         __triggerUploadPush__?: (data?: unknown) => void;
       };
@@ -833,28 +832,38 @@ test.describe('Settings upload', () => {
       win.__triggerUploadPush__ = (data?: unknown) => {
         for (const cb of win.__eventCallbacks__!) cb(data ?? { event: 'uploads-changed' });
       };
-      win.webOS = {
-        service: {
-          request: (_uri: string, opts: LunaOpts) => {
-            if (opts.method === 'start') {
-              // The real service returns the bound port; the in-app client
-              // (UploadClient) uses this for all subsequent fetches.
-              setTimeout(() => opts.onSuccess?.({ running: true, port: 9999 }), 0);
-            } else if (opts.method === 'serviceEvents') {
-              // Initial subscription ack (matches the real service's first
-              // respond({subscribed:true}) inside the serviceEvents handler).
-              setTimeout(() => opts.onSuccess?.({ subscribed: true }), 0);
-              // Register the callback for test-driven pushes.
-              if (opts.onSuccess) win.__eventCallbacks__!.push(opts.onSuccess);
-            } else {
-              // Unknown method — surface as a failure so future Luna additions
-              // that we forget to mock here will fail the test loudly.
-              setTimeout(() => opts.onFailure?.({ errorText: 'unmocked method: ' + opts.method }), 0);
-            }
-            return { cancel(): void { /* no-op */ } };
-          },
-        },
-      };
+      class FakePalmServiceBridge {
+        onservicecallback: ((message: string) => void) | null = null;
+
+        private respond(response: unknown): void {
+          setTimeout(() => this.onservicecallback?.(JSON.stringify(response)), 0);
+        }
+
+        call(uri: string): void {
+          const method = uri.slice(uri.lastIndexOf('/') + 1);
+          if (method === 'start') {
+            // The real service returns the bound port; the in-app client
+            // (UploadClient) uses this for all subsequent fetches.
+            this.respond({ running: true, port: 9999 });
+          } else if (method === 'serviceEvents') {
+            // Initial subscription ack (matches the real service's first
+            // respond({subscribed:true}) inside the serviceEvents handler).
+            this.respond({ subscribed: true });
+            win.__eventCallbacks__!.push((response) => {
+              this.onservicecallback?.(JSON.stringify(response));
+            });
+          } else {
+            // Unknown method — surface as a failure so future Luna additions
+            // that we forget to mock here will fail the test loudly.
+            this.respond({ returnValue: false, errorText: 'unmocked method: ' + method });
+          }
+        }
+
+        cancel(): void {
+          this.onservicecallback = null;
+        }
+      }
+      win.PalmServiceBridge = FakePalmServiceBridge;
     });
 
     await seedPlaylist(page);
@@ -909,15 +918,24 @@ test.describe('Settings phone setup card', () => {
   // of alignment.
   test('keeps the QR spaced from its instructions', async ({ page }) => {
     await page.addInitScript(() => {
-      (window as unknown as { webOS: unknown }).webOS = {
-        service: {
-          request(_uri: string, opts: { method: string; onSuccess?: (r: unknown) => void }) {
-            opts.onSuccess?.(opts.method === 'start'
-              ? { returnValue: true, port: 8890 }
-              : { returnValue: true });
-          },
-        },
-      };
+      class FakePalmServiceBridge {
+        onservicecallback: ((message: string) => void) | null = null;
+
+        call(uri: string): void {
+          const method = uri.slice(uri.lastIndexOf('/') + 1);
+          const response = method === 'start'
+            ? { returnValue: true, port: 8890 }
+            : { returnValue: true };
+          this.onservicecallback?.(JSON.stringify(response));
+        }
+
+        cancel(): void {
+          this.onservicecallback = null;
+        }
+      }
+      (window as unknown as {
+        PalmServiceBridge?: unknown;
+      }).PalmServiceBridge = FakePalmServiceBridge;
     });
     await page.route('http://127.0.0.1:8890/info', (route) => route.fulfill({
       status: 200,

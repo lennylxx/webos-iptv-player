@@ -1,5 +1,6 @@
 import { PLAYREADY_SCHEME } from '../parsers/mpd-manifest';
 import { createLogger } from '../utils/logger';
+import { isLunaAvailable, lunaRequest } from './luna';
 
 const log = createLogger('PlayReady');
 const DRM_URI = 'luna://com.webos.service.drm';
@@ -222,10 +223,8 @@ function customDataMessage(customData: string): string {
 }
 
 function serviceRequest(): ServiceRequest | null {
-  const webOSWindow = window as unknown as {
-    webOS?: { service?: { request?: ServiceRequest } };
-  };
-  return webOSWindow.webOS?.service?.request ?? null;
+  if (!isLunaAvailable()) return null;
+  return (uri, options) => lunaRequest<ServiceResponse>(uri, options);
 }
 
 export class PlayReadyDrm {

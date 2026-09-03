@@ -196,13 +196,45 @@ describe('ReminderService store', () => {
 });
 
 describe('ReminderService scheduling', () => {
-  function mockLuna() {
-    const request = vi.fn();
-    (window as unknown as { webOS?: unknown }).webOS = { service: { request } };
+  function mockLuna(): ReturnType<typeof vi.fn> & { failLast(): void } {
+    const bridges: Array<{
+      onservicecallback: ((message: string) => void) | null;
+    }> = [];
+    const request = vi.fn() as ReturnType<typeof vi.fn> & { failLast(): void };
+    class FakePalmServiceBridge {
+      onservicecallback: ((message: string) => void) | null = null;
+
+      constructor() {
+        bridges.push(this);
+      }
+
+      call(uri: string, payload: string): void {
+        const slash = uri.lastIndexOf('/');
+        request(uri.slice(0, slash), {
+          method: uri.slice(slash + 1),
+          parameters: JSON.parse(payload),
+        });
+      }
+
+      cancel(): void {
+        this.onservicecallback = null;
+      }
+    }
+    request.failLast = () => {
+      bridges[bridges.length - 1].onservicecallback?.(JSON.stringify({
+        returnValue: false,
+        errorCode: -1,
+        errorText: 'request failed',
+      }));
+    };
+    Object.defineProperty(window, 'PalmServiceBridge', {
+      configurable: true,
+      value: FakePalmServiceBridge,
+    });
     return request;
   }
   beforeEach(() => {
-    delete (window as unknown as { webOS?: unknown }).webOS;
+    Reflect.deleteProperty(window, 'PalmServiceBridge');
     ReminderService.setDevMode(false);
   });
 
@@ -255,8 +287,7 @@ describe('ReminderService scheduling', () => {
     request.mockClear();
 
     ReminderService.remove(keyA, 5000);
-    const options = request.mock.calls[0][1] as { onFailure: () => void };
-    options.onFailure();
+    request.failLast();
 
     expect(info).toHaveBeenCalledWith(
       '[Reminder]',

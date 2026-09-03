@@ -474,16 +474,24 @@ describe('PlayerTracks', () => {
       const userAgent = vi.spyOn(window.navigator, 'userAgent', 'get')
         .mockReturnValue('webOS');
       const requests: Array<{
-        onSuccess?: () => void;
-        onFailure?: (error: unknown) => void;
+        respond(response: unknown): void;
       }> = [];
-      vi.stubGlobal('webOS', {
-        service: {
-          request: (_uri: string, options: typeof requests[number]) => {
-            requests.push(options);
-          },
-        },
-      });
+      class FakePalmServiceBridge {
+        onservicecallback: ((message: string) => void) | null = null;
+
+        call(): void {
+          requests.push({
+            respond: (response) => {
+              this.onservicecallback?.(JSON.stringify(response));
+            },
+          });
+        }
+
+        cancel(): void {
+          this.onservicecallback = null;
+        }
+      }
+      vi.stubGlobal('PalmServiceBridge', FakePalmServiceBridge);
       setup([{
         ...rendition('Track 1', 'l1'),
         dash: { kind: 'native' },
@@ -492,10 +500,10 @@ describe('PlayerTracks', () => {
 
       tracks.selectSubtitleTrack(0);
       expect(trackInternals(tracks).ccEnabled).toBe(false);
-      requests[0].onFailure?.({ errorCode: 1 });
+      requests[0].respond({ returnValue: false, errorCode: 1 });
       tracks.reapplyNativeSubtitleCompositor();
       expect(requests).toHaveLength(2);
-      requests[1].onSuccess?.();
+      requests[1].respond({ returnValue: true });
       expect(trackInternals(tracks).ccEnabled).toBe(true);
 
       userAgent.mockRestore();

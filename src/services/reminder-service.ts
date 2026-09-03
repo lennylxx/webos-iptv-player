@@ -7,6 +7,7 @@ import { truncate } from '../utils/text';
 import { t } from '../i18n';
 import { createLogger } from '../utils/logger';
 import { isSourceEnabled } from '../utils/playlist';
+import { isLunaAvailable, lunaRequest } from './luna';
 
 const log = createLogger('Reminder');
 
@@ -232,11 +233,6 @@ class ReminderServiceImpl {
     }
   }
 
-  private lunaRequest(): ((uri: string, opts: unknown) => void) | null {
-    const w = window as unknown as { webOS?: { service?: { request?: (uri: string, opts: unknown) => void } } };
-    return w.webOS?.service?.request ?? null;
-  }
-
   private localTimeString(ms: number): string {
     const d = new Date(ms);
     const p = (n: number) => String(n).padStart(2, '0');
@@ -245,8 +241,10 @@ class ReminderServiceImpl {
   }
 
   private schedule(reminder: Reminder): void {
-    const request = this.lunaRequest();
-    if (!request) { log.debug('Luna unavailable — reminder is in-app only'); return; }
+    if (!isLunaAvailable()) {
+      log.debug('Luna unavailable — reminder is in-app only');
+      return;
+    }
     const name = activityName(reminder.channelKey, reminder.startMs);
     // Cap title/channel so a long name can't overflow the toast/alert.
     const title = truncate(reminder.title, CONFIG.REMINDER.TITLE_MAX);
@@ -276,7 +274,7 @@ class ReminderServiceImpl {
           },
         };
     try {
-      request('luna://com.webos.service.activitymanager', {
+      lunaRequest('luna://com.webos.service.activitymanager', {
         method: 'create',
         parameters: {
           activity: {
@@ -310,10 +308,9 @@ class ReminderServiceImpl {
   }
 
   private cancelSchedule(chKey: string, startMs: number): void {
-    const request = this.lunaRequest();
-    if (!request) return;
+    if (!isLunaAvailable()) return;
     try {
-      request('luna://com.webos.service.activitymanager', {
+      lunaRequest('luna://com.webos.service.activitymanager', {
         method: 'cancel',
         parameters: { activityName: activityName(chKey, startMs) },
         onSuccess: () => log.debug(

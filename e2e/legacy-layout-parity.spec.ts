@@ -70,22 +70,26 @@ async function stubLanService(page: Page): Promise<void> {
   await page.route('http://127.0.0.1:9999/setup-state', (r) => r.fulfill({
     status: 200, contentType: 'application/json', body: '{"updated":true}' }));
   await page.addInitScript(() => {
-    type Cb = (resp: unknown) => void;
-    type LunaOpts = { method?: string; onSuccess?: Cb; onFailure?: Cb };
-    (window as unknown as { webOS?: unknown }).webOS = {
-      service: {
-        request: (_uri: string, opts: LunaOpts) => {
-          if (opts.method === 'start') {
-            setTimeout(() => opts.onSuccess?.({ running: true, port: 9999 }), 0);
-          } else if (opts.method === 'serviceEvents') {
-            setTimeout(() => opts.onSuccess?.({ subscribed: true }), 0);
-          } else {
-            setTimeout(() => opts.onFailure?.({ errorText: 'unmocked: ' + opts.method }), 0);
-          }
-          return { cancel(): void { /* no-op */ } };
-        },
-      },
-    };
+    class FakePalmServiceBridge {
+      onservicecallback: ((message: string) => void) | null = null;
+
+      call(uri: string): void {
+        const method = uri.slice(uri.lastIndexOf('/') + 1);
+        const response = method === 'start'
+          ? { running: true, port: 9999 }
+          : method === 'serviceEvents'
+            ? { subscribed: true }
+            : { returnValue: false, errorText: 'unmocked: ' + method };
+        setTimeout(() => this.onservicecallback?.(JSON.stringify(response)), 0);
+      }
+
+      cancel(): void {
+        this.onservicecallback = null;
+      }
+    }
+    (window as unknown as {
+      PalmServiceBridge?: unknown;
+    }).PalmServiceBridge = FakePalmServiceBridge;
   });
 }
 

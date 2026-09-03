@@ -647,17 +647,28 @@ async function setupPage(page, {
   // Fake the Luna service bus so the LAN service "runs" (settings QR).
   if (upload) {
     await page.addInitScript((port) => {
-      window.webOS = {
-        service: {
-          request(_uri, opts) {
-            const m = opts && opts.method;
-            if (m === 'start') setTimeout(() => opts.onSuccess && opts.onSuccess({ running: true, port }), 0);
-            else if (m === 'serviceEvents') setTimeout(() => opts.onSuccess && opts.onSuccess({ subscribed: true }), 0);
-            else if (m === 'stop') setTimeout(() => opts.onSuccess && opts.onSuccess({ stopped: true }), 0);
-            else setTimeout(() => opts.onFailure && opts.onFailure({ errorText: 'unmocked: ' + m }), 0);
-            return { cancel() { /* no-op */ } };
-          },
-        },
+      window.PalmServiceBridge = class {
+        onservicecallback = null;
+
+        call(uri) {
+          const method = uri.slice(uri.lastIndexOf('/') + 1);
+          const response = method === 'start'
+            ? { running: true, port }
+            : method === 'serviceEvents'
+              ? { subscribed: true }
+              : method === 'stop'
+                ? { stopped: true }
+                : { returnValue: false, errorText: 'unmocked: ' + method };
+          setTimeout(() => {
+            if (this.onservicecallback) {
+              this.onservicecallback(JSON.stringify(response));
+            }
+          }, 0);
+        }
+
+        cancel() {
+          this.onservicecallback = null;
+        }
       };
     }, UPLOAD_PORT);
   }

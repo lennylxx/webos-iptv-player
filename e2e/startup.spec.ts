@@ -11,6 +11,7 @@ interface StartupProbe {
   starts: number;
   loadingAtStart: boolean[];
   subscriptions: number;
+  subscriptionCancellations: number;
   activities: Array<{ name: string; method: string; replace: boolean }>;
 }
 
@@ -22,19 +23,15 @@ async function installStartupHarness(
     route.fulfill({ status: 200, contentType: 'application/json', body: '{"updated":true}' }));
   await page.addInitScript(({ initialVisibility, devMode }) => {
     type Cb = (resp: unknown) => void;
-    type LunaOpts = {
-      method?: string;
-      parameters?: {
-        activity?: { name?: string; callback?: { method?: string } };
-        replace?: boolean;
-      };
-      onSuccess?: Cb;
-      onFailure?: Cb;
+    type LunaParameters = {
+      activity?: { name?: string; callback?: { method?: string } };
+      replace?: boolean;
     };
     const probe: StartupProbe = {
       starts: 0,
       loadingAtStart: [],
       subscriptions: 0,
+      subscriptionCancellations: 0,
       activities: [],
     };
     const pendingStarts: Cb[] = [];
@@ -48,7 +45,8 @@ async function installStartupHarness(
       __startupProbe__?: StartupProbe;
       __releaseServiceStart__?: () => void;
       __showApp__?: () => void;
-      webOS?: unknown;
+      __hideApp__?: () => void;
+      PalmServiceBridge?: unknown;
     };
     win.__startupProbe__ = probe;
     win.__releaseServiceStart__ = () => {
@@ -60,36 +58,57 @@ async function installStartupHarness(
       visibility = 'visible';
       document.dispatchEvent(new Event('visibilitychange'));
     };
-    win.webOS = {
-      service: {
-        request: (_uri: string, opts: LunaOpts) => {
-          if (opts.method === 'start') {
-            probe.starts++;
-            const loading = document.querySelector<HTMLElement>('#view-loading');
-            probe.loadingAtStart.push(loading !== null
-              && loading.style.display !== 'none'
-              && !loading.classList.contains('hidden'));
-            if (opts.onSuccess) pendingStarts.push(opts.onSuccess);
-          } else if (opts.method === 'serviceEvents') {
-            probe.subscriptions++;
-            setTimeout(() => opts.onSuccess?.({ subscribed: true }), 0);
-          } else if (opts.method === 'getDevMode') {
-            setTimeout(() => opts.onSuccess?.({ devmode: devMode }), 0);
-          } else if (opts.method === 'create') {
-            const activity = opts.parameters?.activity;
-            probe.activities.push({
-              name: activity?.name ?? '',
-              method: activity?.callback?.method ?? '',
-              replace: opts.parameters?.replace === true,
-            });
-            setTimeout(() => opts.onSuccess?.({ returnValue: true }), 0);
-          } else {
-            setTimeout(() => opts.onFailure?.({ errorText: `unmocked method: ${opts.method}` }), 0);
-          }
-          return { cancel(): void { /* no-op */ } };
-        },
-      },
+    win.__hideApp__ = () => {
+      visibility = 'hidden';
+      document.dispatchEvent(new Event('visibilitychange'));
     };
+    class FakePalmServiceBridge {
+      onservicecallback: ((message: string) => void) | null = null;
+      private subscription = false;
+      private cancelled = false;
+
+      private respond(response: unknown): void {
+        setTimeout(() => {
+          if (!this.cancelled) this.onservicecallback?.(JSON.stringify(response));
+        }, 0);
+      }
+
+      call(uri: string, payload: string): void {
+        const method = uri.slice(uri.lastIndexOf('/') + 1);
+        const parameters = JSON.parse(payload) as LunaParameters;
+        this.subscription = method === 'serviceEvents';
+        if (method === 'start') {
+          probe.starts++;
+          const loading = document.querySelector<HTMLElement>('#view-loading');
+          probe.loadingAtStart.push(loading !== null
+            && loading.style.display !== 'none'
+            && !loading.classList.contains('hidden'));
+          pendingStarts.push((response) => this.respond(response));
+        } else if (method === 'serviceEvents') {
+          probe.subscriptions++;
+          this.respond({ subscribed: true });
+        } else if (method === 'getDevMode') {
+          this.respond({ devmode: devMode });
+        } else if (method === 'create') {
+          const activity = parameters.activity;
+          probe.activities.push({
+            name: activity?.name ?? '',
+            method: activity?.callback?.method ?? '',
+            replace: parameters.replace === true,
+          });
+          this.respond({ returnValue: true });
+        } else if (method !== 'stop') {
+          this.respond({ returnValue: false, errorText: `unmocked method: ${method}` });
+        }
+      }
+
+      cancel(): void {
+        if (this.cancelled) return;
+        this.cancelled = true;
+        if (this.subscription) probe.subscriptionCancellations++;
+      }
+    }
+    win.PalmServiceBridge = FakePalmServiceBridge;
   }, {
     initialVisibility: options.visibility ?? 'visible',
     devMode: options.devMode ?? false,
@@ -141,6 +160,35 @@ test('channels render while service startup is pending without duplicate work', 
   await page.waitForTimeout(250);
   expect(await startupProbe(page)).toMatchObject({ starts: 1, subscriptions: 1 });
   expect(uploadLists).toBe(1);
+});
+
+test('service event subscription is replaced across background restarts', async ({ page }) => {
+  await page.route('http://127.0.0.1:9999/uploads', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await routePlaylist(page);
+  await seedPlaylist(page);
+  await installStartupHarness(page);
+
+  await page.goto('/');
+  await expect.poll(async () => (await startupProbe(page)).starts).toBe(1);
+  await releaseServiceStart(page);
+  await expect.poll(async () => (await startupProbe(page)).subscriptions).toBe(1);
+
+  await page.evaluate(() => {
+    (window as unknown as { __hideApp__: () => void }).__hideApp__();
+  });
+  await expect.poll(async () =>
+    (await startupProbe(page)).subscriptionCancellations).toBe(1);
+
+  await page.evaluate(() => {
+    (window as unknown as { __showApp__: () => void }).__showApp__();
+  });
+  await expect.poll(async () => (await startupProbe(page)).starts).toBe(2);
+  await releaseServiceStart(page);
+  await expect.poll(async () => (await startupProbe(page)).subscriptions).toBe(2);
+  expect(await startupProbe(page)).toMatchObject({
+    subscriptionCancellations: 1,
+  });
 });
 
 test('uploaded-only startup enters channels after background reconciliation', async ({ page }) => {

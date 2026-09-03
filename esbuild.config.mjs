@@ -38,11 +38,13 @@ function transformStylesheets(outDir) {
 // preview builds swap only the platform library at build time.
 mkdirSync('dist', { recursive: true });
 const indexHtml = readFileSync('index.html', 'utf8');
-const outputIndexHtml = isPreview
-  ? indexHtml.replace('src="webOSjs/webOS.js"', 'src="js/preview-libs.js"')
-  : indexHtml;
-if (isPreview && outputIndexHtml === indexHtml) {
-  throw new Error('Preview build could not find the webOS platform script in index.html.');
+const previewLibsMarker = '<!-- preview-libs -->';
+const outputIndexHtml = indexHtml.replace(
+  previewLibsMarker,
+  isPreview ? '<script src="js/preview-libs.js"></script>' : '',
+);
+if (outputIndexHtml === indexHtml) {
+  throw new Error('Build could not find the preview library marker in index.html.');
 }
 writeFileSync('dist/index.html', outputIndexHtml);
 cpSync('appinfo.json', 'dist/appinfo.json');
@@ -54,7 +56,6 @@ const sourceStylesheets = linkedStylesheets(indexHtml, readdirSync('css'), GENER
 writeFileSync(`css/${GENERATED_STYLESHEET}`, generateFlexGapFallback(sourceStylesheets));
 cpSync('css', 'dist/css', { recursive: true });
 transformStylesheets('dist/css');
-cpSync('webOSjs/webOS.js', 'dist/webOSjs/webOS.js');
 cpSync('assets/icon80.png', 'dist/icon.png');
 cpSync('assets/icon130.png', 'dist/largeIcon.png');
 cpSync('assets/group-icons', 'dist/assets/group-icons', { recursive: true });

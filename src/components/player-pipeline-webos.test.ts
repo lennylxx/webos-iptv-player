@@ -233,22 +233,37 @@ describe('PlayerPipeline webOS DASH', () => {
       '<Representation id="v1" width="1920" height="1080" codecs="avc1.640028"/>' +
       '</AdaptationSet>');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(playReady)));
-    const request = vi.fn((_uri: string, options: {
-      method: string;
-      onSuccess?: (response: Record<string, unknown>) => void;
-    }) => {
-      if (options.method === 'load') {
-        options.onSuccess?.({ returnValue: true, clientId: 'client-1' });
-      } else if (options.method === 'sendDrmMessage') {
-        options.onSuccess?.({ returnValue: true, resultCode: 0, msgId: 'msg-1' });
-      } else if (options.method === 'unload') {
-        options.onSuccess?.({ returnValue: true });
+    const request = vi.fn();
+    class FakePalmServiceBridge {
+      onservicecallback: ((message: string) => void) | null = null;
+      private method = '';
+
+      call(uri: string): void {
+        this.method = uri.slice(uri.lastIndexOf('/') + 1);
+        request(uri, { method: this.method });
+        if (this.method === 'load') {
+          this.onservicecallback?.(JSON.stringify({
+            returnValue: true,
+            clientId: 'client-1',
+          }));
+        } else if (this.method === 'sendDrmMessage') {
+          this.onservicecallback?.(JSON.stringify({
+            returnValue: true,
+            resultCode: 0,
+            msgId: 'msg-1',
+          }));
+        } else if (this.method === 'unload') {
+          this.onservicecallback?.('{"returnValue":true}');
+        }
       }
-      return { cancel: vi.fn() };
-    });
-    Object.defineProperty(window, 'webOS', {
+
+      cancel(): void {
+        this.onservicecallback = null;
+      }
+    }
+    Object.defineProperty(window, 'PalmServiceBridge', {
       configurable: true,
-      value: { service: { request } },
+      value: FakePalmServiceBridge,
     });
     const video = videoElement();
     const pipeline = await pipelineFor(video);

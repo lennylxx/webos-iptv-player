@@ -76,29 +76,46 @@ describe('nativeDrmConfig', () => {
 });
 
 describe('PlayReadyDrm', () => {
-  const cancel = vi.fn();
+  const cancelSubscription = vi.fn();
   const request = vi.fn();
 
   beforeEach(() => {
-    cancel.mockReset();
+    cancelSubscription.mockReset();
     request.mockReset();
-    request.mockImplementation((_uri: string, options: {
-      method: string;
-      parameters: Record<string, unknown>;
-      onSuccess?: (response: Record<string, unknown>) => void;
-    }) => {
-      if (options.method === 'load') {
-        options.onSuccess?.({ returnValue: true, clientId: 'client-1' });
-      } else if (options.method === 'sendDrmMessage') {
-        options.onSuccess?.({ returnValue: true, resultCode: 0, msgId: 'msg-1' });
-      } else if (options.method === 'unload') {
-        options.onSuccess?.({ returnValue: true });
+
+    class FakePalmServiceBridge {
+      onservicecallback: ((message: string) => void) | null = null;
+      private method = '';
+
+      call(uri: string, payload: string): void {
+        this.method = uri.slice(uri.lastIndexOf('/') + 1);
+        const parameters = JSON.parse(payload) as Record<string, unknown>;
+        request(uri, { method: this.method, parameters });
+        if (this.method === 'load') {
+          this.onservicecallback?.(JSON.stringify({
+            returnValue: true,
+            clientId: 'client-1',
+          }));
+        } else if (this.method === 'sendDrmMessage') {
+          this.onservicecallback?.(JSON.stringify({
+            returnValue: true,
+            resultCode: 0,
+            msgId: 'msg-1',
+          }));
+        } else if (this.method === 'unload') {
+          this.onservicecallback?.('{"returnValue":true}');
+        }
       }
-      return { cancel };
-    });
-    Object.defineProperty(window, 'webOS', {
+
+      cancel(): void {
+        if (this.method === 'getRightsError') cancelSubscription();
+        this.onservicecallback = null;
+      }
+    }
+
+    Object.defineProperty(window, 'PalmServiceBridge', {
       configurable: true,
-      value: { service: { request } },
+      value: FakePalmServiceBridge,
     });
   });
 
@@ -137,6 +154,6 @@ describe('PlayReadyDrm', () => {
     await vi.waitFor(() => {
       expect(request.mock.calls.some(call => call[1].method === 'unload')).toBe(true);
     });
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancelSubscription).toHaveBeenCalledOnce();
   });
 });

@@ -19,6 +19,7 @@ import { DashSubtitles } from '../services/dash-subtitles';
 import { VodSubtitles } from '../services/vod-subtitles';
 import { AssSubtitles, isAssSidecar } from '../services/ass-subtitles';
 import { getCachedSubtitle, setCachedSubtitle } from '../services/idb-cache';
+import { isLunaAvailable, lunaRequest } from '../services/luna';
 import {
   audioLabel,
   chooseAudioIndex,
@@ -652,19 +653,10 @@ export class PlayerTracks {
       if (enable) log.warn('CC: no mediaId yet — will retry on track/metadata events');
       return;
     }
-    const webOSWindow = window as unknown as {
-      webOS?: { service?: { request?: (uri: string, opts: {
-        method: string;
-        parameters: unknown;
-        onSuccess?: (response: unknown) => void;
-        onFailure?: (error: unknown) => void;
-      }) => void } };
-    };
-    const request = webOSWindow.webOS?.service?.request;
-    if (!request) return;
+    if (!isLunaAvailable()) return;
     const requestSeq = ++this.ccRequestSeq;
     this.ccPending = enable;
-    request('luna://com.webos.media', {
+    lunaRequest('luna://com.webos.media', {
       method: 'setSubtitleEnable',
       parameters: { mediaId, enable },
       onSuccess: () => {
