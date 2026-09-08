@@ -11,11 +11,14 @@ export function extFromUrl(url: string): string {
 export function containerMime(url: string): string {
   switch (extFromUrl(url)) {
     case 'mp4': case 'm4v': return 'video/mp4';
-    case 'mkv': return 'video/x-matroska';
-    case 'avi': return 'video/x-msvideo';
-    case 'mov': return 'video/quicktime';
-    case 'webm': return 'video/webm';
     case 'ts': return 'video/mp2t';
+    // Older webOS versions can reject these MIME declarations before the
+    // native pipeline has a chance to inspect the file.
+    case 'mkv':
+    case 'avi':
+    case 'mov':
+    case 'webm':
+      return '';
     default: return '';
   }
 }

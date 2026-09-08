@@ -40,6 +40,23 @@ describe('PlayerPipeline webOS stream MIME cache', () => {
     });
   });
 
+  it.each(['mkv', 'avi', 'mov', 'webm'])(
+    'omits the source type for direct .%s playback',
+    async extension => {
+      const { PlayerPipeline } = await import('./player-pipeline');
+      const pipeline = new PlayerPipeline(callbacks());
+      const video = videoElement();
+      pipeline.setVideoElement(video);
+
+      pipeline.load(`http://host/movie/ch1.${extension}`, null, { direct: true });
+
+      const source = video.querySelector('source');
+      expect(source?.src).toBe(`http://host/movie/ch1.${extension}`);
+      expect(source?.hasAttribute('type')).toBe(false);
+      expect(video.play).toHaveBeenCalledOnce();
+    },
+  );
+
   it('plays an ambiguous route from the IndexedDB MIME cache without probing', async () => {
     cacheMocks.getCachedStreamMime.mockResolvedValue('video/mp2t');
     const fetchMock = vi.fn();

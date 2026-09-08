@@ -767,6 +767,7 @@ export class Player {
       `ready=${String(probe.readyState)}`,
       `network=${String(probe.networkState)}`,
       `type=${declaredType || '(none)'}`,
+      `extension=${extFromUrl(url) || '(none)'}`,
       `canPlayType=${declaredType && v ? v.canPlayType(declaredType) || '(rejected)' : 'n/a'}`,
       `url=${diagnosticStreamUrl(url)}`,
     ];

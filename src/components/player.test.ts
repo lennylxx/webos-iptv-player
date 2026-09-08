@@ -1120,7 +1120,7 @@ describe('Player VOD mode', () => {
     // NETWORK_NO_SOURCE: every <source> was skipped, so no 'error' ever arrives.
     Object.assign(video, { readyState: 0, networkState: 3 });
     player.init(video);
-    const r = req();
+    const r = req({ url: 'http://host:8080/movie/u/p/10.mkv' });
     player.playVod(r);
     video.dispatchEvent(new Event('loadstart'));
     vi.mocked(showToast).mockClear();
@@ -1129,7 +1129,9 @@ describe('Player VOD mode', () => {
     vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_POLL_MS);
 
     // A rejected source never becomes currentSrc, so the URL comes from the request.
-    expect(logged.mock.calls[0].join(' ')).toContain('url=http://host:8080/movie/***/***/10.mp4');
+    const detail = logged.mock.calls[0].join(' ');
+    expect(detail).toContain('extension=mkv');
+    expect(detail).toContain('url=http://host:8080/movie/***/***/10.mkv');
     logged.mockRestore();
     expect(showToast).toHaveBeenCalledWith('Unable to play this video.');
     expect(r.onBack).toHaveBeenCalled();
@@ -1216,15 +1218,22 @@ describe('Player VOD mode', () => {
 });
 
 describe('containerMime', () => {
-  it('maps known progressive extensions to their container MIME', () => {
+  it('maps reliably recognized progressive extensions to their MIME', () => {
     expect(containerMime('http://host/movie/u/p/10.mp4')).toBe('video/mp4');
-    expect(containerMime('http://host/movie/u/p/10.mkv')).toBe('video/x-matroska');
-    expect(containerMime('http://host/movie/u/p/10.avi')).toBe('video/x-msvideo');
+    expect(containerMime('http://host/movie/u/p/10.m4v')).toBe('video/mp4');
+    expect(containerMime('http://host/movie/u/p/10.ts')).toBe('video/mp2t');
   });
 
   it('ignores query strings and fragments when reading the extension', () => {
     expect(containerMime('http://host/movie/u/p/10.mp4?token=x')).toBe('video/mp4');
-    expect(containerMime('http://host/movie/u/p/10.mkv#frag')).toBe('video/x-matroska');
+    expect(containerMime('http://host/movie/u/p/10.mkv#frag')).toBe('');
+  });
+
+  it('claims no type for containers without reliable webOS MIME recognition', () => {
+    expect(containerMime('http://host/movie/u/p/10.mkv')).toBe('');
+    expect(containerMime('http://host/movie/u/p/10.avi')).toBe('');
+    expect(containerMime('http://host/movie/u/p/10.mov')).toBe('');
+    expect(containerMime('http://host/movie/u/p/10.webm')).toBe('');
   });
 
   it('claims no type for unknown or extension-less URLs', () => {

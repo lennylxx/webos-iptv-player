@@ -128,4 +128,11 @@ describe('containerMime', () => {
     expect(containerMime('http://host/a.mpd')).toBe('');
     expect(containerMime('http://host/a.mp4')).toBe('video/mp4');
   });
+
+  it('lets webOS sniff containers without reliable MIME recognition', () => {
+    expect(containerMime('http://host/a.mkv')).toBe('');
+    expect(containerMime('http://host/a.avi')).toBe('');
+    expect(containerMime('http://host/a.mov')).toBe('');
+    expect(containerMime('http://host/a.webm')).toBe('');
+  });
 });
