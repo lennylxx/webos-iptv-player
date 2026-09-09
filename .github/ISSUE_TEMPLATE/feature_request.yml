@@ -1,0 +1,101 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe one request per issue. Focus on the problem and user outcome;
+        implementation suggestions are welcome but optional.
+
+        Do not include credentials, tokens, private playlist data, or private
+        account information.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find this request.
+          required: true
+        - label: I checked the README and relevant files in `docs/`.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Live TV
+        - Guide and EPG
+        - Movies and series
+        - Playback
+        - Audio and subtitles
+        - Search
+        - Playlists and accounts
+        - Settings
+        - LAN setup and uploads
+        - Accessibility
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or limitation
+      description: What is difficult or impossible today, and who is affected?
+      placeholder: Describe the current problem rather than only naming a feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Give a concrete example of when and how this would be used.
+      placeholder: |
+        1. The user ...
+        2. They need to ...
+        3. The desired outcome is ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or experience you would like.
+      placeholder: Explain what should happen from the user's perspective.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or other approaches you have considered.
+      placeholder: Optional.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add relevant screenshots, mockups, or technical details.
+      placeholder: Optional. Remove private information before submitting.
+
+  - type: checkboxes
+    id: compatibility
+    attributes:
+      label: Compatibility
+      options:
+        - label: This request should preserve remote-control navigation.
+        - label: This request should also work in the desktop preview.
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed all submitted text and attachments for private data.
+          required: true
