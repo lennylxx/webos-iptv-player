@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { test, expect, routePlaylist, seedPlaylist } from './helpers';
+import { test, expect, isChromium53, routePlaylist, seedPlaylist } from './helpers';
 import { DASH_URL, DASH_M3U, DASH_MPD, installShakaStub } from './shaka-fixture';
 
 const shakaVersion = JSON.parse(readFileSync('package.json', 'utf8')).devDependencies['shaka-player'];
@@ -62,6 +62,13 @@ test('loads the real Shaka engine in the desktop preview', async ({ page }) => {
   await seedPlaylist(page);
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
+  const beforeShaka = await page.evaluate(() => ({
+    promiseFinally: typeof Promise.prototype.finally,
+    trimStart: typeof String.prototype.trimStart,
+  }));
+  expect(beforeShaka).toEqual(isChromium53()
+    ? { promiseFinally: 'undefined', trimStart: 'undefined' }
+    : { promiseFinally: 'function', trimStart: 'function' });
 
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
@@ -71,6 +78,13 @@ test('loads the real Shaka engine in the desktop preview', async ({ page }) => {
   expect(await page.evaluate(() =>
     (window as unknown as { __shaka: { Player: { version: string } } })
       .__shaka.Player.version)).toBe(`v${shakaVersion}`);
+  expect(await page.evaluate(() => ({
+    promiseFinally: typeof Promise.prototype.finally,
+    trimStart: typeof String.prototype.trimStart,
+  }))).toEqual({
+    promiseFinally: 'function',
+    trimStart: 'function',
+  });
 
   // PlayerPipeline fetches track metadata first; the real Shaka instance then
   // makes its own manifest request while initializing playback.

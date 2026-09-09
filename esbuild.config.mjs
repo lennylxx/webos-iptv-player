@@ -5,6 +5,7 @@ import {
   scanBundle,
   formatViolations,
 } from './scripts/compat-gate.mjs';
+import { validateShakaBundle } from './scripts/shaka-compat-gate.mjs';
 import {
   convertLegacyColorSyntax,
   generateFlexGapFallback,
@@ -105,10 +106,9 @@ const shippedBuilds = [
 await Promise.all(shippedBuilds.map(({ config }) =>
   esbuild.build({ ...config, minify: true })));
 
-cpSync(
-  'node_modules/shaka-player/dist/shaka-player.dash.js',
-  'dist/js/shaka-player.dash.js',
-);
+const shakaBundle = readFileSync('node_modules/shaka-player/dist/shaka-player.dash.js', 'utf8');
+validateShakaBundle(shakaBundle);
+writeFileSync('dist/js/shaka-player.dash.js', shakaBundle);
 
 // webOS 4 (Chromium 53) bundle compat gate. Down-leveling handles post-53
 // *syntax*, but not *APIs* — and dependencies get bundled in without passing
@@ -121,7 +121,7 @@ for (const { name, config } of shippedBuilds) {
     throw new Error(`${name} bundle:\n${formatViolations(violations)}`);
   }
 }
-console.log('Compat gate: app and worker bundles are Chromium-53 clean.');
+console.log('Compat gate: app, worker and Shaka bundles are Chromium-53 clean.');
 
 // Desktop-only HLS and MPEG-TS libraries. Shaka stays in its separate lazy
 // bundle on both desktop and webOS.
