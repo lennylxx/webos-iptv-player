@@ -9,6 +9,7 @@ import {
   xtreamCatchupSources,
   xtreamCredentialsFromLiveUrl,
 } from '../utils/xtream-url';
+import { isMpdText } from '../utils/url';
 
 export interface M3UParseOptions {
   maxChannels?: number;
@@ -46,8 +47,12 @@ export function parseM3U(
     if (issues.length < maxIssues) issues.push({ level, code, message, line });
   };
 
-  if (detection.format === 'hls-master' || detection.format === 'hls-media') {
-    const metadata = readPlaylistMetadata(text);
+  if (detection.format === 'dash'
+      || detection.format === 'hls-master'
+      || detection.format === 'hls-media') {
+    const metadata = detection.format === 'dash'
+      ? { attributes: {}, name: undefined }
+      : readPlaylistMetadata(text);
     Object.assign(headerAttributes, metadata.attributes);
     epgUrls = collectEpgUrls(metadata.attributes);
     const maxConn = parseInt(metadata.attributes['max-conn'] || '', 10);
@@ -66,7 +71,13 @@ export function parseM3U(
         metadata.name,
       );
     }
-    addIssue('error', 'hls-without-source', 'HLS input requires its source URL', 1);
+    const streamType = detection.format === 'dash' ? 'DASH' : 'HLS';
+    addIssue(
+      'error',
+      `${detection.format === 'dash' ? 'dash' : 'hls'}-without-source`,
+      `${streamType} input requires its source URL`,
+      1,
+    );
     return result(
       [],
       [],
@@ -243,6 +254,9 @@ export function detectPlaylistFormat(input: string): PlaylistFormatDetection {
   }
   if (/^(?:<\?xml[^>]*>\s*)?(?:<!DOCTYPE\s+tv\b[^>]*>\s*)?<tv\b/i.test(trimmed)) {
     return { format: 'xmltv', confidence: 0.95, reason: 'XMLTV markup', hadBom };
+  }
+  if (isMpdText(trimmed)) {
+    return { format: 'dash', confidence: 0.98, reason: 'DASH MPD markup', hadBom };
   }
   if (/^<(?:!DOCTYPE\s+html|html|head|body)\b/i.test(trimmed)) {
     return { format: 'html', confidence: 0.95, reason: 'HTML document', hadBom };

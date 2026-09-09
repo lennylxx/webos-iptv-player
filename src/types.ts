@@ -98,6 +98,7 @@ export interface ParsedPlaylist {
 
 export type PlaylistFormat =
   | 'extended-m3u'
+  | 'dash'
   | 'hls-master'
   | 'hls-media'
   | 'simple-m3u'

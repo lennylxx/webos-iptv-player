@@ -324,6 +324,31 @@ describe('parseM3U', () => {
     expect(parseM3U(hls).channels).toEqual([]);
   });
 
+  it('wraps a bare DASH MPD as a single channel from the source URL', () => {
+    const mpd = [
+      '<?xml version="1.0"?>',
+      '<!-- manifest -->',
+      '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic"></MPD>',
+    ].join('\n');
+    const result = parseM3U(mpd, 'http://host/live.mpd?token=1');
+    expect(result.channels).toHaveLength(1);
+    expect(result.channels[0].name).toBe('live');
+    expect(result.channels[0].url).toBe('http://host/live.mpd?token=1');
+    expect(result.groups).toEqual([UNCATEGORIZED_GROUP]);
+    expect(result.format).toBe('dash');
+    expect(result.issues).toEqual([]);
+  });
+
+  it('does not wrap a DASH MPD when no source URL is supplied', () => {
+    const result = parseM3U('<MPD type="static"></MPD>');
+    expect(result.channels).toEqual([]);
+    expect(result.issues).toEqual([expect.objectContaining({
+      level: 'error',
+      code: 'dash-without-source',
+      line: 1,
+    })]);
+  });
+
   it('does not wrap a normal channel list (no HLS tags) even with a source URL', () => {
     const m3u = ['#EXTM3U', '#EXTINF:-1,Ch', 'http://e/1'].join('\n');
     const result = parseM3U(m3u, 'http://host/list.m3u');
@@ -340,6 +365,8 @@ describe('parseM3U', () => {
       .toBe('hls-media');
     expect(detectPlaylistFormat('#extm3u\n#ext-x-endlist').format)
       .toBe('hls-media');
+    expect(detectPlaylistFormat('<?xml version="1.0"?><MPD/>').format)
+      .toBe('dash');
     expect(detectPlaylistFormat('<tv></tv>').format).toBe('xmltv');
     expect(detectPlaylistFormat('<html></html>').format).toBe('html');
     expect(detectPlaylistFormat('{"error":true}').format).toBe('json');

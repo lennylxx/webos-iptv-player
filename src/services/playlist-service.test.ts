@@ -82,6 +82,25 @@ describe('PlaylistService.refresh', () => {
     expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
   });
 
+  it('loads a bare MPD playlist URL as a single DASH channel', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'a', name: 'DASH', url: 'http://host/live.mpd' },
+    ]);
+    fetchTextMock.mockResolvedValue(
+      '<?xml version="1.0"?><MPD type="dynamic"></MPD>',
+    );
+
+    const channels = await PlaylistService.refresh();
+
+    expect(channels).toEqual([
+      expect.objectContaining({
+        name: 'live',
+        url: 'http://host/live.mpd',
+        playlistIds: ['a'],
+      }),
+    ]);
+  });
+
   it('loads every distinct EPG URL declared by a playlist', async () => {
     fetchTextMock.mockResolvedValue(
       '#EXTM3U url-tvg="http://host/a.xml,http://host/b.xml"\n'
