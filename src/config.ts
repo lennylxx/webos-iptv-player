@@ -27,7 +27,6 @@ export const CONFIG = {
     // mediaOption selects the native MPEG-DASH transport deterministically;
     // bare delegates selection to URI typefinding for provider compatibility.
     DASH_SOURCE: 'mediaOption' as 'mediaOption' | 'bare',
-    DASH_MAX_RECOVERIES: 3,     // bounded dash.js fatal-error retries (desktop preview)
     STREAM_MIME_CACHE_TTL: 7 * 24 * 60 * 60 * 1000,
     // Long enough to type a second or third digit, short enough that a
     // full-width number does not feel stalled once it can no longer grow.

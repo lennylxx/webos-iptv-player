@@ -100,8 +100,14 @@ export class Player {
       mediaState: video => this.mediaState(video),
       isCatchup: () => this.catchupInfo !== null,
       onError: () => this.onError(),
-      onAudioTracksUpdated: () => this.tracks.applyHlsAudioSelection(),
-      onSubtitleTracksUpdated: () => this.tracks.applyHlsSubtitleSelection(),
+      onAudioTracksUpdated: () => {
+        this.tracks.applyHlsAudioSelection();
+        if (this.osd.isVisible()) this.osd.render();
+      },
+      onSubtitleTracksUpdated: () => {
+        this.tracks.applyHlsSubtitleSelection();
+        if (this.osd.isVisible()) this.osd.render();
+      },
       onManifest: manifest => this.applyPipelineManifest(manifest),
     });
     this.tracks = new PlayerTracks(this.pipeline, {
@@ -1061,8 +1067,8 @@ export class Player {
     this.stopDvrPauseTick();
   }
 
-  // Stream-info values for the OSD. Resolution comes from the video element; the
-  // rest from the HLS manifest (empty for a direct-played VOD).
+  // Resolution comes from the video element; other fields use the active MSE
+  // rendition, native manifest metadata or the VOD container probe.
   private streamInfo(): PlayerOsdStreamInfo | null {
     const v = this.videoEl;
     const lvl = this.pipeline.streamInfo();
@@ -1076,7 +1082,7 @@ export class Player {
     // Atmos (JOC): native path from the manifest variant's audio group; hls.js from
     // the active audio track's channel layout — loadLevelObj carries no channels.
     const hlsChannels = lvl?.audioChannels ?? '';
-    const atmos = variant?.atmos || /\bJOC\b/i.test(hlsChannels);
+    const atmos = lvl?.audioAtmos ?? (variant?.atmos || /\bJOC\b/i.test(hlsChannels));
     const aCodec = aCodecName && atmos ? `${aCodecName} Atmos` : aCodecName;
     const hdr = hdrLabel(lvl?.videoRange ?? variant?.videoRange ?? info?.hdr ?? '');
     const fps = frameRateLabel(lvl?.frameRate ?? variant?.frameRate ?? info?.fps ?? 0);

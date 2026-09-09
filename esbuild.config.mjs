@@ -61,7 +61,8 @@ cpSync('assets/icon130.png', 'dist/largeIcon.png');
 cpSync('assets/group-icons', 'dist/assets/group-icons', { recursive: true });
 cpSync('assets/icons', 'dist/assets/icons', { recursive: true });
 
-// Main app bundle — excludes hls.js, mpegts.js and dashjs (only needed on desktop).
+// Main app bundle — playback libraries remain separate. Shaka is shipped as a
+// lazy TV bundle for Widevine and is also used by the desktop preview.
 const serviceId = JSON.parse(readFileSync('bundled-service/src/services.json', 'utf8')).id;
 const define = {
   '__APP_VERSION__': JSON.stringify(version),
@@ -83,7 +84,7 @@ const appBuild = {
   format: 'iife',
   target: TARGET,
   banner: { js: LEGACY_JS_BANNER },
-  external: ['hls.js', 'mpegts.js', 'dashjs'],
+  external: ['hls.js', 'mpegts.js', 'shaka-player'],
   define,
 };
 const workerBuild = {
@@ -104,6 +105,11 @@ const shippedBuilds = [
 await Promise.all(shippedBuilds.map(({ config }) =>
   esbuild.build({ ...config, minify: true })));
 
+cpSync(
+  'node_modules/shaka-player/dist/shaka-player.dash.js',
+  'dist/js/shaka-player.dash.js',
+);
+
 // webOS 4 (Chromium 53) bundle compat gate. Down-leveling handles post-53
 // *syntax*, but not *APIs* — and dependencies get bundled in without passing
 // through the eslint source gate. Scan a NON-minified build of the same entry
@@ -117,8 +123,8 @@ for (const { name, config } of shippedBuilds) {
 }
 console.log('Compat gate: app and worker bundles are Chromium-53 clean.');
 
-// Desktop-only playback libraries. Production builds neither reference nor
-// generate this bundle, so it cannot leak into the IPK.
+// Desktop-only HLS and MPEG-TS libraries. Shaka stays in its separate lazy
+// bundle on both desktop and webOS.
 if (isPreview) {
   await esbuild.build({
     entryPoints: ['src/preview-libs.ts'],

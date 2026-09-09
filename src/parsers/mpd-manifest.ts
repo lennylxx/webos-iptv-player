@@ -14,7 +14,7 @@ export interface MpdManifest {
 }
 
 export interface MpdDrmInfo {
-  type: 'playready' | 'unsupported';
+  type: 'playready' | 'widevine' | 'clearkey' | 'unsupported';
   scheme: string;
 }
 
@@ -26,6 +26,8 @@ const WEBVTT_MIMES = ['text/vtt', 'application/x-subtitle-vtt'];
 const SUBTITLE_MIMES = WEBVTT_MIMES.concat(['application/ttml+xml']);
 const MP4_PROTECTION_SCHEME = 'urn:mpeg:dash:mp4protection:2011';
 export const PLAYREADY_SCHEME = 'urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95';
+export const WIDEVINE_SCHEME = 'urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed';
+export const CLEARKEY_SCHEME = 'urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e';
 const DV_CODECS = ['dvh1', 'dvhe', 'dvav', 'dva1', 'dav1', 'dvc1'];
 
 const EMPTY: MpdManifest = {
@@ -39,6 +41,12 @@ function drmProtection(root: Element): MpdDrmInfo | null {
     scheme && scheme !== MP4_PROTECTION_SCHEME);
   if (schemes.indexOf(PLAYREADY_SCHEME) >= 0) {
     return { type: 'playready', scheme: PLAYREADY_SCHEME };
+  }
+  if (schemes.indexOf(WIDEVINE_SCHEME) >= 0) {
+    return { type: 'widevine', scheme: WIDEVINE_SCHEME };
+  }
+  if (schemes.indexOf(CLEARKEY_SCHEME) >= 0) {
+    return { type: 'clearkey', scheme: CLEARKEY_SCHEME };
   }
   const scheme = schemes[0];
   return scheme ? { type: 'unsupported', scheme } : null;

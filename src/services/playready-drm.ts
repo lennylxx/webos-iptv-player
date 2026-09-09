@@ -1,6 +1,10 @@
-import { PLAYREADY_SCHEME } from '../parsers/mpd-manifest';
 import { createLogger } from '../utils/logger';
-import { isLunaAvailable, lunaRequest } from './luna';
+import type { PlayReadyConfig } from './drm-config';
+import {
+  isLunaAvailable,
+  lunaRequest,
+  type LunaRequestHandle,
+} from './luna';
 
 const log = createLogger('PlayReady');
 const DRM_URI = 'luna://com.webos.service.drm';
@@ -17,186 +21,6 @@ interface ServiceResponse {
   contentId?: string;
   errorState?: number;
   rightIssueUrl?: string;
-}
-
-interface ServiceHandle {
-  cancel(): void;
-}
-
-interface ServiceOptions {
-  method: string;
-  parameters: Record<string, unknown>;
-  onSuccess?: (response: ServiceResponse) => void;
-  onFailure?: (error: ServiceResponse) => void;
-}
-
-type ServiceRequest = (uri: string, options: ServiceOptions) => ServiceHandle;
-
-export interface PlayReadyConfig {
-  type: 'playready';
-  licenseUrl: string;
-  customData: string;
-  unsupportedOptions: string[];
-}
-
-export interface UnsupportedDrmConfig {
-  type: 'unsupported';
-  value: string;
-}
-
-export type NativeDrmConfig = PlayReadyConfig | UnsupportedDrmConfig;
-
-const LICENSE_TYPE_KEYS = [
-  'inputstream.adaptive.license_type',
-  'license_type',
-  'drm_type',
-];
-const DRM_KEYS = ['inputstream.adaptive.drm'];
-const DRM_LEGACY_KEYS = [
-  'inputstream.adaptive.drm_legacy',
-  'drm_legacy',
-];
-const LICENSE_KEY_KEYS = [
-  'inputstream.adaptive.license_key',
-  'license_key',
-  'drm_license_url',
-];
-const CUSTOM_DATA_KEYS = [
-  'drm_custom_data',
-];
-const LICENSE_DATA_KEYS = [
-  'inputstream.adaptive.license_data',
-  'license_data',
-];
-
-function firstExtra(extras: Record<string, string>, keys: string[]): string {
-  for (const key of keys) {
-    const value = extras[key]?.trim();
-    if (value) return value;
-  }
-  return '';
-}
-
-function isPlayReady(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return normalized === 'playready'
-    || normalized === 'com.microsoft.playready'
-    || normalized === 'com.microsoft.playready.recommendation'
-    || normalized === PLAYREADY_SCHEME;
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function text(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function unsupportedJsonOptions(entry: Record<string, unknown>): string[] {
-  const unsupported: string[] = [];
-  const supportedEntry = {
-    priority: true,
-    license: true,
-    optional_key_req_params: true,
-  };
-  for (const key in entry) {
-    if (!Object.prototype.hasOwnProperty.call(supportedEntry, key)
-        && entry[key] !== undefined) {
-      unsupported.push(key);
-    }
-  }
-  const license = record(entry.license);
-  if (license) {
-    const supported = { server_url: true };
-    for (const key in license) {
-      if (!Object.prototype.hasOwnProperty.call(supported, key) && license[key] !== undefined) {
-        unsupported.push(`license.${key}`);
-      }
-    }
-  }
-  const keyParams = record(entry.optional_key_req_params);
-  if (keyParams) {
-    const supported = { custom_data: true };
-    for (const key in keyParams) {
-      if (!Object.prototype.hasOwnProperty.call(supported, key)
-          && keyParams[key] !== undefined) {
-        unsupported.push(`optional_key_req_params.${key}`);
-      }
-    }
-  }
-  return unsupported;
-}
-
-function kodiDrmConfig(value: string): NativeDrmConfig {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return { type: 'unsupported', value: 'invalid inputstream.adaptive.drm' };
-  }
-  const configs = record(parsed);
-  if (!configs) return { type: 'unsupported', value: 'invalid inputstream.adaptive.drm' };
-
-  let firstType = '';
-  for (const type in configs) {
-    if (!firstType) firstType = type;
-    if (!isPlayReady(type)) continue;
-    const entry = record(configs[type]) ?? {};
-    const license = record(entry.license);
-    const keyParams = record(entry.optional_key_req_params);
-    return {
-      type: 'playready',
-      licenseUrl: text(license?.server_url),
-      customData: text(keyParams?.custom_data),
-      unsupportedOptions: unsupportedJsonOptions(entry),
-    };
-  }
-  return { type: 'unsupported', value: firstType || 'empty inputstream.adaptive.drm' };
-}
-
-function kodiLegacyConfig(value: string): NativeDrmConfig {
-  const parts = value.split('|');
-  const type = parts[0]?.trim() ?? '';
-  if (!isPlayReady(type)) return { type: 'unsupported', value: type || value };
-  const unsupportedOptions: string[] = [];
-  if (parts[2]?.trim()) unsupportedOptions.push('license headers');
-  return {
-    type: 'playready',
-    licenseUrl: parts[1]?.trim() ?? '',
-    customData: '',
-    unsupportedOptions,
-  };
-}
-
-export function nativeDrmConfig(
-  extras: Record<string, string> | null,
-): NativeDrmConfig | null {
-  if (!extras) return null;
-  const drm = firstExtra(extras, DRM_KEYS);
-  if (drm) return kodiDrmConfig(drm);
-  const legacy = firstExtra(extras, DRM_LEGACY_KEYS);
-  if (legacy) return kodiLegacyConfig(legacy);
-
-  const type = firstExtra(extras, LICENSE_TYPE_KEYS);
-  if (!type) return null;
-  if (!isPlayReady(type)) return { type: 'unsupported', value: type };
-  const licenseKey = firstExtra(extras, LICENSE_KEY_KEYS);
-  const licenseParts = licenseKey.split('|');
-  const unsupportedOptions: string[] = [];
-  if (licenseParts[1]?.trim()) unsupportedOptions.push('license headers');
-  if (licenseParts[2]?.trim() || licenseParts[3]?.trim()) {
-    unsupportedOptions.push('license request/response recipe');
-  }
-  if (firstExtra(extras, LICENSE_DATA_KEYS)) unsupportedOptions.push('license data/PSSH');
-  return {
-    type: 'playready',
-    licenseUrl: licenseParts[0]?.trim() ?? '',
-    customData: firstExtra(extras, CUSTOM_DATA_KEYS),
-    unsupportedOptions,
-  };
 }
 
 function xml(value: string): string {
@@ -222,15 +46,10 @@ function customDataMessage(customData: string): string {
     + '</SetCustomData></PlayReadyInitiator>';
 }
 
-function serviceRequest(): ServiceRequest | null {
-  if (!isLunaAvailable()) return null;
-  return (uri, options) => lunaRequest<ServiceResponse>(uri, options);
-}
-
 export class PlayReadyDrm {
   private generation = 0;
   private clientId = '';
-  private subscription: ServiceHandle | null = null;
+  private subscription: LunaRequestHandle | null = null;
   private messageIds = new Set<string>();
 
   async prepare(
@@ -241,23 +60,22 @@ export class PlayReadyDrm {
     await this.unloadCurrent();
     if (generation !== this.generation) return null;
 
-    const request = serviceRequest();
-    if (!request) throw new Error('webOS DRM service is unavailable');
+    if (!isLunaAvailable()) throw new Error('webOS DRM service is unavailable');
 
     try {
-      const loaded = await this.call(request, 'load', {
+      const loaded = await this.call('load', {
         drmType: 'playready',
         appId: __APP_ID__,
       });
       const clientId = loaded.clientId;
       if (!clientId) throw new Error('DRM service returned no clientId');
       if (generation !== this.generation) {
-        await this.unload(request, clientId);
+        await this.unload(clientId);
         return null;
       }
       this.clientId = clientId;
       this.messageIds.clear();
-      this.subscription = request(DRM_URI, {
+      this.subscription = lunaRequest<ServiceResponse>(DRM_URI, {
         method: 'getRightsError',
         parameters: { clientId, subscribe: true },
         onSuccess: response => {
@@ -276,7 +94,7 @@ export class PlayReadyDrm {
       const messages = [licenseServerMessage(config.licenseUrl)];
       if (config.customData) messages.push(customDataMessage(config.customData));
       for (const msg of messages) {
-        const sent = await this.call(request, 'sendDrmMessage', {
+        const sent = await this.call('sendDrmMessage', {
           clientId,
           msgType: PLAYREADY_MESSAGE_TYPE,
           msg,
@@ -303,12 +121,11 @@ export class PlayReadyDrm {
   }
 
   private call(
-    request: ServiceRequest,
     method: string,
     parameters: Record<string, unknown>,
   ): Promise<ServiceResponse> {
     return new Promise((resolve, reject) => {
-      request(DRM_URI, {
+      lunaRequest<ServiceResponse>(DRM_URI, {
         method,
         parameters,
         onSuccess: response => {
@@ -326,16 +143,15 @@ export class PlayReadyDrm {
   }
 
   private async unloadCurrent(): Promise<void> {
-    const request = serviceRequest();
     const clientId = this.clientId;
     this.clientId = '';
     this.messageIds.clear();
     this.subscription?.cancel();
     this.subscription = null;
-    if (request && clientId) await this.unload(request, clientId);
+    if (isLunaAvailable() && clientId) await this.unload(clientId);
   }
 
-  private async unload(request: ServiceRequest, clientId: string): Promise<void> {
-    await this.call(request, 'unload', { clientId });
+  private async unload(clientId: string): Promise<void> {
+    await this.call('unload', { clientId });
   }
 }

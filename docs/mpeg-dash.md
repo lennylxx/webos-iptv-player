@@ -1,14 +1,51 @@
 # MPEG-DASH support
 
 The player supports MPEG-DASH channels on webOS and in the desktop preview.
-webOS uses its native media pipeline; the preview uses dashjs through MSE.
+Clear and PlayReady streams use the native webOS media pipeline. Widevine,
+ClearKey and the desktop preview use Shaka through MSE.
 
 ## Runtime paths
 
 | Platform | Playback path | Track control |
 |---|---|---|
-| webOS | Native `MPEG-DASH` transport | HTML5 audio tracks, self-rendered raw WebVTT, and the native subtitle compositor |
-| Desktop preview | dashjs | The `MseEngine` adapter |
+| webOS, clear or PlayReady | Native `MPEG-DASH` transport | HTML5 audio tracks, self-rendered raw WebVTT, and the native subtitle compositor |
+| webOS, Widevine or ClearKey | Shaka DASH-only through MSE/EME | The `MseEngine` adapter |
+| Desktop preview | Shaka DASH-only | The `MseEngine` adapter |
+
+## Shaka webOS compatibility
+
+The [Shaka support matrix](https://github.com/shaka-project/shaka-player/blob/main/README.md#drm-support-matrix)
+lists webOS generically: community-supported, expected to work, but untested by
+the Shaka team. It gives **no numeric minimum or per-generation certification**.
+
+| DRM | Shaka's declared webOS support | [LG's MSE/EME capabilities, webOS 4.x–26](https://webostv.developer.lge.com/develop/specifications/streaming-protocol-drm) |
+|---|---|---|
+| Widevine Modular | Expected; community-supported | Documented |
+| PlayReady | Expected; community-supported | Documented |
+| ClearKey | Expected; community-supported | Not listed by LG; Shaka's expectation is not an LG guarantee |
+
+**Generation constraints, not certification:** [LG's engine versions](https://webostv.developer.lge.com/develop/specifications/web-api-and-web-engine)
+match [Shaka's webOS adapter](https://github.com/shaka-project/shaka-player/blob/main/lib/device/webos.js).
+EME revisions below are LG specifications; CBCS entries describe Shaka's fallback
+when the device does not explicitly report encryption-scheme support.
+
+| webOS | Chromium | LG EME revision | Shaka CBCS fallback |
+|---|---:|---|---|
+| 4.x (4.0/4.5) | 53 | 2015 draft | Not assumed |
+| 5.x | 68 | 2017 recommendation | Not assumed |
+| 6.x | 79 | 2017 recommendation | Assumed |
+| 22 | 87 | 2017 recommendation | Assumed |
+| 23 | 94 | 2017 recommendation | Assumed |
+| 24 | 108 | 2017 recommendation | Assumed |
+| 25 | 120 | 2017 recommendation | Assumed |
+| 26 | 132 | 2017 recommendation | Assumed |
+
+For all three DRM systems, Shaka's [encryption-scheme fallback](https://github.com/shaka-project/shaka-player/blob/main/lib/polyfill/encryption_scheme_utils.js)
+assumes `cenc`, adding `cbcs` on webOS 6+. These are compatibility heuristics,
+not proof that a device can play a given codec, encryption scheme or license policy.
+
+Use the standard ES5 `shaka-player.dash.js` [build](https://github.com/shaka-project/shaka-player/blob/main/build/all.py),
+not the separate `dash-es2021` build, for this app's Chromium 53 floor.
 
 ## Detection
 
@@ -162,18 +199,60 @@ data and is not treated as PlayReady custom data. If no license URL is
 configured, the client uses the URL in the content's PlayReady header.
 
 The DRM client and rights-error subscription are released on channel changes,
-player teardown and app suspension. Widevine and unknown protection schemes
-trigger `event=playback.dash.drm.unsupported` and normal channel fallback.
-The generic `mp4protection` descriptor alone does not mark a stream as DRM.
-Once the native DRM client is ready, the player OSD shows a `PlayReady` stream
-information pill.
+player teardown and app suspension. Unknown protection schemes trigger
+`event=playback.dash.drm.unsupported` and normal channel fallback. The generic
+`mp4protection` descriptor alone does not mark a stream as DRM. Once the native
+DRM client is ready, the player OSD shows a `PlayReady` stream information pill.
 
-Native playback errors use the existing video-element error path. Desktop
-dashjs errors use a bounded retry budget before invoking the same channel
-fallback.
+## Widevine DRM through Shaka
+
+Widevine DASH uses Shaka's MSE/EME path on webOS because the native DASH
+transport does not consume standard EME `MediaKeys`. The production package
+contains the official DASH-only Shaka build, but loads and initializes it only
+when the playlist or MPD identifies Widevine or ClearKey. Clear streams and PlayReady
+therefore keep the native hardware path without Shaka startup or memory cost.
+
+The same Kodi 22, Kodi 21 and deprecated property forms are accepted with the
+`com.widevine.alpha` key system. For example:
+
+```text
+#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha
+#KODIPROP:inputstream.adaptive.license_key=http://host/license|authorization=Bearer%20token
+```
+
+The license server is supplied through `drm.servers`, and license request
+headers are installed with a Shaka networking request filter. Kodi 22
+`license.req_headers` accepts either a query-string form or an object of string
+headers. Request/response recipes, custom PSSH overrides, persistent sessions
+and other unsupported Kodi options are logged and ignored.
+
+Shaka installs its platform polyfills before checking MSE/EME support or
+creating the player. A channel change invalidates pending bundle loads and
+waits for the active Shaka instance to finish destruction before reusing the
+video element. Stop cancels any queued load. Once encrypted playback loads,
+the OSD shows a `Widevine` stream information pill; automatic ABR changes
+refresh stream information even when the video dimensions stay the same.
+
+Native playback errors use the existing video-element error path. Shaka handles
+recoverable streaming errors internally; critical errors invoke the same
+channel fallback.
 
 Channel-health probing accepts MPD XML and rejects other XML responses. It does
 not probe template-derived media segments.
+
+## ClearKey DRM through Shaka
+
+ClearKey (`org.w3.clearkey`) uses the same on-demand Shaka MSE/EME path.
+Supported configuration includes HTTP/HTTPS license URLs with license-only
+headers, comma-separated `KID:KEY` pairs, and Kodi JSON `license.keyids` maps:
+
+```text
+#KODIPROP:inputstream.adaptive.drm_legacy=org.w3.clearkey|00112233445566778899aabbccddeeff:ffeeddccbbaa99887766554433221100
+```
+
+IDs and keys must represent 16 bytes; hex and base64/base64url are accepted.
+Inline keys use `drm.clearKeys`. Invalid key maps are rejected without logging
+key material. Once playback loads, the OSD shows a `ClearKey` pill.
 
 ## Validation
 
@@ -184,15 +263,19 @@ Automated coverage includes:
 - native source construction for URL, cached and sniffed routes;
 - raw WebVTT rendering and native subtitle routing;
 - DVR sliding-window boundaries;
-- the dashjs adapter in Chromium and Chromium-53 simulation; and
-- the real dashjs dependency in modern Chromium.
+- the Shaka adapter and Widevine/ClearKey configuration in Chromium and Chromium-53
+  simulation;
+- production webOS routing between native PlayReady and Shaka Widevine/ClearKey; and
+- real Shaka ClearKey license networking and browser EME session lifecycle in both
+  browser projects, not desktop media decoding. Widevine tests use a stub.
 
 Native decode, extensionless detection, multiple audio AdaptationSets, raw
 WebVTT, `stpp`, `wvtt`, dynamic MPDs and DVR were tested on webOS TV 10.3.1.
 
 ## Known limitations
 
-- Native DRM support is PlayReady-only; Widevine requires a future EME path.
+- Widevine and ClearKey require compatible MSE codecs and their corresponding
+  `com.widevine.alpha` or `org.w3.clearkey` EME key system.
 - Metadata and subtitle discovery use the first Period.
 - Multi-Period subtitle continuation, xlink, encrypted WebVTT, BaseURL failover
   and UTCTiming correction are not implemented.

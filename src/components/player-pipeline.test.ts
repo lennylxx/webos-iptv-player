@@ -80,70 +80,104 @@ const fakeMpegts = {
   createPlayer: vi.fn(() => new FakeMpegtsPlayer()),
 };
 
-const ROLE_SCHEME = 'urn:mpeg:dash:role:2011';
-const CHANNELS_SCHEME =
-  'urn:mpeg:dash:23003:3:audio_channel_configuration:2011';
+class FakeShakaPlayer {
+  static readonly instances: FakeShakaPlayer[] = [];
+  static pendingAttach: Promise<void> | null = null;
 
-class FakeDashPlayer {
-  readonly initialize = vi.fn();
-  readonly updateSettings = vi.fn();
-  readonly destroy = vi.fn();
-  readonly setCurrentTrack = vi.fn();
-  readonly setTextTrack = vi.fn();
-  readonly listeners = new Map<string, (data?: unknown) => void>();
-  currentTextTrackIndex = 0;
-  // dash.js represents Role and AudioChannelConfiguration as DescriptorType objects.
-  tracks: Record<string, unknown[]> = {
-    audio: [
-      { index: 1, lang: 'l1', labels: [{ text: 'Track 1' }],
-        roles: [{ schemeIdUri: ROLE_SCHEME, value: 'main', id: '' }],
-        codec: 'audio/mp4;codecs="mp4a.40.2"',
-        audioChannelConfiguration: [{ schemeIdUri: CHANNELS_SCHEME, value: '2', id: '' }] },
-      { index: 2, lang: 'l2', labels: [], roles: null,
-        codec: 'audio/mp4;codecs="ec-3"',
-        audioChannelConfiguration: [{ schemeIdUri: CHANNELS_SCHEME, value: '6', id: '' }] },
-    ],
-    text: [
-      { index: 3, lang: 'l1', labels: [{ text: 'Track 1' }],
-        roles: [{ schemeIdUri: ROLE_SCHEME, value: 'main', id: '' }] },
-      { index: 4, lang: 'l2', labels: [],
-        roles: [{ schemeIdUri: ROLE_SCHEME, value: 'forced-subtitle', id: '' }] },
-    ],
-    video: [{ codec: 'video/mp4;codecs="hvc1.2.4.L120.90"' }],
-  };
+  readonly attach = vi.fn(() => FakeShakaPlayer.pendingAttach ?? Promise.resolve());
+  readonly configure = vi.fn(() => true);
+  readonly destroy = vi.fn().mockResolvedValue(undefined);
+  readonly load = vi.fn().mockResolvedValue(undefined);
+  readonly requestFilters: Array<
+    (type: number, request: { headers: Record<string, string> }) => void
+  > = [];
+  readonly selectAudioTrack = vi.fn((track: typeof this.audioTracks[number]) => {
+    for (const candidate of this.audioTracks) candidate.active = candidate === track;
+    this.emit('variantchanged');
+  });
+  readonly selectTextTrack = vi.fn((track?: typeof this.textTracks[number] | null) => {
+    for (const candidate of this.textTracks) candidate.active = candidate === track;
+    this.emit('textchanged');
+  });
+  readonly listeners = new Map<string, (event: Event) => void>();
+  audioTracks = [
+    {
+      active: false, channelsCount: 2, codecs: 'mp4a.40.2',
+      label: 'Track 1', language: 'l1', primary: true,
+    },
+    {
+      active: true, channelsCount: 6, codecs: 'ec-3',
+      label: null, language: 'l2', primary: false,
+    },
+  ];
+  textTracks = [
+    {
+      active: true, forced: false, label: 'Track 1',
+      language: 'l1', primary: true,
+    },
+    {
+      active: false, forced: true, label: null,
+      language: 'l2', primary: false,
+    },
+  ];
+  variantTracks = [
+    {
+      active: true,
+      audioCodec: 'ec-3',
+      channelsCount: 6,
+      frameRate: 24,
+      hdr: 'PQ',
+      videoCodec: 'hvc1.2.4.L120.90',
+    },
+  ];
 
-  getTracksFor(type: string): unknown[] {
-    return this.tracks[type] ?? [];
+  constructor() {
+    FakeShakaPlayer.instances.push(this);
   }
 
-  getCurrentTrackFor(type: string): unknown {
-    return this.tracks[type]?.[type === 'audio' ? 1 : 0] ?? null;
-  }
-
-  getCurrentTextTrackIndex(): number {
-    return this.currentTextTrackIndex;
-  }
-
-  on(event: string, listener: (data?: unknown) => void): void {
+  addEventListener(event: string, listener: (event: Event) => void): void {
     this.listeners.set(event, listener);
   }
 
-  emit(event: string, data?: unknown): void {
-    this.listeners.get(event)?.(data);
+  emit(event: string, detail?: unknown): void {
+    this.listeners.get(event)?.(new CustomEvent(event, { detail }));
   }
+
+  getAudioTracks(): typeof this.audioTracks {
+    return this.audioTracks;
+  }
+
+  getTextTracks(): typeof this.textTracks {
+    return this.textTracks;
+  }
+
+  getVariantTracks(): typeof this.variantTracks {
+    return this.variantTracks;
+  }
+
+  getNetworkingEngine(): {
+    registerRequestFilter: (
+      filter: (type: number, request: { headers: Record<string, string> }) => void,
+    ) => void;
+  } {
+    return {
+      registerRequestFilter: filter => {
+        this.requestFilters.push(filter);
+      },
+    };
+  }
+
 }
 
-const fakeDashjs = {
-  MediaPlayer: Object.assign(() => ({ create: () => new FakeDashPlayer() }), {
-    events: {
-      ERROR: 'error',
-      FRAGMENT_LOADING_COMPLETED: 'fragmentLoadingCompleted',
-      STREAM_INITIALIZED: 'streamInitialized',
-    },
-  }),
+const fakeShaka = {
+  Player: FakeShakaPlayer,
+  net: { NetworkingEngine: { RequestType: { LICENSE: 2 } } },
+  util: { Error: { Severity: { CRITICAL: 2, RECOVERABLE: 1 } } },
 };
 
-let lastDashPlayer: FakeDashPlayer | null = null;
+function lastShakaPlayer(): FakeShakaPlayer | undefined {
+  return FakeShakaPlayer.instances[FakeShakaPlayer.instances.length - 1];
+}
 
 function callbacks(overrides: Partial<PlayerPipelineOptions> = {}): PlayerPipelineOptions {
   return {
@@ -171,24 +205,26 @@ function contentTypeResponse(contentType: string): Response {
 function installPreviewGlobals(): void {
   vi.stubGlobal('__Hls', FakeHls);
   vi.stubGlobal('__mpegts', fakeMpegts);
-  vi.stubGlobal('__dashjs', {
-    ...fakeDashjs,
-    MediaPlayer: Object.assign(() => ({
-      create: () => {
-        lastDashPlayer = new FakeDashPlayer();
-        return lastDashPlayer;
-      },
-    }), { events: fakeDashjs.MediaPlayer.events }),
-  });
+  vi.stubGlobal('__shaka', fakeShaka);
 }
 
 async function settle(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+}
+
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
 }
 
 afterEach(() => {
-  lastDashPlayer = null;
+  FakeShakaPlayer.instances.length = 0;
+  FakeShakaPlayer.pendingAttach = null;
   FakeHls.instances.length = 0;
   FakeHls.isSupported.mockClear();
   fakeMpegts.isSupported.mockClear();
@@ -430,44 +466,116 @@ describe('PlayerPipeline HLS integration', () => {
 
 
 describe('PlayerPipeline desktop DASH', () => {
-  async function loadDash(url = 'http://host/a', contentType = 'application/dash+xml') {
+  async function loadDash(
+    url = 'http://host/a',
+    contentType = 'application/dash+xml',
+    extras: Record<string, string> | null = null,
+  ) {
     installPreviewGlobals();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(contentTypeResponse(contentType)));
     const opts = callbacks();
     const pipeline = new PlayerPipeline(opts);
     const video = videoElement();
     pipeline.setVideoElement(video);
-    pipeline.load(url, null);
+    pipeline.load(url, extras);
     await settle();
     return { pipeline, video, opts };
   }
 
-  it('routes a detected DASH content type through dash.js', async () => {
+  it('routes a detected DASH content type through Shaka', async () => {
     const { pipeline, video } = await loadDash();
+    const player = lastShakaPlayer();
 
-    expect(lastDashPlayer?.initialize).toHaveBeenCalledWith(video, 'http://host/a', true);
+    expect(player?.configure).toHaveBeenCalledWith({
+      streaming: { bufferingGoal: CONFIG.PLAYER.BUFFER_LENGTH },
+    });
+    expect(player?.attach).toHaveBeenCalledWith(video);
+    expect(player?.load).toHaveBeenCalledWith('http://host/a');
+    expect(video.play).toHaveBeenCalledOnce();
     expect(pipeline.isMseActive()).toBe(true);
   });
 
-  it('routes an .mpd URL through dash.js when the probe is inconclusive', async () => {
+  it('routes an .mpd URL through Shaka when the probe is inconclusive', async () => {
     const { pipeline } = await loadDash('http://host/a.mpd', 'application/octet-stream');
 
-    expect(lastDashPlayer?.initialize).toHaveBeenCalledWith(
-      expect.anything(), 'http://host/a.mpd', true,
-    );
+    expect(lastShakaPlayer()?.load).toHaveBeenCalledWith('http://host/a.mpd');
     expect(pipeline.isMseActive()).toBe(true);
+  });
+
+  it('configures Widevine and applies license request headers', async () => {
+    const { pipeline } = await loadDash(
+      'http://host/a.mpd',
+      'application/dash+xml',
+      {
+        'inputstream.adaptive.license_type': 'com.widevine.alpha',
+        'inputstream.adaptive.license_key':
+          'http://host/license|authorization=Bearer%20token',
+      },
+    );
+    const player = lastShakaPlayer();
+    const request = { headers: {} as Record<string, string> };
+    player?.requestFilters[0]?.(2, request);
+
+    expect(player?.configure).toHaveBeenCalledWith({
+      streaming: { bufferingGoal: CONFIG.PLAYER.BUFFER_LENGTH },
+      drm: {
+        preferredKeySystems: ['com.widevine.alpha'],
+        servers: { 'com.widevine.alpha': 'http://host/license' },
+      },
+    });
+    expect(request.headers).toEqual({ authorization: 'Bearer token' });
+    expect(pipeline.drmLabel()).toBe('Widevine');
+  });
+
+  it('configures inline ClearKey keys and its OSD label', async () => {
+    const kid = '00112233445566778899aabbccddeeff';
+    const key = 'ffeeddccbbaa99887766554433221100';
+    const { pipeline } = await loadDash('http://host/a.mpd', 'application/dash+xml', {
+      'inputstream.adaptive.license_type': 'org.w3.clearkey',
+      'inputstream.adaptive.license_key': `${kid}:${key}`,
+    });
+    expect(lastShakaPlayer()?.configure).toHaveBeenCalledWith({
+      streaming: { bufferingGoal: CONFIG.PLAYER.BUFFER_LENGTH },
+      drm: { preferredKeySystems: ['org.w3.clearkey'], servers: {}, clearKeys: { [kid]: key } },
+    });
+    expect(pipeline.drmLabel()).toBe('ClearKey');
+  });
+
+  it('applies ClearKey headers to license requests only', async () => {
+    const { pipeline } = await loadDash('http://host/a.mpd', 'application/dash+xml', {
+      'inputstream.adaptive.drm_legacy': 'org.w3.clearkey|https://host/license|x-token=v',
+    });
+    const player = lastShakaPlayer();
+    const license = { headers: {} as Record<string, string> };
+    const segment = { headers: {} as Record<string, string> };
+    player?.requestFilters[0]?.(2, license);
+    player?.requestFilters[0]?.(1, segment);
+    expect(license.headers).toEqual({ 'x-token': 'v' });
+    expect(segment.headers).toEqual({});
+    expect(pipeline.drmLabel()).toBe('ClearKey');
+    pipeline.destroy();
+    expect(pipeline.drmLabel()).toBe('');
+  });
+
+  it('rejects malformed ClearKey configuration before creating a player', async () => {
+    const { opts } = await loadDash('http://host/a.mpd', 'application/dash+xml', {
+      'inputstream.adaptive.license_type': 'org.w3.clearkey',
+      'inputstream.adaptive.license_key': 'invalid',
+    });
+    expect(lastShakaPlayer()).toBeUndefined();
+    expect(opts.onError).toHaveBeenCalledOnce();
   });
 
   it('exposes DASH track controls', async () => {
     const { pipeline } = await loadDash();
-    const player = lastDashPlayer;
+    const player = lastShakaPlayer();
 
     expect(pipeline.mseAudioOptions()).toEqual([
       { index: 0, name: 'Track 1', lang: 'l1', isDefault: true, active: false },
       { index: 1, name: '', lang: 'l2', isDefault: false, active: true },
     ]);
     expect(pipeline.setMseAudioTrack(0)).toBe(true);
-    expect(player?.setCurrentTrack).toHaveBeenCalledWith(player?.tracks.audio[0]);
+    expect(player?.selectAudioTrack).toHaveBeenCalledWith(player?.audioTracks[0]);
     expect(pipeline.setMseAudioTrack(9)).toBe(false);
 
     expect(pipeline.mseSubtitleOptions()).toEqual([
@@ -475,9 +583,11 @@ describe('PlayerPipeline desktop DASH', () => {
       { index: 1, name: '', lang: 'l2', isDefault: false, isForced: true, active: false },
     ]);
     expect(pipeline.setMseSubtitleTrack(-1)).toBe(true);
-    expect(player?.setTextTrack).toHaveBeenCalledWith(-1);
+    expect(player?.selectTextTrack).toHaveBeenCalledWith();
+    expect(pipeline.mseSubtitleOptions().every(option => !option.active)).toBe(true);
     expect(pipeline.setMseSubtitleTrack(1)).toBe(true);
-    expect(player?.setTextTrack).toHaveBeenCalledWith(1);
+    expect(player?.selectTextTrack).toHaveBeenCalledWith(player?.textTracks[1]);
+    expect(pipeline.setMseSubtitleTrack(9)).toBe(false);
   });
 
   it('reports the playing codecs to the OSD', async () => {
@@ -486,59 +596,260 @@ describe('PlayerPipeline desktop DASH', () => {
     expect(pipeline.streamInfo()).toEqual({
       videoCodec: 'hvc1.2.4.L120.90',
       audioCodec: 'ec-3',
-      videoRange: '',
-      frameRate: 0,
+      videoRange: 'PQ',
+      frameRate: 24,
       audioChannels: '6',
+      audioAtmos: false,
     });
   });
 
-  it('reapplies track picks once dash.js knows the streams', async () => {
+  it('reapplies track picks once Shaka has loaded the streams', async () => {
     const { opts } = await loadDash();
-
-    lastDashPlayer?.emit('streamInitialized');
 
     expect(opts.onAudioTracksUpdated).toHaveBeenCalledOnce();
     expect(opts.onSubtitleTracksUpdated).toHaveBeenCalledOnce();
   });
 
-  it('gives up on a dash.js stream after the recovery budget', async () => {
-    const { opts } = await loadDash();
+  it.each(['adaptation', 'variantchanged'])('refreshes stream information on %s', async event => {
+    const { pipeline, opts } = await loadDash();
+    const player = lastShakaPlayer()!;
+    player.variantTracks[0].frameRate = 60;
+    player.variantTracks[0].hdr = 'HLG';
 
-    for (let i = 0; i < CONFIG.PLAYER.DASH_MAX_RECOVERIES; i++) {
-      lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
-    }
-    expect(opts.onError).not.toHaveBeenCalled();
+    player.emit(event);
 
-    lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
-    expect(opts.onError).toHaveBeenCalledOnce();
-  });
-
-  it('refills the dash.js recovery budget after a media segment loads', async () => {
-    const { opts } = await loadDash();
-
-    for (let i = 0; i < CONFIG.PLAYER.DASH_MAX_RECOVERIES; i++) {
-      lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
-    }
-    lastDashPlayer?.emit('fragmentLoadingCompleted', {
-      request: { type: 'MediaSegment' },
-    });
-    for (let i = 0; i < CONFIG.PLAYER.DASH_MAX_RECOVERIES; i++) {
-      lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
-    }
-
-    expect(opts.onError).not.toHaveBeenCalled();
-    lastDashPlayer?.emit('error', { error: { code: 27, message: 'download' } });
-    expect(opts.onError).toHaveBeenCalledOnce();
-  });
-
-  it('destroys the dash.js player when the pipeline tears down', async () => {
-    const { pipeline } = await loadDash();
-    const player = lastDashPlayer;
+    expect(opts.onAudioTracksUpdated).toHaveBeenCalledTimes(2);
+    expect(pipeline.streamInfo()).toMatchObject({ frameRate: 60, videoRange: 'HLG' });
 
     pipeline.destroy();
+    player.emit(event);
+    expect(opts.onAudioTracksUpdated).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not recurse when Shaka reports the applied subtitle visibility', async () => {
+    const onSubtitleTracksUpdated = vi.fn();
+    let pipeline: PlayerPipeline;
+    onSubtitleTracksUpdated.mockImplementation(() => {
+      pipeline.setMseSubtitleTrack(-1);
+    });
+    installPreviewGlobals();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      contentTypeResponse('application/dash+xml'),
+    ));
+    pipeline = new PlayerPipeline(callbacks({ onSubtitleTracksUpdated }));
+    pipeline.setVideoElement(videoElement());
+
+    pipeline.load('http://host/a.mpd', null);
+    await settle();
+
+    const player = lastShakaPlayer();
+    expect(onSubtitleTracksUpdated).toHaveBeenCalledTimes(2);
+    expect(player?.selectTextTrack).toHaveBeenCalledOnce();
+    expect(player?.textTracks.every(track => !track.active)).toBe(true);
+  });
+
+  it('lets Shaka handle recoverable errors and reports critical errors once', async () => {
+    const { opts } = await loadDash();
+    const player = lastShakaPlayer();
+
+    player?.emit('error', { severity: 1, category: 1, code: 1001 });
+    expect(opts.onError).not.toHaveBeenCalled();
+
+    player?.emit('error', { severity: 2, category: 1, code: 1002 });
+    player?.emit('error', { severity: 2, category: 1, code: 1003 });
+    expect(opts.onError).toHaveBeenCalledOnce();
+  });
+
+  it('destroys the Shaka player when the pipeline tears down', async () => {
+    const { pipeline } = await loadDash();
+    const player = lastShakaPlayer();
+
+    pipeline.destroy();
+    await settle();
 
     expect(player?.destroy).toHaveBeenCalledOnce();
     expect(pipeline.isMseActive()).toBe(false);
+  });
+
+  it.each([false, true])('waits for old teardown before direct playback (explicit=%s)', async direct => {
+    const { pipeline, video } = await loadDash();
+    const oldPlayer = lastShakaPlayer()!;
+    const teardown = deferred();
+    oldPlayer.destroy.mockImplementation(() => teardown.promise.then(() => {
+      video.removeAttribute('src');
+    }));
+    vi.mocked(fetch).mockClear().mockResolvedValue(contentTypeResponse('video/mp4'));
+
+    pipeline.load('http://host/b.mp4', null, { direct });
+    await settle();
+
+    expect(oldPlayer.destroy).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(video.play).toHaveBeenCalledOnce();
+    expect(video.getAttribute('src')).toBeNull();
+
+    teardown.resolve();
+    await vi.waitFor(() => expect(video.src).toBe('http://host/b.mp4'));
+    expect(video.play).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['Shaka', 'application/dash+xml'],
+    ['HLS', 'application/vnd.apple.mpegurl'],
+    ['MPEG-TS', 'video/mp2t'],
+  ])('waits for old teardown before attaching %s', async (kind, contentType) => {
+    const { pipeline, video } = await loadDash();
+    const oldPlayer = lastShakaPlayer()!;
+    const teardown = deferred();
+    oldPlayer.destroy.mockReturnValue(teardown.promise);
+    vi.mocked(fetch).mockClear().mockResolvedValue(contentTypeResponse(contentType));
+
+    pipeline.load('http://host/b', null);
+    await settle();
+
+    expect(FakeShakaPlayer.instances).toHaveLength(1);
+    expect(FakeHls.instances).toHaveLength(0);
+    expect(fakeMpegts.createPlayer).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+
+    teardown.resolve();
+    await vi.waitFor(() => {
+      if (kind === 'Shaka') {
+        expect(FakeShakaPlayer.instances).toHaveLength(2);
+        expect(lastShakaPlayer()?.attach).toHaveBeenCalledWith(video);
+        expect(lastShakaPlayer()?.load).toHaveBeenCalledWith('http://host/b');
+      } else if (kind === 'HLS') {
+        expect(FakeHls.instances).toHaveLength(1);
+        expect(FakeHls.instances[0].attachMedia).toHaveBeenCalledWith(video);
+      } else {
+        expect(fakeMpegts.createPlayer).toHaveBeenCalledOnce();
+        expect(fakeMpegts.createPlayer.mock.results[0].value.attachMediaElement)
+          .toHaveBeenCalledWith(video);
+      }
+    });
+  });
+
+  it('retains teardown across stop and starts only the newest queued tune', async () => {
+    const { pipeline, video } = await loadDash();
+    const oldPlayer = lastShakaPlayer()!;
+    const teardown = deferred();
+    oldPlayer.destroy.mockReturnValue(teardown.promise);
+    const logs = vi.spyOn(console, 'log');
+
+    pipeline.destroy();
+    pipeline.load('http://host/b.mp4', null, { direct: true });
+    pipeline.load('http://host/c.mp4', null, { direct: true });
+    await settle();
+
+    expect(video.play).toHaveBeenCalledOnce();
+    teardown.resolve();
+    await settle();
+
+    expect(video.src).toBe('http://host/c.mp4');
+    expect(video.play).toHaveBeenCalledTimes(2);
+    expect(oldPlayer.destroy).toHaveBeenCalledOnce();
+    const text = logs.mock.calls.map(args => args.join(' ')).join('\n');
+    expect(text).toContain('event=playback.mse.teardown.cancelled load=3 owner=(load=1)');
+    expect(text).toContain('reason=superseded');
+    expect(text).toContain('event=playback.mse.destroy.completed load=1');
+    expect(text).toContain('event=playback.mse.teardown.resumed load=4 owner=(load=1)');
+  });
+
+  it.each(['stop', 'replace'])('cancels a queued tune on %s', async action => {
+    const { pipeline, video, opts } = await loadDash();
+    const teardown = deferred();
+    lastShakaPlayer()!.destroy.mockReturnValue(teardown.promise);
+
+    pipeline.load('http://host/b.mp4', null, { direct: true });
+    if (action === 'stop') pipeline.destroy();
+    else pipeline.setVideoElement(videoElement());
+    teardown.resolve();
+    await settle();
+
+    expect(video.play).toHaveBeenCalledOnce();
+    expect(video.getAttribute('src')).toBeNull();
+    expect(opts.onError).not.toHaveBeenCalled();
+  });
+
+  it('waits for failed-load cleanup before starting channel fallback', async () => {
+    const attach = deferred();
+    FakeShakaPlayer.pendingAttach = attach.promise;
+    const { pipeline, video, opts } = await loadDash();
+    const oldPlayer = lastShakaPlayer()!;
+    const teardown = deferred();
+    oldPlayer.load.mockRejectedValue(new Error('Synthetic load failure'));
+    oldPlayer.destroy.mockImplementation(() => teardown.promise.then(() => {
+      video.removeAttribute('src');
+    }));
+    vi.mocked(opts.onError).mockImplementation(() => {
+      pipeline.load('http://host/b.mp4', null, { direct: true });
+    });
+
+    attach.resolve();
+    await vi.waitFor(() => expect(opts.onError).toHaveBeenCalledOnce());
+    expect(oldPlayer.destroy).toHaveBeenCalledOnce();
+    expect(video.play).not.toHaveBeenCalled();
+    expect(video.getAttribute('src')).toBeNull();
+
+    teardown.resolve();
+    await vi.waitFor(() => expect(video.src).toBe('http://host/b.mp4'));
+    expect(video.play).toHaveBeenCalledOnce();
+  });
+
+  it('reports teardown failure only for the latest tune and requires a fresh video', async () => {
+    const { pipeline, video, opts } = await loadDash();
+    const teardown = deferred();
+    lastShakaPlayer()!.destroy.mockReturnValue(teardown.promise);
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    pipeline.load('http://host/b.mp4', null, { direct: true });
+    pipeline.load('http://host/c.mp4', null, { direct: true });
+    teardown.reject(new Error('Synthetic teardown failure'));
+    await settle();
+
+    expect(opts.onError).toHaveBeenCalledOnce();
+    const text = warnings.mock.calls.map(args => args.join(' ')).join('\n');
+    expect(text).toContain('event=playback.mse.destroy.failed load=1 source=shaka');
+    expect(text).toContain('event=playback.mse.teardown.blocked load=3 owner=(load=1)');
+    expect(text).not.toContain('Synthetic teardown failure');
+    expect(video.getAttribute('src')).toBeNull();
+    expect(video.play).toHaveBeenCalledOnce();
+    pipeline.load('http://host/d.mp4', null, { direct: true });
+    await settle();
+    expect(opts.onError).toHaveBeenCalledTimes(2);
+    expect(video.play).toHaveBeenCalledOnce();
+
+    const fresh = videoElement();
+    pipeline.setVideoElement(fresh);
+    pipeline.load('http://host/d.mp4', null, { direct: true });
+    expect(fresh.src).toBe('http://host/d.mp4');
+    expect(fresh.play).toHaveBeenCalledOnce();
+  });
+
+  it('does not load an old Shaka stream after a newer tune', async () => {
+    let resolveAttach: (() => void) | undefined;
+    FakeShakaPlayer.pendingAttach = new Promise(resolve => {
+      resolveAttach = resolve;
+    });
+    installPreviewGlobals();
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(contentTypeResponse('application/dash+xml'))
+      .mockResolvedValueOnce(contentTypeResponse('video/mp4')));
+    const pipeline = new PlayerPipeline(callbacks());
+    const video = videoElement();
+    pipeline.setVideoElement(video);
+
+    pipeline.load('http://host/a.mpd', null);
+    await settle();
+    const oldPlayer = lastShakaPlayer();
+    pipeline.load('http://host/b', null);
+    await settle();
+    resolveAttach?.();
+    await settle();
+
+    expect(oldPlayer?.destroy).toHaveBeenCalledOnce();
+    expect(oldPlayer?.load).not.toHaveBeenCalled();
+    expect(video.src).toBe('http://host/b');
   });
 });
 

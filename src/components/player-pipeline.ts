@@ -3,10 +3,13 @@ import { CONFIG } from '../config';
 import { getCachedStreamMime, setCachedStreamMime } from '../services/idb-cache';
 import { parseMpd, type MpdManifest } from '../parsers/mpd-manifest';
 import {
-  nativeDrmConfig,
-  PlayReadyDrm,
+  parseDrmConfig,
+  isShakaDrmConfig,
   type PlayReadyConfig,
-} from '../services/playready-drm';
+  type ShakaDrmConfig,
+} from '../services/drm-config';
+import { PlayReadyDrm } from '../services/playready-drm';
+import { loadShaka, type ShakaNamespaceLike } from '../services/shaka-loader';
 import { parseAudioRenditions } from '../utils/audio-tracks';
 import { FetchTextError, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
@@ -14,9 +17,9 @@ import { createLogger } from '../utils/logger';
 import { parseClosedCaptions, parseSubtitleRenditions } from '../utils/subtitle-tracks';
 import { parseVariants, type StreamVariant } from '../utils/stream-info';
 import { mediaOptionSourceType } from '../utils/webos-media-option';
-import { createDashEngine, type DashPlayerLike } from './mse/dash-engine';
 import { createHlsEngine } from './mse/hls-engine';
 import type { MseEngine, PipelineStreamInfo } from './mse/engine';
+import { createShakaEngine, type ShakaPlayerLike } from './mse/shaka-engine';
 import {
   containerMime,
   diagnosticStreamUrl,
@@ -32,24 +35,59 @@ const log = createLogger('Player');
 
 const isWebOS = /webOS|Web0S/i.test(navigator.userAgent);
 
-// hls.js, mpegts.js and dash.js are loaded as globals via preview-libs.js
-// (desktop preview only)
+// Desktop HLS/MPEG-TS libraries are globals from preview-libs.js. Shaka is also
+// a global, but webOS loads its separate bundle only for Widevine/ClearKey.
 const win = window as unknown as Record<string, unknown>;
 
 type HlsType = typeof import('hls.js').default;
 type MpegtsType = typeof import('mpegts.js').default;
 
-interface DashjsNamespace {
-  MediaPlayer: {
-    (): { create(): DashPlayerLike & {
-      initialize(video: HTMLVideoElement, url: string, autoplay: boolean): void;
-      updateSettings(settings: Record<string, unknown>): void;
-      on(event: string, listener: (data?: unknown) => void): void;
-    } };
-    events: {
-      ERROR: string;
-      FRAGMENT_LOADING_COMPLETED: string;
-      STREAM_INITIALIZED: string;
+interface ShakaError {
+  category?: number;
+  code?: number;
+  data?: unknown[];
+  severity?: number;
+}
+
+interface ShakaRequest {
+  headers: Record<string, string>;
+}
+
+interface ShakaPlayerRuntime extends ShakaPlayerLike {
+  addEventListener(type: string, listener: (event: Event) => void): void;
+  attach(video: HTMLVideoElement): Promise<void>;
+  configure(config: Record<string, unknown>): boolean;
+  getNetworkingEngine(): {
+    registerRequestFilter(filter: (type: number, request: ShakaRequest) => void): void;
+  } | null;
+  load(url: string): Promise<void>;
+  getDrmInfo?(): { keySystem: string } | null;
+}
+
+function shakaErrorDetail(error: unknown): string {
+  if (!error || typeof error !== 'object') return 'code=unknown';
+  const detail = error as ShakaError;
+  return `category=${typeof detail.category === 'number' ? detail.category : 'unknown'}`
+    + ` code=${typeof detail.code === 'number' ? detail.code : 'unknown'}`;
+}
+
+interface ShakaNamespace extends ShakaNamespaceLike {
+  Player: {
+    new(): ShakaPlayerRuntime;
+    isBrowserSupported?: () => boolean;
+  };
+  net?: {
+    NetworkingEngine?: {
+      RequestType?: {
+        LICENSE?: number;
+      };
+    };
+  };
+  util: {
+    Error: {
+      Severity: {
+        CRITICAL: number;
+      };
     };
   };
 }
@@ -77,9 +115,10 @@ export class PlayerPipeline {
   private hls: InstanceType<HlsType> | null = null;
   private mpegtsPlayer: { destroy(): void } | null = null;
   private engine: MseEngine | null = null;
+  private engineTeardown: { promise: Promise<void>; label: string } | null = null;
+  private msePending = false;
   private loadToken = 0;
   private hlsRecoveries = 0;
-  private dashRecoveries = 0;
   private manifestSeq = 0;
   private manifestController: AbortController | null = null;
   private videoLoadLabels = new WeakMap<HTMLVideoElement, string>();
@@ -89,6 +128,7 @@ export class PlayerPipeline {
   constructor(private callbacks: PlayerPipelineOptions) {}
 
   setVideoElement(videoEl: HTMLVideoElement): void {
+    if (this.videoEl !== videoEl) this.engineTeardown = null;
     this.videoEl = videoEl;
   }
 
@@ -100,9 +140,9 @@ export class PlayerPipeline {
     return this.videoLoadLabels.get(el) ?? this.callbacks.playbackLabel(this.loadToken);
   }
 
-  // "An MSE library owns the tracks" — hls.js or dash.js in the desktop preview.
+  // "An MSE library owns the tracks" — hls.js in preview or Shaka on either path.
   isMseActive(): boolean {
-    return this.engine !== null;
+    return this.engine !== null || this.msePending;
   }
 
   mseAudioOptions(): AudioOption[] {
@@ -133,13 +173,59 @@ export class PlayerPipeline {
     const videoEl = this.videoEl;
     if (!videoEl) return;
     const token = ++this.loadToken;
-    this.videoLoadLabels.set(videoEl, this.callbacks.playbackLabel(token));
-    const safeUrl = diagnosticStreamUrl(url);
+    const label = this.callbacks.playbackLabel(token);
     this.cancelManifest();
     this.destroyLoaders();
+    this.videoLoadLabels.set(videoEl, label);
     this.playReadyDrm.release();
     this.activeDrm = '';
 
+    const teardown = this.engineTeardown;
+    const queuedAt = Date.now();
+    const isCurrent = () => {
+      if (token === this.loadToken && videoEl === this.videoEl) return true;
+      if (teardown) {
+        log.info('Queued playback cancelled', 'event=playback.mse.teardown.cancelled',
+          label, `owner=(${teardown.label})`, `elapsedMs=${Date.now() - queuedAt}`,
+          `reason=${token !== this.loadToken ? 'superseded' : 'video_replaced'}`);
+      }
+      return false;
+    };
+    const start = () => {
+      if (!isCurrent()) return;
+      if (teardown) {
+        log.info('Playback resuming after MSE teardown', 'event=playback.mse.teardown.resumed',
+          label, `owner=(${teardown.label})`, `elapsedMs=${Date.now() - queuedAt}`);
+      }
+      this.msePending = false;
+      this.loadSource(url, extras, token, opts);
+    };
+    if (teardown) {
+      this.msePending = true;
+      log.info('Playback waiting for MSE teardown', 'event=playback.mse.teardown.wait',
+        label, `owner=(${teardown.label})`);
+      void teardown.promise.then(start, error => {
+        if (!isCurrent()) return;
+        this.msePending = false;
+        log.warn('Playback blocked by failed MSE teardown',
+          'event=playback.mse.teardown.blocked', label, `owner=(${teardown.label})`,
+          `elapsedMs=${Date.now() - queuedAt}`, shakaErrorDetail(error));
+        this.callbacks.onError();
+      });
+    } else {
+      start();
+    }
+  }
+
+  private loadSource(
+    url: string,
+    extras: Record<string, string> | null,
+    token: number,
+    opts?: { direct?: boolean },
+  ): void {
+    const videoEl = this.videoEl;
+    if (!videoEl) return;
+    const safeUrl = diagnosticStreamUrl(url);
     const urlMime = streamUrlMime(url);
     const isTsUrl = urlMime === 'video/mp2t';
     const isFlvUrl = urlMime === 'video/x-flv';
@@ -251,10 +337,21 @@ export class PlayerPipeline {
           'reason=probe');
         this.loadWithMpegts(url, isFlv, token);
       } else if (isDash) {
-        log.info('Selected dash.js playback', 'event=playback.path.dash',
+        log.info('Selected Shaka playback', 'event=playback.path.dash',
           this.callbacks.playbackLabel(token),
           'reason=probe');
-        this.loadWithDash(url, token);
+        const configured = parseDrmConfig(extras);
+        if (configured?.type === 'unsupported') {
+          log.warn('Unsupported DASH DRM', 'event=playback.dash.drm.unsupported',
+            this.callbacks.playbackLabel(token), `type=${configured.value}`);
+          this.callbacks.onError();
+          return;
+        }
+        this.loadWithShaka(
+          url,
+          token,
+          isShakaDrmConfig(configured) ? configured : null,
+        );
       } else if (isDirect) {
         log.info('Selected direct playback', 'event=playback.path.direct',
           this.callbacks.playbackLabel(token),
@@ -284,10 +381,37 @@ export class PlayerPipeline {
   }
 
   private destroyLoaders(): void {
+    this.msePending = false;
     // The engine owns its library instance, hls.js included.
     if (this.engine) {
-      this.engine.destroy();
+      const engine = this.engine;
+      const label = this.videoEl ? this.videoLabel(this.videoEl)
+        : this.callbacks.playbackLabel(this.loadToken);
+      const source = this.hls ? 'hls' : 'shaka';
+      const startedAt = Date.now();
+      log.info('Destroying MSE engine', 'event=playback.mse.destroy.started',
+        label, `source=${source}`);
       this.engine = null;
+      const teardown = engine.destroy();
+      const completed = () => {
+        log.info('MSE engine destroyed', 'event=playback.mse.destroy.completed',
+          label, `source=${source}`, `elapsedMs=${Date.now() - startedAt}`);
+      };
+      if (teardown) {
+        const pending = { promise: teardown, label };
+        this.engineTeardown = pending;
+        void teardown.then(() => {
+          if (this.engineTeardown === pending) this.engineTeardown = null;
+          completed();
+        }, error => {
+          // A failed teardown keeps this element blocked until it is replaced.
+          log.warn('MSE engine teardown failed', 'event=playback.mse.destroy.failed',
+            label, `source=${source}`, `elapsedMs=${Date.now() - startedAt}`,
+            shakaErrorDetail(error));
+        });
+      } else {
+        completed();
+      }
     }
     this.hls = null;
     if (this.mpegtsPlayer) {
@@ -377,15 +501,31 @@ export class PlayerPipeline {
     loadToken: number,
   ): void {
     const seq = this.manifestSeq;
-    void this.loadManifest(url, seq, loadToken, 'dash').then(parsed => {
+    const configured = parseDrmConfig(extras);
+    void this.loadManifest(url, seq, loadToken, 'dash', parsed => {
+      if (isShakaDrmConfig(configured)
+          || (!configured && (parsed?.drm?.type === 'widevine' || parsed?.drm?.type === 'clearkey'))) {
+        this.msePending = true;
+      }
+    }).then(parsed => {
       if (loadToken !== this.loadToken || !this.videoEl) return;
-      const configured = nativeDrmConfig(extras);
       const detected = parsed?.drm;
-      if (configured?.type === 'unsupported' || detected?.type === 'unsupported') {
+      if (configured?.type === 'unsupported' || (!configured && detected?.type === 'unsupported')) {
         const value = configured?.type === 'unsupported' ? configured.value : detected?.scheme;
         log.warn('Unsupported native DASH DRM', 'event=playback.dash.drm.unsupported',
           this.callbacks.playbackLabel(loadToken), `type=${value || 'unknown'}`);
         this.callbacks.onError();
+        return;
+      }
+      if (isShakaDrmConfig(configured)
+          || (!configured && (detected?.type === 'widevine' || detected?.type === 'clearkey'))) {
+        const defaults = { licenseUrl: '', headers: {}, unsupportedOptions: [] };
+        const config: ShakaDrmConfig = isShakaDrmConfig(configured)
+          ? configured
+          : detected?.type === 'clearkey'
+            ? { ...defaults, type: 'clearkey', clearKeys: {} }
+            : { ...defaults, type: 'widevine' };
+        this.loadWithShaka(url, loadToken, config);
         return;
       }
       if (configured?.type !== 'playready' && detected?.type !== 'playready') {
@@ -529,52 +669,145 @@ export class PlayerPipeline {
     }
   }
 
-  private loadWithDash(url: string, loadToken: number): void {
+  private loadWithShaka(
+    url: string,
+    loadToken: number,
+    drm: ShakaDrmConfig | null = null,
+  ): void {
     if (!this.videoEl) return;
-    const dashjs = win.__dashjs as DashjsNamespace | undefined;
-    try {
-      if (!dashjs) {
-        log.warn('dash.js unavailable; using direct playback',
-          'event=playback.path.direct', this.callbacks.playbackLabel(loadToken),
-          'reason=dash-unavailable');
-        this.videoEl.src = url;
-        this.videoEl.play().catch(() => {});
-        return;
+    this.msePending = true;
+    const label = this.callbacks.playbackLabel(loadToken);
+    const startedAt = Date.now();
+    log.info('Initializing Shaka', 'event=playback.dash.init.started',
+      label, `drm=${drm?.type || 'none'}`);
+    void loadShaka().then(loaded => {
+      if (loadToken !== this.loadToken || !this.videoEl) return;
+      const shaka = loaded as ShakaNamespace;
+      const videoEl = this.videoEl;
+      const player = new shaka.Player();
+      const engine = createShakaEngine(player);
+      this.engine = engine;
+      this.msePending = false;
+      const config: Record<string, unknown> = {
+        streaming: { bufferingGoal: CONFIG.PLAYER.BUFFER_LENGTH },
+      };
+      if (drm) {
+        const keySystem = drm.type === 'clearkey' ? 'org.w3.clearkey' : 'com.widevine.alpha';
+        config.drm = {
+          preferredKeySystems: [keySystem],
+          servers: drm.licenseUrl
+            ? { [keySystem]: drm.licenseUrl }
+            : {},
+          ...(drm.type === 'clearkey' && Object.keys(drm.clearKeys).length
+            ? { clearKeys: drm.clearKeys } : {}),
+        };
+        const licenseType =
+          shaka.net?.NetworkingEngine?.RequestType?.LICENSE;
+        const networking = player.getNetworkingEngine();
+        if (Object.keys(drm.headers).length && (licenseType === undefined || !networking)) {
+          throw new Error('Shaka license request filters are unavailable');
+        }
+        if (licenseType !== undefined && networking && Object.keys(drm.headers).length) {
+          networking.registerRequestFilter((type, request) => {
+            if (type !== licenseType) return;
+            for (const name in drm.headers) {
+              request.headers[name] = drm.headers[name];
+            }
+          });
+        }
+        if (drm.unsupportedOptions.length) {
+          log.warn('Ignoring unsupported Shaka DRM options',
+            'event=playback.dash.drm.options.unsupported',
+            this.callbacks.playbackLabel(loadToken),
+            `options=${drm.unsupportedOptions.join(',')}`);
+        }
       }
-      this.dashRecoveries = 0;
-      const player = dashjs.MediaPlayer().create();
-      player.updateSettings({
-        streaming: { buffer: { bufferTimeDefault: CONFIG.PLAYER.BUFFER_LENGTH } },
+      if (!player.configure(config)) {
+        log.warn('Shaka rejected configuration', 'event=playback.dash.drm.failed',
+          this.callbacks.playbackLabel(loadToken));
+        throw new Error('Shaka configuration rejected');
+      }
+      const notifyAudioTracks = (event: Event) => {
+        if (loadToken === this.loadToken && this.engine === engine) {
+          const info = engine.streamInfo();
+          log.info('Shaka variant changed', 'event=playback.dash.variant.changed',
+            label, `reason=${event.type}`,
+            `width=${videoEl.videoWidth} height=${videoEl.videoHeight}`,
+            `videoCodec=${info?.videoCodec || 'unknown'}`,
+            `audioCodec=${info?.audioCodec || 'unknown'}`,
+            `videoRange=${info?.videoRange || 'unknown'}`,
+            `frameRate=${info?.frameRate || 0}`,
+            `audioChannels=${info?.audioChannels || 'unknown'}`,
+            `audioAtmos=${info?.audioAtmos === true}`,
+            this.callbacks.mediaState(videoEl));
+          this.callbacks.onAudioTracksUpdated();
+        }
+      };
+      player.addEventListener('adaptation', notifyAudioTracks);
+      player.addEventListener('variantchanged', notifyAudioTracks);
+      const notifyTextTracks = () => {
+        if (loadToken === this.loadToken && this.engine === engine) {
+          this.callbacks.onSubtitleTracksUpdated();
+        }
+      };
+      player.addEventListener('textchanged', notifyTextTracks);
+      player.addEventListener('texttrackvisibility', notifyTextTracks);
+
+      let reportedCriticalError = false;
+      const reportCriticalError = (error: unknown) => {
+        if (reportedCriticalError || loadToken !== this.loadToken) return;
+        reportedCriticalError = true;
+        log.warn('Shaka critical error', 'event=playback.dash.error',
+          this.callbacks.playbackLabel(loadToken), shakaErrorDetail(error));
+        this.callbacks.onError();
+      };
+      player.addEventListener('error', event => {
+        const error = (event as CustomEvent<ShakaError>).detail;
+        log.warn('Shaka error', 'event=playback.dash.error',
+          this.callbacks.playbackLabel(loadToken), shakaErrorDetail(error));
+        if (error?.severity === shaka.util.Error.Severity.CRITICAL) {
+          reportCriticalError(error);
+        }
       });
-      player.initialize(this.videoEl, url, true);
-      this.engine = createDashEngine(player);
-      // dash.js resolves its rendition lists only once the streams are known,
-      // so the saved picks are applied there, as with hls.js.
-      player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+
+      void player.attach(videoEl).then(() => {
+        if (loadToken !== this.loadToken || this.engine !== engine) return;
+        log.info('Shaka attached; loading stream', 'event=playback.dash.load.started',
+          label, `elapsedMs=${Date.now() - startedAt}`);
+        return player.load(url);
+      }).then(() => {
+        if (loadToken !== this.loadToken || this.engine !== engine) return;
+        const keySystem = player.getDrmInfo?.()?.keySystem;
+        this.activeDrm = drm?.type === 'clearkey' || (!drm && keySystem === 'org.w3.clearkey')
+          ? 'ClearKey'
+          : drm?.type === 'widevine' || keySystem === 'com.widevine.alpha' ? 'Widevine' : '';
+        log.info('Shaka stream loaded', 'event=playback.dash.load.completed',
+          label, `elapsedMs=${Date.now() - startedAt}`,
+          `keySystem=${keySystem || 'none'}`, `mediaKeys=${Boolean(videoEl.mediaKeys)}`,
+          this.callbacks.mediaState(videoEl));
+        if (this.activeDrm) {
+          log.info('Shaka DRM ready', 'event=playback.dash.drm.ready',
+            `drm=${this.activeDrm}`,
+            this.callbacks.playbackLabel(loadToken));
+        }
         this.callbacks.onAudioTracksUpdated();
         this.callbacks.onSubtitleTracksUpdated();
+        videoEl.play().catch(error => log.warn('Shaka play() rejected',
+          'event=playback.play.rejected',
+          this.callbacks.playbackLabel(loadToken), 'path=dash', shakaErrorDetail(error)));
+      }).catch(error => {
+        if (loadToken !== this.loadToken || this.engine !== engine) return;
+        this.destroyLoaders();
+        reportCriticalError(error);
       });
-      player.on(dashjs.MediaPlayer.events.FRAGMENT_LOADING_COMPLETED, data => {
-        const request = (data as { request?: { type?: string } } | undefined)?.request;
-        if (request?.type === 'MediaSegment') this.dashRecoveries = 0;
-      });
-      // dash.js retries internally, so give it a bounded budget before zapping
-      // to the next channel.
-      player.on(dashjs.MediaPlayer.events.ERROR, (data?: unknown) => {
-        log.warn('dash.js error', 'event=playback.dash.error',
-          this.callbacks.playbackLabel(loadToken), data);
-        if (this.dashRecoveries >= CONFIG.PLAYER.DASH_MAX_RECOVERIES) {
-          this.callbacks.onError();
-          return;
-        }
-        this.dashRecoveries++;
-      });
-    } catch (error) {
-      log.warn('dash.js initialization failed; using direct playback',
-        'event=playback.dash.init.failed', this.callbacks.playbackLabel(loadToken), error);
-      this.videoEl.src = url;
-      this.videoEl.play().catch(() => {});
-    }
+    }).catch(error => {
+      if (loadToken !== this.loadToken) return;
+      this.msePending = false;
+      this.destroyLoaders();
+      log.warn('Shaka initialization failed',
+        'event=playback.dash.init.failed', this.callbacks.playbackLabel(loadToken), shakaErrorDetail(error));
+      this.callbacks.onError();
+    });
   }
 
   private loadWithMpegts(url: string, isFlv: boolean, loadToken: number): void {
@@ -618,6 +851,7 @@ export class PlayerPipeline {
   // saved picks when the parsed manifest is delivered.
   private async loadManifest(
     url: string, seq: number, loadToken: number, format: 'hls' | 'dash' = 'hls',
+    beforeNotify?: (manifest: MpdManifest | null) => void,
   ): Promise<MpdManifest | null> {
     const dash = format === 'dash';
     const controller = new AbortController();
@@ -640,6 +874,7 @@ export class PlayerPipeline {
         this.callbacks.playbackLabel(loadToken),
         `format=${format} bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
       const parsed = dash ? parseMpd(text, url) : null;
+      beforeNotify?.(parsed);
       const audio = parsed ? parsed.audio : parseAudioRenditions(text);
       const subtitles = parsed ? parsed.subtitles : parseSubtitleRenditions(text);
       const closedCaptions = parsed ? parsed.closedCaptions : parseClosedCaptions(text);

@@ -313,6 +313,89 @@ describe('PlayerPipeline webOS DASH', () => {
     expect(pipeline.drmLabel()).toBe('');
   });
 
+  it.each([
+    { label: 'Widevine', keySystem: 'com.widevine.alpha', scheme: 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed' },
+    { label: 'ClearKey', keySystem: 'org.w3.clearkey', scheme: 'e2719d58-a985-b3c9-781a-b030af78d30e' },
+    { label: 'ClearKey', keySystem: 'org.w3.clearkey', scheme: '9a04f079-9840-4286-ab92-e65be0885f95' },
+  ])('routes $label through Shaka when the MPD declares $scheme', async testCase => {
+    const widevine = MPD.replace('<Period>',
+      '<Period><AdaptationSet contentType="video" mimeType="video/mp4">' +
+      '<ContentProtection ' +
+      `schemeIdUri="urn:uuid:${testCase.scheme}"/>` +
+      '<Representation id="v1" width="1920" height="1080" codecs="avc1.640028"/>' +
+      '</AdaptationSet>');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(widevine)));
+    const requestFilters: Array<
+      (type: number, request: { headers: Record<string, string> }) => void
+    > = [];
+    const configure = vi.fn(() => true);
+    const load = vi.fn().mockResolvedValue(undefined);
+    class Player {
+      static isBrowserSupported(): boolean {
+        return true;
+      }
+
+      addEventListener(): void {}
+      attach(): Promise<void> {
+        return Promise.resolve();
+      }
+      configure = configure;
+      destroy(): Promise<void> {
+        return Promise.resolve();
+      }
+      getAudioTracks(): [] {
+        return [];
+      }
+      getNetworkingEngine(): {
+        registerRequestFilter: (
+          filter: (type: number, request: { headers: Record<string, string> }) => void,
+        ) => void;
+      } {
+        return {
+          registerRequestFilter: filter => requestFilters.push(filter),
+        };
+      }
+      getTextTracks(): [] {
+        return [];
+      }
+      getVariantTracks(): [] {
+        return [];
+      }
+      load = load;
+      selectAudioTrack(): void {}
+      selectTextTrack(): void {}
+    }
+    vi.stubGlobal('__shaka', {
+      Player,
+      net: { NetworkingEngine: { RequestType: { LICENSE: 2 } } },
+      polyfill: { installAll: vi.fn() },
+      util: { Error: { Severity: { CRITICAL: 2 } } },
+    });
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+
+    pipeline.load('http://host/a.mpd', {
+      'inputstream.adaptive.license_type': testCase.keySystem,
+      'inputstream.adaptive.license_key':
+        'http://host/license|authorization=Bearer%20token',
+    });
+
+    await vi.waitFor(() => expect(load).toHaveBeenCalledWith('http://host/a.mpd'));
+    const request = { headers: {} as Record<string, string> };
+    requestFilters[0]?.(2, request);
+    expect(configure).toHaveBeenCalledWith({
+      streaming: { bufferingGoal: 30 },
+      drm: {
+        preferredKeySystems: [testCase.keySystem],
+        servers: { [testCase.keySystem]: 'http://host/license' },
+      },
+    });
+    expect(request.headers).toEqual({ authorization: 'Bearer token' });
+    expect(video.querySelector('source')).toBeNull();
+    expect(pipeline.isMseActive()).toBe(true);
+    expect(pipeline.drmLabel()).toBe(testCase.label);
+  });
+
   it('plays an .mpd URL natively with the MPEG-DASH media option', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(MPD));
     vi.stubGlobal('fetch', fetchMock);

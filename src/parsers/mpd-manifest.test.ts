@@ -58,6 +58,33 @@ describe('parseMpd', () => {
     });
   });
 
+  it('identifies Widevine ContentProtection', () => {
+    const r = parseMpd(mpd(`<Period>
+      <AdaptationSet contentType="video" mimeType="video/mp4">
+        <ContentProtection
+          schemeIdUri="urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED"/>
+        <Representation id="v1" width="1920" height="1080" codecs="avc1.640028"/>
+      </AdaptationSet></Period>`));
+    expect(r.drm).toEqual({
+      type: 'widevine',
+      scheme: 'urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed',
+    });
+  });
+
+  it('identifies ClearKey ContentProtection without confusing the common PSSH UUID', () => {
+    const r = parseMpd(mpd(`<Period>
+      <AdaptationSet contentType="video" mimeType="video/mp4">
+        <ContentProtection schemeIdUri="urn:uuid:E2719D58-A985-B3C9-781A-B030AF78D30E"/>
+        <Representation id="v1" codecs="avc1.640028"/>
+      </AdaptationSet></Period>`));
+    expect(r.drm).toEqual({
+      type: 'clearkey',
+      scheme: 'urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e',
+    });
+    const common = parseMpd(mpd('<ContentProtection schemeIdUri="urn:uuid:1077efecc0b24d02ace33c1e52e2fb4b"/>'));
+    expect(common.drm?.type).toBe('unsupported');
+  });
+
   it('does not treat the generic MP4 protection descriptor as DRM by itself', () => {
     const r = parseMpd(mpd(`<Period>
       <AdaptationSet contentType="video" mimeType="video/mp4">
