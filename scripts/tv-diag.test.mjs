@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import {
   DiagnosticRedactor,
   assembleDiagnosticReport,
+  captureDiagnostics,
   extractDiagnosticTimeline,
   extractInputTimeline,
   extractXtreamTimeline,
@@ -13,6 +14,7 @@ import {
   parseNativeMetricOutput,
   parseDiagnosticArgs,
   activeProbeExpression,
+  snapshotProbeExpression,
   formatDiagnosticSummary,
   runNativeProbe,
   inspectorWebSocketUrl,
@@ -68,21 +70,37 @@ describe('ares-inspect lifecycle', () => {
   describe('native playback metrics', () => {
     const output = [
       '@ticks|before|100',
-      '@proc|before|1|umediaserver|10|5|1000|2|1000000|2000000',
+      '@proc|before|1|umediaserver|10|5|1000|2|1000000|2000000|500|0|2000|1800|1600|700|300|0|100',
+      '@proc|before|3|starfish|5|5|50000|3|1000000|1000000|900|100|90000|80000|70000|40000|10000|0|5000',
+      '@proc|before|4|webapp|10|5|80000|15|1000000|2000000|888|300|635084|535380|182884|40536|41644|84|4268',
       '@psi|before|cpu|0.10|1000',
       '@psi|before|memory|0.00|2000',
       '@psi|before|io|0.00|3000',
       '@net|before|1000|2000',
       '@tcp|before|4',
+      '@mem|before|1000000|400000|200000|100000',
+      '@mm|before|normal|normal|596|1',
+      '@oom-access|before|1',
+      '@oom|before|old oom record',
       '@native-ready',
+      '@peak|1|1|umediaserver|1500|3',
+      '@peak|1|3|starfish|70000|4',
+      '@peak|1|4|webapp|90000|16',
+      '@mem-sample|1|300000|90000',
       '@ticks|after|100',
-      '@proc|after|1|umediaserver|20|10|1200|3|4000000|7000000',
-      '@proc|after|2|starfish|40|10|14000|5|8000000|9000000',
+      '@proc|after|1|umediaserver|20|10|1200|3|4000000|7000000|550|0|2100|1900|1700|800|400|0|90',
+      '@proc|after|2|starfish|40|10|14000|5|8000000|9000000|700|50|30000|25000|20000|10000|4000|0|1000',
+      '@proc|after|4|webapp|20|10|85000|16|4000000|7000000|890|300|640000|540000|185000|43000|41900|100|5000',
       '@psi|after|cpu|0.20|4000',
       '@psi|after|memory|0.00|2000',
       '@psi|after|io|0.01|5000',
       '@net|after|1500|2700',
       '@tcp|after|6',
+      '@mem|after|1000000|350000|200000|95000',
+      '@mm|after|low|normal|280|1',
+      '@oom-access|after|1',
+      '@oom|after|old oom record',
+      '@oom|after|Out of memory: Killed process 3 (starfish)',
     ].join('\n');
 
     it('calculates process, pressure, network, and retransmit deltas', () => {
@@ -96,6 +114,45 @@ describe('ares-inspect lifecycle', () => {
           memory: { avg10: 0, stallMs: 0 },
           io: { avg10: 0.01, stallMs: 2 },
         },
+        memory: {
+          totalKb: 1000000,
+          availableBeforeKb: 400000,
+          availableAfterKb: 350000,
+          minimumAvailableKb: 300000,
+          usedBeforeKb: 600000,
+          usedAfterKb: 650000,
+          maximumUsedKb: 700000,
+          swapTotalKb: 200000,
+          swapFreeBeforeKb: 100000,
+          swapFreeAfterKb: 95000,
+          minimumSwapFreeKb: 90000,
+        },
+        oomLogAvailable: true,
+        oomEvents: ['Out of memory: Killed process 3 (starfish)'],
+        appMemory: {
+          processCountBefore: 1,
+          processCountAfter: 1,
+          rssBeforeKb: 80000,
+          rssAfterKb: 85000,
+          peakObservedRssKb: 90000,
+          lifetimeHighWaterKb: 185000,
+          virtualSizeAfterKb: 540000,
+          anonymousRssAfterKb: 43000,
+          fileRssAfterKb: 41900,
+          sharedRssAfterKb: 100,
+          swapAfterKb: 5000,
+          percentOfSystemAtPeak: 9,
+        },
+        memoryManager: {
+          available: true,
+          levelBefore: 'normal',
+          levelAfter: 'low',
+          previousLevelBefore: 'normal',
+          previousLevelAfter: 'normal',
+          usableBeforeMb: 596,
+          usableAfterMb: 280,
+          minimumUsableMb: 280,
+        },
       });
       expect(metrics.processes).toEqual([
         expect.objectContaining({
@@ -104,12 +161,39 @@ describe('ares-inspect lifecycle', () => {
           startedDuringWindow: false,
           cpuPercent: 1.5,
           schedulerWaitMs: 5,
+          initialRssKb: 1000,
+          peakRssKb: 1500,
+          initialOomScore: 500,
+          oomScore: 550,
         }),
         expect.objectContaining({
           pid: 2,
           kind: 'starfish',
           startedDuringWindow: true,
           cpuPercent: 5,
+          initialRssKb: null,
+          peakRssKb: 14000,
+          oomScore: 700,
+        }),
+        expect.objectContaining({
+          pid: 4,
+          kind: 'webapp',
+          initialRssKb: 80000,
+          rssKb: 85000,
+          peakRssKb: 90000,
+          vmHwmKb: 185000,
+          swapKb: 5000,
+        }),
+      ]);
+      expect(metrics.stoppedProcesses).toEqual([
+        expect.objectContaining({
+          pid: 3,
+          kind: 'starfish',
+          initialRssKb: 50000,
+          peakRssKb: 70000,
+          peakThreads: 4,
+          initialOomScore: 900,
+          oomScoreAdj: 100,
         }),
       ]);
     });
@@ -121,7 +205,17 @@ describe('ares-inspect lifecycle', () => {
       child.killed = false;
       child.kill = () => { child.killed = true; };
       const session = startNativeMetricWindow(10000, {
-        spawn: () => child,
+        spawn: (_file, args) => {
+          expect(args[1]).toContain('WebAppMgr');
+          expect(args[1]).toContain("app_id='com.lennylxx.iptv'");
+          expect(args[1]).toContain('*"--app-id=$app_id"*');
+          expect(args[1]).toContain('/proc/$p/oom_score');
+          expect(args[1]).toContain('MemAvailable');
+          expect(args[1]).toContain('dmesg');
+          expect(args[1]).toContain('com.webos.memorymanager/getCurrentMemState');
+          expect(args[1]).toContain('new pb.Handle');
+          return child;
+        },
         timeoutMs: 1000,
       });
       child.stdout.emit('data', `${output}\n`);
@@ -603,15 +697,118 @@ describe('diagnostic report assembly', () => {
   });
 });
 
+describe('diagnostic capture recovery', () => {
+  it('returns a marked partial report when CDP closes after the baseline', async () => {
+    const listeners = new Map();
+    let evaluations = 0;
+    const client = {
+      closed: false,
+      on(method, listener) {
+        const current = listeners.get(method) ?? [];
+        current.push(listener);
+        listeners.set(method, current);
+        return () => {};
+      },
+      async call(method) {
+        if (method !== 'Runtime.evaluate') return {};
+        evaluations++;
+        if (evaluations === 1) {
+          return {
+            result: {
+              value: {
+                app: {},
+                state: { view: 'view-player', channelsRendered: 4, media: null },
+                storage: {},
+                environment: { userAgent: 'ua', viewport: '1920x1080' },
+                playlists: [],
+              },
+            },
+          };
+        }
+        for (const listener of listeners.get('Runtime.consoleAPICalled') ?? []) {
+          listener({
+            type: 'log',
+            timestamp: Date.parse('2026-09-10T05:00:00.000Z'),
+            args: [{ value: '[Key] Key down event=key.down code=461 action=back target=app' }],
+          });
+        }
+        client.closed = true;
+        throw new Error('CDP connection closed');
+      },
+      close() {
+        client.closed = true;
+      },
+    };
+    const options = parseDiagnosticArgs([
+      '--host', 'tv',
+      '--attach',
+      '--duration', '1',
+    ]);
+
+    const report = await captureDiagnostics(options, {
+      resolveTarget: async () => ({
+        target: { title: 'App', description: 'TV app' },
+        wsUrl: 'ws://tv/devtools/page/app',
+      }),
+      connect: async () => client,
+      startNativeMetrics: () => ({
+        ready: Promise.resolve(),
+        result: Promise.resolve({ durationMs: 1000, processes: [] }),
+        child: { killed: false, kill() { this.killed = true; } },
+      }),
+      now: () => new Date('2026-09-10T05:00:01.000Z'),
+    });
+
+    expect(report.capture).toEqual({
+      complete: false,
+      phase: 'capturing-final-state',
+      error: 'CDP connection closed',
+    });
+    expect(report.state).toMatchObject({ view: 'view-player', channelsRendered: 4 });
+    expect(report.nativeMetrics).toMatchObject({ durationMs: 1000 });
+    expect(report.input).toEqual([
+      expect.objectContaining({ event: 'key.down', code: 461, action: 'back' }),
+    ]);
+    expect(formatDiagnosticSummary(report))
+      .toContain('Capture: incomplete at capturing-final-state (CDP connection closed)');
+  });
+});
+
 describe('active diagnostics probe', () => {
   // The probe is stringified and evaluated inside the TV's webview, so run it
   // the same way here: a real DOM, no bundler, no module scope.
   const runProbe = () => (0, eval)(activeProbeExpression);
+  const runSnapshot = () => (0, eval)(snapshotProbeExpression);
 
   beforeEach(() => {
     localStorage.clear();
     document.body.innerHTML = '';
     window.fetch = () => Promise.reject(new Error('offline'));
+  });
+
+  it('takes a local snapshot without fetching playlist endpoints', async () => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([{
+      source: 'm3u',
+      name: 'Alpha',
+      url: 'http://host/playlist.m3u',
+    }]));
+    let fetches = 0;
+    window.fetch = () => {
+      fetches++;
+      return Promise.reject(new Error('unexpected fetch'));
+    };
+
+    const probe = await runSnapshot();
+
+    expect(fetches).toBe(0);
+    expect(probe.playlists).toEqual([
+      expect.objectContaining({
+        source: 'm3u',
+        name: 'Alpha',
+        __url: 'http://host/playlist.m3u',
+        webview: null,
+      }),
+    ]);
   });
 
   it('reports only rendered rows, leaving the catalog size to the load event', async () => {

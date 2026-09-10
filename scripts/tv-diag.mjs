@@ -380,6 +380,7 @@ export function extractInputTimeline(logs) {
 export function assembleDiagnosticReport({
   capturedAt,
   full,
+  capture = { complete: true, phase: 'complete', error: '' },
   app,
   environment,
   probe,
@@ -430,6 +431,10 @@ export function assembleDiagnosticReport({
     } : null,
   }));
   const safeLogs = logs.map((entry) => ({ ...entry, text: redactor.text(entry.text) }));
+  const safeNativeMetrics = nativeMetrics ? {
+    ...nativeMetrics,
+    oomEvents: (nativeMetrics.oomEvents ?? []).map((event) => redactor.text(event)),
+  } : null;
   const probeState = probe?.state ?? {};
   const media = probeState.media ? {
     ...probeState.media,
@@ -447,11 +452,12 @@ export function assembleDiagnosticReport({
     schemaVersion: 3,
     capturedAt,
     redacted: !full,
+    capture,
     app,
     environment,
     state: { ...probeState, media },
     storage: probe?.storage ?? {},
-    nativeMetrics,
+    nativeMetrics: safeNativeMetrics,
     playlists,
     diagnostics: extractDiagnosticTimeline(safeLogs),
     input: extractInputTimeline(safeLogs),
@@ -475,6 +481,10 @@ export function formatDiagnosticSummary(report) {
   const lastLoad = loads.length ? loads[loads.length - 1] : null;
   const lines = [
     `Diagnostics captured: ${report.capturedAt}`,
+    ...report.capture?.complete === false
+      ? [`Capture: incomplete at ${report.capture.phase || 'unknown'}`
+        + ` (${report.capture.error || 'unknown error'})`]
+      : [],
     `App: ${report.app?.id ?? '?'} ${report.app?.version ?? '?'}`,
     `Environment: ${report.environment?.userAgent ?? '?'}`,
     `State: ${state.view ?? '?'} | channels=${countText(lastLoad?.channels)}`
@@ -519,16 +529,64 @@ export function formatDiagnosticSummary(report) {
       + ` memory=${String(metrics.pressure?.memory?.stallMs ?? '?')}ms`
       + ` io=${String(metrics.pressure?.io?.stallMs ?? '?')}ms`,
     );
+    if (metrics.memory) {
+      lines.push(
+        `System memory: total=${String(metrics.memory.totalKb ?? '?')}KiB`
+        + ` used=${String(metrics.memory.usedBeforeKb ?? '?')}KiB`
+        + ` -> ${String(metrics.memory.usedAfterKb ?? '?')}KiB`
+        + ` max=${String(metrics.memory.maximumUsedKb ?? '?')}KiB`
+        + ` | available=${String(metrics.memory.availableBeforeKb ?? '?')}KiB`
+        + ` -> ${String(metrics.memory.availableAfterKb ?? '?')}KiB`
+        + ` min=${String(metrics.memory.minimumAvailableKb ?? '?')}KiB`
+        + ` | swap min=${String(metrics.memory.minimumSwapFreeKb ?? '?')}KiB`,
+      );
+    }
+    if (metrics.appMemory) {
+      lines.push(
+        `IPTV web app memory: rss=${String(metrics.appMemory.rssBeforeKb ?? '?')}KiB`
+        + ` -> ${String(metrics.appMemory.rssAfterKb ?? '?')}KiB`
+        + ` peak=${String(metrics.appMemory.peakObservedRssKb ?? '?')}KiB`
+        + ` lifetime-hwm=${String(metrics.appMemory.lifetimeHighWaterKb ?? '?')}KiB`
+        + ` swap=${String(metrics.appMemory.swapAfterKb ?? '?')}KiB`
+        + ` system=${String(metrics.appMemory.percentOfSystemAtPeak ?? '?')}%`,
+      );
+    }
+    if (metrics.memoryManager) {
+      lines.push(
+        `webOS memory manager: ${metrics.memoryManager.available ? 'available' : 'unavailable'}`
+        + ` | level=${metrics.memoryManager.levelBefore || '?'}`
+        + ` -> ${metrics.memoryManager.levelAfter || '?'}`
+        + ` usable=${String(metrics.memoryManager.usableBeforeMb ?? '?')}MB`
+        + ` -> ${String(metrics.memoryManager.usableAfterMb ?? '?')}MB`
+        + ` min=${String(metrics.memoryManager.minimumUsableMb ?? '?')}MB`,
+      );
+    }
     for (const process of metrics.processes ?? []) {
       lines.push(
         `- ${process.kind} pid=${String(process.pid)}`
         + ` cpu=${process.cpuPercent == null ? '?' : process.cpuPercent.toFixed(1)}%`
         + ` rss=${process.rssKb == null ? '?' : (process.rssKb / 1024).toFixed(1)}MiB`
+        + ` peak=${process.peakRssKb == null ? '?' : (process.peakRssKb / 1024).toFixed(1)}MiB`
         + ` threads=${String(process.threads ?? '?')}`
+        + ` oom_score=${String(process.oomScore ?? '?')}`
         + ` wait=${process.schedulerWaitMs == null ? '?' : process.schedulerWaitMs.toFixed(1)}ms`
         + `${process.startedDuringWindow ? ' new' : ''}`,
       );
     }
+    for (const process of metrics.stoppedProcesses ?? []) {
+      lines.push(
+        `- stopped ${process.kind} pid=${String(process.pid)}`
+        + ` initial=${process.initialRssKb == null
+          ? '?' : (process.initialRssKb / 1024).toFixed(1)}MiB`
+        + ` peak=${process.peakRssKb == null ? '?' : (process.peakRssKb / 1024).toFixed(1)}MiB`
+        + ` oom_score=${String(process.initialOomScore ?? '?')}`,
+      );
+    }
+    lines.push(
+      `OOM events: ${String(metrics.oomEvents?.length ?? 0)}`
+      + `${metrics.oomLogAvailable ? '' : ' (kernel log unavailable)'}`,
+    );
+    for (const event of metrics.oomEvents ?? []) lines.push(`- ${event}`);
   }
   for (const playlist of report.playlists ?? []) {
     const webview = playlist.webview ?? {};
@@ -773,6 +831,66 @@ export const activeProbeExpression = `(${function activeProbe(previewBytes) {
   })();
 }.toString()})(${String(PREVIEW_BYTES)})`;
 
+export const snapshotProbeExpression = `(${function snapshotProbe() {
+  const source = (() => {
+    try { return JSON.parse(localStorage.getItem('iptv_playlists') || '[]'); } catch { return []; }
+  })();
+  const playlists = source
+    .filter((entry) => entry.source !== 'upload')
+    .map((entry) => ({
+      source: entry.source === 'xtream' ? 'xtream' : 'm3u',
+      name: entry.name || '',
+      __url: entry.url || '',
+      __secrets: entry.xtream
+        ? [entry.xtream.username || '', entry.xtream.password || '']
+        : [],
+      webview: null,
+      xtreamAuth: null,
+    }));
+  const visible = [...document.querySelectorAll('.view')]
+    .find((element) => !element.classList.contains('hidden'));
+  const video = document.querySelector('video');
+  return {
+    app: {},
+    state: {
+      view: visible ? visible.id : '',
+      loading: (() => {
+        const loading = document.querySelector('#view-loading');
+        return loading ? !loading.classList.contains('hidden') : false;
+      })(),
+      channelsRendered: document.querySelectorAll('.channel-item').length,
+      media: video ? {
+        src: video.currentSrc || video.src || '',
+        sources: [...video.querySelectorAll('source')].map((element) => ({
+          src: element.src || element.getAttribute('src') || '',
+          type: element.getAttribute('type') || '',
+          canPlayType: '',
+        })),
+        readyState: video.readyState,
+        networkState: video.networkState,
+        paused: video.paused,
+        currentTime: Math.round(video.currentTime * 100) / 100,
+        duration: Number.isFinite(video.duration)
+          ? Math.round(video.duration * 100) / 100
+          : null,
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight,
+        error: video.error ? {
+          code: video.error.code,
+          message: video.error.message || '',
+        } : null,
+      } : null,
+      codecSupport: {},
+    },
+    storage: {},
+    environment: {
+      userAgent: navigator.userAgent,
+      viewport: `${String(window.innerWidth)}x${String(window.innerHeight)}`,
+    },
+    playlists,
+  };
+}.toString()})()`;
+
 export function inspectorWebSocketUrl(output) {
   const match = String(output).match(/https?:\/\/[^\s]+\/devtools\/inspector\.html\?ws=([^\s&]+)/);
   if (!match) return null;
@@ -817,30 +935,124 @@ export function startAresInspector(
 
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 
-const nativeMetricCommand = (durationMs) => {
+const memoryManagerProbeScript = `
+var Module=require("module"),originalLoad=Module._load;
+function noop(){}
+function logger(){return{log:noop,info:noop,warning:noop,error:noop};}
+var pmloglib={log:noop,info:noop,warning:noop,error:noop,Console:logger,Context:logger};
+Module._load=function(request,parent,isMain){
+  if(request==="pmloglib")return pmloglib;
+  return originalLoad.apply(this,arguments);
+};
+function createHandle(pb){
+  try{return new pb.Handle("");}
+  catch(singleArgumentError){return new pb.Handle("",true);}
+}
+var phase=process.argv[1]||"unknown";
+var pb=require("palmbus"),handle=createHandle(pb);
+handle.call("luna://com.webos.memorymanager/getCurrentMemState","{}")
+.on("response",function(message){
+  var result;
+  try{result=JSON.parse(message.payload());}catch(error){result={};}
+  console.log([
+    "@mm",phase,result.currentLevel||"",result.prevLevel||"",
+    result.usable==null?"":result.usable,result.returnValue===true?"1":"0"
+  ].join("|"));
+  process.exit(0);
+});
+setTimeout(function(){process.exit(1);},3000);
+`.trim();
+
+const nativeMetricCommand = (durationMs, appId) => {
   const durationSeconds = Math.max(1, Math.round(durationMs / 1000));
   return [
+    `app_id=${shellQuote(appId)}`,
+    'process_kind() {',
+    'p="$1"',
+    'comm=$(cat "/proc/$p/comm" 2>/dev/null)',
+    'case "$comm" in',
+    'WebAppMgr*|WebAppManager*|gwam*)',
+    'cmdline=$(tr "\\000" " " < "/proc/$p/cmdline" 2>/dev/null)',
+    'case "$cmdline" in *"--app-id=$app_id"*) printf webapp;; *) return 1;; esac',
+    ';;',
+    'starfish*) printf starfish;;',
+    'umediaserver*) printf umediaserver;;',
+    '*) return 1;;',
+    'esac',
+    '}',
+    'sample_memory_manager() {',
+    `NODE_PATH=/usr/lib/node_modules:/usr/lib/nodejs node -e ${shellQuote(memoryManagerProbeScript)} "$1" 2>/dev/null`,
+    'status=$?',
+    'if [ "$status" -ne 0 ]; then printf "@mm|%s||||0\\n" "$1"; fi',
+    '}',
+    'sample_oom() {',
+    'phase="$1"',
+    'oom_output=$(dmesg 2>/dev/null); oom_status=$?',
+    'printf "@oom-access|%s|%s\\n" "$phase" "$([ "$oom_status" -eq 0 ] && echo 1 || echo 0)"',
+    'if [ "$oom_status" -eq 0 ]; then',
+    'printf "%s\\n" "$oom_output" | grep -Ei "out of memory|oom-kill|killed process" | tail -n 20 | while IFS= read -r line; do',
+    'printf "@oom|%s|%s\\n" "$phase" "$line"',
+    'done',
+    'fi',
+    '}',
+    'sample_memory() {',
+    'phase="$1"',
+    'awk -v phase="$phase" \'',
+    '/^MemTotal:/ { total=$2 } /^MemAvailable:/ { available=$2 }',
+    '/^SwapTotal:/ { swap_total=$2 } /^SwapFree:/ { swap_free=$2 }',
+    'END { printf "@mem|%s|%s|%s|%s|%s\\n", phase, total, available, swap_total, swap_free }',
+    '\' /proc/meminfo 2>/dev/null',
+    '}',
+    'sample_peak() {',
+    'sample="$1"',
+    'for p in $(pidof WebAppMgr WebAppManager gwam starfish-media-pipeline umediaserver 2>/dev/null); do',
+    'kind=$(process_kind "$p") || continue',
+    'rss=$(awk \'/^VmRSS:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'threads=$(awk \'/^Threads:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'printf "@peak|%s|%s|%s|%s|%s\\n" "$sample" "$p" "$kind" "${rss:-0}" "${threads:-0}"',
+    'done',
+    'awk -v sample="$sample" \'',
+    '/^MemAvailable:/ { available=$2 } /^SwapFree:/ { swap_free=$2 }',
+    'END { printf "@mem-sample|%s|%s|%s\\n", sample, available, swap_free }',
+    '\' /proc/meminfo 2>/dev/null',
+    '}',
     'sample_native() {',
     'phase="$1"',
     'ticks=$(getconf CLK_TCK 2>/dev/null || echo 100)',
     'printf "@ticks|%s|%s\\n" "$phase" "$ticks"',
-    'for p in $(pidof starfish-media-pipeline umediaserver 2>/dev/null); do',
-    'comm=$(cat "/proc/$p/comm" 2>/dev/null)',
-    'case "$comm" in starfish*) kind=starfish;; umediaserver*) kind=umediaserver;; *) continue;; esac',
+    'for p in $(pidof WebAppMgr WebAppManager gwam starfish-media-pipeline umediaserver 2>/dev/null); do',
+    'kind=$(process_kind "$p") || continue',
     'set -- $(cat "/proc/$p/stat" 2>/dev/null); utime="${14}"; stime="${15}"; threads="${20}"',
     'rss=$(awk \'/^VmRSS:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'vm_peak=$(awk \'/^VmPeak:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'vm_size=$(awk \'/^VmSize:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'vm_hwm=$(awk \'/^VmHWM:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'rss_anon=$(awk \'/^RssAnon:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'rss_file=$(awk \'/^RssFile:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'rss_shmem=$(awk \'/^RssShmem:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'vm_swap=$(awk \'/^VmSwap:/ {print $2}\' "/proc/$p/status" 2>/dev/null)',
+    'oom_score=$(cat "/proc/$p/oom_score" 2>/dev/null)',
+    'oom_adj=$(cat "/proc/$p/oom_score_adj" 2>/dev/null)',
     'set -- $(cat "/proc/$p/schedstat" 2>/dev/null); run_ns="$1"; wait_ns="$2"',
-    'printf "@proc|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n" "$phase" "$p" "$kind" "$utime" "$stime" "${rss:-0}" "${threads:-0}" "${run_ns:-0}" "${wait_ns:-0}"',
+    'printf "@proc|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n" "$phase" "$p" "$kind" "$utime" "$stime" "${rss:-0}" "${threads:-0}" "${run_ns:-0}" "${wait_ns:-0}" "${oom_score:-0}" "${oom_adj:-0}" "${vm_peak:-0}" "${vm_size:-0}" "${vm_hwm:-0}" "${rss_anon:-0}" "${rss_file:-0}" "${rss_shmem:-0}" "${vm_swap:-0}"',
     'done',
     'for resource in cpu memory io; do',
     'awk -v phase="$phase" -v resource="$resource" \'$1 == "some" { avg=""; total=""; for (i=2;i<=NF;i++) { split($i,a,"="); if (a[1]=="avg10") avg=a[2]; if (a[1]=="total") total=a[2] } printf "@psi|%s|%s|%s|%s\\n", phase, resource, avg, total }\' "/proc/pressure/$resource" 2>/dev/null',
     'done',
     'awk -v phase="$phase" \'/:/ { gsub(":", "", $1); if ($1 != "lo") { rx += $2; tx += $10 } } END { printf "@net|%s|%.0f|%.0f\\n", phase, rx, tx }\' /proc/net/dev',
     'awk -v phase="$phase" \'$1 == "Tcp:" { if (!seen) { for (i=2;i<=NF;i++) key[i]=$i; seen=1 } else { for (i=2;i<=NF;i++) if (key[i]=="RetransSegs") value=$i; printf "@tcp|%s|%s\\n", phase, value; exit } }\' /proc/net/snmp',
+    'sample_memory "$phase"',
+    'sample_memory_manager "$phase"',
+    'sample_oom "$phase"',
     '}',
     'sample_native before',
     'printf "@native-ready\\n"',
-    `sleep ${String(durationSeconds)}`,
+    'sample=0',
+    `while [ "$sample" -lt ${String(durationSeconds)} ]; do`,
+    'sleep 1',
+    'sample=$((sample + 1))',
+    'sample_peak "$sample"',
+    'done',
     'sample_native after',
   ].join('\n');
 };
@@ -852,18 +1064,53 @@ const finiteNumber = (value) => {
 
 export function parseNativeMetricOutput(output, durationMs) {
   const snapshots = {
-    before: { ticks: 100, processes: [], psi: {}, network: null, tcpRetrans: null },
-    after: { ticks: 100, processes: [], psi: {}, network: null, tcpRetrans: null },
+    before: {
+      ticks: 100, processes: [], psi: {}, network: null, tcpRetrans: null,
+      memory: null, memoryManager: null, oomAccess: false, oom: [],
+    },
+    after: {
+      ticks: 100, processes: [], psi: {}, network: null, tcpRetrans: null,
+      memory: null, memoryManager: null, oomAccess: false, oom: [],
+    },
   };
+  const peakByPid = new Map();
+  const memorySamples = [];
   for (const line of String(output).split(/\r?\n/)) {
     if (!line.startsWith('@')) continue;
     const [type, phase, ...values] = line.slice(1).split('|');
+    if (type === 'peak') {
+      const [pidValue, kind, rssValue, threadsValue] = values;
+      const pid = finiteNumber(pidValue);
+      if (pid == null) continue;
+      const rssKb = finiteNumber(rssValue);
+      const existing = peakByPid.get(pid);
+      peakByPid.set(pid, {
+        pid,
+        kind,
+        peakRssKb: Math.max(existing?.peakRssKb ?? 0, rssKb ?? 0),
+        peakThreads: Math.max(existing?.peakThreads ?? 0, finiteNumber(threadsValue) ?? 0),
+        firstSample: Math.min(existing?.firstSample ?? Number(phase), Number(phase)),
+        lastSample: Math.max(existing?.lastSample ?? Number(phase), Number(phase)),
+      });
+      continue;
+    }
+    if (type === 'mem-sample') {
+      memorySamples.push({
+        sample: finiteNumber(phase),
+        availableKb: finiteNumber(values[0]),
+        swapFreeKb: finiteNumber(values[1]),
+      });
+      continue;
+    }
     const snapshot = snapshots[phase];
     if (!snapshot) continue;
     if (type === 'ticks') {
       snapshot.ticks = finiteNumber(values[0]) ?? 100;
     } else if (type === 'proc') {
-      const [pid, kind, utime, stime, rssKb, threads, runNs, waitNs] = values;
+      const [
+        pid, kind, utime, stime, rssKb, threads, runNs, waitNs, oomScore, oomScoreAdj,
+        vmPeakKb, vmSizeKb, vmHwmKb, rssAnonKb, rssFileKb, rssShmemKb, swapKb,
+      ] = values;
       snapshot.processes.push({
         pid: finiteNumber(pid),
         kind,
@@ -872,6 +1119,15 @@ export function parseNativeMetricOutput(output, durationMs) {
         threads: finiteNumber(threads),
         runNs: finiteNumber(runNs),
         waitNs: finiteNumber(waitNs),
+        oomScore: finiteNumber(oomScore),
+        oomScoreAdj: finiteNumber(oomScoreAdj),
+        vmPeakKb: finiteNumber(vmPeakKb),
+        vmSizeKb: finiteNumber(vmSizeKb),
+        vmHwmKb: finiteNumber(vmHwmKb),
+        rssAnonKb: finiteNumber(rssAnonKb),
+        rssFileKb: finiteNumber(rssFileKb),
+        rssShmemKb: finiteNumber(rssShmemKb),
+        swapKb: finiteNumber(swapKb),
       });
     } else if (type === 'psi') {
       const [resource, avg10, totalUs] = values;
@@ -886,6 +1142,24 @@ export function parseNativeMetricOutput(output, durationMs) {
       };
     } else if (type === 'tcp') {
       snapshot.tcpRetrans = finiteNumber(values[0]);
+    } else if (type === 'mem') {
+      snapshot.memory = {
+        totalKb: finiteNumber(values[0]),
+        availableKb: finiteNumber(values[1]),
+        swapTotalKb: finiteNumber(values[2]),
+        swapFreeKb: finiteNumber(values[3]),
+      };
+    } else if (type === 'mm') {
+      snapshot.memoryManager = {
+        currentLevel: values[0] || '',
+        previousLevel: values[1] || '',
+        usableMb: finiteNumber(values[2]),
+        available: values[3] === '1',
+      };
+    } else if (type === 'oom-access') {
+      snapshot.oomAccess = values[0] === '1';
+    } else if (type === 'oom') {
+      snapshot.oom.push(values.join('|'));
     }
   }
   const beforeByPid = new Map(snapshots.before.processes.map((process) => [process.pid, process]));
@@ -900,12 +1174,80 @@ export function parseNativeMetricOutput(output, durationMs) {
       cpuPercent: seconds > 0
         ? (cpuTicks / snapshots.after.ticks / seconds) * 100
         : null,
+      initialRssKb: before?.rssKb ?? null,
       rssKb: process.rssKb,
+      peakRssKb: Math.max(
+        before?.rssKb ?? 0,
+        process.rssKb ?? 0,
+        peakByPid.get(process.pid)?.peakRssKb ?? 0,
+      ),
       threads: process.threads,
+      peakThreads: Math.max(
+        before?.threads ?? 0,
+        process.threads ?? 0,
+        peakByPid.get(process.pid)?.peakThreads ?? 0,
+      ),
+      initialOomScore: before?.oomScore ?? null,
+      oomScore: process.oomScore,
+      oomScoreAdj: process.oomScoreAdj,
+      vmPeakKb: process.vmPeakKb,
+      vmSizeKb: process.vmSizeKb,
+      vmHwmKb: process.vmHwmKb,
+      rssAnonKb: process.rssAnonKb,
+      rssFileKb: process.rssFileKb,
+      rssShmemKb: process.rssShmemKb,
+      swapKb: process.swapKb,
       schedulerRunMs: Math.max(0, process.runNs - (before?.runNs ?? 0)) / 1e6,
       schedulerWaitMs: Math.max(0, process.waitNs - (before?.waitNs ?? 0)) / 1e6,
     };
   });
+  const afterPids = new Set(snapshots.after.processes.map((process) => process.pid));
+  const stoppedByPid = new Map();
+  for (const process of snapshots.before.processes) {
+    if (!afterPids.has(process.pid)) {
+      stoppedByPid.set(process.pid, {
+        pid: process.pid,
+        kind: process.kind,
+        initialRssKb: process.rssKb,
+        peakRssKb: Math.max(process.rssKb ?? 0, peakByPid.get(process.pid)?.peakRssKb ?? 0),
+        initialThreads: process.threads,
+        peakThreads: Math.max(process.threads ?? 0, peakByPid.get(process.pid)?.peakThreads ?? 0),
+        initialOomScore: process.oomScore,
+        oomScoreAdj: process.oomScoreAdj,
+        vmPeakKb: process.vmPeakKb,
+        vmSizeKb: process.vmSizeKb,
+        vmHwmKb: process.vmHwmKb,
+        rssAnonKb: process.rssAnonKb,
+        rssFileKb: process.rssFileKb,
+        rssShmemKb: process.rssShmemKb,
+        swapKb: process.swapKb,
+        observedAtStart: true,
+      });
+    }
+  }
+  for (const sampled of peakByPid.values()) {
+    if (!afterPids.has(sampled.pid) && !stoppedByPid.has(sampled.pid)) {
+      stoppedByPid.set(sampled.pid, {
+        pid: sampled.pid,
+        kind: sampled.kind,
+        initialRssKb: null,
+        peakRssKb: sampled.peakRssKb,
+        initialThreads: null,
+        peakThreads: sampled.peakThreads,
+        initialOomScore: null,
+        oomScoreAdj: null,
+        vmPeakKb: null,
+        vmSizeKb: null,
+        vmHwmKb: null,
+        rssAnonKb: null,
+        rssFileKb: null,
+        rssShmemKb: null,
+        swapKb: null,
+        observedAtStart: false,
+      });
+    }
+  }
+  const stoppedProcesses = [...stoppedByPid.values()];
   const pressure = {};
   for (const resource of ['cpu', 'memory', 'io']) {
     const before = snapshots.before.psi[resource];
@@ -920,12 +1262,97 @@ export function parseNativeMetricOutput(output, durationMs) {
   const delta = (after, before) => (
     after != null && before != null ? Math.max(0, after - before) : null
   );
+  const minimum = (values) => {
+    const finite = values.filter((value) => value != null);
+    return finite.length ? Math.min(...finite) : null;
+  };
+  const beforeOom = new Set(snapshots.before.oom);
+  const sum = (items, field) => items.reduce(
+    (total, item) => total + (item[field] ?? 0),
+    0,
+  );
+  const beforeWebapps = snapshots.before.processes.filter((process) => process.kind === 'webapp');
+  const afterWebapps = snapshots.after.processes.filter((process) => process.kind === 'webapp');
+  const sampledWebapps = [...peakByPid.values()].filter((process) => process.kind === 'webapp');
+  const totalKb = snapshots.after.memory?.totalKb ?? snapshots.before.memory?.totalKb ?? null;
+  const appPeakRssKb = Math.max(
+    sum(beforeWebapps, 'rssKb'),
+    sum(afterWebapps, 'rssKb'),
+    sum(sampledWebapps, 'peakRssKb'),
+  );
+  const usedBeforeKb = totalKb != null && snapshots.before.memory?.availableKb != null
+    ? Math.max(0, totalKb - snapshots.before.memory.availableKb)
+    : null;
+  const usedAfterKb = totalKb != null && snapshots.after.memory?.availableKb != null
+    ? Math.max(0, totalKb - snapshots.after.memory.availableKb)
+    : null;
+  const minimumAvailableKb = minimum([
+    snapshots.before.memory?.availableKb,
+    ...memorySamples.map((sample) => sample.availableKb),
+    snapshots.after.memory?.availableKb,
+  ]);
   return {
     durationMs,
     processes,
-    stoppedProcessIds: snapshots.before.processes
-      .filter((process) => !snapshots.after.processes.some((item) => item.pid === process.pid))
-      .map((process) => process.pid),
+    stoppedProcessIds: stoppedProcesses.map((process) => process.pid),
+    stoppedProcesses,
+    appMemory: {
+      processCountBefore: beforeWebapps.length,
+      processCountAfter: afterWebapps.length,
+      rssBeforeKb: sum(beforeWebapps, 'rssKb'),
+      rssAfterKb: sum(afterWebapps, 'rssKb'),
+      peakObservedRssKb: appPeakRssKb,
+      lifetimeHighWaterKb: Math.max(
+        sum(beforeWebapps, 'vmHwmKb'),
+        sum(afterWebapps, 'vmHwmKb'),
+      ),
+      virtualSizeAfterKb: sum(afterWebapps, 'vmSizeKb'),
+      anonymousRssAfterKb: sum(afterWebapps, 'rssAnonKb'),
+      fileRssAfterKb: sum(afterWebapps, 'rssFileKb'),
+      sharedRssAfterKb: sum(afterWebapps, 'rssShmemKb'),
+      swapAfterKb: sum(afterWebapps, 'swapKb'),
+      percentOfSystemAtPeak: totalKb && appPeakRssKb
+        ? Math.round((appPeakRssKb / totalKb) * 10000) / 100
+        : null,
+    },
+    memoryManager: {
+      available: Boolean(
+        snapshots.before.memoryManager?.available
+        || snapshots.after.memoryManager?.available
+      ),
+      levelBefore: snapshots.before.memoryManager?.currentLevel ?? '',
+      levelAfter: snapshots.after.memoryManager?.currentLevel ?? '',
+      previousLevelBefore: snapshots.before.memoryManager?.previousLevel ?? '',
+      previousLevelAfter: snapshots.after.memoryManager?.previousLevel ?? '',
+      usableBeforeMb: snapshots.before.memoryManager?.usableMb ?? null,
+      usableAfterMb: snapshots.after.memoryManager?.usableMb ?? null,
+      minimumUsableMb: minimum([
+        snapshots.before.memoryManager?.usableMb,
+        snapshots.after.memoryManager?.usableMb,
+      ]),
+    },
+    memory: {
+      totalKb,
+      availableBeforeKb: snapshots.before.memory?.availableKb ?? null,
+      availableAfterKb: snapshots.after.memory?.availableKb ?? null,
+      minimumAvailableKb,
+      usedBeforeKb,
+      usedAfterKb,
+      maximumUsedKb: totalKb != null && minimumAvailableKb != null
+        ? Math.max(0, totalKb - minimumAvailableKb)
+        : null,
+      swapTotalKb: snapshots.after.memory?.swapTotalKb
+        ?? snapshots.before.memory?.swapTotalKb ?? null,
+      swapFreeBeforeKb: snapshots.before.memory?.swapFreeKb ?? null,
+      swapFreeAfterKb: snapshots.after.memory?.swapFreeKb ?? null,
+      minimumSwapFreeKb: minimum([
+        snapshots.before.memory?.swapFreeKb,
+        ...memorySamples.map((sample) => sample.swapFreeKb),
+        snapshots.after.memory?.swapFreeKb,
+      ]),
+    },
+    oomLogAvailable: snapshots.before.oomAccess || snapshots.after.oomAccess,
+    oomEvents: snapshots.after.oom.filter((event) => !beforeOom.has(event)),
     pressure,
     network: {
       rxBytes: delta(snapshots.after.network?.rxBytes, snapshots.before.network?.rxBytes),
@@ -938,11 +1365,15 @@ export function parseNativeMetricOutput(output, durationMs) {
 
 export function startNativeMetricWindow(
   durationMs,
-  { spawn = spawnChild, timeoutMs = durationMs + 30000 } = {},
+  {
+    spawn = spawnChild,
+    timeoutMs = durationMs + 30000,
+    appId = DEFAULT_APP_ID,
+  } = {},
 ) {
   const child = spawn(
     path.join('scripts', 'tv.sh'),
-    ['run', nativeMetricCommand(durationMs)],
+    ['run', nativeMetricCommand(durationMs, appId)],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
   let output = '';
@@ -1068,13 +1499,18 @@ const evaluate = async (client, expression) => {
 async function waitForSettle(client, timeoutMs, delayFn) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const settled = await evaluate(
-      client,
-      `(() => {
-        var loading = document.querySelector('#view-loading');
-        return Boolean(loading && loading.classList.contains('hidden'));
-      })()`,
-    ).catch(() => false);
+    let settled = false;
+    try {
+      settled = await evaluate(
+        client,
+        `(() => {
+          var loading = document.querySelector('#view-loading');
+          return Boolean(loading && loading.classList.contains('hidden'));
+        })()`,
+      );
+    } catch (error) {
+      if (client.closed) throw error;
+    }
     if (settled) {
       await delayFn(1000);
       return;
@@ -1111,6 +1547,9 @@ export async function captureDiagnostics(options, overrides = {}) {
   let inspector = null;
   let client = null;
   let nativeMetricSession = null;
+  let nativeMetrics = null;
+  let probe = null;
+  let phase = 'connecting';
   if (!options.attach) {
     try {
       dependencies.execFile('ares-launch', ['-c', options.appId, ...deviceArgs], { stdio: 'ignore' });
@@ -1145,18 +1584,66 @@ export async function captureDiagnostics(options, overrides = {}) {
   const unsubNetwork = networkMethods.map((method) => client.on(method, (params) => {
     networkEvents.push({ method, params, observedAt: dependencies.now().toISOString() });
   }));
+  const finishNativeMetrics = async () => {
+    if (!nativeMetricSession || nativeMetrics) return;
+    try {
+      nativeMetrics = await nativeMetricSession.result;
+    } catch (error) {
+      nativeMetrics = { error: toErrorMessage(error) };
+    }
+  };
+  const buildReport = (capture) => {
+    const effectiveProbe = probe ?? {
+      app: {},
+      environment: {},
+      state: {},
+      storage: {},
+      playlists: [],
+    };
+    const native = capture.complete
+      ? effectiveProbe.playlists.map((playlist) =>
+        runNativeProbe(playlist.__url, { execFile: dependencies.execFile }))
+      : effectiveProbe.playlists.map(() => null);
+    return assembleDiagnosticReport({
+      capturedAt: dependencies.now().toISOString(),
+      full: options.full,
+      capture,
+      app: {
+        id: effectiveProbe.app?.id || options.appId,
+        version: effectiveProbe.app?.version || '',
+      },
+      environment: {
+        userAgent: effectiveProbe.environment?.userAgent ?? '',
+        viewport: effectiveProbe.environment?.viewport ?? '',
+        targetTitle: target.target?.title ?? '',
+        targetDescription: target.target?.description ?? '',
+      },
+      probe: effectiveProbe,
+      native,
+      nativeMetrics,
+      logs,
+      networkEvents,
+    });
+  };
   try {
+    phase = 'enabling-cdp';
     await enableCdpLogs(client, { history: true });
     await client.call('Network.enable');
     await client.call('Page.enable');
-    let nativeMetrics = null;
     if (!options.attach) {
+      phase = 'reloading-app';
       await client.call('Page.reload', { ignoreCache: true });
       await waitForSettle(client, options.timeoutMs, dependencies.delay);
     }
     if (options.attach || options.playChannel !== null) {
+      phase = 'capturing-baseline';
+      probe = await evaluate(client, snapshotProbeExpression);
+      phase = 'starting-native-metrics';
       try {
-        nativeMetricSession = dependencies.startNativeMetrics(options.durationMs);
+        nativeMetricSession = dependencies.startNativeMetrics(
+          options.durationMs,
+          { appId: options.appId },
+        );
         await nativeMetricSession.ready;
       } catch (error) {
         void nativeMetricSession?.result.catch(() => {});
@@ -1165,6 +1652,7 @@ export async function captureDiagnostics(options, overrides = {}) {
       }
     }
     if (options.playChannel !== null) {
+      phase = 'activating-playback';
       const activation = await evaluate(client, playbackActivationExpression(options.playChannel));
       if (!activation?.ok) {
         throw new Error(
@@ -1173,34 +1661,25 @@ export async function captureDiagnostics(options, overrides = {}) {
       }
     }
     if (options.attach || options.playChannel !== null) {
+      phase = 'observing';
       if (!nativeMetricSession) {
         await dependencies.delay(options.durationMs);
       } else {
-        try {
-          nativeMetrics = await nativeMetricSession.result;
-        } catch (error) {
-          nativeMetrics = { error: toErrorMessage(error) };
-        }
+        await finishNativeMetrics();
       }
     }
-    const probe = await evaluate(client, activeProbeExpression);
-    const native = probe.playlists.map((playlist) =>
-      runNativeProbe(playlist.__url, { execFile: dependencies.execFile }));
-    return assembleDiagnosticReport({
-      capturedAt: dependencies.now().toISOString(),
-      full: options.full,
-      app: { id: probe.app?.id || options.appId, version: probe.app?.version || '' },
-      environment: {
-        userAgent: probe.environment?.userAgent ?? '',
-        viewport: probe.environment?.viewport ?? '',
-        targetTitle: target.target?.title ?? '',
-        targetDescription: target.target?.description ?? '',
-      },
-      probe,
-      native,
-      nativeMetrics,
-      logs,
-      networkEvents,
+    phase = 'capturing-final-state';
+    probe = await evaluate(client, activeProbeExpression);
+    return buildReport({ complete: true, phase: 'complete', error: '' });
+  } catch (error) {
+    const message = toErrorMessage(error);
+    if (!/CDP connection closed/i.test(message)) throw error;
+    const interruptedPhase = phase;
+    await finishNativeMetrics();
+    return buildReport({
+      complete: false,
+      phase: interruptedPhase,
+      error: message,
     });
   } finally {
     for (const unsubscribe of [...unsubLogs, ...unsubNetwork]) unsubscribe();
