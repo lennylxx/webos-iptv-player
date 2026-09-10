@@ -5,6 +5,7 @@ import type {
   Channel,
   ChannelGroupId,
   ChannelHealthStatus,
+  ChannelScope,
 } from '../types';
 import { CONFIG } from '../config';
 import { PlaylistService } from '../services/playlist-service';
@@ -62,7 +63,7 @@ const FALLBACK_LIST_HEIGHT = 800;
 export class Sidebar {
   private el: HTMLElement | null;
   private getCurrentIndex: () => number;
-  private onSelectChannel: (index: number, catchup?: CatchupInfo) => void;
+  private onSelectChannel: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void;
   private getCurrentCatchupStart: () => number | null;
   private isVisible = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -125,7 +126,7 @@ export class Sidebar {
   constructor(
     container: HTMLElement,
     getCurrentIndex: () => number,
-    onSelectChannel: (index: number, catchup?: CatchupInfo) => void,
+    onSelectChannel: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void,
     getCurrentCatchupStart: () => number | null = () => null,
   ) {
     this.getCurrentIndex = getCurrentIndex;
@@ -413,6 +414,13 @@ export class Sidebar {
       );
     }
     return this.channelSearchScope;
+  }
+
+  // The channel_up/channel_down scope for whatever gets selected here — not
+  // to be confused with channelSearchScope above (the in-sidebar search's
+  // own filtered list).
+  private currentLaunchScope(): ChannelScope {
+    return { group: this.group, playlist: this.playlist || undefined };
   }
 
   private getChannelCount(): number {
@@ -1171,7 +1179,7 @@ export class Sidebar {
       void this.playRecentCatchup(entry.recent);
       return;
     }
-    this.onSelectChannel(entry.globalIdx);
+    this.onSelectChannel(entry.globalIdx, undefined, this.currentLaunchScope());
     this.hide();
   }
 
@@ -1184,7 +1192,7 @@ export class Sidebar {
       this.render();
       return;
     }
-    this.onSelectChannel(item.channelIndex, catchup);
+    this.onSelectChannel(item.channelIndex, catchup, this.currentLaunchScope());
     this.hide();
   }
 }

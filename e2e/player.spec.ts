@@ -316,12 +316,39 @@ test('player sidebar falls back to All after playback leaves the retained group'
   await page.keyboard.press('Enter'); // Tune Beta News and close.
   await expect(page.locator('.osd-channel-name')).toHaveText('Beta News');
 
-  await page.keyboard.press('ArrowUp'); // Tune Alpha Movies outside News.
+  // channel_up now stays within the News view it was tuned from — leaving it
+  // takes a deliberate global jump instead, same as a direct channel number.
+  await page.keyboard.press('3'); // Tune Alpha Movies outside News.
   await expect(page.locator('.osd-channel-name')).toHaveText('Alpha Movies');
   await page.keyboard.press('ArrowLeft');
   await expect(sidebar.locator('.sidebar-channel-title')).toHaveText('All');
   await expect(sidebar.locator('.sidebar-ch-item')).toHaveCount(4);
   await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Alpha Movies');
+});
+
+test('channel_up/channel_down stay within the group a channel was tuned from', async ({ page }) => {
+  await gotoGroupedPlayer(page);
+  const sidebar = page.locator('#player-sidebar');
+
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowDown'); // Favorites
+  await page.keyboard.press('ArrowDown'); // Recently Watched
+  await page.keyboard.press('ArrowDown'); // News
+  await page.keyboard.press('Enter');
+  await expect(sidebar.locator('.sidebar-channel-title')).toHaveText('News');
+  await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Beta News');
+  await page.keyboard.press('Enter'); // Tune Beta News (scoped to News) and close.
+  await expect(page.locator('.osd-channel-name')).toHaveText('Beta News');
+
+  // News has only Alpha News and Beta News — channel_up must wrap within
+  // that pair, not spill into Alpha Movies/Delta Sports from other groups.
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Alpha News');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Beta News');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Alpha News');
 });
 
 test('Magic Remote pointer opens groups and filters the channel panel', async ({ page }) => {

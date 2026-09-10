@@ -5,6 +5,7 @@ import type {
   CatchupProgressEntry,
   Channel,
   ChannelGroupId,
+  ChannelScope,
   Programme,
 } from '../types';
 import { html, raw } from '../utils/dom';
@@ -45,7 +46,7 @@ const EPG_VIEWPORT_FALLBACK = 900;
 
 export class EpgGrid {
   private container: HTMLElement;
-  private onChannelSelect: (index: number, catchup?: CatchupInfo) => void;
+  private onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void;
   private onRevealTabBar?: () => void;
   private onManageReminders?: () => void;
   private selectedChannelIdx = 0;
@@ -107,7 +108,7 @@ export class EpgGrid {
 
   constructor(
     container: HTMLElement,
-    onChannelSelect: (index: number, catchup?: CatchupInfo) => void,
+    onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void,
     onRevealTabBar?: () => void,
     onManageReminders?: () => void,
   ) {
@@ -116,6 +117,10 @@ export class EpgGrid {
     this.onRevealTabBar = onRevealTabBar;
     this.onManageReminders = onManageReminders;
     this.bindEvents();
+  }
+
+  private currentScope(): ChannelScope {
+    return { group: this.selectedGroup, playlist: this.selectedPlaylist || undefined };
   }
 
   /** Re-snap the day selection to "today". Called on a full reload: the display
@@ -766,7 +771,7 @@ export class EpgGrid {
         this.groupOpen = false;
         const idx = parseInt(channelItem.dataset.channelIdx!, 10);
         if (idx === this.selectedChannelIdx && this.focusCol === 'channels') {
-          this.onChannelSelect(idx);
+          this.onChannelSelect(idx, undefined, this.currentScope());
         } else {
           this.selectedChannelIdx = idx;
           this.focusCol = 'channels';
@@ -972,7 +977,7 @@ export class EpgGrid {
         resumeSecs,
       };
     }
-    this.onChannelSelect(this.selectedChannelIdx, catchup);
+    this.onChannelSelect(this.selectedChannelIdx, catchup, this.currentScope());
   }
 
   private async activateFocusedProgramme(): Promise<void> {
@@ -1253,7 +1258,7 @@ export class EpgGrid {
           else this.openSearchInput();
         } else if (this.focusCol === 'channels') {
           if (this.selectedChannelIdx < 0) break;
-          this.onChannelSelect(this.selectedChannelIdx);
+          this.onChannelSelect(this.selectedChannelIdx, undefined, this.currentScope());
         } else if (this.focusCol === 'programmes') {
           void this.activateFocusedProgramme();
         } else if (this.focusCol === 'dates') {

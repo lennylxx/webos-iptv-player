@@ -274,7 +274,7 @@ describe('ChannelList edit mode', () => {
         !item.querySelector('.channel-name')?.textContent?.startsWith('★'))).toBe(true);
       hover(channelItems()[0]);
       list.handleAction('select');
-      expect(onSelect).toHaveBeenCalledWith(0);
+      expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:favorites', playlist: undefined });
     });
 
     it('uses a multi-select mode when editing favorites', () => {

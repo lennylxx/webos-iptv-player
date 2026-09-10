@@ -6,7 +6,12 @@ const { healthMock, playlistMock } = vi.hoisted(() => ({
     recordPlaybackFailure: vi.fn().mockResolvedValue(undefined),
     recordPlaybackSuccess: vi.fn().mockResolvedValue(false),
   },
-  playlistMock: { channels: [] as unknown[], getByIndex: vi.fn(), indexOf: vi.fn() },
+  playlistMock: {
+    channels: [] as unknown[],
+    getByIndex: vi.fn(),
+    indexOf: vi.fn(),
+    getByGroup: vi.fn(),
+  },
 }));
 
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
@@ -204,6 +209,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   playlistMock.getByIndex.mockReturnValue(CHANNEL);
   playlistMock.indexOf.mockReturnValue(0);
+  playlistMock.getByGroup.mockReturnValue([]);
   healthMock.recordPlaybackFailure.mockClear();
   healthMock.recordPlaybackSuccess.mockReset();
   healthMock.recordPlaybackSuccess.mockResolvedValue(false);
@@ -1622,7 +1628,7 @@ describe('Player channel number entry', () => {
 
     player.handleAction('number', { number: 2 });
 
-    expect(play).toHaveBeenCalledWith(1);
+    expect(play).toHaveBeenCalledWith(1, undefined, null);
   });
 
   it('ignores a number outside the channel list instead of switching', () => {
@@ -1641,5 +1647,93 @@ describe('Player channel number entry', () => {
     player.handleAction('number', { number: 2 });
 
     expect(play).not.toHaveBeenCalled();
+  });
+});
+
+describe('Player channel_up/channel_down view scope', () => {
+  // Global order deliberately interleaves a non-favorite (OTHER) between two
+  // favorites — exactly the real-world layout that made channel_up from
+  // Favorites land on a non-favorite channel before this fix.
+  const FAV_A = { id: 'fa', name: 'FavA', logo: '', group: '', url: 'http://host/fa', extras: null, playlistIds: [], catchupDays: 0 };
+  const OTHER = { id: 'ox', name: 'Other', logo: '', group: '', url: 'http://host/ox', extras: null, playlistIds: [], catchupDays: 0 };
+  const FAV_B = { id: 'fb', name: 'FavB', logo: '', group: '', url: 'http://host/fb', extras: null, playlistIds: [], catchupDays: 0 };
+  const FAV_C = { id: 'fc', name: 'FavC', logo: '', group: '', url: 'http://host/fc', extras: null, playlistIds: [], catchupDays: 0 };
+  const GLOBAL = [FAV_A, OTHER, FAV_B, FAV_C];
+  let favorites: (typeof FAV_A)[];
+
+  beforeEach(() => {
+    favorites = [FAV_A, FAV_B, FAV_C];
+    playlistMock.channels = GLOBAL;
+    playlistMock.getByIndex.mockImplementation((i: number) => GLOBAL[i] ?? null);
+    playlistMock.indexOf.mockImplementation((ch: unknown) => GLOBAL.indexOf(ch as never));
+    playlistMock.getByGroup.mockImplementation(() => favorites);
+  });
+  afterEach(() => {
+    playlistMock.channels = [];
+  });
+
+  it('steps within the launch scope, skipping channels outside it', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A
+    player.channelUp();
+    expect(player.getCurrentChannel()).toBe(FAV_B); // not OTHER, which sits between them globally
+    player.channelUp();
+    expect(player.getCurrentChannel()).toBe(FAV_C);
+  });
+
+  it('wraps at the end of the scope instead of spilling into the full list', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A
+    player.channelUp(); // -> FAV_B
+    player.channelUp(); // -> FAV_C
+    player.channelUp(); // wraps
+    expect(player.getCurrentChannel()).toBe(FAV_A);
+  });
+
+  it('wraps backward the same way with channelDown', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A
+    player.channelDown();
+    expect(player.getCurrentChannel()).toBe(FAV_C); // wraps to the scope's last entry
+  });
+
+  it('picks up a live change to the scope on the very next press', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A
+    favorites = [FAV_A, FAV_C]; // FAV_B unfavorited mid-playback
+    player.channelUp();
+    expect(player.getCurrentChannel()).toBe(FAV_C);
+  });
+
+  it('falls back to the last known position when the playing channel drops out of scope', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A, position 0
+    favorites = [FAV_B, FAV_C]; // FAV_A itself unfavorited while it's still playing
+    player.channelUp();
+    // FAV_A is gone; step from its last known slot (0) — FAV_B now occupies
+    // that slot, so the next one over is FAV_C.
+    expect(player.getCurrentChannel()).toBe(FAV_C);
+  });
+
+  it('keeps a scope across internal channelUp/channelDown replays', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A
+    player.channelUp(); // -> FAV_B, via the internal 2-arg play() call
+    player.channelUp(); // still scoped -> FAV_C, not the global next (FAV_C anyway, but via scope math)
+    expect(player.getCurrentChannel()).toBe(FAV_C);
+  });
+
+  it('has no scope when launched without one — channel_up cycles the full list', () => {
+    player.play(0); // no scope passed at all
+    player.channelUp();
+    expect(player.getCurrentChannel()).toBe(OTHER); // the full-list neighbor, not a favorite
+  });
+
+  it('a global number jump mid-scope clears the scope for the next channel_up', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A
+    player.handleAction('number', { number: 2 }); // jump to global index 1 = OTHER
+    expect(player.getCurrentChannel()).toBe(OTHER);
+    player.channelUp();
+    expect(player.getCurrentChannel()).toBe(FAV_B); // global neighbor of OTHER, not scoped
+  });
+
+  it('keeps the OSD channel number global even while scoped to Favorites', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A, global index 0
+    player.channelUp(); // -> FAV_B, global index 2
+    expect(player.getCurrentIndex()).toBe(2);
   });
 });

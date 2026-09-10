@@ -5,6 +5,7 @@ import type {
   Channel,
   ChannelGroupId,
   ChannelHealthStatus,
+  ChannelScope,
   NumberEvent,
 } from '../types';
 import { SpatialNav } from '../navigation/spatial-nav';
@@ -33,7 +34,7 @@ const CHANNEL_VIEWPORT_FALLBACK = 900;
 
 export class ChannelList {
   private container: HTMLElement;
-  private onChannelSelect: (index: number, catchup?: CatchupInfo) => void;
+  private onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void;
   private onChannelsChanged: () => void;
   private nav: SpatialNav;
   private editor: ChannelListEditor;
@@ -64,7 +65,7 @@ export class ChannelList {
 
   constructor(
     container: HTMLElement,
-    onChannelSelect: (index: number, catchup?: CatchupInfo) => void,
+    onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void,
     onChannelsChanged: () => void = () => {},
     onEpgMappingChanged: () => void = () => {},
     onEpgOffsetChanged: () => void = () => {},
@@ -152,6 +153,13 @@ export class ChannelList {
   private focusableAt(x: number, y: number): HTMLElement | null {
     const el = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-focusable]');
     return el && this.container.contains(el) ? el : null;
+  }
+
+  // The view a channel launched from here — including Recently Watched,
+  // which PlaylistService.getByGroup already treats as the full list, same
+  // as no scope at all.
+  private currentScope(): ChannelScope {
+    return { group: this.currentGroup, playlist: this.currentPlaylist || undefined };
   }
 
   render(ensureFocus = true): void {
@@ -387,14 +395,14 @@ export class ChannelList {
           const item = this.recentItems[parseInt(focused.dataset.recentIndex, 10)];
           if (item?.kind === 'live') {
             this.setPlaying(item.channelIndex);
-            this.onChannelSelect(item.channelIndex);
+            this.onChannelSelect(item.channelIndex, undefined, this.currentScope());
           } else if (item) {
             void this.playRecentCatchup(item);
           }
         } else if (focused.dataset.channelIndex !== undefined) {
           const idx = parseInt(focused.dataset.channelIndex, 10);
           this.setPlaying(idx);
-          this.onChannelSelect(idx);
+          this.onChannelSelect(idx, undefined, this.currentScope());
         }
         break;
       }
@@ -413,8 +421,8 @@ export class ChannelList {
         const num = event.number - 1;
         if (num >= 0 && num < PlaylistService.channels.length) {
           this.setPlaying(num);
-          this.revealChannel(num);
-          this.onChannelSelect(num);
+          this.revealChannel(num); // may widen currentGroup — read scope after
+          this.onChannelSelect(num, undefined, this.currentScope());
         }
         break;
       }
@@ -629,7 +637,7 @@ export class ChannelList {
       return;
     }
     this.setPlaying(item.channelIndex, item.progress.progStart);
-    this.onChannelSelect(item.channelIndex, catchup);
+    this.onChannelSelect(item.channelIndex, catchup, this.currentScope());
   }
 
   private moveVirtualFocus(delta: number): boolean {
