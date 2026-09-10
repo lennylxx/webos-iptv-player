@@ -83,7 +83,8 @@ body:
     attributes:
       label: Screenshots or recordings
       description: |
-        Optional. Upload screenshots or recordings that show the problem. Hide
+        Optional. Capture the TV with `./scripts/tv.sh capt screenshot screen.png`
+        or `./scripts/tv.sh capt record screen.mp4`, then upload the result. Hide
         credentials and private information first.
     validations:
       required: false

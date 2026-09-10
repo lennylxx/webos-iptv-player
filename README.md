@@ -206,14 +206,17 @@ scripts/tv.sh logs --app com.lennylxx.iptv       # Stream the app's DevTools con
 scripts/tv.sh eval 'document.visibilityState'    # Evaluate JavaScript in the app page
 scripts/tv.sh perf --duration 30                 # Sample CPU, heap, DOM, and layout
 scripts/tv.sh diag                               # Capture a redacted diagnostics report
+scripts/tv.sh capt screenshot screen.png         # Capture video and app OSD
+scripts/tv.sh capt record screen.mp4             # Record 10 seconds, target 5 fps, no audio
 scripts/tv.sh run 'uname -a'                     # Run a TV command over SSH
 scripts/tv.sh push ./file.txt /tmp/file.txt      # Copy a local file to the TV
+scripts/tv.sh pull /tmp/file.txt ./file.txt      # Copy a TV file to this computer
 scripts/tv.sh shell                              # Open an interactive SSH session
 TV_DEVICE=tv2 scripts/tv.sh logs                 # Select a non-default configured TV
 ```
 
-Run `scripts/tv.sh perf --help` or `scripts/tv.sh diag --help` for capture and
-output options.
+Run `scripts/tv.sh capt --help`, `scripts/tv.sh perf --help`, or
+`scripts/tv.sh diag --help` for options.
 
 ### Preview in Browser
 

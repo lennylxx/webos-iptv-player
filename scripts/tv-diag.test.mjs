@@ -331,10 +331,16 @@ describe('DiagnosticRedactor', () => {
 
 describe('diagnostic report assembly', () => {
   it('parses the native curl preview marker', () => {
+    let command = '';
     const result = runNativeProbe('http://host/a', {
-      execFile: () => "\rEnter passphrase for key '/home/user/.ssh/key': \r\n"
-        + '#EXTM3U\n__IPTV_DIAG__206|text/plain',
+      execFile: (_file, args) => {
+        command = args[1];
+        return "\rEnter passphrase for key '/home/user/.ssh/key': \r\n"
+          + '#EXTM3U\n__IPTV_DIAG__206|text/plain';
+      },
     });
+    expect(command).toContain('temp_root=/media/developer/temp');
+    expect(command).toContain('temp_root=/tmp');
     expect(result).toEqual({
       status: 206,
       contentType: 'text/plain',

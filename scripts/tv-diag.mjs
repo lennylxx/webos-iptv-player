@@ -945,8 +945,12 @@ Module._load=function(request,parent,isMain){
   return originalLoad.apply(this,arguments);
 };
 function createHandle(pb){
-  try{return new pb.Handle("");}
-  catch(singleArgumentError){return new pb.Handle("",true);}
+  var major=Number(String(process.versions.node||"0").split(".")[0]);
+  if(major>=20){
+    try{return new pb.Handle("");}
+    catch(singleArgumentError){return new pb.Handle("",true);}
+  }
+  return new pb.Handle("",true);
 }
 var phase=process.argv[1]||"unknown";
 var pb=require("palmbus"),handle=createHandle(pb);
@@ -1428,8 +1432,10 @@ export function startNativeMetricWindow(
 export function runNativeProbe(url, { execFile = execFileSync } = {}) {
   if (!url) return { status: null, contentType: '', bodyPreview: '', error: 'missing URL' };
   const command = [
-    'body=/tmp/iptv-diag-body-$$',
-    'headers=/tmp/iptv-diag-headers-$$',
+    'node_major=$(node -e \'process.stdout.write(process.versions.node.split(".")[0])\')',
+    'if [ "$node_major" -ge 20 ]; then temp_root=/media/developer/temp; else temp_root=/tmp; fi',
+    'body="$temp_root/iptv-diag-body-$$"',
+    'headers="$temp_root/iptv-diag-headers-$$"',
     `curl -L -sS --connect-timeout 10 --max-time 20 --range 0-${String(PREVIEW_BYTES - 1)}`
       + ` -D "$headers" -o "$body" ${shellQuote(url)}`,
     'rc=$?',
