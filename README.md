@@ -80,6 +80,7 @@
 - **Channel sidebar** — switch channels over the video with current-program info, organized by group
 - **Channel customization** — reorder, hide, rename, regroup, manage favorites, and correct per-channel EPG matching or timing
 - **Auto-play and genre group icons** for faster browsing
+- **Number-key channel entry** — press the remote's number keys to tune by channel number from the channel list or while watching, with on-screen digit feedback
 - **Full remote & Magic Remote** — spatial D-pad navigation and pointer control across every view
 - **Color themes** — choose from light and dark app-wide themes with live previews, plus Dark or Frosted player overlays; selections persist across launches
 - **Adjustable text size** — scale text from 80%–150% without resizing controls
