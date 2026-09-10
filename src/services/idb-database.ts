@@ -104,6 +104,19 @@ export function openPersistenceDb(): Promise<IDBDatabase | null> {
         db.close();
         dbPromise = null;
       };
+      // The browser can close a connection on its own — e.g. suspending an
+      // open connection when webOS backgrounds the app. Without this, every
+      // read/write after that keeps reusing the dead connection and fails
+      // with "The database connection is closing" until the app relaunches.
+      // Clearing the cache here lets the next call reconnect instead.
+      db.onclose = () => {
+        log.warn(
+          'Connection closed unexpectedly',
+          'event=persistence.db.closed.unexpected',
+          'operation=open',
+        );
+        dbPromise = null;
+      };
       resolve(db);
     };
     req.onerror = () => {

@@ -46,6 +46,16 @@ interface UserDataState {
 let userData: UserDataState | null = null;
 let userDataInitPromise: Promise<void> | null = null;
 
+// Individual writes are fire-and-forget (callers never await persistUserChanges),
+// so a failure has no return value to surface — this is the only signal a caller
+// (App, at init) can subscribe to in order to show something the user actually
+// sees, instead of a console-only log line. Kept UI-agnostic here: this module
+// only reports the transition into a failing streak, never renders anything
+// itself. Fires once per streak, not once per failed write, so a run of failures
+// (e.g. a dead IndexedDB connection until the next reconnect) doesn't spam it.
+let writeFailing = false;
+let onWriteFailure: (() => void) | null = null;
+
 function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -59,15 +69,22 @@ function persistUserChanges(
   puts: UserDataRecord[],
   deletes: string[] = [],
 ): void {
-  void applyUserChanges(store, puts, deletes).catch((err) => {
-    log.error(
-      'User data persistence failed',
-      'event=persistence.user.write.failed',
-      'operation=write',
-      `store=${store}`,
-      err,
-    );
-  });
+  void applyUserChanges(store, puts, deletes).then(
+    () => { writeFailing = false; },
+    (err) => {
+      log.error(
+        'User data persistence failed',
+        'event=persistence.user.write.failed',
+        'operation=write',
+        `store=${store}`,
+        err,
+      );
+      if (!writeFailing) {
+        writeFailing = true;
+        onWriteFailure?.();
+      }
+    },
+  );
 }
 
 function reminderKey(item: Reminder): string {
@@ -444,6 +461,13 @@ export const StorageService = {
   get,
   set,
   remove,
+
+  /** Called once, at startup, with something that shows the user a write
+   *  failure is happening — a console-only log line is otherwise the only
+   *  trace. Fires on the first failed user-data write in a streak. */
+  setWriteFailureHandler(handler: () => void): void {
+    onWriteFailure = handler;
+  },
 
   async init(): Promise<void> {
     if (!userDataInitPromise) {
