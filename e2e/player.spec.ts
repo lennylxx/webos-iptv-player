@@ -316,8 +316,8 @@ test('player sidebar falls back to All after playback leaves the retained group'
   await page.keyboard.press('Enter'); // Tune Beta News and close.
   await expect(page.locator('.osd-channel-name')).toHaveText('Beta News');
 
-  // channel_up now stays within the News view it was tuned from — leaving it
-  // takes a deliberate global jump instead, same as a direct channel number.
+  // A direct channel number is always a deliberate global jump, regardless
+  // of the channel-cycle-mode setting — the reliable way to leave News here.
   await page.keyboard.press('3'); // Tune Alpha Movies outside News.
   await expect(page.locator('.osd-channel-name')).toHaveText('Alpha Movies');
   await page.keyboard.press('ArrowLeft');
@@ -326,7 +326,11 @@ test('player sidebar falls back to All after playback leaves the retained group'
   await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Alpha Movies');
 });
 
-test('channel_up/channel_down stay within the group a channel was tuned from', async ({ page }) => {
+test('channel_up/channel_down stay within the group a channel was tuned from, when Active is on', async ({ page }) => {
+  // Scoping is opt-in (settings.channelCycleMode), defaulting to Global.
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_channel_cycle_mode', JSON.stringify('active'));
+  });
   await gotoGroupedPlayer(page);
   const sidebar = page.locator('#player-sidebar');
 
@@ -349,6 +353,27 @@ test('channel_up/channel_down stay within the group a channel was tuned from', a
   await expect(page.locator('.osd-channel-name')).toHaveText('Beta News');
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('.osd-channel-name')).toHaveText('Alpha News');
+});
+
+test('channel_up/channel_down cycle the full list by default, even when tuned from a group', async ({ page }) => {
+  await gotoGroupedPlayer(page);
+  const sidebar = page.locator('#player-sidebar');
+
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowDown'); // Favorites
+  await page.keyboard.press('ArrowDown'); // Recently Watched
+  await page.keyboard.press('ArrowDown'); // News
+  await page.keyboard.press('Enter');
+  await expect(sidebar.locator('.sidebar-ch-item.focused')).toContainText('Beta News');
+  await page.keyboard.press('Enter'); // Tune Beta News (default: Global) and close.
+  await expect(page.locator('.osd-channel-name')).toHaveText('Beta News');
+
+  // settings.channelCycleMode defaults to Global — existing users see no
+  // change: channel_up steps to the next channel in the full list (Alpha
+  // Movies), spilling past News, same as before PR58.
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Alpha Movies');
 });
 
 test('Magic Remote pointer opens groups and filters the channel panel', async ({ page }) => {

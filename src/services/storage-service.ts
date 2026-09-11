@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist';
@@ -703,6 +703,16 @@ export const StorageService = {
   },
   setAutoPlay(val: boolean): void {
     set('auto_play', val);
+  },
+
+  // 'global' = channel_up/channel_down cycles the entire channel list
+  // (default, matches pre-scoping behavior), 'active' = stays within the
+  // group/playlist/Favorites a channel was tuned from.
+  getChannelCycleMode(): ChannelCycleMode {
+    return get<ChannelCycleMode>('channel_cycle_mode', 'global');
+  },
+  setChannelCycleMode(mode: ChannelCycleMode): void {
+    set('channel_cycle_mode', mode);
   },
 
   getLocalePreference(): LocalePreference {

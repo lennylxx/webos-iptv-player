@@ -30,6 +30,7 @@ vi.mock('../services/storage-service', () => ({
     setCatchupProgress: vi.fn(), getCatchupProgress: vi.fn(), clearCatchupProgress: vi.fn(),
     touchRecentlyWatchedLive: vi.fn(),
     getSubtitleOffset: vi.fn(() => 0), setSubtitleOffset: vi.fn(),
+    getChannelCycleMode: vi.fn(() => 'global'),
   },
 }));
 vi.mock('./toast', () => ({ showToast: vi.fn() }));
@@ -1667,9 +1668,13 @@ describe('Player channel_up/channel_down view scope', () => {
     playlistMock.getByIndex.mockImplementation((i: number) => GLOBAL[i] ?? null);
     playlistMock.indexOf.mockImplementation((ch: unknown) => GLOBAL.indexOf(ch as never));
     playlistMock.getByGroup.mockImplementation(() => favorites);
+    // These tests exercise scoped stepping, which only applies when the
+    // user opted into it — settings.channelCycleMode: 'active'.
+    vi.mocked(StorageService.getChannelCycleMode).mockReturnValue('active');
   });
   afterEach(() => {
     playlistMock.channels = [];
+    vi.mocked(StorageService.getChannelCycleMode).mockReturnValue('global');
   });
 
   it('steps within the launch scope, skipping channels outside it', () => {
@@ -1701,13 +1706,28 @@ describe('Player channel_up/channel_down view scope', () => {
     expect(player.getCurrentChannel()).toBe(FAV_C);
   });
 
-  it('falls back to the last known position when the playing channel drops out of scope', () => {
-    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A, position 0
+  it('falls back to the global list when the playing channel drops out of scope', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A, global index 0
     favorites = [FAV_B, FAV_C]; // FAV_A itself unfavorited while it's still playing
     player.channelUp();
-    // FAV_A is gone; step from its last known slot (0) — FAV_B now occupies
-    // that slot, so the next one over is FAV_C.
-    expect(player.getCurrentChannel()).toBe(FAV_C);
+    // FAV_A is gone from the scope — resume plain global stepping from its
+    // global index (0) instead of a remembered slot in the stale scope.
+    expect(player.getCurrentChannel()).toBe(OTHER);
+  });
+
+  it('falls back to the global list when the scope becomes empty', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A
+    favorites = []; // the whole group emptied out mid-playback
+    player.channelUp();
+    expect(player.getCurrentChannel()).toBe(OTHER); // global neighbor of FAV_A
+  });
+
+  it('stays on global stepping for a scope it already fell back out of', () => {
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A
+    favorites = [FAV_B, FAV_C]; // FAV_A drops out
+    player.channelUp(); // falls back to global -> OTHER, and clears the scope
+    player.channelUp(); // now plain global stepping from OTHER
+    expect(player.getCurrentChannel()).toBe(FAV_B);
   });
 
   it('keeps a scope across internal channelUp/channelDown replays', () => {
@@ -1735,5 +1755,12 @@ describe('Player channel_up/channel_down view scope', () => {
     player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A, global index 0
     player.channelUp(); // -> FAV_B, global index 2
     expect(player.getCurrentIndex()).toBe(2);
+  });
+
+  it('ignores an active launch scope when settings.channelCycleMode is global (the default)', () => {
+    vi.mocked(StorageService.getChannelCycleMode).mockReturnValue('global');
+    player.play(0, undefined, { group: 'builtin:favorites' }); // FAV_A, scope tracked either way
+    player.channelUp();
+    expect(player.getCurrentChannel()).toBe(OTHER); // full-list neighbor, not FAV_B
   });
 });

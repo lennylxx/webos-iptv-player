@@ -56,11 +56,6 @@ export class Player {
   // null for launches with no such view (search, reminders, resume-on-boot),
   // which keeps channel_up/channel_down on the full list exactly as before.
   private currentScope: ChannelScope | null = null;
-  // Last known position of the playing channel within currentScope's list —
-  // the scoped analogue of currentIndexAnchor, so a channel that drops out of
-  // its view mid-playback (unfavorited, hidden, moved) still has a sensible
-  // "here" for the next channel_up/channel_down to step from.
-  private scopeAnchorPosition = -1;
   private catchupInfo: CatchupInfo | null = null;
   private vod: VodPlayback | null = null;
   private upNextSeconds = 0;
@@ -441,15 +436,6 @@ export class Player {
     this.playResolved(channel, channelIndex, catchup, scope);
   }
 
-  private refreshScopeAnchor(): void {
-    if (!this.currentScope || !this.currentChannel) {
-      this.scopeAnchorPosition = -1;
-      return;
-    }
-    const list = PlaylistService.getByGroup(this.currentScope.group, this.currentScope.playlist);
-    this.scopeAnchorPosition = list.indexOf(this.currentChannel);
-  }
-
   private playResolved(
     channel: Channel,
     channelIndex: number,
@@ -480,7 +466,6 @@ export class Player {
     this.currentIndex = channelIndex;
     if (channelIndex >= 0) this.currentIndexAnchor = channelIndex;
     if (scope !== undefined) this.currentScope = scope;
-    this.refreshScopeAnchor();
     this.catchupInfo = catchup || null;
     this.onTvPlaybackChanged(channelIndex, catchup ? catchup.start * 1000 : null);
     this.catchupSourceIndex = 0;
@@ -512,7 +497,6 @@ export class Player {
     this.currentChannel = null;
     this.currentIndex = -1;
     this.currentScope = null;
-    this.scopeAnchorPosition = -1;
     this.catchupInfo = null;
     this.vod = v;
     this.pendingResumeSecs = v.resumeSecs > 0 ? v.resumeSecs : 0;
@@ -1161,43 +1145,54 @@ export class Player {
   }
 
   channelUp(): void {
-    if (this.currentScope) { this.scopedChannelStep(1); return; }
-    const len = PlaylistService.channels.length;
-    if (!len) return;
-    const next = this.currentIndex >= 0
-      ? (this.currentIndex + 1) % len
-      : Math.min(this.currentIndexAnchor, len - 1);
-    this.play(next);
+    if (this.shouldUseScope()) { this.scopedChannelStep(1); return; }
+    this.globalChannelStep(1);
   }
 
   channelDown(): void {
-    if (this.currentScope) { this.scopedChannelStep(-1); return; }
+    if (this.shouldUseScope()) { this.scopedChannelStep(-1); return; }
+    this.globalChannelStep(-1);
+  }
+
+  // The settings.channelCycleMode gate: scoping only applies when the user
+  // opted into 'active' — 'global' (the default) preserves the pre-scoping
+  // full-list behavior even though currentScope is still tracked.
+  private shouldUseScope(): boolean {
+    return !!this.currentScope && StorageService.getChannelCycleMode() === 'active';
+  }
+
+  private globalChannelStep(delta: 1 | -1): void {
     const len = PlaylistService.channels.length;
     if (!len) return;
     const next = this.currentIndex >= 0
-      ? (this.currentIndex - 1 + len) % len
-      : Math.max(0, Math.min(this.currentIndexAnchor - 1, len - 1));
+      ? ((this.currentIndex + delta) % len + len) % len
+      : delta > 0
+        ? Math.min(this.currentIndexAnchor, len - 1)
+        : Math.max(0, Math.min(this.currentIndexAnchor - 1, len - 1));
     this.play(next);
   }
 
   // channel_up/channel_down while the current channel was launched from a
-  // specific view (Favorites, a group, a folder, All): step within that
-  // view's list — recomputed live on every call, so a customization change
-  // mid-playback (unfavoriting, hiding, reordering) is reflected immediately
-  // — instead of the full, unfiltered channel list.
+  // specific view (Favorites, a group, a folder, All) and the user has
+  // opted into scoped cycling: step within that view's list — recomputed
+  // live on every call, so a customization change mid-playback (unfavoriting,
+  // hiding, reordering) is reflected immediately — instead of the full,
+  // unfiltered channel list.
   private scopedChannelStep(delta: 1 | -1): void {
     const scope = this.currentScope;
     if (!scope) return;
     const list = PlaylistService.getByGroup(scope.group, scope.playlist);
-    const len = list.length;
-    if (!len) return;
-    // Prefer the current channel's live position in the view; if it just
-    // dropped out (unfavorited, hidden, moved elsewhere while playing), fall
-    // back to its last known spot there — scopeAnchorPosition, the scoped
-    // analogue of currentIndexAnchor.
     const pos = this.currentChannel ? list.indexOf(this.currentChannel) : -1;
-    const anchor = pos >= 0 ? pos : Math.max(0, Math.min(this.scopeAnchorPosition, len - 1));
-    const next = ((anchor + delta) % len + len) % len;
+    if (pos < 0) {
+      // The view is empty, gone, or the playing channel dropped out of it —
+      // resume plain global stepping instead of a remembered position in a
+      // scope that's no longer valid.
+      this.currentScope = null;
+      this.globalChannelStep(delta);
+      return;
+    }
+    const len = list.length;
+    const next = ((pos + delta) % len + len) % len;
     const globalIndex = PlaylistService.indexOf(list[next]);
     if (globalIndex < 0) return;
     this.play(globalIndex);
@@ -1228,7 +1223,6 @@ export class Player {
       this.currentIndex = -1;
       this.onTvPlaybackChanged(-1, this.catchupInfo ? this.catchupInfo.start * 1000 : null);
     }
-    this.refreshScopeAnchor();
   }
 
   getAudioTracks(): AudioTrackOption[] {
