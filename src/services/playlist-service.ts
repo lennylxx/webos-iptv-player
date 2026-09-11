@@ -14,6 +14,7 @@ import {
   xtreamCatchupSources,
   xtreamLiveUrl,
   xtreamLiveStreamId,
+  xtreamVodStreamKind,
   resolveXtreamLiveOutput,
   type XtreamCredentials,
   type XtreamLiveOutput,
@@ -143,9 +144,11 @@ class PlaylistServiceImpl {
   }
 
   async load(): Promise<Channel[]> {
-    const enabledIds = new Set(
-      StorageService.getPlaylists().filter(isSourceEnabled).map(source => source.id),
-    );
+    const enabledSources = StorageService.getPlaylists().filter(isSourceEnabled);
+    const enabledIds = new Set(enabledSources.map(source => source.id));
+    const xtreamIds = new Set(enabledSources
+      .filter(source => source.source === 'xtream')
+      .map(source => source.id));
     if (!enabledIds.size) {
       this.reset();
       this.logLoadCompleted('none', 0, 0);
@@ -154,12 +157,15 @@ class PlaylistServiceImpl {
     const cached = await getCachedPlaylist();
     if (cached) {
       const channelsNeedFiltering = cached.channels
-        .some(channel => channel.playlistIds.some(id => !enabledIds.has(id)));
+        .some(channel => channel.playlistIds.some(id =>
+          !enabledIds.has(id) || (xtreamIds.has(id) && xtreamVodStreamKind(channel.url) !== null)));
       this.allChannels = channelsNeedFiltering
         ? cached.channels
             .map(channel => ({
               ...channel,
-              playlistIds: channel.playlistIds.filter(id => enabledIds.has(id)),
+              playlistIds: channel.playlistIds.filter(id =>
+                enabledIds.has(id)
+                && !(xtreamIds.has(id) && xtreamVodStreamKind(channel.url) !== null)),
             }))
             .filter(channel => channel.playlistIds.length > 0)
         : cached.channels;
@@ -213,8 +219,8 @@ class PlaylistServiceImpl {
       // two playlists sharing a name/URL stay distinct and deleting/reordering
       // one never re-points another's channels.
       const plKey = pl.id;
-      // An xtream account derives get.php (playlist) and xmltv.php (EPG) from its
-      // credentials; everything downstream is the existing M3U path.
+      // Prefer get.php so provider EPG, catch-up, ordering, headers, and custom
+      // URLs survive the existing M3U pipeline; the Player API is only a fallback.
       let fetchUrl = pl.url;
       let xtreamCredentials: XtreamCredentials | null = null;
       let xtreamOutput: XtreamLiveOutput = 'ts';
@@ -240,6 +246,10 @@ class PlaylistServiceImpl {
           const text = await fetchPlaylistText(fetchUrl, 60000);
           log.info('Fetched', pl.name || pl.url, '|', text.length, 'bytes');
           parsed = parseM3U(text, fetchUrl);
+          if (xtreamCredentials) {
+            parsed.channels = parsed.channels
+              .filter(channel => xtreamVodStreamKind(channel.url) === null);
+          }
         } catch (err) {
           playlistError = err;
           if (!xtreamCredentials) throw err;

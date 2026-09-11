@@ -21,6 +21,8 @@ export interface XtreamLiveUrlParts {
   output: XtreamLiveOutput;
 }
 
+export type XtreamVodStreamKind = 'movie' | 'series';
+
 export function normalizeXtreamLiveOutputPreference(
   value: unknown,
 ): XtreamLiveOutputPreference {
@@ -122,6 +124,23 @@ export function xtreamVodUrl(c: XtreamCredentials, streamId: string, ext: string
 export function xtreamEpisodeUrl(c: XtreamCredentials, episodeId: string, ext: string): string {
   const base = normalizeXtreamBaseUrl(c.baseUrl);
   return `${base}/series/${encodeURIComponent(c.username)}/${encodeURIComponent(c.password)}/${episodeId}.${ext}`;
+}
+
+export function xtreamVodStreamKind(url: string): XtreamVodStreamKind | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    if (parts.length < 4) return null;
+    const kind = parts[parts.length - 4].toLowerCase();
+    if (kind !== 'movie' && kind !== 'series') return null;
+    const stream = parts[parts.length - 1];
+    if (!parts[parts.length - 3] || !parts[parts.length - 2]
+        || !/^[^/]+\.[^/.]+$/.test(stream)) return null;
+    return kind;
+  } catch {
+    return null;
+  }
 }
 
 /** Xtream archive URL template. Duration is in minutes; start is provider-local

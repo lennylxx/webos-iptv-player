@@ -12,6 +12,7 @@ import {
   xtreamCatchupSources,
   xtreamCredentialsFromLiveUrl,
   xtreamLiveStreamId,
+  xtreamVodStreamKind,
   formatXtreamCatchupStart,
   normalizeXtreamLiveOutputPreference,
   resolveXtreamLiveOutput,
@@ -152,6 +153,22 @@ describe('xtreamVodUrl', () => {
 describe('xtreamEpisodeUrl', () => {
   it('builds /series/{user}/{pass}/{id}.{ext} on the normalized base', () => {
     expect(xtreamEpisodeUrl(creds, '42', 'mkv')).toBe('http://host:8080/series/u1/p1/42.mkv');
+  });
+});
+
+describe('xtreamVodStreamKind', () => {
+  it('classifies exact movie and series pathname segments case-insensitively', () => {
+    expect(xtreamVodStreamKind('http://host/movie/u1/p1/10.mp4')).toBe('movie');
+    expect(xtreamVodStreamKind('https://host/base/SeRiEs/u1/p1/20.mkv')).toBe('series');
+  });
+
+  it('retains substring, malformed, relative, query-based, and proxy URLs', () => {
+    expect(xtreamVodStreamKind('http://host/movies/u1/p1/10.mp4')).toBeNull();
+    expect(xtreamVodStreamKind('http://host/series-live/u1/p1/20.ts')).toBeNull();
+    expect(xtreamVodStreamKind('not a url')).toBeNull();
+    expect(xtreamVodStreamKind('/movie/u1/p1/10.mp4')).toBeNull();
+    expect(xtreamVodStreamKind('http://host/play?path=/movie/u1/p1/10.mp4')).toBeNull();
+    expect(xtreamVodStreamKind('http://host/proxy/movie/u1/p1/10.mp4/extra')).toBeNull();
   });
 });
 
