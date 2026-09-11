@@ -35,7 +35,7 @@ import { isSourceEnabled } from './utils/playlist';
 import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
-import type { Action, NumberEvent, CatchupInfo, EpgSource, PlaylistEntry } from './types';
+import type { Action, NumberEvent, CatchupInfo, ChannelScope, EpgSource, PlaylistEntry } from './types';
 import { getLocale, initLocale, resolveLocale, setLocale, t, tp } from './i18n';
 
 const log = createLogger('App');
@@ -92,7 +92,7 @@ class App {
 
     this.channelList = new ChannelList(
       this.views.channels,
-      (idx, catchup) => this.playChannel(idx, catchup),
+      (idx, catchup, scope) => this.playChannel(idx, catchup, scope),
       () => this.player.syncCurrentIndex(),
       () => {
         const sources = this.epgSources();
@@ -121,7 +121,7 @@ class App {
     });
     this.epgGrid = new EpgGrid(
       this.views.epg,
-      (idx, catchup) => this.playChannel(idx, catchup),
+      (idx, catchup, scope) => this.playChannel(idx, catchup, scope),
       () => this.tabBar.focus(),
       () => this.openReminderManager('epg'),
     );
@@ -146,7 +146,7 @@ class App {
     this.sidebar = new Sidebar(
       this.views.player,
       () => this.player.getCurrentIndex(),
-      (idx, catchup) => this.playChannel(idx, catchup),
+      (idx, catchup, scope) => this.playChannel(idx, catchup, scope),
       () => this.player.getCurrentCatchupStart(),
     );
     this.menu = new PlayerMenu(
@@ -891,9 +891,9 @@ class App {
     }
   }
 
-  private playChannel(index: number, catchup?: CatchupInfo): void {
+  private playChannel(index: number, catchup?: CatchupInfo, scope: ChannelScope | null = null): void {
     this.showView('player');
-    this.player.play(index, catchup);
+    this.player.play(index, catchup, scope);
   }
 
   private bindReminderLifecycle(): void {

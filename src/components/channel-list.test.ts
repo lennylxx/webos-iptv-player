@@ -509,7 +509,7 @@ describe('ChannelList interaction', () => {
   it('selecting a focused channel plays it', () => {
     hover(channelItems()[1]);
     list.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(1);
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
   });
 
   it('reports virtual moves so Up does not hand focus to the tab bar', () => {
@@ -518,7 +518,7 @@ describe('ChannelList interaction', () => {
       .toBe('1');
     expect(list.handleAction('up')).toBe(true);
     list.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
   });
 
   it('selecting a recent live row starts live playback', () => {
@@ -533,7 +533,7 @@ describe('ChannelList interaction', () => {
     list.handleAction('select');
     hover(channelItems()[0]);
     list.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(1);
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:recently-watched', playlist: undefined });
   });
 
   it('places recent live health before the Live badge', () => {
@@ -589,7 +589,7 @@ describe('ChannelList interaction', () => {
     hover(channelItems()[0]);
     list.handleAction('select');
     await Promise.resolve();
-    expect(onSelect).toHaveBeenCalledWith(0, info);
+    expect(onSelect).toHaveBeenCalledWith(0, info, { group: 'builtin:recently-watched', playlist: undefined });
   });
 
   it('removes an unavailable recent Catch-up row and shows a toast', async () => {
@@ -626,7 +626,7 @@ describe('ChannelList interaction', () => {
     document.elementFromPoint = () => target;
     container.dispatchEvent(new MouseEvent('click', { clientX: 100, clientY: 50, bubbles: true }));
     document.elementFromPoint = orig;
-    expect(onSelect).toHaveBeenCalledWith(1);
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
   });
 
   it('switches group on a pointer click over a group item', () => {
@@ -663,7 +663,7 @@ describe('ChannelList interaction', () => {
 
   it('a number action plays that channel (1-based)', () => {
     list.handleAction('number', { number: 2 });
-    expect(onSelect).toHaveBeenCalledWith(1);
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
   });
 
   it('a number action focuses and marks the channel it tuned', () => {
@@ -679,7 +679,7 @@ describe('ChannelList interaction', () => {
 
     list.handleAction('number', { number: 1 }); // Alpha, outside the Sports group
 
-    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
     expect(channelItems()).toHaveLength(3);
     expect(channelItems()[0].classList.contains('focused')).toBe(true);
     expect(channelItems()[0].classList.contains('playing')).toBe(true);

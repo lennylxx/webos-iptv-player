@@ -310,7 +310,7 @@ describe('EpgGrid mouse interaction', () => {
 
   it('clicking the already-selected focused channel plays it', () => {
     clickData('data-channel-idx', 0); // focusCol is 'channels' and idx already selected
-    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
   });
 
   it('changing the day shows that day programs', () => {
@@ -352,7 +352,7 @@ describe('EpgGrid.handleAction', () => {
 
   it('select on the channels column plays the channel', () => {
     grid.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
   });
 
   it('right moves focus to the programs column', () => {
@@ -442,7 +442,7 @@ describe('EpgGrid playlist tabs', () => {
     grid.handleAction('down');
     grid.handleAction('down');
     grid.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(1);
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: 'p2' });
   });
 
   it('supports remote navigation and activation of source tabs', () => {
@@ -592,7 +592,7 @@ describe('EpgGrid group and channel filters', () => {
 
     expect(document.activeElement).not.toBe(input);
     grid.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(1);
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
   });
 
   it('deactivates an open filter before leaving the EPG view', () => {

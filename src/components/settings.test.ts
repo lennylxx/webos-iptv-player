@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { TzMode } from '../types';
+import type { ChannelCycleMode, TzMode } from '../types';
 import type { XtreamAccountInfo } from '../services/xtream-client';
 
 const {
@@ -30,6 +30,7 @@ const {
     overlayStyle: 'dark' as string,
     textSize: '100' as string,
     tzMode: 'device' as TzMode,
+    channelCycleMode: 'global' as ChannelCycleMode,
     showHidden: false,
     tzOffset: null as number | null,
     epgOffsets: {} as Record<string, number>,
@@ -68,6 +69,7 @@ const {
       getOverlayStyle: vi.fn(() => state.overlayStyle),
       getTextSize: vi.fn(() => state.textSize),
       getTzMode: vi.fn(() => state.tzMode),
+      getChannelCycleMode: vi.fn(() => state.channelCycleMode),
       getEpgTzOffset: vi.fn(() => state.tzOffset),
       getEpgOffsets: vi.fn(() => ({ ...state.epgOffsets })),
       getLocalePreference: vi.fn(() => state.locale),
@@ -85,6 +87,7 @@ const {
       setOverlayStyle: vi.fn((s: string) => { state.overlayStyle = s; }),
       setTextSize: vi.fn((s: string) => { state.textSize = s; }),
       setTzMode: vi.fn(),
+      setChannelCycleMode: vi.fn((m: ChannelCycleMode) => { state.channelCycleMode = m; }),
       setEpgOffsets: vi.fn((offsets: Record<string, number>) => {
         state.epgOffsets = { ...offsets };
       }),
@@ -1081,6 +1084,15 @@ describe('Settings.save', () => {
     expect(activeTz()).toBe('feed');
     click('#save-settings');
     expect(storageMock.setTzMode).toHaveBeenCalledWith('feed');
+  });
+
+  it('selecting Active persists the channel cycle mode, defaulting to Global', () => {
+    const activeMode = () => container.querySelector('#channel-cycle-mode .toggle-option.active')!.getAttribute('data-value');
+    expect(activeMode()).toBe('global'); // default — preserves pre-scoping behavior
+    click('#channel-cycle-mode [data-value="active"]');
+    expect(activeMode()).toBe('active');
+    click('#save-settings');
+    expect(storageMock.setChannelCycleMode).toHaveBeenCalledWith('active');
   });
 
   it('saves online subtitle credentials', () => {

@@ -244,6 +244,19 @@ export type ChannelGroupId = `builtin:${BuiltinChannelGroup}` | `source:${string
  *  stays its own group instead of merging into this bucket. */
 export const UNCATEGORIZED_GROUP = 'builtin:uncategorized';
 
+/** The view a channel was launched from — Live's sidebar, the EPG grid, or the
+ *  in-player sidebar all carry one of these alongside the channel index they
+ *  hand the player, so channel_up/channel_down can step within that same
+ *  view instead of the whole (unfiltered) channel list. */
+export interface ChannelScope {
+  group: ChannelGroupId;
+  playlist?: string;
+}
+
+/** Whether channel_up/channel_down cycles the entire channel list ('global',
+ *  the default) or stays within the launch scope above ('active'). */
+export type ChannelCycleMode = 'global' | 'active';
+
 export type NavDirection = 'up' | 'down' | 'left' | 'right';
 
 export type Action =

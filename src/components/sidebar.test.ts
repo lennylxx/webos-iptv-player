@@ -425,7 +425,7 @@ describe('Sidebar', () => {
     it('select fires onSelectChannel with the global index and hides', () => {
       sidebar.handleAction('down'); // 1 -> 2 (global 2)
       sidebar.handleAction('select');
-      expect(onSelect).toHaveBeenCalledWith(2);
+      expect(onSelect).toHaveBeenCalledWith(2, undefined, { group: 'builtin:all', playlist: undefined });
       expect(sidebar.visible).toBe(false);
     });
   });
@@ -689,7 +689,10 @@ describe('Sidebar', () => {
       expect(items().map(item => item.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
 
       items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(onSelect).toHaveBeenCalledWith(2);
+      expect(onSelect).toHaveBeenCalledWith(2, undefined, {
+        group: 'builtin:recently-watched',
+        playlist: undefined,
+      });
     });
 
     it('resumes a recent catch-up program', async () => {
@@ -727,7 +730,10 @@ describe('Sidebar', () => {
       items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await Promise.resolve();
 
-      expect(onSelect).toHaveBeenCalledWith(0, catchup);
+      expect(onSelect).toHaveBeenCalledWith(0, catchup, {
+        group: 'builtin:recently-watched',
+        playlist: undefined,
+      });
       expect(sidebar.visible).toBe(false);
     });
 
@@ -887,7 +893,7 @@ describe('Sidebar', () => {
 
     it('clicking a channel item selects it', () => {
       items()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(onSelect).toHaveBeenCalledWith(2);
+      expect(onSelect).toHaveBeenCalledWith(2, undefined, { group: 'builtin:all', playlist: undefined });
     });
 
     it('clicking a playlist tab filters the list and resets focus', () => {
@@ -997,7 +1003,7 @@ describe('Sidebar', () => {
       expect(items().length).toBeLessThan(40);
 
       sidebar.handleAction('select');
-      expect(onSelect).toHaveBeenCalledWith(30);
+      expect(onSelect).toHaveBeenCalledWith(30, undefined, { group: 'builtin:all', playlist: undefined });
     });
 
     it('updates the rendered window when the list scrolls', () => {
@@ -1098,7 +1104,7 @@ describe('Sidebar', () => {
       expect(items().map(i => i.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
       sidebar.handleAction('down');   // enter the list at the single result
       sidebar.handleAction('select'); // pick it
-      expect(onSelect).toHaveBeenCalledWith(2); // Charlie is global index 2, not filtered 0
+      expect(onSelect).toHaveBeenCalledWith(2, undefined, { group: 'builtin:all', playlist: undefined }); // Charlie is global index 2, not filtered 0
     });
   });
 });
