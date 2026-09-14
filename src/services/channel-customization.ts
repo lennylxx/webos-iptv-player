@@ -73,6 +73,19 @@ class ChannelCustomizationServiceImpl {
     return ids;
   }
 
+  /**
+   * The same, restricted to the given channel keys. Mappings stay sparse, so
+   * this still walks the overrides rather than the channel list.
+   */
+  epgChannelIdsFor(keys: ReadonlySet<string>): string[] {
+    const ids: string[] = [];
+    for (const key in this.record.overrides) {
+      const id = this.record.overrides[key].epgChannelId;
+      if (id && keys.has(key)) ids.push(id);
+    }
+    return ids;
+  }
+
   isHidden(key: string): boolean {
     return this.record.overrides[key]?.hidden === true;
   }

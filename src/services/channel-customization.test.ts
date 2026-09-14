@@ -124,6 +124,18 @@ describe('ChannelCustomizationService', () => {
     expect(ChannelCustomizationService.applyTo(fixture())[2].group).toBe('Sports');
   });
 
+  it('restricts mapped EPG ids to the given channel keys', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    ChannelCustomizationService.setEpgChannel(KEY_A, 'source::epg-a');
+    ChannelCustomizationService.setEpgChannel(KEY_B, 'source::epg-b');
+
+    expect(ChannelCustomizationService.epgChannelIdsFor(new Set([KEY_A])))
+      .toEqual(['source::epg-a']);
+    expect(ChannelCustomizationService.epgChannelIdsFor(new Set([KEY_A, KEY_B])).sort())
+      .toEqual(['source::epg-a', 'source::epg-b']);
+    expect(ChannelCustomizationService.epgChannelIdsFor(new Set())).toEqual([]);
+  });
+
   it('sets and clears a manual EPG channel mapping', () => {
     const info = vi.spyOn(console, 'log').mockImplementation(() => {});
     ChannelCustomizationService.setEpgChannel(KEY_A, 'source::epg-a');
