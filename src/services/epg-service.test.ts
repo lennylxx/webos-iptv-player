@@ -362,6 +362,36 @@ describe('EpgService multi-source matching', () => {
     expect(fetchMaybeGzipText).toHaveBeenCalledTimes(2);
   });
 
+  it('queues a guide refresh behind an in-flight load', async () => {
+    let resolveFetch: (value: string) => void = () => undefined;
+    vi.mocked(fetchMaybeGzipText).mockImplementationOnce(() =>
+      new Promise(resolve => { resolveFetch = resolve; }));
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Program'));
+    const alpha = channel({
+      id: 'a', name: 'Alpha', url: 'http://host/a', playlistIds: ['a'],
+    });
+
+    const loading = EpgService.load([source('http://a', ['a'])], [alpha]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMaybeGzipText).toHaveBeenCalledTimes(1);
+
+    // Opening the Guide mid-load calls refresh(), which would otherwise see
+    // no source state yet and start a second download and parse.
+    const refreshing = EpgService.refresh();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMaybeGzipText).toHaveBeenCalledTimes(1);
+
+    resolveFetch('xml');
+    await loading;
+    await refreshing;
+
+    // By the time it runs the source is loaded and fresh, so it refetches
+    // nothing rather than repeating the work queued ahead of it.
+    expect(fetchMaybeGzipText).toHaveBeenCalledTimes(1);
+  });
+
   it('lists searchable mapping candidates only from eligible feeds', async () => {
     parseXMLTVMock.mockImplementation((text) =>
       text === 'http://a'

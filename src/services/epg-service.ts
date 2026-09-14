@@ -64,7 +64,7 @@ class EpgServiceImpl {
   private playlistChannels: Channel[] | null = null;
   /** The per-source filter the last completed load was built from. */
   private appliedFilters = new Map<string, SourceFilter | null>();
-  private inFlightLoad: Promise<void> | null = null;
+  private pendingWork: Promise<void> | null = null;
   private revision = 0;
   private mappingRevisionValue = 0;
 
@@ -94,25 +94,35 @@ class EpgServiceImpl {
     this.appliedFilters.clear();
   }
 
-  async load(
+  load(
     sources: EpgSource[],
     channels?: Channel[],
     onDataPublished?: () => void,
   ): Promise<void> {
-    // One load at a time. A second concurrent XMLTV parse would hold a
-    // second full set of retained programmes, which is the allocation the
-    // retention ceiling exists to bound — so queue instead of overlapping.
-    const previous = this.inFlightLoad;
+    return this.enqueue(() => this.runLoad(sources, channels, onDataPublished));
+  }
+
+  /**
+   * One XMLTV parse at a time. Two concurrent parses hold two full sets of
+   * retained programmes, which is the allocation the retention ceiling exists
+   * to bound, and `refresh()` reaches the same parser as `load()` — so both
+   * queue here. Each body re-reads its own preconditions when it finally
+   * runs, so work the entry ahead of it already did is skipped, not repeated.
+   */
+  private enqueue(run: () => Promise<void>): Promise<void> {
+    const previous = this.pendingWork;
     const task = (async () => {
       if (previous) await previous.catch(() => undefined);
-      await this.runLoad(sources, channels, onDataPublished);
+      await run();
     })();
-    this.inFlightLoad = task;
-    try {
-      await task;
-    } finally {
-      if (this.inFlightLoad === task) this.inFlightLoad = null;
-    }
+    this.pendingWork = task;
+    return (async () => {
+      try {
+        await task;
+      } finally {
+        if (this.pendingWork === task) this.pendingWork = null;
+      }
+    })();
   }
 
   private async runLoad(
@@ -143,7 +153,11 @@ class EpgServiceImpl {
     this.publish(revision);
   }
 
-  async refresh(onDataPublished?: () => void): Promise<void> {
+  refresh(onDataPublished?: () => void): Promise<void> {
+    return this.enqueue(() => this.runRefresh(onDataPublished));
+  }
+
+  private async runRefresh(onDataPublished?: () => void): Promise<void> {
     const sourcesToRefresh = this.sources.filter((source) => {
       const state = this.states.get(source.url);
       return !state || state.needsRefresh
