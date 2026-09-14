@@ -17,6 +17,8 @@ export interface XMLTVParseOptions {
   channelNames?: ReadonlySet<string>;
   /** Retain lightweight channel metadata while still filtering programme arrays. */
   retainChannelCatalog?: boolean;
+  /** Stop retaining programmes past this many; unlimited when absent. */
+  maxProgrammes?: number;
 }
 
 export interface XMLTVParseStats {
@@ -29,6 +31,8 @@ export interface XMLTVParseStats {
   skippedDate: number;
   skippedRange: number;
   skippedFilter: number;
+  /** Dropped because `maxProgrammes` was already reached. */
+  droppedBudget: number;
   malformed: number;
 }
 
@@ -62,6 +66,7 @@ export class XMLTVStreamParser {
     skippedDate: 0,
     skippedRange: 0,
     skippedFilter: 0,
+    droppedBudget: 0,
     malformed: 0,
   };
 
@@ -78,6 +83,7 @@ export class XMLTVStreamParser {
   private readonly acceptedIds: Set<string> | null;
   private readonly minTime: number;
   private readonly maxTime: number;
+  private readonly maxProgrammes: number;
   private tzOffsetMinutes: number | null = null;
   private sourceName: string | undefined;
 
@@ -85,6 +91,7 @@ export class XMLTVStreamParser {
     const now = options.nowMs ?? Date.now();
     this.minTime = now - 7 * DAY_MS;
     this.maxTime = now + 7 * DAY_MS;
+    this.maxProgrammes = options.maxProgrammes ?? Number.POSITIVE_INFINITY;
     const { channelIds, channelNames } = options;
     const filtering = (channelIds?.size ?? 0) > 0 || (channelNames?.size ?? 0) > 0;
     this.acceptedIds = filtering ? new Set(channelIds ?? []) : null;
@@ -292,6 +299,13 @@ export class XMLTVStreamParser {
     if (this.tzOffsetMinutes === null && start.offsetMinutes !== null) {
       this.tzOffsetMinutes = start.offsetMinutes;
     }
+    // Checked before the body is sliced and read: past the ceiling the
+    // element costs nothing but a counter, so the channel catalog and the
+    // statistics still come out complete.
+    if (this.stats.programmesKept >= this.maxProgrammes) {
+      this.stats.droppedBudget++;
+      return;
+    }
 
     const body = this.buffer.slice(element.bodyStart, element.bodyEnd);
     const [title, description, category, icon] = copyStrings([
@@ -344,6 +358,14 @@ export class XMLTVStreamParser {
     }
     if (this.stats.skippedFilter) {
       log.info(`Skipped ${String(this.stats.skippedFilter)} elements outside the channel filter`);
+    }
+    if (this.stats.droppedBudget) {
+      log.warn(
+        'Retention ceiling reached; later programmes were dropped',
+        'event=epg.budget.exhausted',
+        `kept=${String(this.stats.programmesKept)}`,
+        `dropped=${String(this.stats.droppedBudget)}`,
+      );
     }
     if (this.stats.malformed) {
       log.warn(`Skipped ${String(this.stats.malformed)} malformed XMLTV elements`);

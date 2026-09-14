@@ -553,7 +553,9 @@ describe('EpgService channel pre-filter', () => {
     vi.mocked(parseXMLTVWithStats).mockClear();
     EpgService.reset();
     await EpgService.load([source('http://a', ['a'])]);
-    expect(vi.mocked(parseXMLTVWithStats).mock.calls[0][1]).toEqual({});
+    expect(vi.mocked(parseXMLTVWithStats).mock.calls[0][1]).toEqual({
+      maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES,
+    });
   });
 
   it('keeps an unmatched filter instead of retaining the entire feed', async () => {
@@ -572,6 +574,49 @@ describe('EpgService channel pre-filter', () => {
 
     expect(vi.mocked(parseXMLTVWithStats)).toHaveBeenCalledTimes(1);
     expect(setCachedEpg).not.toHaveBeenCalled();
+  });
+
+  it('does not cache a guide the retention ceiling truncated', async () => {
+    vi.mocked(parseXMLTVWithStats).mockReturnValueOnce({
+      data: parsed('a', 'Alpha', 'Program'),
+      stats: {
+        channelsKept: 1,
+        programmesSeen: 500,
+        programmesMatched: 500,
+        programmesKept: 1,
+        droppedBudget: 499,
+      },
+    } as never);
+
+    await EpgService.load([source('http://a', ['a'])], [
+      channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
+    ]);
+
+    // Cached under the full filter it would read as covered on the next
+    // boot, and the gap would never be retried.
+    expect(setCachedEpg).not.toHaveBeenCalled();
+    expect(EpgService.getNowPlaying(EpgService.findChannelId(
+      channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
+    )!)?.title).toBe('Program');
+  });
+
+  it('caches a guide that stayed under the retention ceiling', async () => {
+    vi.mocked(parseXMLTVWithStats).mockReturnValueOnce({
+      data: parsed('a', 'Alpha', 'Program'),
+      stats: {
+        channelsKept: 1,
+        programmesSeen: 1,
+        programmesMatched: 1,
+        programmesKept: 1,
+        droppedBudget: 0,
+      },
+    } as never);
+
+    await EpgService.load([source('http://a', ['a'])], [
+      channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
+    ]);
+
+    expect(setCachedEpg).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a valid filter when its programmes are outside the time window', async () => {

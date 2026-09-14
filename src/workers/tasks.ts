@@ -9,6 +9,7 @@ export interface XMLTVWorkerRequest {
     channelIds?: string[];
     channelNames?: string[];
     retainChannelCatalog?: boolean;
+    maxProgrammes?: number;
   };
 }
 

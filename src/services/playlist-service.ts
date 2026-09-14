@@ -473,6 +473,17 @@ class PlaylistServiceImpl {
     this.buildDerivedIndexes();
   }
 
+  /**
+   * The channels the EPG is fetched and retained for. Edit mode and the
+   * "show hidden" setting both widen `channels`, and a widened selection
+   * forces an EPG refetch — so the guide follows the visible selection alone
+   * and stays stable across those two toggles.
+   */
+  getEpgEligibleChannels(): Channel[] {
+    if (!this.includeHidden && !StorageService.getShowHiddenChannels()) return this.channels;
+    return ChannelCustomizationService.applyTo(this.allChannels, false);
+  }
+
   /** Edit mode reveals hidden channels so they can be un-hidden again. */
   setIncludeHidden(include: boolean): void {
     if (this.includeHidden === include) return;

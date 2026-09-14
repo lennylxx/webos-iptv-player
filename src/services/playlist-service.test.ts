@@ -1041,6 +1041,29 @@ describe('PlaylistService customization', () => {
     }
   });
 
+  it('keeps the EPG channel set stable while hidden channels are revealed', async () => {
+    useRecord(record({ overrides: { [KEY_B]: { hidden: true } } }));
+    await PlaylistService.refresh();
+    expect(PlaylistService.getEpgEligibleChannels().map(c => c.name)).toEqual(['Alpha']);
+
+    // A widened selection would force an EPG refetch, so neither toggle may
+    // widen it: both only reveal hidden channels for editing.
+    PlaylistService.setIncludeHidden(true);
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    expect(PlaylistService.getEpgEligibleChannels().map(c => c.name)).toEqual(['Alpha']);
+    PlaylistService.setIncludeHidden(false);
+
+    storageMock.getShowHiddenChannels.mockReturnValue(true);
+    try {
+      PlaylistService.applyCustomization();
+      expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+      expect(PlaylistService.getEpgEligibleChannels().map(c => c.name)).toEqual(['Alpha']);
+    } finally {
+      storageMock.getShowHiddenChannels.mockReturnValue(false);
+      PlaylistService.applyCustomization();
+    }
+  });
+
   it('applies renames and group assignments and orders the groups', async () => {
     useRecord(record({
       overrides: { [KEY_A]: { name: 'Alpha Two', group: 'Custom' } },

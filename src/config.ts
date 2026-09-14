@@ -57,6 +57,11 @@ export const CONFIG = {
     TIME_SLOT_MINUTES: 30,
     OFFSET_STEP_MINUTES: 15,
     OFFSET_MAX_MINUTES: 12 * 60,
+    // Retention ceiling for one XMLTV parse. A five-figure channel count
+    // otherwise retains hundreds of MB, which a 1 GB TV cannot survive.
+    MAX_RETAINED_PROGRAMMES: 120_000,
+    // Visibility and mapping edits arrive one per keypress; coalesce them.
+    CHANNEL_CHANGE_RELOAD_DELAY: 2000,
   },
 
   // Xtream Movies/Series catalog + resume tuning.

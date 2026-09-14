@@ -294,3 +294,42 @@ describe('parseXMLTV channel filter', () => {
     expect(Object.keys(result.programmes).sort()).toEqual(['c1', 'c2', 'c3']);
   });
 });
+
+
+describe('parseXMLTV retention ceiling', () => {
+  const now = Date.now();
+  const feed = (count: number): string => {
+    let xml = '<tv>';
+    for (let i = 0; i < count; i++) {
+      const start = new Date(now + i * 60_000);
+      const stop = new Date(now + (i + 1) * 60_000);
+      xml += `<channel id="c${String(i)}"><display-name>Ch ${String(i)}`
+        + '</display-name></channel>'
+        + `<programme channel="c${String(i)}" start="${xmltvDate(start)}"`
+        + ` stop="${xmltvDate(stop)}"><title>P${String(i)}</title></programme>`;
+    }
+    return xml + '</tv>';
+  };
+
+  it('stops retaining past the ceiling and counts what it dropped', () => {
+    const { data, stats } = parseXMLTVWithStats(feed(10), { maxProgrammes: 4 });
+
+    expect(stats.programmesKept).toBe(4);
+    expect(stats.droppedBudget).toBe(6);
+    expect(stats.programmesSeen).toBe(10);
+    expect(Object.keys(data.programmes).sort()).toEqual(['c0', 'c1', 'c2', 'c3']);
+  });
+
+  it('leaves the channel catalog complete past the ceiling', () => {
+    const { data } = parseXMLTVWithStats(feed(10), { maxProgrammes: 4 });
+
+    expect(Object.keys(data.channels)).toHaveLength(10);
+  });
+
+  it('retains everything when no ceiling is configured', () => {
+    const { stats } = parseXMLTVWithStats(feed(10));
+
+    expect(stats.programmesKept).toBe(10);
+    expect(stats.droppedBudget).toBe(0);
+  });
+});

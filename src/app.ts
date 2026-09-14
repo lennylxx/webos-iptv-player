@@ -68,6 +68,7 @@ class App {
   private serviceEventsSubscription: LunaRequestHandle | null = null;
   private deviceSetupSync = Promise.resolve();
   private epgRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private epgChannelReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   async init(): Promise<void> {
     const done = log.time('init');
@@ -93,20 +94,11 @@ class App {
     this.channelList = new ChannelList(
       this.views.channels,
       (idx, catchup, scope) => this.playChannel(idx, catchup, scope),
-      () => this.player.syncCurrentIndex(),
       () => {
-        const sources = this.epgSources();
-        if (!sources.length) return;
-        void EpgService.load(
-          sources,
-          PlaylistService.allChannels,
-          () => this.refreshEpgDependentViews(),
-        )
-          .then(() => {
-            this.refreshEpgDependentViews();
-          })
-          .catch(err => log.error('EPG mapping reload failed:', err));
+        this.player.syncCurrentIndex();
+        this.scheduleEpgReload();
       },
+      () => this.scheduleEpgReload(),
       () => {
         void this.search.refreshPrograms();
       },
@@ -575,7 +567,34 @@ class App {
     return sources.map(source => ({ ...source, offsetMinutes: offsets[source.url] ?? 0 }));
   }
 
+  /**
+   * The guide covers the eligible channels, so a visibility edit and a
+   * mapping edit both have to re-derive it. Narrowing the selection is served
+   * from the cache; only a selection that grew refetches.
+   */
+  private scheduleEpgReload(): void {
+    if (this.epgChannelReloadTimer !== null) clearTimeout(this.epgChannelReloadTimer);
+    this.epgChannelReloadTimer = setTimeout(() => {
+      this.epgChannelReloadTimer = null;
+      const sources = this.epgSources();
+      if (!sources.length) return;
+      void EpgService.load(
+        sources,
+        PlaylistService.getEpgEligibleChannels(),
+        () => this.refreshEpgDependentViews(),
+      )
+        .then(() => {
+          this.refreshEpgDependentViews();
+        })
+        .catch(err => log.error('EPG reload after a channel change failed:', err));
+    }, CONFIG.EPG.CHANNEL_CHANGE_RELOAD_DELAY);
+  }
+
   private stopEpgRefresh(): void {
+    if (this.epgChannelReloadTimer !== null) {
+      clearTimeout(this.epgChannelReloadTimer);
+      this.epgChannelReloadTimer = null;
+    }
     if (this.epgRefreshTimer === null) return;
     clearInterval(this.epgRefreshTimer);
     this.epgRefreshTimer = null;
@@ -653,7 +672,7 @@ class App {
       if (epgSources.length) {
         EpgService.load(
           epgSources,
-          PlaylistService.allChannels,
+          PlaylistService.getEpgEligibleChannels(),
           () => this.refreshEpgDependentViews(),
         )
           .then(() => {

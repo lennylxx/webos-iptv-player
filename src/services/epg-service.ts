@@ -434,8 +434,9 @@ class EpgServiceImpl {
             channelIds: filter.ids,
             channelNames: filter.names,
             retainChannelCatalog: true,
+            maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES,
           }
-        : {});
+        : { maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES });
       if (revision !== this.revision) {
         done();
         return;
@@ -448,15 +449,28 @@ class EpgServiceImpl {
         done();
         return;
       }
+      // A truncated parse is usable for this session, but it is not the
+      // guide the filter asked for — so it must not settle as the answer.
+      const truncated = stats.droppedBudget > 0;
       this.setState(source.url, {
         data: result,
         timestamp: Date.now(),
-        needsRefresh: false,
+        needsRefresh: truncated,
       });
       if (onDataPublished) this.publish(revision, onDataPublished);
       log.info('Loaded', source.url, '|', Object.keys(result.channels).length, 'channels,',
         programmeCount, 'programmes', filter ? `(of ${String(stats.programmesSeen)} seen)` : '');
-      if (programmeCount > 0) {
+      if (truncated) {
+        // Caching it under the full filter would make `covers()` report the
+        // gap as covered on the next boot, turning it permanent and silent.
+        log.warn(
+          'EPG hit its retention ceiling; partial guide, not cached',
+          'event=epg.budget.exhausted',
+          `kept=${String(programmeCount)}`,
+          `dropped=${String(stats.droppedBudget)}`,
+          'hint=hide the channels you do not watch',
+        );
+      } else if (programmeCount > 0) {
         await setCachedEpg(source.url, result, serializeFilter(filter));
       } else {
         log.warn('EPG has 0 programmes — not caching:', source.url);

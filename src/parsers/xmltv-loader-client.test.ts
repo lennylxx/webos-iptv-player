@@ -26,7 +26,7 @@ class FakeWorker {
         id,
         result: {
           data: { channels: {}, programmes: {}, tzOffsetMinutes: null },
-          stats: { programmesKept: 0 },
+          stats: { programmesKept: 0, droppedBudget: 0 },
           metrics: {
             transport: 'stream',
             encoding: 'gzip',
@@ -109,6 +109,7 @@ describe('fetchAndParseXMLTV worker client', () => {
       'bytes=10',
       'chunks=1',
       'programmes=0',
+      'dropped=0',
       'elapsed=2ms',
     );
   });

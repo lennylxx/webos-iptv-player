@@ -21,6 +21,7 @@ export async function fetchAndParseXMLTV(
         channelIds: options.channelIds ? Array.from(options.channelIds) : undefined,
         channelNames: options.channelNames ? Array.from(options.channelNames) : undefined,
         retainChannelCatalog: options.retainChannelCatalog,
+        maxProgrammes: options.maxProgrammes,
       },
     });
     if (result.metrics.attempts > 1) logRetry();
@@ -63,6 +64,7 @@ function logCompleted(result: XMLTVWorkerResponse): void {
     `bytes=${String(metrics.inputBytes)}`,
     `chunks=${String(metrics.chunks)}`,
     `programmes=${String(result.stats.programmesKept)}`,
+    `dropped=${String(result.stats.droppedBudget)}`,
     `elapsed=${String(metrics.elapsedMs)}ms`,
   );
 }
