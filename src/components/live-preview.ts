@@ -184,8 +184,16 @@ export class LivePreview {
         || !this.options.player.getLivePlaybackSnapshot()) return false;
     this.options.player.enterLivePreview();
     this.options.showChannels(restoreListFocus);
+    this.options.channelList.setPlaying(this.options.player.getCurrentIndex());
     this.options.channelList.render(false);
-    if (restoreListFocus) this.options.channelList.restoreFocus();
+    if (restoreListFocus) {
+      requestAnimationFrame(() => {
+        if (this.options.getCurrentView() === 'channels'
+            && this.options.player.isInLivePreview()) {
+          this.options.channelList.highlightEntryPoint();
+        }
+      });
+    }
     return true;
   }
 

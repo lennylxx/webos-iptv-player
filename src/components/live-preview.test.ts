@@ -53,6 +53,7 @@ describe('LivePreview', () => {
   let favorite: boolean;
   let playerPlay: ReturnType<typeof vi.fn>;
   let liveSnapshot: ReturnType<typeof vi.fn>;
+  let livePreviewMode: boolean;
   let actions: {
     isFavorite: ReturnType<typeof vi.fn>;
     onFavorite: ReturnType<typeof vi.fn>;
@@ -63,6 +64,8 @@ describe('LivePreview', () => {
     onFocus: ReturnType<typeof vi.fn>;
     onBlur: ReturnType<typeof vi.fn>;
     onReturn: ReturnType<typeof vi.fn>;
+    onHighlightEntryPoint: ReturnType<typeof vi.fn>;
+    onSetPlaying: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -83,15 +86,18 @@ describe('LivePreview', () => {
       onFavorite: vi.fn(() => { favorite = !favorite; }),
       onClose: vi.fn(), onMute: vi.fn(), onExpand: vi.fn(), onFocus: vi.fn(),
       onPlayFullscreen: vi.fn(), onBlur: vi.fn(), onReturn: vi.fn(),
+      onHighlightEntryPoint: vi.fn(), onSetPlaying: vi.fn(),
     };
     playerPlay = vi.fn();
     liveSnapshot = vi.fn(() => null);
+    livePreviewMode = false;
     const player = {
       getVideoElement: vi.fn(() => null),
       getLivePlaybackSnapshot: liveSnapshot,
-      isInLivePreview: vi.fn(() => false),
-      enterLivePreview: vi.fn(),
-      exitLivePreview: vi.fn(),
+      getCurrentIndex: vi.fn(() => 1),
+      isInLivePreview: vi.fn(() => livePreviewMode),
+      enterLivePreview: vi.fn(() => { livePreviewMode = true; }),
+      exitLivePreview: vi.fn(() => { livePreviewMode = false; }),
       play: playerPlay,
       stop: actions.onClose,
       showOSD: vi.fn(),
@@ -103,9 +109,10 @@ describe('LivePreview', () => {
         if (!focused) actions.onBlur();
       }),
       restoreFocus: actions.onReturn,
+      highlightEntryPoint: actions.onHighlightEntryPoint,
       render: vi.fn(),
       handleBack: vi.fn(() => false),
-      setPlaying: vi.fn(),
+      setPlaying: actions.onSetPlaying,
     } as unknown as ChannelList;
     preview = new LivePreview(root, {
       channelView: document.createElement('div'),
@@ -211,6 +218,23 @@ describe('LivePreview', () => {
     );
     expect(playerPlay).not.toHaveBeenCalled();
     expect(actions.onExpand).not.toHaveBeenCalled();
+  });
+
+  it('focuses the current playing channel when returning from full screen', () => {
+    StorageService.setLivePreview(true);
+    liveSnapshot.mockReturnValue(state());
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame')
+      .mockImplementation(callback => {
+        callback(0);
+        return 1;
+      });
+
+    expect(preview.returnFromFullscreen(true)).toBe(true);
+
+    expect(actions.onSetPlaying).toHaveBeenCalledWith(1);
+    expect(requestFrame).toHaveBeenCalledOnce();
+    expect(actions.onHighlightEntryPoint).toHaveBeenCalledOnce();
+    expect(actions.onReturn).not.toHaveBeenCalled();
   });
 
   it('keeps controls and slot during buffering and errors', () => {

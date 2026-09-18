@@ -243,6 +243,27 @@ test('selecting the current preview channel again opens full screen', async ({ p
   await expect(page.locator(PANEL)).toBeHidden();
 });
 
+test('Back from full screen focuses the channel changed in the player', async ({ page }) => {
+  await setup(page, { enabled: true });
+  await selectFirst(page);
+  await page.locator(ROW).first().click();
+  await expect(page.locator('#view-player')).toBeVisible();
+  await page.evaluate(() => document.documentElement.dispatchEvent(
+    new MouseEvent('mouseleave', { bubbles: true }),
+  ));
+
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('#video-player source')).toHaveAttribute(
+    'src',
+    'http://host/ch2.m3u8',
+  );
+  await page.keyboard.press('Escape');
+
+  await expect(page.locator(PANEL)).toBeVisible();
+  await expect(page.locator(`${PANEL} .live-preview-channel`)).toHaveText('ch2');
+  await expect(page.locator(`${ROW}.focused`)).toContainText('ch2');
+});
+
 test('a second remote OK on the previewed channel opens full screen', async ({ page }) => {
   await setup(page, { enabled: true });
 
