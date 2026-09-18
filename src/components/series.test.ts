@@ -181,6 +181,17 @@ describe('Series browse + grid', () => {
 });
 
 const SERIES_INFO = {
+  plot: 'Series plot.',
+  cast: 'Actor 1, Actor 2',
+  director: 'Director 1',
+  genre: 'Drama',
+  releaseDate: '2021-02-03',
+  episodeRunTimeMins: 45,
+  poster: 'http://host/series.jpg',
+  rating: '8.4',
+  imdbId: '1234567',
+  tmdbId: '7654',
+  year: 2021,
   seasons: [1, 2],
   episodesBySeason: {
     1: [{ id: 'e1', title: 'Episode One', season: 1, episode: 1, containerExtension: 'mp4', durationSecs: 1500, plot: 'Ep plot.', poster: '' }],
@@ -258,6 +269,15 @@ describe('Series detail', () => {
     const { view, handlers } = await openWith();
     await openDetail(view);
 
+    expect(container.querySelector('.detail-meta')?.textContent)
+      .toContain('2021  ·  45 min  ·  Drama  ·  8.4');
+    expect(container.querySelector('.detail-plot')?.textContent).toBe('Series plot.');
+    expect(container.querySelectorAll('.detail-cast')[0]?.textContent)
+      .toContain('Cast Actor 1, Actor 2');
+    expect(container.querySelectorAll('.detail-cast')[1]?.textContent)
+      .toContain('Director Director 1');
+    expect(container.querySelector<HTMLImageElement>('.series-detail-poster img')?.src)
+      .toBe('http://host/series.jpg');
     expect(container.querySelector('.series-season-btn[data-season="1"]')?.textContent).toContain('Season 1');
     expect(container.querySelector('.series-season-btn[data-season="2"]')).not.toBeNull();
     expect(container.querySelector('.episode-row[data-episode-id="e1"]')?.textContent).toContain('Episode One');
@@ -280,6 +300,19 @@ describe('Series detail', () => {
         }),
       ],
     }));
+  });
+
+  it('renders the normalized year when no release date is available', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue({
+      ...SERIES_INFO,
+      releaseDate: '',
+      year: 2022,
+    });
+    const { view } = await openWith();
+    await openDetail(view);
+
+    expect(container.querySelector('.detail-meta')?.textContent)
+      .toContain('2022  ·  45 min  ·  Drama  ·  8.4');
   });
 
   it('switches season and plays that season\'s episode with its own container extension', async () => {

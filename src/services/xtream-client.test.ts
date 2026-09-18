@@ -405,11 +405,21 @@ describe('XtreamClient VOD', () => {
 
   it('parses tmdb/imdb/year from get_vod_info', async () => {
     fetchTextMock.mockResolvedValue(JSON.stringify({
-      info: { tmdb_id: '27205', imdb_id: 'tt1375666', releasedate: '2010-07-16', plot: 'p', subtitles: [] },
+      info: {
+        tmdb_id: '27205',
+        imdb_id: 'tt1375666',
+        releasedate: '2010-07-16',
+        plot: 'p',
+        subtitles: [],
+      },
       movie_data: {},
     }));
     const info = await createXtreamClient(creds).getVodInfo('10');
-    expect(info).toMatchObject({ tmdbId: '27205', imdbId: '1375666', year: 2010 });
+    expect(info).toMatchObject({
+      tmdbId: '27205',
+      imdbId: '1375666',
+      year: 2010,
+    });
   });
 });
 
@@ -448,6 +458,18 @@ describe('XtreamClient Series', () => {
 
   it('parses series info into sorted seasons + episodesBySeason', async () => {
     fetchTextMock.mockResolvedValue(JSON.stringify({
+      info: {
+        plot: 'Series plot',
+        cast: 'Actor 1',
+        director: 'Director 1',
+        genre: 'Drama',
+        releaseDate: '2021-02-03',
+        episode_run_time: [45],
+        cover: 'http://host/series.png',
+        rating: '8.4',
+        imdb_id: 'tt1234567',
+        tmdb_id: '7654',
+      },
       seasons: [],
       episodes: {
         '2': [{ id: '201', title: 'S2E1', episode_num: 1, container_extension: 'mkv',
@@ -463,12 +485,53 @@ describe('XtreamClient Series', () => {
       expect.any(Number),
       undefined,
     );
+    expect(info).toMatchObject({
+      plot: 'Series plot',
+      cast: 'Actor 1',
+      director: 'Director 1',
+      genre: 'Drama',
+      releaseDate: '2021-02-03',
+      episodeRunTimeMins: 45,
+      poster: 'http://host/series.png',
+      rating: '8.4',
+      imdbId: '1234567',
+      tmdbId: '7654',
+      year: 2021,
+    });
     expect(info!.seasons).toEqual([1, 2]);
     expect(info!.episodesBySeason[1]).toEqual([{
       id: '101', title: 'S1E1', season: 1, episode: 1, containerExtension: 'mp4',
       durationSecs: 1000, plot: 'p1', poster: 'http://host/1.png', subtitles: [],
     }]);
     expect(info!.episodesBySeason[2][0].id).toBe('201');
+  });
+
+  it('uses non-empty series metadata aliases and a direct year', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify({
+      info: {
+        releaseDate: '',
+        release_date: '',
+        cover: '',
+        movie_image: '',
+        cover_big: 'http://host/series-big.png',
+        rating: '',
+        rating_5based: '4.2',
+        imdb_id: '',
+        imdb: 'tt1234567',
+        tmdb_id: '',
+        tmdb: '7654',
+        year: '2022',
+      },
+    }));
+    const info = await createXtreamClient(creds).getSeriesInfo('7');
+    expect(info).toMatchObject({
+      releaseDate: '',
+      poster: 'http://host/series-big.png',
+      rating: '4.2',
+      imdbId: '1234567',
+      tmdbId: '7654',
+      year: 2022,
+    });
   });
 
   it('classifies malformed series JSON instead of returning an empty catalog', async () => {
@@ -484,7 +547,21 @@ describe('XtreamClient Series', () => {
   it('getSeriesInfo returns empty seasons when episodes is absent', async () => {
     fetchTextMock.mockResolvedValue(JSON.stringify({ info: { name: 'x' } }));
     const info = await createXtreamClient(creds).getSeriesInfo('7');
-    expect(info).toEqual({ seasons: [], episodesBySeason: {} });
+    expect(info).toEqual({
+      plot: '',
+      cast: '',
+      director: '',
+      genre: '',
+      releaseDate: '',
+      episodeRunTimeMins: 0,
+      poster: '',
+      rating: '',
+      imdbId: '',
+      tmdbId: '',
+      year: 0,
+      seasons: [],
+      episodesBySeason: {},
+    });
   });
 
   it('parses per-episode sidecar subtitles from the episode info block', async () => {

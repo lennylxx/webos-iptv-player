@@ -86,6 +86,14 @@ function toStr(v: unknown): string {
   return v === null || v === undefined ? '' : String(v);
 }
 
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = toStr(value);
+    if (text.trim()) return text;
+  }
+  return '';
+}
+
 function mapFetchError(err: unknown): XtreamRequestError {
   if (err instanceof XtreamRequestError) return err;
   if (err instanceof FetchTextError) {
@@ -444,7 +452,19 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         signal,
       );
       if (!data || typeof data !== 'object') return null;
-      const episodesRaw = (data as { episodes?: unknown }).episodes;
+      const response = data as { info?: unknown; episodes?: unknown };
+      const info = response.info && typeof response.info === 'object'
+        ? response.info as Record<string, unknown>
+        : {};
+      const releaseDate = firstNonEmptyString(
+        info.releaseDate,
+        info.release_date,
+        info.releasedate,
+      );
+      const yearValue = firstNonEmptyString(info.year, releaseDate);
+      const yearMatch = yearValue.match(/\d{4}/);
+      const runTime = info.episode_run_time;
+      const episodesRaw = response.episodes;
       const episodesBySeason: Record<number, Episode[]> = {};
       if (episodesRaw && typeof episodesRaw === 'object') {
         const byKey = episodesRaw as Record<string, unknown>;
@@ -469,7 +489,24 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         }
       }
       const seasons = Object.keys(episodesBySeason).map(Number).sort((a, b) => a - b);
-      return { seasons, episodesBySeason };
+      return {
+        plot: toStr(info.plot),
+        cast: toStr(info.cast),
+        director: toStr(info.director),
+        genre: toStr(info.genre),
+        releaseDate,
+        episodeRunTimeMins: Math.max(
+          0,
+          toNumber(Array.isArray(runTime) ? runTime[0] : runTime),
+        ),
+        poster: firstNonEmptyString(info.cover, info.movie_image, info.cover_big),
+        rating: firstNonEmptyString(info.rating, info.rating_5based),
+        imdbId: firstNonEmptyString(info.imdb_id, info.imdb).replace(/^tt/i, ''),
+        tmdbId: firstNonEmptyString(info.tmdb_id, info.tmdb),
+        year: yearMatch ? Number(yearMatch[0]) : 0,
+        seasons,
+        episodesBySeason,
+      };
     },
   };
 }

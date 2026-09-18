@@ -450,6 +450,17 @@ export interface Episode {
 }
 
 export interface SeriesInfo {
+  plot: string;
+  cast: string;
+  director: string;
+  genre: string;
+  releaseDate: string;
+  episodeRunTimeMins: number;
+  poster: string;
+  rating: string;
+  imdbId: string;
+  tmdbId: string;
+  year: number;
   seasons: number[];
   episodesBySeason: Record<number, Episode[]>;
 }

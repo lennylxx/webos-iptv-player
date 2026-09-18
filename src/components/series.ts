@@ -125,8 +125,8 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       kind: 'series',
       itemId: series.seriesId,
       name: series.name,
-      poster: series.poster,
-      rating: series.rating,
+      poster: this.currentInfo?.poster || series.poster,
+      rating: this.currentInfo?.rating || series.rating,
       categoryId: series.categoryId,
       addedAt: Date.now(),
     });
@@ -282,6 +282,13 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     if (!series || !a) return;
     const info = this.currentInfo;
     const episodes = info ? (info.episodesBySeason[this.selectedSeason] ?? []) : [];
+    const poster = info?.poster || series.poster;
+    const year = info?.year ? String(info.year) : '';
+    const mins = info && info.episodeRunTimeMins > 0
+      ? t('catalog.minutes', { count: info.episodeRunTimeMins })
+      : '';
+    const meta = [year, mins, info?.genre, info?.rating || series.rating]
+      .filter((value) => !!value);
     if (episodes !== this.episodeSource) {
       this.episodeSource = episodes;
       this.measuredEpisodes.clear();
@@ -314,10 +321,13 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     morph(this.container, html`
       <div class="catalog-view series-detail" data-nav-container>
         <div class="series-detail-head">
-          <div class="detail-poster-wrap series-detail-poster">${this.posterCell(series.name, series.poster)}</div>
+          <div class="detail-poster-wrap series-detail-poster">${this.posterCell(series.name, poster)}</div>
           <div class="detail-body">
             <h1 class="detail-title">${series.name}</h1>
-            ${series.rating ? html`<div class="detail-meta">${series.rating}</div>` : ''}
+            ${meta.length ? html`<div class="detail-meta">${meta.join('  ·  ')}</div>` : ''}
+            ${info?.plot ? html`<p class="detail-plot">${info.plot}</p>` : ''}
+            ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
+            ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
             <div class="detail-actions">
               <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
                 <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>

@@ -296,7 +296,8 @@ describe('Movies detail', () => {
   it('renders plot/meta and a Play button, and plays from the start', async () => {
     catalogMock.loadVodInfo.mockResolvedValue({
       plot: 'A plot.', cast: 'Actor A', director: 'Dir A', genre: 'Drama',
-      releaseDate: '2020-05-01', durationSecs: 3600, poster: 'http://host:8080/p.jpg', imdbId: '', tmdbId: '', year: 0,
+      releaseDate: '2020-05-01', durationSecs: 3600, poster: 'http://host:8080/p.jpg',
+      imdbId: '', tmdbId: '', year: 0,
     });
     const { view, handlers } = await openWith([{ id: '1', name: 'Cat A' }], [vod('10', 'Movie One')]);
     const tile = container.querySelector('.catalog-tile[data-item-id="10"]') as HTMLElement;
