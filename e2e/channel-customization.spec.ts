@@ -133,7 +133,7 @@ test('green hides a channel in edit mode and toggles a favorite outside it', asy
   // Outside edit mode green is still the favorite toggle.
   await focusChannel(page, 0);
   await key(page, GREEN);
-  await expect(page.locator('.channel-main .channel-name').first()).toContainText('★');
+  await expect(page.locator('.channel-main .channel-name .favorite-glyph').first()).toBeVisible();
 
   await key(page, YELLOW);
   await focusChannel(page, 1);

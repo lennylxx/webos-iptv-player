@@ -27,6 +27,7 @@ import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { WorkerListSearch } from '../workers/list-search-client';
 import { createLogger } from '../utils/logger';
+import { liveBadge } from './live-badge';
 
 const log = createLogger('EpgGrid');
 
@@ -634,7 +635,7 @@ export class EpgGrid {
                         </div>
                         <div class="epg-prog-body">
                           <div class="epg-prog-title">
-                            ${current ? html`<span class="epg-now-badge"><span class="epg-now-dot"></span><span>${t('common.live')}</span></span>` : ''}
+                            ${current ? liveBadge() : ''}
                             <span>${p.title}</span>
                             ${state === 'future' && channel ? raw(bellIcon(ReminderService.has(channelKey(channel), startMs))) : ''}
                             ${progress ? html`<span class="epg-catchup-badge ${progress.completed ? 'watched' : 'resume'}">${t(progress.completed ? 'epg.watched' : 'common.resume')}</span>` : ''}

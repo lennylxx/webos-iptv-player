@@ -336,6 +336,35 @@
   --border: #3e4451;
 }
 
+/* Scrollbars follow muted text on dark themes. Light themes use a softer
+   midpoint so a persistent native scrollbar does not become a dark divider. */
+[data-theme="midnight"],
+[data-theme="ember"],
+[data-theme="emerald"],
+[data-theme="amethyst"],
+[data-theme="plum-night"],
+[data-theme="arctic"],
+[data-theme="ocean-dark"],
+[data-theme="vintage-amber"],
+[data-theme="pastel-mocha"],
+[data-theme="neon-night"],
+[data-theme="burgundy"],
+[data-theme="cobalt-slate"] {
+  --scrollbar-thumb: var(--text-muted);
+}
+
+[data-theme="daylight"] {
+  --scrollbar-thumb: #afb5c0;
+}
+
+[data-theme="pastel-latte"] {
+  --scrollbar-thumb: #a9adba;
+}
+
+[data-theme="paper-light"] {
+  --scrollbar-thumb: #b0b3a9;
+}
+
 /* Non-default themes map catalog chrome onto their own palette. Midnight keeps
    the original catalog colors declared in main.css. */
 [data-theme="ember"],

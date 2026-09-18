@@ -126,14 +126,14 @@ test.describe('EPG live badge', () => {
     await expect(live).toHaveCount(1);
     await expect(live).toContainText('Live Show');
 
-    const badge = live.locator('.epg-now-badge');
+    const badge = live.locator('.live-badge');
     await expect(badge).toHaveCount(1);
     await expect(badge).toHaveText(/LIVE/);
 
     // The dot doesn't just exist — it carries the looping pulse animation...
-    const dot = badge.locator('.epg-now-dot');
+    const dot = badge.locator('.live-badge-dot');
     await expect(dot).toHaveCount(1);
-    await expect(dot).toHaveCSS('animation-name', 'epgDotPulse');
+    await expect(dot).toHaveCSS('animation-name', 'liveBadgeDotPulse');
     await expect(dot).toHaveCSS('animation-iteration-count', 'infinite');
 
     // ...and it's a real animation, not a no-op: a computed style (or empty/paused
@@ -153,10 +153,10 @@ test.describe('EPG live badge', () => {
     }
 
     // Only the airing row gets a badge; the ended row is "past" and unbadged.
-    await expect(page.locator('#epg-programmes .epg-now-badge')).toHaveCount(1);
+    await expect(page.locator('#epg-programmes .live-badge')).toHaveCount(1);
     const earlier = page.locator('#epg-programmes .epg-programme-item', { hasText: 'Earlier Show' });
     await expect(earlier).toHaveClass(/state-past/);
-    await expect(earlier.locator('.epg-now-badge')).toHaveCount(0);
+    await expect(earlier.locator('.live-badge')).toHaveCount(0);
   });
 
   // The search box's focus styling is reached two ways: a `.focused` class the
@@ -189,7 +189,7 @@ test.describe('EPG live badge', () => {
   });
 
   test('with reduced motion the LIVE badge still shows, but the pulse is disabled', async ({ page }) => {
-    // epg.css has `@media (prefers-reduced-motion: reduce) { .epg-now-dot { animation: none } }`.
+    // The shared badge styles disable the dot animation under reduced motion.
     // Modern engines honor it (legacy webOS ignores it and keeps pulsing —
     // both acceptable). Verify the off-switch on an engine that honors it.
     test.skip(isChromium53(), 'legacy webOS ignores reduced motion and lacks getAnimations');
@@ -203,7 +203,7 @@ test.describe('EPG live badge', () => {
     await page.locator('#epg-programmes .epg-programme-item.state-live').first().waitFor();
 
     // Accessibility: the badge/dot still render (the LIVE indicator stays)...
-    const dot = page.locator('#epg-programmes .epg-programme-item.state-live .epg-now-dot');
+    const dot = page.locator('#epg-programmes .epg-programme-item.state-live .live-badge-dot');
     await expect(dot).toHaveCount(1);
     // ...but the pulse is turned off entirely — no animation name, no running animation.
     await expect(dot).toHaveCSS('animation-name', 'none');

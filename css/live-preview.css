@@ -1,0 +1,314 @@
+#view-channels {
+  display: flex;
+}
+
+#channel-browser {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  z-index: 2;
+}
+
+.has-live-preview .sidebar {
+  flex-shrink: 0;
+}
+
+.has-live-preview .channel-main {
+  min-width: 0;
+}
+
+#live-preview {
+  position: relative;
+  z-index: 3;
+  flex: 0 0 760px;
+  width: 760px;
+  padding: 0 36px 0 28px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -18px 0 32px rgba(0, 0, 0, .14);
+}
+
+.live-preview-heading {
+  flex-shrink: 0;
+  height: 82px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: var(--bg-primary);
+}
+
+.live-preview-channel {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: calc(24px * var(--font-scale));
+  font-weight: 600;
+}
+
+.live-preview-favorite {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  padding: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  transform: none;
+}
+
+.live-preview-favorite svg.unset {
+  opacity: .78;
+}
+
+.live-preview-favorite[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.live-preview-favorite.focused,
+.live-preview-favorite:hover {
+  border-color: var(--focus-ring) !important;
+  background: rgba(255, 255, 255, .16);
+  box-shadow: 0 0 12px var(--accent-glow);
+  transform: none;
+}
+
+.live-preview-favorite svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+}
+
+.live-preview-favorite svg.set {
+  fill: currentColor;
+}
+
+.live-preview-slot {
+  position: relative;
+  flex-shrink: 0;
+  height: 391px;
+  overflow: hidden;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.live-preview-badge {
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  pointer-events: none;
+}
+
+.live-preview-message {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 72px;
+  text-align: center;
+  font-size: calc(24px * var(--font-scale));
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  pointer-events: none;
+}
+
+.live-preview-controls {
+  position: absolute;
+  bottom: 18px;
+  right: 20px;
+  display: flex;
+  gap: 8px;
+  color: #fff;
+}
+
+.live-preview-controls .live-preview-button {
+  width: 52px;
+  height: 52px;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: #fff;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  transform: none;
+}
+
+.live-preview-controls .live-preview-button.focused {
+  border-color: var(--focus-ring) !important;
+  background: rgba(255, 255, 255, .16);
+  box-shadow: 0 0 12px var(--accent-glow);
+  transform: none;
+}
+
+.live-preview-button svg,
+.live-preview-hint svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.live-preview-button svg {
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .9));
+}
+
+.live-preview-details {
+  padding-top: 28px;
+  min-height: 0;
+  flex: 1;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.live-preview-title {
+  font-size: calc(32px * var(--font-scale));
+  line-height: 1.2;
+  max-height: 2.4em;
+  overflow: hidden;
+  overflow-wrap: break-word;
+}
+
+.live-preview-schedule {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: calc(20px * var(--font-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.live-preview-time-range,
+.live-preview-remaining {
+  white-space: nowrap;
+}
+
+.live-preview-progress {
+  height: 3px;
+  margin-top: 12px;
+  background: var(--border);
+}
+
+.live-preview-progress > div {
+  height: 100%;
+  background: var(--accent);
+}
+
+.live-preview-upcoming {
+  margin-top: 30px;
+}
+
+.live-preview-upcoming h3 {
+  margin-bottom: 6px;
+  font-size: calc(22px * var(--font-scale));
+}
+
+.live-preview-day-separator {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: calc(16px * var(--font-scale));
+  font-weight: 600;
+}
+
+.live-preview-program {
+  height: calc(52px + 16px * var(--font-scale));
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.live-preview-program:last-child,
+.live-preview-program.last-visible {
+  border-bottom: none;
+}
+
+.live-preview-program time {
+  flex-shrink: 0;
+  width: calc(140px * var(--font-scale));
+  font-size: calc(20px * var(--font-scale));
+  line-height: 1.1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.live-preview-program > span {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: calc(23px * var(--font-scale));
+  line-height: 1.2;
+}
+
+.live-preview-empty {
+  margin-top: 30px;
+  font-size: calc(22px * var(--font-scale));
+  color: var(--text-secondary);
+}
+
+.live-preview-legend {
+  position: absolute;
+  right: 160px;
+  left: 20px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  height: 52px;
+  font-size: calc(19px * var(--font-scale));
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .95);
+  pointer-events: none;
+}
+
+.live-preview-hint {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-radius: var(--radius);
+  background: rgba(245, 247, 250, .82);
+  color: #171821;
+  text-shadow: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+}
+
+.live-preview-hint-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.live-preview-key {
+  padding: 0 6px;
+  border: 1px solid rgba(23, 24, 33, .55);
+  border-radius: var(--radius);
+  font-size: 16px;
+}

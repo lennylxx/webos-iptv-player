@@ -26,6 +26,43 @@ describe('StorageService', () => {
     expect(StorageService.getPlaylists()).toEqual([]);
   });
 
+  it('defaults live preview to off without writing a preference', () => {
+    expect(StorageService.getLivePreview()).toBe(false);
+    expect(localStorage.getItem('iptv_live_preview')).toBeNull();
+  });
+
+  it('persists live preview on and off independently from autoplay and sources', () => {
+    StorageService.setAutoPlay(true);
+    StorageService.setPlaylists([{ id: 'p1', name: 'P1', url: 'http://host/a' }]);
+    StorageService.setLivePreview(true);
+    expect(localStorage.getItem('iptv_live_preview')).toBe('true');
+    expect(StorageService.getLivePreview()).toBe(true);
+
+    StorageService.setPlaylists([{ id: 'p2', name: 'P2', url: 'http://host/b' }]);
+    StorageService.setAutoPlay(false);
+    expect(StorageService.getLivePreview()).toBe(true);
+
+    StorageService.setLivePreview(false);
+    expect(localStorage.getItem('iptv_live_preview')).toBe('false');
+    expect(StorageService.getLivePreview()).toBe(false);
+    expect(StorageService.getAutoPlay()).toBe(false);
+  });
+
+  it.each(['null', '"true"', '1', '{}', 'invalid'])(
+    'keeps live preview off for a malformed stored preference %s',
+    (value) => {
+      localStorage.setItem('iptv_live_preview', value);
+      expect(StorageService.getLivePreview()).toBe(false);
+    },
+  );
+
+  it('reads persisted live preview on upgrade and clears it on reset', () => {
+    localStorage.setItem('iptv_live_preview', 'true');
+    expect(StorageService.getLivePreview()).toBe(true);
+    StorageService.clearAll();
+    expect(StorageService.getLivePreview()).toBe(false);
+  });
+
   it('clears all local storage when resetting the app', () => {
     StorageService.set('theme', 'light');
     localStorage.setItem('unrelated', 'value');

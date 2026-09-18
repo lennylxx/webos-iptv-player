@@ -120,9 +120,9 @@ export class ReminderManager {
       if (group?.key !== key) {
         const formatted = formatDayLabel(start);
         const label = key === todayKey
-          ? t('reminderManager.today')
+          ? t('common.today')
           : key === tomorrowKey
-            ? t('reminderManager.tomorrow')
+            ? t('common.tomorrow')
             : formatted.weekday;
         group = {
           key,

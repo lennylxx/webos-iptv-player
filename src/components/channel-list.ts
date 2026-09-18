@@ -19,11 +19,13 @@ import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { ChannelHealthService } from '../services/channel-health';
 import { groupIcon } from './group-icon';
+import { BACK_ICON, NAV_HORIZONTAL_ICON, favoriteIcon } from './icons';
 import { showToast } from './toast';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { ChannelListEditor } from './channel-list-editor';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
+import { CONFIG } from '../config';
 
 // Row strides mirror the fixed row geometry in css/channel-list.css:
 // .channel-item is 88px, .group-item is 60px plus its 8px vertical margin.
@@ -32,15 +34,32 @@ const GROUP_ROW_STRIDE = 68;
 const CHANNEL_OVERSCAN = 12;
 const CHANNEL_VIEWPORT_FALLBACK = 900;
 
+type PreviewHintState = 'off' | 'ready' | 'active';
+
+export interface ChannelListOptions {
+  onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void;
+  onChannelsChanged?: () => void;
+  onEpgMappingChanged?: () => void;
+  onEpgOffsetChanged?: () => void;
+  onEnterPreview?: () => boolean;
+  onListFocus?: () => void;
+  getPreviewHintState?: () => PreviewHintState;
+  onEnterManagement?: () => void;
+}
+
 export class ChannelList {
   private container: HTMLElement;
   private onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void;
   private onChannelsChanged: () => void;
+  private onEnterPreview: () => boolean;
+  private onListFocus: () => void;
+  private getPreviewHintState: () => PreviewHintState;
   private nav: SpatialNav;
   private editor: ChannelListEditor;
   private currentGroup: ChannelGroupId = 'builtin:all';
   private currentPlaylist = '';  // '' = All playlists
   private playingIndex = -1;
+  private previewFocused = false;
   private playingCatchupStart: number | null = null;
   private recentItems: RecentlyWatchedItem[] = [];
   private failedLogos = new Set<string>();
@@ -56,6 +75,8 @@ export class ChannelList {
   });
   private scrollFrame: number | null = null;
   private groupScrollFrame: number | null = null;
+  private channelScrollbarVisible = false;
+  private channelScrollbarTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly scrollGuard = new VirtualScrollGuard();
   private groupEntries: { id: ChannelGroupId; label: string; builtin?: BuiltinChannelGroup }[] = [];
   private groupEntriesChannels: Channel[] | null = null;
@@ -65,20 +86,34 @@ export class ChannelList {
 
   constructor(
     container: HTMLElement,
-    onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void,
-    onChannelsChanged: () => void = () => {},
-    onEpgMappingChanged: () => void = () => {},
-    onEpgOffsetChanged: () => void = () => {},
+    options: ChannelListOptions,
   ) {
+    const {
+      onChannelSelect,
+      onChannelsChanged = () => {},
+      onEpgMappingChanged = () => {},
+      onEpgOffsetChanged = () => {},
+      onEnterPreview = () => false,
+      onListFocus = () => {},
+      getPreviewHintState = () => 'off',
+      onEnterManagement = () => {},
+    } = options;
     this.container = container;
     this.onChannelSelect = onChannelSelect;
     this.onChannelsChanged = onChannelsChanged;
+    this.onEnterPreview = onEnterPreview;
+    this.onListFocus = onListFocus;
+    this.getPreviewHintState = getPreviewHintState;
     this.nav = new SpatialNav(container, (el) => {
       this.editor?.trackFocus(el);
+      if (el) this.onListFocus();
     });
+    this.container.addEventListener('nav:hover', () => this.onListFocus());
+    this.container.addEventListener('click', () => this.onListFocus(), true);
     this.editor = new ChannelListEditor(container, this.nav, {
       render: () => this.render(),
       moveListFocus: (delta) => this.moveVirtualFocus(delta),
+      onEnterManagement,
       onChannelsChanged: () => this.onChannelsChanged(),
       onEpgMappingChanged,
       onEpgOffsetChanged,
@@ -131,6 +166,7 @@ export class ChannelList {
         return;
       }
       if (!target.classList.contains('channel-main')) return;
+      this.showChannelScrollbar(target);
       if (this.currentGroup === 'builtin:recently-watched') return;
       const offset = this.scrollGuard.readUserOffset(target, 'vertical');
       if (offset === null) return;
@@ -292,9 +328,14 @@ export class ChannelList {
                   }</div>`)}
           </div>
         </div>
+        <div class="channel-scroll-indicator ${
+          this.channelScrollbarVisible ? 'visible' : ''
+        }" data-key="channel-scroll-indicator" aria-hidden="true">
+          <div class="channel-scroll-thumb"></div>
+        </div>
         ${this.editor.renderFooter(
           this.currentGroup === 'builtin:favorites' && filteredChannels.length > 0,
-        )}
+        ) || this.renderPreviewHints()}
         ${this.editor.renderGroupPicker()}
       </div>
     `);
@@ -330,6 +371,7 @@ export class ChannelList {
     if (main && !showingRecent) {
       this.scrollGuard.syncOffset(main, 'vertical', this.channelVirtualizer.scrollOffset);
     }
+    if (main) this.updateChannelScrollbar(main);
     const groupList = this.container.querySelector<HTMLElement>('.group-list');
     if (groupList) {
       this.scrollGuard.syncOffset(groupList, 'vertical', this.groupVirtualizer.scrollOffset);
@@ -337,10 +379,80 @@ export class ChannelList {
 
     // An inline rename / new-group field owns the keyboard while it is open.
     this.editor.focusTextInput();
+    if (this.previewFocused) this.nav.clearHighlight();
+  }
+
+  private showChannelScrollbar(main: HTMLElement): void {
+    if (!this.container.closest('.has-live-preview')) return;
+    this.channelScrollbarVisible = true;
+    this.updateChannelScrollbar(main);
+    this.container.querySelector('.channel-scroll-indicator')?.classList.add('visible');
+    if (this.channelScrollbarTimer !== null) clearTimeout(this.channelScrollbarTimer);
+    this.channelScrollbarTimer = setTimeout(() => {
+      this.channelScrollbarTimer = null;
+      this.channelScrollbarVisible = false;
+      this.container.querySelector('.channel-scroll-indicator')?.classList.remove('visible');
+    }, CONFIG.CHANNEL_SCROLLBAR_HIDE_MS);
+  }
+
+  private updateChannelScrollbar(main: HTMLElement): void {
+    const indicator = this.container.querySelector<HTMLElement>('.channel-scroll-indicator');
+    const thumb = indicator?.querySelector<HTMLElement>('.channel-scroll-thumb');
+    if (!indicator || !thumb) return;
+    const viewport = main.clientHeight;
+    const content = main.scrollHeight;
+    const track = indicator.clientHeight;
+    if (viewport <= 0 || track <= 0 || content <= viewport) {
+      indicator.classList.remove('visible');
+      return;
+    }
+    const height = Math.max(48, Math.min(track, track * viewport / content));
+    const offset = (track - height) * main.scrollTop / (content - viewport);
+    thumb.style.height = `${height}px`;
+    thumb.style.transform = `translateY(${Math.max(0, Math.min(track - height, offset))}px)`;
+  }
+
+  setPreviewFocused(focused: boolean): void {
+    this.previewFocused = focused;
+    if (focused) this.nav.clearHighlight();
+  }
+
+  restoreFocus(): void {
+    this.previewFocused = false;
+    if (this.nav.focused && this.container.contains(this.nav.focused)) {
+      this.nav.focus(this.nav.focused);
+    } else {
+      this.highlightEntryPoint();
+    }
   }
 
   get isEditing(): boolean {
     return this.editor.isEditing;
+  }
+
+  private renderPreviewHints(): Safe | string {
+    const state = this.getPreviewHintState();
+    if (state === 'off') return '';
+    return html`
+      <div class="edit-hints preview-list-hints">
+        <div class="preview-list-context">
+          <span class="edit-hint" data-preview-list-open>
+            <span class="edit-key key-ok">OK</span><span>${
+            t('preview.open')
+          }</span></span>
+          ${state === 'active' ? html`
+            <span class="edit-hint" data-preview-list-controls>
+              ${raw(NAV_HORIZONTAL_ICON)}
+              <span>${t('preview.controls')}</span>
+            </span>` : ''}
+        </div>
+        ${state === 'active' ? html`
+          <span class="edit-hint preview-list-close" data-preview-list-close>
+            <span class="edit-key key-back">${raw(BACK_ICON)}</span>
+            <span>${t('common.close')}</span>
+          </span>` : ''}
+      </div>
+    `;
   }
 
   enterEditMode(group: ChannelGroupId = this.currentGroup): void {
@@ -365,7 +477,9 @@ export class ChannelList {
         if (this.moveVirtualFocus(action === 'up' ? -1 : 1)) return true;
         return this.nav.move(action);
       case 'left':
+        return this.nav.move(action);
       case 'right':
+        if (this.nav.focused?.closest('.channel-main') && this.onEnterPreview()) return true;
         return this.nav.move(action);
 
       case 'channel_up':
@@ -530,7 +644,7 @@ export class ChannelList {
           ${renaming
             ? html`<input class="edit-text-input" type="text" value="${ch.name}">`
             : html`<div class="channel-name">${
-                showFavoriteStar ? raw('&#9733; ') : ''
+                showFavoriteStar ? raw(favoriteIcon(true)) : ''
               }${ch.name}</div>`}
           ${this.editor.isChannelEditing && ch.sourceName
             ? html`<div class="channel-now channel-source-name">${ch.sourceName}</div>`
@@ -563,7 +677,9 @@ export class ChannelList {
           <div class="channel-number">${item.channelIndex + 1}</div>
           ${this.renderLogo(item.channel)}
           <div class="channel-info">
-            <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${item.channel.name}</div>
+            <div class="channel-name">${
+              isFav ? raw(favoriteIcon(true)) : ''
+            }${item.channel.name}</div>
             ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
           </div>
           ${this.renderHealth(item.channel)}
@@ -587,7 +703,9 @@ export class ChannelList {
         <div class="channel-number">${item.channelIndex + 1}</div>
         ${this.renderLogo(item.channel)}
         <div class="channel-info">
-          <div class="channel-name">${isFav ? raw('&#9733; ') : ''}${item.progress.title ?? ''}</div>
+          <div class="channel-name">${
+            isFav ? raw(favoriteIcon(true)) : ''
+          }${item.progress.title ?? ''}</div>
           <div class="channel-now">${t('channel.resumeAt', {
             channel: item.channel.name,
             position: formatPosition(item.progress.position),

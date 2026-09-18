@@ -460,6 +460,7 @@ export class Settings {
     this.epgOffsets = { ...this.storedEpgOffsets };
     const epgSources = this.epgSources(epgUrl, allPlaylists);
     const autoPlay = StorageService.getAutoPlay();
+    const livePreview = StorageService.getLivePreview();
     const channelCycleMode = StorageService.getChannelCycleMode();
     const showHidden = StorageService.getShowHiddenChannels();
     const feedTime = StorageService.getTzMode() === 'feed';
@@ -661,6 +662,11 @@ export class Settings {
                 <div class="settings-item">
                   <div class="settings-item-title">${t('settings.autoPlay')}</div>
                   ${toggleGroup('auto-play', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], autoPlay ? 'on' : 'off')}
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.livePreview')}</div>
+                  ${toggleGroup('live-preview-setting', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], livePreview ? 'on' : 'off')}
+                  <div class="settings-item-hint">${t('settings.livePreviewHint')}</div>
                 </div>
                 <div class="settings-item">
                   <div class="settings-item-title">${t('settings.channelCycleMode')}</div>
@@ -1755,6 +1761,9 @@ export class Settings {
 
     const autoPlayBtn = $('#auto-play .toggle-option.active', this.container);
     if (autoPlayBtn) StorageService.setAutoPlay(autoPlayBtn.dataset.value === 'on');
+
+    const livePreviewBtn = $('#live-preview-setting .toggle-option.active', this.container);
+    if (livePreviewBtn) StorageService.setLivePreview(livePreviewBtn.dataset.value === 'on');
 
     const channelCycleBtn = $('#channel-cycle-mode .toggle-option.active', this.container);
     if (channelCycleBtn?.dataset.value) {

@@ -873,7 +873,7 @@ try {
     await gotoChannels(page, base);
     await remote(page, KEY.RED); // open EPG
     await page.locator('#view-epg').waitFor({ state: 'visible' });
-    await page.locator('.epg-now-badge').first().waitFor({ state: 'visible', timeout: 10_000 });
+    await page.locator('.live-badge').first().waitFor({ state: 'visible', timeout: 10_000 });
     await page.locator('.epg-catchup-badge').first().waitFor({ state: 'visible', timeout: 10_000 });
     await remote(page, 39); // RIGHT → focus the programmes column (first row)
     for (let n = 0; n < 6; n++) await remote(page, 40); // DOWN → "The Evening Debate" (21:00, Resume)

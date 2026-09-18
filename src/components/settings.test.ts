@@ -26,6 +26,7 @@ const {
     }[],
     epg: '',
     autoPlay: false,
+    livePreview: false,
     theme: 'midnight' as string,
     overlayStyle: 'dark' as string,
     textSize: '100' as string,
@@ -65,6 +66,7 @@ const {
       getPlaylists: vi.fn(() => state.playlists),
       getEpgUrl: vi.fn(() => state.epg),
       getAutoPlay: vi.fn(() => state.autoPlay),
+      getLivePreview: vi.fn(() => state.livePreview),
       getTheme: vi.fn(() => state.theme),
       getOverlayStyle: vi.fn(() => state.overlayStyle),
       getTextSize: vi.fn(() => state.textSize),
@@ -83,6 +85,7 @@ const {
       setPlaylists: vi.fn(),
       setEpgUrl: vi.fn(),
       setAutoPlay: vi.fn(),
+      setLivePreview: vi.fn((value: boolean) => { state.livePreview = value; }),
       setTheme: vi.fn((id: string) => { state.theme = id; }),
       setOverlayStyle: vi.fn((s: string) => { state.overlayStyle = s; }),
       setTextSize: vi.fn((s: string) => { state.textSize = s; }),
@@ -173,6 +176,7 @@ beforeEach(() => {
   state.playlists = [];
   state.epg = '';
   state.autoPlay = false;
+  state.livePreview = false;
   state.theme = 'midnight';
   state.overlayStyle = 'dark';
   state.textSize = '100';
@@ -1011,6 +1015,52 @@ describe('Settings.save', () => {
   beforeEach(() => {
     state.playlists = [{ name: '', url: '' }, { name: '', url: '' }];
     settings.render();
+  });
+
+  it('defaults live preview to Off under Playback with its help text', () => {
+    const item = container.querySelector('#live-preview-setting')!.closest('.settings-item')!;
+    expect(item.closest('[data-settings-category]')?.getAttribute('data-settings-category'))
+      .toBe('playback');
+    expect(item.querySelector('.settings-item-title')?.textContent).toBe('Live preview');
+    expect(item.querySelector('.settings-item-hint')?.textContent)
+      .toBe('Watch live channels in a small window while you browse.');
+    expect(item.querySelector('.toggle-option.active')?.getAttribute('data-value')).toBe('off');
+    expect(storageMock.setLivePreview).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('saves live preview from %s without reloading sources', (enabled) => {
+    state.playlists = [];
+    state.livePreview = enabled;
+    settings.render();
+    const activeValue = () => container.querySelector('#live-preview-setting .toggle-option.active')
+      ?.getAttribute('data-value');
+    expect(activeValue()).toBe(enabled ? 'on' : 'off');
+
+    click(`#live-preview-setting [data-value="${enabled ? 'off' : 'on'}"]`);
+    expect(activeValue()).toBe(enabled ? 'off' : 'on');
+    expect(state.livePreview).toBe(enabled);
+    expect(storageMock.setLivePreview).not.toHaveBeenCalled();
+
+    click('#save-settings');
+    expect(storageMock.setLivePreview).toHaveBeenCalledExactlyOnceWith(!enabled);
+    expect(state.livePreview).toBe(!enabled);
+    expect(onSave).toHaveBeenCalledWith('apply');
+    expect(storageMock.setAutoPlay).toHaveBeenCalledWith(false);
+    settings.render();
+    expect(activeValue()).toBe(enabled ? 'off' : 'on');
+  });
+
+  it.each([false, true])('discards an unsaved live preview change from %s on Cancel', (enabled) => {
+    state.livePreview = enabled;
+    settings.render();
+    click(`#live-preview-setting [data-value="${enabled ? 'off' : 'on'}"]`);
+    click('#cancel-settings');
+    expect(onSave).toHaveBeenCalledWith('cancel');
+    expect(storageMock.setLivePreview).not.toHaveBeenCalled();
+    expect(state.livePreview).toBe(enabled);
+    settings.render();
+    expect(container.querySelector('#live-preview-setting .toggle-option.active')?.getAttribute('data-value'))
+      .toBe(enabled ? 'on' : 'off');
   });
 
   it('persists trimmed playlists, EPG and auto-play, then reloads', () => {

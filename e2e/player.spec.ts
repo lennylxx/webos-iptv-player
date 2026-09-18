@@ -231,7 +231,7 @@ test('dark player overlay keeps sidebar scrollbar dark on a light theme', async 
     thumb: getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor,
   }));
   expect(colors.track).toBe('rgb(18, 18, 26)');
-  expect(colors.thumb).toBe('rgb(42, 42, 62)');
+  expect(colors.thumb).toBe('rgb(102, 102, 128)');
 });
 
 test('player sidebar expands groups and retains a selected group after tuning', async ({ page }) => {

@@ -6,6 +6,7 @@
   --text-primary: #e8e8e8;
   --text-secondary: #a0a0b0;
   --text-muted: #666680;
+  --scrollbar-thumb: #666680;
   --accent: #00d4ff;
   --accent-dim: #0088aa;
   --accent-rgb: 0 212 255;
@@ -56,6 +57,37 @@
   flex-shrink: 0;
   background: currentColor;
   border-radius: 50%;
+}
+
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--danger);
+  box-shadow: 0 0 12px rgba(255, 71, 87, 0.55);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.live-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+  animation: liveBadgeDotPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes liveBadgeDotPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-badge-dot { animation: none; }
 }
 
 /* App-wide font size. The ids are percentages (see TEXT_SIZES in
@@ -315,7 +347,7 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 

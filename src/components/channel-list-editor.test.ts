@@ -204,13 +204,12 @@ beforeEach(() => {
   onSelect = vi.fn();
   onEpgMappingChanged = vi.fn();
   onEpgOffsetChanged = vi.fn();
-  list = new ChannelList(
-    container,
-    onSelect,
-    vi.fn(),
+  list = new ChannelList(container, {
+    onChannelSelect: onSelect,
+    onChannelsChanged: vi.fn(),
     onEpgMappingChanged,
     onEpgOffsetChanged,
-  );
+  });
 });
 
 function channelItems(): HTMLElement[] {
@@ -271,7 +270,7 @@ describe('ChannelList edit mode', () => {
       expect(container.querySelector('[data-favorite-manage]')).not.toBeNull();
       expect(container.querySelector('[data-favorite-manage] .key-ok')).toBeNull();
       expect(channelItems().every(item =>
-        !item.querySelector('.channel-name')?.textContent?.startsWith('★'))).toBe(true);
+        !item.querySelector('.channel-name .favorite-glyph'))).toBe(true);
       hover(channelItems()[0]);
       list.handleAction('select');
       expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:favorites', playlist: undefined });

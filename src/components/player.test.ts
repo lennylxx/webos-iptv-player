@@ -10,6 +10,7 @@ const { healthMock, playlistMock } = vi.hoisted(() => ({
     channels: [] as unknown[],
     getByIndex: vi.fn(),
     indexOf: vi.fn(),
+    resolveChannelKey: vi.fn(),
     getByGroup: vi.fn(),
   },
 }));
@@ -224,6 +225,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   playlistMock.getByIndex.mockReturnValue(CHANNEL);
   playlistMock.indexOf.mockReturnValue(0);
+  playlistMock.resolveChannelKey.mockReturnValue({ channel: CHANNEL, channelIndex: 0 });
   playlistMock.getByGroup.mockReturnValue([]);
   healthMock.recordPlaybackFailure.mockClear();
   healthMock.recordPlaybackSuccess.mockReset();
@@ -580,7 +582,7 @@ describe('Player live playback', () => {
     player = new Player(container, vi.fn(), onPlaybackChanged);
     player.init(video);
     player.play(0);
-    playlistMock.indexOf.mockReturnValue(-1);
+    playlistMock.resolveChannelKey.mockReturnValue(null);
 
     player.syncCurrentIndex();
 

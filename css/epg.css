@@ -635,28 +635,6 @@
   gap: 10px;
 }
 
-.epg-now-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #fff;
-  background: var(--danger);
-  padding: 3px 10px 3px 8px;
-  border-radius: 999px;
-  letter-spacing: 1px;
-  box-shadow: 0 0 12px rgba(255, 71, 87, 0.55);
-}
-
-.epg-now-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #fff;
-  animation: epgDotPulse 1.2s ease-in-out infinite;
-}
-
 .epg-prog-desc {
   font-size: 16px;
   color: var(--text-secondary);
@@ -679,14 +657,8 @@
   50% { opacity: 1; }
 }
 
-@keyframes epgDotPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.25; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .epg-programme-item.state-live::before,
-  .epg-now-dot { animation: none; }
+  .epg-programme-item.state-live::before { animation: none; }
 }
 
 /* Catch-up resume/watched badges and progress bar */

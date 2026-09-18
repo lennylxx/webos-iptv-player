@@ -156,4 +156,22 @@ describe('i18n', () => {
   it('has no empty translations or mismatched placeholders', () => {
     expect(validateTranslations()).toEqual([]);
   });
+
+  it('localizes live preview settings and remaining minutes in every locale', () => {
+    try {
+      for (const { value } of localeOptions()) {
+        setLocale(value);
+        expect(t('settings.livePreview').length).toBeGreaterThan(0);
+        expect(t('settings.livePreviewHint').length).toBeGreaterThan(0);
+        for (const minutes of [0, 1, 2, 25]) {
+          const remaining = t('preview.timeLeft', { minutes });
+          expect(remaining).toContain(String(minutes));
+          expect(remaining).not.toContain('{minutes}');
+        }
+      }
+    } finally {
+      setLocale(DEFAULT_LOCALE);
+    }
+    expect(t('preview.timeLeft', { minutes: 5 })).toBe('5 min left');
+  });
 });

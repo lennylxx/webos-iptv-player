@@ -729,6 +729,13 @@ export const StorageService = {
     set('auto_play', val);
   },
 
+  getLivePreview(): boolean {
+    return get<unknown>('live_preview', false) === true;
+  },
+  setLivePreview(val: boolean): void {
+    set('live_preview', val);
+  },
+
   // 'global' = channel_up/channel_down cycles the entire channel list
   // (default, matches pre-scoping behavior), 'active' = stays within the
   // group/playlist/Favorites a channel was tuned from.

@@ -63,10 +63,12 @@
 .player-menu,
 .subs-overlay,
 .subs-offset-card,
-.number-entry {
+.number-entry,
+.live-preview-message {
   --text-primary: #e8e8e8;
   --text-secondary: #a0a0b0;
   --text-muted: #666680;
+  --scrollbar-thumb: #666680;
   --bg-secondary: #12121a;
   --bg-tertiary: #1a1a2e;
   --border: #2a2a3e;
@@ -82,13 +84,15 @@
 [data-overlay="frosted"] .player-menu,
 [data-overlay="frosted"] .subs-overlay,
 [data-overlay="frosted"] .subs-offset-card,
-[data-overlay="frosted"] .number-entry {
+[data-overlay="frosted"] .number-entry,
+[data-overlay="frosted"] .live-preview-message {
   background: rgba(244, 246, 249, 0.85);
   border-color: rgba(0, 0, 0, 0.1);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
   --text-primary: #1f2430;
   --text-secondary: #4a5160;
   --text-muted: #79808f;
+  --scrollbar-thumb: #a8aeb8;
   --bg-secondary: #eceef2;
   --bg-tertiary: #dfe4ea;
   --border: #cfd5dd;

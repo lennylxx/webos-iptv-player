@@ -27,6 +27,7 @@ type DragCandidate = { target: EditTarget; x: number; y: number };
 interface ChannelListEditorOptions {
   render: () => void;
   moveListFocus: (delta: number) => boolean;
+  onEnterManagement: () => void;
   onChannelsChanged: () => void;
   onEpgMappingChanged: () => void;
   onEpgOffsetChanged: () => void;
@@ -232,6 +233,7 @@ export class ChannelListEditor {
 
   enterEditMode(group: ChannelGroupId): void {
     if (this.editing || group === 'builtin:recently-watched') return;
+    this.options.onEnterManagement();
     this.options.setLocation(group, this.options.getCurrentPlaylist());
     this.favoriteSelection = null;
     this.editActionTarget = this.nav.focused
@@ -337,6 +339,7 @@ export class ChannelListEditor {
 
   enterFavoriteManagement(): void {
     if (this.editing || this.favoriteSelection) return;
+    this.options.onEnterManagement();
     this.favoriteSelection = new Set();
     this.options.render();
   }

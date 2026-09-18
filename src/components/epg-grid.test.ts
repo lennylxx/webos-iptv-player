@@ -203,7 +203,7 @@ describe('EpgGrid.render', () => {
 
   it('flags the currently airing program with a NOW badge', () => {
     const now = container.querySelector('.epg-programme-item.current');
-    expect(now!.querySelector('.epg-now-badge')).not.toBeNull();
+    expect(now!.querySelector('.live-badge')).not.toBeNull();
     expect(now!.querySelector('.epg-prog-title')!.textContent).toContain('Noon Show');
   });
 

@@ -338,6 +338,19 @@ describe('PlaylistService.refresh', () => {
     const channels = await PlaylistService.refresh();
     expect(channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
     expect(cacheMock.scheduleCachedPlaylist).not.toHaveBeenCalled();
+    expect(PlaylistService.hasFailedSource(['a'])).toBe(true);
+    expect(PlaylistService.hasFailedSource(['b'])).toBe(false);
+    fetchTextMock.mockResolvedValue(P1);
+    await PlaylistService.refresh();
+    expect(PlaylistService.hasFailedSource(['a'])).toBe(false);
+  });
+
+  it('clears unresolved source state when the catalog is reset', async () => {
+    fetchTextMock.mockRejectedValue(new Error('offline'));
+    await PlaylistService.refresh();
+    expect(PlaylistService.hasFailedSource(['a'])).toBe(true);
+    PlaylistService.reset();
+    expect(PlaylistService.hasFailedSource(['a'])).toBe(false);
   });
 
   it('logs the loaded catalog size for a diagnostics report', async () => {

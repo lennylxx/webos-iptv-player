@@ -165,6 +165,44 @@
   padding: 8px 16px;
 }
 
+#view-channels.has-live-preview .channel-main::-webkit-scrollbar {
+  width: 0;
+}
+
+.channel-scroll-indicator {
+  position: absolute;
+  top: 12px;
+  right: 0;
+  bottom: 74px;
+  z-index: 9;
+  display: none;
+  width: 13px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+#view-channels.has-live-preview .channel-scroll-indicator {
+  display: block;
+}
+
+.channel-scroll-indicator.visible {
+  opacity: 1;
+}
+
+.channel-scroll-thumb {
+  width: 6px;
+  margin-left: 13px;
+  border-radius: 3px;
+  background: var(--scrollbar-thumb);
+  transition: margin-left 180ms ease;
+}
+
+.channel-scroll-indicator.visible .channel-scroll-thumb {
+  margin-left: 6px;
+}
+
 .has-channel-hints .channel-main {
   padding-bottom: 64px;
 }
@@ -266,6 +304,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.channel-name .favorite-glyph {
+  width: 18px;
+  height: 18px;
+  margin-right: 7px;
+  vertical-align: -2px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+  color: var(--accent);
 }
 
 .channel-now {
@@ -429,6 +479,27 @@
   font-weight: 600;
   color: var(--text-secondary);
   white-space: nowrap;
+}
+
+.preview-list-hints {
+  height: 62px;
+}
+
+.preview-list-context {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.preview-list-hints svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .edit-action {

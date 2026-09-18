@@ -85,6 +85,7 @@ vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 vi.mock('../services/channel-health', () => ({ ChannelHealthService: healthMock }));
 
 import { ChannelList } from './channel-list';
+import { CONFIG } from '../config';
 import { setLocale } from '../i18n';
 import { channelKey } from '../utils/channel';
 import { UNCATEGORIZED_GROUP } from '../types';
@@ -168,7 +169,7 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   onSelect = vi.fn();
-  list = new ChannelList(container, onSelect);
+  list = new ChannelList(container, { onChannelSelect: onSelect });
 });
 
 function channelItems(): HTMLElement[] {
@@ -180,6 +181,68 @@ function hover(el: HTMLElement): void {
 }
 
 describe('ChannelList.render', () => {
+  it('omits the live-preview toolbar when the setting is off', () => {
+    list = new ChannelList(container, {
+      onChannelSelect: onSelect,
+      getPreviewHintState: () => 'off',
+    });
+    list.render();
+    expect(container.querySelector('.preview-list-hints')).toBeNull();
+  });
+
+  it('keeps one stable live-preview hint set across list and control focus', () => {
+    list = new ChannelList(container, {
+      onChannelSelect: onSelect,
+      getPreviewHintState: () => 'active',
+    });
+    list.render();
+    expect(container.querySelector('.preview-list-hints')?.textContent).toContain('Open preview');
+    expect(container.querySelector('.preview-list-hints')?.textContent).toContain('Preview controls');
+    expect(container.querySelector('[data-preview-list-close] .key-back svg')).not.toBeNull();
+    expect(container.querySelector('[data-preview-list-close]')?.textContent).toContain('Close');
+    const hints = container.querySelector('.preview-list-hints')?.innerHTML;
+    list.setPreviewFocused(true);
+    expect(container.querySelector('.preview-list-hints')?.innerHTML).toBe(hints);
+    list.setPreviewFocused(false);
+    expect(container.querySelector('.preview-list-hints')?.innerHTML).toBe(hints);
+  });
+
+  it('shows the preview scrollbar while scrolling and hides it after a delay', () => {
+    vi.useFakeTimers();
+    document.body.classList.add('has-live-preview');
+    try {
+      list.render();
+      const main = container.querySelector<HTMLElement>('.channel-main')!;
+      const indicator = container.querySelector<HTMLElement>('.channel-scroll-indicator')!;
+      const thumb = indicator.querySelector<HTMLElement>('.channel-scroll-thumb')!;
+      Object.defineProperties(main, {
+        clientHeight: { configurable: true, value: 400 },
+        scrollHeight: { configurable: true, value: 1000 },
+        scrollTop: { configurable: true, value: 200, writable: true },
+      });
+      Object.defineProperty(indicator, 'clientHeight', { configurable: true, value: 300 });
+
+      main.dispatchEvent(new Event('scroll'));
+
+      expect(indicator.classList.contains('visible')).toBe(true);
+      expect(thumb.style.height).toBe('120px');
+      expect(thumb.style.transform).toBe('translateY(60px)');
+      vi.advanceTimersByTime(CONFIG.CHANNEL_SCROLLBAR_HIDE_MS);
+      expect(indicator.classList.contains('visible')).toBe(false);
+    } finally {
+      document.body.classList.remove('has-live-preview');
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not activate the custom scrollbar outside preview', () => {
+    list.render();
+    const main = container.querySelector<HTMLElement>('.channel-main')!;
+    main.dispatchEvent(new Event('scroll'));
+    expect(container.querySelector('.channel-scroll-indicator')?.classList.contains('visible'))
+      .toBe(false);
+  });
+
   // With no channels the entry point falls through to the first focusable,
   // taken in DOM order with no geometry to fall back on — so measurement is
   // the only thing keeping focus off an invisible control. Rects are stubbed
@@ -370,7 +433,7 @@ describe('ChannelList.render', () => {
     data.favorites = [channelKey(data.channels[0])];
     list.render();
     const alpha = channelItems()[0].querySelector('.channel-name')!;
-    expect(alpha.textContent).toContain('★');
+    expect(alpha.querySelector('.favorite-glyph.set')).not.toBeNull();
   });
 
   it('shows an empty state when a group has no channels', () => {
@@ -469,6 +532,34 @@ describe('ChannelList.render', () => {
     expect(container.querySelector('[data-group="builtin:all"]')?.classList.contains('active'))
       .toBe(true);
     expect(channelItems()).toHaveLength(3);
+  });
+
+  it('notifies the app before entering channel edit mode', () => {
+    const onEnterManagement = vi.fn();
+    list = new ChannelList(container, {
+      onChannelSelect: onSelect,
+      onEnterManagement,
+    });
+    list.render();
+    list.enterEditMode('builtin:all');
+    expect(onEnterManagement).toHaveBeenCalledOnce();
+    expect(list.isEditing).toBe(true);
+  });
+
+  it('notifies the app before entering favorite management', () => {
+    const onEnterManagement = vi.fn();
+    data.favorites = [channelKey(data.channels[0])];
+    list = new ChannelList(container, {
+      onChannelSelect: onSelect,
+      onEnterManagement,
+    });
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:favorites"]')!);
+    list.handleAction('select');
+    hover(container.querySelector<HTMLElement>('[data-favorite-manage]')!);
+    list.handleAction('select');
+    expect(onEnterManagement).toHaveBeenCalledOnce();
+    expect(container.querySelector('.favorite-hints')).not.toBeNull();
   });
 
   it('escapes a malicious channel name instead of rendering live HTML (XSS)', () => {
@@ -751,7 +842,7 @@ describe('ChannelList listener lifecycle', () => {
     const c = document.createElement('div');
     document.body.appendChild(c);
     const spy = vi.spyOn(c, 'addEventListener');
-    const l = new ChannelList(c, vi.fn());
+    const l = new ChannelList(c, { onChannelSelect: vi.fn() });
     const initialCount = spy.mock.calls.filter(([type]) => type === 'nav:hover').length;
     l.render();
     l.render();

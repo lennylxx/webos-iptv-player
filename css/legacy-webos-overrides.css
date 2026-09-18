@@ -40,7 +40,8 @@
   .player-sidebar { background: rgb(20, 20, 35); }
   .player-menu,
   .player-osd,
-  .number-entry { background: rgb(10, 10, 15); }
+  .number-entry,
+  .live-preview-message { background: rgb(10, 10, 15); }
 }
 
 /*

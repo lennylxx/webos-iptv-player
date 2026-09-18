@@ -115,6 +115,11 @@ class PlaylistServiceImpl {
   private searchIndexedChannels: Channel[] | null = null;
   private searchIndexedChannelCount = -1;
   private includeHidden = false;
+  private failedSourceIds = new Set<string>();
+
+  hasFailedSource(playlistIds: readonly string[]): boolean {
+    return playlistIds.some(id => this.failedSourceIds.has(id));
+  }
 
   get allSourcesDisabled(): boolean {
     const sources = StorageService.getPlaylists();
@@ -127,6 +132,7 @@ class PlaylistServiceImpl {
    * list view.
    */
   reset(): void {
+    this.failedSourceIds.clear();
     this.allChannels = [];
     this.channels = [];
     this.groups = [];
@@ -159,6 +165,7 @@ class PlaylistServiceImpl {
     }
     const cached = await getCachedPlaylist();
     if (cached) {
+      this.failedSourceIds.clear();
       const channelsNeedFiltering = cached.channels
         .some(channel => channel.playlistIds.some(id => !enabledIds.has(id)));
       this.allChannels = channelsNeedFiltering
@@ -205,6 +212,7 @@ class PlaylistServiceImpl {
     const byUrl = new Map<string, Channel>();
     const epgSources: EpgSource[] = [];
     let failedPlaylists = 0;
+    const failedSourceIds = new Set<string>();
     let completedProcessed = 0;
     let completedKept = 0;
     const addEpgSource = (url: string, playlistId: string, kind: EpgSource['kind']): void => {
@@ -408,6 +416,7 @@ class PlaylistServiceImpl {
         );
       } catch (err) {
         failedPlaylists++;
+        failedSourceIds.add(plKey);
         log.error(
           'Playlist source load failed',
           'event=playlist.source.load.failed',
@@ -433,6 +442,7 @@ class PlaylistServiceImpl {
       plDone();
     }
 
+    this.failedSourceIds = failedSourceIds;
     this.allChannels = allChannels;
     this.epgSources = epgSources;
     // Customization preserves source names/groups on each channel, so cached

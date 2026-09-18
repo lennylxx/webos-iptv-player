@@ -9,6 +9,7 @@
  * legacy-webos-overrides.css, which is linked last.
  */
 @supports not (inset: 0) {
+  .live-badge > * + * { margin-left: 6px; }
   .loading-container > * + * { margin-top: 24px; }
   .reminder-buttons > * + *, .catchup-resume-buttons > * + *, .confirmation-buttons > * + * { margin-left: 24px; }
   .playlist-tabs > * + * { margin-left: 4px; }
@@ -17,12 +18,18 @@
   .channel-item > * + * { margin-left: 16px; }
   .edit-hints > * + * { margin-left: 24px; }
   .edit-hint > * + * { margin-left: 8px; }
+  .preview-list-context > * + * { margin-left: 24px; }
   .edit-action[data-edit-action="yellow"] > * + * { margin-left: 0; }
   .epg-mapping-search-wrap > * + * { margin-left: 12px; }
   .epg-mapping-option > * + * { margin-top: 3px; }
   .channel-epg-offset-controls > * + * { margin-left: 14px; }
   .channel-edit-overlay-back > * + * { margin-left: 8px; }
   .epg-offset-badge > * + * { margin-left: 5px; }
+  .live-preview-heading > * + * { margin-left: 20px; }
+  .live-preview-controls > * + * { margin-left: 8px; }
+  .live-preview-program > * + * { margin-left: 18px; }
+  .live-preview-legend > * + * { margin-left: 8px; }
+  .live-preview-hint > * + * { margin-left: 8px; }
   .osd-channel > * + * { margin-left: 16px; }
   .osd-stream-info > * + * { margin-left: 8px; }
   .osd-programme-detail > * + * { margin-left: 16px; }
@@ -54,7 +61,6 @@
   .epg-programme-item > * + * { margin-left: 20px; }
   .epg-prog-dur > * + * { margin-left: 4px; }
   .epg-prog-title > * + * { margin-left: 10px; }
-  .epg-now-badge > * + * { margin-left: 6px; }
   .settings-nav-list > * + * { margin-top: 6px; }
   .settings-nav-item > * + * { margin-left: 14px; }
   .settings-nav-help > * + * { margin-top: 8px; }

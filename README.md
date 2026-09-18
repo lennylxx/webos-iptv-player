@@ -59,6 +59,7 @@
 - **Channel health** — check live streams and mark them as healthy, suspect, or unavailable
 - **Reminders** — flag an upcoming program and get notified at air time, even with the app closed, to tune straight in
 - **Recently Watched** — return to recent live channels or resume partially watched catch-up programs
+- **Live preview** — keep live playback beside the channel list while browsing, with program info and quick controls
 - **Movies & Series** — browse an Xtream account's VOD catalogs, with Continue Watching and account-scoped Watchlist rails
 - **Automatic VOD queues** — continue through series episodes or remaining Watchlist movies, removing completed titles from the Watchlist
 - **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams
@@ -244,7 +245,9 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **EPG time correction** — adjust each source independently in 15-minute steps.
 - **Program reminders** — open the date-grouped Reminder Manager to review or remove upcoming reminders.
 - **Appearance** — preview an app-wide color theme, choose Dark or Frosted player overlays, and adjust text from 80% to 150%.
-- **Playback** — toggle auto-play (resume last watched channel on launch).
+- **Playback** — toggle auto-play and Live preview, and choose whether Channel
+  Up/Down cycles the global list or stays within the active group, Favorites,
+  or playlist.
 - **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.
 - **Data Management** — refresh data, clear caches or viewing lists, or reset the app.
 - **Save Changes** applies preferences and reloads playlist and guide data when their sources change. **Cancel** discards edits.

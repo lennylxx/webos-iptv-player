@@ -55,6 +55,14 @@ export interface Channel {
   catchupTimeOffsetMinutes?: number;
 }
 
+export type LivePlaybackStatus = 'loading' | 'playing' | 'buffering' | 'paused' | 'error';
+
+export interface LivePlaybackSnapshot {
+  channel: Channel;
+  muted: boolean;
+  status: LivePlaybackStatus;
+}
+
 export type ChannelHealthStatus = 'healthy' | 'suspect' | 'unavailable';
 
 export interface ChannelHealthRecord {
