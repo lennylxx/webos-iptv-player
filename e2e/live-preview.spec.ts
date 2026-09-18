@@ -216,12 +216,10 @@ test('Settings saves On across reload and Cancel discards Off', async ({ page })
   await selectFirst(page);
 });
 
-test('single row clicks tune preview once and retain mute across channel changes', async ({ page }) => {
+test('row clicks tune preview and retain mute across channel changes', async ({ page }) => {
   await setup(page, { enabled: true });
   await selectFirst(page);
   const first = await snapshot(page);
-  await page.locator(ROW).first().click();
-  expect(await snapshot(page)).toEqual(first);
   await page.locator(MUTE).click();
   await expect(page.locator(MUTE)).toHaveAttribute('aria-pressed', 'true');
   await page.locator(ROW).nth(1).click();
@@ -233,8 +231,29 @@ test('single row clicks tune preview once and retain mute across channel changes
   expect(second.source).toBe('http://host/ch2.m3u8');
   expect(second.loads - first.loads).toBe(1);
   expect(second.muted).toBe(true);
-  await page.locator(ROW).nth(1).click();
-  expect(await snapshot(page)).toEqual(second);
+});
+
+test('selecting the current preview channel again opens full screen', async ({ page }) => {
+  await setup(page, { enabled: true });
+  await selectFirst(page);
+
+  await page.locator(ROW).first().click();
+
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator(PANEL)).toBeHidden();
+});
+
+test('a second remote OK on the previewed channel opens full screen', async ({ page }) => {
+  await setup(page, { enabled: true });
+
+  await page.keyboard.press('Enter');
+  await expect(page.locator(PANEL)).toBeVisible();
+  await expect(page.locator(`${PANEL} .live-preview-channel`)).toHaveText('ch1');
+  await expect(page.locator('#view-player')).toBeHidden();
+
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator(PANEL)).toBeHidden();
 });
 
 test('late manifest results from an old selection cannot replace the active preview', async ({ page }) => {
@@ -330,16 +349,16 @@ test('mute preserves a cross-day date group and its following program', async ({
   await expect(visibleRows.last()).toHaveClass(/last-visible/);
 });
 
-test('committed numeric channel entry stays in preview', async ({ page }) => {
+test('committed numeric channel entry opens full screen directly', async ({ page }) => {
   await setup(page, { enabled: true });
   await page.keyboard.press('2');
-  await expect(page.locator(PANEL)).toBeVisible();
-  await expect(page.locator(`${PANEL} .live-preview-channel`)).toHaveText('ch2');
-  await expect(page.locator('#view-player')).toBeHidden();
-  const before = await snapshot(page);
-  await page.keyboard.press('2');
   await expect(page.locator('.number-entry')).not.toHaveClass(/visible/);
-  expect(await snapshot(page)).toEqual(before);
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator('#video-player source')).toHaveAttribute(
+    'src',
+    'http://host/ch2.m3u8',
+  );
 });
 
 test('D-pad enters controls and returns to the selected row without stopping', async ({ page }) => {

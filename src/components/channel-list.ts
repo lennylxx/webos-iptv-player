@@ -35,9 +35,15 @@ const CHANNEL_OVERSCAN = 12;
 const CHANNEL_VIEWPORT_FALLBACK = 900;
 
 type PreviewHintState = 'off' | 'ready' | 'active';
+type ChannelSelectionMode = 'expand-current' | 'fullscreen';
 
 export interface ChannelListOptions {
-  onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void;
+  onChannelSelect: (
+    index: number,
+    catchup?: CatchupInfo,
+    scope?: ChannelScope,
+    mode?: ChannelSelectionMode,
+  ) => void;
   onChannelsChanged?: () => void;
   onEpgMappingChanged?: () => void;
   onEpgOffsetChanged?: () => void;
@@ -49,7 +55,12 @@ export interface ChannelListOptions {
 
 export class ChannelList {
   private container: HTMLElement;
-  private onChannelSelect: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void;
+  private onChannelSelect: (
+    index: number,
+    catchup?: CatchupInfo,
+    scope?: ChannelScope,
+    mode?: ChannelSelectionMode,
+  ) => void;
   private onChannelsChanged: () => void;
   private onEnterPreview: () => boolean;
   private onListFocus: () => void;
@@ -509,14 +520,19 @@ export class ChannelList {
           const item = this.recentItems[parseInt(focused.dataset.recentIndex, 10)];
           if (item?.kind === 'live') {
             this.setPlaying(item.channelIndex);
-            this.onChannelSelect(item.channelIndex, undefined, this.currentScope());
+            this.onChannelSelect(
+              item.channelIndex,
+              undefined,
+              this.currentScope(),
+              'expand-current',
+            );
           } else if (item) {
             void this.playRecentCatchup(item);
           }
         } else if (focused.dataset.channelIndex !== undefined) {
           const idx = parseInt(focused.dataset.channelIndex, 10);
           this.setPlaying(idx);
-          this.onChannelSelect(idx, undefined, this.currentScope());
+          this.onChannelSelect(idx, undefined, this.currentScope(), 'expand-current');
         }
         break;
       }
@@ -536,7 +552,7 @@ export class ChannelList {
         if (num >= 0 && num < PlaylistService.channels.length) {
           this.setPlaying(num);
           this.revealChannel(num); // may widen currentGroup — read scope after
-          this.onChannelSelect(num, undefined, this.currentScope());
+          this.onChannelSelect(num, undefined, this.currentScope(), 'fullscreen');
         }
         break;
       }

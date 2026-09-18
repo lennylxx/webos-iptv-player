@@ -273,7 +273,12 @@ describe('ChannelList edit mode', () => {
         !item.querySelector('.channel-name .favorite-glyph'))).toBe(true);
       hover(channelItems()[0]);
       list.handleAction('select');
-      expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:favorites', playlist: undefined });
+      expect(onSelect).toHaveBeenCalledWith(
+        0,
+        undefined,
+        { group: 'builtin:favorites', playlist: undefined },
+        'expand-current',
+      );
     });
 
     it('uses a multi-select mode when editing favorites', () => {

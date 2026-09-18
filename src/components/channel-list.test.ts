@@ -600,7 +600,12 @@ describe('ChannelList interaction', () => {
   it('selecting a focused channel plays it', () => {
     hover(channelItems()[1]);
     list.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
+    expect(onSelect).toHaveBeenCalledWith(
+      1,
+      undefined,
+      { group: 'builtin:all', playlist: undefined },
+      'expand-current',
+    );
   });
 
   it('reports virtual moves so Up does not hand focus to the tab bar', () => {
@@ -609,7 +614,12 @@ describe('ChannelList interaction', () => {
       .toBe('1');
     expect(list.handleAction('up')).toBe(true);
     list.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
+    expect(onSelect).toHaveBeenCalledWith(
+      0,
+      undefined,
+      { group: 'builtin:all', playlist: undefined },
+      'expand-current',
+    );
   });
 
   it('does not rerender when the next virtual item is already mounted', () => {
@@ -635,7 +645,12 @@ describe('ChannelList interaction', () => {
     list.handleAction('select');
     hover(channelItems()[0]);
     list.handleAction('select');
-    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:recently-watched', playlist: undefined });
+    expect(onSelect).toHaveBeenCalledWith(
+      1,
+      undefined,
+      { group: 'builtin:recently-watched', playlist: undefined },
+      'expand-current',
+    );
   });
 
   it('places recent live health before the Live badge', () => {
@@ -728,7 +743,12 @@ describe('ChannelList interaction', () => {
     document.elementFromPoint = () => target;
     container.dispatchEvent(new MouseEvent('click', { clientX: 100, clientY: 50, bubbles: true }));
     document.elementFromPoint = orig;
-    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
+    expect(onSelect).toHaveBeenCalledWith(
+      1,
+      undefined,
+      { group: 'builtin:all', playlist: undefined },
+      'expand-current',
+    );
   });
 
   it('switches group on a pointer click over a group item', () => {
@@ -765,7 +785,12 @@ describe('ChannelList interaction', () => {
 
   it('a number action plays that channel (1-based)', () => {
     list.handleAction('number', { number: 2 });
-    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
+    expect(onSelect).toHaveBeenCalledWith(
+      1,
+      undefined,
+      { group: 'builtin:all', playlist: undefined },
+      'fullscreen',
+    );
   });
 
   it('a number action focuses and marks the channel it tuned', () => {
@@ -781,7 +806,12 @@ describe('ChannelList interaction', () => {
 
     list.handleAction('number', { number: 1 }); // Alpha, outside the Sports group
 
-    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
+    expect(onSelect).toHaveBeenCalledWith(
+      0,
+      undefined,
+      { group: 'builtin:all', playlist: undefined },
+      'fullscreen',
+    );
     expect(channelItems()).toHaveLength(3);
     expect(channelItems()[0].classList.contains('focused')).toBe(true);
     expect(channelItems()[0].classList.contains('playing')).toBe(true);

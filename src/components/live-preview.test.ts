@@ -59,6 +59,7 @@ describe('LivePreview', () => {
     onClose: ReturnType<typeof vi.fn>;
     onMute: ReturnType<typeof vi.fn>;
     onExpand: ReturnType<typeof vi.fn>;
+    onPlayFullscreen: ReturnType<typeof vi.fn>;
     onFocus: ReturnType<typeof vi.fn>;
     onBlur: ReturnType<typeof vi.fn>;
     onReturn: ReturnType<typeof vi.fn>;
@@ -81,7 +82,7 @@ describe('LivePreview', () => {
       isFavorite: vi.fn(() => favorite),
       onFavorite: vi.fn(() => { favorite = !favorite; }),
       onClose: vi.fn(), onMute: vi.fn(), onExpand: vi.fn(), onFocus: vi.fn(),
-      onBlur: vi.fn(), onReturn: vi.fn(),
+      onPlayFullscreen: vi.fn(), onBlur: vi.fn(), onReturn: vi.fn(),
     };
     playerPlay = vi.fn();
     liveSnapshot = vi.fn(() => null);
@@ -113,7 +114,7 @@ describe('LivePreview', () => {
       getCurrentView: () => 'channels',
       showChannels: vi.fn(),
       showPlayer: actions.onExpand,
-      playFullscreen: vi.fn(),
+      playFullscreen: actions.onPlayFullscreen,
       blurTabBar: actions.onFocus,
       expansionBlocked: () => false,
       isFavorite: actions.isFavorite,
@@ -180,9 +181,36 @@ describe('LivePreview', () => {
     StorageService.setLivePreview(true);
     liveSnapshot.mockReturnValue({ ...state(), channel: oldChannel });
 
-    preview.selectChannel(0);
+    preview.selectChannel(0, undefined, null, 'expand-current');
 
     expect(playerPlay).toHaveBeenCalledWith(0, undefined, null);
+  });
+
+  it('expands when the channel already playing in preview is selected again', () => {
+    const current = state();
+    PlaylistService.channels = [current.channel];
+    StorageService.setLivePreview(true);
+    liveSnapshot.mockReturnValue(current);
+    view.applyState(current);
+
+    preview.selectChannel(0, undefined, null, 'expand-current');
+
+    expect(actions.onExpand).toHaveBeenCalledOnce();
+    expect(playerPlay).not.toHaveBeenCalled();
+  });
+
+  it('routes numeric-style fullscreen selection around live preview', () => {
+    StorageService.setLivePreview(true);
+
+    preview.selectChannel(1, undefined, { group: 'builtin:all' }, 'fullscreen');
+
+    expect(actions.onPlayFullscreen).toHaveBeenCalledWith(
+      1,
+      undefined,
+      { group: 'builtin:all' },
+    );
+    expect(playerPlay).not.toHaveBeenCalled();
+    expect(actions.onExpand).not.toHaveBeenCalled();
   });
 
   it('keeps controls and slot during buffering and errors', () => {

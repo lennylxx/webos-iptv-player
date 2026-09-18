@@ -121,8 +121,9 @@ export class LivePreview {
     index: number,
     catchup?: CatchupInfo,
     scope: ChannelScope | null = null,
+    mode: 'preview' | 'expand-current' | 'fullscreen' = 'preview',
   ): void {
-    if (!StorageService.getLivePreview() || catchup) {
+    if (!StorageService.getLivePreview() || catchup || mode === 'fullscreen') {
       this.options.playFullscreen(index, catchup, scope);
       return;
     }
@@ -130,6 +131,12 @@ export class LivePreview {
     if (!channel) return;
     this.options.blurTabBar();
     const current = this.options.player.getLivePlaybackSnapshot();
+    if (mode === 'expand-current' && this.isShowing && current
+        && channelKey(current.channel) === channelKey(channel)
+        && current.channel.url === channel.url) {
+      this.expand();
+      return;
+    }
     this.options.player.enterLivePreview();
     if (!current || channelKey(current.channel) !== channelKey(channel)
         || current.channel.url !== channel.url) {

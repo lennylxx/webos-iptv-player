@@ -104,8 +104,8 @@ class App {
     this.channelList = new ChannelList(
       $('#channel-browser')!,
       {
-        onChannelSelect: (idx, catchup, scope) =>
-          this.livePreview.selectChannel(idx, catchup, scope),
+        onChannelSelect: (idx, catchup, scope, mode) =>
+          this.livePreview.selectChannel(idx, catchup, scope, mode),
         onChannelsChanged: () => {
           this.player.syncCurrentIndex();
           this.scheduleEpgReload();
