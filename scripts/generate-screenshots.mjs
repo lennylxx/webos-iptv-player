@@ -6,6 +6,7 @@
 // fixtures and a frozen clock, then captures each view into screenshots/:
 //
 //   channel-list.png   channel list (the README hero)
+//   live-preview.png   Pastel Latte live preview with the Mute hint focused
 //   recently-watched.png  mixed live and resumable catch-up history
 //   epg-guide.png      three-pane program guide, with catch-up resume markers
 //   epg-catchup-resume.png  the Resume / Start Over / Cancel resume prompt
@@ -45,6 +46,48 @@ const SETUP_PAGE_HTML = await readFile(
 const FRAME_INNER = '#182942';
 const FRAME_OUTER = '#0b0b12';
 const frameGradient = (at) => `radial-gradient(125% 110% at ${at}, ${FRAME_INNER} 0%, ${FRAME_OUTER} 62%)`;
+const LIVE_PREVIEW_POSTER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+    <defs>
+      <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#8c8fa1"/>
+        <stop offset=".58" stop-color="#b9a6b7"/>
+        <stop offset="1" stop-color="#e6b8a2"/>
+      </linearGradient>
+      <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#303446" stop-opacity=".92"/>
+        <stop offset="1" stop-color="#4c4f69" stop-opacity=".78"/>
+      </linearGradient>
+      <radialGradient id="sun">
+        <stop offset="0" stop-color="#f9e2af"/>
+        <stop offset=".45" stop-color="#f5c2e7" stop-opacity=".7"/>
+        <stop offset="1" stop-color="#f5c2e7" stop-opacity="0"/>
+      </radialGradient>
+      <filter id="blur"><feGaussianBlur stdDeviation="18"/></filter>
+    </defs>
+    <rect width="1280" height="720" fill="url(#sky)"/>
+    <circle cx="995" cy="186" r="150" fill="url(#sun)" filter="url(#blur)"/>
+    <path d="M0 410L90 374 156 397 244 326 306 376 382 288 442 366
+             520 316 594 386 680 304 748 370 820 278 886 354 958 292
+             1034 370 1118 315 1190 377 1280 330V560H0Z"
+          fill="#414559" opacity=".58"/>
+    <path d="M0 474H92V366H157V474H205V329H290V474H344V390H405V474H454
+             V300H548V474H608V354H676V474H742V322H812V474H870V382H934
+             V474H988V346H1078V474H1138V298H1218V474H1280V610H0Z"
+          fill="#303446"/>
+    <g fill="#f9e2af" opacity=".68">
+      <path d="M111 392h12v15h-12zm25 0h12v15h-12zm91-36h14v17h-14zm28 0h14v17h-14z"/>
+      <path d="M478 329h16v18h-16zm31 0h16v18h-16zm124 52h13v16h-13zm25 0h13v16h-13z"/>
+      <path d="M764 348h14v17h-14zm27 0h14v17h-14zm220 26h15v18h-15zm30 0h15v18h-15z"/>
+      <path d="M1162 326h14v17h-14zm28 0h14v17h-14z"/>
+    </g>
+    <path d="M0 548C235 506 414 520 632 558S1039 607 1280 548V720H0Z"
+          fill="#181825" opacity=".92"/>
+    <path d="M116 720L292 522H988L1164 720Z" fill="url(#glass)"/>
+    <path d="M322 547H958" stroke="#cba6f7" stroke-width="8" opacity=".82"/>
+    <path d="M168 680H1112" stroke="#f5c2e7" stroke-width="3" opacity=".42"/>
+  </svg>
+`);
 
 // Frozen clock: Friday 2026-06-12, 22:18 primetime (America/Los_Angeles).
 const TZ = 'America/Los_Angeles';
@@ -285,12 +328,25 @@ function playerApiJson(url) {
     case 'get_series_info': {
       const id = new URL(url).searchParams.get('series_id');
       const s = SERIESES.find((x) => x.series_id === id) || SERIESES[0];
+      const n = Number(s.series_id);
       const mkEps = (season, count) => Array.from({ length: count }, (_, k) => ({
         id: `${id}${season}${k + 1}`, title: `Chapter ${k + 1}: ${NOUN[(Number(id) + season + k) % NOUN.length]}`,
         season, episode_num: k + 1, container_extension: 'mp4',
         info: { plot: PLOTS[(Number(id) + k) % PLOTS.length], duration_secs: 2400 + (k % 3) * 600, movie_image: poster(s.hue) },
       }));
-      return { episodes: { 1: mkEps(1, 8), 2: mkEps(2, 6) } };
+      return {
+        info: {
+          plot: PLOTS[n % PLOTS.length],
+          cast: CAST,
+          director: DIRECTORS[n % DIRECTORS.length],
+          genre: catName(SERIES_CATS, s.category_id),
+          releasedate: `${2017 + (n % 8)}-09-18`,
+          episode_run_time: [42 + (n % 4) * 6],
+          cover: poster(s.hue),
+          rating: `${7 + (n % 3)}.0`,
+        },
+        episodes: { 1: mkEps(1, 8), 2: mkEps(2, 6) },
+      };
     }
     default:
       return { user_info: { auth: 1, status: 'Active' } };
@@ -798,6 +854,18 @@ async function shoot(page, name) {
   }
 }
 
+async function openPlayerMenuWhenReady(page, selector) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await page.keyboard.press('ArrowRight');
+    await page.locator('#player-menu.visible').waitFor({ state: 'visible' });
+    if (await page.locator(selector).count()) return;
+    await page.keyboard.press('ArrowLeft');
+    await page.locator('#player-menu.visible').waitFor({ state: 'hidden' });
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Player menu item did not become ready: ${selector}`);
+}
+
 async function gotoChannels(page, base, { health = false } = {}) {
   await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
   await page.locator('#view-channels').waitFor({ state: 'visible' });
@@ -848,7 +916,39 @@ try {
     await context.close();
   }
 
-  // 1b) Recently Watched — resumable catch-up mixed with recently played live channels.
+  // 1b) Live Preview — Pastel Latte with the Mute control focused and its hint visible.
+  {
+    const { context, page } = await newPage({ fakeStream: true });
+    await page.addInitScript(() => {
+      localStorage.setItem('iptv_theme', JSON.stringify('pastel-latte'));
+      localStorage.setItem('iptv_live_preview', JSON.stringify(true));
+    });
+    await gotoChannels(page, base);
+    await page.keyboard.press('Enter');
+    await page.locator('#live-preview').waitFor({ state: 'visible' });
+    await remote(page, 39); // RIGHT -> focus Mute and show its hint
+    await page.locator('[data-preview-action="mute"].focused').waitFor({ state: 'visible' });
+    await page.locator('.live-preview-legend').waitFor({ state: 'visible' });
+    await page.locator('#video-player').evaluate((video, poster) => {
+      video.poster = poster;
+      video.style.objectFit = 'cover';
+    }, LIVE_PREVIEW_POSTER);
+    await page.locator('.live-preview-message').evaluate((message) => {
+      message.style.display = 'none';
+    });
+    await page.locator('.channel-main').evaluate((list) => {
+      list.scrollTop = 1;
+      list.dispatchEvent(new Event('scroll'));
+    });
+    await page.locator('.channel-scroll-indicator.visible').waitFor({ state: 'visible' });
+    await clearToasts(page);
+    await page.waitForTimeout(400);
+    await shoot(page, 'live-preview.png');
+    console.log('  live-preview.png');
+    await context.close();
+  }
+
+  // 1c) Recently Watched — resumable catch-up mixed with recently played live channels.
   {
     const { context, page } = await newPage({ recently: true });
     await gotoChannels(page, base, { health: true });
@@ -1048,18 +1148,25 @@ try {
   {
     const { context, page } = await newPage({ fakeStream: true, recently: true });
     await gotoChannels(page, base, { health: true });
-    // hls.js requests the (aborted) media playlists only after parsing the master, so
-    // this confirms the audio/subtitle track lists are populated before the menu opens
-    // — it renders once, on open, and isn't re-rendered when tracks arrive later.
-    const tracksReady = page.waitForRequest(/\/stream\/(?:video|audio-|sub-)/, { timeout: 10_000 }).catch(() => {});
     await page.keyboard.press('Enter');
     await page.locator('#player-osd .osd-programme-title').waitFor({ state: 'visible' });
-    await tracksReady;
     // The app shows these one at a time. Open the menu so it renders (with the real
-    // Audio Track / Subtitles rows), then open the sidebar; the menu's content
-    // persists and is forced back on below.
-    await page.keyboard.press('ArrowRight'); // open menu (renders content)
-    await page.locator('#player-menu.visible').waitFor({ state: 'visible' });
+    // Audio Track / Subtitles rows), then explicitly select the intended subtitle.
+    const subtitlesSelector = '#player-menu .menu-item[data-menu-action="__subs_open__"]';
+    await openPlayerMenuWhenReady(page, subtitlesSelector);
+    const subtitlesRow = page.locator(subtitlesSelector);
+    await subtitlesRow.dispatchEvent('click');
+    const englishSubtitle = page.locator(
+      '#player-menu .menu-item[data-menu-action="__subs_track__"][data-track-index="0"]',
+      { hasText: 'English' },
+    );
+    await englishSubtitle.waitFor({ state: 'visible' });
+    await englishSubtitle.dispatchEvent('click');
+    await page.locator(
+      '#player-menu .menu-item[data-menu-action="__subs_open__"] .menu-item-value',
+      { hasText: 'English' },
+    ).waitFor({ state: 'visible' });
+    // Then open the sidebar; the menu's content persists and is forced back on below.
     await page.keyboard.press('ArrowLeft');  // hide menu...
     await page.keyboard.press('ArrowLeft');  // ...open the channel switcher
     await page.locator('#player-sidebar.visible').waitFor({ state: 'visible' });

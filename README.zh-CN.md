@@ -13,37 +13,48 @@
 
 ## 截图
 
-| 频道列表 | 最近观看 |
+| 频道列表 | 直播预览 |
 | --- | --- |
-| ![频道列表](https://github.com/user-attachments/assets/ec5dab43-3b1e-4b90-a20f-71514b8a605b) | ![最近观看](https://github.com/user-attachments/assets/529c23e4-5fe4-4fbf-bae8-f62ce6008e33) |
+| ![频道列表](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![直播预览](https://github.com/user-attachments/assets/136155e4-5cc7-4f64-97b2-15e84252c666) |
 
-| 节目指南 | 回看续播 |
+| 最近观看 | 节目指南 |
 | --- | --- |
-| ![节目指南](https://github.com/user-attachments/assets/9928c342-c2fa-46b8-92f1-b5e815f24f19) | ![回看续播](https://github.com/user-attachments/assets/9a49fa89-b3ae-4b27-bcd6-b93de2c3e1e1) |
+| ![最近观看](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![节目指南](https://github.com/user-attachments/assets/9928c342-c2fa-46b8-92f1-b5e815f24f19) |
 
-| 频道信息 | 播放浮层 |
+| 回看续播 | 频道信息 |
 | --- | --- |
-| ![频道信息](https://github.com/user-attachments/assets/e0dd4fbf-b6b4-46f6-a8e8-7235c66d9512) | ![播放浮层](https://github.com/user-attachments/assets/1a2a3fe7-55ca-4a7c-ac05-a38c4f578e41) |
+| ![回看续播](https://github.com/user-attachments/assets/9a49fa89-b3ae-4b27-bcd6-b93de2c3e1e1) | ![频道信息](https://github.com/user-attachments/assets/9adf8302-750f-429b-9155-828c8c30f097) |
 
-| 字幕 | 字幕搜索 |
+| 播放浮层 | 字幕 |
 | --- | --- |
-| ![字幕](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) | ![字幕搜索](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) |
+| ![播放浮层](https://github.com/user-attachments/assets/1a2a3fe7-55ca-4a7c-ac05-a38c4f578e41) | ![字幕](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) |
 
-| 电影 | 电影详情 |
+| 字幕搜索 | 电影 |
 | --- | --- |
-| ![电影](https://github.com/user-attachments/assets/a6b09baf-0342-4e02-9d7e-5cf7677d1ecf) | ![电影详情](https://github.com/user-attachments/assets/1380b0b2-680f-49bb-a470-336c9e14a54a) |
+| ![字幕搜索](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) | ![电影](https://github.com/user-attachments/assets/a6b09baf-0342-4e02-9d7e-5cf7677d1ecf) |
 
-| 剧集详情 | 搜索 |
+| 电影详情 | 剧集详情 |
 | --- | --- |
-| ![剧集详情](https://github.com/user-attachments/assets/e7bf3b55-3464-4c7a-966d-34ee432795e3) | ![搜索](https://github.com/user-attachments/assets/8677ff38-b32d-44af-991b-ce40a7157e61) |
+| ![电影详情](https://github.com/user-attachments/assets/1380b0b2-680f-49bb-a470-336c9e14a54a) | ![剧集详情](https://github.com/user-attachments/assets/2962184e-cc95-455d-aea7-888ff3297dc4) |
 
-| 设置 | 主题选择器 |
+| 搜索 | 设置 |
 | --- | --- |
-| ![设置](https://github.com/user-attachments/assets/0813b5a4-41ce-4a13-b398-8e7bb213de64) | ![主题选择器](https://github.com/user-attachments/assets/90ecc674-1421-42a5-8c10-248697cce305) |
+| ![搜索](https://github.com/user-attachments/assets/8677ff38-b32d-44af-991b-ce40a7157e61) | ![设置](https://github.com/user-attachments/assets/0813b5a4-41ce-4a13-b398-8e7bb213de64) |
 
-| 节目提醒 | 局域网设置 |
+| 主题选择器 | 节目提醒 |
 | --- | --- |
-| ![节目提醒](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) | ![局域网设置](https://github.com/user-attachments/assets/fda1f741-bf92-45fd-b7c5-e2ed555cdc92) |
+| ![主题选择器](https://github.com/user-attachments/assets/90ecc674-1421-42a5-8c10-248697cce305) | ![节目提醒](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) |
+
+<table>
+  <tr>
+    <th width="50%">局域网设置</th>
+    <th width="50%"></th>
+  </tr>
+  <tr>
+    <td width="50%"><img src="https://github.com/user-attachments/assets/fda1f741-bf92-45fd-b7c5-e2ed555cdc92" alt="局域网设置"></td>
+    <td width="50%"></td>
+  </tr>
+</table>
 
 ## 功能
 
