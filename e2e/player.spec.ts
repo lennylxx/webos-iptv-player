@@ -432,7 +432,22 @@ test('the right-edge player menu opens and lists its color actions', async ({ pa
   await expect(menu).toContainText('Settings');
 
   // The first item is focused on open; Down moves focus to the second.
-  await expect(menu.locator('.menu-item.focused')).toHaveCount(1);
+  const focused = menu.locator('.menu-item.focused');
+  await expect(focused).toHaveCount(1);
+  const gutter = await focused.evaluate((element) => {
+    const list = element.parentElement;
+    if (!list) throw new Error('Player menu item has no list');
+    const listRect = list.getBoundingClientRect();
+    const itemRect = element.getBoundingClientRect();
+    return {
+      left: itemRect.left - listRect.left,
+      right: listRect.right - itemRect.right,
+      top: itemRect.top - listRect.top,
+    };
+  });
+  expect(gutter.left).toBeGreaterThanOrEqual(20);
+  expect(gutter.right).toBeGreaterThanOrEqual(20);
+  expect(gutter.top).toBeGreaterThanOrEqual(20);
   await page.keyboard.press('ArrowDown');
   await expect(menu.locator('.menu-item').nth(1)).toHaveClass(/focused/);
 });

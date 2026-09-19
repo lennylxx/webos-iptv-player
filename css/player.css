@@ -898,6 +898,8 @@
   flex: 1;            /* fill the remaining height of the fixed-height panel */
   min-height: 0;      /* allow the flex child to shrink so overflow-y can scroll */
   overflow-y: auto;   /* long track lists scroll instead of running off-screen */
+  margin: -20px;
+  padding: 20px;
 }
 
 .player-menu .menu-item {
