@@ -601,11 +601,10 @@ class App {
 
   private epgSources(): EpgSource[] {
     if (!StorageService.getPlaylists().some(isSourceEnabled)) return [];
-    const manualUrl = StorageService.getEpgUrl();
+    const manual = StorageService.getManualEpgSources()
+      .map(source => ({ ...source, kind: 'manual' as const }));
     const discovered = PlaylistService.epgSources;
-    const sources: EpgSource[] = manualUrl && !discovered.some((source) => source.url === manualUrl)
-      ? [{ url: manualUrl, playlistIds: [], kind: 'manual' }, ...discovered]
-      : discovered;
+    const sources: EpgSource[] = [...manual, ...discovered];
     const offsets = StorageService.getEpgOffsets();
     return sources.map(source => ({ ...source, offsetMinutes: offsets[source.url] ?? 0 }));
   }

@@ -6,10 +6,15 @@ interface OpenSubtitlesCredentials {
   password?: string;
 }
 
+interface ManualEpgSourcePayload {
+  url: string;
+  playlistIds: string[];
+}
+
 export type SetupActionPayload =
   | { type: 'playlist'; name: string; url: string }
   | { type: 'xtream'; serverUrl: string; username: string; password: string }
-  | { type: 'epg'; url: string }
+  | { type: 'manual-epg-sources'; sources: ManualEpgSourcePayload[] }
   | { type: 'remove-source'; sourceId: string }
   | { type: 'set-source-enabled'; sourceId: string; enabled: boolean }
   | {
@@ -35,6 +40,25 @@ function optionalApiKey(value: unknown, field: string): string | undefined {
   return value.trim();
 }
 
+function parseManualEpgSources(value: unknown): ManualEpgSourcePayload[] {
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new Error('Invalid program guide sources');
+  }
+  const seen: Record<string, boolean> = {};
+  return value.map(source => {
+    const item = objectValue(source);
+    if (!Array.isArray(item.playlistIds) || item.playlistIds.length > 100) {
+      throw new Error('Invalid program guide playlist scope');
+    }
+    const url = httpUrl(item.url, 'program guide URL');
+    const playlistIds = item.playlistIds.map(id =>
+      stringValue(id, 'playlist id', 120));
+    if (seen[url]) throw new Error('Duplicate program guide source URL');
+    seen[url] = true;
+    return { url, playlistIds };
+  });
+}
+
 export function parseSetupAction(value: unknown): SetupActionPayload {
   const input = objectValue(value);
   if (input.type === 'playlist') {
@@ -52,10 +76,10 @@ export function parseSetupAction(value: unknown): SetupActionPayload {
       password: passwordValue(input.password),
     };
   }
-  if (input.type === 'epg') {
+  if (input.type === 'manual-epg-sources') {
     return {
-      type: 'epg',
-      url: httpUrl(input.url, 'program guide URL'),
+      type: 'manual-epg-sources',
+      sources: parseManualEpgSources(input.sources),
     };
   }
   if (input.type === 'remove-source') {

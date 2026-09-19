@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { ChannelCycleMode, TzMode } from '../types';
+import type { ChannelCycleMode, ManualEpgSource, TzMode } from '../types';
 import type { XtreamAccountInfo } from '../services/xtream-client';
 
 const {
@@ -24,7 +24,7 @@ const {
       count?: number;
       xtream?: { username: string; password: string };
     }[],
-    epg: '',
+    manualEpgSources: [] as ManualEpgSource[],
     autoPlay: false,
     livePreview: false,
     theme: 'midnight' as string,
@@ -61,10 +61,13 @@ const {
         quotaBytes: null,
       })),
     },
-    themeMock: { previewTheme: vi.fn(), applyTheme: vi.fn(), initTheme: vi.fn(), applyTextSize: vi.fn() },
+    themeMock: { previewTheme: vi.fn(), applyTheme: vi.fn(), initTheme: vi.fn(), applyTextSize: vi.fn()     },
     storageMock: {
       getPlaylists: vi.fn(() => state.playlists),
-      getEpgUrl: vi.fn(() => state.epg),
+      getManualEpgSources: vi.fn(() => state.manualEpgSources.map(source => ({
+        ...source,
+        playlistIds: source.playlistIds.slice(),
+      }))),
       getAutoPlay: vi.fn(() => state.autoPlay),
       getLivePreview: vi.fn(() => state.livePreview),
       getTheme: vi.fn(() => state.theme),
@@ -83,7 +86,13 @@ const {
       setChannelCustomization: vi.fn(),
       clearChannelCustomization: vi.fn(),
       setPlaylists: vi.fn(),
-      setEpgUrl: vi.fn(),
+      setManualEpgSources: vi.fn((sources: ManualEpgSource[]) => {
+        state.manualEpgSources = sources.map(source => ({
+          ...source,
+          playlistIds: source.playlistIds.slice(),
+        }));
+        return true;
+      }),
       setAutoPlay: vi.fn(),
       setLivePreview: vi.fn((value: boolean) => { state.livePreview = value; }),
       setTheme: vi.fn((id: string) => { state.theme = id; }),
@@ -174,7 +183,7 @@ let settings: Settings;
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   state.playlists = [];
-  state.epg = '';
+  state.manualEpgSources = [];
   state.autoPlay = false;
   state.livePreview = false;
   state.theme = 'midnight';
@@ -354,7 +363,7 @@ describe('Settings.render', () => {
   });
 
   it('places the EPG source dropdown and offset buttons in one control row', () => {
-    state.epg = 'http://host/epg.xml';
+    state.manualEpgSources = [{ url: 'http://host/epg.xml', playlistIds: [] }];
     settings.render();
 
     const controls = container.querySelector('.epg-offset-controls')!;
@@ -364,13 +373,14 @@ describe('Settings.render', () => {
 
   it('renders a row per configured playlist with its values', () => {
     state.playlists = [{ name: 'P1', url: 'http://a' }, { name: 'P2', url: 'http://b' }];
-    state.epg = 'http://epg';
+    state.manualEpgSources = [{ url: 'http://epg', playlistIds: [] }];
     settings.render();
     const names = Array.from(container.querySelectorAll<HTMLInputElement>('.playlist-name'));
     const urls = Array.from(container.querySelectorAll<HTMLInputElement>('.playlist-url'));
     expect(names.map(n => n.value)).toEqual(['P1', 'P2']);
     expect(urls.map(u => u.value)).toEqual(['http://a', 'http://b']);
-    expect(container.querySelector<HTMLInputElement>('#epg-url')!.value).toBe('http://epg');
+    expect(container.querySelector<HTMLInputElement>('.manual-epg-url')!.value)
+      .toBe('http://epg');
   });
 
   it('persists a disabled M3U source without deleting it', () => {
@@ -423,8 +433,25 @@ describe('Settings.render', () => {
     expect(container.querySelector('.settings-nav-item.focused')).not.toBeNull();
   });
 
+  it('shows and restores the empty hint for manual EPG sources', () => {
+    settings.render();
+
+    const entries = container.querySelector('.manual-epg-sources')!;
+    expect(entries.querySelector('.empty-hint')?.textContent)
+      .toBe('No EPG sources added yet');
+
+    click('#add-epg-source');
+    expect(entries.querySelector('.empty-hint')).toBeNull();
+    expect(entries.querySelectorAll('[data-manual-epg-source]')).toHaveLength(1);
+
+    click('.remove-epg-source');
+    expect(entries.querySelector('[data-manual-epg-source]')).toBeNull();
+    expect(entries.querySelector('.empty-hint')?.textContent)
+      .toBe('No EPG sources added yet');
+  });
+
   it('adjusts and resets a manual EPG source offset with remote actions', () => {
-    state.epg = 'http://host/epg.xml';
+    state.manualEpgSources = [{ url: 'http://host/epg.xml', playlistIds: [] }];
     settings.render();
 
     const plus = container.querySelector<HTMLElement>('[data-offset-delta="15"]')!;
@@ -453,11 +480,11 @@ describe('Settings.render', () => {
   });
 
   it('rebinds time correction when the manual XMLTV URL is edited', () => {
-    state.epg = 'http://host/old.xml';
+    state.manualEpgSources = [{ url: 'http://host/old.xml', playlistIds: [] }];
     state.epgOffsets = { 'http://host/old.xml': 30 };
     settings.render();
 
-    const input = container.querySelector<HTMLInputElement>('#epg-url')!;
+    const input = container.querySelector<HTMLInputElement>('.manual-epg-url')!;
     input.value = 'http://host/new.xml';
     input.dispatchEvent(new Event('input', { bubbles: true }));
 
@@ -469,6 +496,119 @@ describe('Settings.render', () => {
     expect(storageMock.setEpgOffsets).toHaveBeenCalledWith({
       'http://host/new.xml': 15,
     });
+  });
+
+  it('orders manual EPG sources and binds each one to selected playlists', () => {
+    state.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a' },
+      { id: 'p2', name: 'Bravo', url: 'http://host/b' },
+    ];
+    state.manualEpgSources = [
+      { url: 'http://host/a.xml', playlistIds: ['p1'] },
+      { url: 'http://host/b.xml', playlistIds: [] },
+    ];
+    settings.render();
+
+    const rows = container.querySelectorAll<HTMLElement>('[data-manual-epg-source]');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelector('[data-scope-all]')?.textContent?.trim())
+      .toBe('All playlists');
+    expect(rows[0].querySelector('[data-playlist-id="p1"]')?.classList)
+      .toContain('active');
+    expect(rows[0].querySelector('[data-scope-all]')?.classList)
+      .not.toContain('active');
+    expect(rows[1].querySelector('[data-scope-all]')?.classList)
+      .toContain('active');
+    expect(rows[0].querySelector<HTMLButtonElement>('.move-epg-earlier')?.disabled)
+      .toBe(true);
+    expect(rows[0].querySelector('.move-epg-earlier')?.hasAttribute('data-focusable'))
+      .toBe(false);
+    expect(rows[1].querySelector<HTMLButtonElement>('.move-epg-later')?.disabled)
+      .toBe(true);
+    expect(rows[1].querySelector('.move-epg-later')?.hasAttribute('data-focusable'))
+      .toBe(false);
+
+    rows[1].querySelector<HTMLElement>('[data-playlist-id="p2"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const moveEarlier = rows[1].querySelector<HTMLElement>('.move-epg-earlier')!;
+    moveEarlier.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    moveEarlier.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const reordered = container.querySelectorAll<HTMLElement>('[data-manual-epg-source]');
+    expect(reordered[0].querySelector<HTMLButtonElement>('.move-epg-earlier')?.disabled)
+      .toBe(true);
+    expect(reordered[0].querySelector('.move-epg-earlier')?.hasAttribute('data-focusable'))
+      .toBe(false);
+    expect(reordered[0].querySelector('.move-epg-later')?.hasAttribute('data-focusable'))
+      .toBe(true);
+    expect(reordered[0].querySelector('.manual-epg-url')?.classList)
+      .toContain('focused');
+    click('#save-settings');
+
+    expect(storageMock.setManualEpgSources).toHaveBeenCalledWith([
+      { url: 'http://host/b.xml', playlistIds: ['p2'] },
+      { url: 'http://host/a.xml', playlistIds: ['p1'] },
+    ]);
+    expect(onSave).toHaveBeenCalledWith('reload');
+  });
+
+  it('keeps manual EPG scopes synchronized with playlist edits', () => {
+    state.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a' },
+    ];
+    state.manualEpgSources = [
+      { url: 'http://host/a.xml', playlistIds: ['p1'] },
+    ];
+    settings.render();
+
+    click('#add-playlist');
+    const addedPlaylist = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '#playlist-entries .settings-row:not(.playlist-header-row)',
+      ),
+    ).at(-1)!;
+    const addedId = addedPlaylist.dataset.id!;
+    const name = addedPlaylist.querySelector<HTMLInputElement>('.playlist-name')!;
+    name.value = 'Bravo';
+    name.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(container.querySelector(
+      `[data-manual-epg-source] [data-playlist-id="${addedId}"]`,
+    )?.textContent?.trim()).toBe('Bravo');
+
+    const originalPlaylist = container.querySelector<HTMLElement>(
+      '#playlist-entries .settings-row[data-id="p1"]',
+    )!;
+    originalPlaylist.querySelector<HTMLElement>('.remove-playlist')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    const source = container.querySelector<HTMLElement>('[data-manual-epg-source]')!;
+    expect(source.querySelector('[data-playlist-id="p1"]')).toBeNull();
+    expect(source.querySelector('[data-scope-all]')?.classList).toContain('active');
+
+    click('#add-epg-source');
+    const addedSource = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-manual-epg-source]'),
+    ).at(-1)!;
+    expect(addedSource.querySelector(`[data-playlist-id="${addedId}"]`)).not.toBeNull();
+  });
+
+  it('rejects duplicate manual EPG URLs before saving any settings', () => {
+    state.manualEpgSources = [
+      { url: 'http://host/a.xml', playlistIds: [] },
+      { url: 'http://host/b.xml', playlistIds: [] },
+    ];
+    settings.render();
+    const inputs = container.querySelectorAll<HTMLInputElement>('.manual-epg-url');
+    inputs[1].value = inputs[0].value;
+
+    click('#save-settings');
+
+    expect(storageMock.setPlaylists).not.toHaveBeenCalled();
+    expect(storageMock.setManualEpgSources).not.toHaveBeenCalled();
+    expect(toastMock.showToast).toHaveBeenCalledWith(
+      'Each EPG source must use a unique URL.',
+    );
+    expect(inputs[1].classList).toContain('focused');
   });
 
   it('does not assign a source to an ambiguous legacy channel key', () => {
@@ -1070,13 +1210,16 @@ describe('Settings.save', () => {
     urls[0].value = '  http://x  ';
     names[1].value = 'Unnamed';
     urls[1].value = '   '; // blank URL -> dropped
-    container.querySelector<HTMLInputElement>('#epg-url')!.value = ' http://epg ';
+    click('#add-epg-source');
+    container.querySelector<HTMLInputElement>('.manual-epg-url')!.value = ' http://epg ';
     click('#auto-play [data-value="on"]');
 
     click('#save-settings');
 
     expect(storageMock.setPlaylists).toHaveBeenCalledWith([{ id: expect.any(String), name: 'My', url: 'http://x', source: 'url' }]);
-    expect(storageMock.setEpgUrl).toHaveBeenCalledWith('http://epg');
+    expect(storageMock.setManualEpgSources).toHaveBeenCalledWith([
+      { url: 'http://epg', playlistIds: [] },
+    ]);
     expect(storageMock.setAutoPlay).toHaveBeenCalledWith(true);
     expect(onSave).toHaveBeenCalledWith('reload'); // playlist + EPG changed
   });
@@ -1239,7 +1382,7 @@ describe('Settings.handleAction', () => {
   it('moves left from a content boundary back to the active category', () => {
     settings.render();
     click('[data-settings-target="guide"]');
-    container.querySelector<HTMLElement>('#epg-url')!
+    container.querySelector<HTMLElement>('#add-epg-source')!
       .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     settings.handleAction('left');
     expect(container.querySelector('[data-settings-target="guide"]')?.classList.contains('focused'))

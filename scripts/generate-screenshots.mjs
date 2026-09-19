@@ -492,7 +492,10 @@ const SETUP_PAGE_STATE = {
     id: 'setup-upload',
     uploadId: 'living-room',
   }],
-  epgUrl: 'https://demo.local/epg.xml',
+  manualEpgSources: [{
+    url: 'https://demo.local/epg.xml',
+    playlistIds: ['setup-playlist'],
+  }],
   onlineSubtitles: {
     preferredLanguage: '',
     subdlConfigured: false,

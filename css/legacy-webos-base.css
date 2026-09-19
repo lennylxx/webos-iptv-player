@@ -69,6 +69,10 @@
   .settings-row > * + * { margin-left: 16px; }
   .epg-offset-controls > * + * { margin-left: 10px; }
   .epg-offset-stepper > * + * { margin-left: 10px; }
+  .manual-epg-sources > * + * { margin-top: 12px; }
+  .manual-epg-source-head > * + * { margin-left: 10px; }
+  .manual-epg-scope > * + * { margin-left: 12px; }
+  .manual-epg-scope-options > * + * { margin-left: 8px; }
   .settings-field > * + * { margin-top: 6px; }
   .dropdown-trigger > * + * { margin-left: 12px; }
   .settings-actions > * + * { margin-left: 16px; }

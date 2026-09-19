@@ -116,7 +116,7 @@ var state = {
   }],
   xtreamAccounts: [],
   uploadedPlaylists: [],
-  epgUrl: '',
+  manualEpgSources: [],
   onlineSubtitles: {
     preferredLanguage: '',
     subdlConfigured: false,
@@ -161,7 +161,10 @@ startServer(0, dataDir).then(function (bound) {
           bound.port,
           'POST',
           '/setup-actions?token=' + encodeURIComponent(token),
-          JSON.stringify({ type: 'epg', url: 'http://host/b' })
+          JSON.stringify({
+            type: 'manual-epg-sources',
+            sources: [{ url: 'http://host/b', playlistIds: ['p1'] }],
+          })
         );
       }).then(function (actionResponse) {
         var action = expectStatus(actionResponse, 201, 'POST /setup-actions');

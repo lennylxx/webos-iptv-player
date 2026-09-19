@@ -332,7 +332,7 @@ test.describe('Settings navigation', () => {
     await guide.dispatchEvent('nav:hover');
     await page.keyboard.press('ArrowRight');
 
-    await expect(page.locator('#epg-url')).toHaveClass(/focused/);
+    await expect(page.locator('#add-epg-source')).toHaveClass(/focused/);
     await expect(guide).toHaveClass(/active/);
   });
 
@@ -343,7 +343,7 @@ test.describe('Settings navigation', () => {
     const guide = page.locator('[data-settings-target="guide"]');
     await guide.dispatchEvent('nav:hover');
     await page.keyboard.press('ArrowRight');
-    await expect(page.locator('#epg-url')).toHaveClass(/focused/);
+    await expect(page.locator('#add-epg-source')).toHaveClass(/focused/);
 
     await page.keyboard.press('ArrowLeft');
     await expect(guide).toHaveClass(/focused/);

@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, ManualEpgSource, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist';
@@ -58,6 +58,32 @@ let onWriteFailure: (() => void) | null = null;
 
 function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function sanitizeManualEpgSources(value: unknown[]): ManualEpgSource[] {
+  const sources: ManualEpgSource[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as { url?: unknown; playlistIds?: unknown };
+    if (typeof candidate.url !== 'string') continue;
+    const url = candidate.url.trim();
+    if (!url) continue;
+    const playlistIds = Array.isArray(candidate.playlistIds)
+      ? candidate.playlistIds.filter((id): id is string =>
+          typeof id === 'string' && id !== '')
+      : [];
+    const existing = sources.find(source => source.url === url);
+    if (!existing) {
+      sources.push({ url, playlistIds: Array.from(new Set(playlistIds)) });
+    } else if (!existing.playlistIds.length || !playlistIds.length) {
+      existing.playlistIds = [];
+    } else {
+      for (const id of playlistIds) {
+        if (!existing.playlistIds.includes(id)) existing.playlistIds.push(id);
+      }
+    }
+  }
+  return sources;
 }
 
 function record(key: string, value: unknown, extra: Partial<UserDataRecord> = {}): UserDataRecord {
@@ -540,11 +566,22 @@ export const StorageService = {
     return stored;
   },
 
-  getEpgUrl(): string {
-    return get<string>('epg_url', '');
+  getManualEpgSources(): ManualEpgSource[] {
+    const stored = get<unknown>('manual_epg_sources', null);
+    if (Array.isArray(stored)) return sanitizeManualEpgSources(stored);
+    // TODO(post-1.16.0): Remove this migration and all `epg_url` access.
+    const legacy = get<string>('epg_url', '').trim();
+    if (!legacy) return [];
+    const migrated = [{ url: legacy, playlistIds: [] }];
+    if (set('manual_epg_sources', migrated)) remove('epg_url');
+    return migrated;
   },
-  setEpgUrl(url: string): boolean {
-    return set('epg_url', url);
+  setManualEpgSources(sources: ManualEpgSource[]): boolean {
+    const sanitized = sanitizeManualEpgSources(sources);
+    if (!set('manual_epg_sources', sanitized)) return false;
+    // TODO(post-1.16.0): Remove with the legacy `epg_url` migration.
+    remove('epg_url');
+    return true;
   },
 
   getEpgOffsets(): Record<string, number> {

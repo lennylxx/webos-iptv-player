@@ -161,7 +161,10 @@ describe('setup state', () => {
       username: 'u1',
     }],
     uploadedPlaylists: [{ id: 'u1', uploadId: 'upload-1', enabled: false }],
-    epgUrl: 'http://host/epg.xml',
+    manualEpgSources: [
+      { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+      { url: 'http://host/epg-2.xml', playlistIds: [] },
+    ],
     onlineSubtitles: {
       preferredLanguage: '',
       subdlConfigured: true,
@@ -206,6 +209,21 @@ describe('setup state', () => {
     expect(saved).not.toHaveProperty('onlineSubtitles.subdlApiKey');
     expect(saved).not.toHaveProperty('onlineSubtitles.opensubtitlesPassword');
   });
+
+  it('rejects duplicate program guide URLs in setup snapshots', async () => {
+    const put = await fetch(`${baseUrl}/setup-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...state,
+        manualEpgSources: [
+          { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+          { url: 'http://host/epg.xml', playlistIds: ['x1'] },
+        ],
+      }),
+    });
+    expect(put.status).toBe(400);
+  });
 });
 
 describe('setup actions', () => {
@@ -226,7 +244,11 @@ describe('setup actions', () => {
       type: 'xtream', serverUrl: 'http://host', username: 'u1', password: 'p1',
     })).status).toBe(201);
     expect((await postAction({
-      type: 'epg', url: 'http://host/epg.xml',
+      type: 'manual-epg-sources',
+      sources: [
+        { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+        { url: 'http://host/epg-2.xml', playlistIds: [] },
+      ],
     })).status).toBe(201);
     expect((await postAction({
       type: 'remove-source', sourceId: 'x1',
@@ -251,7 +273,14 @@ describe('setup actions', () => {
         username: 'u1',
         password: 'p1',
       },
-      { id: expect.any(Number), type: 'epg', url: 'http://host/epg.xml' },
+      {
+        id: expect.any(Number),
+        type: 'manual-epg-sources',
+        sources: [
+          { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+          { url: 'http://host/epg-2.xml', playlistIds: [] },
+        ],
+      },
       { id: expect.any(Number), type: 'remove-source', sourceId: 'x1' },
       {
         id: expect.any(Number),
@@ -273,7 +302,10 @@ describe('setup actions', () => {
     const res = await fetch(`${baseUrl}/setup-actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'epg', url: 'http://host/epg.xml' }),
+      body: JSON.stringify({
+        type: 'manual-epg-sources',
+        sources: [{ url: 'http://host/epg.xml', playlistIds: [] }],
+      }),
     });
     expect(res.status).toBe(403);
     expect(await (await fetch(`${baseUrl}/setup-actions`)).json()).toEqual([]);
@@ -300,11 +332,19 @@ describe('setup actions', () => {
       sourceId: 'u1',
       enabled: 'false',
     })).status).toBe(400);
+    expect((await postAction({
+      type: 'manual-epg-sources',
+      sources: [
+        { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+        { url: 'http://host/epg.xml', playlistIds: ['x1'] },
+      ],
+    })).status).toBe(400);
   });
 
   it('acknowledges and removes a consumed action', async () => {
     const created = await postAction({
-      type: 'epg', url: 'http://host/epg.xml',
+      type: 'manual-epg-sources',
+      sources: [{ url: 'http://host/epg.xml', playlistIds: [] }],
     });
     const { id } = (await created.json()) as { id: number };
     const token = new URL(setupUrl).search;
@@ -507,7 +547,10 @@ describe('startServer onChange callback (Luna push fan-out source)', () => {
       const res = await fetch(`${localBase}/setup-actions${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'epg', url: 'http://host/epg.xml' }),
+        body: JSON.stringify({
+          type: 'manual-epg-sources',
+          sources: [{ url: 'http://host/epg.xml', playlistIds: [] }],
+        }),
       });
       expect(res.status).toBe(201);
       expect(onChange).toHaveBeenCalledWith('setup-changed');

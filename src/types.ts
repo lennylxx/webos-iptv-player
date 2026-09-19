@@ -89,6 +89,12 @@ export interface EpgSource {
   offsetMinutes?: number;
 }
 
+export interface ManualEpgSource {
+  url: string;
+  /** Empty means the source applies to every playlist. */
+  playlistIds: string[];
+}
+
 export interface ParsedPlaylist {
   channels: Channel[];
   groups: string[];

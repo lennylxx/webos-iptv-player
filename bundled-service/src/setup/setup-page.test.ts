@@ -41,6 +41,8 @@ describe('setup page forms', () => {
     expect(dom.window.document.documentElement.lang).toBe('zh-CN');
     expect(dom.window.document.querySelector('.pair-title')!.textContent).toBe('连接电视');
     expect(dom.window.document.querySelector('#language-current')!.textContent).toBe('ZH');
+    expect(dom.window.document.querySelector('[data-message="programGuideSources"]')!.textContent)
+      .toBe('手动 XMLTV 源');
     expect(dom.window.document.cookie).toContain('iptv_setup_locale=zh-CN');
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
     dom.window.close();
@@ -52,7 +54,11 @@ describe('setup page forms', () => {
         return Promise.resolve(response({ token: 'paired-token' }));
       }
       if (url === '/setup-state?token=paired-token') {
-        return Promise.resolve(response({ playlists: [], xtreamAccounts: [], epgUrl: '' }));
+        return Promise.resolve(response({
+          playlists: [],
+          xtreamAccounts: [],
+          manualEpgSources: [],
+        }));
       }
       if (url === '/uploads') return Promise.resolve(response([]));
       return Promise.resolve(response({ error: 'unexpected request' }, 500));
@@ -78,6 +84,10 @@ describe('setup page forms', () => {
     expect(JSON.parse(String(request![1]?.body))).toEqual({ code: '1234' });
     expect(dom.window.document.querySelector<HTMLElement>('#pair-card')!.hidden).toBe(true);
     expect(dom.window.document.querySelector<HTMLElement>('#setup-card')!.hidden).toBe(false);
+    expect(dom.window.document.querySelector('[data-message="programGuideSources"]')!.textContent)
+      .toBe('Manual XMLTV sources');
+    expect(dom.window.document.querySelector('.epg-source-empty')?.textContent)
+      .toBe('No EPG sources added yet');
     dom.window.close();
   });
 
@@ -85,7 +95,11 @@ describe('setup page forms', () => {
     const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
       if (url === '/uploads') return Promise.resolve(response([]));
       if (url === '/setup-state?token=abc123') {
-        return Promise.resolve(response({ playlists: [], xtreamAccounts: [], epgUrl: '' }));
+        return Promise.resolve(response({
+          playlists: [],
+          xtreamAccounts: [],
+          manualEpgSources: [],
+        }));
       }
       if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
         return Promise.resolve(response({ id: 7, type: 'playlist' }, 201));
@@ -140,7 +154,10 @@ describe('setup page forms', () => {
           xtreamAccounts: removed
             ? []
             : [{ id: 'x1', name: 'host', serverUrl: 'http://host', username: 'u1' }],
-          epgUrl: 'http://host/epg.xml',
+          manualEpgSources: [{
+            url: 'http://host/epg.xml',
+            playlistIds: ['p1'],
+          }],
         }));
       }
       if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
@@ -162,7 +179,10 @@ describe('setup page forms', () => {
     });
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    expect(dom.window.document.querySelectorAll('.configured-item')).toHaveLength(3);
+    expect(dom.window.document.querySelectorAll('.configured-item')).toHaveLength(2);
+    expect(dom.window.document.querySelectorAll('.epg-source-row')).toHaveLength(1);
+    expect(Array.from(dom.window.document.querySelectorAll('.epg-scope-option.selected'))
+      .map(option => option.textContent)).toEqual(['Alpha']);
     expect(dom.window.document.querySelector('#configured-list')!.textContent)
       .not.toContain('password');
     const buttons = dom.window.document.querySelectorAll<HTMLButtonElement>('.configured-remove');
@@ -178,6 +198,213 @@ describe('setup page forms', () => {
     });
     expect(dom.window.document.querySelector('#configured-list')!.textContent)
       .not.toContain('host · u1');
+    dom.window.close();
+  });
+
+  it('submits ordered EPG sources with playlist scopes', async () => {
+    const posts: unknown[] = [];
+    const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
+      if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        return Promise.resolve(response({
+          playlists: [
+            { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' },
+            { id: 'p2', name: 'Bravo', url: 'http://host/b.m3u' },
+          ],
+          xtreamAccounts: [],
+          manualEpgSources: [
+            { url: 'http://host/a.xml', playlistIds: ['p1'] },
+            { url: 'http://host/b.xml', playlistIds: [] },
+          ],
+        }));
+      }
+      if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
+        posts.push(JSON.parse(String(options.body)));
+        return Promise.resolve(response({ id: 30, type: 'manual-epg-sources' }, 201));
+      }
+      if (url === '/setup-actions/30?token=abc123') {
+        return Promise.resolve(response({ id: 30, pending: false }));
+      }
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+        window.HTMLFormElement.prototype.reportValidity = () => true;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const rows = dom.window.document.querySelectorAll<HTMLElement>('.epg-source-row');
+    rows[0].querySelector<HTMLButtonElement>('.epg-source-control.down')!.click();
+    const reordered = dom.window.document.querySelectorAll<HTMLElement>('.epg-source-row');
+    expect(reordered[0].querySelector<HTMLInputElement>('.epg-url-input')!.value)
+      .toBe('http://host/b.xml');
+    const alpha = Array.from(reordered[0].querySelectorAll<HTMLButtonElement>(
+      '.epg-scope-option',
+    )).find(option => option.textContent === 'Alpha')!;
+    alpha.click();
+
+    dom.window.document.querySelector<HTMLFormElement>('#epg-form')!
+      .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(posts).toEqual([{
+      type: 'manual-epg-sources',
+      sources: [
+        { url: 'http://host/b.xml', playlistIds: ['p1'] },
+        { url: 'http://host/a.xml', playlistIds: ['p1'] },
+      ],
+    }]);
+    dom.window.close();
+  });
+
+  it('rejects duplicate EPG URLs before submitting', async () => {
+    const posts: unknown[] = [];
+    const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
+      if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        return Promise.resolve(response({
+          playlists: [{ id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' }],
+          xtreamAccounts: [],
+          manualEpgSources: [
+            { url: 'http://host/a.xml', playlistIds: ['p1'] },
+            { url: 'http://host/b.xml', playlistIds: [] },
+          ],
+        }));
+      }
+      if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
+        posts.push(JSON.parse(String(options.body)));
+      }
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+        window.HTMLFormElement.prototype.reportValidity = () => true;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const inputs = dom.window.document.querySelectorAll<HTMLInputElement>('.epg-url-input');
+    inputs[1].value = inputs[0].value;
+    inputs[1].dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    dom.window.document.querySelector<HTMLFormElement>('#epg-form')!
+      .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(posts).toEqual([]);
+    expect(dom.window.document.querySelector('#epg-form .config-status')?.textContent)
+      .toBe('Each EPG source must use a unique URL.');
+    expect(dom.window.document.activeElement).toBe(inputs[1]);
+    dom.window.close();
+  });
+
+  it('does not overwrite unsaved EPG scope changes during state refresh', async () => {
+    let stateRequests = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        stateRequests += 1;
+        return Promise.resolve(response({
+          playlists: [{ id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' }],
+          xtreamAccounts: [],
+          manualEpgSources: [{
+            url: 'http://host/epg.xml',
+            playlistIds: ['p1'],
+          }],
+        }));
+      }
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const alpha = Array.from(dom.window.document.querySelectorAll<HTMLButtonElement>(
+      '.epg-scope-option',
+    )).find(option => option.textContent === 'Alpha')!;
+    alpha.click();
+    expect(Array.from(dom.window.document.querySelectorAll('.epg-scope-option.selected'))
+      .map(option => option.textContent)).toEqual(['All playlists']);
+    const input = dom.window.document.querySelector<HTMLInputElement>('.epg-url-input')!;
+    input.focus();
+
+    await dom.window.eval('refreshSetupState()');
+
+    expect(stateRequests).toBeGreaterThanOrEqual(2);
+    expect(dom.window.document.querySelector('.epg-url-input')).toBe(input);
+    expect(dom.window.document.activeElement).toBe(input);
+    expect(Array.from(dom.window.document.querySelectorAll('.epg-scope-option.selected'))
+      .map(option => option.textContent)).toEqual(['All playlists']);
+    dom.window.close();
+  });
+
+  it('reconciles dirty EPG scopes when playlists change', async () => {
+    let stateRequests = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        stateRequests += 1;
+        return Promise.resolve(response({
+          playlists: stateRequests === 1
+            ? [
+              { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' },
+              { id: 'p2', name: 'Bravo', url: 'http://host/b.m3u' },
+            ]
+            : [
+              { id: 'p2', name: 'Bravo', url: 'http://host/b.m3u' },
+              { id: 'p3', name: 'Charlie', url: 'http://host/c.m3u' },
+            ],
+          xtreamAccounts: [],
+          manualEpgSources: [{
+            url: 'http://host/epg.xml',
+            playlistIds: ['p1'],
+          }],
+        }));
+      }
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const input = dom.window.document.querySelector<HTMLInputElement>('.epg-url-input')!;
+    input.value = 'http://host/unsaved.xml';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    input.focus();
+
+    await dom.window.eval('refreshSetupState()');
+
+    expect(dom.window.document.querySelector('.epg-url-input')).toBe(input);
+    expect(input.value).toBe('http://host/unsaved.xml');
+    expect(dom.window.document.activeElement).toBe(input);
+    expect(Array.from(dom.window.document.querySelectorAll('.epg-scope-option'))
+      .map(option => option.textContent)).toEqual([
+      'All playlists',
+      'Bravo',
+      'Charlie',
+    ]);
+    expect(Array.from(dom.window.document.querySelectorAll('.epg-scope-option.selected'))
+      .map(option => option.textContent)).toEqual(['All playlists']);
     dom.window.close();
   });
 
@@ -205,7 +432,7 @@ describe('setup page forms', () => {
             uploadId: 'upload-1',
             enabled: false,
           }],
-          epgUrl: '',
+          manualEpgSources: [],
         }));
       }
       if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
@@ -253,7 +480,7 @@ describe('setup page forms', () => {
         return Promise.resolve(response({
           playlists: [],
           xtreamAccounts: [],
-          epgUrl: '',
+          manualEpgSources: [],
           onlineSubtitles: {
             preferredLanguage: '',
             subdlConfigured: true,

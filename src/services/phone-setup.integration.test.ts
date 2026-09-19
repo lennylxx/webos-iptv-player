@@ -57,7 +57,13 @@ describe('phone setup synchronization', () => {
       username: 'u1',
       password: 'p1',
     });
-    await submit({ type: 'epg', url: 'http://host/epg.xml' });
+    await submit({
+      type: 'manual-epg-sources',
+      sources: [
+        { url: 'http://host/epg.xml', playlistIds: [] },
+        { url: 'http://host/epg-2.xml', playlistIds: [] },
+      ],
+    });
     await submit({
       type: 'online-subtitles',
       preferredLanguage: '',
@@ -86,7 +92,10 @@ describe('phone setup synchronization', () => {
         },
       },
     ]);
-    expect(StorageService.getEpgUrl()).toBe('http://host/epg.xml');
+    expect(StorageService.getManualEpgSources()).toEqual([
+      { url: 'http://host/epg.xml', playlistIds: [] },
+      { url: 'http://host/epg-2.xml', playlistIds: [] },
+    ]);
     expect(StorageService.getOnlineSubtitleConfig()).toEqual({
       preferredLanguage: '',
       subdl: { apiKey: 'k1' },
@@ -115,7 +124,10 @@ describe('phone setup synchronization', () => {
         username: 'u1',
       }],
       uploadedPlaylists: [],
-      epgUrl: 'http://host/epg.xml',
+      manualEpgSources: [
+        { url: 'http://host/epg.xml', playlistIds: [] },
+        { url: 'http://host/epg-2.xml', playlistIds: [] },
+      ],
       onlineSubtitles: {
         preferredLanguage: '',
         subdlConfigured: true,

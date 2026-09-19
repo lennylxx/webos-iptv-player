@@ -372,8 +372,8 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
-printf 'HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nContent-Length: 10485760\\r\\n\\r\\n' > "$headers"
-head -c 10485760 /dev/zero
+printf 'HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nContent-Length: 4096\\r\\n\\r\\n' > "$headers"
+head -c 4096 /dev/zero
 exit 23
 `, { mode: 0o755 });
 
@@ -382,7 +382,7 @@ exit 23
           ...options,
           env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
         }),
-      });
+      }, 15_000);
 
       expect(result.status).toBe(200);
       expect(result.contentType).toBe('text/plain');

@@ -1,4 +1,4 @@
-import type { PlaylistEntry } from '../types';
+import type { ManualEpgSource, PlaylistEntry } from '../types';
 import { fetchWithTimeout } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
 import { genPlaylistId, isSourceEnabled } from '../utils/playlist';
@@ -28,7 +28,7 @@ export interface ServiceInfo {
 export type SetupAction =
   | { id: number; type: 'playlist'; name: string; url: string }
   | { id: number; type: 'xtream'; serverUrl: string; username: string; password: string }
-  | { id: number; type: 'epg'; url: string }
+  | { id: number; type: 'manual-epg-sources'; sources: ManualEpgSource[] }
   | { id: number; type: 'remove-source'; sourceId: string }
   | { id: number; type: 'set-source-enabled'; sourceId: string; enabled: boolean }
   | {
@@ -54,7 +54,7 @@ export interface SetupState {
     enabled?: boolean;
   }>;
   uploadedPlaylists: Array<{ id: string; uploadId: string; enabled?: boolean }>;
-  epgUrl: string;
+  manualEpgSources: ManualEpgSource[];
   onlineSubtitles: {
     preferredLanguage: string;
     subdlConfigured: boolean;
@@ -131,8 +131,8 @@ class SetupClientImpl {
           uploadId: uploadIdFromUrl(item.url),
           ...(isSourceEnabled(item) ? {} : { enabled: false }),
         })),
-      epgUrl: StorageService.getEpgUrl(),
-        onlineSubtitles: {
+      manualEpgSources: StorageService.getManualEpgSources(),
+      onlineSubtitles: {
           preferredLanguage: onlineSubtitles.preferredLanguage,
           subdlConfigured: onlineSubtitles.subdl.apiKey.trim() !== '',
           assrtConfigured: onlineSubtitles.assrt.apiKey.trim() !== '',
@@ -199,8 +199,8 @@ class SetupClientImpl {
     const previousPlaylists = StorageService.getPlaylists();
     let playlists: PlaylistEntry[] = previousPlaylists
       .map(item => ({ ...item, xtream: item.xtream && { ...item.xtream } }));
-    const previousEpgUrl = StorageService.getEpgUrl();
-    let epgUrl = previousEpgUrl;
+    const previousManualEpgSources = StorageService.getManualEpgSources();
+    let manualEpgSources = previousManualEpgSources;
     const previousOnlineSubtitles = StorageService.getOnlineSubtitleConfig();
     let onlineSubtitles: OnlineSubtitleConfig = {
       preferredLanguage: previousOnlineSubtitles.preferredLanguage,
@@ -260,8 +260,12 @@ class SetupClientImpl {
         if (existing >= 0) playlists[existing] = entry;
         else playlists.push(entry);
         playlistActionIds.push(action.id);
-      } else if (action.type === 'epg' && typeof action.url === 'string') {
-        epgUrl = action.url;
+      } else if (action.type === 'manual-epg-sources' &&
+          Array.isArray(action.sources)) {
+        manualEpgSources = action.sources.map(source => ({
+          url: source.url,
+          playlistIds: source.playlistIds.slice(),
+        }));
         epgActionIds.push(action.id);
       } else if (action.type === 'remove-source' &&
           typeof action.sourceId === 'string') {
@@ -315,12 +319,14 @@ class SetupClientImpl {
     }
 
     const playlistsChanged = JSON.stringify(playlists) !== JSON.stringify(previousPlaylists);
-    const epgChanged = epgUrl !== previousEpgUrl;
+    const epgChanged =
+      JSON.stringify(manualEpgSources) !== JSON.stringify(previousManualEpgSources);
     const subtitlesChanged =
       JSON.stringify(onlineSubtitles) !== JSON.stringify(previousOnlineSubtitles);
     if (playlistsChanged) ReminderService.backfillSourceIds();
     const playlistsStored = !playlistsChanged || StorageService.setPlaylists(playlists);
-    const epgStored = !epgChanged || StorageService.setEpgUrl(epgUrl);
+    const epgStored =
+      !epgChanged || StorageService.setManualEpgSources(manualEpgSources);
     const subtitlesStored =
       !subtitlesChanged || StorageService.setOnlineSubtitleConfig(onlineSubtitles);
 

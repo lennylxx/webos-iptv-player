@@ -50,6 +50,11 @@ interface PreparedEpgMappingSearchEntry {
   fields: string[];
 }
 
+function sourceAppliesToChannel(source: EpgSource, channel: Channel): boolean {
+  return (source.kind === 'manual' && source.playlistIds.length === 0)
+    || source.playlistIds.some((id) => channel.playlistIds.includes(id));
+}
+
 class EpgServiceImpl {
   channels: Record<string, EpgChannel> = {};
   programmes: Record<string, Programme[]> = {};
@@ -113,8 +118,8 @@ class EpgServiceImpl {
     channels?: Channel[],
   ): Promise<void> {
     this.playlistChannels = channels ?? null;
-    this.mappedChannelIds = this.collectMappedChannelIds();
     this.setSources(sources);
+    this.mappedChannelIds = this.collectMappedChannelIds();
     this.appliedFilters = new Map(this.sources.map((source) =>
       [source.url, this.filterFor(source)] as const));
     const revision = ++this.revision;
@@ -168,8 +173,8 @@ class EpgServiceImpl {
   ): Promise<void> {
     const previousSources = this.sources;
     this.playlistChannels = channels ?? null;
-    this.mappedChannelIds = this.collectMappedChannelIds();
     this.setSources(sources);
+    this.mappedChannelIds = this.collectMappedChannelIds();
     const filters = new Map(this.sources.map((source) =>
       [source.url, this.filterFor(source)] as const));
     // Entering and leaving channel edit mode rebuilds the channel array to
@@ -262,10 +267,11 @@ class EpgServiceImpl {
   private findBaseChannelId(channel: Channel, override: ChannelOverride | null): string | null {
     if (!this.sources.length) return this.findLegacyChannelId(channel);
     if (override?.epgChannelId && this.channels[override.epgChannelId]) {
-      return override.epgChannelId;
+      const mapped = this.splitChannelKey(override.epgChannelId);
+      const source = mapped && this.sources.find(item => item.url === mapped.url);
+      if (source && sourceAppliesToChannel(source, channel)) return override.epgChannelId;
     }
-    const candidates = this.sources.filter((source) =>
-      source.kind === 'manual' || source.playlistIds.some((id) => channel.playlistIds.includes(id)));
+    const candidates = this.sources.filter(source => sourceAppliesToChannel(source, channel));
 
     for (const source of candidates) {
       if (!channel.id) continue;
@@ -337,9 +343,7 @@ class EpgServiceImpl {
 
   getMappingSearchEntries(channel: Channel): EpgMappingSearchEntry[] {
     const entries: EpgMappingSearchEntry[] = [];
-    const sources = this.sources.filter((source) =>
-      source.kind === 'manual'
-      || source.playlistIds.some((id) => channel.playlistIds.includes(id)));
+    const sources = this.sources.filter(source => sourceAppliesToChannel(source, channel));
     for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
       const source = sources[sourceIndex];
       const state = this.states.get(source.url);
@@ -426,8 +430,15 @@ class EpgServiceImpl {
       if (!source.url) continue;
       const existing = merged.find((item) => item.url === source.url);
       if (existing) {
-        for (const id of source.playlistIds) {
-          if (!existing.playlistIds.includes(id)) existing.playlistIds.push(id);
+        const globalManual =
+          (existing.kind === 'manual' && existing.playlistIds.length === 0)
+          || (source.kind === 'manual' && source.playlistIds.length === 0);
+        if (globalManual) {
+          existing.playlistIds = [];
+        } else {
+          for (const id of source.playlistIds) {
+            if (!existing.playlistIds.includes(id)) existing.playlistIds.push(id);
+          }
         }
         if (source.kind === 'manual') existing.kind = 'manual';
         if (source.offsetMinutes !== undefined) existing.offsetMinutes = source.offsetMinutes;
@@ -618,9 +629,19 @@ class EpgServiceImpl {
     // Nothing mapped is the common case, and it costs one sparse walk; only
     // a playlist that actually carries mappings pays for the key set.
     if (this.playlistChannels === null || !mapped.length) return mapped;
-    const eligible = new Set<string>();
-    for (const channel of this.playlistChannels) eligible.add(channelKey(channel));
-    return ChannelCustomizationService.epgChannelIdsFor(eligible);
+    const eligibleMappings = new Set<string>();
+    for (const source of this.sources) {
+      const eligibleChannels = new Set<string>();
+      for (const channel of this.playlistChannels) {
+        if (sourceAppliesToChannel(source, channel)) {
+          eligibleChannels.add(channelKey(channel));
+        }
+      }
+      for (const id of ChannelCustomizationService.epgChannelIdsFor(eligibleChannels)) {
+        if (this.splitChannelKey(id)?.url === source.url) eligibleMappings.add(id);
+      }
+    }
+    return [...eligibleMappings];
   }
 
   /**
@@ -637,8 +658,7 @@ class EpgServiceImpl {
       if (mapped?.url === source.url) ids.add(mapped.id);
     }
     for (const channel of this.playlistChannels) {
-      if (source.kind !== 'manual'
-        && !channel.playlistIds.some((id) => source.playlistIds.includes(id))) continue;
+      if (!sourceAppliesToChannel(source, channel)) continue;
       if (channel.id) ids.add(channel.id);
       // A rename keeps the source name, and findChannelId matches either one.
       if (channel.name) names.add(channel.name.toLowerCase());

@@ -11,7 +11,7 @@ const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
       count?: number;
       xtream?: { username: string; password: string; liveOutput?: 'auto' | 'ts' | 'm3u8' };
     }>,
-    epgUrl: '',
+    manualEpgSources: [] as Array<{ url: string; playlistIds: string[] }>,
     onlineSubtitles: {
       preferredLanguage: '',
       subdl: { apiKey: '' },
@@ -26,8 +26,8 @@ const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
     },
     getPlaylists: vi.fn(),
     setPlaylists: vi.fn(),
-    getEpgUrl: vi.fn(),
-    setEpgUrl: vi.fn(),
+    getManualEpgSources: vi.fn(),
+    setManualEpgSources: vi.fn(),
     getOnlineSubtitleConfig: vi.fn(),
     setOnlineSubtitleConfig: vi.fn(),
     remove: vi.fn(),
@@ -39,11 +39,13 @@ storageMock.setPlaylists.mockImplementation((next: typeof storageMock.playlists)
   storageMock.playlists = next;
   return true;
 });
-storageMock.getEpgUrl.mockImplementation(() => storageMock.epgUrl);
-storageMock.setEpgUrl.mockImplementation((url: string) => {
-  storageMock.epgUrl = url;
+storageMock.getManualEpgSources.mockImplementation(() => storageMock.manualEpgSources);
+storageMock.setManualEpgSources.mockImplementation(
+  (sources: typeof storageMock.manualEpgSources) => {
+    storageMock.manualEpgSources = sources;
   return true;
-});
+  },
+);
 storageMock.getOnlineSubtitleConfig.mockImplementation(() => storageMock.onlineSubtitles);
 storageMock.setOnlineSubtitleConfig.mockImplementation(
   (config: typeof storageMock.onlineSubtitles) => {
@@ -68,7 +70,7 @@ function jsonResponse(data: unknown, status = 200): { ok: boolean; status: numbe
 
 beforeEach(() => {
   storageMock.playlists = [];
-  storageMock.epgUrl = '';
+  storageMock.manualEpgSources = [];
   storageMock.onlineSubtitles = {
     preferredLanguage: '',
     subdl: { apiKey: '' },
@@ -83,8 +85,8 @@ beforeEach(() => {
   };
   storageMock.getPlaylists.mockClear();
   storageMock.setPlaylists.mockClear();
-  storageMock.getEpgUrl.mockClear();
-  storageMock.setEpgUrl.mockClear();
+  storageMock.getManualEpgSources.mockClear();
+  storageMock.setManualEpgSources.mockClear();
   storageMock.getOnlineSubtitleConfig.mockClear();
   storageMock.setOnlineSubtitleConfig.mockClear();
   storageMock.remove.mockClear();
@@ -301,7 +303,10 @@ describe('SetupClient.applyPendingActions', () => {
         source: 'upload',
       },
     ];
-    storageMock.epgUrl = 'http://host/epg.xml';
+    storageMock.manualEpgSources = [
+      { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+      { url: 'http://host/epg-2.xml', playlistIds: [] },
+    ];
     storageMock.onlineSubtitles = {
       preferredLanguage: '',
       subdl: { apiKey: 'k1' },
@@ -329,7 +334,10 @@ describe('SetupClient.applyPendingActions', () => {
         username: 'u1',
       }],
       uploadedPlaylists: [{ id: 'u1', uploadId: 'u1' }],
-      epgUrl: 'http://host/epg.xml',
+      manualEpgSources: [
+        { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+        { url: 'http://host/epg-2.xml', playlistIds: [] },
+      ],
       onlineSubtitles: {
         preferredLanguage: '',
         subdlConfigured: true,
@@ -353,7 +361,14 @@ describe('SetupClient.applyPendingActions', () => {
           username: 'u1',
           password: 'p1',
         },
-        { id: 3, type: 'epg', url: 'http://host/epg.xml' },
+        {
+          id: 3,
+          type: 'manual-epg-sources',
+          sources: [
+            { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+            { url: 'http://host/epg-2.xml', playlistIds: [] },
+          ],
+        },
       ]))
       .mockResolvedValue(jsonResponse({ deleted: true }));
 
@@ -374,7 +389,10 @@ describe('SetupClient.applyPendingActions', () => {
         xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
       },
     ]);
-    expect(storageMock.setEpgUrl).toHaveBeenCalledWith('http://host/epg.xml');
+    expect(storageMock.setManualEpgSources).toHaveBeenCalledWith([
+      { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+      { url: 'http://host/epg-2.xml', playlistIds: [] },
+    ]);
     expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
       'http://127.0.0.1:8890/setup-actions/1',
       { method: 'DELETE' },
@@ -588,7 +606,11 @@ describe('SetupClient.applyPendingActions', () => {
     fetchWithTimeoutMock
       .mockResolvedValueOnce(jsonResponse([
         { id: 6, type: 'playlist', name: 'Alpha', url: 'http://host/a.m3u' },
-        { id: 7, type: 'epg', url: 'http://host/epg.xml' },
+        {
+          id: 7,
+          type: 'manual-epg-sources',
+          sources: [{ url: 'http://host/epg.xml', playlistIds: [] }],
+        },
       ]))
       .mockResolvedValue(jsonResponse({ deleted: true }));
 
@@ -629,7 +651,7 @@ describe('SetupClient.applyPendingActions', () => {
     await expect(SetupClient.applyPendingActions()).resolves.toBe(false);
 
     expect(storageMock.setPlaylists).not.toHaveBeenCalled();
-    expect(storageMock.setEpgUrl).not.toHaveBeenCalled();
+    expect(storageMock.setManualEpgSources).not.toHaveBeenCalled();
   });
 });
 

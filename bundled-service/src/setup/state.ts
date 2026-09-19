@@ -16,6 +16,11 @@ export interface OnlineSubtitleState {
   opensubtitlesUsername: string;
 }
 
+export interface ManualEpgSourceState {
+  url: string;
+  playlistIds: string[];
+}
+
 export interface SetupState {
   playlists: Array<{ id: string; name: string; url: string; enabled?: boolean }>;
   xtreamAccounts: Array<{
@@ -30,13 +35,32 @@ export interface SetupState {
     uploadId: string;
     enabled?: boolean;
   }>;
-  epgUrl: string;
+  manualEpgSources: ManualEpgSourceState[];
   onlineSubtitles: OnlineSubtitleState;
 }
 
 function enabledState(value: unknown): { enabled?: false } {
   if (value === undefined) return {};
   return booleanValue(value, 'source enabled state') ? {} : { enabled: false };
+}
+
+function manualEpgSources(value: unknown): ManualEpgSourceState[] {
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new Error('Invalid program guide sources');
+  }
+  const seen: Record<string, boolean> = {};
+  return value.map(source => {
+    const item = objectValue(source);
+    if (!Array.isArray(item.playlistIds) || item.playlistIds.length > 100) {
+      throw new Error('Invalid program guide playlist scope');
+    }
+    const url = httpUrl(item.url, 'program guide URL');
+    const playlistIds = item.playlistIds.map(id =>
+      stringValue(id, 'playlist id', 120));
+    if (seen[url]) throw new Error('Duplicate program guide source URL');
+    seen[url] = true;
+    return { url, playlistIds };
+  });
 }
 
 export function parseSetupState(value: unknown): SetupState {
@@ -76,12 +100,13 @@ export function parseSetupState(value: unknown): SetupState {
       ...enabledState(item.enabled),
     };
   });
+  const parsedManualEpgSources = manualEpgSources(input.manualEpgSources);
   const onlineSubtitles = objectValue(input.onlineSubtitles);
   return {
     playlists,
     xtreamAccounts,
     uploadedPlaylists,
-    epgUrl: input.epgUrl === '' ? '' : httpUrl(input.epgUrl, 'program guide URL'),
+    manualEpgSources: parsedManualEpgSources,
     onlineSubtitles: {
       preferredLanguage: subtitleLanguage(onlineSubtitles.preferredLanguage),
       subdlConfigured: booleanValue(onlineSubtitles.subdlConfigured, 'SubDL status'),
@@ -113,7 +138,7 @@ export class SetupStateStore {
     playlists: [],
     xtreamAccounts: [],
     uploadedPlaylists: [],
-    epgUrl: '',
+    manualEpgSources: [],
     onlineSubtitles: {
       preferredLanguage: '',
       subdlConfigured: false,
@@ -130,7 +155,10 @@ export class SetupStateStore {
       playlists: state.playlists.map(item => ({ ...item })),
       xtreamAccounts: state.xtreamAccounts.map(item => ({ ...item })),
       uploadedPlaylists: state.uploadedPlaylists.map(item => ({ ...item })),
-      epgUrl: state.epgUrl,
+      manualEpgSources: state.manualEpgSources.map(item => ({
+        url: item.url,
+        playlistIds: item.playlistIds.slice(),
+      })),
       onlineSubtitles: { ...state.onlineSubtitles },
     };
   }
@@ -140,7 +168,10 @@ export class SetupStateStore {
       playlists: this.state.playlists.map(item => ({ ...item })),
       xtreamAccounts: this.state.xtreamAccounts.map(item => ({ ...item })),
       uploadedPlaylists: this.state.uploadedPlaylists.map(item => ({ ...item })),
-      epgUrl: this.state.epgUrl,
+      manualEpgSources: this.state.manualEpgSources.map(item => ({
+        url: item.url,
+        playlistIds: item.playlistIds.slice(),
+      })),
       onlineSubtitles: { ...this.state.onlineSubtitles },
     };
   }

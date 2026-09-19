@@ -1,8 +1,9 @@
 # LAN Setup Service
 
 A bundled webOS JS service that lets a phone or computer on the same LAN
-configure Playlist URLs, Xtream accounts, and an EPG URL, or upload an `.m3u`
-playlist to the TV. The TV-side app consumes these changes through Luna.
+configure Playlist URLs, Xtream accounts, and ordered EPG sources, or upload an
+`.m3u` playlist to the TV. Each manual EPG source can apply globally or to
+selected playlists. The TV-side app consumes these changes through Luna.
 
 The service targets webOS TV 4.x's Node.js 0.12.2 runtime. TypeScript emits
 ES5/CommonJS, and `scripts/service-compat-gate.mjs` scans the final JavaScript
@@ -68,7 +69,9 @@ which iterates the active `serviceEvents` subscriber list and calls
 `msg.respond({event})` on each one. Upload events refresh `/uploads`.
 Setup events make `SetupClient` consume the pending actions, update the
 existing `StorageService` models, publish a sanitized `/setup-state` snapshot,
-acknowledge each action, and reload data. The phone waits for that
+acknowledge each action, and reload data. EPG edits use one
+`manual-epg-sources` action containing the complete ordered list, so priority
+and playlist scope change atomically. The phone waits for that
 acknowledgement before showing “Saved on TV”. Source-removal actions use the
 same queue, so deleting a Playlist or Xtream account remains idempotent.
 Source-enable actions also use this queue for URL, Xtream, and uploaded
@@ -158,7 +161,7 @@ the HTTP server is torn down. Luna respawns the process on cold start
     public aggregator. The "I have a file but no hosted URL" gap that
     justifies M3U upload barely exists for EPG.
   - **The local-source case is already covered — and stays fresh.** The
-    manual EPG URL field in **Settings → EPG**, plus the
+    manual EPG source list in **Settings → EPG**, plus the
     localhost→playlist-host rewrite in `src/services/playlist-service.ts`
     (for users running a local proxy like xTeVe/Threadfin that serves
     M3U and XMLTV from the same box), let the TV *pull* fresh EPG by URL.

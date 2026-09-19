@@ -416,6 +416,143 @@
   }
   .config-status.ok { color: #23845a; }
   .config-status.err { color: #c43b4d; }
+  .epg-editor { padding-top: 12px; }
+  .epg-source-empty {
+    padding: 14px;
+    color: #8a93a8;
+    background: #ffffff;
+    border: 1px dashed #dce2ed;
+    border-radius: 8px;
+    font-size: 13px;
+    text-align: center;
+  }
+  .epg-source-row {
+    margin-top: 10px;
+    padding: 12px;
+    background: #ffffff;
+    border: 1px solid #dce2ed;
+    border-radius: 8px;
+  }
+  .epg-source-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .epg-priority {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    color: #315fc9;
+    background: #e8efff;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .epg-source-title {
+    flex: 1;
+    color: #4c5875;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .epg-source-control {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: #6c7488;
+    background: #f7f9fd;
+    border: 1px solid #dce2ed;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+  .epg-source-control::before {
+    position: absolute;
+    top: 12px;
+    left: 10px;
+    width: 7px;
+    height: 7px;
+    border-top: 2px solid currentColor;
+    border-left: 2px solid currentColor;
+    content: "";
+    transform: rotate(45deg);
+  }
+  .epg-source-control.down::before {
+    top: 10px;
+    transform: rotate(225deg);
+  }
+  .epg-source-control.remove {
+    color: #c43b4d;
+    border-color: #efccd2;
+  }
+  .epg-source-control.remove::before,
+  .epg-source-control.remove::after {
+    top: 13px;
+    left: 8px;
+    width: 12px;
+    height: 2px;
+    border: 0;
+    background: currentColor;
+    transform: rotate(45deg);
+  }
+  .epg-source-control.remove::after {
+    position: absolute;
+    content: "";
+    transform: rotate(-45deg);
+  }
+  .epg-source-control:disabled { cursor: default; opacity: 0.38; }
+  .epg-source-row .config-field { margin-top: 10px; }
+  .epg-scope-label {
+    flex: 0 0 auto;
+    margin-right: 2px;
+    color: #6c7488;
+    font-size: 12px;
+  }
+  .epg-scope-options {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 10px;
+  }
+  .epg-scope-option {
+    min-width: 60px;
+    padding: 7px 12px;
+    overflow: hidden;
+    color: #5d6880;
+    background: #f7f9fd;
+    border: 1px solid #dce2ed;
+    border-radius: 999px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .epg-scope-option.selected {
+    color: #ffffff;
+    background: #4c7eff;
+    border-color: #4c7eff;
+  }
+  .epg-add {
+    margin-top: 11px;
+    padding: 8px 2px;
+    color: #315fc9;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .epg-add::before {
+    margin-right: 7px;
+    content: "+";
+    font-size: 18px;
+    font-weight: 400;
+    vertical-align: -1px;
+  }
 
   .section { font-size: 14px; font-weight: 600; color: #1a2138; margin: 28px 0 8px; }
   ul { list-style: none; padding: 0; margin: 0; }
@@ -588,14 +725,14 @@
       </details>
 
       <details class="config-group">
-        <summary><span class="config-type">EPG</span><span data-message="programGuideUrl">Program guide URL</span></summary>
-        <form class="config-fields" data-action="epg">
-          <label class="config-field">
-            <span data-message="xmltvUrl">XMLTV URL</span>
-            <input class="config-input" name="url" type="url"
-              placeholder="https://example.com/epg.xml" required>
-          </label>
-          <button class="config-save" type="submit" data-message="saveProgramGuide">Save program guide</button>
+        <summary><span class="config-type">EPG</span><span data-message="programGuideSources">Manual XMLTV sources</span></summary>
+        <form class="config-fields epg-editor" data-action="manual-epg-sources"
+          id="epg-form">
+          <div id="epg-source-list"></div>
+          <button class="epg-add" id="add-epg-source" type="button"
+            data-message="addProgramGuideSource">Add EPG source</button>
+          <button class="config-save" type="submit"
+            data-message="saveProgramGuide">Save program guide</button>
           <p class="config-status" aria-live="polite"></p>
         </form>
       </details>
@@ -688,8 +825,14 @@
   var languageCurrent = document.getElementById("language-current");
   var subtitleForm = document.querySelector('[data-action="online-subtitles"]');
   var subtitleState = document.getElementById("subtitle-state");
+  var epgForm = document.getElementById("epg-form");
+  var epgSourceList = document.getElementById("epg-source-list");
+  var addEpgSource = document.getElementById("add-epg-source");
   var setupToken = new URLSearchParams(window.location.search).get("token") || "";
   var uploadedSources = {};
+  var manualEpgSources = [];
+  var epgPlaylists = [];
+  var epgDirty = false;
 
   function authenticatedUrl(path) {
     return path + (path.indexOf("?") >= 0 ? "&" : "?") +
@@ -726,7 +869,15 @@
         password: "Password",
         addAccount: "Add account",
         programGuideUrl: "Program guide URL",
+        programGuideSources: "Manual XMLTV sources",
         xmltvUrl: "XMLTV URL",
+        appliesTo: "Applies to",
+        allPlaylists: "All playlists",
+        addProgramGuideSource: "Add EPG source",
+        duplicateProgramGuideSource: "Each EPG source must use a unique URL.",
+        noProgramGuideSources: "No EPG sources added yet",
+        moveUp: "Move up",
+        moveDown: "Move down",
         saveProgramGuide: "Save program guide",
         onlineSubtitles: "Online Subtitles",
         preferredSubtitle: "Preferred subtitle language",
@@ -785,9 +936,17 @@
         username: "Benutzername",
         password: "Passwort",
         addAccount: "Konto hinzufügen",
-        programGuideUrl: "Programmführer-URL",
+        programGuideUrl: "EPG-URL",
+        programGuideSources: "Manuelle XMLTV-Quellen",
         xmltvUrl: "XMLTV-URL",
-        saveProgramGuide: "Programmführer speichern",
+        appliesTo: "Gilt für",
+        allPlaylists: "Alle Wiedergabelisten",
+        addProgramGuideSource: "EPG-Quelle hinzufügen",
+        duplicateProgramGuideSource: "Jede EPG-Quelle muss eine eindeutige URL haben.",
+        noProgramGuideSources: "Noch keine EPG-Quellen hinzugefügt",
+        moveUp: "Nach oben",
+        moveDown: "Nach unten",
+        saveProgramGuide: "Programmübersicht speichern",
         onlineSubtitles: "Online-Untertitel",
         preferredSubtitle: "Bevorzugte Untertitelsprache",
         anyLanguage: "Beliebig",
@@ -846,7 +1005,15 @@
         password: "Contraseña",
         addAccount: "Añadir cuenta",
         programGuideUrl: "URL de la guía de programación",
-        xmltvUrl: "URL XMLTV",
+        programGuideSources: "Fuentes XMLTV manuales",
+        xmltvUrl: "URL de XMLTV",
+        appliesTo: "Se aplica a",
+        allPlaylists: "Todas las listas",
+        addProgramGuideSource: "Añadir fuente EPG",
+        duplicateProgramGuideSource: "Cada fuente EPG debe tener una URL única.",
+        noProgramGuideSources: "Aún no se han añadido fuentes EPG",
+        moveUp: "Subir",
+        moveDown: "Bajar",
         saveProgramGuide: "Guardar guía de programación",
         onlineSubtitles: "Subtítulos en línea",
         preferredSubtitle: "Idioma de subtítulos preferido",
@@ -906,8 +1073,16 @@
         password: "Mot de passe",
         addAccount: "Ajouter le compte",
         programGuideUrl: "URL du guide des programmes",
+        programGuideSources: "Sources XMLTV manuelles",
         xmltvUrl: "URL XMLTV",
-        saveProgramGuide: "Enregistrer le guide",
+        appliesTo: "S’applique à",
+        allPlaylists: "Toutes les listes",
+        addProgramGuideSource: "Ajouter une source EPG",
+        duplicateProgramGuideSource: "Chaque source EPG doit avoir une URL unique.",
+        noProgramGuideSources: "Aucune source EPG ajoutée",
+        moveUp: "Monter",
+        moveDown: "Descendre",
+        saveProgramGuide: "Enregistrer le guide des programmes",
         onlineSubtitles: "Sous-titres en ligne",
         preferredSubtitle: "Langue de sous-titres préférée",
         anyLanguage: "Toutes les langues",
@@ -965,9 +1140,17 @@
         username: "Nome utente",
         password: "Password",
         addAccount: "Aggiungi account",
-        programGuideUrl: "URL guida programmi",
+        programGuideUrl: "URL della guida TV",
+        programGuideSources: "Sorgenti XMLTV manuali",
         xmltvUrl: "URL XMLTV",
-        saveProgramGuide: "Salva guida programmi",
+        appliesTo: "Si applica a",
+        allPlaylists: "Tutte le playlist",
+        addProgramGuideSource: "Aggiungi sorgente EPG",
+        duplicateProgramGuideSource: "Ogni sorgente EPG deve avere un URL univoco.",
+        noProgramGuideSources: "Nessuna sorgente EPG aggiunta",
+        moveUp: "Sposta su",
+        moveDown: "Sposta giù",
+        saveProgramGuide: "Salva guida TV",
         onlineSubtitles: "Sottotitoli online",
         preferredSubtitle: "Lingua dei sottotitoli preferita",
         anyLanguage: "Qualsiasi",
@@ -1026,7 +1209,15 @@
         password: "Senha",
         addAccount: "Adicionar conta",
         programGuideUrl: "URL do guia de programação",
+        programGuideSources: "Fontes XMLTV manuais",
         xmltvUrl: "URL XMLTV",
+        appliesTo: "Aplica-se a",
+        allPlaylists: "Todas as listas",
+        addProgramGuideSource: "Adicionar fonte EPG",
+        duplicateProgramGuideSource: "Cada fonte EPG deve ter uma URL exclusiva.",
+        noProgramGuideSources: "Nenhuma fonte EPG adicionada ainda",
+        moveUp: "Mover para cima",
+        moveDown: "Mover para baixo",
         saveProgramGuide: "Salvar guia de programação",
         onlineSubtitles: "Legendas online",
         preferredSubtitle: "Idioma de legenda preferido",
@@ -1086,7 +1277,15 @@
         password: "Пароль",
         addAccount: "Добавить аккаунт",
         programGuideUrl: "URL телепрограммы",
+        programGuideSources: "Источники XMLTV, добавленные вручную",
         xmltvUrl: "URL XMLTV",
+        appliesTo: "Применяется к",
+        allPlaylists: "Все плейлисты",
+        addProgramGuideSource: "Добавить источник EPG",
+        duplicateProgramGuideSource: "У каждого источника EPG должен быть уникальный URL.",
+        noProgramGuideSources: "Источники EPG ещё не добавлены",
+        moveUp: "Переместить выше",
+        moveDown: "Переместить ниже",
         saveProgramGuide: "Сохранить телепрограмму",
         onlineSubtitles: "Онлайн-субтитры",
         preferredSubtitle: "Предпочитаемый язык субтитров",
@@ -1148,7 +1347,15 @@
         password: "Пароль",
         addAccount: "Додати обліковий запис",
         programGuideUrl: "URL телепрограми",
+        programGuideSources: "Джерела XMLTV, додані вручну",
         xmltvUrl: "URL XMLTV",
+        appliesTo: "Застосовується до",
+        allPlaylists: "Усі плейлисти",
+        addProgramGuideSource: "Додати джерело EPG",
+        duplicateProgramGuideSource: "Для кожного джерела EPG потрібна унікальна URL-адреса.",
+        noProgramGuideSources: "Джерел EPG ще не додано",
+        moveUp: "Перемістити вище",
+        moveDown: "Перемістити нижче",
         saveProgramGuide: "Зберегти телепрограму",
         onlineSubtitles: "Онлайн-субтитри",
         preferredSubtitle: "Бажана мова субтитрів",
@@ -1210,7 +1417,15 @@
         password: "密码",
         addAccount: "添加账户",
         programGuideUrl: "节目指南 URL",
+        programGuideSources: "手动 XMLTV 源",
         xmltvUrl: "XMLTV URL",
+        appliesTo: "适用于",
+        allPlaylists: "所有播放列表",
+        addProgramGuideSource: "添加 EPG 源",
+        duplicateProgramGuideSource: "每个 EPG 源必须使用唯一的 URL。",
+        noProgramGuideSources: "尚未添加 EPG 源",
+        moveUp: "上移",
+        moveDown: "下移",
         saveProgramGuide: "保存节目指南",
         onlineSubtitles: "在线字幕",
         preferredSubtitle: "首选字幕语言",
@@ -1368,6 +1583,7 @@
     document.querySelector(".browse").textContent = tr("browse");
     document.querySelector(".section").textContent = tr("playlists");
     document.querySelector(".empty").textContent = tr("empty");
+    renderEpgSources();
   }
 
   languageTrigger.addEventListener("click", function () {
@@ -1479,9 +1695,183 @@
     });
   }
 
+  function epgControl(className, label, disabled, onClick) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "epg-source-control " + className;
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.disabled = disabled;
+    button.onclick = onClick;
+    return button;
+  }
+
+  function renderEpgScopeOptions(source) {
+    var scopeLabel = document.createElement("div");
+    scopeLabel.className = "epg-scope-label";
+    scopeLabel.textContent = tr("appliesTo");
+    var options = document.createElement("div");
+    options.className = "epg-scope-options";
+    options.appendChild(scopeLabel);
+    var all = document.createElement("button");
+    all.type = "button";
+    all.className = "epg-scope-option" +
+      (source.playlistIds.length === 0 ? " selected" : "");
+    all.textContent = tr("allPlaylists");
+    all.onclick = function () {
+      source.playlistIds = [];
+      epgDirty = true;
+      renderEpgSources();
+    };
+    options.appendChild(all);
+    epgPlaylists.forEach(function (playlist) {
+      var selected = source.playlistIds.indexOf(playlist.id) >= 0;
+      var option = document.createElement("button");
+      option.type = "button";
+      option.className = "epg-scope-option" + (selected ? " selected" : "");
+      option.textContent = playlist.name;
+      option.title = playlist.name;
+      option.onclick = function () {
+        var selectedIndex = source.playlistIds.indexOf(playlist.id);
+        if (selectedIndex >= 0) source.playlistIds.splice(selectedIndex, 1);
+        else source.playlistIds.push(playlist.id);
+        epgDirty = true;
+        renderEpgSources();
+      };
+      options.appendChild(option);
+    });
+    return options;
+  }
+
+  function renderEpgSources() {
+    while (epgSourceList.firstChild) epgSourceList.removeChild(epgSourceList.firstChild);
+    if (manualEpgSources.length === 0) {
+      var empty = document.createElement("div");
+      empty.className = "epg-source-empty";
+      empty.textContent = tr("noProgramGuideSources");
+      epgSourceList.appendChild(empty);
+      return;
+    }
+    manualEpgSources.forEach(function (source, index) {
+      var row = document.createElement("div");
+      row.className = "epg-source-row";
+      var head = document.createElement("div");
+      head.className = "epg-source-head";
+      var priority = document.createElement("span");
+      priority.className = "epg-priority";
+      priority.textContent = String(index + 1);
+      var title = document.createElement("span");
+      title.className = "epg-source-title";
+      title.textContent = tr("programGuideUrl");
+      head.appendChild(priority);
+      head.appendChild(title);
+      head.appendChild(epgControl("up", tr("moveUp"), index === 0, function () {
+        var previous = manualEpgSources[index - 1];
+        manualEpgSources[index - 1] = manualEpgSources[index];
+        manualEpgSources[index] = previous;
+        epgDirty = true;
+        renderEpgSources();
+      }));
+      head.appendChild(epgControl("down", tr("moveDown"),
+        index === manualEpgSources.length - 1, function () {
+          var next = manualEpgSources[index + 1];
+          manualEpgSources[index + 1] = manualEpgSources[index];
+          manualEpgSources[index] = next;
+          epgDirty = true;
+          renderEpgSources();
+        }));
+      head.appendChild(epgControl("remove", tr("remove"), false, function () {
+        manualEpgSources.splice(index, 1);
+        epgDirty = true;
+        renderEpgSources();
+      }));
+      row.appendChild(head);
+
+      var field = document.createElement("label");
+      field.className = "config-field";
+      var fieldLabel = document.createElement("span");
+      fieldLabel.textContent = tr("xmltvUrl");
+      var input = document.createElement("input");
+      input.className = "config-input epg-url-input";
+      input.type = "url";
+      input.required = true;
+      input.placeholder = "https://example.com/epg.xml";
+      input.value = source.url;
+      input.oninput = function () {
+        source.url = input.value;
+        epgDirty = true;
+      };
+      field.appendChild(fieldLabel);
+      field.appendChild(input);
+      row.appendChild(field);
+
+      row.appendChild(renderEpgScopeOptions(source));
+      epgSourceList.appendChild(row);
+    });
+  }
+
+  function refreshDirtyEpgScopes() {
+    var rows = epgSourceList.querySelectorAll(".epg-source-row");
+    manualEpgSources.forEach(function (source, index) {
+      source.playlistIds = source.playlistIds.filter(function (id) {
+        return epgPlaylists.some(function (playlist) {
+          return playlist.id === id;
+        });
+      });
+      var current = rows[index] && rows[index].querySelector(".epg-scope-options");
+      if (current && current.parentNode) {
+        current.parentNode.replaceChild(renderEpgScopeOptions(source), current);
+      }
+    });
+  }
+
+  function submitEpgSetup(form) {
+    if (!form.reportValidity()) return;
+    var button = form.querySelector(".config-save");
+    var status = form.querySelector(".config-status");
+    var sources = manualEpgSources.map(function (source) {
+      return {
+        url: source.url.trim(),
+        playlistIds: source.playlistIds.slice(),
+      };
+    });
+    var seenUrls = {};
+    for (var i = 0; i < sources.length; i += 1) {
+      if (seenUrls[sources[i].url]) {
+        status.className = "config-status err";
+        status.textContent = tr("duplicateProgramGuideSource");
+        epgSourceList.querySelectorAll(".epg-url-input")[i].focus();
+        return;
+      }
+      seenUrls[sources[i].url] = true;
+    }
+    var payload = { type: "manual-epg-sources", sources: sources };
+    button.disabled = true;
+    status.className = "config-status";
+    status.textContent = tr("saving");
+    requestSetupAction(payload, function () {
+      status.textContent = tr("applyingOnTv");
+    }).then(function () {
+      epgDirty = false;
+      return refreshSetupState();
+    }).then(function () {
+      status.className = "config-status ok";
+      status.textContent = tr("savedToTv");
+      button.disabled = false;
+    }).catch(function (error) {
+      status.className = "config-status err";
+      status.textContent = error.message === "timeout" ? tr("setupTimedOut") : tr("setupFailed");
+      button.disabled = false;
+    });
+  }
+
   function submitSetup(form) {
     if (form.getAttribute("data-action") === "online-subtitles") {
       submitSubtitleSetup(form);
+      return;
+    }
+    if (form.getAttribute("data-action") === "manual-epg-sources") {
+      submitEpgSetup(form);
       return;
     }
     if (!form.reportValidity()) return;
@@ -1643,10 +2033,23 @@
         item.id, item.enabled !== false));
       count += 1;
     });
-    if (state.epgUrl) {
-      configuredList.appendChild(configuredItem(
-        "EPG", tr("programGuideUrl"), state.epgUrl, "", true));
-      count += 1;
+    epgPlaylists = [];
+    (state.playlists || []).forEach(function (item) {
+      epgPlaylists.push({ id: item.id, name: item.name });
+    });
+    (state.xtreamAccounts || []).forEach(function (item) {
+      epgPlaylists.push({ id: item.id, name: item.name });
+    });
+    (state.uploadedPlaylists || []).forEach(function (item) {
+      epgPlaylists.push({ id: item.id, name: item.uploadId });
+    });
+    if (!epgDirty) {
+      manualEpgSources = (state.manualEpgSources || []).map(function (source) {
+        return { url: source.url, playlistIds: source.playlistIds.slice() };
+      });
+      renderEpgSources();
+    } else {
+      refreshDirtyEpgScopes();
     }
     uploadedSources = {};
     (state.uploadedPlaylists || []).forEach(function (item) {
@@ -1725,6 +2128,13 @@
       submitSetup(event.currentTarget);
     });
   }
+  addEpgSource.addEventListener("click", function () {
+    manualEpgSources.push({ url: "", playlistIds: [] });
+    epgDirty = true;
+    renderEpgSources();
+    var inputs = epgSourceList.querySelectorAll(".epg-url-input");
+    inputs[inputs.length - 1].focus();
+  });
   subtitleForm.addEventListener("input", function (event) {
     event.target.dataset.dirty = "true";
   });

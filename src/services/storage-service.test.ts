@@ -96,10 +96,35 @@ describe('StorageService', () => {
     });
   });
 
-  it('defaults the EPG url to an empty string and round-trips it', () => {
-    expect(StorageService.getEpgUrl()).toBe('');
-    StorageService.setEpgUrl('http://epg/guide.xml');
-    expect(StorageService.getEpgUrl()).toBe('http://epg/guide.xml');
+  it('defaults manual EPG sources to an empty list and round-trips them', () => {
+    expect(StorageService.getManualEpgSources()).toEqual([]);
+    StorageService.setManualEpgSources([
+      { url: 'http://epg/guide.xml', playlistIds: [] },
+    ]);
+    expect(StorageService.getManualEpgSources()).toEqual([
+      { url: 'http://epg/guide.xml', playlistIds: [] },
+    ]);
+  });
+
+  it('migrates the legacy EPG URL and sanitizes manual EPG sources', () => {
+    localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/legacy.xml'));
+    expect(StorageService.getManualEpgSources()).toEqual([
+      { url: 'http://host/legacy.xml', playlistIds: [] },
+    ]);
+    expect(localStorage.getItem('iptv_epg_url')).toBeNull();
+    expect(localStorage.getItem('iptv_manual_epg_sources')).not.toBeNull();
+
+    StorageService.setManualEpgSources([
+      { url: ' http://host/a.xml ', playlistIds: ['p1', 'p1'] },
+      { url: 'http://host/a.xml', playlistIds: ['p2'] },
+      { url: 'http://host/b.xml', playlistIds: [] },
+      { url: '', playlistIds: ['p3'] },
+    ]);
+
+    expect(StorageService.getManualEpgSources()).toEqual([
+      { url: 'http://host/a.xml', playlistIds: ['p1', 'p2'] },
+      { url: 'http://host/b.xml', playlistIds: [] },
+    ]);
   });
 
   it('round-trips sanitized EPG source offsets and omits zero values', () => {
@@ -161,7 +186,9 @@ describe('StorageService', () => {
   });
 
   it('namespaces keys with the configured storage prefix', () => {
-    StorageService.setEpgUrl('http://epg/x.xml');
+    StorageService.setManualEpgSources([
+      { url: 'http://epg/x.xml', playlistIds: [] },
+    ]);
     const prefixed = Object.keys(localStorage).filter(k => k.startsWith('iptv_'));
     expect(prefixed.length).toBeGreaterThan(0);
   });

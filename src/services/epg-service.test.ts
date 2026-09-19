@@ -91,7 +91,10 @@ beforeEach(() => {
   channelOverrideMock.mockReturnValue(null);
   epgChannelIdsMock.mockReturnValue([]);
   // Default: every saved mapping belongs to an eligible channel.
-  epgChannelIdsForMock.mockImplementation(() => epgChannelIdsMock());
+  epgChannelIdsForMock.mockImplementation(() => {
+    const results = epgChannelIdsMock.mock.results;
+    return results.length ? results[results.length - 1].value as string[] : [];
+  });
   EpgService.reset();
   vi.mocked(getCachedEpg).mockResolvedValue(null);
 });
@@ -262,6 +265,26 @@ describe('EpgService multi-source matching', () => {
     expect(EpgService.getNowPlaying(id!)?.title).toBe('Manual');
   });
 
+  it('limits a manual feed to its selected playlists', async () => {
+    parseXMLTVMock.mockImplementation((text) =>
+      text === 'http://manual-a'
+        ? parsed('same', 'Alpha', 'Manual A')
+        : parsed('same', 'Alpha', 'Manual B'));
+    await EpgService.load([
+      source('http://manual-a', ['a'], 'manual'),
+      source('http://manual-b', ['b'], 'manual'),
+    ]);
+
+    const a = EpgService.findChannelId(
+      channel({ id: 'same', name: 'Alpha', playlistIds: ['a'] }),
+    );
+    const b = EpgService.findChannelId(
+      channel({ id: 'same', name: 'Alpha', playlistIds: ['b'] }),
+    );
+    expect(EpgService.getNowPlaying(a!)?.title).toBe('Manual A');
+    expect(EpgService.getNowPlaying(b!)?.title).toBe('Manual B');
+  });
+
   it('uses a manual channel mapping before id and name matching', async () => {
     parseXMLTVMock.mockReturnValue(parsed('epg.8', 'Bravo', 'Mapped'));
     const mappedId = `${encodeURIComponent('http://a')}::epg.8`;
@@ -282,6 +305,30 @@ describe('EpgService multi-source matching', () => {
       channelIds: new Set(['wrong', 'epg.8']),
       retainChannelCatalog: true,
     });
+  });
+
+  it('ignores a saved mapping when its source no longer applies to the channel', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    parseXMLTVMock.mockReturnValue(parsed('epg.8', 'Bravo', 'Mapped'));
+    const mappedId = `${encodeURIComponent('http://a')}::epg.8`;
+    const playlistChannel = channel({
+      id: 'wrong',
+      name: 'Alpha',
+      url: 'http://host/a',
+      playlistIds: ['a'],
+    });
+    channelOverrideMock.mockReturnValue({ epgChannelId: mappedId });
+    epgChannelIdsMock.mockReturnValue([mappedId]);
+    epgChannelIdsForMock.mockImplementation((keys: ReadonlySet<string>) =>
+      keys.has(channelKey(playlistChannel)) ? [mappedId] : []);
+
+    await EpgService.load([
+      source('http://a', ['b'], 'manual'),
+    ], [playlistChannel]);
+
+    expect(EpgService.findChannelId(playlistChannel)).toBeNull();
+    expect(parseXMLTVWithStats).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('collects sparse EPG mappings without per-channel customization lookups', async () => {
