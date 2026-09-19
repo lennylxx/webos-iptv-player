@@ -95,6 +95,24 @@ describe('SpatialNav', () => {
       nav.focusBySelector('#target');
       expect(nav.focused).toBe(a);
     });
+
+    it('focusContainerEntry enters at the first item and restores the last item', () => {
+      const outside = focusable({ x: 0, y: 0 });
+      const list = document.createElement('div');
+      list.className = 'list';
+      list.setAttribute('data-nav-container', '');
+      const first = focusable({ x: 200, y: 0 });
+      const second = focusable({ x: 200, y: 100 });
+      list.append(first, second);
+      const nav = new SpatialNav(makeContainer(outside, list));
+
+      expect(nav.focusContainerEntry('.list')).toBe(true);
+      expect(nav.focused).toBe(first);
+      nav.focus(second);
+      nav.focus(outside);
+      expect(nav.focusContainerEntry('.list')).toBe(true);
+      expect(nav.focused).toBe(second);
+    });
   });
 
   describe('nav:hover', () => {

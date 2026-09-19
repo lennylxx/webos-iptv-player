@@ -140,6 +140,7 @@ function finishOpening(): void {
 function highlightSearch(): void {
   sidebar.handleAction('up');
   sidebar.handleAction('up');
+  sidebar.handleAction('up');
 }
 
 describe('Sidebar', () => {
@@ -356,12 +357,78 @@ describe('Sidebar', () => {
     });
 
     it('up from the top channel highlights the search box (no caret)', () => {
+      const tabs = PlaylistService.playlistTabs.slice();
+      PlaylistService.playlistTabs.splice(1);
+      try {
+        sidebar.refresh();
+        const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
+        sidebar.handleAction('up'); // 1 -> 0
+        sidebar.handleAction('up'); // from 0 -> search box
+        expect(items().some(i => i.classList.contains('focused'))).toBe(false);
+        expect(search.classList.contains('focused')).toBe(true);
+        expect(document.activeElement).not.toBe(search);
+      } finally {
+        PlaylistService.playlistTabs.splice(0, PlaylistService.playlistTabs.length, ...tabs);
+      }
+    });
+
+    it('moves through search, sources, and channels in visual order', () => {
       const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
       sidebar.handleAction('up'); // 1 -> 0
-      sidebar.handleAction('up'); // from 0 -> search box
+      sidebar.handleAction('up'); // from 0 -> active source
       expect(items().some(i => i.classList.contains('focused'))).toBe(false);
+      expect(el.querySelector('[data-sidebar-playlist=""]')?.classList.contains('focused'))
+        .toBe(true);
+      sidebar.handleAction('up'); // source -> search
       expect(search.classList.contains('focused')).toBe(true);
       expect(document.activeElement).not.toBe(search);
+      sidebar.handleAction('down'); // search -> active source
+      expect(el.querySelector('[data-sidebar-playlist=""]')?.classList.contains('focused'))
+        .toBe(true);
+      sidebar.handleAction('down'); // source -> first channel
+      expect(items()[0].classList.contains('focused')).toBe(true);
+    });
+
+    it('uses left and right to focus and select a source', () => {
+      sidebar.handleAction('up'); // 1 -> 0
+      sidebar.handleAction('up'); // 0 -> All source
+      sidebar.handleAction('right'); // All -> PL1
+      expect(el.querySelector('[data-sidebar-playlist="PL1"]')?.classList.contains('focused'))
+        .toBe(true);
+      sidebar.handleAction('select');
+      expect(el.querySelector('[data-sidebar-playlist="PL1"]')?.classList.contains('active'))
+        .toBe(true);
+      expect(items()).toHaveLength(2);
+      expect(items()[1].classList.contains('focused')).toBe(true);
+    });
+
+    it('opens groups when moving left past the first source', () => {
+      sidebar.handleAction('up'); // 1 -> 0
+      sidebar.handleAction('up'); // 0 -> All source
+      sidebar.handleAction('right'); // All -> PL1
+      sidebar.handleAction('left'); // PL1 -> All
+
+      expect(el.querySelector('[data-sidebar-playlist=""]')?.classList.contains('focused'))
+        .toBe(true);
+
+      sidebar.handleAction('left'); // All -> Groups
+
+      expect(el.classList.contains('groups-expanded')).toBe(true);
+      expect(groupItems()[0].classList.contains('focused')).toBe(true);
+      expect(groupItems()[0].dataset.groupId).toBe('builtin:all');
+    });
+
+    it('resets expanded group focus to All after selecting a source', () => {
+      sidebar.handleAction('left');
+      for (let i = 0; i < 4; i++) sidebar.handleAction('down');
+      sidebar.handleAction('select');
+      sidebar.handleAction('up');
+      sidebar.handleAction('right');
+      sidebar.handleAction('select');
+      sidebar.handleAction('left');
+
+      expect(groupItems()[0].classList.contains('focused')).toBe(true);
+      expect(groupItems()[0].dataset.groupId).toBe('builtin:all');
     });
 
     it('scrolls only channel names that overflow', () => {
@@ -1102,7 +1169,8 @@ describe('Sidebar', () => {
       search.dispatchEvent(new Event('input', { bubbles: true }));
       await vi.waitFor(() => expect(items()).toHaveLength(1));
       expect(items().map(i => i.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
-      sidebar.handleAction('down');   // enter the list at the single result
+      sidebar.handleAction('down');   // search -> active source
+      sidebar.handleAction('down');   // source -> the single result
       sidebar.handleAction('select'); // pick it
       expect(onSelect).toHaveBeenCalledWith(2, undefined, { group: 'builtin:all', playlist: undefined }); // Charlie is global index 2, not filtered 0
     });

@@ -266,6 +266,22 @@ export class SpatialNav {
     if (el) this.focus(el);
   }
 
+  focusContainerEntry(selector: string): boolean {
+    const container = this.root().querySelector<HTMLElement>(selector);
+    if (!container) return false;
+    const elements = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-focusable]'),
+    );
+    const candidates = this.getCandidates(elements, true, container);
+    if (!candidates.length) return false;
+    const remembered = this.lastFocusedIn.get(container);
+    const target = remembered && candidates.some(candidate => candidate.el === remembered)
+      ? remembered
+      : candidates[0].el;
+    this.focus(target);
+    return true;
+  }
+
   move(direction: NavDirection): boolean {
     const root = this.root();
     const focusedContainer = this.focused?.closest<HTMLElement>('[data-nav-container]');

@@ -622,6 +622,85 @@ describe('ChannelList interaction', () => {
     );
   });
 
+  it('follows the visual source, group, channel order', () => {
+    playlistMock.playlistTabs = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    list.render();
+
+    hover(container.querySelector<HTMLElement>('[data-group-position="0"]')!);
+    expect(list.handleAction('up')).toBe(true);
+    expect(container.querySelector('.playlist-tab.active')?.classList.contains('focused'))
+      .toBe(true);
+    expect(list.handleAction('down')).toBe(true);
+    const group = container.querySelector<HTMLElement>('.group-item.active')!;
+    expect(group.classList.contains('focused')).toBe(true);
+    expect(list.handleAction('right')).toBe(true);
+    expect(channelItems()[0].classList.contains('focused')).toBe(true);
+    expect(list.handleAction('left')).toBe(true);
+    expect(container.querySelector('.group-item.active')?.classList.contains('focused'))
+      .toBe(true);
+  });
+
+  it('hands Up from the first channel to the tab bar instead of jumping diagonally', () => {
+    playlistMock.playlistTabs = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    list.render();
+
+    expect(list.handleAction('up')).toBe(false);
+    expect(channelItems()[0].classList.contains('focused')).toBe(true);
+  });
+
+  it('moves horizontally within the source list without jumping regions', () => {
+    playlistMock.playlistTabs = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group-position="0"]')!);
+    list.handleAction('up');
+
+    expect(list.handleAction('right')).toBe(true);
+    expect(container.querySelector('[data-playlist="a"]')?.classList.contains('focused'))
+      .toBe(true);
+    expect(list.handleAction('right')).toBe(true);
+    expect(container.querySelector('[data-playlist="b"]')?.classList.contains('focused'))
+      .toBe(true);
+    expect(list.handleAction('right')).toBe(true);
+    expect(container.querySelector('[data-playlist="b"]')?.classList.contains('focused'))
+      .toBe(true);
+  });
+
+  it('reveals the active group when source selection follows a deep group scroll', () => {
+    const originalGroups = playlistMock.getGroupsForPlaylist;
+    playlistMock.playlistTabs = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    playlistMock.getGroupsForPlaylist = () =>
+      Array.from({ length: 50 }, (_, index) => `Group ${String(index)}`);
+    playlistMock.groupsRevision++;
+    try {
+      list.render();
+      const groupList = container.querySelector<HTMLElement>('.group-list')!;
+      groupList.scrollTop = 2000;
+      list.render(false);
+      expect(container.querySelector('[data-group-position="0"]')).toBeNull();
+
+      hover(container.querySelector<HTMLElement>('[data-playlist="a"]')!);
+      list.handleAction('select');
+      expect(list.handleAction('down')).toBe(true);
+      expect(container.querySelector('[data-group-position="0"]')?.classList.contains('focused'))
+        .toBe(true);
+    } finally {
+      playlistMock.getGroupsForPlaylist = originalGroups;
+      playlistMock.groupsRevision++;
+    }
+  });
+
   it('does not rerender when the next virtual item is already mounted', () => {
     const render = vi.spyOn(list, 'render');
 

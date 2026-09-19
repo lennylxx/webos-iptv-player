@@ -188,6 +188,96 @@ test('the list follows the playing channel however it was tuned', async ({ page 
   expect(row!.y + row!.height).toBeLessThanOrEqual(viewport!.y + viewport!.height);
 });
 
+test('player sidebar reaches sources, groups, and channels by the shortest D-pad paths', async ({
+  page,
+}) => {
+  await page.route('**/a.m3u', route => route.fulfill({
+    status: 200,
+    contentType: 'application/x-mpegurl',
+    body: '#EXTM3U\n#EXTINF:-1 group-title="Alpha",Ch 1\nhttp://host/ch1.m3u8',
+  }));
+  await page.route('**/b.m3u', route => route.fulfill({
+    status: 200,
+    contentType: 'application/x-mpegurl',
+    body: '#EXTM3U\n#EXTINF:-1 group-title="Bravo",Ch 2\nhttp://host/ch2.m3u8',
+  }));
+  await routeLiveManifest(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([
+      { id: 'p1', name: 'Source 1', url: 'http://host/a.m3u', source: 'url' },
+      { id: 'p2', name: 'Source 2', url: 'http://host/b.m3u', source: 'url' },
+    ]));
+  });
+  await page.goto('/');
+  await expect(page.locator('.channel-main .channel-item')).toHaveCount(2);
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#view-channels .group-item.focused')).toBeVisible();
+  await page.keyboard.press('ArrowUp');
+  const channelSource = page.locator('#view-channels [data-playlist=""].focused');
+  await expect(channelSource).toBeVisible();
+  await page.waitForTimeout(250);
+  const channelSourceFocus = await channelSource.evaluate(element => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      borderBottom: style.borderBottomColor,
+      boxShadow: style.boxShadow,
+    };
+  });
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#view-channels [data-playlist="p1"].focused')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-channels [data-playlist="p1"].active')).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#view-channels .group-item.active.focused')).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#view-channels .channel-item.focused')).toContainText('Ch 1');
+
+  await page.keyboard.press('1');
+  await expect(page.locator('#view-player')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#player-sidebar .sidebar-ch-item.focused')).toContainText('Ch 1');
+
+  await page.keyboard.press('ArrowUp');
+  const sidebarSource = page.locator('[data-sidebar-playlist=""].focused');
+  await expect(sidebarSource).toBeVisible();
+  await expect.poll(() => sidebarSource.evaluate(element => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      borderBottom: style.borderBottomColor,
+      boxShadow: style.boxShadow,
+    };
+  })).toEqual(channelSourceFocus);
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('[data-sidebar-playlist="p1"].focused')).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('[data-sidebar-playlist="p2"].focused')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('[data-sidebar-playlist="p1"].focused')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('[data-sidebar-playlist=""].focused')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#player-sidebar .sidebar-group-item.focused')).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#player-sidebar .sidebar-ch-item.focused')).toContainText('Ch 1');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('[data-sidebar-playlist=""].focused')).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('[data-sidebar-playlist="p2"].focused')).toBeVisible();
+  await page.keyboard.press('Enter');
+
+  await expect(page.locator('[data-sidebar-playlist="p2"].active')).toBeVisible();
+  await expect(page.locator('#player-sidebar .sidebar-ch-item.focused')).toContainText('Ch 2');
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#player-sidebar .sidebar-group-item.focused')).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#player-sidebar .sidebar-ch-item.focused')).toContainText('Ch 2');
+});
+
 test('direct channel entry scrolls the list to the tuned channel and keeps it on return', async ({ page }) => {
   const lines = ['#EXTM3U'];
   for (let index = 1; index <= 300; index++) {

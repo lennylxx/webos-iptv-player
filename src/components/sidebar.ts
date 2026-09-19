@@ -32,7 +32,7 @@ type SidebarEntry = { ch: Channel; globalIdx: number; recent?: RecentlyWatchedIt
 type SidebarSource =
   | { kind: 'channels'; channels: Channel[] }
   | { kind: 'recent'; items: RecentlyWatchedItem[] };
-type SidebarPane = 'channels' | 'groups';
+type SidebarPane = 'channels' | 'sources' | 'groups';
 type SidebarGroup = {
   id: ChannelGroupId;
   label: string;
@@ -70,6 +70,7 @@ export class Sidebar {
   private activePane: SidebarPane = 'channels';
   private groupsExpanded = false;
   private channelFocusIdx = -1; // -1 here means the search box is focused
+  private sourceFocusIdx = 0;
   private groupFocusIdx = 0;
   private group: ChannelGroupId = 'builtin:all';
   private playlist = ''; // '' = All
@@ -279,6 +280,11 @@ export class Sidebar {
   handleAction(action: Action): void {
     if (!this.el) return;
 
+    if (this.activePane === 'sources') {
+      this.handleSourceAction(action);
+      return;
+    }
+
     if (action === 'left') {
       if (!this.groupsExpanded) {
         this.openGroups();
@@ -310,8 +316,16 @@ export class Sidebar {
     this.resetTimer();
 
     if (action === 'up' || action === 'channel_up') {
+      if (this.channelFocusIdx === 0 && this.hasSourceTabs()) {
+        this.focusActiveSource();
+        return;
+      }
       this.channelFocusIdx = this.channelFocusIdx <= 0 ? -1 : this.channelFocusIdx - 1;
     } else if (action === 'down' || action === 'channel_down') {
+      if (this.channelFocusIdx === -1 && this.hasSourceTabs()) {
+        this.focusActiveSource();
+        return;
+      }
       if (this.channelFocusIdx < len - 1) this.channelFocusIdx += 1;
     } else if (action === 'select') {
       const entry = this.getChannelEntry(this.channelFocusIdx);
@@ -319,6 +333,32 @@ export class Sidebar {
       return;
     }
 
+    this.updateFocus();
+  }
+
+  private handleSourceAction(action: Action): void {
+    const sources = this.getSourceIds();
+    this.resetTimer();
+    if (action === 'left') {
+      if (this.sourceFocusIdx > 0) {
+        this.sourceFocusIdx -= 1;
+      } else {
+        this.openGroups();
+        return;
+      }
+    } else if (action === 'right') {
+      this.sourceFocusIdx = Math.min(sources.length - 1, this.sourceFocusIdx + 1);
+    } else if (action === 'up' || action === 'channel_up') {
+      this.activePane = 'channels';
+      this.channelFocusIdx = -1;
+    } else if (action === 'down' || action === 'channel_down') {
+      this.activePane = 'channels';
+      this.channelFocusIdx = this.getChannelCount() ? 0 : -1;
+    } else if (action === 'select') {
+      const playlist = sources[this.sourceFocusIdx];
+      if (playlist !== undefined) this.selectPlaylist(playlist);
+      return;
+    }
     this.updateFocus();
   }
 
@@ -492,6 +532,17 @@ export class Sidebar {
         ?.classList.toggle('focused', this.channelFocusIdx === -1);
       this.el?.querySelectorAll('.sidebar-group-item.focused')
         .forEach(item => item.classList.remove('focused'));
+      this.el?.querySelectorAll('.sidebar-tab.focused')
+        .forEach(item => item.classList.remove('focused'));
+    } else if (this.activePane === 'sources') {
+      this.el?.querySelector('.sidebar-search-input')?.classList.remove('focused');
+      this.el?.querySelectorAll('.sidebar-ch-item.focused, .sidebar-group-item.focused')
+        .forEach(item => item.classList.remove('focused'));
+      this.el?.querySelectorAll<HTMLElement>('.sidebar-tab').forEach((item, index) => {
+        item.classList.toggle('focused', index === this.sourceFocusIdx);
+      });
+      this.el?.querySelector('.sidebar-tab.focused')
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     } else {
       if (this.ensureGroupFocusVisible()) {
         this.render();
@@ -500,6 +551,8 @@ export class Sidebar {
       this.el?.querySelector('.sidebar-search-input')?.classList.remove('focused');
       this.el?.querySelectorAll('.sidebar-ch-item.focused')
         .forEach(item => item.classList.remove('focused'));
+      this.el?.querySelectorAll('.sidebar-tab.focused')
+        .forEach(item => item.classList.remove('focused'));
       this.el?.querySelectorAll<HTMLElement>('.sidebar-group-item').forEach((item) => {
         item.classList.toggle('focused',
           parseInt(item.dataset.groupPos || '-1', 10) === this.groupFocusIdx);
@@ -507,6 +560,22 @@ export class Sidebar {
       this.el?.querySelector('.sidebar-group-item.focused')
         ?.scrollIntoView({ block: 'nearest' });
     }
+  }
+
+  private getSourceIds(): string[] {
+    return ['', ...PlaylistService.playlistTabs.map(tab => tab.id)];
+  }
+
+  private hasSourceTabs(): boolean {
+    return PlaylistService.playlistTabs.length > 1;
+  }
+
+  private focusActiveSource(): void {
+    const sources = this.getSourceIds();
+    const selected = sources.indexOf(this.playlist);
+    this.sourceFocusIdx = selected >= 0 ? selected : 0;
+    this.activePane = 'sources';
+    this.updateFocus();
   }
 
   private ensureFocusVisible(): boolean {
@@ -641,6 +710,21 @@ export class Sidebar {
     this.resetTimer();
   }
 
+  private selectPlaylist(playlist: string): void {
+    this.playlist = playlist;
+    this.group = 'builtin:all';
+    this.groupFocusIdx = 0;
+    this.groupVirtualizer.setScrollOffset(0);
+    this.applyGroupScrollOffset();
+    this.searchQuery = '';
+    this.channelSource = null;
+    this.groupSource = null;
+    this.activePane = 'channels';
+    this.focusCurrentChannel(false);
+    this.render();
+    this.resetTimer();
+  }
+
   private syncPanelState(): void {
     this.el?.classList.toggle('groups-expanded', this.groupsExpanded);
     this.el?.classList.toggle('channels-only', !this.groupsExpanded);
@@ -682,6 +766,10 @@ export class Sidebar {
     const tabs = PlaylistService.playlistTabs;
     if (this.playlist && !tabs.some(t => t.id === this.playlist)) this.playlist = '';
     const showTabs = tabs.length > 1;
+    if (this.activePane === 'sources') {
+      const sourceCount = tabs.length + 1;
+      this.sourceFocusIdx = Math.max(0, Math.min(sourceCount - 1, this.sourceFocusIdx));
+    }
     const groups = this.getGroups();
     if (!groups.some(item => item.id === this.group)) {
       this.group = 'builtin:all';
@@ -756,11 +844,15 @@ export class Sidebar {
                placeholder="${searchPlaceholder}" value="${this.searchQuery}">
         ${showTabs ? html`
           <div class="sidebar-tabs">
-            <div class="sidebar-tab ${!this.playlist ? 'active' : ''}"
+            <div class="sidebar-tab ${!this.playlist ? 'active' : ''} ${
+              this.activePane === 'sources' && this.sourceFocusIdx === 0 ? 'focused' : ''}"
                  data-key="tab:"
                  data-sidebar-playlist="">${t('common.all')}</div>
-            ${tabs.map(tab => html`
-              <div class="sidebar-tab ${tab.id === this.playlist ? 'active' : ''}"
+            ${tabs.map((tab, index) => html`
+              <div class="sidebar-tab ${tab.id === this.playlist ? 'active' : ''} ${
+                this.activePane === 'sources' && this.sourceFocusIdx === index + 1
+                  ? 'focused'
+                  : ''}"
                    data-key="tab:${tab.id}"
                    data-sidebar-playlist="${tab.id}">${tab.name}</div>
             `)}
@@ -1079,14 +1171,7 @@ export class Sidebar {
       }
       const tab = target.closest<HTMLElement>('[data-sidebar-playlist]');
       if (tab) {
-        this.playlist = tab.dataset.sidebarPlaylist!;
-        this.group = 'builtin:all';
-        this.searchQuery = '';
-        this.channelSource = null;
-        this.groupSource = null;
-        this.focusCurrentChannel(false);
-        this.render();
-        this.resetTimer();
+        this.selectPlaylist(tab.dataset.sidebarPlaylist!);
         return;
       }
       const chItem = target.closest<HTMLElement>('[data-sidebar-index]');
@@ -1106,6 +1191,21 @@ export class Sidebar {
         if (this.activePane !== 'groups' || pos !== this.groupFocusIdx || this.hoverCleared) {
           this.activePane = 'groups';
           this.groupFocusIdx = pos;
+          this.updateFocus();
+        }
+        this.resetTimer();
+        return;
+      }
+      const sourceItem = target.closest<HTMLElement>('[data-sidebar-playlist]');
+      if (sourceItem) {
+        const sourceItems = Array.from(
+          el.querySelectorAll<HTMLElement>('[data-sidebar-playlist]'),
+        );
+        const position = sourceItems.indexOf(sourceItem);
+        if (this.activePane !== 'sources' || position !== this.sourceFocusIdx
+            || this.hoverCleared) {
+          this.activePane = 'sources';
+          this.sourceFocusIdx = position;
           this.updateFocus();
         }
         this.resetTimer();

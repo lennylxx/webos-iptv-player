@@ -481,6 +481,8 @@ export class ChannelList {
 
   handleAction(action: Action, event?: NumberEvent): boolean {
     if (this.editor.handleAction(action)) return true;
+    if (action === 'up' && this.nav.focused?.dataset.listPosition === '0') return false;
+    if (this.handleRegionNavigation(action)) return true;
 
     switch (action) {
       case 'up':
@@ -558,6 +560,91 @@ export class ChannelList {
       }
     }
     return false;
+  }
+
+  private handleRegionNavigation(action: Action): boolean {
+    const focused = this.nav.focused;
+    if (!focused) return false;
+
+    if (focused.dataset.playlist !== undefined) {
+      const tabs = Array.from(
+        this.container.querySelectorAll<HTMLElement>('.playlist-tab[data-playlist]'),
+      );
+      const index = tabs.indexOf(focused);
+      if (action === 'left' || action === 'right') {
+        const next = index + (action === 'left' ? -1 : 1);
+        if (tabs[next]) this.nav.focus(tabs[next]);
+        return true;
+      }
+      if (action === 'up') {
+        const edit = this.container.querySelector<HTMLElement>('[data-edit-channels]');
+        if (edit) this.nav.focus(edit);
+        return !!edit;
+      }
+      if (action === 'down') return this.focusActiveGroup();
+      return false;
+    }
+
+    if (action === 'down' && focused.dataset.editChannels !== undefined) {
+      return this.focusActivePlaylist() || this.focusFirstChannel();
+    }
+
+    if (action === 'left' && focused.closest('.channel-main')) {
+      return this.focusActiveGroup();
+    }
+
+    if (action === 'right' && focused.dataset.group !== undefined) {
+      return this.nav.focusContainerEntry('.channel-main');
+    }
+
+    if (action !== 'up' || !this.hasPlaylistTabs()) return false;
+    if (focused.dataset.groupPosition === '0') {
+      return this.focusActivePlaylist();
+    }
+    return false;
+  }
+
+  private hasPlaylistTabs(): boolean {
+    return this.container.querySelector('.playlist-tabs') !== null;
+  }
+
+  private focusActivePlaylist(): boolean {
+    const active = this.container.querySelector<HTMLElement>('.playlist-tab.active');
+    if (!active) return false;
+    this.nav.focus(active);
+    return true;
+  }
+
+  private focusActiveGroup(): boolean {
+    const groups = this.getGroupEntries();
+    const selected = groups.findIndex(group => group.id === this.currentGroup);
+    const position = selected >= 0 ? selected : 0;
+    const selector = `[data-group-position="${String(position)}"]`;
+    let active = this.container.querySelector<HTMLElement>(selector);
+    if (!active) {
+      const list = this.container.querySelector<HTMLElement>('.group-list');
+      this.groupVirtualizer.ensureVisible(
+        position,
+        list?.clientHeight || CHANNEL_VIEWPORT_FALLBACK,
+      );
+      if (list) {
+        this.scrollGuard.syncOffset(list, 'vertical', this.groupVirtualizer.scrollOffset);
+      }
+      this.render(false);
+      active = this.container.querySelector<HTMLElement>(selector);
+    }
+    if (!active) return false;
+    this.nav.focus(active);
+    return true;
+  }
+
+  private focusFirstChannel(): boolean {
+    const first = this.container.querySelector<HTMLElement>(
+      '.channel-main [data-list-position="0"]',
+    );
+    if (!first) return false;
+    this.nav.focus(first);
+    return true;
   }
 
   private renderGroup(
