@@ -111,7 +111,11 @@ async function prepareM3U(page: Page): Promise<void> {
   await stubLanService(page);
   await page.addInitScript((key) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([
-      { name: 'Test', url: 'http://host.example.com/playlist.m3u' },
+      { name: 'Source 1', url: 'http://host/playlist.m3u' },
+      {
+        id: 'p2', name: 'Source 2', url: 'http://host/secondary.m3u',
+        enabled: false,
+      },
     ]));
     localStorage.setItem('iptv_reminders', JSON.stringify([{
       channelKey: key,
@@ -199,6 +203,32 @@ const M3U_SCREENS: Screen[] = [
           .toBeVisible();
       },
     }))),
+  {
+    name: 'settings-guide-multi-source',
+    budget: 0,
+    go: async (p) => {
+      await enterTab(p, 'settings');
+      await p.locator('[data-settings-target="guide"]').click();
+      await p.locator('#add-epg-source').click();
+      const sources = p.locator('[data-manual-epg-source]');
+      await expect(sources).toHaveCount(2);
+      await sources.nth(1).locator('.manual-epg-url').fill('http://host/guide-2.xml');
+      const firstScope = sources.nth(0).locator('[data-playlist-id]').first();
+      const secondScope = sources.nth(1).locator('[data-playlist-id]').nth(1);
+      await firstScope.click();
+      await secondScope.click();
+      await expect(firstScope).toHaveClass(/active/);
+      await expect(secondScope).toHaveClass(/active/);
+      await p.evaluate(() => {
+        const scroll = document.querySelector('.settings-scroll') as HTMLElement;
+        const target = document.querySelector('#settings-guide')!;
+        scroll.style.setProperty('scroll-behavior', 'auto');
+        scroll.scrollTop += target.getBoundingClientRect().top
+          - scroll.getBoundingClientRect().top;
+      });
+      await expect(sources.nth(1).locator('.manual-epg-scope-options')).toBeVisible();
+    },
+  },
   {
     name: 'search',
     budget: 0,
@@ -346,6 +376,25 @@ const M3U_SCREENS: Screen[] = [
       await p.keyboard.press('ArrowRight');
       await p.keyboard.press('Enter');
       await expect(p.locator('.catchup-resume-prompt')).toBeVisible();
+    },
+  },
+  {
+    // Reload with the setting enabled, then advance the neutered video to a
+    // stable playing frame so the expanded layout stays visible in the shot.
+    name: 'live-preview',
+    budget: 0,
+    go: async (p) => {
+      await p.evaluate(() => localStorage.setItem('iptv_live_preview', 'true'));
+      await p.reload();
+      await expect(p.locator('.channel-item')).toHaveCount(2);
+      await p.locator('.channel-item').first().click();
+      await p.locator('#video-player').evaluate((video) => {
+        video.dispatchEvent(new Event('loadedmetadata'));
+        video.dispatchEvent(new Event('playing'));
+      });
+      await expect(p.locator('#live-preview')).toBeVisible();
+      await expect(p.locator('.live-preview-title')).toHaveText('Current Show');
+      await expect(p.locator('.live-preview-message')).toHaveCount(0);
     },
   },
   {
