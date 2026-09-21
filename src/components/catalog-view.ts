@@ -527,11 +527,29 @@ export abstract class CatalogView<C extends { id: string; name: string }, I> {
     );
     if (next === this.gridFocusIndex) return false;
     this.gridFocusIndex = next;
-    this.gridVirtualizer.ensureVisible(
-      next,
-      viewportWidth,
-      view?.clientHeight || CATALOG_GRID_VIEWPORT_HEIGHT,
-    );
+    const viewportHeight = view?.clientHeight || CATALOG_GRID_VIEWPORT_HEIGHT;
+    // renderGrid() re-reads the live scroll position before it measures, so
+    // do the same here or the comparison below runs against a stale offset.
+    const offsetBefore = this.gridVirtualizer.scrollOffset;
+    if (view) {
+      this.gridVirtualizer.setScrollOffset(
+        Math.max(0, view.scrollTop - this.gridTrackStart(view, track)),
+      );
+    }
+    const scrolled = this.gridVirtualizer.ensureVisible(next, viewportWidth, viewportHeight);
+    if (!scrolled && this.gridVirtualizer.scrollOffset === offsetBefore
+        && this.gridScrollFrame === null) {
+      const cell = this.container.querySelector<HTMLElement>(
+        `[data-grid-index="${next}"] [data-focusable]`,
+      );
+      // Same window and same offset: renderGrid() would morph byte-identical
+      // markup, since tiles carry no focus state - SpatialNav owns the class.
+      // The channel list already moves focus this way (moveVirtualFocus).
+      if (cell) {
+        this.nav.focus(cell);
+        return true;
+      }
+    }
     this.renderGrid();
     return true;
   }
