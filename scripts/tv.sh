@@ -12,6 +12,7 @@
 #   scripts/tv.sh push <local> <remote>   # copy a local file to the TV
 #   scripts/tv.sh pull <remote> <local>   # copy a TV file to this computer
 #   scripts/tv.sh shell                   # interactive shell
+#   scripts/tv.sh reboot                  # reboot the TV through Luna
 #   scripts/tv.sh logs [--app <id>] ...   # stream the app's DevTools console
 #   scripts/tv.sh eval [--app <id>] '<js>'# evaluate JS in the app page (CDP);
 #                                         # also: --file <path.js>, or `-` for stdin
@@ -91,6 +92,7 @@ fi
 export TV_KEY="$key_path" TV_PORT="$port" TV_HOST="$user@$ip" \
        TV_PASSPHRASE="$passphrase" TV_PASSWORD="$password" \
        TV_TIMEOUT="${TV_TIMEOUT:-120}" \
+       TV_EXPECT_DISCONNECT="${TV_EXPECT_DISCONNECT:-0}" \
        TV_CONTROL_PATH="/tmp/webos-tv-%C"
 
 run_transport() {
@@ -98,6 +100,7 @@ run_transport() {
 set timeout $env(TV_TIMEOUT)
 set mode $env(TV_MODE)
 set interactive [expr {$mode eq "shell"}]
+set expected_disconnect 0
 if {$interactive} { set timeout 30 }
 
 if {$mode eq "push" || $mode eq "pull"} {
@@ -157,6 +160,12 @@ expect {
       exp_continue
     }
   }
+  -re {__TV_REBOOT_REQUESTED__} {
+    if {$env(TV_EXPECT_DISCONNECT) eq "1"} {
+      set expected_disconnect 1
+    }
+    exp_continue
+  }
   timeout {
     if {$interactive} {
       set ready 1
@@ -172,7 +181,11 @@ if {$ready} {
   interact
 }
 catch wait result
-exit [lindex $result 3]
+set status [lindex $result 3]
+if {$expected_disconnect && $status == 255} {
+  exit 0
+}
+exit $status
 EOF
 }
 
@@ -197,8 +210,38 @@ case "$action" in
     export TV_MODE="shell"
     run_transport
     ;;
+  reboot)
+    [ $# -eq 0 ] || { echo "usage: tv.sh reboot" >&2; exit 2; }
+    export TV_MODE="run" TV_EXPECT_DISCONNECT="1"
+    TV_CMD=$(cat <<'EOF'
+NODE_PATH=/usr/lib/node_modules:/usr/lib/nodejs node -e '
+var Module=require("module"),originalLoad=Module._load;
+function noop(){}
+function logger(){return{log:noop,info:noop,warning:noop,error:noop};}
+var pmloglib={log:noop,info:noop,warning:noop,error:noop,Console:logger,Context:logger};
+Module._load=function(request,parent,isMain){
+  if(request==="pmloglib")return pmloglib;
+  return originalLoad.apply(this,arguments);
+};
+function createHandle(pb){
+  try{return new pb.Handle("");}
+  catch(singleArgumentError){return new pb.Handle("",true);}
+}
+var pb=require("palmbus"),handle=createHandle(pb);
+handle.call(
+  "luna://com.webos.service.sleep/shutdown/machineReboot",
+  JSON.stringify({reason:"remoteKey"})
+);
+console.log("__TV_REBOOT_REQUESTED__");
+setTimeout(function(){process.exit(0);},3000);'
+EOF
+)
+    export TV_CMD
+    echo "Rebooting TV..."
+    run_transport
+    ;;
   *)
-    echo "usage: tv.sh {run '<command>' | push <local> <remote> | pull <remote> <local> | shell | logs ... | eval '<js>' | perf ... | diag ... | capt ...}" >&2
+    echo "usage: tv.sh {run '<command>' | push <local> <remote> | pull <remote> <local> | shell | reboot | logs ... | eval '<js>' | perf ... | diag ... | capt ...}" >&2
     exit 2
     ;;
 esac

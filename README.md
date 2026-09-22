@@ -227,6 +227,7 @@ scripts/tv.sh run 'uname -a'                     # Run a TV command over SSH
 scripts/tv.sh push ./file.txt /tmp/file.txt      # Copy a local file to the TV
 scripts/tv.sh pull /tmp/file.txt ./file.txt      # Copy a TV file to this computer
 scripts/tv.sh shell                              # Open an interactive SSH session
+scripts/tv.sh reboot                             # Reboot the TV through Luna
 TV_DEVICE=tv2 scripts/tv.sh logs                 # Select a non-default configured TV
 ```
 

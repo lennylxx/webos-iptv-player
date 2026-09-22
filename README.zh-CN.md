@@ -221,14 +221,18 @@ scripts/tv.sh logs --app com.lennylxx.iptv       # 实时查看应用的 DevTool
 scripts/tv.sh eval 'document.visibilityState'    # 在应用页面中执行 JavaScript
 scripts/tv.sh perf --duration 30                 # 采样 CPU、堆、DOM 和布局
 scripts/tv.sh diag                               # 生成经过脱敏的诊断报告
+scripts/tv.sh capt screenshot screen.png         # 截取电视画面和应用 OSD
+scripts/tv.sh capt record screen.mp4             # 录制 10 秒电视画面，约 5 fps，无音频
 scripts/tv.sh run 'uname -a'                     # 通过 SSH 在电视上执行命令
 scripts/tv.sh push ./file.txt /tmp/file.txt      # 将本地文件复制到电视
+scripts/tv.sh pull /tmp/file.txt ./file.txt      # 将电视文件复制到本地
 scripts/tv.sh shell                              # 打开交互式 SSH 会话
+scripts/tv.sh reboot                             # 通过 Luna 重启电视
 TV_DEVICE=tv2 scripts/tv.sh logs                 # 选择非默认的已配置电视
 ```
 
-运行 `scripts/tv.sh perf --help` 或 `scripts/tv.sh diag --help`
-可查看数据采集和输出选项。
+运行 `scripts/tv.sh capt --help`、`scripts/tv.sh perf --help` 或
+`scripts/tv.sh diag --help` 可查看相关选项。
 
 ### 在浏览器中预览
 
