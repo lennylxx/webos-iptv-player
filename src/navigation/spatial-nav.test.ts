@@ -42,6 +42,19 @@ describe('SpatialNav', () => {
       expect(nav.focused).toBe(b);
     });
 
+    it('scrolls focus into view instantly, never smoothly', () => {
+      const a = focusable({ x: 0, y: 0 });
+      const b = focusable({ x: 0, y: 100 });
+      const nav = new SpatialNav(makeContainer(a, b));
+      nav.focus(a);
+      nav.focus(b);
+      // Smooth animation loses a d-pad autorepeat race, and an omitted
+      // behavior would inherit `.settings-scroll`'s CSS `scroll-behavior`.
+      expect(b.scrollIntoView).toHaveBeenCalledWith(
+        expect.objectContaining({ behavior: 'auto' }),
+      );
+    });
+
     it('skips scrollIntoView when re-focusing the already-focused element', () => {
       const a = focusable({ x: 0, y: 0 });
       const nav = new SpatialNav(makeContainer(a));
