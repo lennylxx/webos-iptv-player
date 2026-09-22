@@ -414,6 +414,7 @@ export class LivePreview {
                 aria-label="${t('player.toggleFavorite')}" aria-pressed="${String(favorite)}">
           ${raw(favoriteIcon(favorite))}
         </button>
+        <time class="live-preview-clock" datetime="${formatTime(now)}">${formatTime(now)}</time>
       </div>
       <div class="live-preview-slot" data-key="preview-slot" aria-label="${t('preview.fullScreen')}">
         ${liveBadge('live-preview-badge')}

@@ -669,6 +669,7 @@ test('EPG shows current program, up to four future rows, and favorite action', a
   await setup(page, { enabled: true, epg: true });
   await expect(page.locator(ROW).first()).toContainText('Program 1');
   await selectFirst(page);
+  await expect(page.locator(`${PANEL} .live-preview-clock`)).toHaveText('12:00');
   await expect(page.locator(`${PANEL} .live-preview-title`)).toHaveText('Program 1');
   await expect(page.locator(`${PANEL} .live-preview-time-range`)).toHaveText('11:00–13:00');
   await expect(page.locator(`${PANEL} .live-preview-program`)).toHaveCount(4);
@@ -687,9 +688,14 @@ test('EPG shows current program, up to four future rows, and favorite action', a
     const badge = box('.live-preview-badge');
     const favorite = box('.live-preview-favorite');
     const channel = box('.live-preview-channel');
+    const clock = box('.live-preview-clock');
     return {
       badgeLeft: badge.left - slot.left, badgeTop: badge.top - slot.top,
-      favoriteAbove: favorite.bottom <= slot.top, headerGap: favorite.left - channel.right,
+      favoriteAbove: favorite.bottom <= slot.top,
+      favoriteGap: favorite.left - channel.right,
+      clockGap: clock.left - favorite.right,
+      clockRight: clock.right,
+      panelRight: box('#live-preview').right,
     };
   });
   expect(geometry.badgeLeft).toBeGreaterThanOrEqual(0);
@@ -697,7 +703,31 @@ test('EPG shows current program, up to four future rows, and favorite action', a
   expect(geometry.badgeTop).toBeGreaterThanOrEqual(0);
   expect(geometry.badgeTop).toBeLessThan(60);
   expect(geometry.favoriteAbove).toBe(true);
-  expect(geometry.headerGap).toBeGreaterThanOrEqual(0);
+  expect(geometry.favoriteGap).toBeGreaterThanOrEqual(0);
+  expect(geometry.clockGap).toBeGreaterThan(0);
+  expect(geometry.panelRight - geometry.clockRight).toBe(36);
+
+  await page.locator(`${PANEL} .live-preview-channel`).evaluate(element => {
+    element.textContent = 'Very Long Channel Name '.repeat(20);
+  });
+  const truncation = await page.evaluate(() => {
+    const channel = document.querySelector<HTMLElement>('.live-preview-channel')!;
+    const favorite = document.querySelector('.live-preview-favorite')!.getBoundingClientRect();
+    const clock = document.querySelector('.live-preview-clock')!.getBoundingClientRect();
+    return {
+      clipped: channel.scrollWidth > channel.clientWidth,
+      overflow: getComputedStyle(channel).textOverflow,
+      favoriteBeforeClock: favorite.right < clock.left,
+    };
+  });
+  expect(truncation).toEqual({
+    clipped: true,
+    overflow: 'ellipsis',
+    favoriteBeforeClock: true,
+  });
+  await page.clock.setFixedTime(new Date('2026-09-15T12:01:59Z'));
+  await page.locator(FAVORITE).click();
+  await expect(page.locator(`${PANEL} .live-preview-clock`)).toHaveText('12:01');
   await page.locator(ROW).nth(1).click();
   await expect(page.locator(`${PANEL} .live-preview-title`)).toHaveCount(0);
   await expect(page.locator(`${PANEL} .live-preview-program`)).toHaveCount(0);

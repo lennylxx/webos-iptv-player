@@ -48,7 +48,6 @@
 }
 
 .live-preview-favorite {
-  margin-left: auto;
   flex-shrink: 0;
   width: 48px;
   height: 48px;
@@ -90,6 +89,13 @@
 
 .live-preview-favorite svg.set {
   fill: currentColor;
+}
+
+.live-preview-clock {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: calc(24px * var(--font-scale));
+  font-variant-numeric: tabular-nums;
 }
 
 .live-preview-slot {

@@ -34,6 +34,7 @@
   .tab-bar-inner > .tab-bar-account { margin-left: 52px; }
   .epg-prog-title > .epg-bell-glyph { margin-left: 18px; }
   .settings-field > .settings-item-hint { margin-top: 14px; }
+  .live-preview-favorite { margin-right: 20px; }
 }
 
 @supports not (backdrop-filter: blur(1px)) {

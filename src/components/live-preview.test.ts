@@ -143,6 +143,8 @@ describe('LivePreview', () => {
   it('shows current program, bounded progress, four future items and favorite state', () => {
     view.applyState(state());
     expect(root.querySelector('.live-preview-channel')?.textContent).toBe('Channel 1');
+    expect(root.querySelector('.live-preview-clock')?.textContent).toBe('20:36');
+    expect(root.querySelector('.live-preview-clock')?.getAttribute('datetime')).toBe('20:36');
     expect(root.querySelector('.live-preview-slot .live-preview-badge')?.textContent).toContain('LIVE');
     expect(root.querySelector('.live-preview-slot .live-badge')).not.toBeNull();
     expect(root.querySelector('.live-preview-slot .live-badge-dot')).not.toBeNull();
@@ -159,6 +161,14 @@ describe('LivePreview', () => {
     expect(root.querySelector('[data-preview-action="mute"]')?.getAttribute('aria-label'))
       .toBe('Mute');
     expect(root.querySelector('.live-preview-legend')).toBeNull();
+  });
+
+  it('renders the 24-hour clock with minute precision', () => {
+    view.applyState(state());
+    vi.setSystemTime(new Date('2026-09-15T21:04:59Z'));
+    view.applyState(state());
+
+    expect(root.querySelector('.live-preview-clock')?.textContent).toBe('21:04');
   });
 
   it('preserves slot and focus through EPG changes without recreating video', () => {
