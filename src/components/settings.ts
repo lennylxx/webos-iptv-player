@@ -37,6 +37,11 @@ import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
 import { localeOptions, t, tp, type LocalePreference, type TextMessageKey } from '../i18n';
 import {
+  ANIMATION_MODES,
+  applyAnimationMode,
+  type AnimationMode,
+} from '../services/motion-service';
+import {
   ADVANCED_ICON,
   APPEARANCE_ICON,
   CHEVRON_DOWN,
@@ -193,6 +198,19 @@ function xtreamCatalogRefreshIntervalOptions(): { value: string; label: string }
   return XTREAM_CATALOG_REFRESH_HOUR_OPTIONS.map(hours => ({
     value: String(hours),
     label: tp('settings.refreshHours', hours),
+  }));
+}
+
+const ANIMATION_MODE_LABELS: Record<AnimationMode, TextMessageKey> = {
+  essential: 'settings.animationEssential',
+  reduced: 'settings.animationReduced',
+  full: 'settings.animationFull',
+};
+
+function animationModeOptions(): { value: AnimationMode; label: string }[] {
+  return ANIMATION_MODES.map(value => ({
+    value,
+    label: t(ANIMATION_MODE_LABELS[value]),
   }));
 }
 
@@ -452,6 +470,7 @@ export class Settings {
   private ignoreCategoryScroll = false;
   private categoryScrollFrame: number | null = null;
   private categorySyncFrame: number | null = null;
+  private categoryFocusFrame: number | null = null;
   private onManageReminders: () => void;
   private healthController: AbortController | null = null;
   private healthCheckPromise: Promise<void> | null = null;
@@ -565,6 +584,7 @@ export class Settings {
     const textSize = StorageService.getTextSize();
     const localePreference = StorageService.getLocalePreference();
     const liveReconnectAttempts = StorageService.getLiveReconnectAttempts();
+    const animationMode = StorageService.getAnimationMode();
     const playlistRefreshHours = StorageService.getPlaylistRefreshIntervalHours();
     const epgRefreshHours = StorageService.getEpgRefreshIntervalHours();
     const xtreamCatalogRefreshHours = StorageService.getXtreamCatalogRefreshIntervalHours();
@@ -834,6 +854,17 @@ export class Settings {
                  data-settings-category="advanced">
               <div class="settings-section">
                 <h3 class="settings-section-title">${t('settings.advanced')}</h3>
+                <div class="settings-item">
+                  <div class="settings-item-control-row">
+                    <div class="settings-item-title">${t('settings.animationMode')}</div>
+                    ${toggleGroup(
+                      'animation-mode',
+                      animationModeOptions(),
+                      animationMode,
+                    )}
+                  </div>
+                  <div class="settings-item-hint">${t('settings.animationHint')}</div>
+                </div>
                 <div class="settings-item">
                   <div class="settings-item-control-row">
                     <div class="settings-item-title">${t('settings.liveReconnectAttempts')}</div>
@@ -1559,7 +1590,11 @@ export class Settings {
         maxScrollTop,
       ),
     );
-    target.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' });
+    target.scrollIntoView({
+      block: 'start',
+      inline: 'nearest',
+      behavior: 'auto',
+    });
     this.watchCategoryScroll(main, category, targetScrollTop);
   }
 
@@ -1631,10 +1666,22 @@ export class Settings {
   private focusCategoryFirst(category: SettingsCategory): void {
     const pane = this.container.querySelector<HTMLElement>(`#settings-${category}`);
     if (!pane) return;
+    if (this.categorySyncFrame !== null) {
+      window.cancelAnimationFrame(this.categorySyncFrame);
+      this.categorySyncFrame = null;
+    }
+    if (this.categoryFocusFrame !== null) {
+      window.cancelAnimationFrame(this.categoryFocusFrame);
+    }
+    this.ignoreCategoryScroll = true;
     this.nav.setRestrict(pane);
     const focused = this.nav.focusFirst();
     this.nav.setRestrict(null);
     if (focused) this.setActiveCategory(category);
+    this.categoryFocusFrame = window.requestAnimationFrame(() => {
+      this.categoryFocusFrame = null;
+      if (this.categoryScrollFrame === null) this.ignoreCategoryScroll = false;
+    });
   }
 
   private syncCategoryFromScroll(main: HTMLElement): void {
@@ -2239,6 +2286,13 @@ export class Settings {
       ($('#live-reconnect-attempts', this.container) as HTMLElement | null)?.dataset.value,
     );
     StorageService.setLiveReconnectAttempts(liveReconnectAttempts);
+
+    const animationMode = $('#animation-mode .toggle-option.active', this.container)
+      ?.dataset.value as AnimationMode | undefined;
+    if (animationMode) {
+      StorageService.setAnimationMode(animationMode);
+      applyAnimationMode(animationMode);
+    }
 
     const playlistRefreshHours = Number(
       ($('#playlist-refresh-interval', this.container) as HTMLElement | null)?.dataset.value,

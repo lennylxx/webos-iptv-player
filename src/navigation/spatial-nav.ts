@@ -1,4 +1,5 @@
 import type { NavDirection } from '../types';
+import { CONFIG } from '../config';
 
 interface Candidate {
   el: HTMLElement;
@@ -13,6 +14,7 @@ export class SpatialNav {
   private visibilityCache = new WeakMap<HTMLElement, boolean>();
   private readonly visibilityObserver: MutationObserver;
   private readonly stylesheetObserver: MutationObserver;
+  private lastScrollFocusAt = 0;
   // Per-container memory for `data-nav-enter="last-focused"`: re-entering a
   // container returns to where focus left it instead of the nearest edge item.
   private lastFocusedIn = new Map<HTMLElement, HTMLElement>();
@@ -216,13 +218,19 @@ export class SpatialNav {
     this.focused = el;
     if (el) {
       el.classList.add('focused');
-      // Instant, not smooth: d-pad autorepeat outruns the animation, so the
-      // list trails the remote by half a second after the key is released.
-      // 'auto' is spelled out because `.settings-scroll` sets CSS
-      // `scroll-behavior: smooth`, which an omitted behavior would inherit.
-      // webOS 4 already scrolls instantly here - its polyfill predates the
-      // options object - so this makes the two engines behave alike.
-      el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
+      const now = Date.now();
+      const elapsed = now - this.lastScrollFocusAt;
+      const repeated = this.lastScrollFocusAt !== 0
+        && elapsed >= 0
+        && elapsed <= CONFIG.NAVIGATION.FOCUS_REPEAT_WINDOW_MS;
+      this.lastScrollFocusAt = now;
+      el.scrollIntoView({
+        block: 'nearest',
+        inline: 'nearest',
+        behavior: repeated ? 'instant' : 'auto',
+      });
+    } else {
+      this.lastScrollFocusAt = 0;
     }
     this.onFocusChange?.(el);
   }

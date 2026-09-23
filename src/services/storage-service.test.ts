@@ -89,6 +89,18 @@ describe('StorageService', () => {
     expect(localStorage.getItem('iptv_live_preview')).toBeNull();
   });
 
+  it('validates and persists the animation mode', () => {
+    expect(StorageService.getAnimationMode()).toBe('reduced');
+    StorageService.setAnimationMode('full');
+    expect(StorageService.getAnimationMode()).toBe('full');
+    StorageService.setAnimationMode('essential');
+    expect(StorageService.getAnimationMode()).toBe('essential');
+    expect(() => StorageService.setAnimationMode('invalid' as 'essential'))
+      .toThrow(RangeError);
+    StorageService.set('animation_mode', 'invalid');
+    expect(StorageService.getAnimationMode()).toBe('reduced');
+  });
+
   it('persists live preview on and off independently from autoplay and sources', () => {
     StorageService.setAutoPlay(true);
     StorageService.setPlaylists([{ id: 'p1', name: 'P1', url: 'http://host/a' }]);

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SpatialNav } from './spatial-nav';
+import { applyAnimationMode } from '../services/motion-service';
 
 // jsdom implements no layout: scrollIntoView is missing and getBoundingClientRect
 // returns zeros. Stub both so focus()/move() can be exercised deterministically.
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
+  applyAnimationMode('reduced');
 });
 
 function focusable(rect: { x: number; y: number; w?: number; h?: number }, container?: string): HTMLElement {
@@ -42,17 +44,42 @@ describe('SpatialNav', () => {
       expect(nav.focused).toBe(b);
     });
 
-    it('scrolls focus into view instantly, never smoothly', () => {
+    it('leaves isolated focus scrolling to CSS', () => {
       const a = focusable({ x: 0, y: 0 });
       const b = focusable({ x: 0, y: 100 });
       const nav = new SpatialNav(makeContainer(a, b));
       nav.focus(a);
       nav.focus(b);
-      // Smooth animation loses a d-pad autorepeat race, and an omitted
-      // behavior would inherit `.settings-scroll`'s CSS `scroll-behavior`.
       expect(b.scrollIntoView).toHaveBeenCalledWith(
         expect.objectContaining({ behavior: 'auto' }),
       );
+    });
+
+    it('forces only repeated focus changes to scroll instantly', () => {
+      applyAnimationMode('full');
+      const now = vi.spyOn(Date, 'now');
+      now.mockReturnValueOnce(1000)
+        .mockReturnValueOnce(1080)
+        .mockReturnValueOnce(1300);
+      const a = focusable({ x: 0, y: 0 });
+      const b = focusable({ x: 0, y: 100 });
+      const c = focusable({ x: 0, y: 200 });
+      const nav = new SpatialNav(makeContainer(a, b, c));
+
+      nav.focus(a);
+      nav.focus(b);
+      nav.focus(c);
+
+      expect(a.scrollIntoView).toHaveBeenCalledWith(
+        expect.objectContaining({ behavior: 'auto' }),
+      );
+      expect(b.scrollIntoView).toHaveBeenCalledWith(
+        expect.objectContaining({ behavior: 'instant' }),
+      );
+      expect(c.scrollIntoView).toHaveBeenCalledWith(
+        expect.objectContaining({ behavior: 'auto' }),
+      );
+      now.mockRestore();
     });
 
     it('skips scrollIntoView when re-focusing the already-focused element', () => {

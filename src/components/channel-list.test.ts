@@ -505,6 +505,28 @@ describe('ChannelList.render', () => {
     expect(channelItems()).toHaveLength(1);
   });
 
+  it('restores Recently Watched focus with one CSS-owned scroll call', () => {
+    recentMock.items = [{
+      kind: 'live',
+      channel: data.channels[0],
+      channelIndex: 0,
+      updatedAt: 1000,
+    }];
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
+    list.handleAction('select');
+    hover(channelItems()[0]);
+    const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView);
+    scrollIntoView.mockClear();
+    list.render();
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenLastCalledWith({
+      block: 'nearest',
+      behavior: 'auto',
+    });
+  });
+
   it('shows the Recently Watched empty state', () => {
     list.render();
     hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);

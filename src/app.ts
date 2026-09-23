@@ -32,6 +32,7 @@ import { ReminderPrompt } from './components/reminder-prompt';
 import { ReminderManager } from './components/reminder-manager';
 import { setDisplayTz } from './utils/time';
 import { initTheme, applyTheme, applyOverlayStyle, applyTextSize } from './services/theme-service';
+import { applyAnimationMode } from './services/motion-service';
 import { channelKey } from './utils/channel';
 import { isSourceEnabled } from './utils/playlist';
 import { truncate } from './utils/text';
@@ -91,6 +92,7 @@ class App {
     await StorageService.init();
     StorageService.setWriteFailureHandler(() => showToast(t('app.saveFailed')));
     initLocale(StorageService.getLocalePreference());
+    applyAnimationMode(StorageService.getAnimationMode());
     const initialLoadingText = $('#loading-text');
     if (initialLoadingText) initialLoadingText.textContent = t('common.loading');
     initTheme();
@@ -899,6 +901,7 @@ class App {
     applyTheme(StorageService.getTheme());
     applyOverlayStyle(StorageService.getOverlayStyle());
     applyTextSize(StorageService.getTextSize());
+    applyAnimationMode(StorageService.getAnimationMode());
     this.player.closeSubtitleSearch(); // never let the subtitle overlay linger across a view change
     this.player.closeSubtitleOffset(); // never let the subtitle-sync overlay linger across a view change
     this.epgGrid.dismissPrompt(); // never let the catch-up prompt linger across a view change

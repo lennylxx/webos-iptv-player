@@ -157,7 +157,9 @@ test.describe('Settings navigation', () => {
     await page.locator('[data-settings-target="advanced"]').click();
 
     await expect(page.locator('#settings-advanced .settings-section-title')).toHaveText('Advanced');
-    const layouts = await page.locator('#settings-advanced .settings-item-control-row')
+    const layouts = await page.locator(
+      '#settings-advanced .settings-item-control-row:has(> .dropdown)',
+    )
       .evaluateAll((rows) => rows.map((row) => {
         const title = row.querySelector<HTMLElement>('.settings-item-title')!
           .getBoundingClientRect();
@@ -178,6 +180,151 @@ test.describe('Settings navigation', () => {
       expect(layout.dropdownCenter).toBeCloseTo(layout.titleCenter, 0);
       expect(layout.controlGap).toBe(24);
       expect(layout.hintTop).toBeGreaterThan(layout.controlBottom);
+    }
+  });
+
+  test('persists Essential mode and disables only costly motion', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('[data-settings-target="advanced"]').click();
+    const animationOptions = page.locator('#animation-mode .toggle-option');
+    await expect(animationOptions).toHaveCount(3);
+    expect(await animationOptions.evaluateAll(options => options.map(
+      option => (option as HTMLElement).dataset.value,
+    )))
+      .toEqual(['essential', 'reduced', 'full']);
+    const animationRow = await page.evaluate(() => {
+      const title = document.querySelector(
+        '#settings-advanced .settings-item-title',
+      )!.getBoundingClientRect();
+      const options = document.querySelector('#animation-mode')!.getBoundingClientRect();
+      return {
+        titleCenter: title.top + title.height / 2,
+        optionsCenter: options.top + options.height / 2,
+      };
+    });
+    expect(animationRow.optionsCenter).toBeCloseTo(animationRow.titleCenter, 0);
+    await page.locator('#animation-mode [data-value="essential"]').click();
+    await page.locator('#save-settings').click();
+
+    await expect(page.locator('html')).toHaveAttribute('data-animation', 'essential');
+    const durations = await page.evaluate(() => {
+      const seconds = (value: string): number[] => value.split(',')
+        .map(part => parseFloat(part.trim()))
+        .filter(Number.isFinite);
+      const liveBadge = document.createElement('span');
+      liveBadge.className = 'live-badge-dot';
+      document.body.appendChild(liveBadge);
+      const motionFixtures = document.createElement('div');
+      motionFixtures.innerHTML = `
+        <span class="playing-indicator"></span>
+        <div class="epg-programme-item state-live"></div>
+        <div class="player-sidebar visible channels-only">
+          <div class="sidebar-picker-arrow"><svg></svg></div>
+          <div class="sidebar-ch-item">
+            <div class="ch-name"><span class="ch-name-text scrolling"></span></div>
+            <div class="ch-now"><span class="ch-now-text scrolling"></span></div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(motionFixtures);
+      const result = {
+        button: seconds(getComputedStyle(document.querySelector('#save-settings')!)
+          .transitionDuration),
+        search: seconds(getComputedStyle(document.querySelector('.tab-bar-search-input')!)
+          .transitionDuration),
+        liveBadge: getComputedStyle(liveBadge).animationName,
+        playingIndicator: getComputedStyle(
+          motionFixtures.querySelector('.playing-indicator')!,
+        ).animationName,
+        epgLiveRail: getComputedStyle(
+          motionFixtures.querySelector('.epg-programme-item')!,
+          '::before',
+        ).animationName,
+        groupPicker: getComputedStyle(
+          motionFixtures.querySelector('.sidebar-picker-arrow svg')!,
+        ).animationName,
+        channelMarquee: getComputedStyle(
+          motionFixtures.querySelector('.ch-name-text')!,
+        ).animationName,
+        programmeMarquee: getComputedStyle(
+          motionFixtures.querySelector('.ch-now-text')!,
+        ).animationName,
+        spinner: seconds(getComputedStyle(document.querySelector('.loading-spinner')!)
+          .animationDuration),
+      };
+      liveBadge.remove();
+      motionFixtures.remove();
+      return result;
+    });
+    expect(durations.search.every(value => value <= 0.000001)).toBe(true);
+    expect(durations.button.some(value => value >= 0.1)).toBe(true);
+    expect(durations.liveBadge).toBe('liveBadgeDotPulse');
+    expect(durations.playingIndicator).toBe('pulse');
+    expect(durations.epgLiveRail).toBe('epgRailPulse');
+    expect(durations.groupPicker).toBe('group-picker-nudge');
+    expect(durations.channelMarquee).toBe('marquee-bounce');
+    expect(durations.programmeMarquee).toBe('marquee-bounce');
+    expect(durations.spinner).toContain(0.8);
+
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-animation', 'essential');
+  });
+
+  test('data-animation CSS owns the navigation scroll policy', async ({ page }) => {
+    await page.goto('/');
+    for (const [mode, expected] of [
+      ['essential', 'auto'],
+      ['reduced', 'auto'],
+      ['full', 'smooth'],
+    ] as const) {
+      await page.evaluate((value) => {
+        localStorage.setItem('iptv_animation_mode', JSON.stringify(value));
+      }, mode);
+      await page.reload();
+      await expect(page.locator('html')).toHaveAttribute('data-animation', mode);
+      const policy = await page.locator('.settings-scroll').evaluate((element) => ({
+        supported: typeof document.documentElement.style.scrollBehavior === 'string',
+        value: getComputedStyle(element).scrollBehavior,
+      }));
+      if (policy.supported) expect(policy.value).toBe(expected);
+    }
+  });
+
+  test('keeps localized animation profile controls on one line', async ({ page }) => {
+    const locales = ['en', 'de', 'es', 'fr', 'it', 'pt-BR', 'ru', 'uk', 'zh-CN'];
+    await page.goto('/');
+
+    for (const locale of locales) {
+      await page.evaluate((value) => {
+        localStorage.setItem('iptv_locale', JSON.stringify(value));
+      }, locale);
+      await page.reload();
+      await page.locator('[data-settings-target="advanced"]').click();
+
+      const layout = await page.locator('#animation-mode').evaluate((group) => {
+        const section = group.closest<HTMLElement>('.settings-section')!;
+        const item = group.closest<HTMLElement>('.settings-item')!;
+        const buttons = Array.from(group.querySelectorAll<HTMLElement>('.toggle-option'));
+        return {
+          buttonCount: buttons.length,
+          wrapped: buttons.filter((button) => {
+            const range = document.createRange();
+            range.selectNodeContents(button);
+            return range.getClientRects().length !== 1;
+          }).map(button => button.textContent?.trim() ?? ''),
+          groupRight: Math.round(group.getBoundingClientRect().right),
+          hintRight: Math.round(
+            item.querySelector<HTMLElement>('.settings-item-hint')!
+              .getBoundingClientRect().right,
+          ),
+          sectionRight: Math.round(section.getBoundingClientRect().right),
+        };
+      });
+
+      expect(layout.buttonCount, locale).toBe(3);
+      expect(layout.wrapped, locale).toEqual([]);
+      expect(layout.groupRight, locale).toBeLessThanOrEqual(layout.sectionRight);
+      expect(layout.hintRight, locale).toBeLessThanOrEqual(layout.sectionRight);
     }
   });
 

@@ -97,6 +97,7 @@ This is the complete active key inventory:
 | `iptv_locale` | `string` | Explicit interface locale or `system` | Preference |
 | `iptv_theme` | `string` | Selected application theme id | Preference |
 | `iptv_text_size` | `string` | Selected text-scale id | Preference |
+| `iptv_animation_mode` | `essential \| reduced \| full` | Animation profile; defaults to immediate navigation scrolling, while Essential disables costly motion for older TVs | Preference |
 | `iptv_overlay_style` | `dark \| frosted` | Player OSD/sidebar/menu glass style | Preference |
 | `iptv_tz_mode` | `device \| feed` | Which time zone displays EPG times | Preference |
 | `iptv_epg_tz_offset` | `number \| null` | Last known feed offset in minutes east of UTC | Small derived state |

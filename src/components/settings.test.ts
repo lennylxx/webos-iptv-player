@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { ChannelCycleMode, ManualEpgSource, TzMode } from '../types';
+import type { AnimationMode } from '../services/motion-service';
 import type { XtreamAccountInfo } from '../services/xtream-client';
 
 const {
@@ -13,6 +14,7 @@ const {
   uploadMock,
   xtreamMock,
   healthMock,
+  motionMock,
 } = vi.hoisted(() => {
   const state = {
     playlists: [] as {
@@ -27,6 +29,7 @@ const {
     manualEpgSources: [] as ManualEpgSource[],
     autoPlay: false,
     livePreview: false,
+    animationMode: 'reduced' as AnimationMode,
     theme: 'midnight' as string,
     overlayStyle: 'dark' as string,
     textSize: '100' as string,
@@ -66,6 +69,9 @@ const {
       })),
     },
     themeMock: { previewTheme: vi.fn(), applyTheme: vi.fn(), initTheme: vi.fn(), applyTextSize: vi.fn()     },
+    motionMock: {
+      applyAnimationMode: vi.fn(),
+    },
     storageMock: {
       getPlaylists: vi.fn(() => state.playlists),
       getManualEpgSources: vi.fn(() => state.manualEpgSources.map(source => ({
@@ -74,6 +80,7 @@ const {
       }))),
       getAutoPlay: vi.fn(() => state.autoPlay),
       getLivePreview: vi.fn(() => state.livePreview),
+      getAnimationMode: vi.fn(() => state.animationMode),
       getTheme: vi.fn(() => state.theme),
       getOverlayStyle: vi.fn(() => state.overlayStyle),
       getTextSize: vi.fn(() => state.textSize),
@@ -105,6 +112,7 @@ const {
       }),
       setAutoPlay: vi.fn(),
       setLivePreview: vi.fn((value: boolean) => { state.livePreview = value; }),
+      setAnimationMode: vi.fn((value: AnimationMode) => { state.animationMode = value; }),
       setTheme: vi.fn((id: string) => { state.theme = id; }),
       setOverlayStyle: vi.fn((s: string) => { state.overlayStyle = s; }),
       setTextSize: vi.fn((s: string) => { state.textSize = s; }),
@@ -174,6 +182,10 @@ vi.mock('../services/storage-service', () => ({
   StorageService: storageMock,
 }));
 vi.mock('../services/theme-service', () => themeMock);
+vi.mock('../services/motion-service', () => ({
+  ANIMATION_MODES: ['essential', 'reduced', 'full'],
+  applyAnimationMode: motionMock.applyAnimationMode,
+}));
 vi.mock('../services/idb-cache', () => cacheMock);
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 vi.mock('../services/xtream-client', () => ({
@@ -213,6 +225,7 @@ beforeEach(() => {
   state.manualEpgSources = [];
   state.autoPlay = false;
   state.livePreview = false;
+  state.animationMode = 'reduced';
   state.theme = 'midnight';
   state.overlayStyle = 'dark';
   state.textSize = '100';
@@ -442,15 +455,25 @@ describe('Settings.render', () => {
     expect(container.querySelector('#auto-play .toggle-option.active')!.getAttribute('data-value')).toBe('on');
   });
 
-  it('renders reconnect and refresh controls under Advanced', () => {
+  it('renders animation, reconnect, and refresh controls under Advanced', () => {
     settings.render();
     const advanced = container.querySelector('#settings-advanced')!;
     expect(advanced.querySelector('.settings-section-title')?.textContent).toBe('Advanced');
     const items = advanced.querySelectorAll('.settings-item');
-    expect(items).toHaveLength(3);
+    expect(items).toHaveLength(4);
     expect(items[0].querySelector('.settings-item-title')?.textContent)
+      .toBe('Animation mode');
+    expect(items[0].querySelector('.settings-item-control-row')?.children)
+      .toHaveLength(2);
+    expect(Array.from(container.querySelectorAll<HTMLElement>(
+      '#animation-mode .toggle-option',
+    )).map(option => option.dataset.value))
+      .toEqual(['essential', 'reduced', 'full']);
+    expect(container.querySelector('#animation-mode .toggle-option.active')
+      ?.getAttribute('data-value')).toBe('reduced');
+    expect(items[1].querySelector('.settings-item-title')?.textContent)
       .toBe('Live reconnect attempts');
-    expect(items[0].querySelector('.settings-item-control-row')?.children).toHaveLength(2);
+    expect(items[1].querySelector('.settings-item-control-row')?.children).toHaveLength(2);
     expect(container.querySelector('#live-reconnect-attempts')?.getAttribute('data-value'))
       .toBe('3');
     expect(Array.from(container.querySelectorAll<HTMLElement>(
@@ -483,13 +506,21 @@ describe('Settings.render', () => {
 
     settings.render();
 
-    expect(container.querySelectorAll('#settings-advanced .settings-item')).toHaveLength(4);
+    expect(container.querySelectorAll('#settings-advanced .settings-item')).toHaveLength(5);
     expect(container.querySelector('#xtream-catalog-refresh-interval')
       ?.getAttribute('data-value')).toBe('6');
     expect(Array.from(container.querySelectorAll<HTMLElement>(
       '#xtream-catalog-refresh-interval [data-dropdown-value]',
     )).map(option => option.dataset.dropdownValue))
       .toEqual(['1', '3', '6', '12', '24']);
+  });
+
+  it('persists and applies the selected animation mode', () => {
+    settings.render();
+    click('#animation-mode [data-value="full"]');
+    click('#save-settings');
+    expect(storageMock.setAnimationMode).toHaveBeenCalledWith('full');
+    expect(motionMock.applyAnimationMode).toHaveBeenCalledWith('full');
   });
 
   // Left moves within a row by measuring peers, and a collapsed control has no
@@ -1502,10 +1533,16 @@ describe('Settings.handleAction', () => {
 
   it('moves right from a category to its first control', () => {
     settings.render();
-    container.querySelector<HTMLElement>('[data-settings-target="appearance"]')!
+    const appearance = container.querySelector<HTMLElement>(
+      '[data-settings-target="appearance"]',
+    )!;
+    appearance
       .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     settings.handleAction('right');
     expect(container.querySelector('.theme-swatch.focused')).not.toBeNull();
+    container.querySelector('.settings-scroll')!
+      .dispatchEvent(new Event('scroll', { bubbles: true }));
+    expect(appearance.classList.contains('active')).toBe(true);
   });
 
   it('moves left from a content boundary back to the active category', () => {
@@ -1518,7 +1555,7 @@ describe('Settings.handleAction', () => {
       .toBe(true);
   });
 
-  it('scrolls to a category when its sidebar item is activated', () => {
+  it('leaves category scrolling to the selected CSS profile', () => {
     settings.render();
     const target = container.querySelector<HTMLElement>('#settings-subtitles')!;
     target.scrollIntoView = vi.fn();
@@ -1526,9 +1563,22 @@ describe('Settings.handleAction', () => {
     expect(target.scrollIntoView).toHaveBeenCalledWith({
       block: 'start',
       inline: 'nearest',
-      behavior: 'smooth',
+      behavior: 'auto',
     });
     expect(target.scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it('still delegates category scrolling to CSS in full mode', () => {
+    state.animationMode = 'full';
+    settings.render();
+    const target = container.querySelector<HTMLElement>('#settings-subtitles')!;
+    target.scrollIntoView = vi.fn();
+    click('[data-settings-target="subtitles"]');
+    expect(target.scrollIntoView).toHaveBeenCalledWith({
+      block: 'start',
+      inline: 'nearest',
+      behavior: 'auto',
+    });
   });
 
   it('updates the weak active category when content scrolling reaches the bottom', async () => {

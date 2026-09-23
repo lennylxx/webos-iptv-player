@@ -372,9 +372,12 @@ export class ChannelList {
       if (!target) this.nav.focusFirst();
     }
     if (target) {
+      const restoreRecentFocus = showingRecent
+        && target.closest('.channel-main') !== null
+        && this.nav.focused === target;
       this.nav.focus(target);
-      if (showingRecent && target.closest('.channel-main')) {
-        target.scrollIntoView({ block: 'nearest' });
+      if (restoreRecentFocus) {
+        target.scrollIntoView({ block: 'nearest', behavior: 'auto' });
       }
     }
     if (!ensureFocus) this.nav.clearDetachedFocus();

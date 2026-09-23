@@ -147,7 +147,6 @@
   min-height: 0;
   padding: 0 12px 32px;
   overflow-y: auto;
-  scroll-behavior: smooth;
 }
 
 .settings-section {
@@ -215,6 +214,10 @@
 .settings-item-control-row > .dropdown {
   flex: 0 0 auto;
   min-width: 160px;
+  margin-left: 24px;
+}
+
+.settings-item-control-row > .toggle-group {
   margin-left: 24px;
 }
 

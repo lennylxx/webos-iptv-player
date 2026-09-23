@@ -7,6 +7,11 @@ import { genPlaylistId } from '../utils/playlist';
 import { createLogger } from '../utils/logger';
 import { isLocalePreference, type LocalePreference } from '../i18n';
 import {
+  DEFAULT_ANIMATION_MODE,
+  isAnimationMode,
+  type AnimationMode,
+} from './motion-service';
+import {
   clearCachedPlaylist,
   clearCachedStreamMimes,
   migrateLegacyStreamMimeCache,
@@ -844,6 +849,17 @@ export const StorageService = {
   },
   setLivePreview(val: boolean): void {
     set('live_preview', val);
+  },
+
+  getAnimationMode(): AnimationMode {
+    const mode = get<unknown>('animation_mode', DEFAULT_ANIMATION_MODE);
+    return isAnimationMode(mode) ? mode : DEFAULT_ANIMATION_MODE;
+  },
+  setAnimationMode(mode: AnimationMode): void {
+    if (!isAnimationMode(mode)) {
+      throw new RangeError(`Invalid animation mode: ${String(mode)}`);
+    }
+    set('animation_mode', mode);
   },
 
   // 'global' = channel_up/channel_down cycles the entire channel list

@@ -106,6 +106,28 @@
   box-sizing: border-box;
 }
 
+html[data-animation="essential"] .tab-bar-search-input,
+html[data-animation="essential"] .channel-scroll-thumb,
+html[data-animation="essential"] .epg-mapping-list,
+html[data-animation="essential"] .channel-health-progress-fill,
+html[data-animation="essential"] .osd-progress-bar {
+  transition-duration: 0.001ms !important;
+}
+
+html[data-animation="full"] .playlist-tabs,
+html[data-animation="full"] .group-list,
+html[data-animation="full"] .channel-main,
+html[data-animation="full"] .settings-scroll,
+html[data-animation="full"] .dropdown-menu,
+html[data-animation="full"] .catalog-view,
+html[data-animation="full"] .catalog-rails,
+html[data-animation="full"] .catalog-rail-track,
+html[data-animation="full"] .search-view,
+html[data-animation="full"] .search-virtual-scroll,
+html[data-animation="full"] .reminder-manager-view {
+  scroll-behavior: smooth;
+}
+
 html, body {
   width: 1920px;
   height: 1080px;
