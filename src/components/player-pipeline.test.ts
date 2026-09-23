@@ -172,7 +172,17 @@ class FakeShakaPlayer {
 const fakeShaka = {
   Player: FakeShakaPlayer,
   net: { NetworkingEngine: { RequestType: { LICENSE: 2 } } },
-  util: { Error: { Severity: { CRITICAL: 2, RECOVERABLE: 1 } } },
+  util: {
+    Error: {
+      Severity: { CRITICAL: 2, RECOVERABLE: 1 },
+      Category: { DRM: 6 },
+      Code: {
+        BAD_HTTP_STATUS: 1001,
+        LICENSE_REQUEST_FAILED: 6007,
+        LICENSE_RESPONSE_REJECTED: 6008,
+      },
+    },
+  },
 };
 
 function lastShakaPlayer(): FakeShakaPlayer | undefined {
@@ -655,9 +665,31 @@ describe('PlayerPipeline desktop DASH', () => {
     player?.emit('error', { severity: 1, category: 1, code: 1001 });
     expect(opts.onError).not.toHaveBeenCalled();
 
-    player?.emit('error', { severity: 2, category: 1, code: 1002 });
-    player?.emit('error', { severity: 2, category: 1, code: 1003 });
+    player?.emit('error', {
+      severity: 2,
+      category: 6,
+      code: 6007,
+      data: [{ code: 1002, data: [] }],
+    });
+    player?.emit('error', {
+      severity: 2,
+      category: 6,
+      code: 6007,
+      data: [{ code: 1002, data: [] }],
+    });
     expect(opts.onError).toHaveBeenCalledOnce();
+    expect(vi.mocked(opts.onError).mock.calls[0]).toEqual([]);
+  });
+
+  it('reports a rejected Shaka license as terminal', async () => {
+    const { opts } = await loadDash();
+    lastShakaPlayer()?.emit('error', {
+      severity: 2,
+      category: 6,
+      code: 6007,
+      data: [{ code: 1001, data: ['http://host/license', 403] }],
+    });
+    expect(opts.onError).toHaveBeenCalledWith('unsupported');
   });
 
   it('destroys the Shaka player when the pipeline tears down', async () => {

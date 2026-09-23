@@ -115,7 +115,14 @@ export async function installShakaStub(
         const server = servers[Object.keys(servers)[0]];
         if (options.licenseNetwork && server) {
           const response = await fetch(server, { method: 'POST', headers: request.headers, body: 'synthetic-challenge' });
-          if (!response.ok) throw new Error('Synthetic license rejection');
+          if (!response.ok) {
+            throw {
+              severity: 2,
+              category: 6,
+              code: 6007,
+              data: [{ code: 1001, data: [server, response.status] }],
+            };
+          }
         }
         if (options.delayedLoad) await new Promise<void>(resolve => { releaseLoad = resolve; });
         state.loadSettled = true;
@@ -184,7 +191,16 @@ export async function installShakaStub(
       value: {
         Player,
         net: { NetworkingEngine: { RequestType: { LICENSE: 2 } } },
-        util: { Error: { Severity: { CRITICAL: 2, RECOVERABLE: 1 } } },
+        util: {
+          Error: {
+            Severity: { CRITICAL: 2, RECOVERABLE: 1 },
+            Code: {
+              BAD_HTTP_STATUS: 1001,
+              LICENSE_REQUEST_FAILED: 6007,
+              LICENSE_RESPONSE_REJECTED: 6008,
+            },
+          },
+        },
       },
     });
     Object.defineProperty(window, '__shakaE2E', {

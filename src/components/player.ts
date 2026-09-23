@@ -86,6 +86,7 @@ export class Player {
   private liveHistoryGeneration = -1;
   private liveHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   private errorAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
+  private errorRetryPending = false;
   // Manual A/V resync (catch-up / VOD): true from the resync seek until playback
   // resumes, gating the "Resyncing…" message and debouncing repeat presses.
   private resyncing = false;
@@ -120,7 +121,7 @@ export class Player {
       playbackLabel: loadToken => this.playbackLabel(loadToken),
       mediaState: video => this.mediaState(video),
       isCatchup: () => this.catchupInfo !== null,
-      onError: () => this.onError(),
+      onError: reason => this.onError(reason),
       onAudioTracksUpdated: () => {
         this.tracks.applyHlsAudioSelection();
         if (this.osd.isVisible()) this.osd.render();
@@ -156,26 +157,29 @@ export class Player {
           currentTime: v.currentTime,
           readyState: v.readyState,
           networkState: v.networkState,
-          paused: v.paused,
+          paused: v.paused && !this.startupPending,
           seeking: v.seeking,
         };
       },
       onReload: recovery => {
-        log.warn('Watchdog reloading a stalled stream',
-          'event=playback.stall.reload', this.playbackLabel(),
+        log.warn('Reconnecting live stream',
+          'event=playback.recovery.reload', this.playbackLabel(),
+          `cause=${recovery.cause}`,
           this.recoveryState(recovery));
         this.reloadCurrentStream();
       },
       onEscalate: recovery => {
-        log.error('Watchdog recovery exhausted; advancing channel',
-          'event=playback.stall.exhausted', this.playbackLabel(),
+        log.error('Live stream recovery exhausted; advancing channel',
+          'event=playback.recovery.exhausted', this.playbackLabel(),
+          `cause=${recovery.cause}`,
           this.recoveryState(recovery));
-        this.markLiveUnavailable('stall_exhausted');
+        this.markLiveUnavailable(recovery.cause === 'stall' ? 'stall_exhausted' : 'playback_error');
+        this.osd.updateMessage(t('player.streamError'));
         this.channelUp();
       },
       pollMs: CONFIG.PLAYER.STALL_POLL_MS,
       freezeTicks: CONFIG.PLAYER.STALL_FREEZE_TICKS,
-      maxReloads: CONFIG.PLAYER.STALL_MAX_RELOADS,
+      maxReloads: CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS,
     });
     this.startupWatchdog = new StartupWatchdog({
       probe: (): StartupProbe => {
@@ -231,7 +235,7 @@ export class Player {
       if (this.liveSessionActive && !this.vod) this.rememberLiveAudio();
       update();
     });
-    onCurrent('error', () => this.onError());
+    onCurrent('error', () => this.onError(el.error?.code === 4 ? 'unsupported' : undefined));
     // Resource selection starts here. Until then readyState/networkState still
     // describe the previous stream — on webOS the content-type probe can defer
     // the attach by up to MANIFEST_TIMEOUT — and recreateVideoEl() loads a
@@ -275,7 +279,14 @@ export class Player {
       if (el === this.videoEl) this.tracks.applyNativeSubtitleSelection();
     });
     onCurrent('playing', () => {
+      this.startupPending = false;
+      const recovered = this.errorRetryPending;
+      if (recovered) {
+        this.cancelErrorAdvance();
+        if (isWebOS) this.stallWatchdog.resume();
+      }
       update('playing');
+      if (recovered) this.osd.render();
       log.info('playing', this.videoLabel(el), this.mediaState(el));
       if (this.catchupInfo) this.catchupVariantConfirmed = true;
       this.startupWatchdog.stop();
@@ -294,6 +305,15 @@ export class Player {
       log.debug('stalled event', this.videoLabel(el), this.mediaState(el));
     });
     onCurrent('timeupdate', () => {
+      if (this.liveSessionActive && !this.catchupInfo && !el.paused && !el.seeking) {
+        const recovered = this.stallWatchdog.observeProgress(el.currentTime);
+        if (recovered && this.errorRetryPending) {
+          this.cancelErrorAdvance();
+          if (isWebOS) this.stallWatchdog.resume();
+          update('playing');
+          this.osd.render();
+        }
+      }
       this.reconcileLiveDvrPosition(el);
       this.reconcilePendingSeek(el);
       this.refreshProgress();
@@ -453,13 +473,18 @@ export class Player {
 
   private startPlaybackGeneration(): void {
     this.cancelLiveHistoryTimer();
+    this.cancelErrorAdvance();
+    this.playbackGeneration++;
+    this.healthStartedAt = Date.now();
+    this.liveHistoryGeneration = -1;
+  }
+
+  private cancelErrorAdvance(): void {
     if (this.errorAdvanceTimer !== null) {
       clearTimeout(this.errorAdvanceTimer);
       this.errorAdvanceTimer = null;
     }
-    this.playbackGeneration++;
-    this.healthStartedAt = Date.now();
-    this.liveHistoryGeneration = -1;
+    this.errorRetryPending = false;
   }
 
   private cancelLiveHistoryTimer(): void {
@@ -550,7 +575,7 @@ export class Player {
     this.loadStream(url, channel.extras);
     this.showOSD();
     if (!this.livePreviewMode) show(this.container);
-    if (isWebOS) this.stallWatchdog.start();
+    this.stallWatchdog.start(isWebOS, StorageService.getLiveReconnectAttempts());
   }
 
   isVod(): boolean { return this.vod !== null; }
@@ -879,7 +904,7 @@ export class Player {
     log.error('Stream never started', 'event=playback.startup.failed',
       this.playbackLabel(), ...detail);
     this.startupPending = false;
-    this.onError();
+    this.onError('unsupported');
   }
 
   private applyPipelineManifest(manifest: PipelineManifest): void {
@@ -887,8 +912,9 @@ export class Player {
     this.tracks.applyManifest(manifest);
   }
 
-  private onError(): void {
+  private onError(reason?: 'unsupported'): void {
     if (!this.playbackActive || this.wasPlayingBeforeHide) return;
+    if (this.errorAdvanceTimer !== null) return;
     if (this.liveSessionActive) {
       this.livePlaybackStatus = 'error';
       this.onPlaybackStateChanged();
@@ -939,14 +965,29 @@ export class Player {
       );
     }
     const v = this.videoEl;
-    if (this.errorAdvanceTimer !== null) return;
-    this.markLiveUnavailable('playback_error');
     log.error('Video playback error', 'event=playback.video.error',
       this.playbackLabel(),
       v ? this.mediaState(v) : 'no video element',
       v?.error ? { code: v.error.code, message: v.error.message } : 'no error info',
       '| channel:', this.currentChannel?.name,
       '| url:', diagnosticStreamUrl(v?.currentSrc || this.currentChannel?.url || ''));
+    if (this.liveSessionActive && !this.catchupInfo && reason !== 'unsupported') {
+      this.stallWatchdog.pause();
+      this.errorRetryPending = true;
+      this.livePlaybackStatus = 'buffering';
+      this.onPlaybackStateChanged();
+      this.osd.updateMessage(t('player.reconnecting'));
+      this.errorAdvanceTimer = setTimeout(() => {
+        this.errorAdvanceTimer = null;
+        this.errorRetryPending = false;
+        if (this.stallWatchdog.recoverFromError() && isWebOS) {
+          this.stallWatchdog.resume();
+        }
+      }, 2000);
+      return;
+    }
+    this.stallWatchdog.stop();
+    this.markLiveUnavailable('playback_error');
     this.osd.updateMessage(t('player.streamError'));
     this.errorAdvanceTimer = setTimeout(() => {
       this.errorAdvanceTimer = null;

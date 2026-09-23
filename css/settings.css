@@ -203,6 +203,21 @@
   font-size: 26px;
 }
 
+.settings-item-control-row {
+  display: flex;
+  align-items: center;
+}
+
+.settings-item-control-row > .settings-item-title {
+  margin-bottom: 0;
+}
+
+.settings-item-control-row > .dropdown {
+  flex: 0 0 auto;
+  min-width: 160px;
+  margin-left: 24px;
+}
+
 .settings-item-hint {
   margin-top: 8px;
   color: var(--text-muted);

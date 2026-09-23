@@ -88,8 +88,29 @@ interface ShakaNamespace extends ShakaNamespaceLike {
       Severity: {
         CRITICAL: number;
       };
+      Code?: {
+        BAD_HTTP_STATUS?: number;
+        LICENSE_REQUEST_FAILED?: number;
+        LICENSE_RESPONSE_REJECTED?: number;
+      };
     };
   };
+}
+
+function isPermanentShakaLicenseError(error: unknown, shaka: ShakaNamespace): boolean {
+  const detail = error as ShakaError | null;
+  const codes = shaka.util.Error.Code;
+  if (!detail || !codes) return false;
+  const responseRejected = codes.LICENSE_RESPONSE_REJECTED;
+  const requestFailed = codes.LICENSE_REQUEST_FAILED;
+  const badHttpStatus = codes.BAD_HTTP_STATUS;
+  if (typeof responseRejected === 'number' && detail.code === responseRejected) return true;
+  if (typeof requestFailed !== 'number' || detail.code !== requestFailed ||
+      typeof badHttpStatus !== 'number') return false;
+  const networkError = detail.data?.[0] as ShakaError | undefined;
+  if (!networkError || networkError.code !== badHttpStatus) return false;
+  const status = networkError.data?.[1];
+  return status === 401 || status === 403;
 }
 
 export interface PipelineManifest {
@@ -104,7 +125,7 @@ export interface PlayerPipelineOptions {
   playbackLabel: (loadToken: number) => string;
   mediaState: (video: HTMLVideoElement) => string;
   isCatchup: () => boolean;
-  onError: () => void;
+  onError: (reason?: 'unsupported') => void;
   onAudioTracksUpdated: () => void;
   onSubtitleTracksUpdated: () => void;
   onManifest: (manifest: PipelineManifest) => void;
@@ -344,7 +365,7 @@ export class PlayerPipeline {
         if (configured?.type === 'unsupported') {
           log.warn('Unsupported DASH DRM', 'event=playback.dash.drm.unsupported',
             this.callbacks.playbackLabel(token), `type=${configured.value}`);
-          this.callbacks.onError();
+          this.callbacks.onError('unsupported');
           return;
         }
         this.loadWithShaka(
@@ -514,7 +535,7 @@ export class PlayerPipeline {
         const value = configured?.type === 'unsupported' ? configured.value : detected?.scheme;
         log.warn('Unsupported native DASH DRM', 'event=playback.dash.drm.unsupported',
           this.callbacks.playbackLabel(loadToken), `type=${value || 'unknown'}`);
-        this.callbacks.onError();
+        this.callbacks.onError('unsupported');
         return;
       }
       if (isShakaDrmConfig(configured)
@@ -551,7 +572,7 @@ export class PlayerPipeline {
         log.warn('PlayReady rights error', 'event=playback.dash.drm.rights',
           this.callbacks.playbackLabel(loadToken),
           `state=${String(response.errorState ?? '')}`);
-        this.callbacks.onError();
+        this.callbacks.onError('unsupported');
       }).then(clientId => {
         if (!clientId || loadToken !== this.loadToken || !this.videoEl) return;
         log.info('PlayReady DRM ready', 'event=playback.dash.drm.ready',
@@ -562,7 +583,7 @@ export class PlayerPipeline {
         if (loadToken !== this.loadToken) return;
         log.warn('PlayReady setup failed', 'event=playback.dash.drm.failed',
           this.callbacks.playbackLabel(loadToken), error);
-        this.callbacks.onError();
+        this.callbacks.onError('unsupported');
       });
     });
   }
@@ -637,6 +658,7 @@ export class PlayerPipeline {
       // re-fetches) a few times, but give up on a genuinely dead stream so it
       // zaps to the next channel instead of retrying forever.
       hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (loadToken !== this.loadToken) return;
         log.warn('hls.js error', 'event=playback.hls.error',
           this.callbacks.playbackLabel(loadToken),
           { type: data.type, details: data.details, fatal: data.fatal });
@@ -759,7 +781,11 @@ export class PlayerPipeline {
         reportedCriticalError = true;
         log.warn('Shaka critical error', 'event=playback.dash.error',
           this.callbacks.playbackLabel(loadToken), shakaErrorDetail(error));
-        this.callbacks.onError();
+        if (isPermanentShakaLicenseError(error, shaka)) {
+          this.callbacks.onError('unsupported');
+        } else {
+          this.callbacks.onError();
+        }
       };
       player.addEventListener('error', event => {
         const error = (event as CustomEvent<ShakaError>).detail;
@@ -832,6 +858,7 @@ export class PlayerPipeline {
       player.load();
       player.play();
       player.on(mpegts.Events.ERROR, () => {
+        if (loadToken !== this.loadToken) return;
         log.error('mpegts.js playback error', 'event=playback.mpegts.error',
           this.callbacks.playbackLabel(loadToken));
         this.callbacks.onError();

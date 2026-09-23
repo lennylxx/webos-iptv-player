@@ -152,6 +152,32 @@ test.describe('Settings navigation', () => {
     expect(gaps.dropdownToNextTitle).toBe(12);
   });
 
+  test('aligns the Advanced reconnect label and dropdown on one row', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('[data-settings-target="advanced"]').click();
+
+    await expect(page.locator('#settings-advanced .settings-section-title')).toHaveText('Advanced');
+    const layout = await page.locator('#settings-advanced .settings-item-control-row')
+      .evaluate((row) => {
+        const title = row.querySelector<HTMLElement>('.settings-item-title')!
+          .getBoundingClientRect();
+        const dropdown = row.querySelector<HTMLElement>('.dropdown')!.getBoundingClientRect();
+        const hint = row.parentElement!.querySelector<HTMLElement>('.settings-item-hint')!
+          .getBoundingClientRect();
+        return {
+          titleCenter: title.top + title.height / 2,
+          dropdownCenter: dropdown.top + dropdown.height / 2,
+          controlGap: dropdown.left - title.right,
+          controlBottom: Math.max(title.bottom, dropdown.bottom),
+          hintTop: hint.top,
+        };
+      });
+
+    expect(layout.dropdownCenter).toBeCloseTo(layout.titleCenter, 0);
+    expect(layout.controlGap).toBe(24);
+    expect(layout.hintTop).toBeGreaterThan(layout.controlBottom);
+  });
+
   test('the action bar sits below the scroll viewport and stays put while scrolling', async ({ page }) => {
     await page.goto('/');
     const main = page.locator('.settings-main');

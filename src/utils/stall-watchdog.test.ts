@@ -110,7 +110,59 @@ describe('StallWatchdog', () => {
       frozenMs: 3000,
       reloadCount: 1,
       maxReloads: 2,
+      cause: 'stall',
     });
+  });
+
+  it('shares the retry budget across errors and stalls without counting while paused', () => {
+    const wd = new StallWatchdog({
+      probe: () => frozen(0),
+      onReload, onEscalate, ...OPTS,
+    });
+    wd.start();
+    wd.pause();
+    vi.advanceTimersByTime(OPTS.pollMs * 20);
+    expect(onReload).not.toHaveBeenCalled();
+
+    expect(wd.recoverFromError()).toBe(true);
+    expect(onReload).toHaveBeenCalledWith(expect.objectContaining({
+      cause: 'error', reloadCount: 1, maxReloads: 2,
+    }));
+    wd.resume();
+    vi.advanceTimersByTime(OPTS.pollMs * OPTS.freezeTicks);
+    expect(onReload).toHaveBeenCalledWith(expect.objectContaining({
+      cause: 'stall', reloadCount: 2,
+    }));
+
+    wd.pause();
+    expect(wd.recoverFromError()).toBe(false);
+    expect(onEscalate).toHaveBeenCalledOnce();
+    expect(onEscalate).toHaveBeenCalledWith(expect.objectContaining({
+      cause: 'error', reloadCount: 2,
+    }));
+  });
+
+  it('refills the error budget only after forward progress, not after a reload baseline', () => {
+    let time = 8;
+    const wd = new StallWatchdog({
+      probe: () => playing(time), onReload, onEscalate, ...OPTS,
+    });
+    wd.start(false, 1);
+    wd.pause();
+    expect(wd.recoverFromError()).toBe(true);
+    time = 0;
+    wd.resume();
+    expect(wd.observeProgress(time)).toBe(false);
+    expect(wd.recoverFromError()).toBe(false);
+
+    wd.start(false, 1);
+    wd.pause();
+    expect(wd.recoverFromError()).toBe(true);
+    time = 0;
+    wd.resume();
+    time = 1;
+    expect(wd.observeProgress(time)).toBe(true);
+    expect(wd.recoverFromError()).toBe(true);
   });
 
   it('keeps a restarting onEscalate\'s watchdog alive (escalation must not kill the next channel)', () => {

@@ -90,6 +90,7 @@ This is the complete active key inventory:
 | `iptv_selectedXtream` | `string \| null` | Account id used by Movies, Series, and Search | Navigation state |
 | `iptv_show_hidden_channels` | `boolean` | Whether normal lists reveal hidden channels in a dimmed state | Preference |
 | `iptv_auto_play` | `boolean` | Whether startup automatically plays the selected channel | Preference |
+| `iptv_live_reconnect_attempts` | `number` | Live channel reconnection limit (0–5; default 3) | Preference |
 | `iptv_locale` | `string` | Explicit interface locale or `system` | Preference |
 | `iptv_theme` | `string` | Selected application theme id | Preference |
 | `iptv_text_size` | `string` | Selected text-scale id | Preference |

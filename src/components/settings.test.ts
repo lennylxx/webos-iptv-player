@@ -32,6 +32,7 @@ const {
     textSize: '100' as string,
     tzMode: 'device' as TzMode,
     channelCycleMode: 'global' as ChannelCycleMode,
+    liveReconnectAttempts: 3,
     showHidden: false,
     tzOffset: null as number | null,
     epgOffsets: {} as Record<string, number>,
@@ -75,6 +76,7 @@ const {
       getTextSize: vi.fn(() => state.textSize),
       getTzMode: vi.fn(() => state.tzMode),
       getChannelCycleMode: vi.fn(() => state.channelCycleMode),
+      getLiveReconnectAttempts: vi.fn(() => state.liveReconnectAttempts),
       getEpgTzOffset: vi.fn(() => state.tzOffset),
       getEpgOffsets: vi.fn(() => ({ ...state.epgOffsets })),
       getLocalePreference: vi.fn(() => state.locale),
@@ -100,6 +102,9 @@ const {
       setTextSize: vi.fn((s: string) => { state.textSize = s; }),
       setTzMode: vi.fn(),
       setChannelCycleMode: vi.fn((m: ChannelCycleMode) => { state.channelCycleMode = m; }),
+      setLiveReconnectAttempts: vi.fn((attempts: number) => {
+        state.liveReconnectAttempts = attempts;
+      }),
       setEpgOffsets: vi.fn((offsets: Record<string, number>) => {
         state.epgOffsets = { ...offsets };
       }),
@@ -145,7 +150,10 @@ const {
   };
 });
 
-vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
+vi.mock('../services/storage-service', () => ({
+  LIVE_RECONNECT_ATTEMPT_OPTIONS: [0, 1, 2, 3, 4, 5],
+  StorageService: storageMock,
+}));
 vi.mock('../services/theme-service', () => themeMock);
 vi.mock('../services/idb-cache', () => cacheMock);
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
@@ -189,6 +197,7 @@ beforeEach(() => {
   state.theme = 'midnight';
   state.overlayStyle = 'dark';
   state.textSize = '100';
+  state.liveReconnectAttempts = 3;
   state.epgOffsets = {};
   PlaylistService.epgSources = [];
   PlaylistService.allChannels = [];
@@ -226,8 +235,15 @@ describe('Settings.render', () => {
       'Appearance',
       'Playback',
       'Online Subtitles',
+      'Advanced',
       'Data Management',
     ]);
+    const navOrder = Array.from(container.querySelectorAll<HTMLElement>('.settings-nav-item'))
+      .map(item => item.dataset.settingsTarget);
+    const contentOrder = Array.from(
+      container.querySelectorAll<HTMLElement>('.settings-scroll > .settings-category'),
+    ).map(item => item.dataset.settingsCategory);
+    expect(contentOrder).toEqual(navOrder);
     expect(container.querySelector('.settings-nav-item.active')?.getAttribute('data-settings-target'))
       .toBe('general');
     expect(container.querySelector('.settings-nav-help')?.textContent)
@@ -402,6 +418,23 @@ describe('Settings.render', () => {
     state.autoPlay = true;
     settings.render();
     expect(container.querySelector('#auto-play .toggle-option.active')!.getAttribute('data-value')).toBe('on');
+  });
+
+  it('renders only live reconnect attempts under Advanced', () => {
+    settings.render();
+    const advanced = container.querySelector('#settings-advanced')!;
+    expect(advanced.querySelector('.settings-section-title')?.textContent).toBe('Advanced');
+    const items = advanced.querySelectorAll('.settings-item');
+    expect(items).toHaveLength(1);
+    expect(items[0].querySelector('.settings-item-title')?.textContent)
+      .toBe('Live reconnect attempts');
+    expect(items[0].querySelector('.settings-item-control-row')?.children).toHaveLength(2);
+    expect(container.querySelector('#live-reconnect-attempts')?.getAttribute('data-value'))
+      .toBe('3');
+    expect(Array.from(container.querySelectorAll<HTMLElement>(
+      '#live-reconnect-attempts [data-dropdown-value]',
+    )).map(option => option.dataset.dropdownValue))
+      .toEqual(['0', '1', '2', '3', '4', '5']);
   });
 
   // Left moves within a row by measuring peers, and a collapsed control has no
@@ -1251,6 +1284,17 @@ describe('Settings.save', () => {
     click('#app-language [data-dropdown-value="zh-CN"]');
     click('#save-settings');
     expect(storageMock.setLocalePreference).toHaveBeenCalledWith('zh-CN');
+    expect(onSave).toHaveBeenCalledWith('apply');
+  });
+
+  it('saves reconnect attempts without forcing a full data reload', () => {
+    state.playlists = [];
+    settings.render();
+
+    click('#live-reconnect-attempts [data-dropdown-value="5"]');
+    click('#save-settings');
+
+    expect(storageMock.setLiveReconnectAttempts).toHaveBeenCalledWith(5);
     expect(onSave).toHaveBeenCalledWith('apply');
   });
 

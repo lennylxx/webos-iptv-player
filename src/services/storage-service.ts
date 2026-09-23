@@ -26,6 +26,7 @@ import {
 const log = createLogger('StorageService');
 
 const PREFIX = CONFIG.STORAGE_PREFIX;
+export const LIVE_RECONNECT_ATTEMPT_OPTIONS: readonly number[] = [0, 1, 2, 3, 4, 5];
 
 type StoredCatchup = CatchupProgressEntry & { expiresAt: number };
 
@@ -564,6 +565,22 @@ export const StorageService = {
     const stored = set('playlists', playlists);
     if (stored) evictCache();
     return stored;
+  },
+
+  getLiveReconnectAttempts(): number {
+    const attempts = get<unknown>(
+      'live_reconnect_attempts',
+      CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS,
+    );
+    return typeof attempts === 'number' && LIVE_RECONNECT_ATTEMPT_OPTIONS.includes(attempts)
+      ? attempts
+      : CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS;
+  },
+  setLiveReconnectAttempts(attempts: number): void {
+    if (!LIVE_RECONNECT_ATTEMPT_OPTIONS.includes(attempts)) {
+      throw new RangeError(`Invalid live reconnect attempts: ${String(attempts)}`);
+    }
+    set('live_reconnect_attempts', attempts);
   },
 
   getManualEpgSources(): ManualEpgSource[] {

@@ -52,6 +52,36 @@ test('remote arrow keys move focus and Enter starts playback', async ({ page }) 
   await expect(page.locator('#view-player')).toBeVisible();
 });
 
+test('live playback retries the current channel before switching', async ({ page }) => {
+  await neuterVideo(page);
+  await routePlaylist(page);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'settings');
+  await page.locator('[data-settings-target="advanced"]').click();
+  const attempts = page.locator('#live-reconnect-attempts');
+  await attempts.locator('.dropdown-trigger').click();
+  await attempts.locator('[data-dropdown-value="1"]').click();
+  await page.locator('#save-settings').click();
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Channel One');
+
+  const video = page.locator('#video-player');
+  await video.evaluate(el => {
+    el.dataset.originalStream = 'true';
+    el.dispatchEvent(new Event('error'));
+  });
+  await expect(page.locator('#view-player')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('iptv_last_channel'))).toBe('0');
+  await expect(video).not.toHaveAttribute('data-original-stream', 'true');
+  expect(await page.evaluate(() => localStorage.getItem('iptv_last_channel'))).toBe('0');
+  await video.dispatchEvent('error');
+  await expect.poll(() =>
+    page.evaluate(() => localStorage.getItem('iptv_last_channel'))).toBe('1');
+});
+
 test('player sidebar focuses the playing channel; search still filters', async ({ page }) => {
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);

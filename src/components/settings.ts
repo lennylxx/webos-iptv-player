@@ -2,7 +2,10 @@ import type { Action, ChannelCycleMode, EpgSource, ManualEpgSource, NavDirection
 import { $, $$, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SpatialNav } from '../navigation/spatial-nav';
-import { StorageService } from '../services/storage-service';
+import {
+  LIVE_RECONNECT_ATTEMPT_OPTIONS,
+  StorageService,
+} from '../services/storage-service';
 import { EpgService } from '../services/epg-service';
 import { ChannelCustomizationService } from '../services/channel-customization';
 import { PlaylistService } from '../services/playlist-service';
@@ -32,6 +35,7 @@ import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
 import { localeOptions, t, tp, type LocalePreference, type TextMessageKey } from '../i18n';
 import {
+  ADVANCED_ICON,
   APPEARANCE_ICON,
   CHEVRON_DOWN,
   CHEVRON_UP,
@@ -175,7 +179,7 @@ function languageHeading(): string {
 }
 
 type SettingsCategory = 'general' | 'sources' | 'guide' | 'appearance'
-  | 'playback' | 'subtitles' | 'data';
+  | 'playback' | 'subtitles' | 'data' | 'advanced';
 
 const SETTINGS_CATEGORIES: readonly {
   id: SettingsCategory;
@@ -211,6 +215,11 @@ const SETTINGS_CATEGORIES: readonly {
     id: 'subtitles',
     label: 'settings.onlineSubtitles',
     icon: raw(CAPTIONS_ICON),
+  },
+  {
+    id: 'advanced',
+    label: 'settings.advanced',
+    icon: raw(ADVANCED_ICON),
   },
   {
     id: 'data',
@@ -537,6 +546,7 @@ export class Settings {
     const overlayStyle = StorageService.getOverlayStyle();
     const textSize = StorageService.getTextSize();
     const localePreference = StorageService.getLocalePreference();
+    const liveReconnectAttempts = StorageService.getLiveReconnectAttempts();
     const overlayStyles = OVERLAY_STYLES.map(option => ({
       value: option.value,
       label: t(option.value === 'dark' ? 'settings.overlayDark' : 'settings.overlayFrosted'),
@@ -795,6 +805,26 @@ export class Settings {
                     <input type="password" class="settings-input" data-focusable id="os-pass"
                            value="${os.opensubtitles.password}" placeholder="password">
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-category" id="settings-advanced"
+                 data-settings-category="advanced">
+              <div class="settings-section">
+                <h3 class="settings-section-title">${t('settings.advanced')}</h3>
+                <div class="settings-item">
+                  <div class="settings-item-control-row">
+                    <div class="settings-item-title">${t('settings.liveReconnectAttempts')}</div>
+                    ${dropdown(
+                      'live-reconnect-attempts',
+                      LIVE_RECONNECT_ATTEMPT_OPTIONS.map(value => ({
+                        value: String(value), label: String(value),
+                      })),
+                      String(liveReconnectAttempts),
+                    )}
+                  </div>
+                  <div class="settings-item-hint">${t('settings.liveReconnectHint')}</div>
                 </div>
               </div>
             </div>
@@ -2142,6 +2172,11 @@ export class Settings {
 
     const locale = ($('#app-language', this.container) as HTMLElement | null)?.dataset.value as LocalePreference | undefined;
     if (locale) StorageService.setLocalePreference(locale);
+
+    const liveReconnectAttempts = Number(
+      ($('#live-reconnect-attempts', this.container) as HTMLElement | null)?.dataset.value,
+    );
+    StorageService.setLiveReconnectAttempts(liveReconnectAttempts);
 
     const prevOs = StorageService.getOnlineSubtitleConfig();
     const osVal = (id: string) => ($(`#${id}`, this.container) as HTMLInputElement | null)?.value.trim() ?? '';

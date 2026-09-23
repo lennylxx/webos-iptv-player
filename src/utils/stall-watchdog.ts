@@ -1,6 +1,5 @@
-// Detects a silently frozen native stream (currentTime stuck, no `error` event)
-// and recovers it: reload in place, escalate to the next channel after
-// `maxReloads` failures. DOM-free — the <video> element is injected via `probe`.
+// Detects silent native stalls and shares a per-channel reconnect budget with
+// explicit playback errors. DOM-free — the <video> element is injected via `probe`.
 
 export interface StallProbe {
   currentTime: number;
@@ -15,6 +14,7 @@ export interface StallRecovery {
   frozenMs: number;
   reloadCount: number;
   maxReloads: number;
+  cause: 'stall' | 'error';
 }
 
 export interface StallWatchdogOptions {
@@ -37,7 +37,7 @@ export class StallWatchdog {
   private readonly onEscalate: (recovery: StallRecovery) => void;
   private readonly pollMs: number;
   private readonly freezeTicks: number;
-  private readonly maxReloads: number;
+  private maxReloads: number;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTime = -1;
@@ -53,11 +53,23 @@ export class StallWatchdog {
     this.maxReloads = opts.maxReloads;
   }
 
-  start(): void {
+  start(monitor = true, maxReloads = this.maxReloads): void {
     this.stop();
     this.lastTime = -1;
     this.frozenTicks = 0;
     this.reloadCount = 0;
+    this.maxReloads = maxReloads;
+    if (monitor) this.timer = setInterval(() => this.tick(), this.pollMs);
+  }
+
+  pause(): void {
+    this.stop();
+    const currentTime = this.probe().currentTime;
+    this.lastTime = Number.isFinite(currentTime) ? currentTime : 0;
+  }
+
+  resume(): void {
+    this.pause();
     this.timer = setInterval(() => this.tick(), this.pollMs);
   }
 
@@ -69,21 +81,57 @@ export class StallWatchdog {
     this.frozenTicks = 0;
   }
 
+  observeProgress(currentTime: number): boolean {
+    if (!Number.isFinite(currentTime)) return false;
+    if (currentTime > this.lastTime) {
+      this.lastTime = currentTime;
+      this.frozenTicks = 0;
+      this.reloadCount = 0;
+      return true;
+    }
+    this.lastTime = currentTime;
+    return false;
+  }
+
+  recoverFromError(): boolean {
+    this.stop();
+    return this.recover(this.probe(), 0, 'error');
+  }
+
+  private recover(
+    probe: StallProbe,
+    frozenMs: number,
+    cause: StallRecovery['cause'],
+  ): boolean {
+    const recovery: StallRecovery = {
+      probe, frozenMs, cause,
+      reloadCount: this.reloadCount,
+      maxReloads: this.maxReloads,
+    };
+    if (this.reloadCount < this.maxReloads) {
+      recovery.reloadCount = ++this.reloadCount;
+      this.onReload(recovery);
+      return true;
+    }
+    // onEscalate may synchronously start the next channel's watchdog.
+    this.stop();
+    this.onEscalate(recovery);
+    return false;
+  }
+
   private tick(): void {
     const p = this.probe();
 
     // A paused or scrubbing stream isn't a stall.
     if (p.paused || p.seeking) {
-      this.lastTime = p.currentTime;
+      this.lastTime = Number.isFinite(p.currentTime) ? p.currentTime : 0;
       this.frozenTicks = 0;
       return;
     }
 
     // Strictly forward progress == healthy. Refill the reload budget.
     if (p.currentTime > this.lastTime) {
-      this.lastTime = p.currentTime;
-      this.frozenTicks = 0;
-      this.reloadCount = 0;
+      this.observeProgress(p.currentTime);
       return;
     }
 
@@ -101,22 +149,6 @@ export class StallWatchdog {
     if (this.frozenTicks < this.freezeTicks) return;
 
     this.frozenTicks = 0;
-    const recovery = {
-      probe: p,
-      frozenMs: this.freezeTicks * this.pollMs,
-      reloadCount: this.reloadCount,
-      maxReloads: this.maxReloads,
-    };
-    if (this.reloadCount < this.maxReloads) {
-      this.reloadCount++;
-      recovery.reloadCount = this.reloadCount;
-      this.onReload(recovery);
-    } else {
-      // onEscalate (channelUp → play) synchronously starts a fresh watchdog for
-      // the next channel, so tear down THIS run first — stopping after would
-      // clear the timer the escalation just created.
-      this.stop();
-      this.onEscalate(recovery);
-    }
+    this.recover(p, this.freezeTicks * this.pollMs, 'stall');
   }
 }

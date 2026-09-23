@@ -41,7 +41,7 @@ export const CONFIG = {
     HLS_MAX_RECOVERIES: 3,      // bounded hls.js fatal-error retries before giving up → next channel
     STALL_POLL_MS: 2000,        // native stall watchdog: currentTime poll interval
     STALL_FREEZE_TICKS: 5,      // ~10s frozen before the first in-place reload
-    STALL_MAX_RELOADS: 2,       // in-place reloads before escalating to the next channel
+    DEFAULT_LIVE_RECONNECT_ATTEMPTS: 3, // reconnect attempts before switching channels
     STARTUP_POLL_MS: 500,       // startup watchdog: readyState/networkState poll interval
     STARTUP_TIMEOUT: 15000,     // ms a stream may load without a frame before it counts as failed
     DVR_MIN_WINDOW: 10,         // live DVR: a seekable window must exceed this (s) to offer timeshift

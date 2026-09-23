@@ -47,6 +47,7 @@ vi.mock('../services/storage-service', () => ({
     setCatchupProgress: vi.fn(), setResume: vi.fn(),
     touchRecentlyWatchedLive: vi.fn(),
     getChannelCycleMode: vi.fn(() => 'global'),
+    getLiveReconnectAttempts: vi.fn(() => 3),
   },
 }));
 vi.mock('../services/media-probe', () => ({
@@ -344,11 +345,11 @@ describe('Player live preview', () => {
     expect(video.volume).toBe(0.4);
   });
 
-  it('reports loading, playing, buffering, paused, error and recovery from actual events', () => {
+  it('reports loading, playing, buffering, paused and reconnecting from actual events', () => {
     player.play(0);
     expect(player.getLivePlaybackSnapshot()?.status).toBe('loading');
     for (const [event, status] of [
-      ['playing', 'playing'], ['waiting', 'buffering'], ['pause', 'paused'], ['error', 'error'],
+      ['playing', 'playing'], ['waiting', 'buffering'], ['pause', 'paused'], ['error', 'buffering'],
     ]) {
       onStateChanged.mockClear();
       emit(event);

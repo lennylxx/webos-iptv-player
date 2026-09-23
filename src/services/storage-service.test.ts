@@ -2,7 +2,10 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
-import { StorageService } from './storage-service';
+import {
+  LIVE_RECONNECT_ATTEMPT_OPTIONS,
+  StorageService,
+} from './storage-service';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { CONFIG } from '../config';
 import {
@@ -24,6 +27,24 @@ describe('StorageService', () => {
 
   it('returns an empty playlist list by default', () => {
     expect(StorageService.getPlaylists()).toEqual([]);
+  });
+
+  it('validates and persists the live reconnect limit', () => {
+    expect(StorageService.getLiveReconnectAttempts())
+      .toBe(CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS);
+    for (const attempts of LIVE_RECONNECT_ATTEMPT_OPTIONS) {
+      StorageService.setLiveReconnectAttempts(attempts);
+      expect(StorageService.getLiveReconnectAttempts()).toBe(attempts);
+    }
+    expect(() => StorageService.setLiveReconnectAttempts(6)).toThrow(RangeError);
+    expect(() => StorageService.setLiveReconnectAttempts(NaN)).toThrow(RangeError);
+    StorageService.set('live_reconnect_attempts', '5');
+    expect(StorageService.getLiveReconnectAttempts())
+      .toBe(CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS);
+    StorageService.setLiveReconnectAttempts(5);
+    StorageService.clearAll();
+    expect(StorageService.getLiveReconnectAttempts())
+      .toBe(CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS);
   });
 
   it('defaults live preview to off without writing a preference', () => {

@@ -261,6 +261,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
   Up/Down cycles the global list or stays within the active group, Favorites,
   or playlist.
 - **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.
+- **Advanced** — configure automatic reconnection after live playback errors or stalls; if recovery fails, playback switches to the next channel.
 - **Data Management** — refresh data, clear caches or viewing lists, or reset the app.
 - **Save Changes** applies preferences and reloads playlist and guide data when their sources change. **Cancel** discards edits.
 
