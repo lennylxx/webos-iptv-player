@@ -216,7 +216,13 @@ export class SpatialNav {
     this.focused = el;
     if (el) {
       el.classList.add('focused');
-      el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+      // Instant, not smooth: d-pad autorepeat outruns the animation, so the
+      // list trails the remote by half a second after the key is released.
+      // 'auto' is spelled out because `.settings-scroll` sets CSS
+      // `scroll-behavior: smooth`, which an omitted behavior would inherit.
+      // webOS 4 already scrolls instantly here - its polyfill predates the
+      // options object - so this makes the two engines behave alike.
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
     }
     this.onFocusChange?.(el);
   }
