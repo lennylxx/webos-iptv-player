@@ -219,6 +219,9 @@ const M3U_SCREENS: Screen[] = [
       await secondScope.click();
       await expect(firstScope).toHaveClass(/active/);
       await expect(secondScope).toHaveClass(/active/);
+      await p.locator('.epg-scope-option.focused').evaluateAll((options) => {
+        options.forEach(option => option.classList.remove('focused'));
+      });
       await p.evaluate(() => {
         const scroll = document.querySelector('.settings-scroll') as HTMLElement;
         const target = document.querySelector('#settings-guide')!;

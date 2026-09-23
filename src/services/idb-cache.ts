@@ -126,6 +126,7 @@ let scheduledPlaylist: {
   channels: Channel[];
   epgSources: EpgSource[];
   timestamp: number;
+  refreshIntervalMs: number | null;
   sourceSignature: string;
   scheduledAt: number;
 } | null = null;
@@ -179,6 +180,7 @@ function persistScheduledPlaylist(): void {
     pending.epgSources,
     pending.timestamp,
     pending.sourceSignature,
+    pending.refreshIntervalMs,
   ).then((stored) => {
     if (stored) {
       log.info(
@@ -211,6 +213,7 @@ export function scheduleCachedPlaylist(
   channels: Channel[],
   epgSources: EpgSource[] = [],
   timestamp = Date.now(),
+  refreshIntervalMs: number | null = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS,
 ): void {
   if (!channels.length) return;
   if (scheduledPlaylist) discardScheduledPlaylist('rescheduled');
@@ -219,6 +222,7 @@ export function scheduleCachedPlaylist(
     channels,
     epgSources,
     timestamp,
+    refreshIntervalMs,
     sourceSignature: playlistSourceSignature(),
     scheduledAt,
   };
@@ -266,9 +270,9 @@ function categoryForStore(store: CacheStore): CacheCategory {
 
 function ttlFor(category: CacheCategory): number {
   switch (category) {
-    case 'playlist': return CONFIG.PLAYLIST_REFRESH_INTERVAL;
-    case 'epg': return CONFIG.EPG_REFRESH_INTERVAL;
-    case 'catalog': return CONFIG.XTREAM.CATALOG_TTL_MS;
+    case 'playlist': return CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS;
+    case 'epg': return CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS;
+    case 'catalog': return CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS;
     case 'subtitle': return SUBTITLE_TTL_MS;
     case 'health': return 30 * 24 * 60 * 60 * 1000;
   }
@@ -1061,8 +1065,15 @@ export async function setCachedEpg(
   data: ParsedEpg,
   filter?: CachedEpgFilter | null,
   timestamp = Date.now(),
+  refreshIntervalMs: number | null = CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS,
 ): Promise<void> {
-  await putRaw(EPG_STORE, { url, timestamp, data, filter });
+  await putRaw(EPG_STORE, {
+    url,
+    timestamp,
+    data,
+    filter,
+    expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
+  });
 }
 
 export async function clearCachedEpg(): Promise<void> {
@@ -1095,7 +1106,7 @@ export async function getCachedCatalog<T = unknown>(
 export async function setCachedCatalog(
   key: string,
   data: unknown,
-  ttlMs: number | null = CONFIG.XTREAM.CATALOG_TTL_MS,
+  ttlMs: number | null = CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
 ): Promise<void> {
   const timestamp = Date.now();
   await putRaw(CATALOG_STORE, {
@@ -1104,6 +1115,10 @@ export async function setCachedCatalog(
     data,
     expiresAt: ttlMs === null ? null : timestamp + ttlMs,
   });
+}
+
+export function clearCachedCatalog(): Promise<void> {
+  return clearStore(CATALOG_STORE);
 }
 
 export async function getCachedStreamMime(routeKey: string): Promise<string | null> {
@@ -1254,19 +1269,27 @@ export async function clearCachedChannelHealth(): Promise<void> {
   await clearStore(CHANNEL_HEALTH_STORE);
 }
 
-export async function getCachedPlaylist(): Promise<{
+export async function getCachedPlaylist(
+  refreshIntervalMs: number | null = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS,
+): Promise<{
   channels: Channel[];
   epgSources: EpgSource[];
+  timestamp: number;
 } | null> {
   const raw = await readRaw(PLAYLIST_STORE, PLAYLIST_CACHE_KEY);
   if (raw) {
     const payload = raw.data as CachedPlaylistPayload | undefined;
+    const timestamp = finiteNumber(raw.timestamp, raw.updatedAt);
     if (
       payload?.sourceSignature === playlistSourceSignature()
       && payload.channels?.length
-      && (raw.expiresAt === null || raw.expiresAt > Date.now())
+      && (refreshIntervalMs === null || Date.now() - timestamp < refreshIntervalMs)
     ) {
-      return { channels: payload.channels, epgSources: payload.epgSources ?? [] };
+      return {
+        channels: payload.channels,
+        epgSources: payload.epgSources ?? [],
+        timestamp,
+      };
     }
   }
 
@@ -1277,12 +1300,14 @@ export async function setCachedPlaylist(
   channels: Channel[],
   epgSources: EpgSource[] = [],
   timestamp = Date.now(),
+  refreshIntervalMs: number | null = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS,
 ): Promise<boolean> {
   return setCachedPlaylistWithSignature(
     channels,
     epgSources,
     timestamp,
     playlistSourceSignature(),
+    refreshIntervalMs,
   );
 }
 
@@ -1291,6 +1316,7 @@ function setCachedPlaylistWithSignature(
   epgSources: EpgSource[],
   timestamp: number,
   sourceSignature: string,
+  refreshIntervalMs: number | null,
 ): Promise<boolean> {
   if (!channels.length) return Promise.resolve(false);
   return putRaw(PLAYLIST_STORE, {
@@ -1302,7 +1328,7 @@ function setCachedPlaylistWithSignature(
       epgSources,
       timestamp,
     } satisfies CachedPlaylistPayload,
-    expiresAt: timestamp + CONFIG.PLAYLIST_REFRESH_INTERVAL,
+    expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
   });
 }
 

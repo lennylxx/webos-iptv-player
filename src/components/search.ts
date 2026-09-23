@@ -7,7 +7,11 @@ import { EpgService } from '../services/epg-service';
 import { ReminderService } from '../services/reminder-service';
 import { StorageService } from '../services/storage-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
-import { loadAllVodStreams, loadAllSeries } from '../services/xtream-catalog';
+import {
+  getSearchCatalogExpiresAt,
+  loadAllSeries,
+  loadAllVodStreams,
+} from '../services/xtream-catalog';
 import {
   prepareNameSearchItems,
   prepareSearchItems,
@@ -78,6 +82,7 @@ export class Search {
   private indexedChannels: Channel[] | null = null;
   private indexedProgrammes: Record<string, Programme[]> | null = null;
   private loadedFor: string | null = null;
+  private catalogExpiresAt = 0;
   private visibleChannels: Channel[] = [];
   private visiblePrograms: ProgramResult[] = [];
   private visibleMovies: VodItem[] = [];
@@ -138,6 +143,7 @@ export class Search {
       this.allVod = [];
       this.allSeries = [];
       this.loadedFor = null;
+      this.catalogExpiresAt = 0;
     }
     this.account = account;
     this.query = '';
@@ -230,6 +236,17 @@ export class Search {
     }
   }
 
+  invalidateCatalog(): void {
+    this.catalogController?.abort();
+    this.catalogController = null;
+    this.workerSession++;
+    this.allVod = [];
+    this.allSeries = [];
+    this.loadedFor = null;
+    this.clearResults();
+    this.invalidateWorkerIndex();
+  }
+
   dismissPrompt(): void {
     this.resumePrompt.hide();
   }
@@ -280,7 +297,7 @@ export class Search {
     sessionId: number,
     workerReset: Promise<boolean>,
   ): Promise<void> {
-    if (this.loadedFor === account.id) {
+    if (this.loadedFor === account.id && Date.now() < this.catalogExpiresAt) {
       if (!await workerReset) return;
       await this.indexWorker({
         sessionId,
@@ -318,6 +335,7 @@ export class Search {
     }
     if (vod.ok && series.ok) {
       this.loadedFor = account.id;
+      this.catalogExpiresAt = await getSearchCatalogExpiresAt(account.id) ?? 0;
       log.debug(
         'catalog loaded',
         vod.data.length,
@@ -746,6 +764,7 @@ export class Search {
       && this.workerIndexedAccountId === (account?.id ?? null)
       && (!account
         || (this.loadedFor === account.id
+          && Date.now() < this.catalogExpiresAt
           && this.workerIndexedVod === this.allVod
           && this.workerIndexedSeries === this.allSeries));
   }

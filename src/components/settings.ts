@@ -4,7 +4,9 @@ import { morph } from '../utils/morph';
 import { SpatialNav } from '../navigation/spatial-nav';
 import {
   LIVE_RECONNECT_ATTEMPT_OPTIONS,
+  REFRESH_INTERVAL_HOUR_OPTIONS,
   StorageService,
+  XTREAM_CATALOG_REFRESH_HOUR_OPTIONS,
 } from '../services/storage-service';
 import { EpgService } from '../services/epg-service';
 import { ChannelCustomizationService } from '../services/channel-customization';
@@ -176,6 +178,22 @@ function languageOptions(): { value: LocalePreference; label: string }[] {
 function languageHeading(): string {
   const localized = t('settings.language');
   return localized === 'Language' ? localized : `${localized} / Language`;
+}
+
+function refreshIntervalOptions(): { value: string; label: string }[] {
+  return REFRESH_INTERVAL_HOUR_OPTIONS.map(hours => ({
+    value: String(hours),
+    label: hours === 0
+      ? t('common.off')
+      : tp('settings.refreshHours', hours),
+  }));
+}
+
+function xtreamCatalogRefreshIntervalOptions(): { value: string; label: string }[] {
+  return XTREAM_CATALOG_REFRESH_HOUR_OPTIONS.map(hours => ({
+    value: String(hours),
+    label: tp('settings.refreshHours', hours),
+  }));
 }
 
 type SettingsCategory = 'general' | 'sources' | 'guide' | 'appearance'
@@ -547,6 +565,9 @@ export class Settings {
     const textSize = StorageService.getTextSize();
     const localePreference = StorageService.getLocalePreference();
     const liveReconnectAttempts = StorageService.getLiveReconnectAttempts();
+    const playlistRefreshHours = StorageService.getPlaylistRefreshIntervalHours();
+    const epgRefreshHours = StorageService.getEpgRefreshIntervalHours();
+    const xtreamCatalogRefreshHours = StorageService.getXtreamCatalogRefreshIntervalHours();
     const overlayStyles = OVERLAY_STYLES.map(option => ({
       value: option.value,
       label: t(option.value === 'dark' ? 'settings.overlayDark' : 'settings.overlayFrosted'),
@@ -826,6 +847,47 @@ export class Settings {
                   </div>
                   <div class="settings-item-hint">${t('settings.liveReconnectHint')}</div>
                 </div>
+                <div class="settings-item">
+                  <div class="settings-item-control-row">
+                    <div class="settings-item-title">${t('settings.playlistRefreshInterval')}</div>
+                    ${dropdown(
+                      'playlist-refresh-interval',
+                      refreshIntervalOptions(),
+                      String(playlistRefreshHours),
+                    )}
+                  </div>
+                  <div class="settings-item-hint">${t('settings.playlistRefreshHint', {
+                    action: t('settings.refreshAll'),
+                  })}</div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-control-row">
+                    <div class="settings-item-title">${t('settings.epgRefreshInterval')}</div>
+                    ${dropdown(
+                      'epg-refresh-interval',
+                      refreshIntervalOptions(),
+                      String(epgRefreshHours),
+                    )}
+                  </div>
+                  <div class="settings-item-hint">${t('settings.epgRefreshHint', {
+                    action: t('settings.refreshAll'),
+                  })}</div>
+                </div>
+                ${enabledAccounts.length ? html`
+                  <div class="settings-item">
+                    <div class="settings-item-control-row">
+                      <div class="settings-item-title">${t('settings.xtreamCatalogRefreshInterval')}</div>
+                      ${dropdown(
+                        'xtream-catalog-refresh-interval',
+                        xtreamCatalogRefreshIntervalOptions(),
+                        String(xtreamCatalogRefreshHours),
+                      )}
+                    </div>
+                    <div class="settings-item-hint">${t('settings.xtreamCatalogRefreshHint', {
+                      action: t('settings.refreshAll'),
+                    })}</div>
+                  </div>
+                ` : ''}
               </div>
             </div>
 
@@ -2177,6 +2239,26 @@ export class Settings {
       ($('#live-reconnect-attempts', this.container) as HTMLElement | null)?.dataset.value,
     );
     StorageService.setLiveReconnectAttempts(liveReconnectAttempts);
+
+    const playlistRefreshHours = Number(
+      ($('#playlist-refresh-interval', this.container) as HTMLElement | null)?.dataset.value,
+    );
+    StorageService.setPlaylistRefreshIntervalHours(playlistRefreshHours);
+
+    const epgRefreshHours = Number(
+      ($('#epg-refresh-interval', this.container) as HTMLElement | null)?.dataset.value,
+    );
+    StorageService.setEpgRefreshIntervalHours(epgRefreshHours);
+
+    const xtreamCatalogRefresh = $(
+      '#xtream-catalog-refresh-interval',
+      this.container,
+    ) as HTMLElement | null;
+    if (xtreamCatalogRefresh) {
+      StorageService.setXtreamCatalogRefreshIntervalHours(
+        Number(xtreamCatalogRefresh.dataset.value),
+      );
+    }
 
     const prevOs = StorageService.getOnlineSubtitleConfig();
     const osVal = (id: string) => ($(`#${id}`, this.container) as HTMLInputElement | null)?.value.trim() ?? '';

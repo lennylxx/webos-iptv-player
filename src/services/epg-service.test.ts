@@ -5,6 +5,7 @@ const {
   epgChannelIdsMock,
   epgChannelIdsForMock,
   fetchAndParseXMLTVMock,
+  epgRefreshIntervalMock,
   parseXMLTVMock,
 } = vi.hoisted(() => ({
   channelOverrideMock: vi.fn(() => null as {
@@ -14,10 +15,16 @@ const {
   epgChannelIdsMock: vi.fn(() => [] as string[]),
   epgChannelIdsForMock: vi.fn(() => [] as string[]),
   fetchAndParseXMLTVMock: vi.fn(),
+  epgRefreshIntervalMock: vi.fn((): number | null => 6 * 60 * 60 * 1000),
   parseXMLTVMock: vi.fn(),
 }));
 
 vi.mock('./idb-cache', () => ({ getCachedEpg: vi.fn(), setCachedEpg: vi.fn(async () => {}) }));
+vi.mock('./storage-service', () => ({
+  StorageService: {
+    getEpgRefreshIntervalMs: epgRefreshIntervalMock,
+  },
+}));
 vi.mock('../utils/fetch-helper', () => ({ fetchMaybeGzipText: vi.fn(async (url: string) => url) }));
 vi.mock('../parsers/xmltv-loader', () => ({
   fetchAndParseXMLTV: fetchAndParseXMLTVMock,
@@ -90,6 +97,7 @@ beforeEach(() => {
   ) => parseXMLTVWithStats(await fetchMaybeGzipText(url, 120000), options));
   channelOverrideMock.mockReturnValue(null);
   epgChannelIdsMock.mockReturnValue([]);
+  epgRefreshIntervalMock.mockReturnValue(6 * 60 * 60 * 1000);
   // Default: every saved mapping belongs to an eligible channel.
   epgChannelIdsForMock.mockImplementation(() => {
     const results = epgChannelIdsMock.mock.results;
@@ -903,12 +911,53 @@ describe('EpgService channel pre-filter', () => {
     expect(EpgService.mappingRevision).toBe(mappingRevision);
   });
 
+  it('schedules the next refresh from the oldest source timestamp', async () => {
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
+    await EpgService.load([source('http://a', ['a'])]);
+
+    vi.setSystemTime(NOON + 2 * 60 * 60 * 1000);
+
+    expect(EpgService.getNextRefreshDelayMs(6 * 60 * 60 * 1000))
+      .toBe(4 * 60 * 60 * 1000);
+  });
+
+  it('reports an incomplete refresh when a due source still fails', async () => {
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Initial'));
+    await EpgService.load([source('http://a', ['a'])]);
+    vi.setSystemTime(NOON + 6 * 60 * 60 * 1000);
+    vi.mocked(fetchMaybeGzipText).mockRejectedValueOnce(new Error('down'));
+
+    await expect(EpgService.refresh()).resolves.toBe(false);
+  });
+
+  it('force-refreshes a source even when its cached state is fresh', async () => {
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Initial'));
+    await EpgService.load([source('http://a', ['a'])]);
+    vi.mocked(fetchMaybeGzipText).mockClear();
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Updated'));
+
+    await EpgService.refresh(undefined, true);
+
+    expect(fetchMaybeGzipText).toHaveBeenCalledWith('http://a', expect.any(Number));
+  });
+
+  it('loads a missing source once when periodic refresh is disabled', async () => {
+    epgRefreshIntervalMock.mockReturnValue(null);
+    await EpgService.restoreCached([source('http://a', ['a'])]);
+    vi.mocked(fetchMaybeGzipText).mockClear();
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Initial'));
+
+    await EpgService.refresh();
+
+    expect(fetchMaybeGzipText).toHaveBeenCalledWith('http://a', expect.any(Number));
+  });
+
   it('rebuilds derived indexes when an expired source is refreshed', async () => {
     parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Initial'));
     await EpgService.load([source('http://a', ['a'])]);
     const programmes = EpgService.programmes;
     const mappingRevision = EpgService.mappingRevision;
-    vi.setSystemTime(NOON + CONFIG.EPG_REFRESH_INTERVAL);
+    vi.setSystemTime(NOON + CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS);
     parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Updated'));
 
     await EpgService.refresh();
@@ -949,7 +998,7 @@ describe('EpgService channel pre-filter', () => {
     cached.channelCatalogComplete = true;
     vi.mocked(getCachedEpg).mockResolvedValue({
       url: 'http://a',
-      timestamp: NOON - CONFIG.EPG_REFRESH_INTERVAL + 1000,
+      timestamp: NOON - CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS + 1000,
       data: cached,
       filter: { ids: ['a', 'b'], names: ['alpha', 'bravo'] },
     });
@@ -962,7 +1011,8 @@ describe('EpgService channel pre-filter', () => {
       'http://a',
       expect.anything(),
       { ids: ['a'], names: ['alpha'] },
-      NOON - CONFIG.EPG_REFRESH_INTERVAL + 1000,
+      NOON - CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS + 1000,
+      CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS,
     );
     const cachedData = vi.mocked(setCachedEpg).mock.calls[0][1];
     expect(Object.keys(cachedData.channels)).toEqual(['a', 'b']);
@@ -986,7 +1036,7 @@ describe('EpgService channel pre-filter', () => {
       ]);
       expect(fetchMaybeGzipText).not.toHaveBeenCalled();
 
-      vi.setSystemTime(NOON + CONFIG.EPG_REFRESH_INTERVAL + 1);
+      vi.setSystemTime(NOON + CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS + 1);
       parseXMLTVMock.mockReturnValue({
         channels: {}, programmes: {}, tzOffsetMinutes: null,
       });

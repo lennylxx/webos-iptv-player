@@ -14,6 +14,7 @@ import { getCachedEpg, setCachedEpg } from './idb-cache';
 import type { CachedEpgFilter } from './idb-cache';
 import { ChannelCustomizationService } from './channel-customization';
 import { channelKey } from '../utils/channel';
+import { StorageService } from './storage-service';
 
 const log = createLogger('EPG');
 
@@ -71,12 +72,24 @@ class EpgServiceImpl {
   private playlistChannels: Channel[] | null = null;
   /** The per-source filter the last completed load was built from. */
   private appliedFilters = new Map<string, SourceFilter | null>();
-  private pendingWork: Promise<void> | null = null;
+  private pendingWork: Promise<unknown> | null = null;
   private revision = 0;
   private mappingRevisionValue = 0;
 
   get mappingRevision(): number {
     return this.mappingRevisionValue;
+  }
+
+  getNextRefreshDelayMs(intervalMs: number): number {
+    let nextDueAt = Number.POSITIVE_INFINITY;
+    for (const source of this.sources) {
+      const state = this.states.get(source.url);
+      if (!state || state.needsRefresh) return 0;
+      nextDueAt = Math.min(nextDueAt, state.timestamp + intervalMs);
+    }
+    return nextDueAt === Number.POSITIVE_INFINITY
+      ? intervalMs
+      : Math.max(0, nextDueAt - Date.now());
   }
 
   /**
@@ -150,16 +163,16 @@ class EpgServiceImpl {
    * queue here. Each body re-reads its own preconditions when it finally
    * runs, so work the entry ahead of it already did is skipped, not repeated.
    */
-  private enqueue(run: () => Promise<void>): Promise<void> {
+  private enqueue<T>(run: () => Promise<T>): Promise<T> {
     const previous = this.pendingWork;
     const task = (async () => {
       if (previous) await previous.catch(() => undefined);
-      await run();
+      return run();
     })();
     this.pendingWork = task;
     return (async () => {
       try {
-        await task;
+        return await task;
       } finally {
         if (this.pendingWork === task) this.pendingWork = null;
       }
@@ -194,26 +207,32 @@ class EpgServiceImpl {
     this.publish(revision);
   }
 
-  refresh(onDataPublished?: () => void): Promise<void> {
-    return this.enqueue(() => this.runRefresh(onDataPublished));
+  refresh(onDataPublished?: () => void, force = false): Promise<boolean> {
+    return this.enqueue(() => this.runRefresh(onDataPublished, force));
   }
 
-  private async runRefresh(onDataPublished?: () => void): Promise<void> {
+  private async runRefresh(
+    onDataPublished?: () => void,
+    force = false,
+  ): Promise<boolean> {
+    const refreshIntervalMs = StorageService.getEpgRefreshIntervalMs();
     const sourcesToRefresh = this.sources.filter((source) => {
       const state = this.states.get(source.url);
-      return !state || state.needsRefresh
-        || Date.now() - state.timestamp >= CONFIG.EPG_REFRESH_INTERVAL;
+      return force || !state || state.needsRefresh
+        || (refreshIntervalMs !== null
+          && Date.now() - state.timestamp >= refreshIntervalMs);
     });
-    if (!sourcesToRefresh.length) return;
+    if (!sourcesToRefresh.length) return true;
 
     const revision = ++this.revision;
     this.mappedChannelIds = this.collectMappedChannelIds();
-    await Promise.all(sourcesToRefresh.map(source =>
+    const refreshed = await Promise.all(sourcesToRefresh.map(source =>
       this.fetchSource(source, this.filterFor(source), revision, onDataPublished)));
-    if (revision !== this.revision) return;
+    if (revision !== this.revision) return false;
     this.rebuildIndexes();
     this.loaded = this.sources.length > 0;
     this.mappingRevisionValue++;
+    return refreshed.every(Boolean);
   }
 
   getNowPlaying(channelId: string): Programme | null {
@@ -487,6 +506,7 @@ class EpgServiceImpl {
     const cached = await getCachedEpg(source.url);
     if (revision !== this.revision || !cached) return 'missing';
     const age = Date.now() - cached.timestamp;
+    const refreshIntervalMs = StorageService.getEpgRefreshIntervalMs();
     const hasTzField = 'tzOffsetMinutes' in cached.data;
     const hasChannelCatalog = !cached.filter
       || cached.data.channelCatalogComplete === true;
@@ -497,7 +517,7 @@ class EpgServiceImpl {
       timestamp: cached.timestamp,
       needsRefresh: !hasTzField || !hasChannelCatalog || !covered,
     });
-    const fresh = age < CONFIG.EPG_REFRESH_INTERVAL
+    const fresh = (refreshIntervalMs === null || age < refreshIntervalMs)
       && hasTzField
       && hasChannelCatalog
       && covered;
@@ -507,6 +527,7 @@ class EpgServiceImpl {
         filtered.data,
         serializeFilter(filter),
         cached.timestamp,
+        refreshIntervalMs,
       );
     }
     if (fresh) {
@@ -529,12 +550,12 @@ class EpgServiceImpl {
     filter = this.filterFor(source),
     revision = this.revision,
     onDataPublished?: () => void,
-  ): Promise<void> {
-    if (revision !== this.revision) return;
+  ): Promise<boolean> {
+    if (revision !== this.revision) return false;
     if (filter && isEmptyFilter(filter)) {
       this.states.delete(source.url);
       this.channelIdsByName.delete(source.url);
-      return;
+      return true;
     }
     const done = log.time(`fetch '${source.url}'`);
     try {
@@ -548,7 +569,7 @@ class EpgServiceImpl {
         : { maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES });
       if (revision !== this.revision) {
         done();
-        return;
+        return false;
       }
       const programmeCount = stats.programmesKept;
       // An empty parse is usually a transient upstream response; neither cache
@@ -556,7 +577,7 @@ class EpgServiceImpl {
       if (programmeCount === 0 && this.hasProgrammes(source.url)) {
         log.warn('EPG has 0 programmes — keeping the previous data:', source.url);
         done();
-        return;
+        return false;
       }
       // A truncated parse is usable for this session, but it is not the
       // guide the filter asked for — so it must not settle as the answer.
@@ -580,14 +601,23 @@ class EpgServiceImpl {
           'hint=hide the channels you do not watch',
         );
       } else if (programmeCount > 0) {
-        await setCachedEpg(source.url, result, serializeFilter(filter));
+        await setCachedEpg(
+          source.url,
+          result,
+          serializeFilter(filter),
+          Date.now(),
+          StorageService.getEpgRefreshIntervalMs(),
+        );
       } else {
         log.warn('EPG has 0 programmes — not caching:', source.url);
       }
+      done();
+      return !truncated;
     } catch (err) {
       log.error('Failed to load EPG:', source.url, err);
+      done();
+      return false;
     }
-    done();
   }
 
   private hasProgrammes(url: string): boolean {

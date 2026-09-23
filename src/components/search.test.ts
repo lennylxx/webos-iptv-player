@@ -13,7 +13,11 @@ const {
   toastMock,
   workerMock,
 } = vi.hoisted(() => ({
-  catalogMock: { loadAllVodStreams: vi.fn(), loadAllSeries: vi.fn() },
+  catalogMock: {
+    getSearchCatalogExpiresAt: vi.fn(),
+    loadAllVodStreams: vi.fn(),
+    loadAllSeries: vi.fn(),
+  },
   playlistMock: {
     channels: [] as unknown[],
     search: vi.fn(() => [] as unknown[]),
@@ -97,6 +101,9 @@ beforeEach(() => {
   storageMock.getCatchupProgressList.mockReturnValue([]);
   archiveMock.load.mockResolvedValue(null);
   archiveMock.isAvailable.mockImplementation((channel: { catchupSource?: string }) => !!channel.catchupSource);
+  catalogMock.getSearchCatalogExpiresAt.mockResolvedValue(
+    Date.now() + CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
+  );
   container = document.createElement('div');
   document.body.appendChild(container);
 });
@@ -139,6 +146,36 @@ describe('Search', () => {
     )).toHaveLength(initialResets);
     expect(catalogMock.loadAllVodStreams).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain('Alpha Movie');
+  });
+
+  it('reloads the account catalog after it is invalidated', async () => {
+    const { view } = await openWith({ vod: [vod('10', 'Old Movie')] });
+    view.deactivate();
+    view.invalidateCatalog();
+    catalogMock.loadAllVodStreams.mockResolvedValue([vod('11', 'New Movie')]);
+    catalogMock.loadAllSeries.mockResolvedValue([]);
+
+    await view.open(account);
+    await view.setQuery('movie');
+
+    expect(catalogMock.loadAllVodStreams).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain('New Movie');
+    expect(container.textContent).not.toContain('Old Movie');
+  });
+
+  it('reloads the account catalog after its natural TTL expires', async () => {
+    catalogMock.getSearchCatalogExpiresAt.mockResolvedValue(Date.now() - 1);
+    const { view } = await openWith({ vod: [vod('10', 'Old Movie')] });
+    view.deactivate();
+    catalogMock.loadAllVodStreams.mockResolvedValue([vod('11', 'New Movie')]);
+    catalogMock.loadAllSeries.mockResolvedValue([]);
+
+    await view.open(account);
+    await view.setQuery('movie');
+
+    expect(catalogMock.loadAllVodStreams).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain('New Movie');
+    expect(container.textContent).not.toContain('Old Movie');
   });
 
   it('rebuilds the index after the shared worker was terminated while inactive', async () => {

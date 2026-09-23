@@ -4,7 +4,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
 import {
   LIVE_RECONNECT_ATTEMPT_OPTIONS,
+  REFRESH_INTERVAL_HOUR_OPTIONS,
   StorageService,
+  XTREAM_CATALOG_REFRESH_HOUR_OPTIONS,
 } from './storage-service';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { CONFIG } from '../config';
@@ -45,6 +47,41 @@ describe('StorageService', () => {
     StorageService.clearAll();
     expect(StorageService.getLiveReconnectAttempts())
       .toBe(CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS);
+  });
+
+  it('validates and persists playlist and guide refresh intervals', () => {
+    expect(StorageService.getPlaylistRefreshIntervalHours()).toBe(6);
+    expect(StorageService.getEpgRefreshIntervalHours()).toBe(6);
+    for (const hours of REFRESH_INTERVAL_HOUR_OPTIONS) {
+      StorageService.setPlaylistRefreshIntervalHours(hours);
+      StorageService.setEpgRefreshIntervalHours(hours);
+      expect(StorageService.getPlaylistRefreshIntervalHours()).toBe(hours);
+      expect(StorageService.getEpgRefreshIntervalHours()).toBe(hours);
+      expect(StorageService.getPlaylistRefreshIntervalMs())
+        .toBe(hours === 0 ? null : hours * 60 * 60 * 1000);
+      expect(StorageService.getEpgRefreshIntervalMs())
+        .toBe(hours === 0 ? null : hours * 60 * 60 * 1000);
+    }
+    expect(() => StorageService.setPlaylistRefreshIntervalHours(2)).toThrow(RangeError);
+    expect(() => StorageService.setEpgRefreshIntervalHours(NaN)).toThrow(RangeError);
+    StorageService.set('playlist_refresh_interval_hours', '12');
+    StorageService.set('epg_refresh_interval_hours', {});
+    expect(StorageService.getPlaylistRefreshIntervalHours()).toBe(6);
+    expect(StorageService.getEpgRefreshIntervalHours()).toBe(6);
+  });
+
+  it('validates and persists the Xtream catalog refresh interval', () => {
+    expect(StorageService.getXtreamCatalogRefreshIntervalHours()).toBe(6);
+    for (const hours of XTREAM_CATALOG_REFRESH_HOUR_OPTIONS) {
+      StorageService.setXtreamCatalogRefreshIntervalHours(hours);
+      expect(StorageService.getXtreamCatalogRefreshIntervalHours()).toBe(hours);
+      expect(StorageService.getXtreamCatalogRefreshIntervalMs())
+        .toBe(hours * 60 * 60 * 1000);
+    }
+    expect(() => StorageService.setXtreamCatalogRefreshIntervalHours(0))
+      .toThrow(RangeError);
+    StorageService.set('xtream_catalog_refresh_interval_hours', '12');
+    expect(StorageService.getXtreamCatalogRefreshIntervalHours()).toBe(6);
   });
 
   it('defaults live preview to off without writing a preference', () => {

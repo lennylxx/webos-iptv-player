@@ -33,6 +33,9 @@ const {
     tzMode: 'device' as TzMode,
     channelCycleMode: 'global' as ChannelCycleMode,
     liveReconnectAttempts: 3,
+    playlistRefreshHours: 6,
+    epgRefreshHours: 6,
+    xtreamCatalogRefreshHours: 6,
     showHidden: false,
     tzOffset: null as number | null,
     epgOffsets: {} as Record<string, number>,
@@ -77,6 +80,11 @@ const {
       getTzMode: vi.fn(() => state.tzMode),
       getChannelCycleMode: vi.fn(() => state.channelCycleMode),
       getLiveReconnectAttempts: vi.fn(() => state.liveReconnectAttempts),
+      getPlaylistRefreshIntervalHours: vi.fn(() => state.playlistRefreshHours),
+      getEpgRefreshIntervalHours: vi.fn(() => state.epgRefreshHours),
+      getXtreamCatalogRefreshIntervalHours: vi.fn(
+        () => state.xtreamCatalogRefreshHours,
+      ),
       getEpgTzOffset: vi.fn(() => state.tzOffset),
       getEpgOffsets: vi.fn(() => ({ ...state.epgOffsets })),
       getLocalePreference: vi.fn(() => state.locale),
@@ -104,6 +112,15 @@ const {
       setChannelCycleMode: vi.fn((m: ChannelCycleMode) => { state.channelCycleMode = m; }),
       setLiveReconnectAttempts: vi.fn((attempts: number) => {
         state.liveReconnectAttempts = attempts;
+      }),
+      setPlaylistRefreshIntervalHours: vi.fn((hours: number) => {
+        state.playlistRefreshHours = hours;
+      }),
+      setEpgRefreshIntervalHours: vi.fn((hours: number) => {
+        state.epgRefreshHours = hours;
+      }),
+      setXtreamCatalogRefreshIntervalHours: vi.fn((hours: number) => {
+        state.xtreamCatalogRefreshHours = hours;
       }),
       setEpgOffsets: vi.fn((offsets: Record<string, number>) => {
         state.epgOffsets = { ...offsets };
@@ -152,6 +169,8 @@ const {
 
 vi.mock('../services/storage-service', () => ({
   LIVE_RECONNECT_ATTEMPT_OPTIONS: [0, 1, 2, 3, 4, 5],
+  REFRESH_INTERVAL_HOUR_OPTIONS: [0, 1, 3, 6, 12, 24],
+  XTREAM_CATALOG_REFRESH_HOUR_OPTIONS: [1, 3, 6, 12, 24],
   StorageService: storageMock,
 }));
 vi.mock('../services/theme-service', () => themeMock);
@@ -198,6 +217,9 @@ beforeEach(() => {
   state.overlayStyle = 'dark';
   state.textSize = '100';
   state.liveReconnectAttempts = 3;
+  state.playlistRefreshHours = 6;
+  state.epgRefreshHours = 6;
+  state.xtreamCatalogRefreshHours = 6;
   state.epgOffsets = {};
   PlaylistService.epgSources = [];
   PlaylistService.allChannels = [];
@@ -420,12 +442,12 @@ describe('Settings.render', () => {
     expect(container.querySelector('#auto-play .toggle-option.active')!.getAttribute('data-value')).toBe('on');
   });
 
-  it('renders only live reconnect attempts under Advanced', () => {
+  it('renders reconnect and refresh controls under Advanced', () => {
     settings.render();
     const advanced = container.querySelector('#settings-advanced')!;
     expect(advanced.querySelector('.settings-section-title')?.textContent).toBe('Advanced');
     const items = advanced.querySelectorAll('.settings-item');
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(3);
     expect(items[0].querySelector('.settings-item-title')?.textContent)
       .toBe('Live reconnect attempts');
     expect(items[0].querySelector('.settings-item-control-row')?.children).toHaveLength(2);
@@ -435,6 +457,39 @@ describe('Settings.render', () => {
       '#live-reconnect-attempts [data-dropdown-value]',
     )).map(option => option.dataset.dropdownValue))
       .toEqual(['0', '1', '2', '3', '4', '5']);
+    expect(container.querySelector('#playlist-refresh-interval')
+      ?.getAttribute('data-value')).toBe('6');
+    expect(container.querySelector('#epg-refresh-interval')
+      ?.getAttribute('data-value')).toBe('6');
+    expect(Array.from(container.querySelectorAll<HTMLElement>(
+      '#playlist-refresh-interval [data-dropdown-value]',
+    )).map(option => option.dataset.dropdownValue))
+      .toEqual(['0', '1', '3', '6', '12', '24']);
+    expect(Array.from(container.querySelectorAll<HTMLElement>(
+      '#playlist-refresh-interval [data-dropdown-value]',
+    )).map(option => option.textContent))
+      .toEqual(['Off', '1 hour', '3 hours', '6 hours', '12 hours', '24 hours']);
+    expect(container.querySelector('#xtream-catalog-refresh-interval')).toBeNull();
+  });
+
+  it('shows the Xtream catalog refresh interval only for an enabled account', () => {
+    state.playlists = [{
+      id: 'x1',
+      name: 'Account',
+      url: 'http://host',
+      source: 'xtream',
+      xtream: { username: 'u', password: 'p' },
+    }];
+
+    settings.render();
+
+    expect(container.querySelectorAll('#settings-advanced .settings-item')).toHaveLength(4);
+    expect(container.querySelector('#xtream-catalog-refresh-interval')
+      ?.getAttribute('data-value')).toBe('6');
+    expect(Array.from(container.querySelectorAll<HTMLElement>(
+      '#xtream-catalog-refresh-interval [data-dropdown-value]',
+    )).map(option => option.dataset.dropdownValue))
+      .toEqual(['1', '3', '6', '12', '24']);
   });
 
   // Left moves within a row by measuring peers, and a collapsed control has no
@@ -1296,6 +1351,36 @@ describe('Settings.save', () => {
 
     expect(storageMock.setLiveReconnectAttempts).toHaveBeenCalledWith(5);
     expect(onSave).toHaveBeenCalledWith('apply');
+  });
+
+  it('saves playlist and guide refresh intervals without forcing a data reload', () => {
+    settings.render();
+
+    click('#playlist-refresh-interval [data-dropdown-value="12"]');
+    click('#epg-refresh-interval [data-dropdown-value="0"]');
+    state.playlists = [];
+    click('#save-settings');
+
+    expect(storageMock.setPlaylistRefreshIntervalHours).toHaveBeenCalledWith(12);
+    expect(storageMock.setEpgRefreshIntervalHours).toHaveBeenCalledWith(0);
+    expect(storageMock.setXtreamCatalogRefreshIntervalHours).not.toHaveBeenCalled();
+    expect(onSave).toHaveBeenCalledWith('apply');
+  });
+
+  it('saves the Xtream catalog refresh interval when the control is available', () => {
+    state.playlists = [{
+      id: 'x1',
+      name: 'Account',
+      url: 'http://host',
+      source: 'xtream',
+      xtream: { username: 'u', password: 'p' },
+    }];
+    settings.render();
+
+    click('#xtream-catalog-refresh-interval [data-dropdown-value="12"]');
+    click('#save-settings');
+
+    expect(storageMock.setXtreamCatalogRefreshIntervalHours).toHaveBeenCalledWith(12);
   });
 
   it('renders the Settings title in Simplified Chinese', () => {

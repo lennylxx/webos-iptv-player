@@ -73,6 +73,46 @@ describe('i18n', () => {
     ]);
   });
 
+  it('pluralizes refresh-hour options in every locale', () => {
+    setLocale('en');
+    expect(tp('settings.refreshHours', 1)).toBe('1 hour');
+    expect(tp('settings.refreshHours', 3)).toBe('3 hours');
+    setLocale('de');
+    expect(tp('settings.refreshHours', 1)).toBe('1 Stunde');
+    expect(tp('settings.refreshHours', 3)).toBe('3 Stunden');
+    setLocale('es');
+    expect(tp('settings.refreshHours', 1)).toBe('1 hora');
+    expect(tp('settings.refreshHours', 3)).toBe('3 horas');
+    setLocale('fr');
+    expect(tp('settings.refreshHours', 1)).toBe('1 heure');
+    expect(tp('settings.refreshHours', 3)).toBe('3 heures');
+    setLocale('it');
+    expect(tp('settings.refreshHours', 1)).toBe('1 ora');
+    expect(tp('settings.refreshHours', 3)).toBe('3 ore');
+    setLocale('pt-BR');
+    expect(tp('settings.refreshHours', 1)).toBe('1 hora');
+    expect(tp('settings.refreshHours', 3)).toBe('3 horas');
+    setLocale('ru');
+    expect([
+      tp('settings.refreshHours', 1),
+      tp('settings.refreshHours', 3),
+      tp('settings.refreshHours', 6),
+      tp('settings.refreshHours', 12),
+      tp('settings.refreshHours', 24),
+    ]).toEqual(['1 час', '3 часа', '6 часов', '12 часов', '24 часа']);
+    setLocale('uk');
+    expect([
+      tp('settings.refreshHours', 1),
+      tp('settings.refreshHours', 3),
+      tp('settings.refreshHours', 6),
+      tp('settings.refreshHours', 12),
+      tp('settings.refreshHours', 24),
+    ]).toEqual(['1 година', '3 години', '6 годин', '12 годин', '24 години']);
+    setLocale('zh-CN');
+    expect(tp('settings.refreshHours', 1)).toBe('1 小时');
+    expect(tp('settings.refreshHours', 3)).toBe('3 小时');
+  });
+
   it('translates and interpolates Simplified Chinese messages', () => {
     setLocale('zh-CN');
     expect(t('channel.recentlyWatched')).toBe('最近观看');

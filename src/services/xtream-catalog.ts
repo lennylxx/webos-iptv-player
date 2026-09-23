@@ -5,8 +5,8 @@ import {
   XtreamRequestError,
 } from './xtream-client';
 import { getCachedCatalog, setCachedCatalog } from './idb-cache';
-import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
+import { StorageService } from './storage-service';
 
 const log = createLogger('Catalog');
 
@@ -23,7 +23,19 @@ function clientFor(a: PlaylistEntry) {
 }
 
 function fresh(timestamp: number): boolean {
-  return Date.now() - timestamp < CONFIG.XTREAM.CATALOG_TTL_MS;
+  return Date.now() - timestamp < StorageService.getXtreamCatalogRefreshIntervalMs();
+}
+
+export async function getSearchCatalogExpiresAt(
+  accountId: string,
+): Promise<number | null> {
+  const [vod, series] = await Promise.all([
+    getCachedCatalog(`${accountId}|vod_all`),
+    getCachedCatalog(`${accountId}|series_all`),
+  ]);
+  if (!vod || !series) return null;
+  return Math.min(vod.timestamp, series.timestamp)
+    + StorageService.getXtreamCatalogRefreshIntervalMs();
 }
 
 function resourceFor(key: string): string {
@@ -68,7 +80,7 @@ async function cachedList<T>(
   }
   ensureActive(signal);
   if (data.length) {
-    await setCachedCatalog(key, data);
+    await setCachedCatalog(key, data, StorageService.getXtreamCatalogRefreshIntervalMs());
     log.debug('fetched', key, `(${data.length})`);
     return data;
   }
@@ -120,7 +132,7 @@ async function cachedItem<T>(
   }
   ensureActive(signal);
   if (data) {
-    await setCachedCatalog(key, data);
+    await setCachedCatalog(key, data, StorageService.getXtreamCatalogRefreshIntervalMs());
     log.debug('fetched', key);
     return data;
   }

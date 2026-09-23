@@ -7,6 +7,7 @@ import { ChannelHealthService } from './services/channel-health';
 import { StorageService } from './services/storage-service';
 import {
   clearAllCachedData,
+  clearCachedCatalog,
   clearCachedPlaylist,
   flushCacheWrites,
 } from './services/idb-cache';
@@ -77,7 +78,11 @@ class App {
   private bundledServiceStarting = false;
   private serviceEventsSubscription: LunaRequestHandle | null = null;
   private deviceSetupSync = Promise.resolve();
-  private epgRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private playlistRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private playlistRefreshIntervalMs: number | null | undefined;
+  private playlistRefreshPromise: Promise<void> | null = null;
+  private epgRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private epgRefreshIntervalMs: number | null | undefined;
   private epgChannelReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   async init(): Promise<void> {
@@ -637,15 +642,137 @@ class App {
       clearTimeout(this.epgChannelReloadTimer);
       this.epgChannelReloadTimer = null;
     }
-    if (this.epgRefreshTimer === null) return;
-    clearInterval(this.epgRefreshTimer);
-    this.epgRefreshTimer = null;
+    this.epgRefreshIntervalMs = undefined;
+    if (this.epgRefreshTimer !== null) {
+      clearTimeout(this.epgRefreshTimer);
+      this.epgRefreshTimer = null;
+    }
   }
 
-  private async loadData(): Promise<void> {
+  private scheduleEpgRefresh(force = false, delayOverride?: number): void {
+    const intervalMs = StorageService.getEpgRefreshIntervalMs();
+    const shouldRun = intervalMs !== null && this.epgSources().length > 0;
+    if (!force
+      && this.epgRefreshIntervalMs === intervalMs
+      && ((shouldRun && this.epgRefreshTimer !== null)
+        || (!shouldRun && this.epgRefreshTimer === null))) {
+      return;
+    }
+    if (this.epgRefreshTimer !== null) {
+      clearTimeout(this.epgRefreshTimer);
+      this.epgRefreshTimer = null;
+    }
+    this.epgRefreshIntervalMs = intervalMs;
+    if (!shouldRun || intervalMs === null) return;
+    const delayMs = delayOverride ?? EpgService.getNextRefreshDelayMs(intervalMs);
+    this.epgRefreshTimer = setTimeout(() => {
+      this.epgRefreshTimer = null;
+      EpgService.refresh(() => this.refreshEpgDependentViews())
+        .then((complete) => {
+          this.refreshEpgDependentViews();
+          this.scheduleEpgRefresh(
+            true,
+            complete ? undefined : StorageService.getEpgRefreshIntervalMs() ?? undefined,
+          );
+        }, (err) => {
+          log.error('EPG refresh failed:', err);
+          this.scheduleEpgRefresh(true, StorageService.getEpgRefreshIntervalMs() ?? undefined);
+        });
+    }, delayMs);
+  }
+
+  private stopPlaylistRefresh(): void {
+    if (this.playlistRefreshTimer !== null) {
+      clearTimeout(this.playlistRefreshTimer);
+      this.playlistRefreshTimer = null;
+    }
+    this.playlistRefreshIntervalMs = undefined;
+  }
+
+  private schedulePlaylistRefresh(force = false, delayOverride?: number): void {
+    const intervalMs = StorageService.getPlaylistRefreshIntervalMs();
+    const shouldRun = intervalMs !== null
+      && StorageService.getPlaylists().some(isSourceEnabled);
+    if (!force
+      && this.playlistRefreshIntervalMs === intervalMs
+      && ((shouldRun && this.playlistRefreshTimer !== null)
+        || (!shouldRun && this.playlistRefreshTimer === null))) {
+      return;
+    }
+    if (this.playlistRefreshTimer !== null) {
+      clearTimeout(this.playlistRefreshTimer);
+      this.playlistRefreshTimer = null;
+    }
+    this.playlistRefreshIntervalMs = intervalMs;
+    if (!shouldRun || intervalMs === null) return;
+    const delayMs = delayOverride ?? PlaylistService.getNextRefreshDelayMs(intervalMs);
+    this.playlistRefreshTimer = setTimeout(() => {
+      this.playlistRefreshTimer = null;
+      void this.queuePlaylistRefresh();
+    }, delayMs);
+  }
+
+  private queuePlaylistRefresh(): Promise<void> {
+    if (this.playlistRefreshPromise) return this.playlistRefreshPromise;
+    const onSettled = () => {
+      this.playlistRefreshPromise = null;
+      this.schedulePlaylistRefresh(
+        true,
+        StorageService.getPlaylistRefreshIntervalMs() ?? undefined,
+      );
+    };
+    this.playlistRefreshPromise = this.refreshPlaylistInBackground()
+      .then(() => {
+        onSettled();
+      }, (err) => {
+        onSettled();
+        throw err;
+      });
+    return this.playlistRefreshPromise;
+  }
+
+  private async refreshPlaylistInBackground(): Promise<void> {
+    try {
+      if (!StorageService.getPlaylists().some(isSourceEnabled)) return;
+      await PlaylistService.refresh(undefined, { preserveOnFailure: true });
+      this.player.syncCurrentIndex();
+      await ChannelHealthService.initialize();
+
+      const epgSources = this.epgSources();
+      if (epgSources.length) {
+        await EpgService.load(
+          epgSources,
+          PlaylistService.getEpgEligibleChannels(),
+          () => this.refreshEpgDependentViews(),
+        );
+        await EpgService.refresh(() => this.refreshEpgDependentViews());
+        this.refreshEpgDependentViews();
+      } else {
+        EpgService.reset();
+        this.refreshEpgDependentViews();
+      }
+      this.scheduleEpgRefresh(true);
+
+      const playlists = StorageService.getPlaylists();
+      const xtreamAccounts = playlists
+        .filter((playlist) =>
+          playlist.source === 'xtream' && playlist.xtream && isSourceEnabled(playlist));
+      this.tabBar.setSections(xtreamAccounts.length > 0);
+      this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
+      this.channelList.render();
+      this.sidebar.refresh();
+      this.livePreview?.refresh();
+    } catch (err) {
+      log.error('Automatic playlist refresh failed:', err);
+    }
+  }
+
+  private async loadData(forceEpgRefresh = false): Promise<void> {
     const done = log.time('loadData');
     show(this.views.loading);
     this.stopEpgRefresh();
+    this.stopPlaylistRefresh();
+    if (this.playlistRefreshPromise) await this.playlistRefreshPromise;
 
     this.applyDisplayTz();
     this.epgGrid.resetDay(); // re-pick today; a tz change invalidates the remembered day index
@@ -727,19 +854,31 @@ class App {
       }
 
       if (epgSources.length) {
-        EpgService.refresh(() => this.refreshEpgDependentViews())
-          .then(() => {
-            this.refreshEpgDependentViews();
-          })
-          .catch(err => log.error('EPG load failed:', err));
-        this.epgRefreshTimer = setInterval(() =>
+        if (forceEpgRefresh) {
+          EpgService.refresh(() => this.refreshEpgDependentViews(), true)
+            .then(() => {
+              this.refreshEpgDependentViews();
+              this.scheduleEpgRefresh(
+                true,
+                StorageService.getEpgRefreshIntervalMs() ?? undefined,
+              );
+            }, (err) => {
+              log.error('EPG load failed:', err);
+              this.scheduleEpgRefresh(
+                true,
+                StorageService.getEpgRefreshIntervalMs() ?? undefined,
+              );
+            });
+        } else if (StorageService.getEpgRefreshIntervalMs() === null) {
           EpgService.refresh(() => this.refreshEpgDependentViews())
-          .then(() => {
-            this.refreshEpgDependentViews();
-          })
-          .catch(err => log.error('EPG refresh failed:', err)),
-        CONFIG.EPG_REFRESH_INTERVAL);
+            .then(() => {
+              this.refreshEpgDependentViews();
+            }, err => log.error('Initial EPG load failed:', err));
+        } else {
+          this.scheduleEpgRefresh(true);
+        }
       }
+      this.schedulePlaylistRefresh(true);
     } catch (err) {
       log.error('loadData failed:', err);
       this.showView('settings');
@@ -1370,15 +1509,19 @@ class App {
       void SetupClient.publishState();
     }
     if (action === 'reload') {
-      await clearCachedPlaylist();
+      this.search.invalidateCatalog();
+      await Promise.all([clearCachedPlaylist(), clearCachedCatalog()]);
       this.showView('channels');
-      await this.loadData();
+      await this.loadData(true);
       return;
     }
     // 'apply': only display settings changed — re-apply + re-render, no re-fetch.
     if (action === 'apply') {
+      this.search.invalidateCatalog();
       this.applyDisplayTz();
       this.epgGrid.resetDay();
+      this.scheduleEpgRefresh();
+      this.schedulePlaylistRefresh();
     }
     this.channelList.render();
     this.showView('channels');

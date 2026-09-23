@@ -13,10 +13,10 @@ export const CONFIG = {
   SERVICE_ID: __SERVICE_ID__,
   SERVICE_HOST: '127.0.0.1',
 
-  PLAYLIST_REFRESH_INTERVAL: 6 * 60 * 60 * 1000,
+  DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
   WORKER_IDLE_TERMINATION_MS: 1000,
   PLAYLIST_CACHE_WRITE_DELAY_MS: 1200,
-  EPG_REFRESH_INTERVAL: 6 * 60 * 60 * 1000,
+  DEFAULT_EPG_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
   REMINDER_SCAN_INTERVAL: 30 * 1000,
   CHANNEL_SCROLLBAR_HIDE_MS: 900,
   PLAYER: {
@@ -71,7 +71,7 @@ export const CONFIG = {
 
   // Xtream Movies/Series catalog + resume tuning.
   XTREAM: {
-    CATALOG_TTL_MS: 6 * 60 * 60 * 1000,  // catalog cache freshness before a re-fetch
+    DEFAULT_CATALOG_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
     ACCOUNT_MAX_BYTES: 1024 * 1024,      // account/server metadata response budget
     CATEGORY_MAX_BYTES: 2 * 1024 * 1024, // category-list response budget
     CATALOG_MAX_BYTES: 32 * 1024 * 1024, // full or per-category stream-list budget

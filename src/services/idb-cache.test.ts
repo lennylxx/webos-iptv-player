@@ -5,6 +5,7 @@ import type { Channel } from '../types';
 import { CONFIG } from '../config';
 import {
   clearAllCachedData,
+  clearCachedCatalog,
   clearCachedPlaylist,
   clearCachedStreamMimes,
   clearCachedChannelHealth,
@@ -146,6 +147,16 @@ describe('idb-cache', () => {
     expect((await getCacheUsage()).categories.catalog.entries).toBe(1);
   });
 
+  it('clears catalog records without clearing stream MIME records', async () => {
+    await setCachedCatalog('x1|vod_categories', ['a']);
+    await setCachedStreamMime('http://host/live', 'video/mp2t');
+
+    await clearCachedCatalog();
+
+    expect(await getCachedCatalog('x1|vod_categories')).toBeNull();
+    expect(await getCachedStreamMime('http://host/live')).toBe('video/mp2t');
+  });
+
   it('includes stream MIME records in the shared cache eviction pass', async () => {
     await setCachedStreamMime('http://host/live', 'video/mp2t');
     const storageDescriptor = Object.getOwnPropertyDescriptor(navigator, 'storage');
@@ -204,8 +215,25 @@ describe('idb-cache', () => {
 
     expect(await setCachedPlaylist(channels, sources)).toBe(true);
 
-    expect(await getCachedPlaylist()).toEqual({ channels, epgSources: sources });
+    expect(await getCachedPlaylist()).toEqual({
+      channels,
+      epgSources: sources,
+      timestamp: expect.any(Number),
+    });
     expect(localStorage.getItem('iptv_cached_playlist')).toBeNull();
+  });
+
+  it('evaluates playlist freshness against the current refresh interval', async () => {
+    const channels = [channel('ch1')];
+    const timestamp = Date.now() - 2 * 60 * 60 * 1000;
+    await setCachedPlaylist(channels, [], timestamp, 24 * 60 * 60 * 1000);
+
+    expect(await getCachedPlaylist(60 * 60 * 1000)).toBeNull();
+    expect(await getCachedPlaylist(null)).toEqual({
+      channels,
+      epgSources: [],
+      timestamp,
+    });
   });
 
   it('defers playlist persistence until after worker idle termination', async () => {

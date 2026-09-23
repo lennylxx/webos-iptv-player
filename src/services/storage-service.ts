@@ -27,6 +27,9 @@ const log = createLogger('StorageService');
 
 const PREFIX = CONFIG.STORAGE_PREFIX;
 export const LIVE_RECONNECT_ATTEMPT_OPTIONS: readonly number[] = [0, 1, 2, 3, 4, 5];
+export const REFRESH_INTERVAL_HOUR_OPTIONS: readonly number[] = [0, 1, 3, 6, 12, 24];
+export const XTREAM_CATALOG_REFRESH_HOUR_OPTIONS: readonly number[] = [1, 3, 6, 12, 24];
+const HOUR_MS = 60 * 60 * 1000;
 
 type StoredCatchup = CatchupProgressEntry & { expiresAt: number };
 
@@ -581,6 +584,59 @@ export const StorageService = {
       throw new RangeError(`Invalid live reconnect attempts: ${String(attempts)}`);
     }
     set('live_reconnect_attempts', attempts);
+  },
+
+  getPlaylistRefreshIntervalHours(): number {
+    const defaultHours = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS / HOUR_MS;
+    const hours = get<unknown>('playlist_refresh_interval_hours', defaultHours);
+    return typeof hours === 'number' && REFRESH_INTERVAL_HOUR_OPTIONS.includes(hours)
+      ? hours
+      : defaultHours;
+  },
+  setPlaylistRefreshIntervalHours(hours: number): void {
+    if (!REFRESH_INTERVAL_HOUR_OPTIONS.includes(hours)) {
+      throw new RangeError(`Invalid playlist refresh interval: ${String(hours)}`);
+    }
+    set('playlist_refresh_interval_hours', hours);
+  },
+  getPlaylistRefreshIntervalMs(): number | null {
+    const hours = this.getPlaylistRefreshIntervalHours();
+    return hours === 0 ? null : hours * HOUR_MS;
+  },
+
+  getEpgRefreshIntervalHours(): number {
+    const defaultHours = CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS / HOUR_MS;
+    const hours = get<unknown>('epg_refresh_interval_hours', defaultHours);
+    return typeof hours === 'number' && REFRESH_INTERVAL_HOUR_OPTIONS.includes(hours)
+      ? hours
+      : defaultHours;
+  },
+  setEpgRefreshIntervalHours(hours: number): void {
+    if (!REFRESH_INTERVAL_HOUR_OPTIONS.includes(hours)) {
+      throw new RangeError(`Invalid EPG refresh interval: ${String(hours)}`);
+    }
+    set('epg_refresh_interval_hours', hours);
+  },
+  getEpgRefreshIntervalMs(): number | null {
+    const hours = this.getEpgRefreshIntervalHours();
+    return hours === 0 ? null : hours * HOUR_MS;
+  },
+
+  getXtreamCatalogRefreshIntervalHours(): number {
+    const defaultHours = CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS / HOUR_MS;
+    const hours = get<unknown>('xtream_catalog_refresh_interval_hours', defaultHours);
+    return typeof hours === 'number' && XTREAM_CATALOG_REFRESH_HOUR_OPTIONS.includes(hours)
+      ? hours
+      : defaultHours;
+  },
+  setXtreamCatalogRefreshIntervalHours(hours: number): void {
+    if (!XTREAM_CATALOG_REFRESH_HOUR_OPTIONS.includes(hours)) {
+      throw new RangeError(`Invalid Xtream catalog refresh interval: ${String(hours)}`);
+    }
+    set('xtream_catalog_refresh_interval_hours', hours);
+  },
+  getXtreamCatalogRefreshIntervalMs(): number {
+    return this.getXtreamCatalogRefreshIntervalHours() * HOUR_MS;
   },
 
   getManualEpgSources(): ManualEpgSource[] {

@@ -9,6 +9,7 @@ const { storageMock, cacheMock, fetchTextMock } = vi.hoisted(() => ({
     migrateFavoriteKeys: vi.fn(),
     getShowHiddenChannels: vi.fn(() => false),
     getChannelCustomization: vi.fn(() => null),
+    getPlaylistRefreshIntervalMs: vi.fn(() => 6 * 60 * 60 * 1000),
     setChannelCustomization: vi.fn(),
     clearChannelCustomization: vi.fn(),
   },
@@ -132,6 +133,20 @@ describe('PlaylistService.refresh', () => {
   it('merges playlists and de-duplicates channels by URL', async () => {
     const channels = await PlaylistService.refresh();
     expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  });
+
+  it('schedules the next refresh from the last successful refresh time', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      await PlaylistService.refresh();
+
+      now.mockReturnValue(1_000_000 + 2 * 60 * 60 * 1000);
+
+      expect(PlaylistService.getNextRefreshDelayMs(6 * 60 * 60 * 1000))
+        .toBe(4 * 60 * 60 * 1000);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('reports cumulative channel-loading progress across sources', async () => {
@@ -286,6 +301,8 @@ describe('PlaylistService.refresh', () => {
     expect(cacheMock.scheduleCachedPlaylist).toHaveBeenCalledWith(
       PlaylistService.channels,
       [{ url: 'http://host1:8080/epg.xml', playlistIds: ['a'], kind: 'm3u' }],
+      expect.any(Number),
+      6 * 60 * 60 * 1000,
     );
   });
 
@@ -343,6 +360,28 @@ describe('PlaylistService.refresh', () => {
     fetchTextMock.mockResolvedValue(P1);
     await PlaylistService.refresh();
     expect(PlaylistService.hasFailedSource(['a'])).toBe(false);
+  });
+
+  it('keeps the current list when an automatic refresh is incomplete', async () => {
+    await PlaylistService.refresh();
+    const previousChannels = PlaylistService.channels;
+    const previousEpgSources = PlaylistService.epgSources;
+    fetchTextMock.mockImplementation((url: string) =>
+      url.includes('p1') ? Promise.reject(new Error('boom')) : Promise.resolve(P2),
+    );
+
+    const channels = await PlaylistService.refresh(
+      undefined,
+      { preserveOnFailure: true },
+    );
+
+    expect(channels).toBe(previousChannels);
+    expect(PlaylistService.channels).toBe(previousChannels);
+    expect(PlaylistService.epgSources).toBe(previousEpgSources);
+    expect(PlaylistService.channels.map(channel => channel.name))
+      .toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect(PlaylistService.hasFailedSource(['a'])).toBe(true);
+    expect(cacheMock.scheduleCachedPlaylist).toHaveBeenCalledOnce();
   });
 
   it('clears unresolved source state when the catalog is reset', async () => {
@@ -1141,7 +1180,11 @@ describe('PlaylistService customization', () => {
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha']);
     // The raw parse is cached, so an edit never forces a re-fetch.
     expect(cacheMock.scheduleCachedPlaylist).toHaveBeenCalledWith(
-      PlaylistService.allChannels, PlaylistService.epgSources);
+      PlaylistService.allChannels,
+      PlaylistService.epgSources,
+      expect.any(Number),
+      6 * 60 * 60 * 1000,
+    );
   });
 
   it('re-derives indices after an edit so index-based consumers follow', async () => {

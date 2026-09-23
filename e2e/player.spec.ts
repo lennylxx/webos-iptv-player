@@ -151,8 +151,12 @@ test('large sidebar decodes visible logos before revealing one per frame', async
       }
     }
     Object.defineProperty(window, 'Image', { configurable: true, value: DeferredImage });
-    (window as unknown as { resolveSidebarLogoDecodes: () => number })
-      .resolveSidebarLogoDecodes = () => {
+    const controls = window as unknown as {
+      pendingSidebarLogoDecodes: () => number;
+      resolveSidebarLogoDecodes: () => number;
+    };
+    controls.pendingSidebarLogoDecodes = () => pending.length;
+    controls.resolveSidebarLogoDecodes = () => {
         const ready = pending.splice(0);
         ready.forEach(resolve => resolve());
         return ready.length;
@@ -176,7 +180,9 @@ test('large sidebar decodes visible logos before revealing one per frame', async
     element => parseFloat((element as HTMLElement).style.height),
   )).toBe(900 * 88);
 
-  await page.waitForTimeout(300);
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { pendingSidebarLogoDecodes: () => number })
+      .pendingSidebarLogoDecodes())).toBeGreaterThan(1);
   const counts = await page.evaluate(async () => {
     const resolved = (window as unknown as { resolveSidebarLogoDecodes: () => number })
       .resolveSidebarLogoDecodes();
@@ -202,7 +208,9 @@ test('large sidebar decodes visible logos before revealing one per frame', async
   await expect(sidebar.locator('img.ch-logo[src]')).toHaveCount(0);
   expect(await pending.count()).toBeGreaterThan(0);
 
-  await page.waitForTimeout(300);
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { pendingSidebarLogoDecodes: () => number })
+      .pendingSidebarLogoDecodes())).toBeGreaterThan(1);
   const reopened = await page.evaluate(async () => {
     (window as unknown as { resolveSidebarLogoDecodes: () => number })
       .resolveSidebarLogoDecodes();

@@ -49,6 +49,10 @@ export interface PlaylistLoadProgress {
   channelsKept: number;
 }
 
+interface PlaylistRefreshOptions {
+  preserveOnFailure?: boolean;
+}
+
 function usableDirectSource(value: string): string {
   try {
     const url = new URL(value);
@@ -116,6 +120,7 @@ class PlaylistServiceImpl {
   private searchIndexedChannelCount = -1;
   private includeHidden = false;
   private failedSourceIds = new Set<string>();
+  private refreshTimestamp: number | null = null;
 
   hasFailedSource(playlistIds: readonly string[]): boolean {
     return playlistIds.some(id => this.failedSourceIds.has(id));
@@ -126,6 +131,11 @@ class PlaylistServiceImpl {
     return sources.length > 0 && !sources.some(isSourceEnabled);
   }
 
+  getNextRefreshDelayMs(intervalMs: number): number {
+    if (this.refreshTimestamp === null) return 0;
+    return Math.max(0, this.refreshTimestamp + intervalMs - Date.now());
+  }
+
   /**
    * Clear all in-memory state. Called when the user removes every configured
    * playlist so stale channels do not survive navigation back to the channel
@@ -133,6 +143,7 @@ class PlaylistServiceImpl {
    */
   reset(): void {
     this.failedSourceIds.clear();
+    this.refreshTimestamp = null;
     this.allChannels = [];
     this.channels = [];
     this.groups = [];
@@ -163,9 +174,10 @@ class PlaylistServiceImpl {
       this.logLoadCompleted('none', 0, 0);
       return [];
     }
-    const cached = await getCachedPlaylist();
+    const cached = await getCachedPlaylist(StorageService.getPlaylistRefreshIntervalMs());
     if (cached) {
       this.failedSourceIds.clear();
+      this.refreshTimestamp = cached.timestamp;
       const channelsNeedFiltering = cached.channels
         .some(channel => channel.playlistIds.some(id => !enabledIds.has(id)));
       this.allChannels = channelsNeedFiltering
@@ -197,7 +209,10 @@ class PlaylistServiceImpl {
     return this.refresh(onProgress);
   }
 
-  async refresh(onProgress?: (progress: PlaylistLoadProgress) => void): Promise<Channel[]> {
+  async refresh(
+    onProgress?: (progress: PlaylistLoadProgress) => void,
+    options: PlaylistRefreshOptions = {},
+  ): Promise<Channel[]> {
     const done = log.time('refresh');
     const playlists = StorageService.getPlaylists().filter(isSourceEnabled);
     if (!playlists.length) {
@@ -443,13 +458,31 @@ class PlaylistServiceImpl {
     }
 
     this.failedSourceIds = failedSourceIds;
+    if (failedPlaylists && options.preserveOnFailure) {
+      log.warn(
+        'Keeping the current channel list because an automatic refresh was incomplete',
+        'event=playlist.refresh.preserved',
+        `failed=${String(failedPlaylists)}`,
+      );
+      this.logLoadCompleted('network', playlists.length, failedPlaylists);
+      done();
+      return this.channels;
+    }
+    const refreshTimestamp = Date.now();
     this.allChannels = allChannels;
     this.epgSources = epgSources;
     // Customization preserves source names/groups on each channel, so cached
     // channels can be re-customized after an edit without another network load.
     if (!failedPlaylists) {
-      scheduleCachedPlaylist(allChannels, epgSources);
+      this.refreshTimestamp = refreshTimestamp;
+      scheduleCachedPlaylist(
+        allChannels,
+        epgSources,
+        refreshTimestamp,
+        StorageService.getPlaylistRefreshIntervalMs(),
+      );
     } else {
+      this.refreshTimestamp = null;
       log.warn('Skipping cache write because one or more playlists failed');
     }
     this.applyCustomization();

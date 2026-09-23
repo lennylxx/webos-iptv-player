@@ -91,6 +91,9 @@ This is the complete active key inventory:
 | `iptv_show_hidden_channels` | `boolean` | Whether normal lists reveal hidden channels in a dimmed state | Preference |
 | `iptv_auto_play` | `boolean` | Whether startup automatically plays the selected channel | Preference |
 | `iptv_live_reconnect_attempts` | `number` | Live channel reconnection limit (0–5; default 3) | Preference |
+| `iptv_playlist_refresh_interval_hours` | `number` | Channel-list refresh interval: 0 (off), 1, 3, 6, 12, or 24 hours; default 6 | Preference |
+| `iptv_epg_refresh_interval_hours` | `number` | Program-guide refresh interval: 0 (off), 1, 3, 6, 12, or 24 hours; default 6 | Preference |
+| `iptv_xtream_catalog_refresh_interval_hours` | `number` | Xtream Movies, Series, and Search catalog interval: 1, 3, 6, 12, or 24 hours; default 6 | Preference |
 | `iptv_locale` | `string` | Explicit interface locale or `system` | Preference |
 | `iptv_theme` | `string` | Selected application theme id | Preference |
 | `iptv_text_size` | `string` | Selected text-scale id | Preference |
@@ -210,11 +213,11 @@ invalidates a structurally valid but now unrelated parsed playlist.
 
 ### Cache freshness
 
-| Category | Default lifetime | Read behavior |
+| Category | Refresh setting | Read behavior |
 | --- | --- | --- |
-| Playlist | 6 hours | Requires matching payload version, source signature, non-empty channels, and unexpired envelope |
-| Program guide | 6 hours | Timestamp drives EPG refresh; expired entries are first-priority cleanup candidates |
-| Xtream catalog | 6 hours | Callers use the timestamp for refresh; individual entries may supply another TTL |
+| Playlist | Off, 1, 3, 6, 12, or 24 hours; default 6 | Requires matching payload version, source signature, and non-empty channels. The current setting is compared with the stored timestamp; Off keeps a matching cache until its source configuration changes or the user refreshes all data |
+| Program guide | Off, 1, 3, 6, 12, or 24 hours; default 6 | Each source retains its own timestamp. Off stops periodic refresh and ignores age, but a missing or structurally invalid source is still downloaded once so a cold cache can populate |
+| Xtream catalog | 1, 3, 6, 12, or 24 hours; default 6 | Callers compare each entry's timestamp with the current setting. There is no Off option, so Movies, Series, and Search cannot remain permanently stale |
 | Media probe | No expiry | Stored in the catalog category and still subject to LRU/budget cleanup |
 | Stream MIME probe | 7 days | Expired reads become misses; records participate in catalog LRU and accounting |
 | Downloaded subtitle | 30 days | An expired read becomes a miss and deletes the record |
@@ -222,6 +225,19 @@ invalidates a structurally valid but now unrelated parsed playlist.
 
 Reads update `lastAccessedAt` in a best-effort follow-up transaction. Failure to
 write this bookkeeping does not turn a valid cache hit into a miss.
+
+### Refresh scheduling
+
+The three settings are under **Settings → Advanced**. `CONFIG` provides their
+defaults; runtime freshness uses the saved preferences and the age of the
+loaded data. Off stops periodic channel-list or program-guide refresh, while
+still allowing a missing guide cache to populate. Xtream catalogs refresh when
+Movies, Series, or Search accesses expired data and do not have an Off option.
+
+An incomplete automatic channel-list refresh keeps the previous complete list
+instead of publishing partial data. **Refresh All Data** remains available in
+Off mode; it reloads enabled channel sources, forces the configured guide
+sources to refresh, and clears Xtream catalog and related media-metadata caches.
 
 The app does not provide account-based cloud sync or a remote backup of this
 data. Playlist providers and subtitle services still receive the requests
