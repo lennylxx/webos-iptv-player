@@ -152,35 +152,50 @@ test.describe('Settings navigation', () => {
     expect(gaps.dropdownToNextTitle).toBe(12);
   });
 
-  test('keeps each Advanced label and dropdown on one row', async ({ page }) => {
+  test('lays out Advanced settings as a continuous three-column matrix', async ({ page }) => {
     await page.goto('/');
     await page.locator('[data-settings-target="advanced"]').click();
 
     await expect(page.locator('#settings-advanced .settings-section-title')).toHaveText('Advanced');
     const layouts = await page.locator(
-      '#settings-advanced .settings-item-control-row:has(> .dropdown)',
+      '#settings-advanced .settings-advanced-row',
     )
       .evaluateAll((rows) => rows.map((row) => {
+        const bounds = row.getBoundingClientRect();
+        const group = row.querySelector<HTMLElement>('.settings-advanced-group')!
+          .getBoundingClientRect();
         const title = row.querySelector<HTMLElement>('.settings-item-title')!
           .getBoundingClientRect();
-        const dropdown = row.querySelector<HTMLElement>('.dropdown')!.getBoundingClientRect();
-        const hint = row.parentElement!.querySelector<HTMLElement>('.settings-item-hint')!
+        const control = row.querySelector<HTMLElement>('.dropdown, .toggle-group')!
+          .getBoundingClientRect();
+        const hint = row.querySelector<HTMLElement>('.settings-item-hint')!
           .getBoundingClientRect();
         return {
-          titleCenter: title.top + title.height / 2,
-          dropdownCenter: dropdown.top + dropdown.height / 2,
-          controlGap: dropdown.left - title.right,
-          controlBottom: Math.max(title.bottom, dropdown.bottom),
+          rowCenter: bounds.top + bounds.height / 2,
+          controlCenter: control.top + control.height / 2,
+          controlRightGap: bounds.right - control.right,
+          groupRight: group.right,
+          titleLeft: title.left,
+          titleBottom: title.bottom,
           hintTop: hint.top,
         };
       }));
 
-    expect(layouts).toHaveLength(5);
+    expect(layouts).toHaveLength(6);
     for (const layout of layouts) {
-      expect(layout.dropdownCenter).toBeCloseTo(layout.titleCenter, 0);
-      expect(layout.controlGap).toBe(24);
-      expect(layout.hintTop).toBeGreaterThan(layout.controlBottom);
+      expect(Math.abs(layout.controlCenter - layout.rowCenter)).toBeLessThanOrEqual(1);
+      expect(layout.controlRightGap).toBe(20);
+      expect(layout.titleLeft).toBeGreaterThan(layout.groupRight);
+      expect(layout.hintTop).toBeGreaterThan(layout.titleBottom);
     }
+
+    const numberEntry = page.locator('#number-entry-osd-timeout .dropdown-trigger');
+    await numberEntry.click();
+    const focusedRow = numberEntry.locator(
+      'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "),'
+        + ' " settings-advanced-row ")][1]',
+    );
+    await expect(focusedRow).toHaveClass(/focused/);
   });
 
   test('persists Essential mode and disables only costly motion', async ({ page }) => {
@@ -193,16 +208,16 @@ test.describe('Settings navigation', () => {
     )))
       .toEqual(['essential', 'reduced', 'full']);
     const animationRow = await page.evaluate(() => {
-      const title = document.querySelector(
-        '#settings-advanced .settings-item-title',
+      const row = document.querySelector(
+        '#settings-advanced .settings-advanced-row',
       )!.getBoundingClientRect();
       const options = document.querySelector('#animation-mode')!.getBoundingClientRect();
       return {
-        titleCenter: title.top + title.height / 2,
+        rowCenter: row.top + row.height / 2,
         optionsCenter: options.top + options.height / 2,
       };
     });
-    expect(animationRow.optionsCenter).toBeCloseTo(animationRow.titleCenter, 0);
+    expect(animationRow.optionsCenter).toBeCloseTo(animationRow.rowCenter, 0);
     await page.locator('#animation-mode [data-value="essential"]').click();
     await page.locator('#save-settings').click();
 
@@ -303,8 +318,11 @@ test.describe('Settings navigation', () => {
 
       const layout = await page.locator('#animation-mode').evaluate((group) => {
         const section = group.closest<HTMLElement>('.settings-section')!;
-        const item = group.closest<HTMLElement>('.settings-item')!;
+        const row = group.closest<HTMLElement>('.settings-advanced-row')!;
         const buttons = Array.from(group.querySelectorAll<HTMLElement>('.toggle-option'));
+        const matrixGroups = Array.from(
+          section.querySelectorAll<HTMLElement>('.settings-advanced-group'),
+        );
         return {
           buttonCount: buttons.length,
           wrapped: buttons.filter((button) => {
@@ -312,9 +330,16 @@ test.describe('Settings navigation', () => {
             range.selectNodeContents(button);
             return range.getClientRects().length !== 1;
           }).map(button => button.textContent?.trim() ?? ''),
+          groupOverlaps: matrixGroups.filter((matrixGroup) => {
+            if (!matrixGroup.textContent?.trim()) return false;
+            const range = document.createRange();
+            range.selectNodeContents(matrixGroup);
+            const description = matrixGroup.nextElementSibling!.getBoundingClientRect();
+            return range.getBoundingClientRect().right > description.left;
+          }).map(matrixGroup => matrixGroup.textContent?.trim() ?? ''),
           groupRight: Math.round(group.getBoundingClientRect().right),
           hintRight: Math.round(
-            item.querySelector<HTMLElement>('.settings-item-hint')!
+            row.querySelector<HTMLElement>('.settings-item-hint')!
               .getBoundingClientRect().right,
           ),
           sectionRight: Math.round(section.getBoundingClientRect().right),
@@ -323,6 +348,7 @@ test.describe('Settings navigation', () => {
 
       expect(layout.buttonCount, locale).toBe(3);
       expect(layout.wrapped, locale).toEqual([]);
+      expect(layout.groupOverlaps, locale).toEqual([]);
       expect(layout.groupRight, locale).toBeLessThanOrEqual(layout.sectionRight);
       expect(layout.hintRight, locale).toBeLessThanOrEqual(layout.sectionRight);
     }
@@ -492,7 +518,7 @@ test.describe('Settings navigation', () => {
       const main = document.querySelector('.settings-main')!.getBoundingClientRect();
       const title = document.querySelector('#settings-data .settings-section-title')!
         .getBoundingClientRect();
-      return title.top >= main.top && title.bottom <= main.bottom;
+      return title.top >= main.top - 1 && title.bottom <= main.bottom + 1;
     })).toBe(true);
 
     const changes = await page.evaluate(() =>

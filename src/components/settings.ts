@@ -877,20 +877,32 @@ export class Settings {
                  data-settings-category="advanced">
               <div class="settings-section">
                 <h3 class="settings-section-title">${t('settings.advanced')}</h3>
-                <div class="settings-item">
-                  <div class="settings-item-control-row">
-                    <div class="settings-item-title">${t('settings.animationMode')}</div>
+                <div class="settings-advanced-matrix">
+                  <div class="settings-advanced-row">
+                    <div class="settings-advanced-group">
+                      ${t('settings.advancedGroupInterface')}
+                    </div>
+                    <div class="settings-advanced-description">
+                      <div class="settings-item-title">${t('settings.animationMode')}</div>
+                      <div class="settings-item-hint">${t('settings.animationHint')}</div>
+                    </div>
+                    <div class="settings-advanced-control">
                     ${toggleGroup(
                       'animation-mode',
                       animationModeOptions(),
                       animationMode,
                     )}
+                    </div>
                   </div>
-                  <div class="settings-item-hint">${t('settings.animationHint')}</div>
-                </div>
-                <div class="settings-item">
-                  <div class="settings-item-control-row">
-                    <div class="settings-item-title">${t('settings.liveReconnectAttempts')}</div>
+                  <div class="settings-advanced-row">
+                    <div class="settings-advanced-group">
+                      ${t('settings.advancedGroupPlayback')}
+                    </div>
+                    <div class="settings-advanced-description">
+                      <div class="settings-item-title">${t('settings.liveReconnectAttempts')}</div>
+                      <div class="settings-item-hint">${t('settings.liveReconnectHint')}</div>
+                    </div>
+                    <div class="settings-advanced-control">
                     ${dropdown(
                       'live-reconnect-attempts',
                       LIVE_RECONNECT_ATTEMPT_OPTIONS.map(value => ({
@@ -898,72 +910,91 @@ export class Settings {
                       })),
                       String(liveReconnectAttempts),
                     )}
+                    </div>
                   </div>
-                  <div class="settings-item-hint">${t('settings.liveReconnectHint')}</div>
-                </div>
-                <div class="settings-item">
-                  <div class="settings-item-control-row">
-                    <div class="settings-item-title">${t('settings.numberEntryOsdTimeout')}</div>
+                  <div class="settings-advanced-row">
+                    <div class="settings-advanced-group">
+                      ${t('settings.advancedGroupOnScreenDisplay')}
+                    </div>
+                    <div class="settings-advanced-description">
+                      <div class="settings-item-title">${t('settings.numberEntryOsdTimeout')}</div>
+                      <div class="settings-item-hint">${t('settings.numberEntryOsdTimeoutHint')}</div>
+                    </div>
+                    <div class="settings-advanced-control">
                     ${dropdown(
                       'number-entry-osd-timeout',
                       timeoutOptions(NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS),
                       String(numberEntryOsdTimeoutMs),
                     )}
+                    </div>
                   </div>
-                  <div class="settings-item-hint">${t('settings.numberEntryOsdTimeoutHint')}</div>
-                </div>
-                <div class="settings-item">
-                  <div class="settings-item-control-row">
-                    <div class="settings-item-title">${t('settings.playerOsdTimeout')}</div>
+                  <div class="settings-advanced-row">
+                    <div class="settings-advanced-group" aria-hidden="true"></div>
+                    <div class="settings-advanced-description">
+                      <div class="settings-item-title">${t('settings.playerOsdTimeout')}</div>
+                      <div class="settings-item-hint">${t('settings.playerOsdTimeoutHint')}</div>
+                    </div>
+                    <div class="settings-advanced-control">
                     ${dropdown(
                       'player-osd-timeout',
                       timeoutOptions(PLAYER_OSD_TIMEOUT_MS_OPTIONS),
                       String(playerOsdTimeoutMs),
                     )}
+                    </div>
                   </div>
-                  <div class="settings-item-hint">${t('settings.playerOsdTimeoutHint')}</div>
-                </div>
-                <div class="settings-item">
-                  <div class="settings-item-control-row">
-                    <div class="settings-item-title">${t('settings.playlistRefreshInterval')}</div>
+                  <div class="settings-advanced-row">
+                    <div class="settings-advanced-group">
+                      ${t('settings.advancedGroupBackgroundRefresh')}
+                    </div>
+                    <div class="settings-advanced-description">
+                      <div class="settings-item-title">${t('settings.playlistRefreshInterval')}</div>
+                      <div class="settings-item-hint">${t('settings.playlistRefreshHint', {
+                        action: t('settings.refreshAll'),
+                      })}</div>
+                    </div>
+                    <div class="settings-advanced-control">
                     ${dropdown(
                       'playlist-refresh-interval',
                       refreshIntervalOptions(),
                       String(playlistRefreshHours),
                     )}
+                    </div>
                   </div>
-                  <div class="settings-item-hint">${t('settings.playlistRefreshHint', {
-                    action: t('settings.refreshAll'),
-                  })}</div>
-                </div>
-                <div class="settings-item">
-                  <div class="settings-item-control-row">
-                    <div class="settings-item-title">${t('settings.epgRefreshInterval')}</div>
+                  <div class="settings-advanced-row">
+                    <div class="settings-advanced-group" aria-hidden="true"></div>
+                    <div class="settings-advanced-description">
+                      <div class="settings-item-title">${t('settings.epgRefreshInterval')}</div>
+                      <div class="settings-item-hint">${t('settings.epgRefreshHint', {
+                        action: t('settings.refreshAll'),
+                      })}</div>
+                    </div>
+                    <div class="settings-advanced-control">
                     ${dropdown(
                       'epg-refresh-interval',
                       refreshIntervalOptions(),
                       String(epgRefreshHours),
                     )}
+                    </div>
                   </div>
-                  <div class="settings-item-hint">${t('settings.epgRefreshHint', {
-                    action: t('settings.refreshAll'),
-                  })}</div>
-                </div>
-                ${enabledAccounts.length ? html`
-                  <div class="settings-item">
-                    <div class="settings-item-control-row">
-                      <div class="settings-item-title">${t('settings.xtreamCatalogRefreshInterval')}</div>
+                  ${enabledAccounts.length ? html`
+                    <div class="settings-advanced-row">
+                      <div class="settings-advanced-group" aria-hidden="true"></div>
+                      <div class="settings-advanced-description">
+                        <div class="settings-item-title">${t('settings.xtreamCatalogRefreshInterval')}</div>
+                        <div class="settings-item-hint">${t('settings.xtreamCatalogRefreshHint', {
+                          action: t('settings.refreshAll'),
+                        })}</div>
+                      </div>
+                      <div class="settings-advanced-control">
                       ${dropdown(
                         'xtream-catalog-refresh-interval',
                         xtreamCatalogRefreshIntervalOptions(),
                         String(xtreamCatalogRefreshHours),
                       )}
+                      </div>
                     </div>
-                    <div class="settings-item-hint">${t('settings.xtreamCatalogRefreshHint', {
-                      action: t('settings.refreshAll'),
-                    })}</div>
-                  </div>
-                ` : ''}
+                  ` : ''}
+                </div>
               </div>
             </div>
 
@@ -1604,6 +1635,9 @@ export class Settings {
   // Live theme preview: focusing (D-pad) or hovering (pointer) a swatch previews
   // that theme app-wide; anything else falls back to the currently selected theme.
   private onNavFocus(el: HTMLElement | null): void {
+    this.container.querySelector('.settings-advanced-row.focused')
+      ?.classList.remove('focused');
+    el?.closest('.settings-advanced-row')?.classList.add('focused');
     if (el?.dataset.themeId) previewTheme(el.dataset.themeId);
     else previewTheme(this.selectedTheme);
   }

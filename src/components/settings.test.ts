@@ -473,12 +473,16 @@ describe('Settings.render', () => {
     settings.render();
     const advanced = container.querySelector('#settings-advanced')!;
     expect(advanced.querySelector('.settings-section-title')?.textContent).toBe('Advanced');
-    const items = advanced.querySelectorAll('.settings-item');
+    const items = advanced.querySelectorAll('.settings-advanced-row');
     expect(items).toHaveLength(6);
+    expect(Array.from(advanced.querySelectorAll('.settings-advanced-group'))
+      .map(group => group.textContent?.trim())
+      .filter(Boolean))
+      .toEqual(['Interface', 'Playback', 'On-screen display', 'Background refresh']);
     expect(items[0].querySelector('.settings-item-title')?.textContent)
       .toBe('Animation mode');
-    expect(items[0].querySelector('.settings-item-control-row')?.children)
-      .toHaveLength(2);
+    expect(items[0].querySelector('.settings-advanced-control')?.children)
+      .toHaveLength(1);
     expect(Array.from(container.querySelectorAll<HTMLElement>(
       '#animation-mode .toggle-option',
     )).map(option => option.dataset.value))
@@ -487,7 +491,7 @@ describe('Settings.render', () => {
       ?.getAttribute('data-value')).toBe('reduced');
     expect(items[1].querySelector('.settings-item-title')?.textContent)
       .toBe('Live reconnect attempts');
-    expect(items[1].querySelector('.settings-item-control-row')?.children).toHaveLength(2);
+    expect(items[1].querySelector('.settings-advanced-control')?.children).toHaveLength(1);
     expect(container.querySelector('#live-reconnect-attempts')?.getAttribute('data-value'))
       .toBe('3');
     expect(Array.from(container.querySelectorAll<HTMLElement>(
@@ -536,7 +540,8 @@ describe('Settings.render', () => {
 
     settings.render();
 
-    expect(container.querySelectorAll('#settings-advanced .settings-item')).toHaveLength(7);
+    expect(container.querySelectorAll('#settings-advanced .settings-advanced-row'))
+      .toHaveLength(7);
     expect(container.querySelector('#xtream-catalog-refresh-interval')
       ?.getAttribute('data-value')).toBe('6');
     expect(Array.from(container.querySelectorAll<HTMLElement>(
