@@ -33,6 +33,7 @@ vi.mock('../services/storage-service', () => ({
     getSubtitleOffset: vi.fn(() => 0), setSubtitleOffset: vi.fn(),
     getChannelCycleMode: vi.fn(() => 'global'),
     getLiveReconnectAttempts: vi.fn(() => 3),
+    getPlayerOsdTimeoutMs: vi.fn(() => 5000),
     getPlaylists: vi.fn(() => [{
       id: 'x',
       name: 'Account',
@@ -910,10 +911,14 @@ describe('Player live DVR', () => {
     expect(live.paused).toBe(true);
   });
 
-  it('clamps to the window start when resuming after it rolled past the paused point', () => {
+  it('holds the paused point until resume, then clamps into the rolled window', () => {
     player.handleAction('rewind');
     player.handleAction('pause');
+    const pausedAt = live.currentTime;
     setWindow(20, 80); // window rolled forward while paused
+    live.dispatchEvent(new Event('progress'));
+    expect(live.currentTime).toBe(pausedAt);
+
     player.handleAction('play');
     expect(live.currentTime).toBe(20 + OLDEST_PAD);
   });

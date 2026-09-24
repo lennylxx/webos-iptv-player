@@ -1158,7 +1158,7 @@ export class Player {
   }
 
   private reconcileLiveDvrPosition(el: HTMLVideoElement): void {
-    if (el !== this.videoEl || el.seeking) return;
+    if (el !== this.videoEl || el.paused || el.seeking) return;
     const win = this.liveDvrWindow();
     if (!win || el.currentTime >= win.start) return;
     const target = this.oldestDvrTarget(win);
