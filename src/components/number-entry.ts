@@ -1,4 +1,4 @@
-import { CONFIG } from '../config';
+import { StorageService } from '../services/storage-service';
 import { html } from '../utils/dom';
 import { morph } from '../utils/morph';
 
@@ -21,7 +21,8 @@ export function showNumberEntry(digits: string): void {
   const tiles = digits.split('').map((digit, index) =>
     html`<span class="number-entry-digit" data-key="d${String(index)}">${digit}</span>`);
   // A new key per keypress remounts the bar, restarting the debounce it tracks.
-  const duration = `animation-duration: ${String(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT)}ms`;
+  const timeout = StorageService.getNumberEntryOsdTimeoutMs();
+  const duration = `animation-duration: ${String(timeout)}ms`;
   morph(entryEl, html`<span class="number-entry-digits">${tiles}</span>
     <span class="number-entry-countdown" data-key="c${String(sequence)}">
       <i class="number-entry-countdown-fill" style="${duration}"></i>
@@ -31,7 +32,7 @@ export function showNumberEntry(digits: string): void {
   // The tune that hides this never arrives if a modal swallowed the flush.
   hideTimer = setTimeout(() => {
     entryEl?.classList.remove('visible');
-  }, CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT + 500);
+  }, timeout + 500);
 }
 
 export function hideNumberEntry(): void {

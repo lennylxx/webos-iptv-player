@@ -32,6 +32,8 @@ const log = createLogger('StorageService');
 
 const PREFIX = CONFIG.STORAGE_PREFIX;
 export const LIVE_RECONNECT_ATTEMPT_OPTIONS: readonly number[] = [0, 1, 2, 3, 4, 5];
+export const NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS: readonly number[] = [1200, 1800, 2500, 3000, 3500];
+export const PLAYER_OSD_TIMEOUT_MS_OPTIONS: readonly number[] = [3000, 5000, 8000, 10000, 12000];
 export const REFRESH_INTERVAL_HOUR_OPTIONS: readonly number[] = [0, 1, 3, 6, 12, 24];
 export const XTREAM_CATALOG_REFRESH_HOUR_OPTIONS: readonly number[] = [1, 3, 6, 12, 24];
 const HOUR_MS = 60 * 60 * 1000;
@@ -589,6 +591,38 @@ export const StorageService = {
       throw new RangeError(`Invalid live reconnect attempts: ${String(attempts)}`);
     }
     set('live_reconnect_attempts', attempts);
+  },
+
+  getNumberEntryOsdTimeoutMs(): number {
+    const timeout = get<unknown>(
+      'number_entry_osd_timeout_ms',
+      CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS,
+    );
+    return typeof timeout === 'number' && NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS.includes(timeout)
+      ? timeout
+      : CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS;
+  },
+  setNumberEntryOsdTimeoutMs(timeout: number): void {
+    if (!NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS.includes(timeout)) {
+      throw new RangeError(`Invalid Number Entry OSD timeout: ${String(timeout)}`);
+    }
+    set('number_entry_osd_timeout_ms', timeout);
+  },
+
+  getPlayerOsdTimeoutMs(): number {
+    const timeout = get<unknown>(
+      'player_osd_timeout_ms',
+      CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS,
+    );
+    return typeof timeout === 'number' && PLAYER_OSD_TIMEOUT_MS_OPTIONS.includes(timeout)
+      ? timeout
+      : CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS;
+  },
+  setPlayerOsdTimeoutMs(timeout: number): void {
+    if (!PLAYER_OSD_TIMEOUT_MS_OPTIONS.includes(timeout)) {
+      throw new RangeError(`Invalid player OSD timeout: ${String(timeout)}`);
+    }
+    set('player_osd_timeout_ms', timeout);
   },
 
   getPlaylistRefreshIntervalHours(): number {

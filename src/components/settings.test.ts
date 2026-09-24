@@ -36,6 +36,8 @@ const {
     tzMode: 'device' as TzMode,
     channelCycleMode: 'global' as ChannelCycleMode,
     liveReconnectAttempts: 3,
+    numberEntryOsdTimeoutMs: 1200,
+    playerOsdTimeoutMs: 5000,
     playlistRefreshHours: 6,
     epgRefreshHours: 6,
     xtreamCatalogRefreshHours: 6,
@@ -87,6 +89,8 @@ const {
       getTzMode: vi.fn(() => state.tzMode),
       getChannelCycleMode: vi.fn(() => state.channelCycleMode),
       getLiveReconnectAttempts: vi.fn(() => state.liveReconnectAttempts),
+      getNumberEntryOsdTimeoutMs: vi.fn(() => state.numberEntryOsdTimeoutMs),
+      getPlayerOsdTimeoutMs: vi.fn(() => state.playerOsdTimeoutMs),
       getPlaylistRefreshIntervalHours: vi.fn(() => state.playlistRefreshHours),
       getEpgRefreshIntervalHours: vi.fn(() => state.epgRefreshHours),
       getXtreamCatalogRefreshIntervalHours: vi.fn(
@@ -120,6 +124,12 @@ const {
       setChannelCycleMode: vi.fn((m: ChannelCycleMode) => { state.channelCycleMode = m; }),
       setLiveReconnectAttempts: vi.fn((attempts: number) => {
         state.liveReconnectAttempts = attempts;
+      }),
+      setNumberEntryOsdTimeoutMs: vi.fn((timeout: number) => {
+        state.numberEntryOsdTimeoutMs = timeout;
+      }),
+      setPlayerOsdTimeoutMs: vi.fn((timeout: number) => {
+        state.playerOsdTimeoutMs = timeout;
       }),
       setPlaylistRefreshIntervalHours: vi.fn((hours: number) => {
         state.playlistRefreshHours = hours;
@@ -176,7 +186,9 @@ const {
 });
 
 vi.mock('../services/storage-service', () => ({
+  NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS: [1200, 1800, 2500, 3000, 3500],
   LIVE_RECONNECT_ATTEMPT_OPTIONS: [0, 1, 2, 3, 4, 5],
+  PLAYER_OSD_TIMEOUT_MS_OPTIONS: [3000, 5000, 8000, 10000, 12000],
   REFRESH_INTERVAL_HOUR_OPTIONS: [0, 1, 3, 6, 12, 24],
   XTREAM_CATALOG_REFRESH_HOUR_OPTIONS: [1, 3, 6, 12, 24],
   StorageService: storageMock,
@@ -230,6 +242,8 @@ beforeEach(() => {
   state.overlayStyle = 'dark';
   state.textSize = '100';
   state.liveReconnectAttempts = 3;
+  state.numberEntryOsdTimeoutMs = 1200;
+  state.playerOsdTimeoutMs = 5000;
   state.playlistRefreshHours = 6;
   state.epgRefreshHours = 6;
   state.xtreamCatalogRefreshHours = 6;
@@ -460,7 +474,7 @@ describe('Settings.render', () => {
     const advanced = container.querySelector('#settings-advanced')!;
     expect(advanced.querySelector('.settings-section-title')?.textContent).toBe('Advanced');
     const items = advanced.querySelectorAll('.settings-item');
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(6);
     expect(items[0].querySelector('.settings-item-title')?.textContent)
       .toBe('Animation mode');
     expect(items[0].querySelector('.settings-item-control-row')?.children)
@@ -480,6 +494,22 @@ describe('Settings.render', () => {
       '#live-reconnect-attempts [data-dropdown-value]',
     )).map(option => option.dataset.dropdownValue))
       .toEqual(['0', '1', '2', '3', '4', '5']);
+    expect(items[2].querySelector('.settings-item-title')?.textContent)
+      .toBe('Number Entry OSD timeout');
+    expect(container.querySelector('#number-entry-osd-timeout')?.getAttribute('data-value'))
+      .toBe('1200');
+    expect(Array.from(container.querySelectorAll<HTMLElement>(
+      '#number-entry-osd-timeout [data-dropdown-value]',
+    )).map(option => option.textContent))
+      .toEqual(['1.2 seconds', '1.8 seconds', '2.5 seconds', '3 seconds', '3.5 seconds']);
+    expect(items[3].querySelector('.settings-item-title')?.textContent)
+      .toBe('Player OSD auto-hide delay');
+    expect(container.querySelector('#player-osd-timeout')?.getAttribute('data-value'))
+      .toBe('5000');
+    expect(Array.from(container.querySelectorAll<HTMLElement>(
+      '#player-osd-timeout [data-dropdown-value]',
+    )).map(option => option.textContent))
+      .toEqual(['3 seconds', '5 seconds', '8 seconds', '10 seconds', '12 seconds']);
     expect(container.querySelector('#playlist-refresh-interval')
       ?.getAttribute('data-value')).toBe('6');
     expect(container.querySelector('#epg-refresh-interval')
@@ -506,7 +536,7 @@ describe('Settings.render', () => {
 
     settings.render();
 
-    expect(container.querySelectorAll('#settings-advanced .settings-item')).toHaveLength(5);
+    expect(container.querySelectorAll('#settings-advanced .settings-item')).toHaveLength(7);
     expect(container.querySelector('#xtream-catalog-refresh-interval')
       ?.getAttribute('data-value')).toBe('6');
     expect(Array.from(container.querySelectorAll<HTMLElement>(
@@ -521,6 +551,15 @@ describe('Settings.render', () => {
     click('#save-settings');
     expect(storageMock.setAnimationMode).toHaveBeenCalledWith('full');
     expect(motionMock.applyAnimationMode).toHaveBeenCalledWith('full');
+  });
+
+  it('persists the selected number entry and player OSD timeouts', () => {
+    settings.render();
+    click('#number-entry-osd-timeout [data-dropdown-value="1800"]');
+    click('#player-osd-timeout [data-dropdown-value="8000"]');
+    click('#save-settings');
+    expect(storageMock.setNumberEntryOsdTimeoutMs).toHaveBeenCalledWith(1800);
+    expect(storageMock.setPlayerOsdTimeoutMs).toHaveBeenCalledWith(8000);
   });
 
   // Left moves within a row by measuring peers, and a collapsed control has no

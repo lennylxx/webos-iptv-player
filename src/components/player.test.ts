@@ -757,12 +757,12 @@ describe('Player live playback', () => {
   it('starts the OSD hide timer when startup playback begins', async () => {
     video.pause();
     player.showOSD();
-    vi.advanceTimersByTime(CONFIG.PLAYER.OSD_TIMEOUT);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS);
     expect((container.querySelector('#player-osd') as HTMLElement).style.display).not.toBe('none');
 
     await video.play();
     video.dispatchEvent(new Event('playing'));
-    vi.advanceTimersByTime(CONFIG.PLAYER.OSD_TIMEOUT);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS);
 
     expect((container.querySelector('#player-osd') as HTMLElement).style.display).toBe('none');
   });
@@ -1013,7 +1013,7 @@ describe('Player stall reconnect OSD', () => {
 
     // A real stall reloads only after the OSD has auto-hidden (osdVisible false)
     // — the case the message used to get stuck in.
-    vi.advanceTimersByTime(CONFIG.PLAYER.OSD_TIMEOUT + 100);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS + 100);
 
     (player as unknown as { reloadCurrentStream(): void }).reloadCurrentStream();
     await flush();

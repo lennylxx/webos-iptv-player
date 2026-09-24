@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { CONFIG } from '../config';
+import { StorageService } from '../services/storage-service';
 import type { Action, NumberEvent } from '../types';
 
 // KeyHandler attaches its listeners to `document` and keeps module-level singleton
@@ -29,6 +30,7 @@ describe('KeyHandler', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
+    localStorage.clear();
     vi.useFakeTimers();
     handler = vi.fn();
     KeyHandler.setHandler(handler as (a: Action, e?: NumberEvent) => void);
@@ -123,7 +125,7 @@ describe('KeyHandler', () => {
 
       // Still one tune, after the timeout.
       expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
       expect(handler).toHaveBeenCalledWith('number', { number: 215 });
     });
 
@@ -132,19 +134,28 @@ describe('KeyHandler', () => {
       press(K.NUM_0 + 4);
       press(K.NUM_0 + 2);
       expect(tunes()).toHaveLength(0); // waits for the timeout (only echoes so far)
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
       expect(tunes()).toHaveLength(1);
       expect(handler).toHaveBeenCalledWith('number', { number: 42 });
     });
 
     it('resets the timeout while digits keep coming', () => {
       press(K.NUM_0 + 1);
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT - 1);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS - 1);
       press(K.NUM_0 + 7);
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT - 1);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS - 1);
       expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
       vi.advanceTimersByTime(1);
       expect(handler).toHaveBeenCalledWith('number', { number: 17 });
+    });
+
+    it('uses the configured number entry timeout', () => {
+      StorageService.setNumberEntryOsdTimeoutMs(1800);
+      press(K.NUM_0 + 4);
+      vi.advanceTimersByTime(1799);
+      expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
+      vi.advanceTimersByTime(1);
+      expect(handler).toHaveBeenCalledWith('number', { number: 4 });
     });
 
     it('ignores digits past the width of the channel count', () => {
@@ -158,7 +169,7 @@ describe('KeyHandler', () => {
 
       // And the wait still belongs to the number that was typed.
       expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
       expect(handler).toHaveBeenCalledWith('number', { number: 215 });
     });
 
@@ -166,7 +177,7 @@ describe('KeyHandler', () => {
       KeyHandler.setChannelCount(() => 99);
       press(K.NUM_0 + 4);
       press(K.NUM_0 + 2);
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
       expect(handler).toHaveBeenCalledWith('number', { number: 42 });
       press(K.NUM_0 + 7);
       expect(handler).toHaveBeenCalledWith('number_input', { number: 7, digits: '7' });
@@ -175,7 +186,7 @@ describe('KeyHandler', () => {
     it('falls back to a fixed cap until the channel count is known', () => {
       for (const d of [1, 2, 3, 4]) press(K.NUM_0 + d);
       press(K.NUM_0 + 5);
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
       expect(handler).toHaveBeenCalledWith('number', { number: 1234 });
     });
 
@@ -187,7 +198,7 @@ describe('KeyHandler', () => {
       expect(handler).toHaveBeenCalledWith('up');
 
       // The abandoned digits must not merge into what comes next.
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
       expect(handler).not.toHaveBeenCalledWith('number', expect.anything());
       press(K.NUM_0 + 5);
       expect(handler).toHaveBeenCalledWith('number_input', { number: 5, digits: '5' });
@@ -215,7 +226,7 @@ describe('KeyHandler', () => {
       });
 
       press(K.NUM_0 + 4);
-      vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+      vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
       press(K.RED);
       press(4242); // a code this remote map has no entry for
       const input = document.createElement('input');

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CONFIG } from '../config';
+import { StorageService } from '../services/storage-service';
 
 // The indicator keeps a module-level element, so reset the module per test —
 // otherwise a cleared body leaves it holding a detached node and the
@@ -19,6 +20,7 @@ describe('number entry indicator', () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     document.body.innerHTML = '';
+    localStorage.clear();
     vi.resetModules();
     ({ showNumberEntry, hideNumberEntry } = await import('./number-entry'));
   });
@@ -45,16 +47,27 @@ describe('number entry indicator', () => {
 
   it('hides itself if the flush never arrives', () => {
     showNumberEntry('2');
-    vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT + 500);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS + 500);
     expect(visible()).toBe(false);
   });
 
   it('keeps the safety timeout alive while digits keep coming', () => {
     showNumberEntry('2');
-    vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
     showNumberEntry('21');
-    vi.advanceTimersByTime(CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
     expect(visible()).toBe(true);
+  });
+
+  it('uses the configured timeout for the countdown and safety hide', () => {
+    StorageService.setNumberEntryOsdTimeoutMs(1800);
+    showNumberEntry('2');
+    expect(document.querySelector<HTMLElement>('.number-entry-countdown-fill')
+      ?.style.animationDuration).toBe('1800ms');
+    vi.advanceTimersByTime(2299);
+    expect(visible()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(visible()).toBe(false);
   });
 
   it('renders digits as text, never as markup', () => {

@@ -3,7 +3,9 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel } from '../types';
 import {
+  NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS,
   LIVE_RECONNECT_ATTEMPT_OPTIONS,
+  PLAYER_OSD_TIMEOUT_MS_OPTIONS,
   REFRESH_INTERVAL_HOUR_OPTIONS,
   StorageService,
   XTREAM_CATALOG_REFRESH_HOUR_OPTIONS,
@@ -47,6 +49,29 @@ describe('StorageService', () => {
     StorageService.clearAll();
     expect(StorageService.getLiveReconnectAttempts())
       .toBe(CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS);
+  });
+
+  it('validates and persists OSD timeouts', () => {
+    expect(StorageService.getNumberEntryOsdTimeoutMs())
+      .toBe(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
+    expect(StorageService.getPlayerOsdTimeoutMs())
+      .toBe(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS);
+    for (const timeout of NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS) {
+      StorageService.setNumberEntryOsdTimeoutMs(timeout);
+      expect(StorageService.getNumberEntryOsdTimeoutMs()).toBe(timeout);
+    }
+    for (const timeout of PLAYER_OSD_TIMEOUT_MS_OPTIONS) {
+      StorageService.setPlayerOsdTimeoutMs(timeout);
+      expect(StorageService.getPlayerOsdTimeoutMs()).toBe(timeout);
+    }
+    expect(() => StorageService.setNumberEntryOsdTimeoutMs(1100)).toThrow(RangeError);
+    expect(() => StorageService.setPlayerOsdTimeoutMs(NaN)).toThrow(RangeError);
+    StorageService.set('number_entry_osd_timeout_ms', '1800');
+    StorageService.set('player_osd_timeout_ms', {});
+    expect(StorageService.getNumberEntryOsdTimeoutMs())
+      .toBe(CONFIG.PLAYER.DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS);
+    expect(StorageService.getPlayerOsdTimeoutMs())
+      .toBe(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS);
   });
 
   it('validates and persists playlist and guide refresh intervals', () => {

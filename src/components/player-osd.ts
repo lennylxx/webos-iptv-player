@@ -1,5 +1,5 @@
 import type { CatchupInfo, Channel, Programme } from '../types';
-import { CONFIG } from '../config';
+import { StorageService } from '../services/storage-service';
 import { $, hide, html, raw, type Safe, show } from '../utils/dom';
 import { type DvrState } from '../utils/dvr';
 import { morph } from '../utils/morph';
@@ -134,7 +134,7 @@ export class PlayerOsd {
     this.timer = null;
     // Keep the OSD up while paused (live DVR or catch-up): nothing to fall behind.
     if (this.callbacks.getSnapshot().playback?.paused) return;
-    this.timer = setTimeout(() => this.hide(), CONFIG.PLAYER.OSD_TIMEOUT);
+    this.timer = setTimeout(() => this.hide(), StorageService.getPlayerOsdTimeoutMs());
   }
 
   render(): void {

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG } from '../config';
+import { StorageService } from '../services/storage-service';
 import type { Channel, Programme } from '../types';
 import type { DvrState } from '../utils/dvr';
 import { PlayerOsd, type PlayerOsdOptions, type PlayerOsdSnapshot } from './player-osd';
@@ -66,6 +67,7 @@ describe('PlayerOsd', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    localStorage.clear();
     container = document.createElement('div');
     container.innerHTML = '<div id="player-osd"></div>';
     document.body.appendChild(container);
@@ -95,7 +97,7 @@ describe('PlayerOsd', () => {
     osd.show();
     expect(osd.isVisible()).toBe(true);
     expect(container.querySelector('#player-osd')?.classList.contains('hidden')).toBe(false);
-    vi.advanceTimersByTime(CONFIG.PLAYER.OSD_TIMEOUT);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS);
     expect(osd.isVisible()).toBe(false);
 
     container.dispatchEvent(new MouseEvent('mousemove', {
@@ -108,13 +110,22 @@ describe('PlayerOsd', () => {
 
     state = { ...state, playback: playback(120, 0, true) };
     osd.resetTimer();
-    vi.advanceTimersByTime(CONFIG.PLAYER.OSD_TIMEOUT);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS);
     expect(osd.isVisible()).toBe(true);
 
     osd.clearPointer();
     osd.hide();
     expect(osd.pointerPosition()).toEqual({ x: null, y: null });
     expect(container.querySelector('#player-osd')?.classList.contains('hidden')).toBe(true);
+  });
+
+  it('uses the configured auto-hide timeout', () => {
+    StorageService.setPlayerOsdTimeoutMs(3000);
+    osd.show();
+    vi.advanceTimersByTime(2999);
+    expect(osd.isVisible()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(osd.isVisible()).toBe(false);
   });
 
   it('renders representative Live, catch-up, VOD, and up-next layouts', () => {

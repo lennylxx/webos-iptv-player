@@ -3,7 +3,9 @@ import { $, $$, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SpatialNav } from '../navigation/spatial-nav';
 import {
+  NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS,
   LIVE_RECONNECT_ATTEMPT_OPTIONS,
+  PLAYER_OSD_TIMEOUT_MS_OPTIONS,
   REFRESH_INTERVAL_HOUR_OPTIONS,
   StorageService,
   XTREAM_CATALOG_REFRESH_HOUR_OPTIONS,
@@ -35,7 +37,14 @@ import { showToast } from './toast';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
-import { localeOptions, t, tp, type LocalePreference, type TextMessageKey } from '../i18n';
+import {
+  formatNumber,
+  localeOptions,
+  t,
+  tp,
+  type LocalePreference,
+  type TextMessageKey,
+} from '../i18n';
 import {
   ANIMATION_MODES,
   applyAnimationMode,
@@ -212,6 +221,18 @@ function animationModeOptions(): { value: AnimationMode; label: string }[] {
     value,
     label: t(ANIMATION_MODE_LABELS[value]),
   }));
+}
+
+function timeoutOptions(values: readonly number[]): { value: string; label: string }[] {
+  return values.map(value => {
+    const seconds = value / 1000;
+    return {
+      value: String(value),
+      label: tp('settings.durationSeconds', seconds, {
+        seconds: formatNumber(seconds, { maximumFractionDigits: 1 }),
+      }),
+    };
+  });
 }
 
 type SettingsCategory = 'general' | 'sources' | 'guide' | 'appearance'
@@ -584,6 +605,8 @@ export class Settings {
     const textSize = StorageService.getTextSize();
     const localePreference = StorageService.getLocalePreference();
     const liveReconnectAttempts = StorageService.getLiveReconnectAttempts();
+    const numberEntryOsdTimeoutMs = StorageService.getNumberEntryOsdTimeoutMs();
+    const playerOsdTimeoutMs = StorageService.getPlayerOsdTimeoutMs();
     const animationMode = StorageService.getAnimationMode();
     const playlistRefreshHours = StorageService.getPlaylistRefreshIntervalHours();
     const epgRefreshHours = StorageService.getEpgRefreshIntervalHours();
@@ -877,6 +900,28 @@ export class Settings {
                     )}
                   </div>
                   <div class="settings-item-hint">${t('settings.liveReconnectHint')}</div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-control-row">
+                    <div class="settings-item-title">${t('settings.numberEntryOsdTimeout')}</div>
+                    ${dropdown(
+                      'number-entry-osd-timeout',
+                      timeoutOptions(NUMBER_ENTRY_OSD_TIMEOUT_MS_OPTIONS),
+                      String(numberEntryOsdTimeoutMs),
+                    )}
+                  </div>
+                  <div class="settings-item-hint">${t('settings.numberEntryOsdTimeoutHint')}</div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-control-row">
+                    <div class="settings-item-title">${t('settings.playerOsdTimeout')}</div>
+                    ${dropdown(
+                      'player-osd-timeout',
+                      timeoutOptions(PLAYER_OSD_TIMEOUT_MS_OPTIONS),
+                      String(playerOsdTimeoutMs),
+                    )}
+                  </div>
+                  <div class="settings-item-hint">${t('settings.playerOsdTimeoutHint')}</div>
                 </div>
                 <div class="settings-item">
                   <div class="settings-item-control-row">
@@ -2286,6 +2331,16 @@ export class Settings {
       ($('#live-reconnect-attempts', this.container) as HTMLElement | null)?.dataset.value,
     );
     StorageService.setLiveReconnectAttempts(liveReconnectAttempts);
+
+    const numberEntryOsdTimeoutMs = Number(
+      ($('#number-entry-osd-timeout', this.container) as HTMLElement | null)?.dataset.value,
+    );
+    StorageService.setNumberEntryOsdTimeoutMs(numberEntryOsdTimeoutMs);
+
+    const playerOsdTimeoutMs = Number(
+      ($('#player-osd-timeout', this.container) as HTMLElement | null)?.dataset.value,
+    );
+    StorageService.setPlayerOsdTimeoutMs(playerOsdTimeoutMs);
 
     const animationMode = $('#animation-mode .toggle-option.active', this.container)
       ?.dataset.value as AnimationMode | undefined;

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_LOCALE,
+  formatNumber,
   isLocalePreference,
   localeOptions,
   resolveLocale,
@@ -111,6 +112,36 @@ describe('i18n', () => {
     setLocale('zh-CN');
     expect(tp('settings.refreshHours', 1)).toBe('1 小时');
     expect(tp('settings.refreshHours', 3)).toBe('3 小时');
+  });
+
+  it('formats and pluralizes second durations by locale', () => {
+    const duration = (seconds: number) => tp('settings.durationSeconds', seconds, {
+      seconds: formatNumber(seconds, { maximumFractionDigits: 1 }),
+    });
+
+    setLocale('en');
+    expect(duration(1)).toBe('1 second');
+    expect(duration(1.2)).toBe('1.2 seconds');
+    expect(duration(3)).toBe('3 seconds');
+
+    setLocale('de');
+    expect(duration(1)).toBe('1 Sekunde');
+    expect(duration(1.2)).toBe('1,2 Sekunden');
+
+    setLocale('ru');
+    expect(duration(1)).toBe('1 секунда');
+    expect(duration(2)).toBe('2 секунды');
+    expect(duration(5)).toBe('5 секунд');
+    expect(duration(1.2)).toBe('1,2 секунды');
+
+    setLocale('uk');
+    expect(duration(1)).toBe('1 секунда');
+    expect(duration(2)).toBe('2 секунди');
+    expect(duration(5)).toBe('5 секунд');
+    expect(duration(1.2)).toBe('1,2 секунди');
+
+    setLocale('zh-CN');
+    expect(duration(1.2)).toBe('1.2 秒');
   });
 
   it('translates and interpolates Simplified Chinese messages', () => {

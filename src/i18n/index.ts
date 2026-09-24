@@ -137,6 +137,16 @@ export function getLocale(): SupportedLocale {
   return currentLocale;
 }
 
+export function formatNumber(
+  value: number,
+  options?: Intl.NumberFormatOptions,
+): string {
+  const locale = __ENABLE_PSEUDO_LOCALE__ && pseudoLocaleRequested()
+    ? DEFAULT_LOCALE
+    : currentLocale;
+  return new Intl.NumberFormat(locale, options).format(value);
+}
+
 export function t(key: TextMessageKey, params?: Params): string {
   let message = LOCALES[currentLocale].messages[key] as string;
   if (__ENABLE_PSEUDO_LOCALE__ && pseudoLocaleRequested()) {

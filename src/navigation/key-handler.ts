@@ -1,4 +1,5 @@
 import { CONFIG } from '../config';
+import { StorageService } from '../services/storage-service';
 import { createLogger } from '../utils/logger';
 import type { Action, NumberEvent } from '../types';
 
@@ -102,7 +103,7 @@ function handleNumber(digit: number): void {
   // the TV shows nothing at all while a multi-digit number is being typed.
   const digits = numberBuffer;
   if (activeHandler) activeHandler('number_input', { number: parseInt(digits, 10), digits });
-  numberTimer = setTimeout(flushNumber, CONFIG.PLAYER.CHANNEL_NUMBER_TIMEOUT);
+  numberTimer = setTimeout(flushNumber, StorageService.getNumberEntryOsdTimeoutMs());
 }
 
 export const KeyHandler = {

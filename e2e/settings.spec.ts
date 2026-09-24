@@ -175,7 +175,7 @@ test.describe('Settings navigation', () => {
         };
       }));
 
-    expect(layouts).toHaveLength(3);
+    expect(layouts).toHaveLength(5);
     for (const layout of layouts) {
       expect(layout.dropdownCenter).toBeCloseTo(layout.titleCenter, 0);
       expect(layout.controlGap).toBe(24);
