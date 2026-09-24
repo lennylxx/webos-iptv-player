@@ -1131,7 +1131,8 @@ try {
     await page.goto('http://setup.demo.local/collage');
     const sources = page.frameLocator('iframe[title="Source setup"]');
     const uploads = page.frameLocator('iframe[title="Playlist upload"]');
-    await sources.locator('.configured-item').nth(2).waitFor({ state: 'visible' });
+    await sources.locator('.configured-item').nth(1).waitFor({ state: 'visible' });
+    await sources.locator('.epg-source-row').first().waitFor({ state: 'attached' });
     await uploads.locator('.item').nth(1).waitFor({ state: 'visible' });
     await Promise.all([
       sources.locator('body').evaluate(element => { element.style.background = 'transparent'; }),

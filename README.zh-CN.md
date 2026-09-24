@@ -15,7 +15,7 @@
 
 | 频道列表 | 直播预览 |
 | --- | --- |
-| ![频道列表](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![直播预览](https://github.com/user-attachments/assets/136155e4-5cc7-4f64-97b2-15e84252c666) |
+| ![频道列表](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![直播预览](https://github.com/user-attachments/assets/a10915a7-cdea-4bfc-bb12-f6e3054b4b51) |
 
 | 最近观看 | 节目指南 |
 | --- | --- |
@@ -39,11 +39,11 @@
 
 | 搜索 | 设置 |
 | --- | --- |
-| ![搜索](https://github.com/user-attachments/assets/8677ff38-b32d-44af-991b-ce40a7157e61) | ![设置](https://github.com/user-attachments/assets/0813b5a4-41ce-4a13-b398-8e7bb213de64) |
+| ![搜索](https://github.com/user-attachments/assets/8677ff38-b32d-44af-991b-ce40a7157e61) | ![设置](https://github.com/user-attachments/assets/dbb231fe-defa-480b-948f-9395c8ba0a79) |
 
 | 主题选择器 | 节目提醒 |
 | --- | --- |
-| ![主题选择器](https://github.com/user-attachments/assets/90ecc674-1421-42a5-8c10-248697cce305) | ![节目提醒](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) |
+| ![主题选择器](https://github.com/user-attachments/assets/2e5ed981-c01b-48ab-a681-9a0ecd6431b8) | ![节目提醒](https://github.com/user-attachments/assets/1d9bd762-def1-4e57-82cd-52eb70834b1a) |
 
 <table>
   <tr>
@@ -262,7 +262,7 @@ mpegts.js 和 Shaka 播放相应格式的视频。
 - **播放** — 控制启动时自动播放和直播预览，并选择频道上/下键是在全局频道列表中
   切换，还是限制在当前分组、收藏或播放列表内。
 - **在线字幕** — 选择首选字幕语言，并配置 SubDL、OpenSubtitles 和 Assrt 的在线搜索凭据。
-- **高级设置** — 配置直播重连，以及频道列表、节目指南和 Xtream 内容目录的刷新周期。
+- **高级设置** — 自定义高级界面、播放和后台刷新行为。
 - **数据管理** — 刷新数据、清除缓存或观看记录，以及重置应用。
 - **保存更改**会应用当前设置；播放源发生变化时，还会重新加载播放列表和节目指南。选择**取消**则放弃本次修改。
 

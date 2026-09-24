@@ -15,7 +15,7 @@
 
 | Channel list | Live preview |
 | --- | --- |
-| ![Channel list](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![Live preview](https://github.com/user-attachments/assets/136155e4-5cc7-4f64-97b2-15e84252c666) |
+| ![Channel list](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![Live preview](https://github.com/user-attachments/assets/a10915a7-cdea-4bfc-bb12-f6e3054b4b51) |
 
 | Recently watched | Program guide |
 | --- | --- |
@@ -39,11 +39,11 @@
 
 | Search | Settings |
 | --- | --- |
-| ![Search](https://github.com/user-attachments/assets/8677ff38-b32d-44af-991b-ce40a7157e61) | ![Settings](https://github.com/user-attachments/assets/0813b5a4-41ce-4a13-b398-8e7bb213de64) |
+| ![Search](https://github.com/user-attachments/assets/8677ff38-b32d-44af-991b-ce40a7157e61) | ![Settings](https://github.com/user-attachments/assets/dbb231fe-defa-480b-948f-9395c8ba0a79) |
 
 | Theme picker | Reminder manager |
 | --- | --- |
-| ![Theme picker](https://github.com/user-attachments/assets/90ecc674-1421-42a5-8c10-248697cce305) | ![Reminder manager](https://github.com/user-attachments/assets/f48116a3-9553-4d22-b0b1-ebd09a477a5b) |
+| ![Theme picker](https://github.com/user-attachments/assets/2e5ed981-c01b-48ab-a681-9a0ecd6431b8) | ![Reminder manager](https://github.com/user-attachments/assets/1d9bd762-def1-4e57-82cd-52eb70834b1a) |
 
 <table>
   <tr>
@@ -261,7 +261,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
   Up/Down cycles the global list or stays within the active group, Favorites,
   or playlist.
 - **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.
-- **Advanced** — configure live reconnection and refresh intervals for channel lists, the program guide, and Xtream content catalogs.
+- **Advanced** — customize advanced interface, playback, and background refresh behavior.
 - **Data Management** — refresh data, clear caches or viewing lists, or reset the app.
 - **Save Changes** applies preferences and reloads playlist and guide data when their sources change. **Cancel** discards edits.
 
