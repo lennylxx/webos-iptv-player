@@ -56,7 +56,7 @@
     "stylelint": "^17.15.0",
     "stylelint-no-unsupported-browser-features": "^8.1.2",
     "typescript": "^5.7.0",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.2"
   },
   "dependencies": {
     "assjs": "^0.1.10",
