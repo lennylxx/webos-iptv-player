@@ -235,6 +235,9 @@ performance setting, not a no-animation preference.
 
 ## Words on screen
 
+Load the **`ui-copy`** skill for any new or changed string: it owns the
+glossary-first process, terminology, and translation rules.
+
 - Name things as a viewer understands them ("Channels", "Guide"), not as
   the system is built ("playlist entries", "XMLTV").
 - A button says what happens ("Add reminder", not "OK"), and the action
