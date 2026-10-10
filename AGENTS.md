@@ -14,6 +14,7 @@ Procedural workflows live in `.agents/skills/` (open Agent Skills format;
 | --- | --- |
 | `feature-review` | A feature is implemented and its tests pass — run it unasked. |
 | `commit` | The user asks to commit. |
+| `ui-design` | Building or restyling a view, overlay, or component, or reviewing a UI change. |
 | `legacy-engine` | Adding browser APIs/polyfills, editing CSS layout or `css/legacy-*.css`, writing or debugging E2E tests. |
 | `webos-device` | Installing on a TV, or debugging what only reproduces on device. |
 
