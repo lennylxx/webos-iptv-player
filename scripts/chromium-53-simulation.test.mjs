@@ -1,5 +1,15 @@
+import stylelint from 'stylelint';
 import { describe, expect, it } from 'vitest';
-import { postTargetApis, removeApis, simulateLegacyEngine } from './chromium-53-simulation.mjs';
+import { noMixedLegacySelectorPlugin } from '../stylelint.config.mjs';
+import {
+  isPost53Selector,
+  postTargetApis,
+  postTargetSelectors,
+  removeApis,
+  simulateLegacyEngine,
+  splitSelectorList,
+  unclassifiedSelectorFeatures,
+} from './chromium-53-simulation.mjs';
 
 const { globals, members, cssProperties } = postTargetApis();
 const hasMember = (owner, member) => members.some(([o, m]) => o === owner && m === member);
@@ -147,5 +157,116 @@ describe('simulateLegacyEngine', () => {
     );
     expect(out.indexOf('.p > * + *')).toBeGreaterThan(out.indexOf('margin-left:auto'));
     expect(out.indexOf('.p > * + *')).toBeLessThan(out.indexOf('.z'));
+  });
+});
+
+// The stylelint rule in stylelint.config.mjs enforces statically what the
+// simulation above models: a post-53 selector drops its whole rule.
+// Selectors Chromium 53 cannot parse: post-53 pseudo-classes and elements
+// (Chrome 54 through 119), never-shipped ones, any letter case, and new
+// grammar inside selectors it otherwise supports.
+const POST_53_EXAMPLES = [
+  '.x:focus-within',
+  'input::placeholder',
+  ':is(.a) .b',
+  '.a:where(.b)',
+  '.a:has(.b)',
+  'x-el:defined',
+  'input::file-selector-button',
+  'dialog:modal',
+  '.field:user-invalid',
+  '.x:has-slotted',
+  '.x:FOCUS-WITHIN',
+  'input::PlaceHolder',
+  ':IS(.a) .b',
+  '.a:not(.b, .c)',
+  'li:nth-child(2 of .item)',
+  'li:NTH-LAST-CHILD(odd OF .item)',
+  'p:lang(l1, l2)',
+  'p:lang(*-x)',
+  '[data-a="b" s]',
+];
+
+describe('isPost53Selector', () => {
+  it('matches every post-53 example and the simulation drops its rule', () => {
+    for (const modern of POST_53_EXAMPLES) {
+      expect(isPost53Selector(modern), modern).toBe(true);
+      expect(simulateLegacyEngine(`.legacy, ${modern} { color: red; }`)).not.toContain('color');
+    }
+  });
+
+  it('leaves selectors Chromium 53 supports alone', () => {
+    for (const legacy of [
+      '.a:focus',
+      'a:hover',
+      '.a:not(.b)',
+      'li:nth-child(2n)',
+      'li:nth-child(2n + 1)',
+      'p::before',
+      'p::selection',
+      'input:placeholder-shown',
+      'input:read-only',
+      ':-webkit-any(.a)',
+      '::-webkit-scrollbar',
+      'p:lang(l1)',
+      '[data-a="b" i]',
+      '[data-a="x s"]',
+      '.a:not([data-x="1,2"])',
+    ]) {
+      expect(isPost53Selector(legacy), legacy).toBe(false);
+    }
+  });
+
+  it('classifies every selector feature BCD says the target lacks', () => {
+    expect(unclassifiedSelectorFeatures()).toEqual([]);
+    expect(postTargetSelectors()).toEqual(expect.arrayContaining([':has-slotted', ':target-before']));
+  });
+});
+
+describe('iptv/no-mixed-legacy-selector', () => {
+  const lint = async (code) => {
+    const { results } = await stylelint.lint({
+      code,
+      config: {
+        plugins: [noMixedLegacySelectorPlugin],
+        rules: { 'iptv/no-mixed-legacy-selector': true },
+      },
+    });
+    return results[0].warnings.map((w) => w.text);
+  };
+
+  it('rejects a modern selector sharing a rule with a legacy one', async () => {
+    const warnings = await lint('.x.focused, .x:focus-within { color: red; }');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('.x:focus-within');
+  });
+
+  it('flags each post-53 selector form', async () => {
+    for (const modern of POST_53_EXAMPLES) {
+      expect(await lint(`.legacy, ${modern} { color: red; }`)).toHaveLength(1);
+      expect(await lint(`${modern}, ${modern} .y { color: red; }`)).toEqual([]);
+    }
+  });
+
+  it('allows modern-only and legacy-only rules', async () => {
+    expect(await lint('.x:focus-within, .y:focus-within { color: red; }')).toEqual([]);
+    expect(await lint('.x.focused, .y:focus { color: red; }')).toEqual([]);
+  });
+
+  it('checks rules nested in at-rules', async () => {
+    expect(await lint('@supports not (display: grid) { .a, .b:focus-within { color: red; } }')).toHaveLength(1);
+  });
+
+  it('splits selector lists on top-level commas only', () => {
+    expect(splitSelectorList('.a:not(.b, .c), [data-x="1,2"], .d')).toEqual([
+      '.a:not(.b, .c)',
+      '[data-x="1,2"]',
+      '.d',
+    ]);
+  });
+
+  it('does not split on escaped commas or parentheses', async () => {
+    expect(splitSelectorList('.a\\,b, .c\\(d, .e')).toEqual(['.a\\,b', '.c\\(d', '.e']);
+    expect(await lint('.old\\,name:focus-within, .other:focus-within { color: red; }')).toEqual([]);
   });
 });

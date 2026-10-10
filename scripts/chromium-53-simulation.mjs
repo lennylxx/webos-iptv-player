@@ -183,9 +183,172 @@ export function removeApis({ globals, members, cssProperties }) {
 // layout or JS behavior that differs at equal feature support — so the emulator
 // sweep remains the check for engine-level differences.
 
-// Chromium 53 predates these; the parser treats each as a syntax error.
-const POST_53_SELECTOR = /:focus-within\b|::placeholder\b|:(?:is|where|has)\(/; // Chrome 60 / 57 / 88 / 88 / 105
-// Two of the post-53 features stylelint.config.js accepts are deliberately
+// Selectors Chromium 53 cannot parse, derived from BCD's `css.selectors` so the
+// list never needs hand-maintenance. Classification fails closed:
+// `unclassifiedSelectorFeatures()` names any feature the target lacks that is
+// neither detected below nor excluded with a reason, and a test keeps it empty.
+
+// Unlike an API, a selector Chromium has never shipped (`false`) is just as
+// unparsable as one added later.
+const selectorUnavailable = (compat) => {
+  const support = compat?.support?.chrome;
+  if (!support) return false;
+  for (const range of Array.isArray(support) ? support : [support]) {
+    if (range.flags || range.prefix || range.alternative_name) continue;
+    if (range.version_added === true || range.version_added === null) return false;
+    const added = parseVersion(range.version_added);
+    const removed = parseVersion(range.version_removed) ?? Infinity;
+    if (added !== null && added <= TARGET_CHROME && TARGET_CHROME < removed) return false;
+  }
+  return true;
+};
+
+// BCD entries whose description carries no `<code>` syntax.
+const SELECTOR_SYNTAX = {
+  'interest-source': ':interest-source',
+  'interest-target': ':interest-target',
+  'target-after': ':target-after',
+  'target-before': ':target-before',
+};
+const EXCLUDED_SELECTORS = {
+  nesting: '`&` belongs to nested rules, which Chromium 53 cannot parse at all',
+};
+
+// New grammar inside a selector Chromium 53 otherwise supports. Each detector
+// receives one selector from a list.
+const argsOf = (selector, name) => {
+  const args = [];
+  const lower = selector.toLowerCase();
+  const open = `:${name}(`;
+  for (let at = lower.indexOf(open); at !== -1; at = lower.indexOf(open, at + 1)) {
+    if (lower[at - 1] === ':') continue;
+    const start = at + open.length;
+    let depth = 1;
+    let quote = '';
+    let i = start;
+    for (; i < selector.length && depth > 0; i++) {
+      const ch = selector[i];
+      if (ch === '\\') i++;
+      else if (quote) {
+        if (ch === quote) quote = '';
+      } else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+    }
+    args.push(selector.slice(start, i - 1));
+  }
+  return args;
+};
+const STRINGS = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g;
+const attributesOf = (selector) => selector.replace(STRINGS, '""').match(/\[[^\]]*\]/g) ?? [];
+
+const GRAMMAR_SUBFEATURES = {
+  'not.selector_list': (s) => argsOf(s, 'not').some((a) => splitSelectorList(a).length > 1),
+  'nth-child.of_syntax': (s) => argsOf(s, 'nth-child').some((a) => /\sof\s/i.test(a)),
+  'nth-last-child.of_syntax': (s) => argsOf(s, 'nth-last-child').some((a) => /\sof\s/i.test(a)),
+  'lang.argument_list': (s) => argsOf(s, 'lang').some((a) => splitSelectorList(a).length > 1),
+  'lang.wildcards': (s) => argsOf(s, 'lang').some((a) => a.includes('*')),
+  'attribute.case_sensitive_modifier': (s) => attributesOf(s).some((a) => /\ss\s*\]$/i.test(a)),
+};
+// Changes to matching or styling, not grammar: the rule still parses.
+const BEHAVIOR = 'matching or styling behaviour; the rule still parses';
+const NON_GRAMMAR_SUBFEATURES = {
+  'after.nested_marker': '`::marker` is itself post-53 and already detected',
+  'before.nested_marker': '`::marker` is itself post-53 and already detected',
+  'active.top-layer_ancestor_matching_boundary': BEHAVIOR,
+  'hover.top-layer_ancestor_matching_boundary': BEHAVIOR,
+  'backdrop.fullscreen': BEHAVIOR,
+  'backdrop.inherit_from_originating_element': BEHAVIOR,
+  'backdrop.popover': BEHAVIOR,
+  'empty.matches_whitespace': BEHAVIOR,
+  'first-child.no_parent_required': BEHAVIOR,
+  'last-child.no_parent_required': BEHAVIOR,
+  'nth-child.no_parent_required': BEHAVIOR,
+  'nth-last-child.no_parent_required': BEHAVIOR,
+  'only-child.no_parent_required': BEHAVIOR,
+  'first-letter.dutch_ij_digraph': BEHAVIOR,
+  'first-letter.svg_text_element': BEHAVIOR,
+  'first-line.svg_text_element': BEHAVIOR,
+  'selection.text-decoration': BEHAVIOR,
+};
+
+const selectorFeatures = () => {
+  const tops = [];
+  const subs = [];
+  for (const [key, feature] of Object.entries(bcd.css.selectors)) {
+    if (selectorUnavailable(feature.__compat)) {
+      tops.push([key, feature.__compat]);
+      continue;
+    }
+    for (const [subKey, sub] of Object.entries(feature)) {
+      if (subKey !== '__compat' && selectorUnavailable(sub.__compat)) subs.push(`${key}.${subKey}`);
+    }
+  }
+  return { tops, subs };
+};
+
+export const postTargetSelectors = () => {
+  const selectors = [];
+  for (const [key, compat] of selectorFeatures().tops) {
+    const match = /<code>(::?-?[a-z][\w-]*)(\(\))?<\/code>/i.exec(compat.description ?? '');
+    const syntax = match ? match[1] + (match[2] ?? '') : SELECTOR_SYNTAX[key];
+    if (syntax) selectors.push(syntax.toLowerCase());
+  }
+  return selectors.sort();
+};
+
+export const unclassifiedSelectorFeatures = () => {
+  const { tops, subs } = selectorFeatures();
+  return [
+    ...tops
+      .filter(([, compat]) => !/<code>::?-?[a-z]/i.test(compat.description ?? ''))
+      .map(([key]) => key)
+      .filter((key) => !SELECTOR_SYNTAX[key] && !EXCLUDED_SELECTORS[key]),
+    ...subs.filter(
+      (key) => !GRAMMAR_SUBFEATURES[key] && !NON_GRAMMAR_SUBFEATURES[key],
+    ),
+  ];
+};
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const POST_53_PSEUDO = new RegExp(
+  postTargetSelectors()
+    .map((s) => (s.endsWith('()') ? escapeRegExp(s.slice(0, -1)) : `${escapeRegExp(s)}(?![\\w-])`))
+    .join('|'),
+  'i',
+);
+const grammarDetectors = Object.values(GRAMMAR_SUBFEATURES);
+
+// Whether Chromium 53 fails to parse this single selector (one entry of a
+// selector list).
+export const isPost53Selector = (selector) =>
+  POST_53_PSEUDO.test(selector) || grammarDetectors.some((detect) => detect(selector));
+
+// Splits a selector list on its top-level commas, honouring parentheses,
+// brackets, strings, and escapes.
+export function splitSelectorList(selector) {
+  const parts = [];
+  let depth = 0;
+  let quote = '';
+  let start = 0;
+  for (let i = 0; i < selector.length; i++) {
+    const ch = selector[i];
+    if (ch === '\\') i++;
+    else if (quote) {
+      if (ch === quote) quote = '';
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === '(' || ch === '[') depth++;
+    else if (ch === ')' || ch === ']') depth--;
+    else if (ch === ',' && depth === 0) {
+      parts.push(selector.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(selector.slice(start).trim());
+  return parts.filter(Boolean);
+}
+// Two of the post-53 features stylelint.config.mjs accepts are deliberately
 // left in place, because removing them models the engine *less* faithfully:
 // - `overflow-anchor: none` — Chromium 53 has no scroll anchoring to turn off,
 //   so dropping the declaration would enable, on the modern engine only, a
@@ -227,7 +390,7 @@ export function simulateLegacyEngine(css) {
   root.walkDecls(/^(gap|row-gap|column-gap)$/, (decl) => decl.remove());
 
   root.walkRules((rule) => {
-    if (POST_53_SELECTOR.test(rule.selector)) rule.remove();
+    if (splitSelectorList(rule.selector).some(isPost53Selector)) rule.remove();
   });
 
   root.walkDecls((decl) => {
