@@ -29,6 +29,7 @@ import { StallWatchdog, type StallProbe, type StallRecovery } from '../utils/sta
 import { StartupWatchdog, type StartupFailure, type StartupProbe } from '../utils/startup-watchdog';
 import { resolutionBadge, hdrLabel, frameRateLabel, pickVariant, codecName, audioSummary, subtitleSummary, type StreamVariant, type MediaInfo } from '../utils/stream-info';
 import { extFromUrl, diagnosticStreamUrl, streamUrlMime } from '../utils/url';
+import { fillCatchupTemplate } from '../utils/catchup-url';
 import { isWebOS } from '../utils/platform';
 import { probeMedia } from '../services/media-probe';
 import { ChannelHealthService } from '../services/channel-health';
@@ -279,7 +280,7 @@ export class Player {
       log.info('loadedmetadata', this.videoLabel(el), el.videoWidth + 'x' + el.videoHeight,
         this.mediaState(el), '| pendingResume:', this.pendingResumeSecs);
       if ((this.vod || this.catchupInfo) && this.pendingResumeSecs > 0 && Number.isFinite(el.duration) && el.duration > 0) {
-        const target = Math.min(this.pendingResumeSecs, el.duration - 1);
+        const target = Math.min(this.pendingResumeSecs, this.playbackDuration(el) - 1);
         log.info('resume seek', this.videoLabel(el), '| requested:', this.pendingResumeSecs,
           '| target:', target, '| duration:', el.duration);
         el.currentTime = target;
@@ -347,6 +348,10 @@ export class Player {
           update('playing');
           this.osd.render();
         }
+      }
+      if (this.playbackActive && this.pastShiftProgrammeEnd(el)) {
+        this.onEnded();
+        return;
       }
       this.reconcileLiveDvrPosition(el);
       this.reconcilePendingSeek(el);
@@ -523,12 +528,31 @@ export class Player {
             channel.catchupTimeOffsetMinutes,
           ));
       }
-      return source
-        .replace('{channel-id}', encodeURIComponent(channel.id || channel.name))
-        .replace('{utc}', String(catchup.start))
-        .replace('{utcend}', String(catchup.end));
+      return fillCatchupTemplate(source, {
+        start: catchup.start,
+        end: catchup.end,
+        now: Math.floor(Date.now() / 1000),
+      }).replace(/\{channel-id\}/g, encodeURIComponent(channel.id || channel.name));
     }
     return channel.url;
+  }
+
+  /** The media duration, capped to the programme for shift catch-up: its
+   *  playlist runs on past the programme end (to now, or a server window). */
+  private playbackDuration(v: HTMLVideoElement): number {
+    const info = this.catchupInfo;
+    if (info && this.currentChannel?.catchup === 'shift' && Number.isFinite(v.duration)) {
+      const programme = info.end - info.start;
+      if (programme > 0) return Math.min(v.duration, programme);
+    }
+    return v.duration;
+  }
+
+  private pastShiftProgrammeEnd(v: HTMLVideoElement): boolean {
+    const info = this.catchupInfo;
+    if (!info || this.currentChannel?.catchup !== 'shift' || v.seeking) return false;
+    const programme = info.end - info.start;
+    return programme > 0 && v.duration > programme && v.currentTime >= programme;
   }
 
   private startPlaybackGeneration(): void {
@@ -717,7 +741,7 @@ export class Player {
     const progStartMs = info.start * 1000;
     const progEndMs = info.end * 1000;
     const epgDur = info.end - info.start; // seconds, as fallback when media duration unknown
-    const dur = el && Number.isFinite(el.duration) && el.duration > 0 ? el.duration : epgDur;
+    const dur = el && Number.isFinite(el.duration) && el.duration > 0 ? this.playbackDuration(el) : epgDur;
     const isCompleted = (opts?.completed ?? false) || (dur > 0 && pos >= dur - CONFIG.CATCHUP.FINISH_PAD);
     // Avoid writing a sub-threshold position that would delete a valid stored entry.
     if (!isCompleted && pos < CONFIG.CATCHUP.RESUME_MIN_SECS) return;
@@ -812,6 +836,11 @@ export class Player {
   // would reset the watchdog's reload budget and prevent escalation.
   private reloadCurrentStream(): void {
     if (!this.currentChannel) return;
+    const v = this.videoEl;
+    if (this.catchupInfo && v) {
+      const position = this.pendingSeekTarget ?? v.currentTime;
+      if (position > 0) this.pendingResumeSecs = Math.max(this.pendingResumeSecs, position);
+    }
     this.osd.updateMessage(t('player.reconnecting'));
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
@@ -1202,7 +1231,7 @@ export class Player {
     const f = Math.max(0, Math.min(1, fraction));
     const win = this.liveDvrWindow();
     if (win) this.seekTo(win.start + f * win.length);
-    else if (Number.isFinite(v.duration)) this.seekTo(f * v.duration);
+    else if (Number.isFinite(v.duration)) this.seekTo(f * this.playbackDuration(v));
   }
 
   private seekTo(time: number, showControls = true): void {
@@ -1217,7 +1246,7 @@ export class Player {
       const oldest = this.oldestDvrTarget(win);
       this.pendingSeekTarget = time >= liveEdge ? liveEdge : Math.max(oldest, time);
     } else if (Number.isFinite(v.duration) && v.duration > 0) {
-      this.pendingSeekTarget = Math.max(0, Math.min(v.duration, time));
+      this.pendingSeekTarget = Math.max(0, Math.min(this.playbackDuration(v), time));
     } else {
       return;
     }
@@ -1398,7 +1427,7 @@ export class Player {
     return {
       playback: video ? {
         position,
-        duration: video.duration,
+        duration: this.playbackDuration(video),
         paused: video.paused,
       } : null,
       channel,

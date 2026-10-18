@@ -10,6 +10,7 @@ import {
   xtreamCredentialsFromLiveUrl,
 } from '../utils/xtream-url';
 import { isMpdText } from '../utils/url';
+import { catchupTemplate, normalizeCatchupMode } from '../utils/catchup-url';
 
 export interface M3UParseOptions {
   maxChannels?: number;
@@ -25,6 +26,15 @@ type PendingDirectiveKind =
   | 'vlc-option'
   | 'kodi-property'
   | 'http-headers';
+
+/** Catch-up defaults an `#EXTM3U` header declares for every channel. */
+interface HeaderCatchup {
+  mode: string;
+  source: string;
+  days: number;
+}
+
+const NO_HEADER_CATCHUP: HeaderCatchup = { mode: '', source: '', days: 0 };
 
 interface PendingChannelDirective {
   kind: PendingDirectiveKind;
@@ -50,6 +60,7 @@ export function parseM3U(
 
 export class M3UStreamParser {
   private readonly headerAttributes: Record<string, string> = {};
+  private headerCatchup: HeaderCatchup = NO_HEADER_CATCHUP;
   private readonly channels: Channel[] = [];
   private readonly groupSet = new Set<string>();
   private readonly groupPool = new Map<string, string>();
@@ -285,7 +296,7 @@ export class M3UStreamParser {
           if (this.pendingExtInfBody !== null) this.clearPendingChannel();
           this.pendingExtInfBody = body;
         } else {
-          this.current = parseExtInf(body);
+          this.current = parseExtInf(body, this.headerCatchup);
         }
         break;
       case '#EXTGRP':
@@ -335,6 +346,7 @@ export class M3UStreamParser {
     const attrs = scanAttributes(body, 0).values;
     Object.assign(this.headerAttributes, attrs);
     this.epgUrls = collectEpgUrls(this.headerAttributes);
+    this.headerCatchup = headerCatchup(this.headerAttributes);
     const maxConn = parseInt(attrs['max-conn'] || '', 10);
     if (maxConn > 0) this.maxConnections = maxConn;
   }
@@ -363,7 +375,7 @@ export class M3UStreamParser {
     }
     if (!this.current) this.current = emptyChannel(nameFromUrl(line));
     this.current.url = line;
-    if (this.current.catchup.toLowerCase() === 'xc' && !this.current.catchupSource) {
+    if (this.current.catchup === 'xc' && !this.current.catchupSource) {
       const inferred = xtreamCredentialsFromLiveUrl(line);
       if (inferred) {
         this.current.catchupSource = xtreamCatchupSource(
@@ -374,6 +386,12 @@ export class M3UStreamParser {
         this.current.catchup = 'xtream';
         this.current.catchupStreamId = inferred.streamId;
       }
+    } else {
+      this.current.catchupSource = catchupTemplate(
+        this.current.catchup,
+        line,
+        this.current.catchupSource,
+      );
     }
     const channel = this.current;
     this.current = null;
@@ -430,7 +448,7 @@ export class M3UStreamParser {
   }
 
   private materializePendingChannel(): Channel {
-    const channel = parseExtInf(this.pendingExtInfBody!);
+    const channel = parseExtInf(this.pendingExtInfBody!, this.headerCatchup);
     if (this.pendingDirectiveKind !== null) {
       this.applyPendingDirective(
         channel,
@@ -699,7 +717,16 @@ function result(
   };
 }
 
-function parseExtInf(body: string): Channel {
+function headerCatchup(attrs: Record<string, string>): HeaderCatchup {
+  const seconds = parseInt(attrs['catchup-time'] || '', 10) || 0;
+  return {
+    mode: normalizeCatchupMode(attrs.catchup || attrs['catchup-type'] || ''),
+    source: attrs['catchup-source'] || '',
+    days: parseInt(attrs['catchup-days'] || '', 10) || Math.ceil(Math.max(0, seconds) / 86400),
+  };
+}
+
+function parseExtInf(body: string, header: HeaderCatchup = NO_HEADER_CATCHUP): Channel {
   let index = 0;
   while (index < body.length && isWhitespace(body.charCodeAt(index))) index++;
   if (body.charCodeAt(index) === 43 || body.charCodeAt(index) === 45) index++;
@@ -718,12 +745,7 @@ function parseExtInf(body: string): Channel {
   );
   channel.id = attrs['tvg-id'] || '';
   channel.logo = attrs['tvg-logo'] || attrs.logo || '';
-  channel.catchup = attrs.catchup || attrs['catchup-type'] || '';
-  channel.catchupSource = attrs['catchup-source'] || '';
-  channel.catchupDays = parseInt(
-    attrs['catchup-days'] || attrs['tvg-rec'] || '0',
-    10,
-  ) || 0;
+  applyCatchupAttributes(channel, attrs, header);
   applyGroups(channel, attrs['group-title'] || UNCATEGORIZED_GROUP, false);
 
   const channelNumberRaw = attrs['tvg-chno']
@@ -733,7 +755,7 @@ function parseExtInf(body: string): Channel {
     const channelNumber = parseInt(channelNumberRaw, 10);
     if (Number.isFinite(channelNumber)) channel.channelNumber = channelNumber;
   }
-  const tvgShiftRaw = attrs['tvg-shift'] || attrs.timeshift;
+  const tvgShiftRaw = attrs['tvg-shift'];
   if (tvgShiftRaw) {
     const tvgShift = parseFloat(tvgShiftRaw);
     if (Number.isFinite(tvgShift)) channel.tvgShift = tvgShift;
@@ -741,6 +763,24 @@ function parseExtInf(body: string): Channel {
   if (attrs.radio === 'true' || attrs.radio === '1') channel.radio = true;
   preserveUnknownAttributes(channel, attrs);
   return channel;
+}
+
+/* Mode, source and days follow Kodi's pvr.iptvsimple: the entry's own tags win
+ * over the header's. SIPTV's `timeshift="<days>"` (or `tvg-rec`) predates the
+ * catch-up tags and implies shift mode when nothing else names one. */
+function applyCatchupAttributes(
+  channel: Channel,
+  attrs: Record<string, string>,
+  header: HeaderCatchup,
+): void {
+  const ownMode = normalizeCatchupMode(attrs.catchup || attrs['catchup-type'] || '');
+  const siptvDays = parseInt(attrs.timeshift || '', 10) || parseInt(attrs['tvg-rec'] || '', 10) || 0;
+  channel.catchup = ownMode || header.mode || (siptvDays > 0 ? 'shift' : '');
+  channel.catchupSource = attrs['catchup-source']
+    || (channel.catchup === header.mode ? header.source : '');
+  channel.catchupDays = parseInt(attrs['catchup-days'] || '', 10)
+    || siptvDays
+    || header.days;
 }
 
 interface ScannedAttributes {

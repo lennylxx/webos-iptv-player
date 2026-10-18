@@ -874,6 +874,25 @@ https://host/token/abc?token=new&x=1`;
     });
   });
 
+  it('prefers the account archive over a shift source derived from tvg-rec', async () => {
+    const withTvgRec = XT.replace('tvg-id="a"', 'tvg-id="a" tvg-rec="2"');
+    fetchTextMock.mockImplementation((url: string) => {
+      if (url.includes('action=get_live_streams')) {
+        return Promise.resolve(JSON.stringify([
+          { stream_id: 101, tv_archive: 1, tv_archive_duration: 7 },
+        ]));
+      }
+      if (url.includes('player_api.php')) return Promise.resolve('{}');
+      return Promise.resolve(withTvgRec);
+    });
+    const channels = await PlaylistService.refresh();
+    expect(channels[0]).toMatchObject({
+      catchup: 'xtream',
+      catchupDays: 7,
+      catchupSource: 'http://host:8080/timeshift/u1/p1/{duration}/{start}/101.ts',
+    });
+  });
+
   it('keeps one tab for the account even when its feed is unreachable', async () => {
     fetchTextMock.mockRejectedValue(new Error('down'));
     await PlaylistService.refresh();

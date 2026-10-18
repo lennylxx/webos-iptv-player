@@ -38,6 +38,7 @@ import {
 } from './xtream-client';
 import { getCachedPlaylist, playlistCacheToken, scheduleCachedPlaylist } from './idb-cache';
 import { isSourceEnabled } from '../utils/playlist';
+import { isDerivedShiftSource } from '../utils/catchup-url';
 import {
   filterLiveStreams,
   liveCategoryCounts,
@@ -677,7 +678,8 @@ class PlaylistServiceImpl {
       }
       channel.catchupStreamId = streamId;
       channel.catchupAccountId = accountId;
-      if (!channel.catchupSource) {
+      // The account's archive API beats a template derived from SIPTV tags.
+      if (!channel.catchupSource || isDerivedShiftSource(channel)) {
         channel.catchup = 'xtream';
         channel.catchupSource = xtreamCatchupSource(credentials, streamId, output);
         channel.catchupDays = stream.archiveDurationDays;

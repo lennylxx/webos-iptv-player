@@ -24,7 +24,7 @@ export interface Channel {
   httpHeaders?: Record<string, string>;
   /** Optional logical channel number declared by the source. */
   channelNumber?: number;
-  /** EPG shift in hours declared by tvg-shift/timeshift. */
+  /** EPG shift in hours declared by tvg-shift. */
   tvgShift?: number;
   /** Source metadata explicitly identifies this entry as radio. */
   radio?: boolean;

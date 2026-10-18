@@ -14,6 +14,7 @@ vi.mock('./xtream-client', () => ({
 }));
 
 import { XtreamArchiveService } from './xtream-archive';
+import { parseM3U } from '../parsers/m3u-parser';
 
 const START = 1709978400;
 const channel = (over: Partial<Channel> = {}): Channel => ({
@@ -115,6 +116,20 @@ describe('XtreamArchiveService', () => {
   it('keeps generic M3U catch-up independent of the Xtream endpoint', () => {
     const ch = channel({ catchup: 'default', catchupAccountId: undefined, catchupStreamId: undefined });
     expect(XtreamArchiveService.isAvailable(ch, START * 1000, START * 1000 + 1000)).toBe(true);
+  });
+
+  it('offers catch-up for SIPTV timeshift channels within their days', () => {
+    const [archived, liveOnly] = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:0 timeshift="3",Alpha',
+      'http://host/ch1/mono.m3u8',
+      '#EXTINF:0 timeshift="0",Bravo',
+      'http://host/ch2/mono.m3u8',
+    ].join('\n')).channels;
+    const dayAgo = START * 1000 + 86400000;
+    expect(XtreamArchiveService.isAvailable(archived, START * 1000, dayAgo)).toBe(true);
+    expect(XtreamArchiveService.isAvailable(archived, START * 1000, START * 1000 + 4 * 86400000)).toBe(false);
+    expect(XtreamArchiveService.isAvailable(liveOnly, START * 1000, dayAgo)).toBe(false);
   });
 
   it('rejects programs older than the advertised retention window', () => {

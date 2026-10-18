@@ -88,6 +88,108 @@ describe('parseM3U', () => {
     expect(channel.catchupSources).toBeUndefined();
   });
 
+  it('reads SIPTV timeshift as catch-up days in shift mode', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:0 tvg-id="ch1" timeshift="7",Alpha',
+      'http://host/ch1/mono.m3u8?k=v',
+      '#EXTINF:0 tvg-id="ch2" timeshift="0",Bravo',
+      'http://host/ch2/mono.m3u8',
+    ].join('\n');
+    const [alpha, bravo] = parseM3U(m3u).channels;
+    expect(alpha).toMatchObject({
+      catchup: 'shift',
+      catchupDays: 7,
+      catchupSource: 'http://host/ch1/mono.m3u8?k=v&utc={utc}&lutc={lutc}',
+    });
+    expect(alpha.tvgShift).toBeUndefined();
+    expect(bravo).toMatchObject({ catchup: '', catchupDays: 0, catchupSource: '' });
+  });
+
+  it('reads tvg-rec like SIPTV timeshift', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:0 tvg-rec="3",Alpha',
+      'http://host/ch1/index.m3u8',
+    ].join('\n');
+    expect(parseM3U(m3u).channels[0]).toMatchObject({
+      catchup: 'shift',
+      catchupDays: 3,
+      catchupSource: 'http://host/ch1/index.m3u8?utc={utc}&lutc={lutc}',
+    });
+  });
+
+  it('keeps an explicit mode and catchup-days over SIPTV timeshift', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:0 catchup="default" catchup-days="2" timeshift="7" '
+        + 'catchup-source="http://host/c/{utc}",Alpha',
+      'http://host/ch1/mono.m3u8',
+    ].join('\n');
+    expect(parseM3U(m3u).channels[0]).toMatchObject({
+      catchup: 'default',
+      catchupDays: 2,
+      catchupSource: 'http://host/c/{utc}',
+    });
+  });
+
+  it('builds sources for append, shift and flussonic modes', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:0 catchup="append" catchup-source="?cutv={Y}-{m}-{d}",Alpha',
+      'http://host/a.m3u8?k=v',
+      '#EXTINF:0 catchup="shift" catchup-days="1",Bravo',
+      'http://host/b.m3u8',
+      '#EXTINF:0 catchup="fs",Charlie',
+      'http://host/ch3/mono.m3u8?k=v',
+      '#EXTINF:0 catchup="flussonic",Delta',
+      'http://host/ch4/mpegts',
+    ].join('\n');
+    const channels = parseM3U(m3u).channels;
+    expect(channels.map(ch => [ch.catchup, ch.catchupSource])).toEqual([
+      ['append', 'http://host/a.m3u8?k=v&cutv={Y}-{m}-{d}'],
+      ['shift', 'http://host/b.m3u8?utc={utc}&lutc={lutc}'],
+      ['flussonic', 'http://host/ch3/mono-{utc}-{duration}.m3u8?k=v'],
+      ['flussonic', 'http://host/ch4/archive-{utc}-{duration}.ts'],
+    ]);
+  });
+
+  it('applies header catch-up defaults to entries without their own', () => {
+    const m3u = [
+      '#EXTM3U catchup-type="flussonic" catchup-time="604800"',
+      '#EXTINF:0 tvg-id="ch1",Alpha',
+      'http://host/ch1/mono.m3u8?k=v',
+      '#EXTINF:0 tvg-id="ch2" catchup="shift" catchup-days="3",Bravo',
+      'http://host/ch2/mono.m3u8',
+    ].join('\n');
+    for (const options of [{}, { streamLocationPrefilter: () => true }]) {
+      const [alpha, bravo] = parseM3U(m3u, '', options).channels;
+      expect(alpha).toMatchObject({
+        catchup: 'flussonic',
+        catchupDays: 7,
+        catchupSource: 'http://host/ch1/mono-{utc}-{duration}.m3u8?k=v',
+      });
+      expect(bravo).toMatchObject({
+        catchup: 'shift',
+        catchupDays: 3,
+        catchupSource: 'http://host/ch2/mono.m3u8?utc={utc}&lutc={lutc}',
+      });
+    }
+  });
+
+  it('inherits a header catchup-source only for the header mode', () => {
+    const m3u = [
+      '#EXTM3U catchup="default" catchup-source="http://host/c/{utc}" catchup-days="5"',
+      '#EXTINF:0,Alpha',
+      'http://host/a.m3u8',
+      '#EXTINF:0 catchup="shift",Bravo',
+      'http://host/b.m3u8',
+    ].join('\n');
+    const [alpha, bravo] = parseM3U(m3u).channels;
+    expect(alpha).toMatchObject({ catchup: 'default', catchupDays: 5, catchupSource: 'http://host/c/{utc}' });
+    expect(bravo).toMatchObject({ catchup: 'shift', catchupSource: 'http://host/b.m3u8?utc={utc}&lutc={lutc}' });
+  });
+
   it('matches attribute names without regard to case', () => {
     const m3u = [
       '#EXTM3U X-TVG-URL="http://host/guide.xml"',

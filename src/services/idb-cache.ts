@@ -23,8 +23,8 @@ const FALLBACK_BUDGET_BYTES = 384 * 1024 * 1024;
 const MAX_BUDGET_BYTES = 1024 * 1024 * 1024;
 const SUBTITLE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLEANUP_MARGIN_BYTES = 4 * 1024 * 1024;
-// Avoid deserializing pre-cross-check caches that may contain Xtream VOD rows.
-const PLAYLIST_CACHE_KEY = 'combined-v3';
+// v4: re-parse caches whose SIPTV and header catch-up tags were not applied.
+const PLAYLIST_CACHE_KEY = 'combined-v4';
 const ENTRY_META_PREFIX = 'entry:';
 const ENTRY_META_INDEX_KEY = 'entry-index';
 const ENTRY_META_VERSION = 1;

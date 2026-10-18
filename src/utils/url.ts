@@ -56,7 +56,7 @@ export function diagnosticStreamUrl(url: string): string {
     }
 
     parsed.searchParams.forEach((_, key) => {
-      if (!/^(?:start|end|duration|extension|stream)$/i.test(key)) {
+      if (!/^(?:start|end|duration|extension|stream|utc|lutc)$/i.test(key)) {
         parsed.searchParams.set(key, '***');
       }
     });

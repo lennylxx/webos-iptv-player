@@ -638,6 +638,108 @@ describe('Player catch-up completion', () => {
   });
 });
 
+describe('Player M3U catch-up modes', () => {
+  const SHIFT_CHANNEL = {
+    ...CHANNEL,
+    url: 'http://host/ch1/mono.m3u8?k=v',
+    catchup: 'shift',
+    catchupSource: 'http://host/ch1/mono.m3u8?k=v&utc={utc}&lutc={lutc}',
+  };
+
+  function realVideo(duration: number) {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const v = document.createElement('video');
+    let currentTime = 0;
+    Object.defineProperty(v, 'duration', { value: duration, configurable: true });
+    Object.defineProperty(v, 'currentTime', {
+      get: () => currentTime,
+      set: (t: number) => { currentTime = t; },
+      configurable: true,
+    });
+    container.appendChild(v);
+    return v;
+  }
+
+  it('requests the SIPTV shift URL with the programme start and now', async () => {
+    vi.setSystemTime(2_000_000_000);
+    playlistMock.getByIndex.mockReturnValue(SHIFT_CHANNEL);
+    player.play(0, CATCHUP);
+    await flush();
+    expect(video.src).toContain('http://host/ch1/mono.m3u8?k=v&utc=1000000&lutc=2000000');
+  });
+
+  it('fills every occurrence of a placeholder', async () => {
+    playlistMock.getByIndex.mockReturnValue({
+      ...CHANNEL,
+      catchupSource: 'http://host/{channel-id}/{utc}/index-{utc}-{duration}.m3u8',
+    });
+    player.play(0, CATCHUP);
+    await flush();
+    expect(video.src).toContain('http://host/c1/1000000/index-1000000-120.m3u8');
+  });
+
+  it('bounds a shift catch-up to the programme when the playlist runs longer', () => {
+    video = fakeVideo(10_800);
+    player.init(video);
+    playlistMock.getByIndex.mockReturnValue(SHIFT_CHANNEL);
+    player.play(0, CATCHUP);
+
+    expect(container.querySelector('.osd-time-end')!.textContent).toBe('2:00');
+    player.seekBy(600);
+    expect(video.currentTime).toBe(120);
+  });
+
+  it('keeps the media duration for other modes', () => {
+    video = fakeVideo(300);
+    player.init(video);
+    player.play(0, CATCHUP);
+
+    expect(container.querySelector('.osd-time-end')!.textContent).toBe('5:00');
+  });
+
+  it('resumes live once a shift catch-up passes the programme end', async () => {
+    player.init(realVideo(10_800));
+    playlistMock.getByIndex.mockReturnValue(SHIFT_CHANNEL);
+    player.play(0, CATCHUP);
+    await flush();
+    const playing = container.querySelector('video')!;
+    expect(playing.src).toContain('utc=');
+
+    playing.currentTime = 60;
+    playing.dispatchEvent(new Event('timeupdate'));
+    expect(container.querySelector('video')).toBe(playing);
+
+    playing.currentTime = 120;
+    playing.dispatchEvent(new Event('timeupdate'));
+    await flush();
+    expect(container.querySelector('video')!.src).toBe('http://host/ch1/mono.m3u8?k=v');
+  });
+
+  it('reloads a stalled catch-up at its current position', async () => {
+    player.init(realVideo(120));
+    player.play(0, CATCHUP);
+    await flush();
+    container.querySelector('video')!.currentTime = 60;
+
+    (player as unknown as { reloadCurrentStream(): void }).reloadCurrentStream();
+    await flush();
+    const fresh = container.querySelector('video')!;
+    let resumedAt = 0;
+    Object.defineProperty(fresh, 'duration', { value: 120, configurable: true });
+    Object.defineProperty(fresh, 'currentTime', {
+      get: () => resumedAt,
+      set: (t: number) => { resumedAt = t; },
+      configurable: true,
+    });
+    fresh.dispatchEvent(new Event('loadedmetadata'));
+
+    expect(fresh.src).toContain('/catchup/');
+    expect(resumedAt).toBe(60);
+  });
+});
+
 describe('Player live playback', () => {
   it('has no seek bar and is not seekable', () => {
     player.play(0); // live, no catch-up
@@ -1773,6 +1875,11 @@ describe('stream routing', () => {
     expect(diagnosticStreamUrl(
       'http://host/catchup/ch1.m3u8?start=10&end=20&auth=secret',
     )).toBe('http://host/catchup/ch1.m3u8?start=10&end=20&auth=***');
+  });
+
+  it('keeps SIPTV shift timestamps visible in diagnostics', () => {
+    expect(diagnosticStreamUrl('http://host/ch1/mono.m3u8?token=t&utc=10&lutc=20'))
+      .toBe('http://host/ch1/mono.m3u8?token=***&utc=10&lutc=20');
   });
 
   it('maps detected content types to native MIME values', () => {
