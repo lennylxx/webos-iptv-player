@@ -1530,7 +1530,7 @@ describe('Search', () => {
     expect(handlers.onOpenSeries).toHaveBeenCalledWith(account, expect.objectContaining({ seriesId: 's1' }));
   });
 
-  it('shows the preparing hint instead of results or No results until the index is ready', async () => {
+  it('shows channel results while the catalog loads, and the preparing hint instead of No results', async () => {
     playlistMock.channels = [chan('Alpha')];
     let finishVod!: (items: unknown[]) => void;
     catalogMock.loadAllVodStreams.mockReturnValue(new Promise((resolve) => { finishVod = resolve; }));
@@ -1540,12 +1540,10 @@ describe('Search', () => {
     await view.open(account, 'alpha');
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const hint = container.querySelector('.search-results .catalog-hint.search-empty');
-    expect(hint?.textContent).toBe('Preparing search…');
+    // The indexed channels answer at once; the catalog joins them when it lands.
+    expect(container.querySelector('.catalog-tile[data-channel-index="0"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('Preparing search…');
     expect(container.textContent).not.toContain('No results');
-    // No partial results: the channel already indexed stays hidden.
-    expect(container.querySelector('.catalog-tile')).toBeNull();
-    expect(workerMock.run.mock.calls.some(([task]) => task === 'search.query')).toBe(false);
     await view.setQuery('zzz');
     expect(container.textContent).toContain('Preparing search…');
     expect(container.textContent).not.toContain('No results');
@@ -1561,7 +1559,7 @@ describe('Search', () => {
     info.mockRestore();
   });
 
-  it('waits in the search box while the index prepares, then focuses the first result', async () => {
+  it('focuses an indexed channel result while the catalog loads, and keeps it when the catalog lands', async () => {
     playlistMock.channels = [chan('Alpha')];
     let finishVod!: (items: unknown[]) => void;
     catalogMock.loadAllVodStreams.mockReturnValue(new Promise((resolve) => { finishVod = resolve; }));
@@ -1578,13 +1576,13 @@ describe('Search', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     view.focusFirstResult();
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(document.activeElement).toBe(box);
-    expect(container.querySelector('.focused')).toBeNull();
+    const tile = (): Element | null => container.querySelector('.catalog-tile[data-channel-index="0"]');
+    expect(tile()?.classList.contains('focused')).toBe(true);
 
-    finishVod([vod('10', 'Movie Two')]);
-    await vi.waitFor(() => expect(handlers.onReleaseTabBar).toHaveBeenCalledTimes(1));
-    expect(container.querySelector('.catalog-tile[data-channel-index="0"]')?.classList.contains('focused'))
-      .toBe(true);
+    finishVod([vod('10', 'Alpha Movie')]);
+    await vi.waitFor(() => expect(container.textContent).toContain('Alpha Movie'));
+    expect(tile()?.classList.contains('focused')).toBe(true);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
     box.remove();
   });
 
@@ -2084,7 +2082,7 @@ describe('Search', () => {
     }
   });
 
-  it('keeps preparing for a pending catalog after a program post fails, then shows it', async () => {
+  it('keeps channel results for a pending catalog after a program post fails, then shows it all', async () => {
     playlistMock.channels = [chan('Alpha')];
     epgMock.programmes = { Alpha: [prog('Evening Report', Date.now() + 3600000, Date.now() + 7200000)] };
     let finishVod: (value: unknown[]) => void = () => undefined;
@@ -2104,7 +2102,7 @@ describe('Search', () => {
       void view.open(account, 'alpha');
       await vi.waitFor(() => expect(rejected).toBe(true));
       await new Promise(resolve => setTimeout(resolve, 50));
-      expect(container.textContent).toContain('Preparing search…');
+      expect(container.querySelector('.catalog-tile[data-channel-index="0"]')).not.toBeNull();
       expect(container.textContent).not.toContain('No results found.');
 
       finishVod([vod('10', 'Alpha Movie')]);

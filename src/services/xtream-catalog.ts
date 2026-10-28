@@ -470,12 +470,14 @@ async function fetchWholeCatalog<T extends { categoryId: string }>(
   accountId: string,
   resource: 'vod_all' | 'series_all',
   signal: AbortSignal | undefined,
-  fetchItems: (categoryId: string, signal?: AbortSignal) => Promise<T[]>,
+  fetchItems: (categoryId?: string, signal?: AbortSignal) => Promise<T[]>,
   fetchCategories: (signal?: AbortSignal) => Promise<Array<{ id: string }>>,
   itemId: (item: T) => string,
   previous?: T[],
 ): Promise<CatalogListResult<T>> {
   ensureActive(signal);
+  const whole = await fetchUnpartitionedCatalog(accountId, resource, signal, fetchItems, itemId, previous);
+  if (whole) return whole;
   const controller = new AbortController();
   const deadline = Date.now() + CONFIG.XTREAM.CATALOG_LOAD_BUDGET_MS;
   let expired = false;
@@ -504,6 +506,59 @@ async function fetchWholeCatalog<T extends { categoryId: string }>(
     signal?.removeEventListener('abort', cancel);
     controller.abort();
   }
+}
+
+// One request for the whole list beats one per category by minutes on a
+// large panel. A panel whose whole list fails (too large, too slow, or
+// refused) loads by category instead, and keeps doing so for a while.
+async function fetchUnpartitionedCatalog<T extends object>(
+  accountId: string,
+  resource: 'vod_all' | 'series_all',
+  signal: AbortSignal | undefined,
+  fetchItems: (categoryId?: string, signal?: AbortSignal) => Promise<T[]>,
+  itemId: (item: T) => string,
+  previous?: T[],
+): Promise<CatalogListResult<T> | null> {
+  const generation = catalogCacheGeneration();
+  const fallbackKey = `${accountId}|${resource}_by_category`;
+  const fallback = await getCachedCatalog<{ reason: string }>(fallbackKey);
+  ensureCatalogActive(generation, signal);
+  if (fallback && Date.now() - fallback.timestamp < CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS) return null;
+  let data: T[];
+  try {
+    data = await fetchItems(undefined, signal);
+  } catch (error) {
+    ensureCatalogActive(generation, signal);
+    if (isXtreamRequestCancelled(error)) throw error;
+    const reason = error instanceof XtreamRequestError ? error.code : 'request_failed';
+    log.info(
+      'Whole catalog request failed; loading by category',
+      'event=xtream.catalog.by_category',
+      `resource=${resource}`,
+      `reason=${reason}`,
+    );
+    await setCachedCatalog(fallbackKey, { reason }, CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS);
+    ensureCatalogActive(generation, signal);
+    return null;
+  }
+  ensureCatalogActive(generation, signal);
+  // Some panels answer an unfiltered request with nothing; categories decide.
+  if (!data.length) return null;
+  const result: T[] = [];
+  const seen = new Set<string>();
+  for (const item of data) {
+    const id = itemId(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push(item);
+  }
+  const now = Date.now();
+  const ttl = StorageService.getXtreamCatalogRefreshIntervalMs();
+  return {
+    data: result,
+    unchanged: previous !== undefined && sameCatalogItems(previous, result),
+    state: { complete: true, refreshAfter: now + ttl, freshSince: now },
+  };
 }
 
 function sameCatalogItems<T extends object>(left: T[], right: T[]): boolean {

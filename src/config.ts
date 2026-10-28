@@ -104,7 +104,9 @@ export const CONFIG = {
     DEFAULT_CATALOG_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
     CATALOG_RETRY_DELAY_MS: 60 * 1000,
     CATALOG_LOAD_BUDGET_MS: 60 * 1000,
-    CATALOG_LOAD_CONCURRENCY: 2,
+    CATALOG_LOAD_CONCURRENCY: 4,
+    // How long a panel whose unfiltered list request failed loads by category before trying it again.
+    WHOLE_CATALOG_RETRY_MS: 24 * 60 * 60 * 1000,
     ACCOUNT_MAX_BYTES: 1024 * 1024,      // account/server metadata response budget
     CATEGORY_MAX_BYTES: 2 * 1024 * 1024, // category-list response budget
     CATALOG_MAX_BYTES: 32 * 1024 * 1024, // full or per-category stream-list budget

@@ -185,7 +185,8 @@ export class Search {
   // Shared by a reopen, so closing Search does not restart the load.
   private catalogLoad: { accountId: string; promise: Promise<CatalogSources> } | null = null;
   private catalogLoading = false;
-  // Until every source is indexed, queries wait and the results show a hint.
+  // Sources still indexing. Queries wait for channels only; programmes and
+  // the catalog join the results as each one lands.
   private pendingIndex: PendingIndex | null = null;
   private active = false;
   private programIndexGeneration = 0;
@@ -678,13 +679,30 @@ export class Search {
     const pending = this.pendingIndex;
     if (!pending || sessionId !== this.workerSession) return;
     for (const source of sources) pending[source] = false;
-    if (pending.channels || pending.programmes || pending.catalog) return;
+    if (pending.channels || pending.programmes || pending.catalog) {
+      if (this.active && !this.indexPreparing() && this.query.trim()) {
+        void this.startQuery(++this.queryGeneration, this.hasResults());
+      }
+      return;
+    }
     this.pendingIndex = null;
     this.logIndexReady(this.indexMode());
     if (!this.workerIndexLost) this.markWorkerIndexReady(this.account);
     if (!this.active) return;
-    if (this.query.trim()) void this.startQuery(++this.queryGeneration);
+    if (this.query.trim()) void this.startQuery(++this.queryGeneration, this.hasResults());
     else this.render();
+  }
+
+  // Queries wait for the channels, and for every source once the worker may
+  // hold a partial index, which only a rebuild after the last source mends.
+  private indexPreparing(): boolean {
+    const pending = this.pendingIndex;
+    return !!pending && (pending.channels || this.workerIndexLost);
+  }
+
+  private hasResults(): boolean {
+    return this.visibleChannels.length > 0 || this.visiblePrograms.length > 0
+      || this.visibleMovies.length > 0 || this.visibleSeries.length > 0;
   }
 
   private onSelect(): void {
@@ -1117,7 +1135,7 @@ export class Search {
     const query = this.query;
     const sessionId = this.workerSession;
     if (!query.trim()) return;
-    if (this.pendingIndex) {
+    if (this.indexPreparing()) {
       // The ready index runs this query; until then the hint stands in.
       if (!this.indexStats.hintAt) this.indexStats.hintAt = Date.now();
       this.render();
@@ -1552,8 +1570,7 @@ export class Search {
     const q = this.query.trim();
     const isXtream = !!this.account;
 
-    const hasResults = this.visibleChannels.length > 0 || this.visiblePrograms.length > 0
-      || this.visibleMovies.length > 0 || this.visibleSeries.length > 0;
+    const hasResults = this.hasResults();
     const hasMixedLists = !isXtream
       && this.visibleChannels.length > 0
       && this.visiblePrograms.length > 0;
@@ -1580,12 +1597,13 @@ export class Search {
     // EPG programs use compact rows so their metadata remains readable.
     const resultsBody = !q
       ? html``
-      : this.pendingIndex
+      : this.indexPreparing()
         ? html`<p class="catalog-hint search-empty">${t('search.preparing')}</p>`
       : this.queryPending
         ? html``
         : !hasResults
-        ? html`<p class="catalog-hint search-empty">${t('search.empty')}</p>`
+        ? html`<p class="catalog-hint search-empty">${
+            t(this.pendingIndex ? 'search.preparing' : 'search.empty')}</p>`
         : isXtream
           ? html`
                 ${this.visibleChannels.length

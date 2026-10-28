@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import type { PlaylistEntry } from '../types';
 import type { CatalogListState } from './idb-cache';
 
@@ -74,6 +74,14 @@ import { StorageService } from './storage-service';
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
 };
+
+// The panel refused its unfiltered lists recently, so they load by category.
+function loadByCategory(): void {
+  for (const resource of ['vod_all', 'series_all']) {
+    const key = `x1|${resource}_by_category`;
+    cacheStore.set(key, { key, timestamp: Date.now(), data: { reason: 'too_large' } });
+  }
+}
 
 // Background refreshes chain a few promises; a macrotask drains them all.
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -213,12 +221,10 @@ describe('xtream-catalog', () => {
     const stop = onCatalogListWritten(listener);
     clientMock.getVodStreams.mockResolvedValue([{ accountId: 'x1', streamId: '10', name: 'Movie One' }]);
     await loadAllVodStreams(account);
-    expect(listener.mock.calls).toEqual([
-      ['x1|vod_categories'], ['x1|vod_streams-v2|1'], ['x1|vod_all'],
-    ]);
+    expect(listener.mock.calls).toEqual([['x1|vod_all']]);
 
     await loadAllVodStreams(account);
-    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener).toHaveBeenCalledTimes(1);
 
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
     cacheStore.set('x1|series_all', { key: 'x1|series_all', timestamp: stale, data: [{ id: 'old' }] });
@@ -226,10 +232,7 @@ describe('xtream-catalog', () => {
     await loadAllSeries(account);
     await settle();
     stop();
-    expect(listener.mock.calls).toEqual([
-      ['x1|vod_categories'], ['x1|vod_streams-v2|1'], ['x1|vod_all'],
-      ['x1|series_categories'], ['x1|series-v2|1'], ['x1|series_all'],
-    ]);
+    expect(listener.mock.calls).toEqual([['x1|vod_all'], ['x1|series_all']]);
   });
 
   it('shares one background refresh per key and detaches it from the caller signal', async () => {
@@ -483,6 +486,15 @@ describe('xtream-catalog series', () => {
 });
 
 describe('xtream-catalog whole-catalog (search)', () => {
+  // These request sequences are written for two request slots.
+  const slots = CONFIG.XTREAM.CATALOG_LOAD_CONCURRENCY;
+  afterEach(() => {
+    (CONFIG.XTREAM as { CATALOG_LOAD_CONCURRENCY: number }).CATALOG_LOAD_CONCURRENCY = slots;
+  });
+  beforeEach(() => {
+    (CONFIG.XTREAM as { CATALOG_LOAD_CONCURRENCY: number }).CATALOG_LOAD_CONCURRENCY = 2;
+  });
+
   describe.each([
     {
       resource: 'vod_all',
@@ -511,6 +523,7 @@ describe('xtream-catalog whole-catalog (search)', () => {
     const partitionKey = (id: string) => `x1|${itemKey}|${id}`;
 
     beforeEach(() => {
+      loadByCategory();
       categories.mockResolvedValue([
         { id: '1', name: 'Cat A' }, { id: '2', name: 'Cat B' }, { id: '3', name: 'Cat C' },
       ]);
@@ -842,7 +855,9 @@ describe('xtream-catalog whole-catalog (search)', () => {
 
     it('keeps successful partitions but stops and does not publish a cancelled snapshot', async () => {
       const controller = new AbortController();
-      categories.mockResolvedValue(['1', '2', '3', '4', '5'].map(id => ({ id, name: `Cat ${id}` })));
+      const active = CONFIG.XTREAM.CATALOG_LOAD_CONCURRENCY;
+      const ids = Array.from({ length: active + 3 }, (_, index) => String(index + 1));
+      categories.mockResolvedValue(ids.map(id => ({ id, name: `Cat ${id}` })));
       items.mockImplementation((id: string, signal: AbortSignal) => {
         if (id === '1') return Promise.resolve([first]);
         return new Promise((_resolve, reject) => {
@@ -853,12 +868,12 @@ describe('xtream-catalog whole-catalog (search)', () => {
       });
       const pending = expect(load(account, controller.signal))
         .rejects.toMatchObject({ code: 'cancelled' });
-      await vi.waitFor(() => expect(items).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => expect(items).toHaveBeenCalledTimes(active + 1));
       expect(cacheStore.get(partitionKey('1'))?.data).toEqual([first]);
       controller.abort();
       await pending;
 
-      expect(items.mock.calls.map(call => call[0])).toEqual(['1', '2', '3']);
+      expect(items.mock.calls.map(call => call[0])).toEqual(ids.slice(0, active + 1));
       expect(cacheStore.has(partitionKey('2'))).toBe(false);
       expect(cacheStore.has(key)).toBe(false);
     });
@@ -994,12 +1009,15 @@ describe('xtream-catalog whole-catalog (search)', () => {
     });
   });
 
-  it('limits category requests to two across concurrent movie and series loads', async () => {
+  it('limits category requests across concurrent movie and series loads', async () => {
+    loadByCategory();
+    const slots = CONFIG.XTREAM.CATALOG_LOAD_CONCURRENCY;
+    const ids = Array.from({ length: slots + 1 }, (_, index) => String(index + 1));
     const releases: Array<() => void> = [];
     let active = 0;
     let peak = 0;
     for (const categories of [clientMock.getVodCategories, clientMock.getSeriesCategories]) {
-      categories.mockResolvedValue(['1', '2', '3'].map(id => ({ id, name: `Cat ${id}` })));
+      categories.mockResolvedValue(ids.map(id => ({ id, name: `Cat ${id}` })));
     }
     for (const [mock, idKey] of [
       [clientMock.getVodStreams, 'streamId'],
@@ -1016,17 +1034,18 @@ describe('xtream-catalog whole-catalog (search)', () => {
     }
     const pending = Promise.all([loadAllVodStreams(account), loadAllSeries(account)]);
     await settle();
-    expect(releases).toHaveLength(2);
-    for (let batch = 0; batch < 3; batch++) {
+    expect(releases).toHaveLength(slots);
+    while (releases.length) {
       releases.splice(0).forEach(release => release());
       await settle();
     }
     const results = await pending;
-    expect(results.map(result => result.length)).toEqual([3, 3]);
-    expect(peak).toBe(2);
+    expect(results.map(result => result.length)).toEqual([ids.length, ids.length]);
+    expect(peak).toBe(slots);
   });
 
   it('removes a cancelled catalog from the shared queue without cancelling the active catalog', async () => {
+    loadByCategory();
     clientMock.getVodCategories.mockResolvedValue([{ id: '1', name: 'Cat A' }, { id: '2', name: 'Cat B' }]);
     const releases: Array<() => void> = [];
     clientMock.getVodStreams.mockImplementation((id: string) => new Promise(resolve => {
@@ -1052,17 +1071,75 @@ describe('xtream-catalog whole-catalog (search)', () => {
     expect(clientMock.getSeries).toHaveBeenCalledTimes(1);
   });
 
-  it('fetches the VOD catalog by category and writes the search snapshot', async () => {
-    clientMock.getVodStreams.mockResolvedValue([{ accountId: 'x1', streamId: '10', name: 'Movie One' }]);
+  it('fetches the whole VOD catalog in one request and writes the search snapshot', async () => {
+    clientMock.getVodStreams.mockResolvedValue([
+      { accountId: 'x1', streamId: '10', name: 'Movie One', categoryId: '1' },
+      { accountId: 'x1', streamId: '10', name: 'Movie One', categoryId: '2' },
+      { accountId: 'x1', streamId: '20', name: 'Movie Two', categoryId: '2' },
+    ]);
     const out = await loadAllVodStreams(account);
-    expect(out).toEqual([{ accountId: 'x1', streamId: '10', name: 'Movie One' }]);
-    expect(clientMock.getVodStreams).toHaveBeenCalledWith('1', expect.any(AbortSignal));
+    expect(out.map(item => item.streamId)).toEqual(['10', '20']);
+    expect(clientMock.getVodStreams.mock.calls).toEqual([[undefined, undefined]]);
+    expect(clientMock.getVodCategories).not.toHaveBeenCalled();
     expect(setCachedCatalog).toHaveBeenCalledWith(
       'x1|vod_all',
       out,
       CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
       { complete: true, refreshAfter: expect.any(Number), freshSince: expect.any(Number) },
     );
+  });
+
+  it('loads by category after the whole list fails, and keeps doing so for a while', async () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    clientMock.getVodStreams.mockImplementation(async (categoryId?: string) => {
+      if (categoryId === undefined) throw new XtreamRequestError('too_large', 'Response exceeds limit');
+      return [{ accountId: 'x1', streamId: `${categoryId}0`, name: 'Movie', categoryId }];
+    });
+    expect(await loadAllVodStreams(account)).toEqual([
+      { accountId: 'x1', streamId: '10', name: 'Movie', categoryId: '1' },
+    ]);
+    expect(clientMock.getVodStreams.mock.calls.map(call => call[0])).toEqual([undefined, '1']);
+    expect(info).toHaveBeenCalledWith(
+      '[Catalog]',
+      'Whole catalog request failed; loading by category',
+      'event=xtream.catalog.by_category',
+      'resource=vod_all',
+      'reason=too_large',
+    );
+
+    cacheStore.delete('x1|vod_all');
+    cacheStore.delete('x1|vod_streams-v2|1');
+    clientMock.getVodStreams.mockClear();
+    await loadAllVodStreams(account);
+    expect(clientMock.getVodStreams.mock.calls.map(call => call[0])).toEqual(['1']);
+
+    const retryAt = Date.now() + CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(retryAt);
+    cacheStore.delete('x1|vod_all');
+    clientMock.getVodStreams.mockClear();
+    await loadAllVodStreams(account);
+    expect(clientMock.getVodStreams.mock.calls[0][0]).toBeUndefined();
+    now.mockRestore();
+    info.mockRestore();
+  });
+
+  it('loads by category when the whole list comes back empty', async () => {
+    clientMock.getVodStreams.mockImplementation(async (categoryId?: string) => (
+      categoryId === undefined ? [] : [{ accountId: 'x1', streamId: '10', name: 'Movie', categoryId }]
+    ));
+    expect(await loadAllVodStreams(account)).toHaveLength(1);
+    expect(clientMock.getVodStreams.mock.calls.map(call => call[0])).toEqual([undefined, '1']);
+  });
+
+  it('propagates cancellation of the whole-list request without falling back', async () => {
+    const controller = new AbortController();
+    clientMock.getVodStreams.mockImplementation(() => {
+      controller.abort();
+      return Promise.reject(new XtreamRequestError('cancelled', 'Request was cancelled'));
+    });
+    await expect(loadAllVodStreams(account, controller.signal)).rejects.toMatchObject({ code: 'cancelled' });
+    expect(clientMock.getVodStreams).toHaveBeenCalledTimes(1);
+    expect(cacheStore.has('x1|vod_all_by_category')).toBe(false);
   });
 
   it('returns the fresh full VOD catalog without calling the client', async () => {
@@ -1078,7 +1155,7 @@ describe('xtream-catalog whole-catalog (search)', () => {
     clientMock.getVodStreams.mockResolvedValue([{ accountId: 'x1', streamId: '10' }]);
     expect(await loadAllVodStreams(account)).toEqual([{ accountId: 'x1', streamId: 'old' }]);
     await settle();
-    expect(clientMock.getVodStreams).toHaveBeenCalledWith('1', expect.any(AbortSignal));
+    expect(clientMock.getVodStreams).toHaveBeenCalledWith(undefined, undefined);
     expect(await loadAllVodStreams(account)).toEqual([{ accountId: 'x1', streamId: '10' }]);
   });
 
@@ -1099,11 +1176,11 @@ describe('xtream-catalog whole-catalog (search)', () => {
     warn.mockRestore();
   });
 
-  it('fetches the series catalog by category and writes the search snapshot', async () => {
+  it('fetches the whole series catalog in one request and writes the search snapshot', async () => {
     clientMock.getSeries.mockResolvedValue([{ accountId: 'x1', seriesId: 's1', name: 'Series One' }]);
     const out = await loadAllSeries(account);
     expect(out).toEqual([{ accountId: 'x1', seriesId: 's1', name: 'Series One' }]);
-    expect(clientMock.getSeries).toHaveBeenCalledWith('1', expect.any(AbortSignal));
+    expect(clientMock.getSeries.mock.calls).toEqual([[undefined, undefined]]);
     expect(setCachedCatalog).toHaveBeenCalledWith(
       'x1|series_all',
       out,

@@ -134,7 +134,7 @@ test('unified search matches channels, movies, and series; a channel result play
   await expect(page.locator('#view-player')).toBeVisible();
 });
 
-test('a query typed while the index prepares shows a hint, then its results', async ({ page }) => {
+test('a query typed while the catalog loads shows channels at once, then the catalog results', async ({ page }) => {
   await seedSearch(page);
   let releaseCatalog!: () => void;
   const catalogHeld = new Promise<void>((resolve) => { releaseCatalog = resolve; });
@@ -148,8 +148,10 @@ test('a query typed while the index prepares shows a hint, then its results', as
 
   await page.locator('.tab-bar-search-input').fill('one');
   const hint = page.locator('#view-search .search-results .search-empty');
-  await expect(hint).toHaveText('Preparing search…');
-  await expect(page.locator('#view-search .catalog-tile')).toHaveCount(0);
+  await expect(page.locator('#view-search .catalog-tile[data-channel-index="0"]')).toContainText('Channel One');
+  await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toHaveCount(0);
+  await expect(hint).toHaveCount(0);
+  // Nothing matched yet, but the catalog may still match: no "No results".
   await page.locator('.tab-bar-search-input').fill('zzz');
   await expect(hint).toHaveText('Preparing search…');
   await page.locator('.tab-bar-search-input').fill('one');
