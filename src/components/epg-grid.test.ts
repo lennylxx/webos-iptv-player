@@ -220,6 +220,14 @@ describe('EpgGrid.render', () => {
     expect(now!.querySelector('.epg-prog-title')!.textContent).toContain('Noon Show');
   });
 
+  it('leaves long descriptions whole for the CSS line clamp', () => {
+    const description = 'word '.repeat(60).trim();
+    state.programmes['Chan A'][0] = { ...state.programmes['Chan A'][0], description };
+    grid.render();
+
+    expect(progItems()[0].querySelector('.epg-prog-desc')!.textContent).toBe(description);
+  });
+
   it('rebuilds row sizes when refreshed programme data changes descriptions', () => {
     expect(container.querySelector<HTMLElement>(
       '#epg-programmes .epg-virtual-spacer',

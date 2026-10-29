@@ -431,6 +431,22 @@ test.describe('Guide pointer and keys', () => {
     }).toBe(true);
   }
 
+  test('a long programme description clamps to two lines', async ({ page }) => {
+    const description = 'word '.repeat(120).trim();
+    await openGuide(page, () => description);
+    await programmesSettled(page);
+
+    const box = await page.locator('#epg-programmes .epg-prog-desc').first().evaluate((el) => ({
+      text: el.textContent,
+      lineHeight: parseFloat(getComputedStyle(el).lineHeight),
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+    }));
+    expect(box.text).toBe(description);
+    expect(Math.abs(box.clientHeight - 2 * box.lineHeight)).toBeLessThanOrEqual(1);
+    expect(box.scrollHeight).toBeGreaterThan(box.clientHeight);
+  });
+
   test('hovering a programme moves the ring off the channel, which stays selected', async ({ page }) => {
     await openGuide(page);
     const channel = page.locator('#view-epg .epg-channel-item.selected');
