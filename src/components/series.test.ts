@@ -10,6 +10,7 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
     watchlistState,
     storageMock: {
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
+      getHideArabic: vi.fn(() => false),
       setCatalogSort: vi.fn((_kind: 'vod' | 'series', _sort: CatalogSortPreference) => true),
       getResumeList: vi.fn(() => [] as unknown[]),
       getResume: vi.fn(() => null),

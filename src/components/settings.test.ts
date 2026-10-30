@@ -31,6 +31,7 @@ const {
       };
     }[],
     manualEpgSources: [] as ManualEpgSource[],
+    guideOff: [] as string[],
     autoPlay: false,
     livePreview: false,
     animationMode: 'reduced' as AnimationMode,
@@ -109,11 +110,15 @@ const {
       getLiveCategorySnapshot: vi.fn(() => null),
       setLiveCategorySnapshot: vi.fn(),
       getShowHiddenChannels: vi.fn(() => state.showHidden),
+      getHideArabic: vi.fn(() => false),
+      setHideArabic: vi.fn(),
       setShowHiddenChannels: vi.fn((v: boolean) => { state.showHidden = v; }),
       getChannelCustomization: vi.fn(() => null),
       setChannelCustomization: vi.fn(),
       clearChannelCustomization: vi.fn(),
       setPlaylists: vi.fn(),
+      getGuideOffSources: vi.fn(() => state.guideOff.slice()),
+      setGuideOffSources: vi.fn((ids: string[]) => { state.guideOff = ids.slice(); }),
       setManualEpgSources: vi.fn((sources: ManualEpgSource[]) => {
         state.manualEpgSources = sources.map(source => ({
           ...source,
@@ -253,6 +258,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   state.playlists = [];
   state.manualEpgSources = [];
+  state.guideOff = [];
   state.autoPlay = false;
   state.livePreview = false;
   state.animationMode = 'reduced';
@@ -1464,6 +1470,15 @@ describe('Settings Recently Watched clearing', () => {
     expect(onChannelsChanged).toHaveBeenCalledTimes(1);
   });
 
+  it('saves the Hide Arabic titles switch', () => {
+    settings.render();
+    expect(container.querySelector('#hide-arabic .toggle-option.active')?.getAttribute('data-value')).toBe('off');
+    click('#hide-arabic [data-value="on"]');
+    click('#save-settings');
+    expect(storageMock.setHideArabic).toHaveBeenLastCalledWith(true);
+    expect(onSave).toHaveBeenLastCalledWith('apply');
+  });
+
   it('cancels without clearing', () => {
     click('#clear-recently-watched');
     settings.handleAction('back');
@@ -2412,6 +2427,29 @@ describe('Settings Xtream section', () => {
     const saved = storageMock.setPlaylists.mock.calls.at(-1)![0] as PlaylistEntry[];
     expect(saved[0].xtream?.liveOutput).toBe('m3u8');
     expect(onSave).toHaveBeenCalledWith('reload');
+  });
+
+  it('switches an account guide off without reloading its channels', () => {
+    state.playlists = [{
+      id: 'x1', name: 'Acct', url: 'http://host:8080',
+      source: 'xtream', xtream: { username: 'u', password: 'p' },
+    }];
+    settings.render();
+    expect(container.querySelector('#xtream-guide-x1 .toggle-option.active')?.getAttribute('data-value')).toBe('on');
+    click('#xtream-guide-x1 [data-value="off"]');
+    click('#save-settings');
+    expect(state.guideOff).toEqual(['x1']);
+    expect(onSave).toHaveBeenLastCalledWith('guide');
+
+    settings.render();
+    expect(container.querySelector('#xtream-guide-x1 .toggle-option.active')?.getAttribute('data-value')).toBe('off');
+    click('#save-settings');
+    expect(onSave).toHaveBeenLastCalledWith('apply');
+
+    click('#xtream-guide-x1 [data-value="on"]');
+    click('#save-settings');
+    expect(state.guideOff).toEqual([]);
+    expect(onSave).toHaveBeenLastCalledWith('guide');
   });
 
   it('falls back to the host as the label when none is given', () => {

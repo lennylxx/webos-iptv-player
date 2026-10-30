@@ -804,6 +804,29 @@ export const StorageService = {
     return this.getXtreamCatalogRefreshIntervalHours() * HOUR_MS;
   },
 
+  // When a panel last refused an unfiltered catalog list, keyed by
+  // `accountId|resource`. Kept here, not in the evictable catalog cache, so a
+  // cache prune cannot send a huge list request again.
+  getWholeCatalogRefusedAt(key: string): number | null {
+    const stored = get<unknown>('xtream_whole_catalog_refused', null);
+    if (!stored || typeof stored !== 'object') return null;
+    const at = (stored as Record<string, unknown>)[key];
+    return typeof at === 'number' && Number.isFinite(at) ? at : null;
+  },
+  setWholeCatalogRefusedAt(key: string, at: number): void {
+    const stored = get<unknown>('xtream_whole_catalog_refused', null);
+    const next: Record<string, number> = {};
+    if (stored && typeof stored === 'object') {
+      const entries = stored as Record<string, unknown>;
+      for (const k of Object.keys(entries)) {
+        const v = entries[k];
+        if (typeof v === 'number' && at - v < CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS) next[k] = v;
+      }
+    }
+    next[key] = at;
+    set('xtream_whole_catalog_refused', next);
+  },
+
   getCatalogSort(kind: 'vod' | 'series'): CatalogSortPreference {
     const value = get<unknown>(`catalog_sort_${kind}`, null);
     const stored = value && typeof value === 'object' ? value as Partial<CatalogSortPreference> : null;
@@ -834,6 +857,27 @@ export const StorageService = {
     // TODO(post-1.16.0): Remove with the legacy `epg_url` migration.
     remove('epg_url');
     return true;
+  },
+
+  getHideArabic(): boolean {
+    return get<unknown>('hide_arabic', false) === true;
+  },
+
+  setHideArabic(hide: boolean): void {
+    set('hide_arabic', hide);
+  },
+
+  // Kept outside the playlist entries, so switching a guide off never
+  // invalidates the parsed channel list and downloads it again.
+  getGuideOffSources(): string[] {
+    const stored = get<unknown>('guide_off_sources', []);
+    return Array.isArray(stored)
+      ? stored.filter((id): id is string => typeof id === 'string' && id !== '')
+      : [];
+  },
+
+  setGuideOffSources(ids: string[]): void {
+    set('guide_off_sources', ids.filter((id, i) => id !== '' && ids.indexOf(id) === i));
   },
 
   getEpgOffsets(): Record<string, number> {

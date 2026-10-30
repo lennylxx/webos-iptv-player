@@ -257,6 +257,8 @@ export const FR_MESSAGES = {
   'settings.editChannelListHint': 'Réorganisez, masquez, renommez et regroupez les chaînes directement dans la liste.',
   'settings.showHidden': 'Afficher les chaînes masquées',
   'settings.showHiddenHint': 'Une fois cette option activée, les chaînes masquées restent dans la liste, en grisé, pour pouvoir être rétablies.',
+  'settings.hideArabic': 'Masquer les titres en arabe',
+  'settings.hideArabicHint': 'Masque les chaînes, films, séries et catégories dont le nom utilise l’écriture arabe.',
   'settings.resetCustomization': 'Réinitialiser la personnalisation',
   'settings.resetCustomizationHint': 'Restaure l’ordre, les noms, les groupes, l’association EPG automatique et la correction horaire de la source.',
   'settings.resetCustomizationTitle': 'Réinitialiser la personnalisation des chaînes ?',

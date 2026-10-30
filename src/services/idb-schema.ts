@@ -12,6 +12,9 @@ export const PLAYLIST_CACHE_KEY = 'combined-v3';
 // Bump when item lists gain fields, so old catalog rows are never served.
 export const VOD_STREAMS_RESOURCE = 'vod_streams-v2';
 export const SERIES_RESOURCE = 'series-v2';
+// Whole catalogs for Search, stored by column (see catalog-table.ts).
+export const VOD_CATALOG_RESOURCE = 'vod_all-v3';
+export const SERIES_CATALOG_RESOURCE = 'series_all-v3';
 
 function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;

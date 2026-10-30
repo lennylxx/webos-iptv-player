@@ -10,6 +10,7 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
     watchlistState,
     storageMock: {
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
+      getHideArabic: vi.fn(() => false),
       setCatalogSort: vi.fn((_kind: 'vod' | 'series', _sort: CatalogSortPreference) => true),
       getResumeList: vi.fn(() => [] as unknown[]),
       getResume: vi.fn((): ResumeEntry | null => null),
@@ -456,6 +457,24 @@ describe('Movies browse + grid', () => {
     await openWith([{ id: '1', name: 'Cat A' }], [vod('10', 'Movie One')]);
     expect(container.querySelector('.catalog-rail-title')?.textContent).toContain('Cat A');
     expect(container.querySelector('.catalog-tile[data-item-id="10"]')?.textContent).toContain('Movie One');
+  });
+
+  it('hides Arabic-named categories and titles while the setting is on', async () => {
+    storageMock.getHideArabic.mockReturnValue(true);
+    try {
+      await openWith(
+        [{ id: '1', name: 'Cat A' }, { id: '2', name: 'أفلام' }],
+        [vod('10', 'Movie One'), vod('11', 'فيلم')],
+      );
+      const titles = Array.from(container.querySelectorAll('.catalog-rail-title')).map(el => el.textContent);
+      expect(titles.join('|')).toContain('Cat A');
+      expect(titles.join('|')).not.toContain('أفلام');
+      expect(container.querySelector('.catalog-tile[data-item-id="10"]')).not.toBeNull();
+      expect(container.querySelector('.catalog-tile[data-item-id="11"]')).toBeNull();
+      expect(catalogMock.loadVodStreams.mock.calls.map(call => call[1])).toEqual(['1']);
+    } finally {
+      storageMock.getHideArabic.mockReturnValue(false);
+    }
   });
 
   it('updates the hero title and backdrop to the focused movie', async () => {

@@ -2,6 +2,7 @@ import { gzipSync, strToU8 } from 'fflate';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   fetchLimitedText,
+  fetchLimitedTextStream,
   fetchMaybeGzipText,
   fetchText,
   fetchWithTimeout,
@@ -268,6 +269,59 @@ describe('fetchLimitedText', () => {
     const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
     await vi.advanceTimersByTimeAsync(5000);
     await assertion;
+  });
+});
+
+describe('fetchLimitedTextStream', () => {
+  function chunkedResponse(chunks: Uint8Array[]) {
+    const read = vi.fn();
+    for (const value of chunks) read.mockResolvedValueOnce({ done: false, value });
+    read.mockResolvedValue({ done: true, value: undefined });
+    const cancel = vi.fn(async () => {});
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      headers: { get: () => null },
+      body: { getReader: () => ({ read, cancel }) },
+    } as unknown as Response)));
+    return { read, cancel };
+  }
+
+  it('hands decoded pieces to the caller, joining characters split across chunks', async () => {
+    const bytes = new TextEncoder().encode('["Café", "Café"]');
+    const split = bytes.indexOf(0xc3) + 1;
+    chunkedResponse([bytes.slice(0, split), bytes.slice(split)]);
+    const pieces: string[] = [];
+
+    await fetchLimitedTextStream('http://host/a', 1024, 5000, undefined, text => pieces.push(text));
+
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.join('')).toBe('["Café", "Café"]');
+  });
+
+  it('stops reading and cancels once the byte limit is passed', async () => {
+    const { read, cancel } = chunkedResponse([
+      new TextEncoder().encode('[1,'),
+      new TextEncoder().encode('2,3,4,5]'),
+    ]);
+    const pieces: string[] = [];
+
+    await expect(fetchLimitedTextStream('http://host/a', 5, 5000, undefined, text => pieces.push(text)))
+      .rejects.toMatchObject({ code: 'too_large' });
+    expect(pieces).toEqual(['[1,']);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('cancels the download when the caller rejects a piece', async () => {
+    const { cancel } = chunkedResponse([
+      new TextEncoder().encode('<html>'),
+      new TextEncoder().encode('</html>'),
+    ]);
+
+    await expect(fetchLimitedTextStream('http://host/a', 1024, 5000, undefined, () => {
+      throw new Error('not json');
+    })).rejects.toThrow('not json');
+    expect(cancel).toHaveBeenCalled();
   });
 });
 

@@ -4,11 +4,22 @@ const { fetchTextMock } = vi.hoisted(() => ({ fetchTextMock: vi.fn() }));
 vi.mock('../utils/fetch-helper', async (importOriginal) => ({
   ...await importOriginal<typeof import('../utils/fetch-helper')>(),
   fetchLimitedText: fetchTextMock,
+  fetchLimitedTextStream: async (
+    url: string,
+    maxBytes: number,
+    timeout: number,
+    signal: AbortSignal | undefined,
+    onText: (text: string) => void,
+  ) => {
+    onText(await fetchTextMock(url, maxBytes, timeout, signal));
+  },
 }));
 
 import { FetchTextError } from '../utils/fetch-helper';
 import { CONFIG } from '../config';
 import { createXtreamClient } from './xtream-client';
+import { CatalogTable } from './catalog-table';
+import type { SeriesItem, VodItem } from '../types';
 
 const creds = { baseUrl: 'http://host:8080', username: 'u1', password: 'p1' };
 
@@ -462,6 +473,55 @@ describe('XtreamClient VOD', () => {
     );
   });
 
+  it('gives unfiltered movie and series lists a larger size and time budget than one category', async () => {
+    fetchTextMock.mockResolvedValue('[]');
+    const client = createXtreamClient(creds);
+    await client.getVodStreams();
+    await client.getSeries();
+    await client.getSeries('1');
+
+    const budgets = fetchTextMock.mock.calls.map(call => [call[1], call[2]]);
+    expect(budgets).toEqual([
+      [CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES, CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS],
+      [CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES, CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS],
+      [CONFIG.XTREAM.CATALOG_MAX_BYTES, 30000],
+    ]);
+    expect(CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES).toBeGreaterThan(CONFIG.XTREAM.CATALOG_MAX_BYTES);
+  });
+
+  it('downloads the whole movie and series catalogs straight into columns', async () => {
+    fetchTextMock.mockResolvedValueOnce(JSON.stringify([
+      { stream_id: 10, name: 'Movie One', stream_icon: 'http://host/p/a.png', rating: '7.5',
+        category_id: '1', container_extension: 'mp4', added: '1700000000', plot: 'dropped' },
+      { stream_id: 10, name: 'Movie One', category_id: '2' },
+      { stream_id: '', name: 'No id' },
+      { stream_id: 20, name: 'Movie Two', category_id: '2' },
+    ]));
+    const movies = await createXtreamClient(creds, 'acc1').getVodCatalog();
+    expect(fetchTextMock.mock.calls[0].slice(0, 3)).toEqual([
+      expect.stringMatching(/action=get_vod_streams$/),
+      CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES,
+      CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS,
+    ]);
+    const table = new CatalogTable<VodItem>(movies);
+    expect(table.length).toBe(2);
+    expect(table.item(0)).toEqual({
+      accountId: 'acc1', streamId: '10', name: 'Movie One', poster: 'http://host/p/a.png',
+      rating: '7.5', categoryId: '1', containerExtension: 'mp4', addedAt: 1700000000000,
+    });
+    expect(table.idAt(1)).toBe('20');
+
+    fetchTextMock.mockResolvedValueOnce(JSON.stringify([
+      { series_id: 's1', name: 'Show', cover: 'http://host/c.png', category_id: '3', releaseDate: '2020-01-01' },
+    ]));
+    const shows = new CatalogTable<SeriesItem>(await createXtreamClient(creds, 'acc1').getSeriesCatalog());
+    expect(fetchTextMock.mock.calls[1][0]).toMatch(/action=get_series$/);
+    expect(shows.item(0)).toEqual({
+      accountId: 'acc1', seriesId: 's1', name: 'Show', poster: 'http://host/c.png',
+      rating: '', categoryId: '3', year: 2020,
+    });
+  });
+
   it('classifies oversized and cancelled catalog requests', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     fetchTextMock.mockRejectedValueOnce(
@@ -475,8 +535,8 @@ describe('XtreamClient VOD', () => {
       'event=xtream.request.failed',
       'endpoint=get_vod_streams',
       'code=too_large',
-      'timeoutMs=30000',
-      `limitBytes=${CONFIG.XTREAM.CATALOG_MAX_BYTES}`,
+      `timeoutMs=${CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS}`,
+      `limitBytes=${CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES}`,
     );
 
     warn.mockClear();

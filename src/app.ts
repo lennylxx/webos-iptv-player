@@ -14,7 +14,12 @@ import {
 } from './services/idb-cache';
 import { SetupClient } from './services/setup-client';
 import { SearchIndexPrewarmer } from './services/search-index-store';
-import { CATALOG_STORE, EPG_STORE } from './services/idb-schema';
+import {
+  CATALOG_STORE,
+  EPG_STORE,
+  SERIES_CATALOG_RESOURCE,
+  VOD_CATALOG_RESOURCE,
+} from './services/idb-schema';
 import type { SearchPrewarmSource } from './workers/tasks';
 import { setServicePort } from './services/service-http';
 import { isLunaAvailable, lunaRequest, type LunaRequestHandle } from './services/luna';
@@ -50,6 +55,8 @@ import { isSourceEnabled } from './utils/playlist';
 import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
+import { withoutGuideOff } from './utils/guide-sources';
+import { preloadSearchCatalog } from './services/xtream-catalog';
 import { FocusRing } from './navigation/focus-ring';
 import { Focus, type FocusScope } from './navigation/focus-scope';
 import type {
@@ -107,6 +114,8 @@ class App {
   private epgRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private epgRefreshIntervalMs: number | null | undefined;
   private epgChannelReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  private searchCatalogPreloadTimer: ReturnType<typeof setTimeout> | null = null;
+  private hideArabic = StorageService.getHideArabic();
   private readonly searchPrewarm = new SearchIndexPrewarmer(() => this.searchPrewarmSources());
 
   async init(): Promise<void> {
@@ -728,7 +737,7 @@ class App {
     if (!StorageService.getPlaylists().some(isSourceEnabled)) return [];
     const manual = StorageService.getManualEpgSources()
       .map(source => ({ ...source, kind: 'manual' as const }));
-    const discovered = PlaylistService.epgSources;
+    const discovered = withoutGuideOff(PlaylistService.epgSources, StorageService.getGuideOffSources());
     const sources: EpgSource[] = [...manual, ...discovered];
     const offsets = StorageService.getEpgOffsets();
     return sources.map(source => ({ ...source, offsetMinutes: offsets[source.url] ?? 0 }));
@@ -1006,6 +1015,7 @@ class App {
       }
       this.schedulePlaylistRefresh(true);
       this.searchPrewarm.schedule('startup');
+      this.scheduleSearchCatalogPreload();
     } catch (err) {
       log.error('loadData failed:', err);
       this.showView('settings');
@@ -1257,6 +1267,18 @@ class App {
     });
   }
 
+  private reloadGuide(): void {
+    const sources = this.epgSources();
+    if (!sources.length) {
+      EpgService.reset();
+      this.refreshEpgDependentViews();
+      return;
+    }
+    void EpgService.load(sources, PlaylistService.getEpgEligibleChannels(), () => this.refreshEpgDependentViews())
+      .then(() => this.refreshEpgDependentViews())
+      .catch(err => log.error('Guide reload after a settings change failed:', err));
+  }
+
   private refreshEpgDependentViews(): void {
     this.applyDisplayTz();
     this.channelList.render();
@@ -1362,11 +1384,20 @@ class App {
     const account = this.activeXtreamAccount();
     if (account) {
       sources.push(
-        { store: CATALOG_STORE, key: `${account.id}|vod_all` },
-        { store: CATALOG_STORE, key: `${account.id}|series_all` },
+        { store: CATALOG_STORE, key: `${account.id}|${VOD_CATALOG_RESOURCE}` },
+        { store: CATALOG_STORE, key: `${account.id}|${SERIES_CATALOG_RESOURCE}` },
       );
     }
     return sources;
+  }
+
+  private scheduleSearchCatalogPreload(): void {
+    if (this.searchCatalogPreloadTimer !== null) clearTimeout(this.searchCatalogPreloadTimer);
+    this.searchCatalogPreloadTimer = setTimeout(() => {
+      this.searchCatalogPreloadTimer = null;
+      const account = this.activeXtreamAccount();
+      if (account) void preloadSearchCatalog(account);
+    }, CONFIG.XTREAM.SEARCH_CATALOG_PRELOAD_DELAY_MS);
   }
 
   private activeXtreamAccount(): PlaylistEntry | null {
@@ -1889,8 +1920,14 @@ class App {
       await this.loadData(true);
       return;
     }
+    if (action === 'guide') this.reloadGuide();
+    if (action !== 'cancel' && StorageService.getHideArabic() !== this.hideArabic) {
+      this.hideArabic = StorageService.getHideArabic();
+      // Hidden titles leave every list the way concealed ones do.
+      this.onParentalLocksChanged(true);
+    }
     // 'apply': only display settings changed — re-apply + re-render, no re-fetch.
-    if (action === 'apply') {
+    if (action === 'apply' || action === 'guide') {
       this.search.invalidateCatalog();
       this.applyDisplayTz();
       this.epgGrid.resetDay();

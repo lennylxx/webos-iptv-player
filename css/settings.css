@@ -1001,7 +1001,8 @@
 
 .xtream-fields .settings-field { flex: 1 1 220px; }
 .xtream-fields .settings-field.wide { flex: 2 1 320px; }
-.xtream-fields .settings-field.xtream-output {
+.xtream-fields .settings-field.xtream-output,
+.xtream-fields .settings-field.xtream-guide {
   flex: 0 1 auto;
   width: max-content;
   max-width: 100%;

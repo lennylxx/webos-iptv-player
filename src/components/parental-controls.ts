@@ -508,16 +508,18 @@ export class ParentalControls {
     });
     if (!ParentalControlService.itemRuleEntries().some(([key]) => key.startsWith(prefix))) return;
     try {
-      const items = source.kind === 'vod'
-        ? (await loadAllVodStreams(source.account, signal))
-          .map(item => ({ entry: this.vodItem(item), categoryId: item.categoryId }))
-        : (await loadAllSeries(source.account, signal))
-          .map(item => ({ entry: this.seriesItem(item), categoryId: item.categoryId }));
+      const table = source.kind === 'vod'
+        ? await loadAllVodStreams(source.account, signal)
+        : await loadAllSeries(source.account, signal);
       if (signal.aborted) return;
-      for (const { entry, categoryId } of items) {
+      for (let i = 0; i < table.length; i++) {
+        const item = table.item(i)!;
+        const entry = source.kind === 'vod'
+          ? this.vodItem(item as VodItem)
+          : this.seriesItem(item as SeriesItem);
         const key = ruleKey(entry);
         if (!this.memberGroups.has(key)) {
-          this.setMemberGroup(key, `${source.kind}:${source.account.id}:${categoryId}`);
+          this.setMemberGroup(key, `${source.kind}:${source.account.id}:${item.categoryId}`);
         }
       }
       this.render();

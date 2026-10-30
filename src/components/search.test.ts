@@ -20,6 +20,8 @@ const {
     getSearchCatalogExpiresAt: vi.fn(),
     loadAllVodStreams: vi.fn(),
     loadAllSeries: vi.fn(),
+    loadVodCategories: vi.fn(async () => [] as unknown[]),
+    loadSeriesCategories: vi.fn(async () => [] as unknown[]),
     onCatalogListRefreshed: vi.fn(),
   },
   playlistMock: {
@@ -40,6 +42,7 @@ const {
     getCatchupProgressList: vi.fn(() => [] as unknown[]),
     clearCatchupProgress: vi.fn(),
     addSearchHistory: vi.fn(),
+    getHideArabic: vi.fn(() => false),
   },
   archiveMock: {
     load: vi.fn(async () => null as Set<number> | null),
@@ -57,9 +60,40 @@ const {
   cacheMock: {
     records: new Map<string, Record<string, unknown>>(),
     refs: new WeakMap<object, unknown>(),
+    sources: new WeakMap<object, object>(),
   },
 }));
-vi.mock('../services/xtream-catalog', () => catalogMock);
+// Tests hand the catalog mocks item arrays; Search receives them as column
+// tables, the same table for the same array, and a cache record remembered
+// for an array belongs to its columns.
+vi.mock('../services/xtream-catalog', async () => {
+  const { CatalogColumnsBuilder, CatalogTable } = await import('../services/catalog-table');
+  const tables = new WeakMap<object, unknown>();
+  const toTable = (kind: 'vod' | 'series') => (value: unknown): unknown => {
+    if (!Array.isArray(value)) return value;
+    const known = tables.get(value);
+    if (known) return known;
+    const builder = new CatalogColumnsBuilder(kind, 'x1');
+    for (const item of value as Array<Record<string, unknown>>) {
+      builder.add({
+        ...(item as unknown as { name: string; poster: string; rating: string; categoryId: string }),
+        id: String(kind === 'vod' ? item.streamId : item.seriesId),
+      });
+    }
+    const columns = builder.build();
+    cacheMock.sources.set(columns, value);
+    const table = new CatalogTable(columns);
+    tables.set(value, table);
+    return table;
+  };
+  return {
+    ...catalogMock,
+    loadAllVodStreams: (...args: unknown[]) =>
+      Promise.resolve(catalogMock.loadAllVodStreams(...args)).then(toTable('vod')),
+    loadAllSeries: (...args: unknown[]) =>
+      Promise.resolve(catalogMock.loadAllSeries(...args)).then(toTable('series')),
+  };
+});
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
 vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
 vi.mock('../services/reminder-service', () => ({ ReminderService: reminderMock }));
@@ -69,7 +103,7 @@ vi.mock('./toast', () => ({ showToast: toastMock }));
 vi.mock('../services/search-index-store', () => ({ persistSearchIndexes: persistMock }));
 vi.mock('../services/idb-cache', async importOriginal => ({
   ...await importOriginal<typeof import('../services/idb-cache')>(),
-  cacheRecordRef: (value: object) => cacheMock.refs.get(value) ?? null,
+  cacheRecordRef: (value: object) => cacheMock.refs.get(cacheMock.sources.get(value) ?? value) ?? null,
 }));
 vi.mock('../workers/app-worker-client', async () => {
   const { SearchWorkerIndex } = await import('../workers/search-index');
@@ -180,8 +214,8 @@ function diagEvents(spy: { mock: { calls: unknown[][] } }, event: string): strin
 
 // The catalog refresh replaced the movie list and settled.
 async function refreshLanded(view: Search, name: string): Promise<void> {
-  const internals = view as unknown as { allVod: Array<{ name: string }> };
-  await vi.waitFor(() => expect(internals.allVod[0]?.name).toBe(name));
+  const internals = view as unknown as { allVod: { length: number; nameAt: (index: number) => string } };
+  await vi.waitFor(() => expect(internals.allVod.length && internals.allVod.nameAt(0)).toBe(name));
   await new Promise(resolve => setTimeout(resolve, 0));
 }
 
@@ -284,6 +318,26 @@ describe('Search', () => {
     expect(container.textContent).toContain('Alpha Movie');
   });
 
+  it('leaves out Arabic titles and titles in Arabic categories while the setting is on', async () => {
+    storageMock.getHideArabic.mockReturnValue(true);
+    catalogMock.loadVodCategories.mockResolvedValue([{ id: '1', name: 'Cat A' }, { id: '2', name: 'أفلام' }]);
+    try {
+      const { view } = await openWith({
+        vod: [vod('10', 'Alpha Movie'), vod('11', 'Alpha فيلم'), { ...vod('12', 'Alpha Three'), categoryId: '2' }],
+        series: [ser('s1', 'Alpha Show'), ser('s2', 'Alpha مسلسل')],
+      });
+      await view.setQuery('alpha');
+      expect(container.textContent).toContain('Alpha Movie');
+      expect(container.textContent).toContain('Alpha Show');
+      expect(container.textContent).not.toContain('فيلم');
+      expect(container.textContent).not.toContain('مسلسل');
+      expect(container.textContent).not.toContain('Alpha Three');
+    } finally {
+      storageMock.getHideArabic.mockReturnValue(false);
+      catalogMock.loadVodCategories.mockResolvedValue([]);
+    }
+  });
+
   it('reloads the account catalog after it is invalidated', async () => {
     const { view } = await openWith({ vod: [vod('10', 'Old Movie')] });
     view.deactivate();
@@ -331,7 +385,7 @@ describe('Search', () => {
     expect(container.textContent).toContain('Alpha Series');
     const refreshed = catalogMock.onCatalogListRefreshed.mock.calls[0][0] as
       (key: string, changed?: boolean) => void;
-    refreshed('x1|vod_all', false);
+    refreshed('x1|vod_all-v3', false);
     await vi.waitFor(() => expect(catalogMock.getSearchCatalogExpiresAt).toHaveBeenCalledTimes(3));
     expect(catalogMock.loadAllVodStreams).toHaveBeenCalledTimes(2);
     expect(workerMock.run.mock.calls.filter(([task]) => task === 'search.index')).toHaveLength(indexed);
@@ -350,7 +404,7 @@ describe('Search', () => {
     catalogMock.getSearchCatalogExpiresAt.mockResolvedValue(Date.now() + 60_000);
     catalogMock.loadAllVodStreams.mockResolvedValue([vod('11', 'New Movie')]);
     const refreshed = catalogMock.onCatalogListRefreshed.mock.calls[0][0] as (key: string) => void;
-    refreshed('x1|vod_all');
+    refreshed('x1|vod_all-v3');
     await view.setQuery('movie');
     await vi.waitFor(() => expect(container.textContent).toContain('New Movie'));
 
@@ -378,7 +432,7 @@ describe('Search', () => {
     const expiresAt = Date.now() + 60_000;
     catalogMock.getSearchCatalogExpiresAt.mockResolvedValue(expiresAt);
     const refreshed = catalogMock.onCatalogListRefreshed.mock.calls[0][0] as (key: string) => void;
-    refreshed('x1|vod_all');
+    refreshed('x1|vod_all-v3');
     finishExpiry(expiresAt);
     await staleExpiry;
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -550,7 +604,7 @@ describe('Search', () => {
       await vi.waitFor(() => expect(held).toBe(true));
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('11', 'Alpha Sequel')]);
       const refreshed = catalogMock.onCatalogListRefreshed.mock.calls[0][0] as (key: string) => void;
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       // The refresh lands mid-rebuild; it must not call the index ready.
       await refreshLanded(view, 'Alpha Sequel');
       expect(sequelPosts()).toEqual([]);
@@ -600,7 +654,7 @@ describe('Search', () => {
       await vi.waitFor(() => expect(held).toBe(true));
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('11', 'Alpha Sequel')]);
       const refreshed = catalogMock.onCatalogListRefreshed.mock.calls[0][0] as (key: string) => void;
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await refreshLanded(view, 'Alpha Sequel');
       // The rebuild resumes after the refresh replaced the catalog.
       releaseChannels();
@@ -638,7 +692,7 @@ describe('Search', () => {
     workerMock.run.mockImplementation((task: string, payload: SearchIndexRequest) => {
       if (task === 'search.index' && payload.chunk?.names?.[0] === 'Alpha Movie' && !fired) {
         fired = true;
-        refreshed('x1|vod_all');
+        refreshed('x1|vod_all-v3');
       }
       return originalRun(task, payload);
     });
@@ -683,7 +737,7 @@ describe('Search', () => {
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await vi.waitFor(() => expect(query).not.toBeNull());
       await query;
       expect(diagEvents(warn, 'search.index.lost')).toEqual([expect.stringContaining('source=catalog')]);
@@ -783,10 +837,10 @@ describe('Search', () => {
       await vi.waitFor(() => expect(channels.held).toBe(true));
       cache = holdWorkerTask((task, payload) => task === 'search.index' && !!payload.cachedMovies);
       catalogMock.loadAllVodStreams.mockResolvedValue(older);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await refreshLanded(view, 'Alpha Old');
       catalogMock.loadAllVodStreams.mockResolvedValue(newer);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await refreshLanded(view, 'Bravo Other');
       channels.release();
       await query;
@@ -856,7 +910,7 @@ describe('Search', () => {
     let reset: ReturnType<typeof holdWorkerTask> | null = null;
     try {
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('20', 'Alpha Old'), ...fillers]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await vi.waitFor(() => expect(namePosts('Alpha Old')).toHaveLength(1));
       const older = internals.sourcePosts.movies;
       // The worker crashes; a query rebuilds it while a second refresh lands.
@@ -865,7 +919,7 @@ describe('Search', () => {
       const query = view.setQuery('alpha');
       await vi.waitFor(() => expect(reset!.held).toBe(true));
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('31', 'Bravo Other'), vod('30', 'Alpha Sequel')]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await refreshLanded(view, 'Bravo Other');
       reset.release();
       await vi.waitFor(() => expect(internals.sourcePosts.movies).not.toBe(older));
@@ -895,11 +949,11 @@ describe('Search', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('20', 'Alpha Old'), ...fillers]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await vi.waitFor(() => expect(namePosts('Alpha Old')).toHaveLength(1));
       const older = internals.sourcePosts.movies;
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('31', 'Bravo Other'), vod('30', 'Alpha Sequel')]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await vi.waitFor(() => expect(internals.sourcePosts.movies).not.toBe(older));
       frames.release();
       await vi.waitFor(() => expect(namePosts('Bravo Other')).toHaveLength(1));
@@ -928,12 +982,12 @@ describe('Search', () => {
     try {
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('20', 'Alpha Old'), ...fillers]);
       catalogMock.loadAllSeries.mockResolvedValue([ser('s2', 'Alpha Old Show')]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await vi.waitFor(() => expect(namePosts('Alpha Old')).toHaveLength(1));
       const older = internals.sourcePosts.movies;
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('31', 'Bravo Other'), vod('30', 'Alpha Sequel')]);
       catalogMock.loadAllSeries.mockResolvedValue([ser('s3', 'Alpha New Show')]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await vi.waitFor(() => expect(internals.sourcePosts.movies).not.toBe(older));
       frames.release();
       await vi.waitFor(() => expect(namePosts('Alpha New Show')).toHaveLength(1));
@@ -980,12 +1034,12 @@ describe('Search', () => {
     try {
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('20', 'Alpha Old'), ...fillers]);
       catalogMock.loadAllSeries.mockResolvedValue([ser('s2', 'Alpha Old Show')]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await vi.waitFor(() => expect(namePosts('Alpha Old')).toHaveLength(1));
       const older = internals.sourcePosts.movies;
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('31', 'Bravo Other'), vod('30', 'Alpha Sequel')]);
       catalogMock.loadAllSeries.mockResolvedValue([ser('s3', 'Alpha New Show')]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
       await vi.waitFor(() => expect(internals.sourcePosts.movies).not.toBe(older));
       frames.release();
       // The older refresh settles and marks the index ready while the newer series post is out.
@@ -1018,7 +1072,7 @@ describe('Search', () => {
     playlistMock.channels = [chan('Alpha')];
     const { view } = await openWith({ series: [ser('s1', 'Alpha Show')] });
     const refreshed = catalogMock.onCatalogListRefreshed.mock.calls[0][0] as (key: string) => void;
-    const internals = view as unknown as { allSeries: Array<{ name: string }> };
+    const internals = view as unknown as { allSeries: { columns: unknown } };
     const olderSeries = [ser('s2', 'Alpha Old Show')];
     const newerSeries = [ser('s3', 'Alpha New Show')];
     // The older record is gone from IndexedDB, so its cached load falls back to a post.
@@ -1030,11 +1084,13 @@ describe('Search', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
       catalogMock.loadAllSeries.mockResolvedValue(olderSeries);
-      refreshed('x1|series_all');
+      refreshed('x1|series_all-v3');
       await vi.waitFor(() => expect(held.held).toBe(true));
       catalogMock.loadAllSeries.mockResolvedValue(newerSeries);
-      refreshed('x1|series_all');
-      await vi.waitFor(() => expect(internals.allSeries).toBe(newerSeries));
+      refreshed('x1|series_all-v3');
+      await vi.waitFor(() => expect(
+        internals.allSeries.columns && cacheMock.sources.get(internals.allSeries.columns as object),
+      ).toBe(newerSeries));
       await vi.waitFor(() => expect(workerMock.run.mock.calls.some(([task, payload]) => task === 'search.index'
         && (payload as SearchIndexRequest).cachedSeries?.record.key === 'x1|series_new')).toBe(true));
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -1629,7 +1685,7 @@ describe('Search', () => {
 
     catalogMock.getSearchCatalogExpiresAt.mockResolvedValue(Date.now() + 60000);
     catalogMock.loadAllVodStreams.mockResolvedValue([vod('11', 'New Movie')]);
-    refreshed('x1|vod_all');
+    refreshed('x1|vod_all-v3');
 
     await vi.waitFor(() => expect(container.textContent).toContain('New Movie'));
     expect(container.textContent).not.toContain('Old Movie');
@@ -1656,7 +1712,7 @@ describe('Search', () => {
     try {
       catalogMock.getSearchCatalogExpiresAt.mockResolvedValue(Date.now() + 60000);
       catalogMock.loadAllVodStreams.mockResolvedValue([vod('11', 'New Movie')]);
-      refreshed('x1|vod_all');
+      refreshed('x1|vod_all-v3');
 
       await vi.waitFor(() => expect(container.textContent).toContain('New Movie'));
       expect(rejected).toBe(true);
@@ -1679,7 +1735,7 @@ describe('Search', () => {
     catalogMock.getSearchCatalogExpiresAt.mockReturnValue(new Promise(resolve => { expire = resolve; }));
     catalogMock.loadAllVodStreams.mockResolvedValue([vod('11', 'Bravo Movie'), vod('10', 'Alpha Movie')]);
     const asked = catalogMock.getSearchCatalogExpiresAt.mock.calls.length;
-    refreshed('x1|vod_all');
+    refreshed('x1|vod_all-v3');
     await vi.waitFor(() => expect(catalogMock.getSearchCatalogExpiresAt.mock.calls.length).toBe(asked + 1));
 
     // The page holds the new list; the worker still ranks the old one.

@@ -255,6 +255,8 @@ export const IT_MESSAGES = {
   'settings.editChannelListHint': 'Riordina, nascondi, rinomina e raggruppa i canali direttamente nell’elenco.',
   'settings.showHidden': 'Mostra canali nascosti',
   'settings.showHiddenHint': 'Quando è attivo, i canali nascosti restano nell’elenco, in grigio, per poterli ripristinare.',
+  'settings.hideArabic': 'Nascondi titoli in arabo',
+  'settings.hideArabicHint': 'Nasconde canali, film, serie e categorie i cui nomi usano la scrittura araba.',
   'settings.resetCustomization': 'Reimposta personalizzazione',
   'settings.resetCustomizationHint': 'Ripristina ordine, nomi, gruppi, associazione EPG automatica e correzione oraria della sorgente.',
   'settings.resetCustomizationTitle': 'Reimpostare la personalizzazione dei canali?',

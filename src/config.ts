@@ -102,11 +102,16 @@ export const CONFIG = {
   // Xtream Movies/Series catalog + resume tuning.
   XTREAM: {
     DEFAULT_CATALOG_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
-    CATALOG_RETRY_DELAY_MS: 60 * 1000,
-    CATALOG_LOAD_BUDGET_MS: 60 * 1000,
-    CATALOG_LOAD_CONCURRENCY: 4,
-    // How long a panel whose unfiltered list request failed loads by category before trying it again.
-    WHOLE_CATALOG_RETRY_MS: 24 * 60 * 60 * 1000,
+    // After an unfiltered movie or series list fails, Search waits this long
+    // before requesting it again, so a refusing panel is not asked on every open.
+    WHOLE_CATALOG_RETRY_MS: 60 * 60 * 1000,
+    // Unfiltered lists are parsed as they stream in, so memory follows the
+    // kept fields, not the download; this only bounds a runaway response.
+    WHOLE_CATALOG_MAX_BYTES: 256 * 1024 * 1024,
+    WHOLE_CATALOG_TIMEOUT_MS: 3 * 60 * 1000,
+    // The search catalog downloads this long after startup, once the channel
+    // list and any resumed stream have settled, so Search finds it ready.
+    SEARCH_CATALOG_PRELOAD_DELAY_MS: 10 * 1000,
     ACCOUNT_MAX_BYTES: 1024 * 1024,      // account/server metadata response budget
     CATEGORY_MAX_BYTES: 2 * 1024 * 1024, // category-list response budget
     CATALOG_MAX_BYTES: 32 * 1024 * 1024, // full or per-category stream-list budget

@@ -20,6 +20,7 @@ import { showToast } from './toast';
 import { dropdown, toggleDropdown, closeDropdown, commitDropdownOption } from './dropdown';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
+import { hiddenAsArabic } from '../utils/arabic-script';
 import {
   catalogParentalRequest,
   isResumeConcealed,
@@ -687,11 +688,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     try {
       const categories = await this.loadCategories(account, signal);
       if (signal.aborted || this.account?.id !== account.id) return;
-      this.categories = categories.filter(category => !ParentalControlService.isCategoryConcealed({
-        kind: this.parentalKind === 'vod' ? 'vod-category' : 'series-category',
-        accountId: account.id,
-        categoryId: category.id,
-      }));
+      this.categories = categories.filter(category => !hiddenAsArabic(category.name)
+        && !ParentalControlService.isCategoryConcealed({
+          kind: this.parentalKind === 'vod' ? 'vod-category' : 'series-category',
+          accountId: account.id,
+          categoryId: category.id,
+        }));
       const railCats = this.categories.slice(0, CONFIG.XTREAM.RAIL_CATEGORIES);
       // Settle each rail on its own: one failing category must not blank the rest.
       const loaded = await Promise.all(
@@ -1199,7 +1201,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     categoryId: string,
     signal: AbortSignal,
   ): Promise<I[]> {
-    const items = await this.loadItems(account, categoryId, signal);
+    const loaded = await this.loadItems(account, categoryId, signal);
+    const items = StorageService.getHideArabic()
+      ? loaded.filter(item => !hiddenAsArabic(this.itemName(item)))
+      : loaded;
     if (!ParentalControlService.concealing) return items;
     return items.filter(item => !ParentalControlService.isConcealed(
       catalogParentalRequest(this.parentalKind, {
@@ -1256,12 +1261,13 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   private visibleResume(accountId: string): ResumeEntry[] {
     return StorageService.getResumeList(accountId)
-      .filter(entry => entry.kind === this.resumeKind && !isResumeConcealed(entry));
+      .filter(entry => entry.kind === this.resumeKind && !hiddenAsArabic(entry.name)
+        && !isResumeConcealed(entry));
   }
 
   protected visibleWatchlist(kind: WatchlistKind): WatchlistEntry[] {
     return StorageService.getWatchlist(this.account!.id, kind)
-      .filter(entry => !isWatchlistConcealed(entry));
+      .filter(entry => !hiddenAsArabic(entry.name) && !isWatchlistConcealed(entry));
   }
 
   protected findItem(categoryId: string, id: string): I | null {

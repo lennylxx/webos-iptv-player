@@ -256,6 +256,8 @@ export const DE_MESSAGES = {
   'settings.editChannelListHint': 'Kanäle direkt in der Kanalliste neu anordnen, ausblenden, umbenennen und gruppieren.',
   'settings.showHidden': 'Ausgeblendete Kanäle anzeigen',
   'settings.showHiddenHint': 'Wenn aktiviert, bleiben ausgeblendete Kanäle abgeblendet in der Liste und können zurückgeholt werden.',
+  'settings.hideArabic': 'Arabische Titel ausblenden',
+  'settings.hideArabicHint': 'Blendet Kanäle, Filme, Serien und Kategorien aus, deren Namen arabische Schrift enthalten.',
   'settings.resetCustomization': 'Anpassungen zurücksetzen',
   'settings.resetCustomizationHint': 'Stellt Reihenfolge, Namen, Gruppen, automatische EPG-Zuordnung und Quellenzeitkorrektur wieder her.',
   'settings.resetCustomizationTitle': 'Kanalanpassungen zurücksetzen?',

@@ -257,6 +257,8 @@ export const PT_BR_MESSAGES = {
   'settings.editChannelListHint': 'Reordene, oculte, renomeie e agrupe canais diretamente na lista de canais.',
   'settings.showHidden': 'Mostrar canais ocultos',
   'settings.showHiddenHint': 'Quando ativado, os canais ocultos continuam na lista, esmaecidos, para poderem ser restaurados.',
+  'settings.hideArabic': 'Ocultar títulos em árabe',
+  'settings.hideArabicHint': 'Oculta canais, filmes, séries e categorias cujos nomes usam escrita árabe.',
   'settings.resetCustomization': 'Redefinir personalização',
   'settings.resetCustomizationHint': 'Restaura a ordem, os nomes, os grupos, o mapeamento EPG automático e a correção de horário da fonte.',
   'settings.resetCustomizationTitle': 'Redefinir a personalização de canais?',

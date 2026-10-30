@@ -258,6 +258,8 @@ export const EN_MESSAGES = {
   'settings.editChannelListHint': 'Reorder, hide, rename, and regroup channels directly in the channel list.',
   'settings.showHidden': 'Show hidden channels',
   'settings.showHiddenHint': 'When enabled, hidden channels stay in the list, dimmed, so they can be brought back.',
+  'settings.hideArabic': 'Hide Arabic titles',
+  'settings.hideArabicHint': 'Hides channels, movies, series, and categories whose names use Arabic script.',
   'settings.resetCustomization': 'Reset Customization',
   'settings.resetCustomizationHint': 'Restores playlist order, names, groups, automatic EPG matching, and source time correction.',
   'settings.resetCustomizationTitle': 'Reset channel customization?',

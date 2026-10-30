@@ -784,6 +784,47 @@ describe('idb-cache', () => {
     });
   });
 
+  // A whole movie list once evicted the channel list, so the next start
+  // downloaded every channel again and the panel refused part of it.
+  it('never evicts a live channel list to make room for other data', async () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const storageDescriptor = Object.getOwnPropertyDescriptor(navigator, 'storage');
+    try {
+      const channels = [channel('ch1')];
+      expect(await setCachedPlaylist(channels)).toBe(true);
+      await setCachedSubtitle('subdl:1', `WEBVTT\n\n${'x'.repeat(1024)}`);
+      const used = (await getCacheUsage()).total.bytes;
+      Object.defineProperty(navigator, 'storage', {
+        configurable: true,
+        value: { estimate: async () => ({ usage: 0, quota: 2 * (used + 512) }) },
+      });
+
+      await setCachedCatalog('x1|vod_all-v3', ['x'.repeat(4096)]);
+      expect(await getCachedPlaylist()).toMatchObject({ channels });
+      expect(await getCachedCatalog('x1|vod_all-v3')).toBeNull();
+      // Everything but the channel list still gives way first.
+      expect(await getCachedSubtitle('subdl:1')).toBeNull();
+      expect(info).toHaveBeenCalledWith(
+        '[CacheStorage]',
+        'Cache write skipped to keep the channel list',
+        'event=persistence.cache.write.skipped',
+        'reason=budget',
+        'category=catalog',
+        expect.stringMatching(/^requiredBytes=\d+$/),
+        expect.stringMatching(/^freedBytes=\d+$/),
+      );
+
+      // A new channel list may still replace the old one.
+      const replacement = [channel('ch2'), channel('ch3')];
+      expect(await setCachedPlaylist(replacement)).toBe(true);
+      expect(await getCachedPlaylist()).toMatchObject({ channels: replacement });
+    } finally {
+      info.mockRestore();
+      if (storageDescriptor) Object.defineProperty(navigator, 'storage', storageDescriptor);
+      else delete (navigator as Navigator & { storage?: StorageManager }).storage;
+    }
+  });
+
   it('keeps accounting correct when pruning the record being updated', async () => {
     await setCachedSubtitle('subdl:4', 'WEBVTT\n\nold');
     const storageDescriptor = Object.getOwnPropertyDescriptor(navigator, 'storage');

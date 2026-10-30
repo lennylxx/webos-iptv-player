@@ -29,6 +29,19 @@ describe('StorageService', () => {
     await clearAllCachedData();
   });
 
+  it('keeps whole-catalog refusals outside the evictable cache and drops expired ones', async () => {
+    const start = 1_000_000;
+    expect(StorageService.getWholeCatalogRefusedAt('x1|vod_all')).toBeNull();
+    StorageService.setWholeCatalogRefusedAt('x1|vod_all', start);
+    await clearAllCachedData();
+    expect(StorageService.getWholeCatalogRefusedAt('x1|vod_all')).toBe(start);
+
+    const later = start + CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS;
+    StorageService.setWholeCatalogRefusedAt('x1|series_all', later);
+    expect(StorageService.getWholeCatalogRefusedAt('x1|vod_all')).toBeNull();
+    expect(StorageService.getWholeCatalogRefusedAt('x1|series_all')).toBe(later);
+  });
+
   it('returns an empty playlist list by default', () => {
     expect(StorageService.getPlaylists()).toEqual([]);
   });
@@ -351,6 +364,16 @@ describe('StorageService', () => {
       'http://host/b': -90,
       'http://host/high': CONFIG.EPG.OFFSET_MAX_MINUTES,
     });
+  });
+
+  it('keeps guide-off sources outside the playlist entries', () => {
+    expect(StorageService.getGuideOffSources()).toEqual([]);
+    const playlists = localStorage.getItem('iptv_playlists');
+    StorageService.setGuideOffSources(['x1', '', 'x1', 'x2']);
+    expect(StorageService.getGuideOffSources()).toEqual(['x1', 'x2']);
+    expect(localStorage.getItem('iptv_playlists')).toBe(playlists);
+    StorageService.set('guide_off_sources', [3, 'x3']);
+    expect(StorageService.getGuideOffSources()).toEqual(['x3']);
   });
 
   it('ignores a malformed EPG offset map', () => {

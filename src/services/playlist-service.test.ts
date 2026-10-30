@@ -8,6 +8,7 @@ const { storageMock, cacheMock, fetchTextMock } = vi.hoisted(() => ({
     getFavorites: vi.fn(() => [] as string[]),
     migrateFavoriteKeys: vi.fn(),
     getShowHiddenChannels: vi.fn(() => false),
+    getHideArabic: vi.fn(() => false),
     getChannelCustomization: vi.fn(() => null),
     getPlaylistRefreshIntervalMs: vi.fn(() => 6 * 60 * 60 * 1000),
     setChannelCustomization: vi.fn(),
@@ -1663,6 +1664,29 @@ describe('PlaylistService customization', () => {
       PlaylistService.applyCustomization();
     }
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+  });
+
+  it('hides channels named or grouped in Arabic script while the setting is on', async () => {
+    fetchTextMock.mockResolvedValue(`#EXTM3U
+#EXTINF:-1 group-title="News",Alpha
+http://stream/u1
+#EXTINF:-1 group-title="News",قناة
+http://stream/u2
+#EXTINF:-1 group-title="أخبار",Charlie
+http://stream/u3`);
+    await PlaylistService.refresh();
+    expect(PlaylistService.channels).toHaveLength(3);
+    storageMock.getHideArabic.mockReturnValue(true);
+    try {
+      PlaylistService.applyCustomization();
+      expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha']);
+      expect(PlaylistService.groups).not.toContain('أخبار');
+      expect(PlaylistService.getUnconcealedChannels()).toHaveLength(3);
+    } finally {
+      storageMock.getHideArabic.mockReturnValue(false);
+      PlaylistService.applyCustomization();
+    }
+    expect(PlaylistService.channels).toHaveLength(3);
   });
 
   it('maps visible channels to their playlist-cache record', async () => {

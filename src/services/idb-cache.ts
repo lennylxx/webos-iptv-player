@@ -406,6 +406,8 @@ function serializedBytes(value: unknown): number {
         ? jsonStringBytes(item.toISOString())
         : JSON_NULL_BYTES;
     }
+    // Typed arrays are stored as their bytes, not as JSON numbers.
+    if (ArrayBuffer.isView(item)) return item.byteLength;
     if (ancestors.has(item)) throw new TypeError('Circular cache value');
     ancestors.add(item);
     let bytes = 2;
@@ -875,10 +877,21 @@ async function removeExpiredRecord(store: CacheStore, key: IDBValidKey): Promise
   });
 }
 
-async function pruneBytes(targetBytes: number): Promise<number> {
-  if (targetBytes <= 0) return 0;
+interface PruneResult {
+  freed: number;
+  // Bytes of live channel lists the prune would have taken but kept.
+  kept: number;
+}
+
+// Only a new channel list may evict a live one: losing it means downloading
+// every channel again on the next start, which panels limit.
+async function pruneBytes(targetBytes: number, incoming: CacheCategory): Promise<PruneResult> {
+  if (targetBytes <= 0) return { freed: 0, kept: 0 };
   const now = Date.now();
-  const candidates = await collectCandidates();
+  const all = await collectCandidates();
+  const keep = (item: CacheCandidate) => incoming !== 'playlist' && item.category === 'playlist'
+    && (item.expiresAt === null || item.expiresAt > now);
+  const candidates = all.filter((item) => !keep(item));
   const selected: CacheCandidate[] = [];
   const selectedKeys = new Set<string>();
   let bytes = 0;
@@ -901,11 +914,15 @@ async function pruneBytes(targetBytes: number): Promise<number> {
       .filter((item) => item.category === category)
       .sort((a, b) => a.lastAccessedAt - b.lastAccessedAt));
   }
-  return deleteCandidates(selected);
+  let kept = 0;
+  for (const item of all) if (keep(item)) kept += item.byteSize;
+  return { freed: await deleteCandidates(selected), kept };
 }
 
-async function ensureCapacity(deltaBytes: number): Promise<void> {
-  if (deltaBytes <= 0) return;
+// False when the room could only come from a live channel list, in which
+// case the incoming record is not written.
+async function ensureCapacity(deltaBytes: number, incoming: CacheCategory): Promise<boolean> {
+  if (deltaBytes <= 0) return true;
   const metadata = await readMetadata();
   const estimate = await cachedStorageEstimate();
   const budgetBytes = budgetForQuota(estimate.quota);
@@ -922,8 +939,23 @@ async function ensureCapacity(deltaBytes: number): Promise<void> {
       `requiredBytes=${required}`,
       `incomingBytes=${deltaBytes}`,
     );
-    await pruneBytes(required + Math.max(CLEANUP_MARGIN_BYTES, Math.floor(deltaBytes * 0.1)));
+    const pruned = await pruneBytes(
+      required + Math.max(CLEANUP_MARGIN_BYTES, Math.floor(deltaBytes * 0.1)),
+      incoming,
+    );
+    if (pruned.freed < required && pruned.kept > 0) {
+      log.info(
+        'Cache write skipped to keep the channel list',
+        'event=persistence.cache.write.skipped',
+        'reason=budget',
+        `category=${incoming}`,
+        `requiredBytes=${required}`,
+        `freedBytes=${pruned.freed}`,
+      );
+      return false;
+    }
   }
+  return true;
 }
 
 function isQuotaError(err: unknown): boolean {
@@ -996,7 +1028,10 @@ async function putRawNow(
   await ensureMetadata();
   const previous = await readEntryMeta(store, key);
   const record = normalizeRecord(store, raw);
-  await ensureCapacity(Math.max(0, record.byteSize - (previous?.byteSize ?? 0)));
+  const category = categoryForStore(store);
+  if (!await ensureCapacity(Math.max(0, record.byteSize - (previous?.byteSize ?? 0)), category)) {
+    return false;
+  }
   try {
     const latest = await readEntryMeta(store, key);
     await commitRecord(store, record, latest);
@@ -1010,7 +1045,7 @@ async function putRawNow(
         `category=${categoryForStore(store)}`,
         `recordBytes=${record.byteSize}`,
       );
-      await pruneBytes(record.byteSize + CLEANUP_MARGIN_BYTES);
+      await pruneBytes(record.byteSize + CLEANUP_MARGIN_BYTES, category);
       try {
         const latest = await readEntryMeta(store, key);
         await commitRecord(store, record, latest);

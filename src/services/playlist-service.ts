@@ -44,6 +44,7 @@ import {
   type CacheRecordRef,
 } from './idb-cache';
 import { isSourceEnabled } from '../utils/playlist';
+import { hiddenAsArabic } from '../utils/arabic-script';
 import {
   filterLiveStreams,
   liveCategoryCounts,
@@ -732,11 +733,14 @@ class PlaylistServiceImpl {
       includeHidden,
       sourceIndices,
     );
-    if (ParentalControlService.concealing) {
+    const concealing = ParentalControlService.concealing;
+    const hideArabic = StorageService.getHideArabic();
+    if (concealing || hideArabic) {
       const visible: Channel[] = [];
       for (let i = 0; i < this.unconcealedChannels.length; i++) {
         const channel = this.unconcealedChannels[i];
-        if (ParentalControlService.isConcealed(liveParentalRequest(channel))) continue;
+        if (hideArabic && hiddenAsArabic(channel.name, channel.group)) continue;
+        if (concealing && ParentalControlService.isConcealed(liveParentalRequest(channel))) continue;
         // Compacts in place: the write index never passes the read index.
         sourceIndices[visible.length] = sourceIndices[i];
         visible.push(channel);

@@ -362,6 +362,7 @@ export function liveCategoriesButtonContent(
 function xtreamCard(pl: Partial<PlaylistEntry>) {
   const liveOutput = normalizeXtreamLiveOutputPreference(pl.xtream?.liveOutput);
   const enabled = pl.enabled !== false;
+  const guide = !pl.id || StorageService.getGuideOffSources().indexOf(pl.id) < 0;
   return html`
     <div class="xtream-card ${enabled ? '' : 'source-disabled'}"
          data-id="${pl.id || ''}" data-source-entry>
@@ -393,6 +394,13 @@ function xtreamCard(pl: Partial<PlaylistEntry>) {
             { value: 'm3u8', label: t('settings.streamFormatHls') },
             { value: 'auto', label: t('settings.streamFormatAuto') },
           ], liveOutput)}
+        </div>
+        <div class="settings-field xtream-guide">
+          <label>${t('settings.guide')}</label>
+          ${toggleGroup(`xtream-guide-${pl.id || ''}`, [
+            { value: 'on', label: t('settings.on') },
+            { value: 'off', label: t('settings.off') },
+          ], guide ? 'on' : 'off')}
         </div>
       </div>
       <div class="xtream-card-foot">
@@ -481,7 +489,8 @@ function formatExpiry(expiresAt: number | null): string {
 /** What the app does after Settings closes: reload = re-fetch playlist/EPG;
  *  apply = re-render for display-only changes; reset = erase local app data;
  *  edit-channels = open the channel list in edit mode; cancel = discard. */
-export type SaveAction = 'reload' | 'apply' | 'reset' | 'cancel' | 'edit-channels';
+// 'guide': only which sources load their program guide changed.
+export type SaveAction = 'reload' | 'guide' | 'apply' | 'reset' | 'cancel' | 'edit-channels';
 
 export class Settings {
   private container: HTMLElement;
@@ -736,6 +745,7 @@ export class Settings {
     const livePreview = StorageService.getLivePreview();
     const channelCycleMode = StorageService.getChannelCycleMode();
     const showHidden = StorageService.getShowHiddenChannels();
+    const hideArabic = StorageService.getHideArabic();
     const feedTime = StorageService.getTzMode() === 'feed';
     const tzOffset = StorageService.getEpgTzOffset();
     const os = StorageService.getOnlineSubtitleConfig();
@@ -892,6 +902,11 @@ export class Settings {
                   <div class="settings-item-title">${t('settings.showHidden')}</div>
                   ${toggleGroup('show-hidden', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], showHidden ? 'on' : 'off')}
                   <div class="settings-item-hint">${t('settings.showHiddenHint')}</div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.hideArabic')}</div>
+                  ${toggleGroup('hide-arabic', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], hideArabic ? 'on' : 'off')}
+                  <div class="settings-item-hint">${t('settings.hideArabicHint')}</div>
                 </div>
                 <div class="settings-item settings-item--action">
                   <div class="settings-item-title">${t('settings.resetCustomization')}</div>
@@ -2765,6 +2780,7 @@ export class Settings {
     // Xtream accounts derive their get.php/xmltv.php URLs from these credentials
     // at load time; the base URL is normalized so a bare host still resolves.
     const accounts: PlaylistEntry[] = [];
+    const guideOff: string[] = [];
     const reviewedSnapshots: [string, XtreamLiveCategorySnapshot][] = [];
     const cards = $$('#xtream-entries .xtream-card', this.container) as HTMLElement[];
     for (const card of cards) {
@@ -2778,6 +2794,9 @@ export class Settings {
         card.querySelector<HTMLElement>('.xtream-output .dropdown')!.dataset.value,
       );
       const id = card.dataset.id || genPlaylistId();
+      if (card.querySelector<HTMLElement>('.xtream-guide .toggle-option.active')?.dataset.value === 'off') {
+        guideOff.push(id);
+      }
       const xtream: NonNullable<PlaylistEntry['xtream']> = { username, password, liveOutput };
       const accountKey = `${base}|${username}`;
       const liveCategories = this.cardLiveCategories(id, accountKey);
@@ -2839,6 +2858,8 @@ export class Settings {
 
     const previousManualEpgSources = StorageService.getManualEpgSources();
     StorageService.setManualEpgSources(manualEpgSources);
+    const previousGuideOff = StorageService.getGuideOffSources();
+    StorageService.setGuideOffSources(guideOff);
 
     const autoPlayBtn = $('#auto-play .toggle-option.active', this.container);
     if (autoPlayBtn) StorageService.setAutoPlay(autoPlayBtn.dataset.value === 'on');
@@ -2852,6 +2873,8 @@ export class Settings {
     }
 
     this.saveShowHidden();
+    const hideArabicBtn = $('#hide-arabic .toggle-option.active', this.container);
+    if (hideArabicBtn) StorageService.setHideArabic(hideArabicBtn.dataset.value === 'on');
 
     const tzModeBtn = $('#tz-mode .toggle-option.active', this.container);
     if (tzModeBtn?.dataset.value) StorageService.setTzMode(tzModeBtn.dataset.value as TzMode);
@@ -2980,7 +3003,11 @@ export class Settings {
         !== JSON.stringify(previousManualEpgSources)
       || sig(stored) !== sig(nextSources)
       || offsetSig(this.storedEpgOffsets) !== offsetSig(this.epgOffsets);
-    this.onSave(dataChanged ? 'reload' : 'apply');
+    // A guide switch alone keeps the channel and catalog caches, which a
+    // reload would download again.
+    const guideChanged = JSON.stringify(previousGuideOff.slice().sort())
+      !== JSON.stringify(guideOff.slice().sort());
+    this.onSave(dataChanged ? 'reload' : guideChanged ? 'guide' : 'apply');
   }
 
   /**

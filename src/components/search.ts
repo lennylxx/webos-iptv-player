@@ -10,12 +10,17 @@ import { ReminderService } from '../services/reminder-service';
 import { StorageService } from '../services/storage-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
 import { persistSearchIndexes } from '../services/search-index-store';
+import { CatalogTable, emptyCatalogTable } from '../services/catalog-table';
+import { SERIES_CATALOG_RESOURCE, VOD_CATALOG_RESOURCE } from '../services/idb-schema';
 import {
   getSearchCatalogExpiresAt,
   loadAllSeries,
   loadAllVodStreams,
+  loadSeriesCategories,
+  loadVodCategories,
   onCatalogListRefreshed,
 } from '../services/xtream-catalog';
+import { hasArabicScript } from '../utils/arabic-script';
 import {
   prepareNameSearchItems,
   prepareSearchItems,
@@ -143,13 +148,29 @@ function sameCatalogSource(left: SearchCachedNames | null, right: SearchCachedNa
 // Up from the box reveals the tab bar; Back returns to Live. The global key
 // handler ignores INPUT keydowns, so the box owns its own text input + focus-out
 // keys.
+// Categories named in Arabic script hide their titles from Search, as the
+// Movies and Series browsers hide the categories themselves. A list that
+// cannot load hides nothing by category.
+async function arabicCategoryIds(
+  account: PlaylistEntry,
+  signal: AbortSignal,
+): Promise<{ vod: Set<string>; series: Set<string> }> {
+  const ids = (categories: Array<{ id: string; name: string }>) =>
+    new Set(categories.filter(category => hasArabicScript(category.name)).map(category => category.id));
+  const [vod, series] = await Promise.all([
+    loadVodCategories(account, signal).then(ids, () => new Set<string>()),
+    loadSeriesCategories(account, signal).then(ids, () => new Set<string>()),
+  ]);
+  return { vod, series };
+}
+
 export class Search {
   private nav: SpatialNav;
   readonly focusScope: FocusScope;
   private account: PlaylistEntry | null = null;
   private query = '';
-  private allVod: VodItem[] = [];
-  private allSeries: SeriesItem[] = [];
+  private allVod: CatalogTable<VodItem> = emptyCatalogTable();
+  private allSeries: CatalogTable<SeriesItem> = emptyCatalogTable();
   private programIndex: ProgramResult[] = [];
   private programRuns = new ProgrammeRuns();
   // The catalog-cache selections behind allVod / allSeries, when available.
@@ -210,8 +231,8 @@ export class Search {
   } | null = null;
   // The catalog lists the worker ranks, which can trail allVod/allSeries
   // while a refresh is posted; worker indices map onto these.
-  private indexedVod: VodItem[] = [];
-  private indexedSeries: SeriesItem[] = [];
+  private indexedVod: CatalogTable<VodItem> = emptyCatalogTable();
+  private indexedSeries: CatalogTable<SeriesItem> = emptyCatalogTable();
   // How this session's index reached the worker, for its diagnostic event.
   private indexStats = { startedAt: 0, hintAt: 0, persisted: 0, built: 0, posted: 0 };
   // The latest chunked post of each source; a source posts one sequence at a time.
@@ -222,8 +243,8 @@ export class Search {
   private workerIndexedAccountId: string | null = null;
   private workerIndexedGeneration: number | null = null;
   private workerResetGeneration: number | null = null;
-  private workerIndexedVod: VodItem[] | null = null;
-  private workerIndexedSeries: SeriesItem[] | null = null;
+  private workerIndexedVod: CatalogTable<VodItem> | null = null;
+  private workerIndexedSeries: CatalogTable<SeriesItem> | null = null;
   private releaseWorker: (() => void) | null = null;
   private readonly scrollGuard = new VirtualScrollGuard();
 
@@ -278,8 +299,8 @@ export class Search {
     this.cancelScheduledQuery();
     if (this.catalogLoad && this.catalogLoad.accountId !== account?.id) this.abortCatalogLoad();
     if (this.loadedFor !== account?.id) {
-      this.allVod = [];
-      this.allSeries = [];
+      this.allVod = emptyCatalogTable();
+      this.allSeries = emptyCatalogTable();
       this.vodCache = null;
       this.seriesCache = null;
       this.loadedFor = null;
@@ -442,8 +463,8 @@ export class Search {
     this.pendingIndex = null;
     this.workerSession++;
     this.recoveryRetry = null;
-    this.allVod = [];
-    this.allSeries = [];
+    this.allVod = emptyCatalogTable();
+    this.allSeries = emptyCatalogTable();
     this.vodCache = null;
     this.seriesCache = null;
     this.loadedFor = null;
@@ -516,17 +537,25 @@ export class Search {
   }
 
   private async fetchCatalog(account: PlaylistEntry, signal: AbortSignal): Promise<CatalogSources> {
-    const [vod, series] = await Promise.all([
+    const [vod, series, arabic] = await Promise.all([
       captureCatalogLoad(loadAllVodStreams(account, signal)),
       captureCatalogLoad(loadAllSeries(account, signal)),
+      StorageService.getHideArabic() ? arabicCategoryIds(account, signal) : Promise.resolve(null),
     ]);
     if (signal.aborted || this.account?.id !== account.id
       || this.catalogController?.signal !== signal) return { movies: false, series: false };
     const concealing = ParentalControlService.concealing;
+    const hiding = concealing || arabic !== null;
+    const vodHidden = (item: VodItem): boolean =>
+      (arabic !== null && (hasArabicScript(item.name) || arabic.vod.has(item.categoryId)))
+      || (concealing && isVodConcealed(item));
+    const seriesHidden = (item: SeriesItem): boolean =>
+      (arabic !== null && (hasArabicScript(item.name) || arabic.series.has(item.categoryId)))
+      || (concealing && isSeriesConcealed(item));
     if (vod.ok) {
-      const visible = selectCatalogItems(vod.data, concealing, isVodConcealed);
-      const cache = cachedNamesRequest(vod.data, visible.items, visible.selection);
-      if (!sameCatalogSource(this.vodCache, cache)) this.allVod = visible.items;
+      const visible = selectCatalogItems(vod.data, hiding, vodHidden);
+      const cache = cachedNamesRequest(visible);
+      if (!sameCatalogSource(this.vodCache, cache)) this.allVod = visible;
       this.vodCache = cache;
     } else {
       log.error(
@@ -537,9 +566,9 @@ export class Search {
       );
     }
     if (series.ok) {
-      const visible = selectCatalogItems(series.data, concealing, isSeriesConcealed);
-      const cache = cachedNamesRequest(series.data, visible.items, visible.selection);
-      if (!sameCatalogSource(this.seriesCache, cache)) this.allSeries = visible.items;
+      const visible = selectCatalogItems(series.data, hiding, seriesHidden);
+      const cache = cachedNamesRequest(visible);
+      if (!sameCatalogSource(this.seriesCache, cache)) this.allSeries = visible;
       this.seriesCache = cache;
     } else {
       log.error(
@@ -578,7 +607,8 @@ export class Search {
   private onCatalogRefreshed(key: string, changed = true): void {
     const account = this.account;
     if (!account || this.loadedFor !== account.id) return;
-    if (key !== `${account.id}|vod_all` && key !== `${account.id}|series_all`) return;
+    if (key !== `${account.id}|${VOD_CATALOG_RESOURCE}`
+      && key !== `${account.id}|${SERIES_CATALOG_RESOURCE}`) return;
     if (!changed) {
       void getSearchCatalogExpiresAt(account.id).then(expiresAt => {
         if (this.account?.id === account.id && this.loadedFor === account.id) {
@@ -725,12 +755,12 @@ export class Search {
     } else if (el.dataset.programIndex !== undefined) {
       void this.activateProgram(parseInt(el.dataset.programIndex, 10), query);
     } else if (this.account && el.dataset.streamId !== undefined) {
-      const v = this.allVod.find((x) => x.streamId === el.dataset.streamId);
+      const v = this.visibleMovies.find((x) => x.streamId === el.dataset.streamId);
       if (!v) return;
       rememberQuery(query, catalogParentalRequest('vod', { ...v, id: v.streamId }));
       this.handlers.onOpenMovie(this.account, v);
     } else if (this.account && el.dataset.seriesId !== undefined) {
-      const s = this.allSeries.find((x) => x.seriesId === el.dataset.seriesId);
+      const s = this.visibleSeries.find((x) => x.seriesId === el.dataset.seriesId);
       if (!s) return;
       rememberQuery(query, catalogParentalRequest('series', { ...s, id: s.seriesId }));
       this.handlers.onOpenSeries(this.account, s);
@@ -985,7 +1015,7 @@ export class Search {
         // A newer refresh replaced this list and posts its own; an older post
         // landing after it would leave the worker on the older list.
         if (items !== (source === 'movies' ? this.allVod : this.allSeries)) continue;
-        const result = this.postSource(sessionId, source, items.length, index => items[index].name);
+        const result = this.postSource(sessionId, source, items.length, index => items.nameAt(index));
         const own = this.sourcePosts[source];
         if (!await result) return false;
         // A newer post replaced this one and shares its outcome, not its list.
@@ -1012,8 +1042,8 @@ export class Search {
     const accepted = response.accepted && request.sessionId === this.workerSession;
     if (accepted && request.reset) {
       this.workerResetGeneration = generation;
-      this.indexedVod = [];
-      this.indexedSeries = [];
+      this.indexedVod = emptyCatalogTable();
+      this.indexedSeries = emptyCatalogTable();
     }
     return accepted;
   }
@@ -1228,10 +1258,10 @@ export class Search {
       this.resultLimit,
     );
     const movies = this.account
-      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allVod), query, this.resultLimit)
+      ? rankPreparedNamesTopK(prepareNameSearchItems(catalogNames(this.allVod)), query, this.resultLimit)
       : { items: [], hasMore: false };
     const series = this.account
-      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allSeries), query, this.resultLimit)
+      ? rankPreparedNamesTopK(prepareNameSearchItems(catalogNames(this.allSeries)), query, this.resultLimit)
       : { items: [], hasMore: false };
     return {
       channels: {
@@ -1243,11 +1273,11 @@ export class Search {
         hasMore: programmes.hasMore,
       },
       movies: {
-        indices: indicesOf(this.allVod, movies.items),
+        indices: movies.items.map(item => item.index),
         hasMore: movies.hasMore,
       },
       series: {
-        indices: indicesOf(this.allSeries, series.items),
+        indices: series.items.map(item => item.index),
         hasMore: series.hasMore,
       },
     };
@@ -1346,7 +1376,7 @@ export class Search {
     // Any list may be replaced meanwhile, and a newer post of a source may
     // carry an older list: post until the worker holds the current lists,
     // each from this rebuild's own post.
-    const posted: Partial<Record<SearchIndexSource, { list: unknown[]; post?: SourcePost }>> = {};
+    const posted: Partial<Record<SearchIndexSource, { list: { length: number }; post?: SourcePost }>> = {};
     let channels: Channel[];
     let changed: boolean;
     do {
@@ -1356,11 +1386,11 @@ export class Search {
       const movies = this.allVod;
       const series = this.allSeries;
       channels = current;
-      const sources: Array<[SearchIndexSource, unknown[], (index: number) => string[] | string]> = [
+      const sources: Array<[SearchIndexSource, { length: number }, (index: number) => string[] | string]> = [
         ['channels', current, index => channelDocument(current[index])],
         ['programmes', programs, index => programDocument(programs[index])],
-        ['movies', movies, index => movies[index].name],
-        ['series', series, index => series[index].name],
+        ['movies', movies, index => movies.nameAt(index)],
+        ['series', series, index => series.nameAt(index)],
       ];
       for (const [source, list, documentAt] of sources) {
         const last = posted[source];
@@ -1385,13 +1415,13 @@ export class Search {
 
   private applyQueryResponse(
     response: SearchQueryResponse,
-    vod: VodItem[],
-    series: SeriesItem[],
+    vod: CatalogTable<VodItem>,
+    series: CatalogTable<SeriesItem>,
   ): void {
     this.visibleChannels = itemsAt(PlaylistService.channels, response.channels.indices);
     this.visiblePrograms = itemsAt(this.programIndex, response.programmes.indices);
-    this.visibleMovies = itemsAt(vod, response.movies.indices);
-    this.visibleSeries = itemsAt(series, response.series.indices);
+    this.visibleMovies = rowsAt(vod, response.movies.indices);
+    this.visibleSeries = rowsAt(series, response.series.indices);
     this.hasMoreResults = response.channels.hasMore || response.programmes.hasMore
       || response.movies.hasMore || response.series.hasMore;
   }
@@ -1834,6 +1864,22 @@ function itemsAt<T>(items: T[], indices: number[]): T[] {
     if (item !== undefined) selected.push(item);
   }
   return selected;
+}
+
+function rowsAt<T extends VodItem | SeriesItem>(table: CatalogTable<T>, indices: number[]): T[] {
+  const selected: T[] = [];
+  for (const index of indices) {
+    const item = table.item(index);
+    if (item !== undefined) selected.push(item);
+  }
+  return selected;
+}
+
+// Only the main-thread fallback ranks names here; the worker keeps its own copy.
+function catalogNames(table: CatalogTable<VodItem | SeriesItem>): Array<{ name: string; index: number }> {
+  const names: Array<{ name: string; index: number }> = new Array(table.length);
+  for (let index = 0; index < table.length; index++) names[index] = { name: table.nameAt(index), index };
+  return names;
 }
 
 function indicesOf<T>(items: T[], selected: T[]): number[] {

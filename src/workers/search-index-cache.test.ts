@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG } from '../config';
+import { CatalogColumnsBuilder } from '../services/catalog-table';
 import { cachedChannelsRequest, ProgrammeRuns, sampleDocuments } from '../components/search-cache-source';
 import type { Channel } from '../types';
 import type { CachedRecord, SearchCacheKey, SearchCacheReader } from './search-cache-reader';
@@ -338,6 +339,22 @@ describe('SearchWorkerIndex with cached documents', () => {
       persist: expect.any(Array),
     });
     expect((await index.query(query(1, 'alpha')))?.movies.indices).toEqual([0, 1]);
+  });
+
+  it('reads catalog names from a record stored by column', async () => {
+    const builder = new CatalogColumnsBuilder('vod', 'a');
+    vod.forEach((item, i) => builder.add({ id: `m${i}`, name: item.name, poster: '', rating: '', categoryId: '1' }));
+    const memory = reader();
+    memory.records.set('catalog-cache|a|vod_all', { key: 'a|vod_all', timestamp: 30, data: builder.build() });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    const names = vod.map(item => item.name);
+    expect(await index.index({ sessionId: 1, cachedMovies: cachedNames(null, names) })).toMatchObject({
+      accepted: true,
+      loaded: { persisted: 0, built: 1 },
+    });
+    expect((await index.query(query(1, 'alpha')))?.movies.indices).toEqual([0, 1]);
+    expect((await index.query(query(1, 'bravo')))?.movies.indices).toEqual([2]);
   });
 
   it('reports a changed record so the page posts that source', async () => {

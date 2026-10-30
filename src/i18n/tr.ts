@@ -250,6 +250,8 @@ export const TR_MESSAGES = {
   'settings.editChannelListHint': 'Kanalları doğrudan listede sıralayın, gizleyin, yeniden adlandırın ve gruplayın.',
   'settings.showHidden': 'Gizli kanalları göster',
   'settings.showHiddenHint': 'Açıldığında gizli kanallar soluk görünür ve yeniden kullanılabilir.',
+  'settings.hideArabic': 'Arapça başlıkları gizle',
+  'settings.hideArabicHint': 'Adında Arap alfabesi bulunan kanalları, filmleri, dizileri ve kategorileri gizler.',
   'settings.resetCustomization': 'Özelleştirmeyi Sıfırla',
   'settings.resetCustomizationHint': 'Sıralamayı, adları, grupları, otomatik EPG eşleştirmesini ve kaynak saat düzeltmesini geri yükler.',
   'settings.resetCustomizationTitle': 'Kanal özelleştirmesi sıfırlansın mı?',

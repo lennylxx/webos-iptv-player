@@ -12,6 +12,86 @@
   </p>
 </div>
 
+## About this fork
+
+This is a personal fork of [lennylxx/webos-iptv-player](https://github.com/lennylxx/webos-iptv-player).
+It changes how Xtream Search works so it stays fast and stable on TVs with
+little memory, and makes far fewer requests to the provider. Everything
+else works as in the original.
+
+Tested on an LG **NANO866NA** (webOS 5, Chromium 68). On this TV the app is
+killed at about 630–700 MB of memory, and its browser storage quota is only
+about 48 MB.
+
+### Search on low-memory TVs
+
+In the original, Search downloaded every movie and series category
+separately, two at a time with a 60-second budget. On a large panel that
+meant hundreds of requests per search. Search said "Preparing search…" for
+minutes and often lost series. The repeated requests could also get the
+account blocked (HTTP 403). In this fork:
+
+- **One request per catalog.** Search loads all movies with one unfiltered
+  `get_vod_streams` call and all series with one `get_series` call. The two
+  downloads run one after the other, never at the same time.
+- **No per-category fallback.** If a whole-catalog request fails, the app
+  does not retry it by category. It waits an hour before asking again, so a
+  provider that refuses is not hammered.
+- **Parsed while it downloads.** Each catalog is read one title at a time as
+  it arrives. Only the fields the app uses are kept, so a catalog of tens of
+  megabytes is never held as one string or as raw JSON objects.
+- **Compact storage in memory.** Titles are stored by column: one packed
+  string per field, plus offsets, and poster URLs share their directory. A
+  few hundred thousand titles take a fraction of the memory that one object
+  per title would.
+- **Preloaded in the background.** About 10 seconds after the app starts,
+  the catalogs download in the background. By the time you open Search it
+  is usually instant. Search and the preload share one download, and closing
+  Search does not cancel it.
+- **Kept in memory until the refresh interval.** The catalogs stay in memory
+  for the session until the **Xtream content catalog refresh interval** in Settings expires. The
+  catalogs (about 21 MB of movies and 5 MB of series on the test panel) are
+  too large for the TV's browser storage, so they are downloaded again on
+  the next launch.
+- **Results appear early.** Queries run as soon as channels are indexed.
+  Programs, movies and series join the results as each one arrives.
+- **The channel list is never evicted.** When storage is full, saving
+  catalogs or other caches no longer evicts the saved channel list. The
+  other write is skipped instead, so starting the app never re-downloads the
+  playlist because of Search.
+
+Measured on the NANO866NA with a large panel and the guide off:
+
+| | Memory | Notes |
+| --- | --- | --- |
+| App start | ~80 MB | |
+| Background preload done | ~240 MB | movies ready ~80 s, series ~110 s after launch, 2 requests |
+| Search peak | ~370 MB | no crash; index ready ~4 s after the catalogs |
+
+### Turn the guide off per account
+
+The program guide's search index can take over 300 MB for a large panel,
+enough to crash the TV with Search loaded. Each Xtream account in
+**Settings** now has a **Program Guide** switch. Turning it off stops downloading
+and indexing that account's guide. Changing it reloads only the guide, not
+the channels or catalogs.
+
+### Hide Arabic titles
+
+**Settings → Channels → Hide Arabic titles** hides everything whose name
+uses Arabic script:
+
+- **Live:** channels, and channel groups along with every channel in them.
+- **Movies and Series:** categories with everything in them, and individual
+  titles.
+- **Continue Watching and Watchlist:** titles with Arabic names.
+- **Search:** Arabic titles, and titles in an Arabic-named category.
+
+Only Arabic letters count, so Latin tags such as "AR |" are not matched. It
+is separate from parental controls: there is no PIN, and unlocking does not
+show these items. Switching it filters what is already loaded and downloads
+nothing.
+
 ## Screenshots
 
 | Channel list | Live preview |

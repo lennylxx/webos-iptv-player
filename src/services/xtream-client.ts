@@ -1,4 +1,6 @@
-import { FetchTextError, fetchLimitedText } from '../utils/fetch-helper';
+import { FetchTextError, fetchLimitedText, fetchLimitedTextStream } from '../utils/fetch-helper';
+import { JsonArrayStream, JsonArrayStreamError } from '../utils/json-array-stream';
+import { CatalogColumnsBuilder, type CatalogColumns } from './catalog-table';
 import { xtreamPlayerApi, type XtreamCredentials } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
 import type { VodCategory, VodItem, VodInfo, SeriesCategory, SeriesItem, SeriesInfo, Episode, SidecarSubtitle } from '../types';
@@ -219,20 +221,113 @@ async function fetchJson(
   }
 }
 
-async function fetchCatalogArray(
+// Catalog lists are parsed one element at a time as they download and mapped
+// at once to the few fields the app keeps, so a list of tens of megabytes
+// never sits in memory as one string or as its raw parsed objects.
+async function streamCatalogList(
   url: string,
   maxBytes: number,
+  timeout: number,
   idField: 'category_id' | 'stream_id' | 'series_id',
+  onItem: (item: Record<string, unknown>) => void,
   signal?: AbortSignal,
-): Promise<Record<string, unknown>[]> {
-  const data = await fetchJsonStrict(url, CATALOG_TIMEOUT, maxBytes, signal);
-  const items = asArray(data);
-  if (!Array.isArray(data) || (data.length && !items.some(item => toStr(item[idField]) !== ''))) {
+): Promise<void> {
+  let objects = 0;
+  let withId = 0;
+  const parser = new JsonArrayStream(value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const item = value as Record<string, unknown>;
+    objects++;
+    if (toStr(item[idField]) !== '') withId++;
+    onItem(item);
+  });
+  try {
+    await fetchLimitedTextStream(url, maxBytes, timeout, signal, text => parser.push(text));
+    parser.finish();
+  } catch (err) {
+    const requestError = err instanceof JsonArrayStreamError
+      ? err.code === 'not_array'
+        ? new XtreamRequestError('request_failed', 'Xtream catalog response was not a valid list')
+        : new XtreamRequestError('invalid_json', 'Xtream response was not valid JSON')
+      : mapFetchError(err);
+    logRequestFailure(url, requestError, timeout, maxBytes);
+    throw requestError;
+  }
+  if (objects && !withId) {
     const error = new XtreamRequestError('request_failed', 'Xtream catalog response was not a valid list');
-    logRequestFailure(url, error, CATALOG_TIMEOUT, maxBytes);
+    logRequestFailure(url, error, timeout, maxBytes);
     throw error;
   }
+}
+
+async function fetchCatalogList<T>(
+  url: string,
+  maxBytes: number,
+  timeout: number,
+  idField: 'category_id' | 'stream_id' | 'series_id',
+  map: (item: Record<string, unknown>) => T | null,
+  signal?: AbortSignal,
+): Promise<T[]> {
+  const items: T[] = [];
+  await streamCatalogList(url, maxBytes, timeout, idField, (item) => {
+    const mapped = map(item);
+    if (mapped !== null) items.push(mapped);
+  }, signal);
   return items;
+}
+
+function vodItem(accountId: string, s: Record<string, unknown>): VodItem | null {
+  const streamId = toStr(s.stream_id);
+  return streamId ? {
+    accountId,
+    streamId,
+    name: toStr(s.name),
+    poster: toStr(s.stream_icon),
+    rating: toStr(s.rating),
+    categoryId: toStr(s.category_id),
+    containerExtension: toStr(s.container_extension),
+    ...catalogSortMetadata(s),
+  } : null;
+}
+
+function seriesItem(accountId: string, s: Record<string, unknown>): SeriesItem | null {
+  const seriesId = toStr(s.series_id);
+  return seriesId ? {
+    accountId,
+    seriesId,
+    name: toStr(s.name),
+    poster: toStr(s.cover),
+    rating: toStr(s.rating),
+    categoryId: toStr(s.category_id),
+    ...catalogSortMetadata(s, true),
+  } : null;
+}
+
+// Whole catalogs go straight into columns as each title is parsed.
+async function fetchCatalogColumns(
+  url: string,
+  kind: 'vod' | 'series',
+  accountId: string,
+  signal?: AbortSignal,
+): Promise<CatalogColumns> {
+  const builder = new CatalogColumnsBuilder(kind, accountId);
+  await streamCatalogList(
+    url,
+    CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES,
+    CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS,
+    kind === 'vod' ? 'stream_id' : 'series_id',
+    (raw) => {
+      if (kind === 'vod') {
+        const item = vodItem(accountId, raw);
+        if (item) builder.add({ ...item, id: item.streamId });
+      } else {
+        const item = seriesItem(accountId, raw);
+        if (item) builder.add({ ...item, id: item.seriesId });
+      }
+    },
+    signal,
+  );
+  return builder.build();
 }
 
 // Coerce an unknown JSON value to an array of plain objects (empty if not an array).
@@ -426,37 +521,34 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
     },
 
     async getVodCategories(signal?: AbortSignal): Promise<VodCategory[]> {
-      const arr = await fetchCatalogArray(
+      return fetchCatalogList(
         xtreamPlayerApi(creds, 'get_vod_categories'),
         CONFIG.XTREAM.CATEGORY_MAX_BYTES,
+        CATALOG_TIMEOUT,
         'category_id',
+        (c) => {
+          const id = toStr(c.category_id);
+          return id ? { id, name: toStr(c.category_name) } : null;
+        },
         signal,
       );
-      return arr
-        .map((c) => ({ id: toStr(c.category_id), name: toStr(c.category_name) }))
-        .filter((c) => c.id !== '');
     },
 
     async getVodStreams(categoryId?: string, signal?: AbortSignal): Promise<VodItem[]> {
       const params = categoryId ? { category_id: categoryId } : undefined;
-      const arr = await fetchCatalogArray(
+      return fetchCatalogList(
         xtreamPlayerApi(creds, 'get_vod_streams', params),
-        CONFIG.XTREAM.CATALOG_MAX_BYTES,
+        categoryId ? CONFIG.XTREAM.CATALOG_MAX_BYTES : CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES,
+        categoryId ? CATALOG_TIMEOUT : CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS,
         'stream_id',
+        s => vodItem(accountId, s),
         signal,
       );
-      return arr
-        .map((s) => ({
-          accountId,
-          streamId: toStr(s.stream_id),
-          name: toStr(s.name),
-          poster: toStr(s.stream_icon),
-          rating: toStr(s.rating),
-          categoryId: toStr(s.category_id),
-          containerExtension: toStr(s.container_extension),
-          ...catalogSortMetadata(s),
-        }))
-        .filter((v) => v.streamId !== '');
+    },
+
+    /** Every movie on the account, from one unfiltered request. */
+    getVodCatalog(signal?: AbortSignal): Promise<CatalogColumns> {
+      return fetchCatalogColumns(xtreamPlayerApi(creds, 'get_vod_streams'), 'vod', accountId, signal);
     },
 
     async getVodInfo(vodId: string, signal?: AbortSignal): Promise<VodInfo | null> {
@@ -486,36 +578,34 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
     },
 
     async getSeriesCategories(signal?: AbortSignal): Promise<SeriesCategory[]> {
-      const arr = await fetchCatalogArray(
+      return fetchCatalogList(
         xtreamPlayerApi(creds, 'get_series_categories'),
         CONFIG.XTREAM.CATEGORY_MAX_BYTES,
+        CATALOG_TIMEOUT,
         'category_id',
+        (c) => {
+          const id = toStr(c.category_id);
+          return id ? { id, name: toStr(c.category_name) } : null;
+        },
         signal,
       );
-      return arr
-        .map((c) => ({ id: toStr(c.category_id), name: toStr(c.category_name) }))
-        .filter((c) => c.id !== '');
     },
 
     async getSeries(categoryId?: string, signal?: AbortSignal): Promise<SeriesItem[]> {
       const params = categoryId ? { category_id: categoryId } : undefined;
-      const arr = await fetchCatalogArray(
+      return fetchCatalogList(
         xtreamPlayerApi(creds, 'get_series', params),
-        CONFIG.XTREAM.CATALOG_MAX_BYTES,
+        categoryId ? CONFIG.XTREAM.CATALOG_MAX_BYTES : CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES,
+        categoryId ? CATALOG_TIMEOUT : CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS,
         'series_id',
+        s => seriesItem(accountId, s),
         signal,
       );
-      return arr
-        .map((s) => ({
-          accountId,
-          seriesId: toStr(s.series_id),
-          name: toStr(s.name),
-          poster: toStr(s.cover),
-          rating: toStr(s.rating),
-          categoryId: toStr(s.category_id),
-          ...catalogSortMetadata(s, true),
-        }))
-        .filter((s) => s.seriesId !== '');
+    },
+
+    /** Every series on the account, from one unfiltered request. */
+    getSeriesCatalog(signal?: AbortSignal): Promise<CatalogColumns> {
+      return fetchCatalogColumns(xtreamPlayerApi(creds, 'get_series'), 'series', accountId, signal);
     },
 
     async getSeriesInfo(seriesId: string, signal?: AbortSignal): Promise<SeriesInfo | null> {

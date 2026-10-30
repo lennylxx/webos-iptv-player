@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Channel } from '../types';
+import type { Channel, VodItem } from '../types';
+import { CatalogColumnsBuilder, CatalogTable } from '../services/catalog-table';
 
 const refs = vi.hoisted(() => new WeakMap<object, unknown>());
 vi.mock('../services/idb-cache', () => ({
@@ -19,6 +20,12 @@ function channel(name: string, group: string, extra: Partial<Channel> = {}): Cha
 }
 
 const RECORD = { store: 'playlist-cache' as const, key: 'k', timestamp: 1 };
+
+function movies(names: string[]): CatalogTable<VodItem> {
+  const builder = new CatalogColumnsBuilder('vod', 'a');
+  names.forEach((name, i) => builder.add({ id: `m${i}`, name, poster: '', rating: '', categoryId: '1' }));
+  return new CatalogTable<VodItem>(builder.build());
+}
 
 describe('search cache sources', () => {
   it('samples evenly spaced documents, first and last included', () => {
@@ -54,37 +61,42 @@ describe('search cache sources', () => {
   });
 
   it('skips concealment checks when nothing is concealed', () => {
-    const items = [{ name: 'Alpha' }, { name: 'Bravo' }, { name: 'Charlie' }];
-    const concealed = vi.fn((item: { name: string }) => item.name === 'Bravo');
+    const table = movies(['Alpha', 'Bravo', 'Charlie']);
+    const concealed = vi.fn((item: VodItem) => item.name === 'Bravo');
 
-    const open = selectCatalogItems(items, false, concealed);
-    expect(open).toEqual({ items, selection: null });
-    expect(open.items).toBe(items);
+    const open = selectCatalogItems(table, false, concealed);
+    expect(open).toBe(table);
+    expect(open.rows()).toBeNull();
     expect(concealed).not.toHaveBeenCalled();
 
-    const visible = selectCatalogItems(items, true, concealed);
-    expect(visible.items.map(item => item.name)).toEqual(['Alpha', 'Charlie']);
-    expect(visible.selection).toEqual(new Uint32Array([0, 2]));
+    const visible = selectCatalogItems(table, true, concealed);
+    expect([visible.nameAt(0), visible.nameAt(1)]).toEqual(['Alpha', 'Charlie']);
+    expect(visible.length).toBe(2);
+    expect(visible.rows()).toEqual(new Uint32Array([0, 2]));
+    expect(visible.item(1)).toMatchObject({ streamId: 'm2', name: 'Charlie' });
   });
 
   it('maps catalog names only for a remembered cache record', () => {
-    const items = [{ name: 'Alpha' }, { name: 'Bravo' }];
-    expect(cachedNamesRequest(items, items, null)).toBeNull();
+    const table = movies(['Alpha', 'Bravo']);
+    expect(cachedNamesRequest(table)).toBeNull();
 
-    const ref = { store: 'catalog-cache', key: 'a|vod_all', timestamp: 2 };
-    refs.set(items, ref);
-    expect(cachedNamesRequest(items, items, null)).toMatchObject({
+    const ref = { store: 'catalog-cache', key: 'a|vod_all-v3', timestamp: 2 };
+    refs.set(table.columns!, ref);
+    expect(cachedNamesRequest(table)).toMatchObject({
       record: ref,
       length: 2,
       selection: null,
       samples: { indices: [0, 1], documents: [['Alpha'], ['Bravo']] },
     });
-    const selection = new Uint32Array([1]);
-    expect(cachedNamesRequest(items, [items[1]], selection)?.selection).toBe(selection);
-    expect(cachedNamesRequest(items, items, selection)).toBeNull();
+    const visible = table.select(item => item.name === 'Bravo');
+    expect(cachedNamesRequest(visible)).toMatchObject({
+      length: 2,
+      selection: new Uint32Array([1]),
+      samples: { indices: [0], documents: [['Bravo']] },
+    });
 
-    refs.set(items, RECORD);
-    expect(cachedNamesRequest(items, items, null)).toBeNull();
+    refs.set(table.columns!, RECORD);
+    expect(cachedNamesRequest(table)).toBeNull();
   });
 
   it('builds programme runs only when every run is cached consistently', () => {
