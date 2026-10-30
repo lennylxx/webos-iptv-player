@@ -71,13 +71,14 @@ Procedural workflows live in `.agents/skills/` (open Agent Skills format;
 ```bash
 npm install                    # setup
 npm run typecheck              # tsc --noEmit (strict)
+npm run typecheck:all          # app + service + benchmarks typecheck
 npm run lint                   # stylelint + eslint Chromium 53 compat gate
 npm run build                  # typecheck + esbuild bundle into dist/
 npm run preview                # build + serve dist/ at http://localhost:3000
 npm test                       # vitest run (unit/integration)
 npm run test:watch             # vitest watch
 npm run test:e2e               # Playwright, 2 projects (see legacy-engine)
-npm run test:all               # lint + unit + e2e
+npm run test:all               # typecheck + lint + unit + e2e
 npm run screenshots            # regenerate README screenshots
 npm run service:smoke          # bundled service on real Node.js 0.12.2
 npm run service:smoke:matrix   # webOS 4-26 Node runtime matrix
@@ -96,9 +97,11 @@ and `tsc` strictness are real gates.
 
 ## CI
 
-`.github/workflows/build.yml` runs typecheck (app, `service`, **and**
-`benchmarks`), `npm run lint` and the compat gate, `vitest run`, the esbuild
-bundle, `service:smoke:matrix`, and packages the IPK. Pushes/PRs to `main`
+`.github/workflows/build.yml` runs a `check` job (`typecheck:all` —
+app, `service`, **and** `benchmarks`; `npm run lint` and the compat gate;
+`vitest run`) in parallel with Playwright E2E split across four `e2e`
+shards; once both pass, `package` runs the esbuild bundle,
+`service:smoke:matrix`, and packages the IPK. Pushes/PRs to `main`
 build; tagged `v*` pushes publish a GitHub release with the `.ipk`.
 
 ## Versioning

@@ -33,9 +33,7 @@ npm run build
 
 # Compile the bundled service (TypeScript -> Node CommonJS)
 info "Building service..."
-rm -rf build/bundled-service
-npx tsc -p bundled-service/tsconfig.json
-node scripts/service-compat-gate.mjs build/bundled-service
+npm run service:build
 # Node.js 0.12.2 ships only as x64, so Apple Silicon needs Rosetta; without
 # it, leave the smoke to CI rather than block packaging.
 if [ "$(uname -sm)" = "Darwin arm64" ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
@@ -44,9 +42,6 @@ if [ "$(uname -sm)" = "Darwin arm64" ] && ! arch -x86_64 /usr/bin/true 2>/dev/nu
 else
   node scripts/run-service-smoke.mjs
 fi
-cp bundled-service/package.json build/bundled-service/
-cp bundled-service/src/services.json build/bundled-service/
-cp bundled-service/src/setup/setup-page.html build/bundled-service/setup/
 
 # Package IPK (--no-minify since esbuild already minifies)
 info "Packaging IPK..."

@@ -39,18 +39,24 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-# webOS 4 / Chromium 53 compatibility gate (CSS features + JS APIs)
-info "Linting (webOS 4 / Chromium 53 compat gate)..."
-npm run lint
+if [ "$MODE" = "all" ]; then
+  info "Running type check, lint, unit, and end-to-end tests..."
+  npm run test:all
+else
+  info "Type checking (app, service, benchmarks)..."
+  npm run typecheck:all
 
-if [ "$MODE" = "unit" ] || [ "$MODE" = "all" ]; then
-  info "Running unit tests (Vitest)..."
-  npm run test
-fi
+  # webOS 4 / Chromium 53 compatibility gate (CSS features + JS APIs)
+  info "Linting (webOS 4 / Chromium 53 compat gate)..."
+  npm run lint
 
-if [ "$MODE" = "e2e" ] || [ "$MODE" = "all" ]; then
-  info "Running end-to-end tests (Playwright)..."
-  npm run test:e2e
+  if [ "$MODE" = "unit" ]; then
+    info "Running unit tests (Vitest)..."
+    npm run test
+  else
+    info "Running end-to-end tests (Playwright)..."
+    npm run test:e2e
+  fi
 fi
 
 info "All tests passed."
