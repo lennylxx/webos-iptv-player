@@ -63,6 +63,7 @@
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   overflow-y: auto;
+  overflow-anchor: none;
   z-index: 2;
 }
 .catalog-rails-spacer { height: 45%; }
@@ -119,6 +120,7 @@
 .catalog-grid-cell { position: absolute; width: 220px; height: 371px; }
 
 .catalog-tile { width: 220px; flex: 0 0 auto; cursor: pointer; }
+.catalog-tile-placeholder { cursor: default; }
 .catalog-poster-wrap {
   position: relative;
   width: 220px; height: 330px;

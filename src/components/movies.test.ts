@@ -63,7 +63,30 @@ function pressKey(view: { handleAction(action: Action): void }, action: Action):
   Focus.flush();
 }
 
+// Lays browse out as on the TV: the rails scroller is one screen tall, and
+// each rail sits one stride below the last, moved by `scroll`. A tall screen
+// shows every rail at once.
+const RAIL_TOP = 500;
+const RAIL_STRIDE = 485;
+const layout = { on: false, height: 1080, scroll: 0 };
+const nativeRect = Element.prototype.getBoundingClientRect;
+function box(top: number, height: number): DOMRect {
+  return { top, bottom: top + height, left: 0, right: 1920, width: 1920, height, x: 0, y: top, toJSON: () => ({}) };
+}
+Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+  if (layout.on && this.classList.contains('catalog-rails')) return box(0, layout.height);
+  if (layout.on && this.classList.contains('catalog-rail') && this.parentElement) {
+    const rails = Array.from(this.parentElement.children).filter(el => el.classList.contains('catalog-rail'));
+    return box(RAIL_TOP + rails.indexOf(this) * RAIL_STRIDE - layout.scroll, RAIL_STRIDE);
+  }
+  return nativeRect.call(this);
+};
+function tallScreen(): void {
+  Object.assign(layout, { on: true, height: 100000, scroll: 0 });
+}
+
 beforeEach(() => {
+  Object.assign(layout, { on: false, height: 1080, scroll: 0 });
   document.documentElement.classList.remove('keyboard-nav');
   Focus.uninstall();
   Element.prototype.scrollIntoView = vi.fn();
@@ -588,6 +611,7 @@ describe('Movies browse + grid', () => {
       categoryId === '3'
         ? Promise.reject(new Error('timeout'))
         : Promise.resolve([vod(`${categoryId}0`, `Movie ${categoryId}`, categoryId)]));
+    tallScreen();
     const warns = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
@@ -599,7 +623,7 @@ describe('Movies browse + grid', () => {
     }
     expect(container.querySelector('.catalog-see-all[data-category-id="3"]')).toBeNull();
     expect(eventLines(errors, 'xtream.view.load.failed').join('\n')).toContain('operation=rail mode=vod');
-    expect(eventLines(warns, 'xtream.view.rails.partial')[0]).toContain('kept=5 total=6');
+    expect(eventLines(warns, 'xtream.view.rails.partial')[0]).toContain('kept=5 failed=1 empty=0 total=6');
     errors.mockRestore();
     warns.mockRestore();
 
@@ -966,6 +990,7 @@ describe('Movies browse + grid', () => {
     catalogMock.loadVodCategories.mockResolvedValue(cats);
     catalogMock.loadVodStreams.mockImplementation((_account: PlaylistEntry, categoryId: string) =>
       Promise.resolve(Array.from({ length: 50 }, (_, i) => vod(`${categoryId}-${String(i)}`, `Movie ${String(i)}`, categoryId))));
+    tallScreen();
     const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
     Focus.setBase(() => view.focusScope);
     await view.open(account);
@@ -1602,5 +1627,379 @@ describe('Movies account-switch race', () => {
     expect(container.textContent).not.toContain('Alpha Movie');
     expect(container.textContent).toContain('Cat Bravo');
     expect(container.textContent).not.toContain('Cat Alpha');
+  });
+});
+
+describe('Movies progressive rails', () => {
+  const cats = (count: number) => Array.from({ length: count }, (_, i) => ({ id: String(i + 1), name: `Cat ${String(i + 1)}` }));
+  const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+  const requested = () => catalogMock.loadVodStreams.mock.calls.map((call) => call[1] as string);
+  const railKeys = () => Array.from(container.querySelectorAll<HTMLElement>('.catalog-browse [data-rail-key^="cat:"]'))
+    .map((rail) => rail.dataset.railKey);
+  const hover = (el: HTMLElement) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+  const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  // Category loads that resolve only when the test says so; the rest resolve at once.
+  function deferLoads(deferred: string[]) {
+    const pending: Record<string, (items: VodItem[]) => void> = {};
+    catalogMock.loadVodStreams.mockImplementation((_a: PlaylistEntry, categoryId: string) =>
+      deferred.includes(categoryId)
+        ? new Promise<VodItem[]>((resolve) => { pending[categoryId] = resolve; })
+        : Promise.resolve([vod(`${categoryId}0`, `Movie ${categoryId}`, categoryId)]));
+    return (categoryId: string, items = [vod(`${categoryId}0`, `Movie ${categoryId}`, categoryId)]) =>
+      pending[categoryId](items);
+  }
+  function newView() {
+    const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
+    Focus.setBase(() => view.focusScope);
+    return view;
+  }
+
+  it('shows a fast rail without waiting for a slower one above it', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    const resolve = deferLoads(['1']);
+    const view = newView();
+    const opening = view.open(account);
+    await settle();
+
+    expect(railKeys()).toEqual(['cat:1', 'cat:2', 'cat:3']);
+    expect(container.querySelector('.catalog-tile[data-item-id="20"]')).not.toBeNull();
+    expect(container.querySelector('.catalog-tile[data-item-id="30"]')).not.toBeNull();
+    const slow = container.querySelector<HTMLElement>('[data-rail-key="cat:1"]')!;
+    expect(slow.hasAttribute('data-rail-pending')).toBe(true);
+    expect(slow.querySelector('.catalog-tile[data-item-id]')).toBeNull();
+    // The focus waits on the slow rail's skeleton, then moves to its first title.
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:1', 'pending:1:0']));
+
+    resolve('1');
+    await opening;
+    await settle();
+    expect(slow.hasAttribute('data-rail-pending')).toBe(false);
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:1', 'i:1:10']));
+    expect(container.querySelector('.catalog-hero-title')?.textContent).toBe('Movie 1');
+  });
+
+  it('loads only the rails on screen and the next one, then more as browsing scrolls', async () => {
+    Object.assign(layout, { on: true, height: 1080, scroll: 0 });
+    catalogMock.loadVodCategories.mockResolvedValue(cats(7));
+    deferLoads([]);
+    const view = newView();
+    await view.open(account);
+
+    // Rails 1 and 2 reach the screen; rail 3 is the next one below.
+    expect(requested().sort()).toEqual(['1', '2', '3']);
+    expect(railKeys()).toEqual(['cat:1', 'cat:2', 'cat:3', 'cat:4', 'cat:5', 'cat:6']);
+    expect(container.querySelector('[data-rail-key="cat:4"]')?.hasAttribute('data-rail-pending')).toBe(true);
+
+    layout.scroll = 1000;
+    container.querySelector('.catalog-rails')!.dispatchEvent(new Event('scroll'));
+    await frame();
+    await settle();
+    expect(requested().sort()).toEqual(['1', '2', '3', '4', '5']);
+    expect(container.querySelector('.catalog-tile[data-item-id="40"]')).not.toBeNull();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:1', 'i:1:10']));
+  });
+
+  it('loads the rail after the one the focus moves to', async () => {
+    catalogMock.loadVodCategories.mockResolvedValue(cats(6));
+    const resolve = deferLoads(['3']);
+    const view = newView();
+    await view.open(account);
+    expect(requested().sort()).toEqual(['1', '2']);
+
+    hover(container.querySelector<HTMLElement>('.catalog-tile[data-item-id="20"]')!);
+    expect(requested().sort()).toEqual(['1', '2', '3']);
+
+    // Focus resting on a loading rail's skeleton lands on its first title.
+    hover(container.querySelector<HTMLElement>('[data-key="pending:3:0"]')!);
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:3', 'pending:3:0']));
+    expect(requested().sort()).toEqual(['1', '2', '3', '4']);
+    resolve('3');
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:3', 'i:3:30']));
+    expect(requested()).not.toContain('5');
+  });
+
+  it('keeps the hero a title picked while focus waits on a skeleton and another rail lands', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(4));
+    const resolve = deferLoads(['3', '4']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    const title = () => container.querySelector('.catalog-hero-title')?.textContent;
+    hover(container.querySelector<HTMLElement>('.catalog-tile[data-item-id="20"]')!);
+    expect(title()).toBe('Movie 2');
+    hover(container.querySelector<HTMLElement>('[data-key="pending:3:0"]')!);
+
+    resolve('4');
+    await settle();
+    expect(container.querySelector('.catalog-tile[data-item-id="40"]')).not.toBeNull();
+    expect(title()).toBe('Movie 2');
+  });
+
+  it('keeps the leading hero a sort put up when a rail lands after it', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    const resolve = deferLoads(['3']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    const title = () => container.querySelector('.catalog-hero-title')?.textContent;
+    hover(container.querySelector<HTMLElement>('.catalog-tile[data-item-id="20"]')!);
+    expect(title()).toBe('Movie 2');
+    container.querySelector<HTMLElement>('.catalog-browse .dropdown-trigger')!.click();
+    container.querySelector<HTMLElement>('.catalog-browse [data-dropdown-value="name"]')!.click();
+    expect(title()).toBe('Movie 1');
+
+    resolve('3');
+    await settle();
+    expect(container.querySelector('.catalog-tile[data-item-id="30"]')).not.toBeNull();
+    expect(title()).toBe('Movie 1');
+    expect(view.focusScope.focusKey).not.toContain('i:');
+  });
+
+  it('loads a rail again after a Search deep link canceled it', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(2));
+    catalogMock.loadVodInfo.mockResolvedValue({ plot: '', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0, poster: '', imdbId: '', tmdbId: '', year: 0 });
+    const resolve = deferLoads(['1']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    await view.openItem(account, vod('99', 'Found Movie'), vi.fn());
+    resolve('1');
+    await settle();
+    expect(container.querySelector('.catalog-browse .catalog-tile[data-item-id="10"]')).toBeNull();
+
+    view.leaveDeepLink();
+    view.ensureLoaded(account);
+    await settle();
+    expect(requested().filter(id => id === '1')).toHaveLength(2);
+    resolve('1');
+    await settle();
+    expect(container.querySelector('.catalog-browse .catalog-tile[data-item-id="10"]')).not.toBeNull();
+    expect(container.querySelector('[data-rail-key="cat:1"]')?.hasAttribute('data-rail-pending')).toBe(false);
+  });
+
+  it('loads the rails on screen when the section is shown again after loading hidden', async () => {
+    catalogMock.loadVodCategories.mockResolvedValue(cats(6));
+    deferLoads([]);
+    const view = newView();
+    // Browse renders while the section is hidden behind Search: nothing measures.
+    await view.open(account);
+    expect(requested().sort()).toEqual(['1', '2']);
+
+    Object.assign(layout, { on: true, height: 1080, scroll: 0 });
+    view.ensureLoaded(account);
+    await settle();
+    expect(requested().sort()).toEqual(['1', '2', '3']);
+    expect(catalogMock.loadVodCategories).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a grid open when a rail lands under it, and shows the rail on Back', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(7));
+    const resolve = deferLoads(['2']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    catalogMock.loadVodStreams.mockResolvedValue([vod('70', 'Movie 7', '7')]);
+    hover(container.querySelector<HTMLElement>('.catalog-cat[data-category-id="7"]')!);
+    view.handleAction('select');
+    await settle();
+    expect(container.querySelector('.catalog-layer-grid')?.classList.contains('catalog-layer-hidden')).toBe(false);
+
+    resolve('2');
+    await settle();
+    expect(container.querySelector('.catalog-layer-grid')?.classList.contains('catalog-layer-hidden')).toBe(false);
+    expect(container.querySelector('.catalog-layer-browse')?.classList.contains('catalog-layer-hidden')).toBe(true);
+    expect(container.querySelectorAll('.catalog-grid .catalog-tile[data-item-id]').length).toBe(1);
+    expect(container.querySelector('.catalog-grid .catalog-tile[data-item-id="70"]')).not.toBeNull();
+
+    view.handleAction('back');
+    expect(container.querySelector('.catalog-browse .catalog-tile[data-item-id="20"]')).not.toBeNull();
+    expect(container.querySelector('[data-rail-pending]')).toBeNull();
+  });
+
+  it('moves the focus past a rail that landed empty to the next rail with titles', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    const resolve = deferLoads(['1']);
+    const view = newView();
+    const opening = view.open(account);
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:1', 'pending:1:0']));
+
+    resolve('1', []);
+    await opening;
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:2', 'i:2:20']));
+  });
+
+  it('moves the focus past a failed rail and an empty one after it', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    let fail: (err: Error) => void = () => {};
+    catalogMock.loadVodStreams.mockImplementation((_a: PlaylistEntry, categoryId: string) => {
+      if (categoryId === '1') return new Promise<VodItem[]>((_resolve, reject) => { fail = reject; });
+      if (categoryId === '2') return Promise.resolve([]);
+      return Promise.resolve([vod(`${categoryId}0`, `Movie ${categoryId}`, categoryId)]);
+    });
+    const view = newView();
+    const opening = view.open(account);
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:1', 'pending:1:0']));
+
+    fail(new Error('network'));
+    await opening;
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:3', 'i:3:30']));
+  });
+
+  it('moves the focus to All Categories when the last rail landed empty', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(2));
+    const resolve = deferLoads(['2']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    hover(container.querySelector<HTMLElement>('[data-key="pending:2:0"]')!);
+
+    resolve('2', []);
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'all-categories', 'c:1']));
+  });
+
+  it('drops a rail that landed empty and lists its category under All Categories', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    const resolve = deferLoads(['2']);
+    const view = newView();
+    const opening = view.open(account);
+    await settle();
+    expect(container.querySelector('[data-rail-key="all-categories"]')).toBeNull();
+
+    resolve('2', []);
+    await opening;
+    await settle();
+    expect(railKeys()).toEqual(['cat:1', 'cat:3']);
+    expect(container.querySelector('[data-rail-key="all-categories"]')).not.toBeNull();
+    expect(container.querySelector('.catalog-cat[data-category-id="2"]')).not.toBeNull();
+  });
+
+  it('measures the rails once a frame however often they scroll', async () => {
+    Object.assign(layout, { on: true, height: 1080, scroll: 0 });
+    catalogMock.loadVodCategories.mockResolvedValue(cats(7));
+    deferLoads([]);
+    const view = newView();
+    await view.open(account);
+    const near = vi.spyOn(view as unknown as { requestNearRails(): void }, 'requestNearRails')
+      .mockImplementation(() => {});
+    const rails = container.querySelector('.catalog-rails')!;
+    for (let i = 0; i < 3; i++) rails.dispatchEvent(new Event('scroll'));
+    expect(near).not.toHaveBeenCalled();
+    await frame();
+    expect(near).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the column the focus held on a loading rail once its titles land', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(2));
+    const resolve = deferLoads(['2']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    expect(container.querySelectorAll('[data-rail-key="cat:2"] [data-focusable]').length).toBeGreaterThan(4);
+    hover(container.querySelector<HTMLElement>('[data-key="pending:2:4"]')!);
+
+    resolve('2', Array.from({ length: 10 }, (_, i) => vod(`2${String(i)}`, `Movie 2-${String(i)}`, '2')));
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:2', 'i:2:24']));
+  });
+
+  it('moves the focus to All Categories when every rail fails', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    const failures: Array<(err: Error) => void> = [];
+    catalogMock.loadVodStreams.mockImplementation(() =>
+      new Promise<VodItem[]>((_resolve, reject) => { failures.push(reject); }));
+    const view = newView();
+    const opening = view.open(account);
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:1', 'pending:1:0']));
+
+    failures.forEach(fail => fail(new Error('network')));
+    await opening;
+    await settle();
+    expect(railKeys()).toEqual([]);
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'all-categories', 'c:1']));
+  });
+
+  it('opens a grid on the request of the rail still loading for its category', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(7));
+    const resolve = deferLoads(['2']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    expect(requested().filter(id => id === '2')).toHaveLength(1);
+    hover(container.querySelector<HTMLElement>('.catalog-cat[data-category-id="2"]')!);
+    view.handleAction('select');
+    await settle();
+    expect(container.querySelector('.catalog-layer-grid')?.classList.contains('catalog-layer-hidden')).toBe(false);
+
+    resolve('2');
+    await settle();
+    expect(requested().filter(id => id === '2')).toHaveLength(1);
+    expect(container.querySelector('.catalog-grid .catalog-tile[data-item-id="20"]')).not.toBeNull();
+  });
+
+  it('shows a rail that landed under the sort menu once a pointer click closes it', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(2));
+    const resolve = deferLoads(['2']);
+    const view = newView();
+    const opening = view.open(account);
+    await settle();
+    const trigger = () => container.querySelector<HTMLElement>('.catalog-sort .dropdown-trigger')!;
+    trigger().click();
+    expect(container.querySelector('.catalog-sort .dropdown.open')).not.toBeNull();
+
+    resolve('2');
+    await opening;
+    await settle();
+    expect(container.querySelector('[data-rail-key="cat:2"]')?.hasAttribute('data-rail-pending')).toBe(true);
+    trigger().click();
+    expect(container.querySelector('.catalog-sort .dropdown.open')).toBeNull();
+    expect(container.querySelector('[data-rail-pending]')).toBeNull();
+    expect(container.querySelector('.catalog-tile[data-item-id="20"]')).not.toBeNull();
+  });
+
+  it('drops a rail that lands after the section closed or switched accounts', async () => {
+    const a2: PlaylistEntry = { ...account, id: 'x2', name: 'Y' };
+    catalogMock.loadVodCategories.mockResolvedValue(cats(2));
+    const resolve = deferLoads(['1']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    view.deactivate();
+    resolve('1');
+    await settle();
+    expect(container.querySelector('.catalog-tile[data-item-id="10"]')).toBeNull();
+    expect(container.querySelector('[data-rail-key="cat:1"]')?.hasAttribute('data-rail-pending')).toBe(true);
+    expect(requested().filter((id) => id === '1')).toHaveLength(1);
+
+    const resolveAgain = deferLoads(['1']);
+    void view.open(account);
+    await settle();
+    catalogMock.loadVodCategories.mockResolvedValue([{ id: 'b1', name: 'Cat Bravo' }]);
+    catalogMock.loadVodStreams.mockResolvedValue([vod('b10', 'Bravo Movie', 'b1')]);
+    await view.open(a2);
+    resolveAgain('1', [vod('a10', 'Alpha Movie', '1')]);
+    await settle();
+    expect(container.textContent).toContain('Bravo Movie');
+    expect(container.textContent).not.toContain('Alpha Movie');
+    expect(container.textContent).not.toContain('Cat 1');
   });
 });

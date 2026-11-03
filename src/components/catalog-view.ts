@@ -63,6 +63,8 @@ const CATALOG_GRID_VIEWPORT_WIDTH = 1760;
 const CATALOG_GRID_VIEWPORT_HEIGHT = 900;
 const CATEGORY_RAIL_STRIDE = 320;
 const CATEGORY_RAIL_VIEWPORT = 1760;
+// Enough skeleton posters to fill a rail's width while it loads.
+const RAIL_PLACEHOLDER_TILES = 8;
 
 // Matches the rail track's padding and its end spacer in catalog-view.css.
 const RAIL_EDGE_GUTTER = 12;
@@ -74,6 +76,16 @@ export interface CatalogHandlers {
 }
 
 type Mode = 'browse' | 'grid' | 'detail';
+
+// A browse rail keeps its place from the start; its titles load once it
+// nears the screen.
+type RailState = 'pending' | 'loading' | 'loaded' | 'failed';
+
+interface RailSlot<C, I> {
+  category: C;
+  state: RailState;
+  items: I[];
+}
 
 export type CollectionKind = 'continue' | 'watchlist';
 
@@ -136,7 +148,13 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   protected account: PlaylistEntry | null = null;
   protected mode: Mode = 'browse';
   protected categories: C[] = [];
-  protected railGroups: { category: C; items: I[] }[] = [];
+  private railSlots: RailSlot<C, I>[] = [];
+  // Bumped by open(): a rail load from an earlier browse never lands.
+  private railGeneration = 0;
+  private railAccountId: string | null = null;
+  private railRequests: Record<string, { promise: Promise<I[]>; signal: AbortSignal }> = {};
+  // A rail settled while browse was hidden or its sort menu open.
+  private railsDirty = false;
   protected resume: ResumeEntry[] = [];
   protected itemsByCategory: Record<string, I[]> = {};
   private serverItemsByCategory: Record<string, I[]> = {};
@@ -165,6 +183,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     fallbackViewportSize: CATEGORY_RAIL_VIEWPORT,
   });
   private categoryScrollFrame: number | null = null;
+  private railsScrollFrame: number | null = null;
   // The All categories window last rendered; its cells sit at fixed offsets,
   // so a scroll inside the window needs no render.
   private categoryWindow = '';
@@ -218,10 +237,15 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       if (!el || !this.layers[this.mode].contains(el)) return;
       this.place(el, 'pointer');
       this.onSelect();
+      // Closing the sort menu by clicking its trigger shows rails that landed under it.
+      this.flushRailUpdates();
     });
     document.addEventListener('click', (e: MouseEvent) => {
       const menu = this.openSortMenu();
-      if (menu && !menu.contains(e.target as Node)) this.dismissSort(null);
+      if (menu && !menu.contains(e.target as Node)) {
+        this.dismissSort(null);
+        this.flushRailUpdates();
+      }
     }, true);
     // A ring the pointer left stays off; the next key only shows it again.
     this.container.addEventListener('nav:unhover', (e: Event) => {
@@ -230,6 +254,16 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.container.addEventListener('scroll', (event: Event) => {
       const target = event.target as HTMLElement;
       if (this.handleExtraScroll(target)) return;
+      if (this.mode === 'browse' && target.classList.contains('catalog-rails')) {
+        // Measuring every rail per scroll event would lay out ~60 times a second.
+        if (this.railsScrollFrame === null) {
+          this.railsScrollFrame = requestAnimationFrame(() => {
+            this.railsScrollFrame = null;
+            this.requestNearRails();
+          });
+        }
+        return;
+      }
       if (this.mode === 'browse' && target.classList.contains('catalog-category-rail')) {
         const offset = this.scrollGuard.readUserOffset(target, 'horizontal');
         if (offset === null) return;
@@ -647,7 +681,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     else if (this.mode === 'grid') this.renderGrid();
     else {
       this.leaveBrowse();
-      this.renderBrowse();
+      this.renderBrowseHeld();
+      this.restoreBrowseFocus();
     }
   }
 
@@ -672,7 +707,11 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.clearLayer('grid');
     this.clearLayer('detail');
     this.categories = [];
-    this.railGroups = [];
+    this.railSlots = [];
+    this.railGeneration++;
+    this.railAccountId = account.id;
+    this.railRequests = {};
+    this.railsDirty = false;
     this.itemsByCategory = {};
     this.serverItemsByCategory = {};
     this.sort = StorageService.getCatalogSort(this.parentalKind);
@@ -692,44 +731,13 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         accountId: account.id,
         categoryId: category.id,
       }));
-      const railCats = this.categories.slice(0, CONFIG.XTREAM.RAIL_CATEGORIES);
-      // Settle each rail on its own: one failing category must not blank the rest.
-      const loaded = await Promise.all(
-        railCats.map((c) => this.loadVisibleItems(account, c.id, signal).then(
-          (items): I[] | null => items,
-          (err: unknown): null => {
-            if (!signal.aborted) {
-              log.error(
-                'Catalog rail load failed',
-                'event=xtream.view.load.failed',
-                'operation=rail',
-                `mode=${this.parentalKind}`,
-                err,
-              );
-            }
-            return null;
-          },
-        )),
-      );
-      if (signal.aborted || this.account?.id !== account.id) return;
-      const groups: { category: C; items: I[] }[] = [];
-      railCats.forEach((category, i) => {
-        const items = loaded[i];
-        if (!items) return;
-        this.setCategoryItems(category.id, items);
-        groups.push({ category, items: this.itemsByCategory[category.id].slice(0, CONFIG.XTREAM.RAIL_ITEMS) });
-      });
-      this.railGroups = groups;
-      if (groups.length < railCats.length) {
-        log.warn(
-          'Catalog rails partially loaded',
-          'event=xtream.view.rails.partial',
-          `mode=${this.parentalKind}`,
-          `kept=${String(groups.length)}`,
-          `total=${String(railCats.length)}`,
-        );
-      }
+      this.railSlots = this.categories.slice(0, CONFIG.XTREAM.RAIL_CATEGORIES)
+        .map((category): RailSlot<C, I> => ({ category, state: 'pending', items: [] }));
+      // Each rail fills in as it lands; only the rails on screen and the next
+      // one below load now, the rest as browsing nears them.
       this.renderBrowse();
+      const initial = Object.keys(this.railRequests).map(id => this.railRequests[id].promise);
+      await Promise.all(initial.map(promise => promise.then(() => undefined, () => undefined)));
     } catch (err) {
       if (signal.aborted) return;
       log.error(
@@ -789,7 +797,11 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   // an interrupted browse, or one left on an account no longer active.
   ensureLoaded(account: PlaylistEntry | null): void {
     if (!account) return;
-    if (!this.browseStale && this.account?.id === account.id) return;
+    if (!this.browseStale && this.account?.id === account.id) {
+      // Browse may have rendered while hidden, when no rail could be measured.
+      this.requestNearRails();
+      return;
+    }
     log.debug(
       'Catalog browse reloading',
       'event=xtream.view.reload',
@@ -823,6 +835,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     } finally {
       this.pickVia = null;
     }
+    this.flushRailUpdates();
   }
 
   private route(action: Action): void {
@@ -918,7 +931,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         back();
         return;
       }
-      this.gridCategory || this.collection ? this.renderGrid() : this.renderBrowse();
+      this.gridCategory || this.collection ? this.renderGrid() : this.returnToBrowse();
       this.clearLayer('detail');
       return;
     }
@@ -929,11 +942,18 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       }
       this.gridCategory = null;
       this.collection = null;
-      this.renderBrowse();
+      this.returnToBrowse();
       this.clearLayer('grid');
       return;
     }
     this.handlers.onBack();
+  }
+
+  // Browse shows again holding its rails still, though rails that landed or
+  // dropped out (Watchlist, Continue Watching, failed) changed above them.
+  private returnToBrowse(): void {
+    this.renderBrowseHeld();
+    this.restoreBrowseFocus();
   }
 
   private onSelect(): void {
@@ -1142,6 +1162,11 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const categoryCell = el?.closest<HTMLElement>('[data-category-virtual-index]');
     if (this.mode === 'browse' && categoryCell) return;
     if (this.mode !== 'browse' || !el) return;
+    this.requestNearRails();
+    this.heroFromTile(el);
+  }
+
+  private heroFromTile(el: HTMLElement): void {
     if (el.dataset.resumeEpisode !== undefined) {
       const entry = this.resume.find(entry => entry.itemId === el.dataset.resumeEpisode);
       if (entry) this.updateHero(entry.name, entry.poster);
@@ -1240,10 +1265,11 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
           this.serverItemsByCategory[id], sort.by, getLocale(), sort.direction,
         );
       });
-      this.railGroups = this.railGroups.map(group => ({
-        category: group.category,
-        items: this.itemsByCategory[group.category.id].slice(0, CONFIG.XTREAM.RAIL_ITEMS),
-      }));
+      this.railSlots.forEach(slot => {
+        if (slot.state === 'loaded') {
+          slot.items = this.itemsByCategory[slot.category.id].slice(0, CONFIG.XTREAM.RAIL_ITEMS);
+        }
+      });
       this.gridFocusIndex = 0;
       this.gridVirtualizer.setScrollOffset(0);
       this.resetBrowseRailOffsets = true;
@@ -1282,11 +1308,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     if (!this.itemsByCategory[categoryId]) {
       this.renderLoading('grid');
       try {
-        const items = await this.loadVisibleItems(
-          account,
-          categoryId,
-          signal,
-        );
+        const inflight = this.railRequests[categoryId];
+        const items = await (inflight && !inflight.signal.aborted
+          ? inflight.promise
+          : this.loadVisibleItems(account, categoryId, signal));
         if (signal.aborted || this.account?.id !== account.id) return;
         this.setCategoryItems(categoryId, items);
       } catch (err) {
@@ -1376,6 +1401,243 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     return this.rail(`cat:${id}`, group.category.name, tiles);
   }
 
+  // A loading rail keeps a loaded rail's title, height, and tile columns, so
+  // Up and Down from any column step onto it rather than past it.
+  private placeholderRail(category: C): Safe {
+    const id = category.id;
+    const tiles = Array.from({ length: RAIL_PLACEHOLDER_TILES }, (_, index) => html`
+      <div class="catalog-tile catalog-tile-placeholder" data-focusable
+           data-key="pending:${id}:${String(index)}" aria-hidden="true">
+        <div class="catalog-poster-wrap"></div>
+        <div class="catalog-tile-name">${raw('&nbsp;')}</div>
+      </div>
+    `);
+    return html`
+      <div class="catalog-rail" data-key="rail:cat:${id}" data-rail-key="cat:${id}" data-rail-pending
+           aria-busy="true">
+        <h2 class="catalog-rail-title">${category.name}</h2>
+        <div class="catalog-rail-track" data-edge-scroll>${tiles}</div>
+      </div>
+    `;
+  }
+
+  // The hero follows the first rail that has landed; while an earlier rail
+  // still loads it waits, so it changes once rather than per rail.
+  private leadingHero(): I | null {
+    for (const slot of this.railSlots) {
+      if (this.railHidden(slot)) continue;
+      if (slot.state === 'loaded') return slot.items[0];
+      break;
+    }
+    return this.heroFallback();
+  }
+
+  // A rail that failed or came back empty is left out of browse.
+  private railHidden(slot: RailSlot<C, I>): boolean {
+    return slot.state === 'failed' || (slot.state === 'loaded' && !slot.items.length);
+  }
+
+  // Once some categories have no rail, "All Categories" lists every category,
+  // rails included, so it is the one complete index of the catalog.
+  private allCategoriesShown(): boolean {
+    return this.categories.length > this.railSlots.length
+      || this.railSlots.some(slot => this.railHidden(slot));
+  }
+
+  // Loads the rails on screen, the first one below it, and the one after the
+  // focused rail, so D-pad, pointer, and wheel browsing all reach loaded rails.
+  // Without a layout to measure, only the first rail loads.
+  private requestNearRails(): void {
+    if (this.mode !== 'browse' || !this.account || this.railAccountId !== this.account.id) return;
+    if (!this.railSlots.some(slot => slot.state === 'pending')) return;
+    const signal = this.requestSignal;
+    if (!signal || signal.aborted) return;
+    const rails = this.layers.browse.querySelector<HTMLElement>('.catalog-browse .catalog-rails');
+    if (!rails) return;
+    const wanted: RailSlot<C, I>[] = [];
+    const slotFor = (railKey: string | undefined): RailSlot<C, I> | undefined =>
+      this.railSlots.find(slot => `cat:${slot.category.id}` === railKey);
+    const view = rails.getBoundingClientRect();
+    if (view.height > 0) {
+      const shown = Array.from(rails.querySelectorAll<HTMLElement>('[data-rail-key]'));
+      for (const rail of shown) {
+        const slot = slotFor(rail.dataset.railKey);
+        const top = rail.getBoundingClientRect().top;
+        if (slot) wanted.push(slot);
+        if (top >= view.bottom) break;
+      }
+    } else {
+      const first = this.railSlots.find(slot => !this.railHidden(slot));
+      if (first) wanted.push(first);
+    }
+    const focused = parseKey(this.focusScope.focusKey);
+    if (focused?.mode === 'browse') {
+      const index = this.railSlots.findIndex(slot => `cat:${slot.category.id}` === focused.rail);
+      if (index >= 0) {
+        wanted.push(this.railSlots[index]);
+        const next = this.railSlots.slice(index + 1).find(slot => !this.railHidden(slot));
+        if (next) wanted.push(next);
+      }
+    }
+    wanted.forEach(slot => {
+      if (slot.state === 'pending') this.startRailLoad(slot, this.account!, signal);
+    });
+  }
+
+  private startRailLoad(slot: RailSlot<C, I>, account: PlaylistEntry, signal: AbortSignal): void {
+    const id = slot.category.id;
+    const generation = this.railGeneration;
+    slot.state = 'loading';
+    const promise = this.loadVisibleItems(account, id, signal);
+    this.railRequests[id] = { promise, signal };
+    const live = (): boolean => generation === this.railGeneration
+      && this.account?.id === account.id && this.railSlots.indexOf(slot) >= 0;
+    promise.then((items) => {
+      if (!live()) return;
+      if (this.railRequests[id]?.promise === promise) delete this.railRequests[id];
+      if (signal.aborted) {
+        slot.state = 'pending';
+        this.requestNearRails();
+        return;
+      }
+      // A grid may have loaded this category meanwhile; it keeps its list.
+      if (!this.serverItemsByCategory[id]) this.setCategoryItems(id, items);
+      slot.items = this.itemsByCategory[id].slice(0, CONFIG.XTREAM.RAIL_ITEMS);
+      slot.state = 'loaded';
+      this.railSettled();
+    }, (err: unknown) => {
+      if (!live()) return;
+      if (this.railRequests[id]?.promise === promise) delete this.railRequests[id];
+      // A canceled rail loads again once browse is shown and near it.
+      if (signal.aborted) {
+        slot.state = 'pending';
+        this.requestNearRails();
+        return;
+      }
+      log.error(
+        'Catalog rail load failed',
+        'event=xtream.view.load.failed',
+        'operation=rail',
+        `mode=${this.parentalKind}`,
+        err,
+      );
+      slot.state = 'failed';
+      this.railSettled();
+    });
+  }
+
+  private railSettled(): void {
+    const slots = this.railSlots;
+    if (slots.every(slot => slot.state === 'loaded' || slot.state === 'failed')) {
+      const failed = slots.filter(slot => slot.state === 'failed').length;
+      const empty = slots.filter(slot => slot.state === 'loaded' && !slot.items.length).length;
+      const kept = slots.length - failed - empty;
+      if (kept < slots.length) {
+        log.warn(
+          'Catalog rails partially loaded',
+          'event=xtream.view.rails.partial',
+          `mode=${this.parentalKind}`,
+          `kept=${String(kept)}`,
+          `failed=${String(failed)}`,
+          `empty=${String(empty)}`,
+          `total=${String(slots.length)}`,
+        );
+      }
+    }
+    this.railsDirty = true;
+    this.flushRailUpdates();
+  }
+
+  // Shows the rails that landed, if browse is on screen and no sort menu is
+  // open; a hidden browse shows them when it renders again.
+  private flushRailUpdates(): void {
+    if (!this.railsDirty || this.mode !== 'browse' || this.openSortMenu()) return;
+    const browse = this.layers.browse;
+    if (!browse.querySelector('.catalog-browse .catalog-rails')) return;
+    const focused = parseKey(this.focusScope.focusKey);
+    const railOrder = Array.from(browse.querySelectorAll<HTMLElement>('[data-rail-key]'));
+    const picked = this.pickedHero();
+    this.renderBrowseHeld();
+    if (picked) this.restoreHero(picked);
+    const key = this.focusScope.focusKey;
+    if (focused?.mode === 'browse' && focused.key.indexOf('pending:') === 0 && key !== null
+        && !this.resolveKey(key)) {
+      // Without revealing a ring the pointer hid.
+      this.place(this.landingAfterRails(railOrder, focused) ?? this.nav.first(), null);
+    } else {
+      const el = this.current();
+      if (el && browse.contains(el)) this.heroFromTile(el);
+    }
+  }
+
+  // The hero a focused title put up in place of the leading one, which a
+  // rail landing re-render keeps whatever the focus rests on.
+  private pickedHero(): { name: string; background: string } | null {
+    const hero = this.layers.browse.querySelector<HTMLElement>('.catalog-hero');
+    const name = this.layers.browse.querySelector('.catalog-hero-title')?.textContent ?? '';
+    if (!hero) return null;
+    const leading = this.leadingHero();
+    if (name === (leading ? this.itemName(leading) : this.kicker)) return null;
+    return { name, background: hero.style.backgroundImage };
+  }
+
+  private restoreHero(picked: { name: string; background: string }): void {
+    const hero = this.layers.browse.querySelector<HTMLElement>('.catalog-hero');
+    const title = this.layers.browse.querySelector<HTMLElement>('.catalog-hero-title');
+    if (hero) hero.style.backgroundImage = picked.background;
+    if (title) title.textContent = picked.name;
+  }
+
+  // Renders browse holding what is on screen still while a rail above it
+  // drops out or shows up, as Chromium 53 has no scroll anchoring and
+  // .catalog-rails turns it off everywhere else. If the top rail itself dropped out, the first remaining rail
+  // below it holds still. A hidden layer is only invisible, so it measures.
+  private renderBrowseHeld(): void {
+    const rails = this.layers.browse.querySelector<HTMLElement>('.catalog-browse .catalog-rails');
+    const railOrder = rails ? Array.from(rails.querySelectorAll<HTMLElement>('[data-rail-key]')) : [];
+    const top = rails ? rails.getBoundingClientRect().top : 0;
+    const first = railOrder.findIndex(rail => rail.getBoundingClientRect().bottom > top);
+    const candidates = first < 0 ? [] : railOrder.slice(first)
+      .map(rail => ({ rail, top: rail.getBoundingClientRect().top }));
+    this.renderBrowse(false);
+    const held = candidates.find(c => c.rail.isConnected);
+    // At the top, a rail added above shows rather than pushing what was there.
+    if (!rails || !held || rails.scrollTop === 0) return;
+    const delta = held.rail.getBoundingClientRect().top - held.top;
+    if (Math.abs(delta) >= 1) {
+      const target = rails.scrollTop + delta;
+      withInstantScroll([rails], () => { rails.scrollTop = target; });
+    }
+  }
+
+  // The skeleton the focus held became titles, came back empty, or its rail
+  // failed. The focus keeps its column on that rail, else takes the first
+  // title of the next rail down (All Categories included), else the nearest
+  // one above.
+  private landingAfterRails(before: HTMLElement[], focused: CatalogKey): HTMLElement | null {
+    const after = Array.from(this.layers.browse.querySelectorAll<HTMLElement>('[data-rail-key]'));
+    const index = before.findIndex(rail => rail.dataset.railKey === focused.rail);
+    let start = 0;
+    for (let i = index; i >= 0; i--) {
+      if (!before[i].isConnected) continue;
+      start = after.indexOf(before[i]) + (i === index ? 0 : 1);
+      break;
+    }
+    const column = Number(focused.key.slice(focused.key.lastIndexOf(':') + 1)) || 0;
+    const tilesOf = (rail: HTMLElement): HTMLElement[] =>
+      Array.from(rail.querySelectorAll<HTMLElement>('[data-focusable]'));
+    for (let i = start; i < after.length; i++) {
+      const tiles = tilesOf(after[i]);
+      if (!tiles.length) continue;
+      return after[i].dataset.railKey === focused.rail ? tiles[Math.min(column, tiles.length - 1)] : tiles[0];
+    }
+    for (let i = start - 1; i >= 0; i--) {
+      const tiles = tilesOf(after[i]);
+      if (tiles.length) return tiles[0];
+    }
+    return null;
+  }
+
   protected rail(key: string, title: string, items: Safe[]): Safe {
     return html`
       <div class="catalog-rail" data-key="rail:${key}" data-rail-key="${key}">
@@ -1435,7 +1697,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.showLayer('browse');
     const browse = this.layers.browse;
     this.resume = this.visibleResume(this.account!.id);
-    const hero = this.railGroups[0]?.items[0] ?? this.heroFallback();
+    const hero = this.leadingHero();
     const continueRail = this.collectionRail('continue');
     const watchlistRail = this.collectionRail('watchlist');
     const hasContent = this.categories.length > 0 || !!continueRail || !!watchlistRail;
@@ -1445,7 +1707,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const heroBg = hero ? this.itemPoster(hero).replace(/["'()\\\s]/g, encodeURIComponent) : '';
     // Once some categories have no rail, "All Categories" lists every category,
     // rails included, so it is the one complete index of the catalog.
-    const moreCats = this.categories.length > this.railGroups.length ? this.categories : [];
+    const moreCats = this.allCategoriesShown() ? this.categories : [];
     const previousCategoryRail = browse.querySelector<HTMLElement>('.catalog-category-rail');
     if (restoreFocus && previousCategoryRail) {
       this.categoryVirtualizer.setScrollOffset(previousCategoryRail.scrollLeft);
@@ -1472,7 +1734,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
                 ${continueRail}
                 ${watchlistRail}
                 ${this.categories.length ? this.sortControls() : ''}
-                ${this.railGroups.map((r) => this.categoryRail(r))}
+                ${this.railSlots.map((slot) => {
+                  if (this.railHidden(slot)) return '';
+                  return slot.state === 'loaded' ? this.categoryRail(slot) : this.placeholderRail(slot.category);
+                })}
                 ${moreCats.length ? html`
                   <div class="catalog-rail" data-key="rail:all-categories"
                        data-rail-key="all-categories">
@@ -1519,6 +1784,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       this.resetBrowseRailOffsets = false;
     }
     if (restoreFocus) this.restoreBrowseFocus();
+    this.railsDirty = false;
+    this.requestNearRails();
   }
 
   private collectionActions(width: number): Safe {
@@ -1681,7 +1948,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   }
 
   private categoryWindowFor(viewport: number): string {
-    const count = this.categories.length > this.railGroups.length ? this.categories.length : 0;
+    const count = this.allCategoriesShown() ? this.categories.length : 0;
     const range = this.categoryVirtualizer.getRange(count, viewport || CATEGORY_RAIL_VIEWPORT);
     return `${String(count)}:${String(range.start)}:${String(range.end)}`;
   }

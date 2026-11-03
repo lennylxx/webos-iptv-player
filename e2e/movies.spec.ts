@@ -120,8 +120,13 @@ test('Back to See all jumps straight to it under full animation', async ({ page 
   await enterTab(page, 'movies');
   await expect(page.locator('html')).toHaveAttribute('data-animation', 'full');
   // Walk the rail with the remote, as a viewer would, so See all is scrolled
-  // into view before it opens its grid.
-  await page.locator('#view-movies [data-rail-key="cat:4"] .catalog-tile').first()
+  // into view before it opens its grid. Below the screen the rail is still
+  // loading; resting on it loads it.
+  const rail = page.locator('#view-movies [data-rail-key="cat:4"]');
+  await rail.locator('.catalog-tile').first()
+    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await expect(rail.locator('.catalog-tile[data-item-id]').first()).toHaveClass(/focused/);
+  await rail.locator('.catalog-tile[data-item-id]').first()
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
   const seeAll = page.locator('#view-movies .catalog-see-all[data-category-id="4"]');
   for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
@@ -153,6 +158,191 @@ test('Back to See all jumps straight to it under full animation', async ({ page 
     };
   });
   expect(placement).toEqual({ focused: true, inTrack: true, onScreen: true });
+});
+
+test('loads browse rails only as the remote walks down to them', async ({ page }) => {
+  await seedXtream(page, { catalog: 'large' });
+  const requested = new Set<string>();
+  await page.route('**/player_api.php*', (route) => {
+    const url = new URL(route.request().url());
+    const category = url.searchParams.get('category_id');
+    if (url.searchParams.get('action') === 'get_vod_streams' && category) requested.add(category);
+    return route.fallback();
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'movies');
+  const movies = page.locator('#view-movies');
+  await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id="10"]')).toBeVisible();
+  // Every rail keeps its place; the ones below the screen wait to load.
+  await expect(movies.locator('[data-rail-key^="cat:"]')).toHaveCount(6);
+  await expect(movies.locator('[data-rail-key="cat:6"]')).toHaveAttribute('data-rail-pending', '');
+  expect(requested.has('6')).toBe(false);
+  await page.keyboard.press('ArrowDown');
+  await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id="10"]')).toHaveClass(/focused/);
+  for (let rail = 2; rail <= 6; rail++) {
+    await page.keyboard.press('ArrowDown');
+    await expect(movies.locator(`[data-rail-key="cat:${String(rail)}"] .catalog-tile[data-item-id]`).first())
+      .toHaveClass(/focused/);
+  }
+  expect([...requested].sort()).toEqual(['1', '2', '3', '4', '5', '6']);
+  await expect(movies.locator('[data-rail-pending]')).toHaveCount(0);
+});
+
+test('holds the rails on screen still when the rail at the top fails', async ({ page }) => {
+  await seedXtream(page, { catalog: 'large' });
+  let failRail: () => void = () => {};
+  await page.route('**/player_api.php*', (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('action') !== 'get_vod_streams' || url.searchParams.get('category_id') !== '3') {
+      return route.fallback();
+    }
+    return new Promise<void>((done) => {
+      failRail = () => { void route.fulfill({ status: 500, body: '' }).then(done); };
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'movies');
+  const movies = page.locator('#view-movies');
+  const fifth = movies.locator('[data-rail-key="cat:5"] .catalog-tile[data-item-id]').first();
+  await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id]').first()).toBeVisible();
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
+  await expect(fifth).toHaveClass(/focused/);
+  const topOf = () => fifth.evaluate((el) => Math.round(el.getBoundingClientRect().top));
+  await expect.poll(async () => { const a = await topOf(); await page.waitForTimeout(150); return a === await topOf(); })
+    .toBe(true);
+  // The loading rail is the topmost one on screen, so it anchors the scroll.
+  const anchored = await movies.locator('.catalog-rails').evaluate((rails) => {
+    const top = rails.getBoundingClientRect().top;
+    const first = Array.from(rails.querySelectorAll<HTMLElement>('[data-rail-key]'))
+      .find((rail) => rail.getBoundingClientRect().bottom > top);
+    return first?.dataset.railKey;
+  });
+  expect(anchored).toBe('cat:3');
+  const before = await topOf();
+  failRail();
+  await expect(movies.locator('[data-rail-key="cat:3"]')).toHaveCount(0);
+  expect(await topOf()).toBe(before);
+  await expect(fifth).toHaveClass(/focused/);
+});
+
+test('Down from mid-rail steps onto a loading rail and keeps its column', async ({ page }) => {
+  await seedXtream(page, { catalog: 'large' });
+  let releaseRail: () => void = () => {};
+  await page.route('**/player_api.php*', (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('action') !== 'get_vod_streams' || url.searchParams.get('category_id') !== '2') {
+      return route.fallback();
+    }
+    return new Promise<void>((done) => { releaseRail = () => { void route.fallback().then(done); }; });
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'movies');
+  const movies = page.locator('#view-movies');
+  await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id]').first()).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
+  await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id="1004"]')).toHaveClass(/focused/);
+  await page.keyboard.press('ArrowDown');
+  await expect(movies.locator('[data-rail-key="cat:2"] [data-key="pending:2:4"]')).toHaveClass(/focused/);
+  releaseRail();
+  await expect(movies.locator('[data-rail-key="cat:2"] .catalog-tile[data-item-id="2004"]')).toHaveClass(/focused/);
+});
+
+test('Back holds the rails still when a rail above failed while a detail was open', async ({ page }) => {
+  await seedXtream(page, { catalog: 'large' });
+  let failRail: () => void = () => {};
+  await page.route('**/player_api.php*', (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('action') !== 'get_vod_streams' || url.searchParams.get('category_id') !== '3') {
+      return route.fallback();
+    }
+    return new Promise<void>((done) => {
+      failRail = () => { void route.fulfill({ status: 500, body: '' }).then(done); };
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'movies');
+  const movies = page.locator('#view-movies');
+  const fifth = movies.locator('[data-rail-key="cat:5"] .catalog-tile[data-item-id]').first();
+  await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id]').first()).toBeVisible();
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
+  await expect(fifth).toHaveClass(/focused/);
+  const topOf = () => fifth.evaluate((el) => Math.round(el.getBoundingClientRect().top));
+  await expect.poll(async () => { const a = await topOf(); await page.waitForTimeout(150); return a === await topOf(); })
+    .toBe(true);
+  const before = await topOf();
+  await page.keyboard.press('Enter');
+  await expect(movies.locator('.catalog-layer-detail')).not.toHaveClass(/catalog-layer-hidden/);
+  const failed = page.waitForResponse((r) => r.url().includes('category_id=3'));
+  failRail();
+  await failed;
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
+  await expect(movies.locator('[data-rail-key="cat:3"]')).toHaveCount(0);
+  await expect(fifth).toHaveClass(/focused/);
+  expect(await topOf()).toBe(before);
+});
+
+test('Back holds the rails still when the detail added the Watchlist rail above', async ({ page }) => {
+  await seedXtream(page, { catalog: 'large' });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'movies');
+  const movies = page.locator('#view-movies');
+  const fourth = movies.locator('[data-rail-key="cat:4"] .catalog-tile[data-item-id]').first();
+  await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id]').first()).toBeVisible();
+  // Scrolled, with the focused title mid-screen where no reveal moves it.
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await expect(fourth).toHaveClass(/focused/);
+  const topOf = () => fourth.evaluate((el) => Math.round(el.getBoundingClientRect().top));
+  await expect.poll(async () => { const a = await topOf(); await page.waitForTimeout(150); return a === await topOf(); })
+    .toBe(true);
+  const before = await topOf();
+  await page.keyboard.press('Enter');
+  const watchlist = movies.locator('.catalog-layer-detail .detail-btn[data-key="watchlist"]');
+  await expect(watchlist).toBeVisible();
+  const label = await watchlist.textContent();
+  await watchlist.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await expect(watchlist).not.toHaveText(label ?? '');
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
+  await expect(movies.locator('[data-rail-key="watchlist"]')).toHaveCount(1);
+  await expect(fourth).toHaveClass(/focused/);
+  expect(await topOf()).toBe(before);
+});
+
+test('a rail that lands under the open sort menu shows once a click closes it', async ({ page }) => {
+  await seedXtream(page, { catalog: 'large' });
+  let releaseRail: () => void = () => {};
+  await page.route('**/player_api.php*', (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('action') !== 'get_vod_streams' || url.searchParams.get('category_id') !== '2') {
+      return route.fallback();
+    }
+    return new Promise<void>((done) => { releaseRail = () => { void route.fallback().then(done); }; });
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'movies');
+  const movies = page.locator('#view-movies');
+  await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id]').first()).toBeVisible();
+  const trigger = movies.locator('.catalog-sort .dropdown-trigger');
+  const rail = movies.locator('[data-rail-key="cat:2"]');
+  await trigger.click();
+  await expect(movies.locator('.catalog-sort .dropdown.open')).toHaveCount(1);
+  const landed = page.waitForResponse((r) => r.url().includes('category_id=2'));
+  releaseRail();
+  await landed;
+  await page.waitForTimeout(300);
+  await expect(rail).toHaveAttribute('data-rail-pending', '');
+  await trigger.click();
+  await expect(movies.locator('.catalog-sort .dropdown.open')).toHaveCount(0);
+  await expect(rail).not.toHaveAttribute('data-rail-pending');
+  await expect(rail.locator('.catalog-tile[data-item-id]').first()).toBeAttached();
 });
 
 test('Left and Right stop at the ends of All categories', async ({ page }) => {
