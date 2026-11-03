@@ -141,6 +141,16 @@ degrades both axes from `scripts/chromium-53-simulation.mjs`:
   `scripts/serve.mjs` prepends to its bundle. `KEEP_GLOBALS` exempts only
   what the harness or desktop preview needs: exempting `AbortController` for
   hls.js once silently cost the app's own polyfill its coverage.
+- **Events.** Deleting `PointerEvent` does not stop the engine firing
+  `pointermove`, so DOM events newer than Chromium 53 (`pointer*`,
+  `transitionstart`, `auxclick`, …, derived from BCD's `*_event` entries)
+  are swallowed by a capture listener on `window` registered before any
+  other script; only trusted ones, so a test may still dispatch its own.
+  Their `on<event>` handler properties are deleted too, so
+  `'onpointermove' in window` detects nothing. Pointer input reaches
+  components through KeyHandler's `nav:*` events, which ride on mouse
+  events; lint rejects listeners for Pointer Events (`pointer*`,
+  `*pointercapture`) everywhere in `src/` (`pointerlockchange` is allowed).
 - **Not modeled: call options.** Deleting an API cannot make an engine
   ignore a dictionary member it predates, so `{ once }` and
   `{ preventScroll }` behave natively here. Cover such fallbacks with a

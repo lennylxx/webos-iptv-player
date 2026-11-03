@@ -70,8 +70,16 @@ describe('KeyHandler', () => {
     it('keeps keyboard-nav through the first synthetic mousemove after startup', () => {
       press(K.DOWN);
       expect(root.classList.contains('keyboard-nav')).toBe(true);
-      move(100, 100);
+      const onMove = vi.fn();
+      document.addEventListener('nav:pointermove', onMove);
+      try {
+        move(100, 100);
+      } finally {
+        document.removeEventListener('nav:pointermove', onMove);
+      }
       expect(root.classList.contains('keyboard-nav')).toBe(true);
+      // The seed may be a render under a cursor resting at a screen edge.
+      expect(onMove).not.toHaveBeenCalled();
     });
 
     it('keeps keyboard-nav when a mousemove repeats the resting position', () => {
@@ -654,6 +662,78 @@ describe('KeyHandler', () => {
         expect(handler).not.toHaveBeenCalled();
         // The surface scrolls natively.
         expect(e.defaultPrevented).toBe(false);
+      });
+    });
+
+    describe('nav:pointermove', () => {
+      let screenX = 5000;
+      let seen: { target: EventTarget | null; clientX: number; clientY: number }[];
+      const onMove = (e: Event): void => {
+        seen.push({ target: e.target, ...(e as CustomEvent<{ clientX: number; clientY: number }>).detail });
+      };
+      const move = (target: EventTarget, x: number): void => {
+        target.dispatchEvent(new MouseEvent('mousemove', {
+          clientX: x, clientY: 300, screenX: x, screenY: 300, bubbles: true,
+        }));
+      };
+      const attached = (): HTMLElement => document.body.appendChild(document.createElement('div'));
+      beforeEach(() => {
+        seen = [];
+        document.addEventListener('nav:pointermove', onMove);
+      });
+      afterEach(() => document.removeEventListener('nav:pointermove', onMove));
+
+      it('carries the coordinates of a real move and of a resting repeat in pointer mode', () => {
+        const el = attached();
+        screenX += 50;
+        move(el, screenX - 10);
+        move(el, screenX);
+        move(el, screenX);
+        expect(seen.slice(-2)).toEqual([
+          { target: el, clientX: screenX, clientY: 300 },
+          { target: el, clientX: screenX, clientY: 300 },
+        ]);
+      });
+
+      it('skips a resting repeat in key mode, which is content moving under the cursor', () => {
+        const el = attached();
+        screenX += 50;
+        move(el, screenX);
+        press(K.DOWN);
+        seen = [];
+        move(el, screenX);
+        expect(seen).toEqual([]);
+        move(el, screenX + 10);
+        expect(seen).toHaveLength(1);
+      });
+
+      it('reaches listeners after the pointer state is updated', () => {
+        const el = attached();
+        screenX += 50;
+        move(el, screenX);
+        press(K.DOWN);
+        const states: unknown[] = [];
+        const probe = (): void => {
+          states.push([InputMode.current, Focus.pointerPosition()]);
+        };
+        document.addEventListener('nav:pointermove', probe);
+        try {
+          move(el, screenX + 10);
+        } finally {
+          document.removeEventListener('nav:pointermove', probe);
+        }
+        expect(states).toEqual([['pointer', { x: screenX + 10, y: 300 }]]);
+      });
+
+      it('still reaches document when a hover re-renders the target away', () => {
+        const el = attached();
+        el.setAttribute('data-focusable', '');
+        el.addEventListener('nav:hover', () => el.remove());
+        screenX += 50;
+        move(document.body, screenX - 10);
+        move(el, screenX);
+        expect(el.isConnected).toBe(false);
+        expect(seen.slice(-1)).toEqual([{ target: document, clientX: screenX, clientY: 300 }]);
       });
     });
 

@@ -74,11 +74,49 @@ const isPostTarget = (compat) => {
   return knownLater;
 };
 
+const supportedAtTarget = (compat) => {
+  const support = compat?.support?.chrome;
+  if (!support) return false;
+  for (const range of Array.isArray(support) ? support : [support]) {
+    if (range.flags || range.prefix || range.alternative_name) continue;
+    if (range.version_added === true) return true;
+    const added = parseVersion(range.version_added);
+    if (added === null) continue;
+    const removed = parseVersion(range.version_removed) ?? Infinity;
+    if (added <= TARGET_CHROME && TARGET_CHROME < removed) return true;
+  }
+  return false;
+};
+
+// Interfaces whose events travel through window, where removeApis swallows them.
+const DOM_EVENT_INTERFACES = ['Element', 'HTMLElement', 'Document', 'Window', 'Node'];
+
+// Skip events any interface fired by 53 (BCD dates Window "message" to 60).
+const postTargetEvents = () => {
+  const earlier = new Set();
+  for (const node of Object.values(bcd.api)) {
+    for (const [member, sub] of Object.entries(node)) {
+      if (member.endsWith('_event') && supportedAtTarget(sub?.__compat)) {
+        earlier.add(member.slice(0, -'_event'.length));
+      }
+    }
+  }
+  const events = new Set();
+  for (const name of DOM_EVENT_INTERFACES) {
+    for (const [member, sub] of Object.entries(bcd.api[name] ?? {})) {
+      if (!member.endsWith('_event')) continue;
+      const event = member.slice(0, -'_event'.length);
+      if (!earlier.has(event) && isPostTarget(sub?.__compat)) events.add(event);
+    }
+  }
+  return [...events].sort();
+};
+
 /**
- * @returns {{ globals: string[], members: [string, string][], cssProperties: string[] }}
+ * @returns {{ globals: string[], members: [string, string][], cssProperties: string[], events: string[] }}
  * globals to delete from `window`, `[builtin, member]` pairs to delete from
  * either the builtin's prototype or the builtin itself (resolved in the page),
- * and camelCased CSSOM reflections to shadow.
+ * camelCased CSSOM reflections to shadow, and DOM events to swallow.
  */
 export function postTargetApis() {
   const globals = [];
@@ -119,14 +157,14 @@ export function postTargetApis() {
     cssProperties.push(property.replace(/-([a-z])/g, (_, c) => c.toUpperCase()));
   }
 
-  return { globals, members, cssProperties };
+  return { globals, members, cssProperties, events: postTargetEvents() };
 }
 
 /**
  * Page-side removal. Kept as a standalone function so Playwright can pass it
  * straight to `addInitScript` with the derived lists as its argument.
  */
-export function removeApis({ globals, members, cssProperties }) {
+export function removeApis({ globals, members, cssProperties, events }) {
   const drop = (owner, key) => {
     try {
       if (owner && Object.prototype.hasOwnProperty.call(owner, key)) delete owner[key];
@@ -159,6 +197,21 @@ export function removeApis({ globals, members, cssProperties }) {
     // An instance method lives on the prototype, a static on the builtin.
     drop(owner.prototype, member);
     drop(owner, member);
+  }
+
+  // Registered before any other script, so it runs first; workers have no window.
+  if (typeof window !== 'undefined') {
+    // A test or the app may still dispatch one itself; only the engine's own are swallowed.
+    const swallow = (event) => {
+      if (event.isTrusted) event.stopImmediatePropagation();
+    };
+    // `'onpointermove' in window` is how code feature-detects an event.
+    const handlerOwners = [window, ...['Window', 'Document', 'Element', 'HTMLElement', 'SVGElement']
+      .map((name) => globalThis[name] && globalThis[name].prototype)];
+    for (const type of events || []) {
+      window.addEventListener(type, swallow, true);
+      for (const owner of handlerOwners) drop(owner, `on${type}`);
+    }
   }
 
   // Chromium before 91 leaves a row flex scroller's padding-right out of its

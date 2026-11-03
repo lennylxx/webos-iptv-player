@@ -4,6 +4,9 @@
 const RING_WRITERS = new Set(['setRing', 'ringsIn']);
 const MODE_WRITERS = new Set(['setInputMode']);
 const POINTER_EVENTS = new Set(['mouseover', 'mouseenter', 'mousemove', 'mouseleave', 'mouseout', 'wheel']);
+// Pointer Events shipped in Chrome 55; pointer lock is older and unrelated.
+const POST_53_POINTER_EVENT =
+  /^(?:pointer(?:over|enter|down|move|rawupdate|up|cancel|out|leave)|(?:got|lost)pointercapture)$/;
 const GUARDED_MODULES = [
   { module: 'focus-ring', names: RING_WRITERS, message: (name) =>
     `Request focus through a focus scope (navigation/focus-scope) instead of painting it with ${name}().` },
@@ -121,11 +124,31 @@ const noRawPointerListener = {
         if (memberName(node.callee, sourceCode) !== 'addEventListener') return;
         const type = staticString(node.arguments[0], sourceCode);
         if (type === undefined || !POINTER_EVENTS.has(type)) return;
-        hit(node, `Listen for nav:hover/nav:unhover or InputMode, not raw '${type}'; KeyHandler owns pointer input.`);
+        hit(node, `Listen for nav:hover/nav:unhover, nav:pointermove, or InputMode, not raw '${type}'; `
+          + 'KeyHandler owns pointer input.');
       },
     };
   },
 };
+
+const noPointerEvent = {
+  meta: { type: 'problem', schema: [] },
+  create(context) {
+    const sourceCode = context.sourceCode;
+    const hit = reporter(context);
+    return {
+      CallExpression(node) {
+        if (memberName(node.callee, sourceCode) !== 'addEventListener') return;
+        const type = staticString(node.arguments[0], sourceCode);
+        if (type === undefined || !POST_53_POINTER_EVENT.test(type)) return;
+        hit(node, `Chromium 53 (webOS 4) never fires '${type}'; use the mouse equivalent.`);
+      },
+    };
+  },
+};
+
+// A compat gate, not a focus rule: it covers src/navigation/ too.
+export const pointerEventRule = { 'no-pointer-event': noPointerEvent };
 
 const noScrollIntoView = {
   meta: { type: 'problem', schema: [] },

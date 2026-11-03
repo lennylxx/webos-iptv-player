@@ -10,6 +10,7 @@ import {
   enterTab,
   SEARCH_M3U,
   pressStepsAndReadPlayer,
+  seedPointer,
 } from './helpers';
 
 // The player view: playback start, sidebar, action menu, OSD, and live DVR.
@@ -501,6 +502,7 @@ test('Magic Remote dwell expands groups and stages pointer dismissal', async ({ 
   await gotoGroupedPlayer(page);
   const sidebar = page.locator('#player-sidebar');
 
+  await seedPointer(page);
   await page.mouse.move(30, 540);
   await expect(sidebar).toHaveClass(/groups-expanded/);
 
@@ -524,6 +526,7 @@ test('the group panel lights the group it slides in under a pointer moved mid-sl
   const sidebar = page.locator('#player-sidebar');
   const groups = sidebar.locator('.sidebar-group-panel');
   const target = sidebar.locator('.sidebar-group-item').nth(3);
+  await seedPointer(page);
   await page.mouse.move(30, 540);
   await expect(sidebar).toHaveClass(/groups-expanded/);
   await panelSettled(sidebar);
@@ -608,6 +611,21 @@ async function moveOnto(page: Page, row: ReturnType<Page['locator']>, dx = 0): P
   await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2);
 }
 
+// Chromium 53 fires no pointer events: the edge panels must open from mousemove.
+test('the pointer at the right edge opens the live player menu', async ({ page }) => {
+  await gotoLivePlayer(page);
+  await seedPointer(page);
+  await page.mouse.move(1900, 300);
+  await expect(page.locator('#player-menu')).toHaveClass(/visible/);
+});
+
+test('the pointer at the left edge opens the live channel sidebar', async ({ page }) => {
+  await gotoLivePlayer(page);
+  await seedPointer(page);
+  await page.mouse.move(20, 300);
+  await expect(page.locator('#player-sidebar')).toHaveClass(/visible/);
+});
+
 test('the player menu reopens with one ring, on its first row', async ({ page }) => {
   await gotoLivePlayer(page);
   const menu = page.locator('#player-menu');
@@ -630,6 +648,7 @@ test('the player menu reopens with one ring, on its first row', async ({ page })
 
 test('the player menu ring follows the pointer and the D-pad, and returns to the row it rests on', async ({ page }) => {
   await gotoLivePlayer(page);
+  await seedPointer(page);
   await page.mouse.move(1900, 540);
   const menu = page.locator('#player-menu');
   const rows = menu.locator('.menu-item');
@@ -813,6 +832,7 @@ test('the live subtitle sync adjuster keeps the channel panel shut at the screen
   await expect(page.locator('#view-player')).toBeVisible();
   const menu = page.locator('#player-menu');
   const sidebar = page.locator('#player-sidebar');
+  await seedPointer(page);
   await page.mouse.move(1900, 540);
   await expect(menu).toHaveClass(/visible/);
   await expect.poll(() => menu.evaluate((el) => el.getBoundingClientRect().right)).toBe(1920);

@@ -11,7 +11,7 @@ import {
   unclassifiedSelectorFeatures,
 } from './chromium-53-simulation.mjs';
 
-const { globals, members, cssProperties } = postTargetApis();
+const { globals, members, cssProperties, events } = postTargetApis();
 const hasMember = (owner, member) => members.some(([o, m]) => o === owner && m === member);
 
 describe('postTargetApis', () => {
@@ -58,6 +58,26 @@ describe('postTargetApis', () => {
   });
 });
 
+describe('postTargetApis events', () => {
+  it('lists DOM events Chromium 53 never dispatches', () => {
+    expect(events).toContain('pointermove'); // Chrome 55
+    expect(events).toContain('pointerenter'); // Chrome 55
+    expect(events).toContain('auxclick'); // Chrome 55
+    expect(events).toContain('transitionstart'); // Chrome 74
+  });
+
+  it('keeps events Chromium 53 fired, even where BCD dates a later interface', () => {
+    // VisualViewport scroll/resize and Window message are post-53 entries, but
+    // the events themselves reached DOM listeners long before.
+    for (const name of ['scroll', 'resize', 'message', 'change', 'error', 'progress', 'select']) {
+      expect(events).not.toContain(name);
+    }
+    for (const name of ['click', 'mousemove', 'mouseover', 'keydown', 'transitionend', 'wheel']) {
+      expect(events).not.toContain(name);
+    }
+  });
+});
+
 describe('removeApis', () => {
   it('deletes globals, prototype methods and statics, and tolerates absent ones', () => {
     function Widget() {}
@@ -86,6 +106,35 @@ describe('removeApis', () => {
       delete globalThis.LegacyKept;
       delete globalThis.LegacyWidget;
     }
+  });
+
+  it('swallows the engine\'s listed events before any later listener, but not synthetic ones', () => {
+    const target = new EventTarget();
+    target.onlegacygone = null;
+    globalThis.window = target;
+    const seen = [];
+    const trusted = (type) => {
+      const event = new Event(type);
+      Object.defineProperty(event, 'isTrusted', { value: true });
+      return event;
+    };
+    try {
+      removeApis({ globals: [], members: [], events: ['legacygone'] });
+      target.addEventListener('legacygone', (e) => seen.push(e.isTrusted ? 'engine' : 'synthetic'), true);
+      target.addEventListener('legacykept', () => seen.push('kept'));
+      target.dispatchEvent(trusted('legacygone'));
+      target.dispatchEvent(new Event('legacygone'));
+      target.dispatchEvent(trusted('legacykept'));
+      expect(seen).toEqual(['synthetic', 'kept']);
+      // Feature detection through the handler property fails as on the old engine.
+      expect('onlegacygone' in target).toBe(false);
+    } finally {
+      delete globalThis.window;
+    }
+  });
+
+  it('skips event suppression where there is no window, as in the worker', () => {
+    expect(() => removeApis({ globals: [], members: [], events: ['pointermove'] })).not.toThrow();
   });
 });
 

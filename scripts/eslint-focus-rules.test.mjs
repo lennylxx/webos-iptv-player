@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { ESLint, Linter } from 'eslint';
 import tsParser from '@typescript-eslint/parser';
-import { focusRules } from './eslint-focus-rules.mjs';
+import { focusRules, pointerEventRule } from './eslint-focus-rules.mjs';
 import { FOCUS_RULES } from '../eslint.config.mjs';
 
 function lint(code, rule) {
@@ -14,6 +14,16 @@ function lint(code, rule) {
     plugins: { focus: { rules: focusRules } },
     rules: { [`focus/${rule}`]: 'error' },
   }], '/repo/src/components/example.ts').map((m) => m.message);
+}
+
+function lintWith(code, rules, rule) {
+  const linter = new Linter({ cwd: '/repo' });
+  return linter.verify(code, [{
+    files: ['**/*.ts'],
+    languageOptions: { parser: tsParser, sourceType: 'module' },
+    plugins: { rules: { rules } },
+    rules: { [`rules/${rule}`]: 'error' },
+  }], '/repo/src/navigation/example.ts').map((m) => m.message);
 }
 
 describe('focus ESLint rules', () => {
@@ -76,6 +86,37 @@ describe('focus ESLint rules', () => {
       el.addEventListener(type, c);
       el.addEventListener(later, d);
     `, 'no-raw-pointer-listener')).toEqual([]);
+  });
+
+  it('points a raw pointer listener at the nav:* events', () => {
+    expect(lint("el.addEventListener('mousemove', a);", 'no-raw-pointer-listener'))
+      .toEqual([expect.stringContaining('nav:pointermove')]);
+  });
+
+  it('rejects every pointer event Chromium 53 never fires, but not pointer lock', () => {
+    const messages = lintWith(`
+      const MOVE = 'pointer' + 'move';
+      document.addEventListener(MOVE, a);
+      el.addEventListener('pointerdown', b);
+      el.addEventListener('pointerup', c);
+      el.addEventListener('pointercancel', d);
+      el.addEventListener('pointerenter', e);
+      el.addEventListener('gotpointercapture', f);
+    `, pointerEventRule, 'no-pointer-event');
+    expect(messages).toHaveLength(6);
+    expect(messages[0]).toBe("Chromium 53 (webOS 4) never fires 'pointermove'; use the mouse equivalent.");
+    expect(lintWith(`
+      document.addEventListener('pointerlockchange', a);
+      el.addEventListener('mousemove', b);
+      el.addEventListener('nav:pointermove', c);
+    `, pointerEventRule, 'no-pointer-event')).toEqual([]);
+  });
+
+  it('gates pointer events in src/navigation too, where KeyHandler listens', async () => {
+    const eslint = new ESLint();
+    const [result] = await eslint.lintText("document.addEventListener('pointermove', () => {});\n",
+      { filePath: 'src/navigation/example.ts' });
+    expect(result.messages.map((m) => m.ruleId)).toContain('webos-compat/no-pointer-event');
   });
 
   it('rejects scrollIntoView calls', () => {

@@ -130,6 +130,11 @@ export async function pressStepsAndReadPlayer(page: Page, steps: number[][]): Pr
   }, steps);
 }
 
+// KeyHandler takes the first mousemove as a seed, not a move.
+export async function seedPointer(page: Page): Promise<void> {
+  await page.mouse.move(960, 300);
+}
+
 /** Pre-seed one configured URL playlist so the app boots into the channel list. */
 export async function seedPlaylist(page: Page, url = PLAYLIST_URL): Promise<void> {
   await page.addInitScript((u) => {

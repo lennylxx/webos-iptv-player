@@ -278,6 +278,14 @@ export const KeyHandler = {
     }, true);
     let pointerClientX = 0;
     let pointerClientY = 0;
+    // Position-only consumers such as the player's edge panels; Chromium 53 fires no pointermove.
+    const dispatchPointerMove = (e: MouseEvent): void => {
+      // A hover may have re-rendered the target out of the document.
+      const at = e.target instanceof Element && document.contains(e.target) ? e.target : document;
+      at.dispatchEvent(new CustomEvent('nav:pointermove', {
+        bubbles: true, detail: { clientX: e.clientX, clientY: e.clientY },
+      }));
+    };
     document.addEventListener('mousemove', (e: MouseEvent) => {
       const moved = movedFrom(e);
       pointerX = e.screenX;
@@ -285,7 +293,11 @@ export const KeyHandler = {
       pointerClientX = e.clientX;
       pointerClientY = e.clientY;
       Focus.pointer(e.clientX, e.clientY);
-      if (!moved) return;
+      if (!moved) {
+        // A repeat in pointer mode is the cursor pushed against the screen edge.
+        if (InputMode.current !== 'keys') dispatchPointerMove(e);
+        return;
+      }
       // Firmware may re-show its cursor on a move without reporting it.
       setCursorHidden(false);
       // Pointing off a stopped scroll's track: the keys follow the pointer again.
@@ -298,6 +310,7 @@ export const KeyHandler = {
       }
       if (InputMode.current === 'keys') resumePointer(e, 'move');
       else if (hoverStale || focusableAt(e) !== lastHover) setHoverTarget(focusableAt(e));
+      dispatchPointerMove(e);
     }, true);
     // Scrolling content with the wheel is pointer use even with the cursor at
     // rest; the hovers it causes must follow the pointer again. A wheel that

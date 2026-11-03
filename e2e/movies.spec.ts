@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page, pressStepsAndReadPlayer } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page, pressStepsAndReadPlayer, seedPointer } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // A minimal ASS body with one dialogue active from t=0, so assjs renders it as
@@ -523,6 +523,7 @@ test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu
   // The left edge opens the channel switcher during live playback; VOD has no
   // channels, so the pointer must not summon it. Check once (not a retrying
   // wait) — the sidebar auto-hides, which would mask a wrong show.
+  await seedPointer(page);
   await page.mouse.move(10, 540);
   await page.waitForTimeout(200);
   expect(await page.locator('#player-sidebar.visible').count()).toBe(0);
@@ -627,6 +628,14 @@ async function startFakeVod(page: Page): Promise<void> {
     video.pause = () => { paused = true; };
   });
 }
+
+// Chromium 53 fires no pointer events: the edge panels must open from mousemove.
+test('the pointer at the right edge opens the VOD player menu', async ({ page }) => {
+  await startFakeVod(page);
+  await seedPointer(page);
+  await page.mouse.move(1900, 300);
+  await expect(page.locator('#player-menu')).toHaveClass(/visible/);
+});
 
 const [ENTER, RIGHT, BACK, YELLOW] = [13, 39, 461, 405];
 

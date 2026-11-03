@@ -1,7 +1,7 @@
 import compat from 'eslint-plugin-compat';
 import tsParser from '@typescript-eslint/parser';
 import { ALLOWLIST, DENYLIST } from './scripts/compat-gate.mjs';
-import { focusRules } from './scripts/eslint-focus-rules.mjs';
+import { focusRules, pointerEventRule } from './scripts/eslint-focus-rules.mjs';
 
 const entryByKind = new Map(DENYLIST.map((entry) => [entry.kind, entry]));
 const callOptions = DENYLIST.filter((entry) => entry.kind === 'call-option');
@@ -70,7 +70,7 @@ export default [
     files: ['src/**/*.ts'],
     plugins: {
       compat,
-      'webos-compat': { rules: { 'unsupported-patterns': unsupportedPatterns } },
+      'webos-compat': { rules: { 'unsupported-patterns': unsupportedPatterns, ...pointerEventRule } },
     },
     languageOptions: {
       parser: tsParser,
@@ -114,6 +114,7 @@ export default [
         },
       ],
       'webos-compat/unsupported-patterns': 'error',
+      'webos-compat/no-pointer-event': 'error',
     },
   },
   {
