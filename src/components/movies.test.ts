@@ -347,7 +347,19 @@ describe('Movies browse + grid', () => {
       view.handleAction('select');
       expect(order()).toEqual(['10', '2', '1']);
       expect(browse().querySelector('[data-sort-direction="desc"]')?.getAttribute('aria-checked')).toBe('true');
-      expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', '', 'sort-direction:desc']));
+      expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', '', 'sort-direction:name:desc']));
+    });
+
+    it('rebuilds the direction buttons when the field changes so no highlight fades out', async () => {
+      await openWith(undefined, streams());
+      choose('name');
+      const nameAsc = browse().querySelector<HTMLElement>('[data-sort-direction="asc"]')!;
+      expect(nameAsc.classList.contains('active')).toBe(true);
+      choose('added');
+      const addedAsc = browse().querySelector<HTMLElement>('[data-sort-direction="asc"]')!;
+      expect(addedAsc).not.toBe(nameAsc);
+      expect(addedAsc.classList.contains('active')).toBe(false);
+      expect(browse().querySelector('[data-sort-direction="desc"]')?.classList.contains('active')).toBe(true);
     });
 
     it('selecting the same field or direction never silently reverses it', async () => {

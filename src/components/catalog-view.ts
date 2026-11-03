@@ -1680,7 +1680,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
             ${sortDirections(by).map(direction => html`
               <button class="toggle-option catalog-sort-direction${direction === this.sort.direction ? ' active' : ''}"
                       type="button" role="radio" aria-checked="${direction === this.sort.direction}"
-                      data-focusable data-key="sort-direction:${direction}" data-sort-direction="${direction}">
+                      data-focusable data-key="sort-direction:${by}:${direction}" data-sort-direction="${direction}">
                 <span class="catalog-sort-direction-icon">${raw(direction === 'asc'
                   ? SORT_ASCENDING_ICON : SORT_DESCENDING_ICON)}</span>
                 <span>${sortDirectionLabel(by, direction)}</span>

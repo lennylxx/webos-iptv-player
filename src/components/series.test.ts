@@ -146,7 +146,7 @@ describe('Series browse + grid', () => {
     container.querySelector<HTMLElement>('[data-sort-direction="desc"]')!.click();
     expect(storageMock.setCatalogSort).toHaveBeenLastCalledWith('series', { by: 'name', direction: 'desc' });
     expect(storageMock.setCatalogSort.mock.calls.every(([kind]) => kind === 'series')).toBe(true);
-    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', '', 'sort-direction:desc']));
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', '', 'sort-direction:name:desc']));
   });
 
   it('labels See all with the series count', async () => {
