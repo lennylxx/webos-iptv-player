@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { Channel } from '../types';
 import { CONFIG } from '../config';
 import {
@@ -63,10 +63,192 @@ const channel = (id: string): Channel => ({
   catchupDays: 0,
 });
 
+// The webkitTemporaryStorage quota measured on the webOS 4 emulator.
+const EMULATOR_QUOTA = 8_547_530;
+const STANDARD_QUOTA = 768 * 1024 * 1024;
+type QuotaQuery = (success: (usage: number, quota: number) => void, error: () => void) => void;
+
+function stubNavigator(name: 'storage' | 'webkitTemporaryStorage', value: unknown): void {
+  Object.defineProperty(navigator, name, { configurable: true, value });
+}
+
+function usePrefixedQuota(query: QuotaQuery): void {
+  stubNavigator('storage', undefined);
+  stubNavigator('webkitTemporaryStorage', { queryUsageAndQuota: query });
+}
+
+// Runs past the minute the previous estimate stays cached for.
+async function withQuota<T>(quota: number, usage: number, run: () => Promise<T>): Promise<T> {
+  const previous = Object.getOwnPropertyDescriptor(navigator, 'storage');
+  stubNavigator('storage', { estimate: async () => ({ usage, quota }) });
+  const later = Date.now() + 60 * 1000;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+  try {
+    return await run();
+  } finally {
+    clock.mockRestore();
+    if (previous) Object.defineProperty(navigator, 'storage', previous);
+  }
+}
+
 describe('idb-cache', () => {
   beforeEach(async () => {
     localStorage.clear();
+    // Keeps the 384 MiB budget the tests below were written against.
+    stubNavigator('storage', { estimate: async () => ({ usage: 0, quota: STANDARD_QUOTA }) });
     await clearAllCachedData();
+  });
+
+  afterEach(() => {
+    delete (navigator as Navigator & { storage?: unknown }).storage;
+    delete (navigator as Navigator & { webkitTemporaryStorage?: unknown }).webkitTemporaryStorage;
+  });
+
+  describe('storage quota', () => {
+    const MiB = 1024 * 1024;
+    const bigChannel = (bytes: number): Channel => ({ ...channel('ch1'), name: 'x'.repeat(bytes) });
+
+    it('takes only the quota from webkitTemporaryStorage', async () => {
+      usePrefixedQuota((success) => success(1234, EMULATOR_QUOTA));
+
+      expect(await getCacheUsage()).toMatchObject({
+        quotaBytes: EMULATOR_QUOTA,
+        budgetBytes: Math.floor(EMULATOR_QUOTA * 0.25),
+        originUsageBytes: null,
+      });
+    });
+
+    it('reports no budget when no quota is reported', async () => {
+      usePrefixedQuota((_success, error) => error());
+      expect((await getCacheUsage()).budgetBytes).toBeNull();
+
+      stubNavigator('webkitTemporaryStorage', undefined);
+      expect((await getCacheUsage()).budgetBytes).toBeNull();
+    });
+
+    it('stops asking a prefixed API that never answers', async () => {
+      const query = vi.fn<QuotaQuery>();
+      usePrefixedQuota(query);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const pending = getCacheUsage();
+        await vi.advanceTimersByTimeAsync(1000);
+        expect((await pending).budgetBytes).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(warn.mock.calls.map(call => call.join(' '))).toContainEqual(
+        expect.stringContaining('event=persistence.cache.quota.unavailable reason=timeout'),
+      );
+      warn.mockRestore();
+
+      await getCacheUsage();
+      expect(query).toHaveBeenCalledTimes(1);
+    });
+
+    it('shares one pending prefixed query between callers', async () => {
+      const query = vi.fn<QuotaQuery>();
+      usePrefixedQuota(query);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const pending = Promise.all([getCacheUsage(), getCacheUsage()]);
+        await vi.advanceTimersByTimeAsync(1000);
+        await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    });
+
+    it('trusts a prefixed API again once its late answer arrives', async () => {
+      const answers: Array<(usage: number, quota: number) => void> = [];
+      const query = vi.fn<QuotaQuery>((success) => { answers.push(success); });
+      usePrefixedQuota(query);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const pending = getCacheUsage();
+        await vi.advanceTimersByTimeAsync(1000);
+        await pending;
+      } finally {
+        vi.useRealTimers();
+        warn.mockRestore();
+      }
+
+      answers[0](0, EMULATOR_QUOTA);
+      expect((await getCacheUsage()).quotaBytes).toBe(EMULATOR_QUOTA);
+      expect(query).toHaveBeenCalledTimes(1);
+    });
+
+    it('prunes nothing for a budget no quota grounds', async () => {
+      stubNavigator('storage', undefined);
+      await setCachedSubtitle('subdl:1', 'x'.repeat(2 * MiB));
+      await setCachedPlaylist([bigChannel(3 * MiB)]);
+
+      expect(await getCachedPlaylist(null)).not.toBeNull();
+      expect(await getCachedSubtitle('subdl:1')).not.toBeNull();
+    });
+
+    it('never evicts the playlist to fit the budget', async () => {
+      // A 2 MiB budget.
+      usePrefixedQuota((success) => success(0, 8 * MiB));
+      await setCachedPlaylist([bigChannel(1.5 * MiB)]);
+      await setCachedSubtitle('subdl:1', 'x'.repeat(MiB / 2));
+      await setCachedCatalog('x1|vod_categories', ['x'.repeat(MiB / 2)]);
+
+      expect(await getCachedPlaylist(null)).not.toBeNull();
+      expect(await getCachedSubtitle('subdl:1')).toBeNull();
+      expect(await getCachedCatalog('x1|vod_categories')).not.toBeNull();
+    });
+
+    it('prunes only the overrun from a budget of a few MiB', async () => {
+      // A 2 MiB budget.
+      usePrefixedQuota((success) => success(0, 8 * MiB));
+      await setCachedPlaylist([bigChannel(MiB)]);
+      await setCachedEpg('http://host/epg', { channels: {}, programmes: {} });
+      await setCachedCatalog('x1|vod_categories', ['x'.repeat(0.4 * MiB)]);
+      await setCachedCatalog('x1|series_categories', ['x'.repeat(0.4 * MiB)]);
+      await setCachedSubtitle('subdl:1', 'x'.repeat(0.3 * MiB));
+
+      expect(await getCachedCatalog('x1|vod_categories')).toBeNull();
+      expect(await getCachedCatalog('x1|series_categories')).not.toBeNull();
+      expect(await getCachedEpg('http://host/epg')).not.toBeNull();
+    });
+
+    it('stretches the budget over a playlist larger than it', async () => {
+      usePrefixedQuota((success) => success(0, 8 * MiB));
+      await setCachedPlaylist([bigChannel(3 * MiB)]);
+
+      const usage = await getCacheUsage();
+      expect(usage.budgetBytes).toBe(usage.categories.playlist.bytes);
+    });
+
+    it('limits a search index only by the engine when no quota is known', async () => {
+      stubNavigator('storage', undefined);
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(1);
+      await setCachedCatalog('x1|vod_all', ['x1|vod_all'], null);
+      clock.mockRestore();
+      await setCachedPlaylist([bigChannel(5 * MiB)]);
+
+      expect(await reserveSearchIndex({
+        key: 'catalog-cache|x1|vod_all|1|v1',
+        prefix: 'catalog-cache|x1|vod_all|',
+        bytes: MiB,
+      })).not.toBeNull();
+    });
+
+    it('stores a record the budget cannot hold without flushing the rest', async () => {
+      usePrefixedQuota((success) => success(0, 8 * MiB));
+      await setCachedSubtitle('subdl:1', 'kept');
+      await setCachedCatalog('x1|vod_all', ['x'.repeat(3 * MiB)]);
+
+      expect(await getCachedSubtitle('subdl:1')).toBe('kept');
+      expect(await getCachedCatalog('x1|vod_all')).not.toBeNull();
+    });
   });
 
   it('uses the next schema version after the published v3 database', async () => {
@@ -181,22 +363,15 @@ describe('idb-cache', () => {
 
   it('includes stream MIME records in the shared cache eviction pass', async () => {
     await setCachedStreamMime('http://host/live', 'video/mp2t');
-    const storageDescriptor = Object.getOwnPropertyDescriptor(navigator, 'storage');
-    Object.defineProperty(navigator, 'storage', {
-      configurable: true,
-      value: { estimate: async () => ({ usage: 0, quota: 100 }) },
-    });
-    try {
+    await withQuota(100, 0, async () => {
       await setCachedCatalog('x1|vod_categories', ['a']);
-    } finally {
-      if (storageDescriptor) {
-        Object.defineProperty(navigator, 'storage', storageDescriptor);
-      } else {
-        delete (navigator as Navigator & { storage?: StorageManager }).storage;
-      }
-    }
+    });
 
     expect(await getCachedStreamMime('http://host/live')).toBeNull();
+    expect(await getCachedCatalog('x1|vod_categories')).not.toBeNull();
+
+    // The clock moved back past the tiny quota's estimate, which expires.
+    await setCachedSubtitle('subdl:1', 'a');
     expect(await getCachedCatalog('x1|vod_categories')).not.toBeNull();
   });
 
@@ -492,6 +667,7 @@ describe('idb-cache', () => {
         configurable: true,
         value: { estimate: async () => ({ usage: 0, quota: 2 * (used - 1024 * 1024) }) },
       });
+      clock.mockReturnValue(initial + 8 * hour);
       await setCachedCatalog('x1|vod_categories', [{ id: '1', name: 'Cat A' }]);
 
       expect(await getCachedCatalog('x1|expired')).toBeNull();
@@ -786,20 +962,9 @@ describe('idb-cache', () => {
 
   it('keeps accounting correct when pruning the record being updated', async () => {
     await setCachedSubtitle('subdl:4', 'WEBVTT\n\nold');
-    const storageDescriptor = Object.getOwnPropertyDescriptor(navigator, 'storage');
-    Object.defineProperty(navigator, 'storage', {
-      configurable: true,
-      value: { estimate: async () => ({ usage: 0, quota: 100 }) },
-    });
-    try {
+    await withQuota(100, 0, async () => {
       await setCachedSubtitle('subdl:4', 'WEBVTT\n\nreplacement');
-    } finally {
-      if (storageDescriptor) {
-        Object.defineProperty(navigator, 'storage', storageDescriptor);
-      } else {
-        delete (navigator as Navigator & { storage?: StorageManager }).storage;
-      }
-    }
+    });
 
     const usage = await getCacheUsage();
     expect(usage.categories.subtitle.entries).toBe(1);
@@ -830,20 +995,6 @@ describe('idb-cache', () => {
       sourceBytes = (await getCacheUsage()).total.bytes;
     });
 
-    async function withQuota<T>(quota: number, usage: number, run: () => Promise<T>): Promise<T> {
-      const descriptor = Object.getOwnPropertyDescriptor(navigator, 'storage');
-      Object.defineProperty(navigator, 'storage', {
-        configurable: true,
-        value: { estimate: async () => ({ usage, quota }) },
-      });
-      try {
-        return await run();
-      } finally {
-        if (descriptor) Object.defineProperty(navigator, 'storage', descriptor);
-        else delete (navigator as Navigator & { storage?: StorageManager }).storage;
-      }
-    }
-
     async function writeIndex(key: string, extra: Record<string, unknown> = {}): Promise<void> {
       const db = (await openPersistenceDb())!;
       const tx = db.transaction(SEARCH_INDEX_STORE, 'readwrite');
@@ -870,7 +1021,7 @@ describe('idb-cache', () => {
     });
 
     it('skips an index larger than its share of the room left', async () => {
-      // FALLBACK budget 384 MiB: 10% is 38.4 MiB.
+      // The 384 MiB budget: 10% is 38.4 MiB.
       const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       expect(await reserveSearchIndex(candidate('x1|vod_all', 39 * MiB))).toBeNull();
       expect(info.mock.calls.map(call => call.join(' '))).toContainEqual(expect.stringContaining(

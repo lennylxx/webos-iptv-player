@@ -34,6 +34,7 @@ const contracts: DiagnosticContract[] = [
       'persistence.cache.eviction.failed',
       'persistence.cache.budget.exceeded',
       'persistence.cache.quota.exceeded',
+      'persistence.cache.quota.unavailable',
       'persistence.cache.write.failed',
       'persistence.cache.clear.failed',
       'persistence.cache.clear.completed',

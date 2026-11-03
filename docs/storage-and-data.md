@@ -287,17 +287,33 @@ The second number is a **soft cache budget**, not reserved or currently used
 space. For example, `1.8 MiB / 75 MiB` means the managed cache currently uses
 about 1.8 MiB and may grow toward a 75 MiB target.
 
-The budget adapts to the storage quota reported by
-`navigator.storage.estimate()`:
+The budget follows the per-app quota webOS grants, which depends on the free
+space left on the TV, so it differs between TV models and over time. How the
+app reads that quota depends on the engine:
+
+| Engine | Quota source | `share` |
+| --- | --- | --- |
+| Chromium 61+ (webOS 5 and later) | `navigator.storage.estimate()` | 0.5 |
+| Chromium 53 (webOS 4) | `navigator.webkitTemporaryStorage.queryUsageAndQuota()` | 0.25 |
 
 ```text
-budget = min(floor(reportedQuota * 0.5), 1 GiB)
+budget = min(floor(reportedQuota * share), 1 GiB)
 ```
 
-If the TV cannot report a quota, the app uses a 384 MiB fallback budget. The
-result can therefore differ between TV models, webOS versions, and available
-storage. A displayed budget of 75 MiB is normal when webOS grants the app a
-quota of about 150 MiB.
+For example, on webOS 5 and later a quota of about 150 MiB gives a budget of
+75 MiB.
+
+On webOS 4 the quota is only a few MiB, and writes start failing well before
+it is reached. The API also reports no usage, so the app cannot tell how full
+storage is before a write, and personal records share the same quota. The
+cache therefore keeps to a quarter of the quota. A parsed playlist larger
+than the budget stretches it to the playlist's size, leaving no room for other
+cached data.
+
+If no quota is reported, or the query gets no answer within a second, there
+is no budget: Settings shows it as `—`, and cleanup and Search index storage
+wait for webOS to reject a write. If the quota query answers after its
+one-second wait, the app uses that answer from then on.
 
 The displayed total covers only the managed cache. Small settings, personal
 records, browser-managed image files, and original LAN-uploaded M3U files are
@@ -306,8 +322,10 @@ not included.
 ## Automatic cleanup
 
 The app checks the cache before and after writes. Cleanup begins when the cache
-would exceed its soft budget or when overall app storage approaches 80% of the
-quota reported by webOS.
+would exceed a budget grounded in a reported quota, or when overall app storage
+approaches 80% of that quota. A record larger than the whole budget is stored
+without clearing the rest, since evicting everything else still would not make
+it fit.
 
 Cleanup removes data in this order:
 
@@ -316,15 +334,17 @@ Cleanup removes data in this order:
 3. Least-recently-used subtitles.
 4. Least-recently-used catalog and media metadata.
 5. Least-recently-used program guides.
-6. Least-recently-used parsed playlists.
+6. Least-recently-used parsed playlists, only after webOS rejects a write.
 
 A Search index never causes other data to be removed: it replaces older
 indexes of the same source and is skipped when it would take more than 10% of
 the room left in the budget. A failed index write is dropped without a retry.
 
 This order favors quick startup and live TV while discarding content that is
-usually cheap to download again. If webOS still rejects a write because storage
-is full, the app performs another cleanup and retries once.
+usually cheap to download again. Cleanup ahead of a write stops before the
+parsed playlist the app starts from. If webOS still rejects a write because
+storage is full, the app performs another cleanup, the playlist included, and
+retries once.
 
 More precisely, an incoming write computes:
 
@@ -334,8 +354,11 @@ originOver = reportedOriginUsage + incomingDelta - 80% of reportedQuota
 required   = max(cacheOver, originOver)
 ```
 
-When `required` is positive, cleanup removes at least that amount plus the
-larger of 4 MiB or 10% of the incoming delta. The margin avoids running another
+`cacheOver` counts only when webOS reported a quota and the incoming delta fits
+the budget on its own, and `originOver` only when it also reported usage. When
+`required` is positive, cleanup removes at least that amount plus the
+larger of a margin and 10% of the incoming delta. The margin is 4 MiB, or 10%
+of the budget when that is smaller. The margin avoids running another
 scan immediately after the next small write. A native `QuotaExceededError`
 triggers a second path that prunes the incoming record size plus 4 MiB, then
 retries the write once.

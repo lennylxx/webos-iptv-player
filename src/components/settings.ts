@@ -1760,11 +1760,11 @@ export class Settings {
   private renderCacheUsage(usage: CacheUsageSummary): void {
     const target = $('#cache-usage', this.container);
     if (!target) return;
-    const usedPercent = usage.budgetBytes > 0
+    const usedPercent = usage.budgetBytes
       ? Math.max(0, Math.min(100, usage.total.bytes / usage.budgetBytes * 100))
       : 0;
     const used = formatBytes(usage.total.bytes);
-    const budget = formatBytes(usage.budgetBytes);
+    const budget = usage.budgetBytes === null ? '—' : formatBytes(usage.budgetBytes);
     morph(target, html`
       <div class="cache-usage-total" role="img" aria-label="${used} / ${budget}">
         <svg class="cache-usage-ring" viewBox="0 0 120 120" aria-hidden="true">

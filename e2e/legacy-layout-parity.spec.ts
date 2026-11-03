@@ -227,9 +227,9 @@ const M3U_SCREENS: Screen[] = [
   ...(['general', 'sources', 'guide', 'appearance', 'playback', 'subtitles', 'advanced', 'data']
     .map((pane) => ({
       name: `settings-${pane}`,
-      // The data pane prints a storage quota, and `navigator.storage` is
-      // Chromium 55 — so webOS 4 estimates it another way. Environment, not
-      // layout.
+      // The data pane prints a storage budget, and `storage.estimate()` is
+      // Chromium 61 — so webOS 4 budgets from the prefixed quota API.
+      // Environment, not layout.
       budget: pane === 'data' ? 0.0005 : 0,
       go: (p: Page) => openSettingsPane(p, pane),
     }))),

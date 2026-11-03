@@ -22,8 +22,17 @@ import { cacheEntryMetaId, cacheRecordTimestamp, PLAYLIST_CACHE_KEY } from './id
 
 const log = createLogger('CacheStorage');
 const CACHE_CATEGORIES = ['playlist', 'epg', 'catalog', 'subtitle', 'health', 'search'] as const;
-const FALLBACK_BUDGET_BYTES = 384 * 1024 * 1024;
 const MAX_BUDGET_BYTES = 1024 * 1024 * 1024;
+const STANDARD_QUOTA_SHARE = 0.5;
+// The prefixed API reports no usage, so nothing checks the origin before a
+// write. On the webOS 4 emulator writes failed at about 60% of its quota, and
+// personal records need the rest.
+const PREFIXED_QUOTA_SHARE = 0.25;
+const PREFIXED_QUOTA_TIMEOUT_MS = 1000;
+// Least valuable first. Pruning ahead of a write never evicts the playlist the
+// app boots from; only the engine's quota error does.
+const EVICTION_ORDER: readonly CacheCategory[] = ['search', 'subtitle', 'catalog', 'epg', 'playlist'];
+const BUDGET_EVICTION_ORDER = EVICTION_ORDER.filter((category) => category !== 'playlist');
 const SUBTITLE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SEARCH_INDEX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CLEANUP_MARGIN_BYTES = 4 * 1024 * 1024;
@@ -82,7 +91,8 @@ export interface CacheUsageEntry {
 export interface CacheUsageSummary {
   total: CacheUsageEntry;
   categories: Record<CacheCategory, CacheUsageEntry>;
-  budgetBytes: number;
+  // Null when the engine reports no quota.
+  budgetBytes: number | null;
   originUsageBytes: number | null;
   quotaBytes: number | null;
 }
@@ -130,13 +140,26 @@ interface CachedPlaylistPayload {
 
 type StoredRecord = Record<string, unknown> & CacheFields;
 
+interface QuotaEstimate {
+  usage: number | null;
+  quota: number | null;
+  /** The part of the quota the cache may budget for. */
+  share: number;
+}
+
+// Chromium's pre-StorageManager quota API, `navigator.webkitTemporaryStorage`.
+interface WebkitTemporaryStorage {
+  queryUsageAndQuota(onQuota: (usage: number, quota: number) => void, onError: () => void): void;
+}
+
+const UNKNOWN_QUOTA: QuotaEstimate = { usage: null, quota: null, share: STANDARD_QUOTA_SHARE };
+
 let metadataPromise: Promise<void> | null = null;
 let mutationChain: Promise<void> = Promise.resolve();
 const accessTouches = new Map<string, number>();
-let storageEstimateCache: {
-  value: { usage: number | null; quota: number | null };
-  timestamp: number;
-} | null = null;
+let storageEstimateCache: { value: QuotaEstimate; timestamp: number } | null = null;
+let prefixedQuery: Promise<QuotaEstimate> | null = null;
+let prefixedQuotaSilent = false;
 let scheduledPlaylist: {
   channels: Channel[];
   epgSources: EpgSource[];
@@ -741,27 +764,84 @@ async function readEntryMeta(
   return isCacheEntryMeta(raw) ? raw : null;
 }
 
-async function storageEstimate(): Promise<{ usage: number | null; quota: number | null }> {
+function positiveOrNull(value: unknown): number | null {
+  return typeof value === 'number' && value > 0 ? value : null;
+}
+
+async function standardEstimate(storage: StorageManager): Promise<QuotaEstimate> {
   try {
-    // StorageManager is absent on webOS 4; guard before accessing it.
-    if (typeof navigator === 'undefined' || !navigator.storage?.estimate) {
-      return { usage: null, quota: null };
-    }
-    // eslint-disable-next-line compat/compat
-    const estimate = await navigator.storage.estimate();
+    const { usage, quota } = await storage.estimate();
     return {
-      usage: typeof estimate.usage === 'number' ? estimate.usage : null,
-      quota: typeof estimate.quota === 'number' ? estimate.quota : null,
+      usage: typeof usage === 'number' ? usage : null,
+      quota: positiveOrNull(quota),
+      share: STANDARD_QUOTA_SHARE,
     };
   } catch {
-    return { usage: null, quota: null };
+    return UNKNOWN_QUOTA;
   }
 }
 
-async function cachedStorageEstimate(): Promise<{ usage: number | null; quota: number | null }> {
+function prefixedEstimate(storage: WebkitTemporaryStorage): Promise<QuotaEstimate> {
+  return new Promise((resolve) => {
+    let timedOut = false;
+    const answer = (quota: unknown): void => {
+      clearTimeout(timer);
+      const value = positiveOrNull(quota);
+      const estimate = value === null
+        ? UNKNOWN_QUOTA
+        : { usage: null, quota: value, share: PREFIXED_QUOTA_SHARE };
+      if (!timedOut) {
+        resolve(estimate);
+      } else if (estimate.quota !== null) {
+        // A slow engine answered after all; trust it again.
+        prefixedQuotaSilent = false;
+        storageEstimateCache = { value: estimate, timestamp: Date.now() };
+      }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      prefixedQuotaSilent = true;
+      log.warn(
+        'Storage quota query never answered; using the fallback budget',
+        'event=persistence.cache.quota.unavailable',
+        'reason=timeout',
+      );
+      resolve(UNKNOWN_QUOTA);
+    }, PREFIXED_QUOTA_TIMEOUT_MS);
+    try {
+      storage.queryUsageAndQuota((_usage, quota) => answer(quota), () => answer(null));
+    } catch {
+      answer(null);
+    }
+  });
+}
+
+async function storageEstimate(): Promise<QuotaEstimate> {
+  if (typeof navigator === 'undefined') return UNKNOWN_QUOTA;
+  // estimate() arrived in Chromium 61; older engines, webOS 4's Chromium 53
+  // included, have only the prefixed API.
+  // eslint-disable-next-line compat/compat
+  const standard = navigator.storage as StorageManager | undefined;
+  if (standard && typeof standard.estimate === 'function') return standardEstimate(standard);
+  const prefixed = (navigator as Navigator & { webkitTemporaryStorage?: WebkitTemporaryStorage })
+    .webkitTemporaryStorage;
+  if (prefixedQuotaSilent || !prefixed || typeof prefixed.queryUsageAndQuota !== 'function') {
+    return UNKNOWN_QUOTA;
+  }
+  if (!prefixedQuery) {
+    const query = prefixedEstimate(prefixed);
+    const settled = (): void => { prefixedQuery = null; };
+    query.then(settled, settled);
+    prefixedQuery = query;
+  }
+  return prefixedQuery;
+}
+
+async function cachedStorageEstimate(): Promise<QuotaEstimate> {
   const now = Date.now();
-  if (storageEstimateCache
-      && now - storageEstimateCache.timestamp < STORAGE_ESTIMATE_TTL_MS) {
+  const age = storageEstimateCache ? now - storageEstimateCache.timestamp : -1;
+  // A clock set back, as when the TV syncs its time after boot, expires it too.
+  if (storageEstimateCache && age >= 0 && age < STORAGE_ESTIMATE_TTL_MS) {
     return storageEstimateCache.value;
   }
   const value = await storageEstimate();
@@ -769,16 +849,22 @@ async function cachedStorageEstimate(): Promise<{ usage: number | null; quota: n
   return value;
 }
 
-function budgetForQuota(quota: number | null): number {
-  if (quota === null || quota <= 0) return FALLBACK_BUDGET_BYTES;
-  return Math.min(Math.floor(quota * 0.5), MAX_BUDGET_BYTES);
+// Budget pruning keeps the playlist, so a playlist larger than the quota's
+// share stretches the budget to hold it and leaves no room for anything else.
+function cacheBudget(
+  { quota, share }: QuotaEstimate,
+  { categories }: { categories: Record<CacheCategory, CacheUsageEntry> },
+): number | null {
+  if (quota === null) return null;
+  const budget = Math.min(Math.floor(quota * share), MAX_BUDGET_BYTES);
+  return Math.max(budget, categories.playlist.bytes);
 }
 
 export async function getCacheUsage(): Promise<CacheUsageSummary> {
-  const [metadata, estimate] = await Promise.all([readMetadata(), storageEstimate()]);
+  const [metadata, estimate] = await Promise.all([readMetadata(), cachedStorageEstimate()]);
   return {
     ...metadata,
-    budgetBytes: budgetForQuota(estimate.quota),
+    budgetBytes: cacheBudget(estimate, metadata),
     originUsageBytes: estimate.usage,
     quotaBytes: estimate.quota,
   };
@@ -875,10 +961,13 @@ async function removeExpiredRecord(store: CacheStore, key: IDBValidKey): Promise
   });
 }
 
-async function pruneBytes(targetBytes: number): Promise<number> {
+async function pruneBytes(
+  targetBytes: number,
+  order: readonly CacheCategory[] = EVICTION_ORDER,
+): Promise<number> {
   if (targetBytes <= 0) return 0;
   const now = Date.now();
-  const candidates = await collectCandidates();
+  const candidates = (await collectCandidates()).filter((item) => order.includes(item.category));
   const selected: CacheCandidate[] = [];
   const selectedKeys = new Set<string>();
   let bytes = 0;
@@ -896,7 +985,7 @@ async function pruneBytes(targetBytes: number): Promise<number> {
   addUntilTarget(candidates
     .filter((item) => item.expiresAt !== null && item.expiresAt <= now)
     .sort((a, b) => (a.expiresAt ?? 0) - (b.expiresAt ?? 0)));
-  for (const category of ['search', 'subtitle', 'catalog', 'epg', 'playlist'] as const) {
+  for (const category of order) {
     addUntilTarget(candidates
       .filter((item) => item.category === category)
       .sort((a, b) => a.lastAccessedAt - b.lastAccessedAt));
@@ -904,13 +993,23 @@ async function pruneBytes(targetBytes: number): Promise<number> {
   return deleteCandidates(selected);
 }
 
+// A fixed margin would empty a budget of a few MiB at the first overrun.
+function cleanupMargin(budgetBytes: number): number {
+  return Math.min(CLEANUP_MARGIN_BYTES, Math.floor(budgetBytes * 0.1));
+}
+
 async function ensureCapacity(deltaBytes: number): Promise<void> {
   if (deltaBytes <= 0) return;
   const metadata = await readMetadata();
   const estimate = await cachedStorageEstimate();
-  const budgetBytes = budgetForQuota(estimate.quota);
-  const cacheOver = metadata.total.bytes + deltaBytes - budgetBytes;
-  const originOver = estimate.quota !== null && estimate.usage !== null
+  const budgetBytes = cacheBudget(estimate, metadata);
+  // Without a quota, the engine's quota error is the only guard.
+  if (budgetBytes === null || estimate.quota === null) return;
+  // A record the budget can't hold even alone would only flush the rest.
+  const cacheOver = deltaBytes <= budgetBytes
+    ? metadata.total.bytes + deltaBytes - budgetBytes
+    : 0;
+  const originOver = estimate.usage !== null
     ? estimate.usage + deltaBytes - Math.floor(estimate.quota * 0.8)
     : 0;
   const required = Math.max(cacheOver, originOver);
@@ -922,7 +1021,10 @@ async function ensureCapacity(deltaBytes: number): Promise<void> {
       `requiredBytes=${required}`,
       `incomingBytes=${deltaBytes}`,
     );
-    await pruneBytes(required + Math.max(CLEANUP_MARGIN_BYTES, Math.floor(deltaBytes * 0.1)));
+    await pruneBytes(
+      required + Math.max(cleanupMargin(budgetBytes), Math.floor(deltaBytes * 0.1)),
+      BUDGET_EVICTION_ORDER,
+    );
   }
 }
 
@@ -1612,6 +1714,7 @@ export async function clearAllCachedData(): Promise<void> {
       metadataPromise = null;
       accessTouches.clear();
       storageEstimateCache = null;
+      prefixedQuotaSilent = false;
       log.info(
         'Cache clear completed',
         'event=persistence.cache.clear.completed',
@@ -1699,7 +1802,9 @@ export function reserveSearchIndex(
     }
     const metadata = await readMetadata();
     const estimate = await cachedStorageEstimate();
-    let room = budgetForQuota(estimate.quota) - metadata.total.bytes;
+    const budgetBytes = cacheBudget(estimate, metadata);
+    // Without a quota, only the engine's quota error limits the index.
+    let room = budgetBytes === null ? Infinity : budgetBytes - metadata.total.bytes;
     if (estimate.quota !== null && estimate.usage !== null) {
       room = Math.min(room, Math.floor(estimate.quota * 0.8) - estimate.usage);
     }

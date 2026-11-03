@@ -70,7 +70,7 @@ const {
           health: { bytes: 0, entries: 0 },
           search: { bytes: 3 * 1024 * 1024, entries: 2 },
         },
-        budgetBytes: 1024 * 1024 * 1024,
+        budgetBytes: 1024 * 1024 * 1024 as number | null,
         originUsageBytes: null,
         quotaBytes: null,
       })),
@@ -946,6 +946,18 @@ describe('Settings.render', () => {
     expect(breakdown.textContent).toContain('286 MiB');
     expect(breakdown.textContent).toContain('92.0 MiB');
     expect(breakdown.textContent).toContain('Channel Health');
+  });
+
+  it('shows a dash for the budget when no quota is known', async () => {
+    const usage = await cacheMock.getCacheUsage();
+    cacheMock.getCacheUsage.mockResolvedValueOnce({ ...usage, budgetBytes: null });
+    settings.render();
+    await vi.waitFor(() => {
+      expect(container.querySelector('.cache-usage-value')?.textContent?.replace(/\s+/g, ' ').trim())
+        .toBe('438 MiB / —');
+    });
+    expect(container.querySelector('.cache-usage-ring-used')
+      ?.getAttribute('stroke-dasharray')).toBe('0.0 100');
   });
 });
 
