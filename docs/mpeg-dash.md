@@ -9,6 +9,7 @@ ClearKey and the desktop preview use Shaka through MSE.
 | Platform | Playback path | Track control |
 |---|---|---|
 | webOS, clear or PlayReady | Native `MPEG-DASH` transport | HTML5 audio tracks, self-rendered raw WebVTT, and the native subtitle compositor |
+| webOS, clear or PlayReady, with channel HTTP headers | Luna `com.webos.media/load` with `MPEG-DASH` transport | UMS `sourceInfo` audio tracks and self-rendered raw WebVTT on the Luna clock |
 | webOS, Widevine or ClearKey | Shaka DASH-only through MSE/EME | The `MseEngine` adapter |
 | Desktop preview | Shaka DASH-only | The `MseEngine` adapter |
 
@@ -159,6 +160,53 @@ boundaries:
 
 The pads are configured by `DVR_GO_LIVE_PAD` and `DVR_OLDEST_PAD`.
 
+## Luna header playback
+
+A DASH channel with HTTP headers that the page pipeline would overwrite
+(Referer, User-Agent, Cookie, Authorization) loads through
+`luna://com.webos.media/load` on webOS, as header HLS does. The payload
+uses `mediaTransportType: 'MPEG-DASH'` and the same `option.transmission`
+headers. HTTPS streams keep the Cookie and Authorization stripping.
+
+- The MPD is first read without the channel's headers to find its DRM,
+  as the element path does. A refused MPD loads Luna as configured and
+  logs `playback.path.luna drm=unknown mpd=unreadable`. If that load fails
+  (`load_failed` or `error`), Luna retries once as PlayReady
+  (`playback.luna.drm.retry`) before the stream counts as failed. A
+  PlayReady channel whose MPD needs its headers should declare
+  `#KODIPROP:inputstream.adaptive.license_type=com.microsoft.playready`
+  to skip this guess.
+- PlayReady loads the DRM client first and passes
+  `option.drm: {type: 'playready', clientId}` beside `option.transmission`.
+  License handling is unchanged: the license request never carries the
+  channel's headers.
+- Widevine and ClearKey stay on Shaka (`playback.luna.skipped
+  reason=drm_mse`); an unsupported scheme logs `reason=drm_unsupported`.
+- A Luna failure falls back to the native element, reusing the MPD read
+  instead of fetching it again. A PlayReady client is released and a
+  fresh one is prepared for the element.
+- A User-Agent-only channel that failed on the element drops the element's
+  source and DRM client before its Luna DASH retry. A stream on Shaka gets
+  no Luna retry.
+- Audio comes from the UMS `sourceInfo` list and switches with
+  `selectTrack {type: 'audio'}`. Raw WebVTT is self-rendered on the Luna
+  clock; compositor subtitles (`stpp`, `wvtt`, CEA) are hidden, since
+  `setSubtitleEnable` would reach the placeholder's pipeline.
+
+Verified on webOS 25: UMS sends the `transmission` headers on the MPD,
+init, and media segment requests, through 302 redirects, absolute
+BaseURLs, and live MPD refreshes, and PlayReady plays with a direct Luna
+load.
+
+Limits:
+
+- License requests do not get the channel's headers; a license server
+  that checks them fails.
+- webOS 4 has no usable window ID for the load, so these channels stay
+  on `<video>` there.
+- Unverified: that the live DASH media timeline matches the Luna
+  position clock, which DASH WebVTT on Luna relies on.
+
 ## Native PlayReady DRM
 
 The webOS native path supports PlayReady-protected DASH. Before attaching the
@@ -271,6 +319,42 @@ Automated coverage includes:
 
 Native decode, extensionless detection, multiple audio AdaptationSets, raw
 WebVTT, `stpp`, `wvtt`, dynamic MPDs and DVR were tested on webOS TV 10.3.1.
+
+### Public test streams
+
+These vendor developer test streams reproduce the DRM paths on a TV.
+Load them through a local M3U; never hardcode them into code or tests.
+Availability can change.
+
+| DRM | Title | Manifest | License server |
+|---|---|---|---|
+| PlayReady | Tears of Steel 4K | `https://test.playready.microsoft.com/media/profficialsite/tearsofsteel_4k.ism/manifest.mpd` | `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(persist:false,sl:150)` |
+| PlayReady | Big Buck Bunny CBCS 1080p | `https://test.playready.microsoft.com/media/dash/APPLEENC_CBCS_BBB_1080p/1080p.mpd` | `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(persist:false,ck:W31bfVt9W31bfVt9W31bfQ==,ckt:aescbc)` |
+| Widevine | Angel One | `https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd` | `https://proxy.uat.widevine.com/proxy` |
+| ClearKey | Angel One | `https://storage.googleapis.com/shaka-demo-assets/angel-one-clearkey/dash.mpd` | `https://cwip-shaka-proxy.appspot.com/clearkey?_u3wDe7erb7v8Lqt8A3QDQ=ABEiM0RVZneImaq7zN3u_w` |
+| None | Angel One (multiple audio, `stpp` subtitles) | `https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd` | — |
+| None | Tears of Steel (TTML subtitles) | `https://storage.googleapis.com/shaka-demo-assets/tos-ttml/dash.mpd` | — |
+
+The PlayReady streams come from Microsoft's PlayReady test server; the
+Widevine, ClearKey, and clear ones from Shaka Player's demo catalog
+(`demo/common/assets.js`). A plain GET on a Widevine or ClearKey license
+URL returns HTTP 400, which is expected without a CDM challenge. The
+Axinom multi-DRM vectors need an `X-AxDRM-Message` header whose value
+isn't public, so they can't be reproduced outside Shaka's hosted demo.
+
+Set the DRM with the Kodi properties above. Adding a header such as
+`#EXTVLCOPT:http-referrer=http://ref.test/` routes the channel through
+[Luna header playback](#luna-header-playback); these servers ignore it.
+
+```m3u
+#EXTM3U
+#EXTINF:-1,PlayReady with Referer
+#KODIPROP:inputstream.adaptive.manifest_type=mpd
+#KODIPROP:inputstream.adaptive.license_type=com.microsoft.playready
+#KODIPROP:inputstream.adaptive.license_key=https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(persist:false,sl:150)
+#EXTVLCOPT:http-referrer=http://ref.test/
+https://test.playready.microsoft.com/media/profficialsite/tearsofsteel_4k.ism/manifest.mpd
+```
 
 ## Known limitations
 

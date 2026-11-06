@@ -409,6 +409,11 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   display: block;
 }
 
+/* The Luna pipeline's picture shows through the placeholder's window. */
+#video-player.luna-media {
+  background: transparent;
+}
+
 /* Program-reminder & catch-up resume prompts — overlay modals */
 .reminder-prompt,
 .catchup-resume-prompt,

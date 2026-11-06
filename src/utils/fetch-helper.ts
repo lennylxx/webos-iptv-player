@@ -9,10 +9,20 @@ export class FetchTextError extends Error {
   constructor(
     public readonly code: FetchTextErrorCode,
     message: string,
+    public readonly status = 0,
   ) {
     super(message);
     this.name = 'FetchTextError';
   }
+}
+
+/** Diagnostic reason for a failed fetch; never carries the URL. */
+export function fetchFailureReason(error: unknown): string {
+  if (error instanceof FetchTextError) {
+    if (error.code === 'http') return `http_${String(error.status)}`;
+    return error.code === 'invalid_content' ? 'parse' : error.code;
+  }
+  return 'network';
 }
 
 export type FetchPrefixVerdict = 'match' | 'mismatch' | 'undecided';
@@ -124,7 +134,8 @@ export async function fetchLimitedText(
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
-      throw new FetchTextError('http', `HTTP ${response.status}: ${response.statusText}`);
+      throw new FetchTextError(
+        'http', `HTTP ${response.status}: ${response.statusText}`, response.status);
     }
     const declaredLength = Number(response.headers?.get('content-length') || 0);
     if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {

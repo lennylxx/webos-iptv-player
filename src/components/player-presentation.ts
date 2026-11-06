@@ -3,7 +3,7 @@ import { createLogger } from '../utils/logger';
 const log = createLogger('PlayerPresentation');
 const geometryProperties = ['left', 'top', 'width', 'height'] as const;
 
-interface Rectangle {
+export interface Rectangle {
   left: number;
   top: number;
   width: number;
@@ -30,10 +30,13 @@ function clearStyles(video: HTMLVideoElement): void {
 export class PlayerPresentation {
   private previewMode = false;
   private video: HTMLVideoElement | null = null;
+  private lastPreview: { rect: Rectangle; radius: string } | null = null;
 
   constructor(
     private readonly getVideo: () => HTMLVideoElement | null,
     private readonly getSlot: () => HTMLElement | null,
+    // A pipeline outside the page (Luna) has to be told where the picture goes.
+    private readonly onLayout: (rect: Rectangle | null) => void = () => {},
   ) {}
 
   showPreview(): void {
@@ -63,6 +66,7 @@ export class PlayerPresentation {
     if (!video) return;
     if (!this.previewMode) {
       clearStyles(video);
+      this.onLayout(null);
       return;
     }
     const slot = this.getSlot();
@@ -71,12 +75,21 @@ export class PlayerPresentation {
       log.warn('Cannot present live preview: slot is missing or has invalid geometry', rect);
       video.style.transition = 'none';
       video.style.zIndex = '';
+      // A Luna picture would otherwise stay full screen behind the list.
+      if (this.lastPreview) this.place(video, this.lastPreview.rect, this.lastPreview.radius);
       return;
     }
     // Animated resizing saturated the TV CPU and caused dropped frames.
     video.style.transition = 'none';
-    writeRectangle(video, rect);
-    video.style.borderRadius = getComputedStyle(slot).borderRadius || '0px';
     video.style.zIndex = '';
+    const preview = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    this.lastPreview = { rect: preview, radius: getComputedStyle(slot).borderRadius || '0px' };
+    this.place(video, preview, this.lastPreview.radius);
+  }
+
+  private place(video: HTMLVideoElement, rect: Rectangle, radius: string): void {
+    writeRectangle(video, rect);
+    video.style.borderRadius = radius;
+    this.onLayout(rect);
   }
 }

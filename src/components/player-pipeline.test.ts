@@ -197,6 +197,7 @@ function callbacks(overrides: Partial<PlayerPipelineOptions> = {}): PlayerPipeli
     onError: vi.fn(),
     onAudioTracksUpdated: vi.fn(),
     onSubtitleTracksUpdated: vi.fn(),
+    onPlaybackPathChange: vi.fn(),
     onManifest: vi.fn(),
     ...overrides,
   };

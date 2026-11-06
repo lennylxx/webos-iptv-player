@@ -6,6 +6,8 @@ const { pipeline, tracks, osd, playlist, health } = vi.hoisted(() => ({
   pipeline: {
     load: vi.fn(), destroy: vi.fn(), setVideoElement: vi.fn(),
     currentLoadToken: vi.fn(() => 1), videoLabel: vi.fn(() => 'video'),
+    isLunaActive: vi.fn(() => false), isLunaPending: vi.fn(() => false),
+    isLunaStarting: vi.fn(() => false), lunaClock: vi.fn(() => null), setLunaDisplay: vi.fn(), lunaStreamUrl: vi.fn(() => ''), retryWithLuna: vi.fn(() => false),
   },
   tracks: {
     resetForLoad: vi.fn(), suspend: vi.fn(), stop: vi.fn(), attachVod: vi.fn(),
@@ -229,7 +231,7 @@ describe('Player live preview', () => {
     expect(player.getCurrentChannel()).toBe(replacement);
     expect(player.getCurrentIndex()).toBe(0);
     expect(pipeline.load).toHaveBeenCalledOnce();
-    expect(pipeline.load).toHaveBeenCalledWith(replacement.url, replacement.extras, undefined);
+    expect(pipeline.load).toHaveBeenCalledWith(replacement.url, replacement.extras, { headers: {} });
   });
 
   it('retunes a replacement channel whose stream options changed', () => {
@@ -245,6 +247,14 @@ describe('Player live preview', () => {
 
     expect(player.getCurrentChannel()).toBe(replacement);
     expect(pipeline.load).toHaveBeenCalledOnce();
+  });
+
+  it('hands the channel headers to the pipeline', () => {
+    playlist.channels = [{ ...channels[0], httpHeaders: { Referer: 'http://host/' } }];
+    pipeline.load.mockClear();
+    player.play(0);
+    expect(pipeline.load).toHaveBeenCalledWith(channels[0].url, null,
+      { headers: { Referer: 'http://host/' } });
   });
 
   it('retunes a refreshed URL without asking for the PIN again', () => {
@@ -285,6 +295,70 @@ describe('Player live preview', () => {
     player.suspend();
     player.resume();
     expect(authorize).toHaveBeenLastCalledWith(channels[0], expect.any(Function), true, false);
+  });
+
+  it('unloads a paused Luna stream on suspend and restarts it on resume', () => {
+    player.play(0);
+    pipeline.isLunaActive.mockReturnValue(true);
+    pipeline.load.mockClear();
+    try {
+      player.suspend();
+      expect(pipeline.destroy).toHaveBeenCalled();
+      player.resume();
+      expect(pipeline.load).toHaveBeenCalledOnce();
+    } finally {
+      pipeline.isLunaActive.mockReturnValue(false);
+    }
+  });
+
+  it('unloads a Luna stream still preparing its DRM on suspend and restarts it on resume', () => {
+    player.play(0);
+    pipeline.isLunaPending.mockReturnValue(true);
+    pipeline.load.mockClear();
+    try {
+      player.suspend();
+      expect(pipeline.destroy).toHaveBeenCalled();
+      player.resume();
+      expect(pipeline.load).toHaveBeenCalledOnce();
+    } finally {
+      pipeline.isLunaPending.mockReturnValue(false);
+    }
+  });
+
+  it('places a Luna picture in the 1920x1080 app space', () => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(960);
+    player.setVideoDisplay({ left: 440, top: 80, width: 480, height: 270 });
+    expect(pipeline.setLunaDisplay)
+      .toHaveBeenLastCalledWith({ x: 880, y: 160, width: 960, height: 540 });
+    player.setVideoDisplay(null);
+    expect(pipeline.setLunaDisplay).toHaveBeenLastCalledWith('full');
+  });
+
+  it('hands a live preview header channel to the pipeline in the preview rect', () => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1920);
+    playlist.channels = [{ ...channels[0], httpHeaders: { Referer: 'http://host/' } }];
+    player.enterLivePreview();
+    player.setVideoDisplay({ left: 440, top: 80, width: 480, height: 270 });
+    pipeline.load.mockClear();
+    player.play(0);
+    expect(pipeline.load).toHaveBeenCalledWith(channels[0].url, null,
+      { headers: { Referer: 'http://host/' } });
+    expect(pipeline.setLunaDisplay)
+      .toHaveBeenLastCalledWith({ x: 440, y: 80, width: 480, height: 270 });
+  });
+
+  it('starts a full-screen load at full screen, never resizing the outgoing pipeline', () => {
+    player.enterLivePreview();
+    player.setVideoDisplay({ left: 440, top: 80, width: 480, height: 270 });
+    player.play(0);
+    expect(pipeline.setLunaDisplay).not.toHaveBeenLastCalledWith('full');
+
+    player.exitLivePreview();
+    pipeline.setLunaDisplay.mockClear();
+    player.play(1);
+    expect(pipeline.setLunaDisplay).toHaveBeenCalledWith('full');
+    expect(pipeline.setLunaDisplay.mock.invocationCallOrder[0])
+      .toBeGreaterThan(pipeline.load.mock.invocationCallOrder.at(-1)!);
   });
 
   it('restores live audio when expanding without touching playback state', () => {

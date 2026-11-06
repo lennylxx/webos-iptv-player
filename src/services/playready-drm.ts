@@ -1,3 +1,4 @@
+import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
 import type { PlayReadyConfig } from './drm-config';
 import {
@@ -51,6 +52,9 @@ export class PlayReadyDrm {
   private clientId = '';
   private subscription: LunaRequestHandle | null = null;
   private messageIds = new Set<string>();
+  // Unloads and loads still in flight. The service may hand a new load the
+  // clientId an earlier unload is about to delete, so a load waits them out.
+  private pending = new Set<Promise<void>>();
 
   async prepare(
     config: PlayReadyConfig,
@@ -58,15 +62,25 @@ export class PlayReadyDrm {
   ): Promise<string | null> {
     const generation = ++this.generation;
     await this.unloadCurrent();
+    await this.settlePending();
     if (generation !== this.generation) return null;
 
     if (!isLunaAvailable()) throw new Error('webOS DRM service is unavailable');
 
     try {
-      const loaded = await this.call('load', {
+      // A load superseded while in flight unloads its client before a newer
+      // prepare may load.
+      const loading = this.call('load', {
         drmType: 'playready',
         appId: __APP_ID__,
+      }).then(async response => {
+        if (generation === this.generation || !response.clientId) return response;
+        await this.unload(response.clientId);
+        return null;
       });
+      this.track(loading);
+      const loaded = await loading;
+      if (!loaded) return null;
       const clientId = loaded.clientId;
       if (!clientId) throw new Error('DRM service returned no clientId');
       if (generation !== this.generation) {
@@ -152,6 +166,32 @@ export class PlayReadyDrm {
   }
 
   private async unload(clientId: string): Promise<void> {
-    await this.call('unload', { clientId });
+    const unloading = this.call('unload', { clientId });
+    this.track(unloading);
+    await unloading;
+  }
+
+  private track(work: Promise<unknown>): void {
+    const settled = work.then(() => {}, () => {});
+    this.pending.add(settled);
+    void settled.then(() => { this.pending.delete(settled); });
+  }
+
+  // Bounded, so an unload the service never answers cannot hold playback.
+  private settlePending(): Promise<void> {
+    const waiting = Array.from(this.pending);
+    if (!waiting.length) return Promise.resolve();
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        for (const work of waiting) this.pending.delete(work);
+        log.warn('DRM client unload unanswered', 'event=playback.dash.drm.unload.timeout',
+          `pending=${String(waiting.length)}`);
+        resolve();
+      }, CONFIG.PLAYER.PLAYREADY_UNLOAD_WAIT_MS);
+      void Promise.all(waiting).then(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 }

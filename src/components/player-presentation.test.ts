@@ -48,6 +48,35 @@ afterEach(() => {
 });
 
 describe('PlayerPresentation', () => {
+  it('reports where the picture goes for an out-of-page pipeline', () => {
+    const onLayout = vi.fn();
+    const tracked = new PlayerPresentation(() => video, () => slot, onLayout);
+
+    tracked.showPreview();
+    expect(onLayout).toHaveBeenLastCalledWith(preview);
+    slotRectangle = { ...preview, top: 200 };
+    tracked.refresh();
+    expect(onLayout).toHaveBeenLastCalledWith({ ...preview, top: 200 });
+    tracked.showFullscreen();
+    expect(onLayout).toHaveBeenLastCalledWith(null);
+  });
+
+  it('keeps the picture at the last preview while the slot has no geometry', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onLayout = vi.fn();
+    const tracked = new PlayerPresentation(() => video, () => slot, onLayout);
+    tracked.showPreview();
+    tracked.showFullscreen();
+    slotRectangle = { ...preview, width: 0 };
+
+    tracked.showPreview();
+
+    expect(warn).toHaveBeenCalled();
+    expect(onLayout).toHaveBeenLastCalledWith(preview);
+    expectGeometry(preview);
+    expect(video?.style.borderRadius).toBe('8px');
+  });
+
   it('switches both directions immediately without touching media state', () => {
     const original = video!;
     const parent = original.parentNode;

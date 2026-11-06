@@ -66,6 +66,7 @@ export class LivePreview {
     this.presentation = new PlayerPresentation(
       () => options.player.getVideoElement(),
       () => this.slot,
+      rect => options.player.setVideoDisplay(rect),
     );
     container.setAttribute('data-self-activate', '');
     container.addEventListener('nav:hover', event => {

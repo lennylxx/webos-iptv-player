@@ -21,6 +21,7 @@ import { show, hide } from '../utils/dom';
 import {
   channelExactStreamIdentity,
   channelExactStreamKey,
+  channelHttpHeaders,
   channelKey,
   channelStreamIdentity,
   channelStreamKey,
@@ -42,7 +43,8 @@ import { ChannelHealthService } from '../services/channel-health';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
 import { showToast } from './toast';
-import { PlayerPipeline, type PipelineManifest } from './player-pipeline';
+import { PlayerPipeline, type PipelineLoadOptions, type PipelineManifest } from './player-pipeline';
+import type { Rectangle } from './player-presentation';
 import {
   PlaybackRateController,
   type PlaybackRate,
@@ -115,6 +117,7 @@ export class Player {
   private startupPending = false;
   // The user paused the element; startup, reloads, and `play` clear it.
   private userPaused = false;
+  private lunaStallHeldLoad = -1; // one playback.luna.stall.held event per load
   private liveSessionActive = false;
   private playbackActive = false;
   private livePreviewMode = false;
@@ -166,6 +169,15 @@ export class Player {
         if (this.osd.isVisible()) this.osd.render();
       },
       onManifest: manifest => this.applyPipelineManifest(manifest),
+      onPlaybackPathChange: () => {
+        // A path change reloads the element, which reads NETWORK_NO_SOURCE
+        // until its resource selection runs: a tick due now would call that
+        // source refused.
+        if (this.startupPending) this.startupWatchdog.start();
+        // Frozen ticks counted against Luna would reload the fallback source
+        // in the same instant it starts.
+        this.stallWatchdog.restartFreeze();
+      },
     });
     this.tracks = new PlayerTracks(this.pipeline, {
       getVideoElement: () => this.videoEl,
@@ -217,6 +229,7 @@ export class Player {
         this.osd.updateMessage(t('player.streamError'));
         this.channelUp();
       },
+      holdStall: recovery => this.holdStallForLuna(recovery),
       pollMs: CONFIG.PLAYER.STALL_POLL_MS,
       freezeTicks: CONFIG.PLAYER.STALL_FREEZE_TICKS,
       maxReloads: CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS,
@@ -416,11 +429,27 @@ export class Player {
       ` paused=${String(p.paused)} seeking=${String(p.seeking)}`;
   }
 
+  // A reload would restart Luna before its deadline could fall back to the
+  // element, so a server that never answers would never leave Luna.
+  private holdStallForLuna(recovery: StallRecovery): boolean {
+    if (!this.pipeline.isLunaStarting()) return false;
+    const load = this.pipeline.currentLoadToken();
+    if (this.lunaStallHeldLoad !== load) {
+      this.lunaStallHeldLoad = load;
+      log.info('Stall left to the Luna start deadline', 'event=playback.luna.stall.held',
+        this.playbackLabel(load), this.recoveryState(recovery));
+    }
+    return true;
+  }
+
   suspend(): void {
     this.startupWatchdog.stop();
     if (!this.videoEl || !this.currentChannel) return;
     if (this.wasPlayingBeforeHide) return; // already suspended
-    this.wasPlayingBeforeHide = !this.videoEl.paused;
+    // A Luna pipeline lives outside the page, so hiding always unloads it,
+    // as it does one still waiting on its PlayReady client.
+    this.wasPlayingBeforeHide = !this.videoEl.paused || this.pipeline.isLunaActive()
+      || this.pipeline.isLunaPending();
     if (this.wasPlayingBeforeHide) {
       // Save catch-up position and remember it for resume() BEFORE the element is destroyed.
       // Prefer a not-yet-applied resume seek: if we suspend before loadedmetadata
@@ -671,7 +700,7 @@ export class Player {
 
     this.videoEl.classList.add('active');
     this.onPlaybackStateChanged();
-    this.loadStream(url, channel.extras);
+    this.loadStream(url, channel.extras, { headers: channelHttpHeaders(channel) });
     this.showOSD();
     if (!this.livePreviewMode) show(this.container);
     this.stallWatchdog.start(isWebOS(), StorageService.getLiveReconnectAttempts());
@@ -885,6 +914,7 @@ export class Player {
     this.loadStream(
       this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
       this.currentChannel.extras,
+      { headers: channelHttpHeaders(this.currentChannel), reload: true },
     );
   }
 
@@ -1017,7 +1047,7 @@ export class Player {
     back?.();
   }
 
-  private loadStream(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
+  private loadStream(url: string, extras: Record<string, string> | null, opts?: PipelineLoadOptions): void {
     this.tracks.resetForLoad();
     this.vodTracksLatePending = false;
     this.manifestVariants = [];
@@ -1025,6 +1055,10 @@ export class Player {
     this.startupPending = true;
     this.startupWatchdog.stop();
     this.pipeline.load(url, extras, opts);
+    // Only the live preview reports a rect; every other entry is full screen,
+    // and a rect left from an earlier preview would shrink the Luna picture.
+    // After load, so the outgoing pipeline is already gone.
+    if (!this.livePreviewMode) this.pipeline.setLunaDisplay('full');
   }
 
   /**
@@ -1043,7 +1077,7 @@ export class Player {
     const source = v?.querySelector('source');
     const declaredType = source?.getAttribute('type') ?? '';
     // A source rejected on its declared type never becomes currentSrc.
-    const url = v?.currentSrc || source?.getAttribute('src') ||
+    const url = this.pipeline.lunaStreamUrl() || elementSrc(v) || source?.getAttribute('src') ||
       this.vod?.url || this.currentChannel?.url || '';
     const deferred = failure === 'timeout' && !this.vod;
     const detail = [
@@ -1060,10 +1094,12 @@ export class Player {
     if (deferred) {
       log.warn('Stream produced no frame', 'event=playback.startup.failed',
         this.playbackLabel(), ...detail);
+      this.retryStartupWithLuna();
       return;
     }
     log.error('Stream never started', 'event=playback.startup.failed',
       this.playbackLabel(), ...detail);
+    if (this.retryStartupWithLuna()) return;
     this.startupPending = false;
     this.onError('unsupported');
   }
@@ -1073,9 +1109,19 @@ export class Player {
     this.tracks.applyManifest(manifest);
   }
 
+  // The element sends its own User-Agent, so a channel that names one gets a
+  // Luna try when it never started.
+  private retryStartupWithLuna(): boolean {
+    if (!this.startupPending || !this.pipeline.retryWithLuna()) return false;
+    this.startupWatchdog.start();
+    if (this.liveSessionActive && !this.catchupInfo && isWebOS()) this.stallWatchdog.resume();
+    return true;
+  }
+
   private onError(reason?: 'unsupported'): void {
     if (!this.playbackActive || this.wasPlayingBeforeHide) return;
     if (this.errorAdvanceTimer !== null) return;
+    if (this.retryStartupWithLuna()) return;
     if (this.liveSessionActive) {
       this.livePlaybackStatus = 'error';
       this.onPlaybackStateChanged();
@@ -1112,6 +1158,7 @@ export class Player {
         this.loadStream(
           this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
           this.currentChannel.extras,
+          { headers: channelHttpHeaders(this.currentChannel) },
         );
         return;
       }
@@ -1131,7 +1178,8 @@ export class Player {
       v ? this.mediaState(v) : 'no video element',
       v?.error ? { code: v.error.code, message: v.error.message } : 'no error info',
       '| channel:', this.currentChannel?.name,
-      '| url:', diagnosticStreamUrl(v?.currentSrc || this.currentChannel?.url || ''));
+      '| url:', diagnosticStreamUrl(this.pipeline.lunaStreamUrl() || elementSrc(v)
+        || this.currentChannel?.url || ''));
     if (this.liveSessionActive && !this.catchupInfo && reason !== 'unsupported') {
       this.stallWatchdog.pause();
       this.errorRetryPending = true;
@@ -1205,6 +1253,23 @@ export class Player {
     ).atLiveEdge) {
       this.seekTo(win.end, false);
     }
+  }
+
+  /** Where the picture belongs: a preview slot rect, or null for full screen. */
+  setVideoDisplay(rect: Rectangle | null): void {
+    if (!rect) {
+      this.pipeline.setLunaDisplay('full');
+      return;
+    }
+    // setDisplayWindow takes the 1920x1080 app space.
+    const scale = window.innerWidth > 0
+      ? CONFIG.PLAYER.LUNA_MEDIA_DISPLAY_WIDTH / window.innerWidth : 1;
+    this.pipeline.setLunaDisplay({
+      x: rect.left * scale,
+      y: rect.top * scale,
+      width: rect.width * scale,
+      height: rect.height * scale,
+    });
   }
 
   exitLivePreview(): void {
@@ -1626,6 +1691,8 @@ export class Player {
       // The Up Next countdown sets the queued vod before its media loads.
       available: this.playbackActive && this.vod !== null &&
         !STREAMING_MIMES.has(streamUrlMime(this.vod.url)) &&
+        // The rate would reach the placeholder clip, not the Luna stream.
+        !this.pipeline.isLunaActive() &&
         !this.playbackRate.isRejected(),
       rate: this.playbackRate.currentRate(),
     };
@@ -1749,6 +1816,13 @@ export class Player {
     // plain global stepping, not whatever view was active before this jump.
     this.play(index, undefined, null);
   }
+}
+
+// A restored Luna element keeps the placeholder as currentSrc until its next
+// resource selection; it is never the stream that failed.
+function elementSrc(video: HTMLVideoElement | null): string {
+  const src = video?.currentSrc || '';
+  return src.indexOf(CONFIG.PLAYER.LUNA_MEDIA_PLACEHOLDER) < 0 ? src : '';
 }
 
 function sameParentalItem(a: VodQueueItem, b: VodQueueItem): boolean {

@@ -21,6 +21,9 @@ export interface StallWatchdogOptions {
   probe: () => StallProbe;
   onReload: (recovery: StallRecovery) => void;
   onEscalate: (recovery: StallRecovery) => void;
+  // True when another owner (a start deadline) handles this stall; the
+  // reload budget is left untouched.
+  holdStall?: (recovery: StallRecovery) => boolean;
   pollMs: number;
   freezeTicks: number;
   maxReloads: number;
@@ -35,6 +38,7 @@ export class StallWatchdog {
   private readonly probe: () => StallProbe;
   private readonly onReload: (recovery: StallRecovery) => void;
   private readonly onEscalate: (recovery: StallRecovery) => void;
+  private readonly holdStall: (recovery: StallRecovery) => boolean;
   private readonly pollMs: number;
   private readonly freezeTicks: number;
   private maxReloads: number;
@@ -48,6 +52,7 @@ export class StallWatchdog {
     this.probe = opts.probe;
     this.onReload = opts.onReload;
     this.onEscalate = opts.onEscalate;
+    this.holdStall = opts.holdStall ?? (() => false);
     this.pollMs = opts.pollMs;
     this.freezeTicks = opts.freezeTicks;
     this.maxReloads = opts.maxReloads;
@@ -78,6 +83,11 @@ export class StallWatchdog {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.frozenTicks = 0;
+  }
+
+  // A new source on the element gets a whole freeze window of its own.
+  restartFreeze(): void {
     this.frozenTicks = 0;
   }
 
@@ -149,6 +159,10 @@ export class StallWatchdog {
     if (this.frozenTicks < this.freezeTicks) return;
 
     this.frozenTicks = 0;
-    this.recover(p, this.freezeTicks * this.pollMs, 'stall');
+    const frozenMs = this.freezeTicks * this.pollMs;
+    if (this.holdStall({
+      probe: p, frozenMs, cause: 'stall', reloadCount: this.reloadCount, maxReloads: this.maxReloads,
+    })) return;
+    this.recover(p, frozenMs, 'stall');
   }
 }

@@ -5,16 +5,26 @@ import { parseMpd, type MpdManifest } from '../parsers/mpd-manifest';
 import {
   parseDrmConfig,
   isShakaDrmConfig,
+  type DrmConfig,
   type PlayReadyConfig,
   type ShakaDrmConfig,
 } from '../services/drm-config';
 import { PlayReadyDrm } from '../services/playready-drm';
 import { loadShaka, type ShakaNamespaceLike } from '../services/shaka-loader';
 import { parseAudioRenditions } from '../utils/audio-tracks';
-import { FetchTextError, fetchLimitedText } from '../utils/fetch-helper';
+import { FetchTextError, fetchFailureReason, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
 import { createLogger } from '../utils/logger';
 import { isWebOS } from '../utils/platform';
+import {
+  hasLunaHeaders,
+  hasOnlyUserAgent,
+  lunaHeaderNames,
+  tlsUnsafeHeaderNames,
+  withoutHeaders,
+  type LunaDisplay,
+} from '../services/luna-media';
+import { LunaMediaElement, type LunaAudioTrack, type LunaFallbackReason } from './luna-media-element';
 import { parseClosedCaptions, parseSubtitleRenditions } from '../utils/subtitle-tracks';
 import { parseVariants, type StreamVariant } from '../utils/stream-info';
 import { mediaOptionSourceType } from '../utils/webos-media-option';
@@ -23,7 +33,6 @@ import type { MseEngine, PipelineStreamInfo } from './mse/engine';
 import { createShakaEngine, type ShakaPlayerLike } from './mse/shaka-engine';
 import {
   containerMime,
-  diagnosticStreamUrl,
   sniffStreamContentType,
   isMpdText,
   mpdOpeningVerdict,
@@ -38,6 +47,35 @@ const log = createLogger('Player');
 // Desktop HLS/MPEG-TS libraries are globals from preview-libs.js. Shaka is also
 // a global, but webOS loads its separate bundle only for Widevine/ClearKey.
 const win = window as unknown as Record<string, unknown>;
+
+type LunaRouteReason = 'url' | 'cache' | 'probe' | 'guess' | 'ua_only';
+
+interface LunaDash {
+  extras: Record<string, string> | null;
+  clientId: string;
+  // The header-less MPD read; null when it failed, so its DRM is unknown.
+  parsed: MpdManifest | null;
+  // clientId is a guessed PlayReady client, tried after a clear load failed for this reason.
+  guessedAfter?: LunaFallbackReason;
+  // This load is the one PlayReady retry; its clear failure is already recorded.
+  retry?: boolean;
+}
+
+const DETECTED_PLAYREADY: PlayReadyConfig = {
+  type: 'playready',
+  licenseUrl: '',
+  customData: '',
+  unsupportedOptions: [],
+};
+
+// Why a configured DRM keeps a header channel off Luna: only DASH with
+// PlayReady, which UMS decrypts itself, can load there.
+function lunaDrmSkip(drm: DrmConfig | null, format: 'hls' | 'dash'): string {
+  if (!drm) return '';
+  if (format !== 'dash') return 'drm';
+  if (drm.type === 'playready') return '';
+  return drm.type === 'unsupported' ? 'drm_unsupported' : 'drm_mse';
+}
 
 type HlsType = typeof import('hls.js').default;
 type MpegtsType = typeof import('mpegts.js').default;
@@ -121,6 +159,14 @@ export interface PipelineManifest {
   masterUrl: string;
 }
 
+export interface PipelineLoadOptions {
+  direct?: boolean;
+  /** Every HTTP header the channel declares (see channelHttpHeaders). */
+  headers?: Record<string, string>;
+  /** A recovery reload of the same play, which keeps its Luna fallbacks. */
+  reload?: boolean;
+}
+
 export interface PlayerPipelineOptions {
   playbackLabel: (loadToken: number) => string;
   mediaState: (video: HTMLVideoElement) => string;
@@ -129,6 +175,8 @@ export interface PlayerPipelineOptions {
   onAudioTracksUpdated: () => void;
   onSubtitleTracksUpdated: () => void;
   onManifest: (manifest: PipelineManifest) => void;
+  /** Playback moved between Luna and the element mid-load; clocked renderers must restart. */
+  onPlaybackPathChange: () => void;
 }
 
 export class PlayerPipeline {
@@ -145,6 +193,34 @@ export class PlayerPipeline {
   private videoLoadLabels = new WeakMap<HTMLVideoElement, string>();
   private playReadyDrm = new PlayReadyDrm();
   private activeDrm = '';
+  private luna: LunaMediaElement | null = null;
+  // Bumped when a newer source takes the element, whose load() aborts the
+  // pending play() of the one before.
+  private nativePlaySeq = 0;
+  private lunaDisplay: LunaDisplay = 'full';
+  private lunaUrl = '';
+  // A User-Agent-only HLS load on the element, which Luna may retry once.
+  private uaRetry: {
+    url: string;
+    headers: Record<string, string>;
+    extras: Record<string, string> | null;
+    token: number;
+    mime: string;
+  } | null = null;
+  // Streams that fell back once stay on <video> for the rest of the session.
+  private lunaFailed = new Set<string>();
+  private lunaTransientFailures = new Map<string, number>();
+  // Streams that fell back during this play: its reloads stay on <video>
+  // rather than spend another Luna deadline.
+  private lunaFellBack = new Set<string>();
+  private lunaNoWindows = 0;
+  private lunaOff = false;
+  // MPDs unreadable without headers that played on a guessed PlayReady client,
+  // with the clear failure that led to the guess.
+  private lunaPlayReadyUrls = new Map<string, LunaFallbackReason>();
+  // The load whose Luna start waits on its MPD read or a PlayReady client.
+  private lunaPreparing = -1;
+  private lunaSkipToken = -1; // one playback.luna.skipped event per load
 
   constructor(private callbacks: PlayerPipelineOptions) {}
 
@@ -182,6 +258,49 @@ export class PlayerPipeline {
     return this.engine?.setSubtitleTrack(index) ?? false;
   }
 
+  /** A header-carrying stream plays through com.webos.media, not the element. */
+  isLunaActive(): boolean {
+    return this.luna !== null;
+  }
+
+  /** A Luna load that has not played yet; its own deadline falls back. */
+  isLunaStarting(): boolean {
+    return this.luna?.isStarting() ?? false;
+  }
+
+  /** Luna is about to start once its MPD is read or its PlayReady client is ready. */
+  isLunaPending(): boolean {
+    return this.lunaPreparing === this.loadToken;
+  }
+
+  /** The stream Luna plays; the element itself holds only the placeholder. */
+  lunaStreamUrl(): string {
+    return this.luna ? this.lunaUrl : '';
+  }
+
+  /** Luna's playback clock; the element's own media time is the placeholder's. */
+  lunaClock(): (() => number) | null {
+    const luna = this.luna;
+    const videoEl = this.videoEl;
+    if (!luna || !videoEl) return null;
+    return () => (this.luna === luna ? luna.clockTime() : videoEl.currentTime);
+  }
+
+  /** UMS's audio renditions on Luna; the element's own are the placeholder's. */
+  lunaAudioTracks(): LunaAudioTrack[] {
+    return this.luna?.audioTracks() ?? [];
+  }
+
+  selectLunaAudio(index: number): Promise<boolean> {
+    return this.luna ? this.luna.selectAudio(index) : Promise.resolve(false);
+  }
+
+  /** Where the Luna picture goes; the element's own rect does not move it. */
+  setLunaDisplay(display: LunaDisplay): void {
+    this.lunaDisplay = display;
+    this.luna?.setDisplay(display);
+  }
+
   streamInfo(): PipelineStreamInfo | null {
     return this.engine?.streamInfo() ?? null;
   }
@@ -190,11 +309,13 @@ export class PlayerPipeline {
     return this.activeDrm;
   }
 
-  load(url: string, extras: Record<string, string> | null, opts?: { direct?: boolean }): void {
+  load(url: string, extras: Record<string, string> | null, opts?: PipelineLoadOptions): void {
     const videoEl = this.videoEl;
     if (!videoEl) return;
     const token = ++this.loadToken;
     const label = this.callbacks.playbackLabel(token);
+    this.uaRetry = null;
+    if (!opts?.reload) this.lunaFellBack.clear();
     this.cancelManifest();
     this.destroyLoaders();
     this.videoLoadLabels.set(videoEl, label);
@@ -242,11 +363,10 @@ export class PlayerPipeline {
     url: string,
     extras: Record<string, string> | null,
     token: number,
-    opts?: { direct?: boolean },
+    opts?: PipelineLoadOptions,
   ): void {
     const videoEl = this.videoEl;
     if (!videoEl) return;
-    const safeUrl = diagnosticStreamUrl(url);
     const urlMime = streamUrlMime(url);
     const isTsUrl = urlMime === 'video/mp2t';
     const isFlvUrl = urlMime === 'video/x-flv';
@@ -261,9 +381,16 @@ export class PlayerPipeline {
         const mime = containerMime(url);
         log.info('Selected webOS native playback', 'event=playback.path.native',
           this.callbacks.playbackLabel(token),
-          'reason=direct', 'url=', safeUrl,
-          '| webOS native VOD | MIME', mime || '(sniffed)');
+          'reason=direct', '| webOS native VOD | MIME', mime || '(sniffed)');
         this.playNative(url, mime);
+        return;
+      }
+      const headers = opts?.headers ?? {};
+      const lunaHeaders = isHlsUrl || isDashUrl
+        ? this.lunaHeaders(url, headers, extras, token, false, isDashUrl ? 'dash' : 'hls') : null;
+      if (lunaHeaders) {
+        if (isDashUrl) this.loadLunaDash(url, lunaHeaders, extras, token, 'url');
+        else this.loadLuna(url, lunaHeaders, token, 'url');
         return;
       }
       if (isTsUrl || isFlvUrl || isHlsUrl || isDashUrl) {
@@ -271,15 +398,17 @@ export class PlayerPipeline {
           : isTsUrl ? 'video/mp2t'
           : isDashUrl ? 'application/dash+xml'
           : 'application/vnd.apple.mpegurl';
+        if (!isHlsUrl && !isDashUrl) this.noteLunaSkip(token, headers, 'non_hls');
         log.info('Selected webOS native playback', 'event=playback.path.native',
           this.callbacks.playbackLabel(token),
-          'reason=url', 'url=', safeUrl,
-          '| webOS native | catchup:', this.callbacks.isCatchup(), '| MIME', mime);
+          'reason=url', '| webOS native | catchup:', this.callbacks.isCatchup(), '| MIME', mime);
         if (isDashUrl) {
+          this.rememberUaRetry(url, headers, extras, token, mime);
           this.loadNativeDash(url, extras, token);
           return;
         }
         if (isHlsUrl) {
+          this.rememberUaRetry(url, headers, extras, token, mime);
           void this.loadManifest(url, this.manifestSeq, token);
         }
         this.playNativeMime(url, mime);
@@ -288,15 +417,27 @@ export class PlayerPipeline {
       const routeKey = streamRouteKey(url);
       void getCachedStreamMime(routeKey).then(cachedMime => {
         if (token !== this.loadToken || !this.videoEl) return;
+        const cachedDash = cachedMime === 'application/dash+xml';
+        const cachedLunaHeaders = cachedMime === 'application/vnd.apple.mpegurl' || cachedDash
+          ? this.lunaHeaders(url, headers, extras, token, false, cachedDash ? 'dash' : 'hls') : null;
+        if (cachedLunaHeaders) {
+          if (cachedDash) this.loadLunaDash(url, cachedLunaHeaders, extras, token, 'cache');
+          else this.loadLuna(url, cachedLunaHeaders, token, 'cache');
+          return;
+        }
         if (cachedMime) {
+          if (cachedMime !== 'application/vnd.apple.mpegurl' && !cachedDash) {
+            this.noteLunaSkip(token, headers, 'non_hls');
+          }
           log.info('Selected webOS native playback', 'event=playback.path.native',
             this.callbacks.playbackLabel(token),
-            'reason=cache', 'url=', safeUrl,
-            '| webOS native | cached MIME', cachedMime,
+            'reason=cache', '| webOS native | cached MIME', cachedMime,
             '| catchup:', this.callbacks.isCatchup());
           if (cachedMime === 'application/vnd.apple.mpegurl') {
+            this.rememberUaRetry(url, headers, extras, token, cachedMime);
             void this.loadManifest(url, this.manifestSeq, token);
-          } else if (cachedMime === 'application/dash+xml') {
+          } else if (cachedDash) {
+            this.rememberUaRetry(url, headers, extras, token, cachedMime);
             this.loadNativeDash(url, extras, token);
             return;
           }
@@ -310,11 +451,26 @@ export class PlayerPipeline {
               contentType.split(';')[0].trim() !== 'application/octet-stream') {
             void setCachedStreamMime(routeKey, mime);
           }
+          // A header-protected server often refuses the header-less probe, so an
+          // unknown type tries Luna too; its fallback covers a wrong guess.
+          const probedDash = mime === 'application/dash+xml';
+          const probedLunaHeaders = mime === 'application/vnd.apple.mpegurl' || !contentType || probedDash
+            ? this.lunaHeaders(url, headers, extras, token, false, probedDash ? 'dash' : 'hls') : null;
+          if (probedLunaHeaders) {
+            if (probedDash) this.loadLunaDash(url, probedLunaHeaders, extras, token, 'probe');
+            else this.loadLuna(url, probedLunaHeaders, token, contentType ? 'probe' : 'guess', mime);
+            return;
+          }
           log.info('Selected webOS native playback', 'event=playback.path.native',
             this.callbacks.playbackLabel(token),
-            'reason=probe', 'url=', safeUrl,
-            '| webOS native | content-type:', contentType || '(none)',
+            'reason=probe', '| webOS native | content-type:', contentType || '(none)',
             '| catchup:', this.callbacks.isCatchup(), '| MIME', mime || '(auto)');
+          if (contentType && mime !== 'application/vnd.apple.mpegurl' && !probedDash) {
+            this.noteLunaSkip(token, headers, 'non_hls');
+          }
+          if (mime === 'application/vnd.apple.mpegurl' || !contentType || probedDash) {
+            this.rememberUaRetry(url, headers, extras, token, mime);
+          }
           if (mime === 'application/vnd.apple.mpegurl') {
             void this.loadManifest(url, this.manifestSeq, token);
           } else if (mime === 'application/dash+xml') {
@@ -334,7 +490,7 @@ export class PlayerPipeline {
     if (opts?.direct) {
       log.info('Selected direct playback', 'event=playback.path.direct',
         this.callbacks.playbackLabel(token),
-        'reason=direct', 'url=', safeUrl, '| desktop direct VOD');
+        'reason=direct', '| desktop direct VOD');
       videoEl.src = url;
       videoEl.play().catch(e => log.warn('Direct play() rejected',
         'event=playback.play.rejected',
@@ -349,7 +505,7 @@ export class PlayerPipeline {
         (isDashUrl || ct.includes('dash+xml') || ct.includes('dash.mpd'));
       const isDirect = !isTs && !isFlv && !isDash && /^(?:video|audio)\//.test(ct);
       const isHls = !isTs && !isFlv && !isDash && !isDirect;
-      log.info('loadStream', this.callbacks.playbackLabel(token), 'url=', safeUrl,
+      log.info('loadStream', this.callbacks.playbackLabel(token),
         '| content-type:', ct || '(none)', '| catchup:', this.callbacks.isCatchup(),
         '| isHls:', isHls, '| isTs:', isTs, '| isFlv:', isFlv, '| isDash:', isDash);
       if (isTs || isFlv) {
@@ -403,6 +559,11 @@ export class PlayerPipeline {
 
   private destroyLoaders(): void {
     this.msePending = false;
+    if (this.luna) {
+      const luna = this.luna;
+      this.luna = null;
+      luna.destroy();
+    }
     // The engine owns its library instance, hls.js included.
     if (this.engine) {
       const engine = this.engine;
@@ -451,6 +612,11 @@ export class PlayerPipeline {
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     try {
       const res = await fetch(url, { signal: controller.signal });
+      // An error page's type says nothing about the stream.
+      if (!res.ok) {
+        res.body?.cancel().catch(() => {});
+        return '';
+      }
       const ct = (res.headers.get('content-type') || '').toLowerCase();
       const baseType = ct.split(';')[0].trim();
       const sniffBody = baseType === 'application/octet-stream'
@@ -487,6 +653,305 @@ export class PlayerPipeline {
       if (reader) void reader.cancel().catch(() => {});
       clearTimeout(timer);
     }
+  }
+
+  /** The headers to load through Luna, or null when the stream stays on <video>. */
+  private lunaHeaders(
+    url: string,
+    headers: Record<string, string>,
+    extras: Record<string, string> | null,
+    token: number,
+    userAgentOnly = false,
+    format: 'hls' | 'dash' = 'hls',
+  ): Record<string, string> | null {
+    if (!isWebOS() || !(userAgentOnly ? hasOnlyUserAgent(headers) : hasLunaHeaders(headers))) return null;
+    const skip = this.lunaOff ? 'latched_off'
+      : this.lunaFailed.has(url) ? 'failed_before'
+      : this.lunaFellBack.has(url) ? 'fell_back'
+      : lunaDrmSkip(parseDrmConfig(extras), format);
+    if (skip) {
+      this.noteLunaSkip(token, headers, skip, userAgentOnly);
+      return null;
+    }
+    const unsafe = tlsUnsafeHeaderNames(url, headers);
+    if (!unsafe.length) return headers;
+    const kept = withoutHeaders(headers, unsafe);
+    const usable = hasLunaHeaders(kept);
+    log.info('Luna credentials withheld over https', 'event=playback.luna.tls.stripped',
+      this.callbacks.playbackLabel(token), `headers=${unsafe.join(',')}`,
+      `path=${usable ? 'luna' : 'native'}`);
+    return usable ? kept : null;
+  }
+
+  // Why a channel whose headers need Luna still plays without them.
+  private noteLunaSkip(token: number, headers: Record<string, string>, reason: string, userAgentOnly = false): void {
+    if (token === this.lunaSkipToken || !isWebOS()
+        || !(userAgentOnly ? hasOnlyUserAgent(headers) : hasLunaHeaders(headers))) return;
+    this.lunaSkipToken = token;
+    log.info('Luna header playback skipped', 'event=playback.luna.skipped',
+      this.callbacks.playbackLabel(token), `reason=${reason}`, `headers=${lunaHeaderNames(headers)}`);
+  }
+
+  private rememberUaRetry(
+    url: string,
+    headers: Record<string, string>,
+    extras: Record<string, string> | null,
+    token: number,
+    mime: string,
+  ): void {
+    this.uaRetry = hasOnlyUserAgent(headers) ? { url, headers, extras, token, mime } : null;
+  }
+
+  /**
+   * A User-Agent-only channel that failed to start on the element, where the
+   * page's own User-Agent replaces the channel's, gets one Luna try per load.
+   */
+  retryWithLuna(): boolean {
+    const retry = this.uaRetry;
+    this.uaRetry = null;
+    const videoEl = this.videoEl;
+    if (!retry || retry.token !== this.loadToken || !videoEl || this.luna) return false;
+    // Shaka owns the element; Luna would compete for it.
+    if (this.engine || this.msePending) return false;
+    const dash = retry.mime === 'application/dash+xml';
+    const headers = this.lunaHeaders(retry.url, retry.headers, retry.extras, retry.token, true,
+      dash ? 'dash' : 'hls');
+    if (!headers) return false;
+    log.warn('User-Agent channel failed on the video element', 'event=playback.luna.fallback',
+      this.callbacks.playbackLabel(retry.token), 'reason=ua_only');
+    this.cancelManifest();
+    this.callbacks.onPlaybackPathChange();
+    if (dash) {
+      // The MPD read and PlayReady prepare take time: drop the failed source and
+      // its DRM client first, so neither errors under the Luna retry.
+      this.destroyLoaders();
+      videoEl.removeAttribute('src');
+      videoEl.innerHTML = '';
+      // Supersedes the failed source's play(), so its abort is not logged.
+      this.nativePlaySeq++;
+      videoEl.load();
+      this.playReadyDrm.release();
+      this.activeDrm = '';
+    }
+    if (dash) this.loadLunaDash(retry.url, headers, retry.extras, retry.token, 'ua_only');
+    else this.loadLuna(retry.url, headers, retry.token, 'ua_only', retry.mime);
+    return true;
+  }
+
+  // A load UMS rejects is permanent for the session; a stream error, a
+  // missing window, or a timeout may be transient and gets another try.
+  private markLunaFailure(url: string, reason: LunaFallbackReason, label: string): void {
+    this.lunaFellBack.add(url);
+    if (reason === 'no_window' && ++this.lunaNoWindows >= CONFIG.PLAYER.LUNA_MEDIA_NO_WINDOW_LIMIT
+        && !this.lunaOff) {
+      // No window for several channels: this TV cannot show a Luna picture.
+      this.lunaOff = true;
+      log.warn('Luna playback disabled for this session', 'event=playback.luna.disabled',
+        label, 'reason=no_window', `count=${String(this.lunaNoWindows)}`);
+    }
+    if (reason === 'load_failed') {
+      this.lunaFailed.add(url);
+      return;
+    }
+    const count = (this.lunaTransientFailures.get(url) ?? 0) + 1;
+    this.lunaTransientFailures.set(url, count);
+    if (count >= CONFIG.PLAYER.LUNA_MEDIA_TRANSIENT_FAILURES) this.lunaFailed.add(url);
+  }
+
+  private loadLuna(
+    url: string,
+    headers: Record<string, string>,
+    token: number,
+    reason: LunaRouteReason,
+    fallbackMime = 'application/vnd.apple.mpegurl',
+    dash: LunaDash | null = null,
+  ): void {
+    const videoEl = this.videoEl;
+    if (!videoEl) return;
+    if (this.luna) {
+      const previous = this.luna;
+      this.luna = null;
+      previous.destroy();
+    }
+    const label = this.callbacks.playbackLabel(token);
+    const isHlsMime = fallbackMime === 'application/vnd.apple.mpegurl';
+    const drmUnknown = !!dash && !dash.clientId && !dash.parsed;
+    log.info('Selected webOS Luna playback', 'event=playback.path.luna', label,
+      `reason=${reason}`, `headers=${lunaHeaderNames(headers)}`, `format=${dash ? 'dash' : 'hls'}`,
+      `drm=${dash?.clientId ? 'playready' : drmUnknown ? 'unknown' : 'none'}`,
+      ...(drmUnknown ? ['mpd=unreadable'] : []));
+    const fallBack = (fallback: LunaFallbackReason, code: number, stage: string): void => {
+      log.warn('Luna playback fell back to the video element',
+        'event=playback.luna.fallback', label,
+        `reason=${fallback}`, `code=${String(code)}`, `stage=${stage}`);
+      if (token !== this.loadToken || videoEl !== this.videoEl) return;
+      this.callbacks.onPlaybackPathChange();
+      // The element already failed this stream once.
+      if (reason === 'ua_only') {
+        this.callbacks.onError();
+        return;
+      }
+      this.cancelManifest();
+      if (dash) {
+        // A fresh client for the element: UMS may keep the one Luna loaded.
+        if (dash.clientId) {
+          this.playReadyDrm.release();
+          this.activeDrm = '';
+        }
+        // Reuse the MPD read, so the fallback keeps within the startup watchdog.
+        if (dash.parsed) this.notifyManifest(url, token, '', dash.parsed);
+        this.playDash(url, dash.extras, token, dash.parsed);
+        return;
+      }
+      log.info('Selected webOS native playback', 'event=playback.path.native', label,
+        'reason=luna_fallback', `format=${isHlsMime ? 'hls' : 'auto'}`);
+      if (isHlsMime) void this.loadManifest(url, this.manifestSeq, token);
+      this.playNativeMime(url, fallbackMime);
+    };
+    // Only a clear load UMS rejected suggests the stream really is PlayReady.
+    if (dash?.guessedAfter && dash.guessedAfter !== 'load_failed') this.activeDrm = '';
+    const luna = new LunaMediaElement(videoEl, {
+      uri: url,
+      headers,
+      transport: dash ? 'MPEG-DASH' : 'HLS',
+      playReadyClientId: dash?.clientId || undefined,
+      label,
+      onFallback: (fallback, code, stage) => {
+        if (this.luna !== luna) return;
+        this.luna = null;
+        if (dash?.guessedAfter) this.lunaPlayReadyUrls.delete(url);
+        const current = token === this.loadToken && videoEl === this.videoEl;
+        // An MPD unreadable without headers hid its DRM: a load that failed
+        // as clear gets one PlayReady try. A reload that supersedes it loads
+        // PlayReady up front, recorded as any load, so it cannot repeat.
+        if (current && drmUnknown && dash && (fallback === 'load_failed' || fallback === 'error')) {
+          this.lunaPlayReadyUrls.set(url, fallback);
+          log.warn('Luna DASH retrying as PlayReady', 'event=playback.luna.drm.retry', label,
+            `reason=${fallback}`, `code=${String(code)}`, `stage=${stage}`, 'drm=playready');
+          // The failed session restored the element, which reads no source
+          // while PlayReady prepares.
+          this.callbacks.onPlaybackPathChange();
+          this.lunaPreparing = token;
+          void this.preparePlayReady(DETECTED_PLAYREADY, token, true).then(clientId => {
+            if (this.lunaPreparing === token) this.lunaPreparing = -1;
+            if (token !== this.loadToken || videoEl !== this.videoEl) return;
+            if (!clientId) {
+              this.lunaPlayReadyUrls.delete(url);
+              this.markLunaFailure(url, fallback, label);
+              fallBack(fallback, code, stage);
+              return;
+            }
+            this.loadLuna(url, headers, token, reason, fallbackMime,
+              { ...dash, clientId, guessedAfter: fallback, retry: true });
+          });
+          return;
+        }
+        // A failed retry records the clear failure, then only a worse one or
+        // a missing window, which counts toward turning Luna off.
+        if (dash?.retry && dash.guessedAfter) this.markLunaFailure(url, dash.guessedAfter, label);
+        if (!dash?.retry || fallback === 'no_window') this.markLunaFailure(url, fallback, label);
+        else if (fallback === 'load_failed' && dash.guessedAfter !== 'load_failed') {
+          this.markLunaFailure(url, fallback, label);
+        }
+        fallBack(fallback, code, stage);
+      },
+      onStarted: () => {
+        this.lunaTransientFailures.delete(url);
+        this.lunaNoWindows = 0;
+        if (dash?.guessedAfter) this.lunaPlayReadyUrls.set(url, dash.guessedAfter);
+      },
+      onAudioTracks: () => {
+        if (this.luna === luna) this.callbacks.onAudioTracksUpdated();
+      },
+    });
+    this.luna = luna;
+    this.lunaUrl = url;
+    luna.setDisplay(this.lunaDisplay);
+    this.nativePlaySeq++;
+    luna.start();
+    // DASH already read its MPD before the load.
+    if (dash) return;
+    // Fetched without the channel's headers, for subtitle renditions and audio
+    // names only, so Luna never waits on it.
+    this.cancelManifest();
+    void this.loadManifest(url, this.manifestSeq, token);
+  }
+
+  /**
+   * DASH reads its MPD without the channel's headers first, as the element
+   * path does, to find its DRM: clear and PlayReady DASH load through Luna,
+   * Widevine and ClearKey stay on Shaka. A refused MPD loads Luna as configured.
+   */
+  private loadLunaDash(
+    url: string,
+    headers: Record<string, string>,
+    extras: Record<string, string> | null,
+    token: number,
+    reason: LunaRouteReason,
+  ): void {
+    const configured = parseDrmConfig(extras);
+    let held = false;
+    let handled = false;
+    let skipped = '';
+    let started = false;
+    const holdLuna = async (parsed: MpdManifest | null): Promise<void> => {
+      if (token !== this.loadToken || !this.videoEl) return;
+      const detected = configured ? null : parsed?.drm ?? null;
+      if (detected && detected.type !== 'playready') {
+        skipped = detected.type === 'unsupported' ? 'drm_unsupported' : 'drm_mse';
+        this.noteLunaSkip(token, headers, skipped, reason === 'ua_only');
+        return;
+      }
+      let clientId = '';
+      // A URL whose guessed PlayReady retry played skips the clear load that failed.
+      const guessedAfter = configured || parsed ? undefined : this.lunaPlayReadyUrls.get(url);
+      if (configured?.type === 'playready' || detected || guessedAfter) {
+        handled = true;
+        clientId = await this.preparePlayReady(
+          configured?.type === 'playready' ? configured : DETECTED_PLAYREADY, token, !!guessedAfter);
+        if (!clientId) {
+          // A guess that cannot even prepare plays on the element instead.
+          if (guessedAfter) {
+            this.lunaPlayReadyUrls.delete(url);
+            handled = false;
+          }
+          return;
+        }
+      }
+      if (token !== this.loadToken || !this.videoEl) return;
+      handled = true;
+      started = true;
+      if (this.lunaPreparing === token) this.lunaPreparing = -1;
+      this.loadLuna(url, headers, token, reason, 'application/dash+xml',
+        { extras, clientId, parsed, guessedAfter });
+    };
+    this.cancelManifest();
+    // Pending until Luna starts, so suspend during the MPD read unloads it.
+    this.lunaPreparing = token;
+    void this.loadManifest(url, this.manifestSeq, token, 'dash', parsed => {
+      if (!configured && (parsed?.drm?.type === 'widevine' || parsed?.drm?.type === 'clearkey')) {
+        this.msePending = true;
+      }
+    }, async parsed => {
+      // A throw after the hold re-enters it from the manifest's catch.
+      if (held) return;
+      held = true;
+      try {
+        await holdLuna(parsed);
+      } finally {
+        if (!started && this.lunaPreparing === token) this.lunaPreparing = -1;
+      }
+    }).then(parsed => {
+      if (handled || token !== this.loadToken || !this.videoEl) return;
+      if (reason === 'ua_only') {
+        this.callbacks.onError();
+        return;
+      }
+      log.info('Selected webOS native playback', 'event=playback.path.native',
+        this.callbacks.playbackLabel(token), `reason=${skipped || 'luna_skipped'}`,
+        'format=dash');
+      this.playDash(url, extras, token, parsed);
+    });
   }
 
   // DASH keeps application/dash+xml for classification and uses mediaOption on
@@ -530,61 +995,73 @@ export class PlayerPipeline {
       }
     }).then(parsed => {
       if (loadToken !== this.loadToken || !this.videoEl) return;
-      const detected = parsed?.drm;
-      if (configured?.type === 'unsupported' || (!configured && detected?.type === 'unsupported')) {
-        const value = configured?.type === 'unsupported' ? configured.value : detected?.scheme;
-        log.warn('Unsupported native DASH DRM', 'event=playback.dash.drm.unsupported',
-          this.callbacks.playbackLabel(loadToken), `type=${value || 'unknown'}`);
-        this.callbacks.onError('unsupported');
-        return;
-      }
-      if (isShakaDrmConfig(configured)
-          || (!configured && (detected?.type === 'widevine' || detected?.type === 'clearkey'))) {
-        const defaults = { licenseUrl: '', headers: {}, unsupportedOptions: [] };
-        const config: ShakaDrmConfig = isShakaDrmConfig(configured)
-          ? configured
-          : detected?.type === 'clearkey'
-            ? { ...defaults, type: 'clearkey', clearKeys: {} }
-            : { ...defaults, type: 'widevine' };
-        this.loadWithShaka(url, loadToken, config);
-        return;
-      }
-      if (configured?.type !== 'playready' && detected?.type !== 'playready') {
-        this.playNativeDash(url);
-        return;
-      }
-      const config: PlayReadyConfig = configured?.type === 'playready'
+      this.playDash(url, extras, loadToken, parsed);
+    });
+  }
+
+  private playDash(
+    url: string,
+    extras: Record<string, string> | null,
+    loadToken: number,
+    parsed: MpdManifest | null,
+  ): void {
+    const configured = parseDrmConfig(extras);
+    const detected = parsed?.drm;
+    if (configured?.type === 'unsupported' || (!configured && detected?.type === 'unsupported')) {
+      const value = configured?.type === 'unsupported' ? configured.value : detected?.scheme;
+      log.warn('Unsupported native DASH DRM', 'event=playback.dash.drm.unsupported',
+        this.callbacks.playbackLabel(loadToken), `type=${value || 'unknown'}`);
+      this.callbacks.onError('unsupported');
+      return;
+    }
+    if (isShakaDrmConfig(configured)
+        || (!configured && (detected?.type === 'widevine' || detected?.type === 'clearkey'))) {
+      const defaults = { licenseUrl: '', headers: {}, unsupportedOptions: [] };
+      const config: ShakaDrmConfig = isShakaDrmConfig(configured)
         ? configured
-        : {
-            type: 'playready',
-            licenseUrl: '',
-            customData: '',
-            unsupportedOptions: [],
-          };
-      if (config.unsupportedOptions.length) {
-        log.warn('Ignoring unsupported native PlayReady options',
-          'event=playback.dash.drm.options.unsupported',
-          this.callbacks.playbackLabel(loadToken),
-          `options=${config.unsupportedOptions.join(',')}`);
-      }
-      void this.playReadyDrm.prepare(config, response => {
-        if (loadToken !== this.loadToken) return;
-        log.warn('PlayReady rights error', 'event=playback.dash.drm.rights',
-          this.callbacks.playbackLabel(loadToken),
-          `state=${String(response.errorState ?? '')}`);
-        this.callbacks.onError('unsupported');
-      }).then(clientId => {
-        if (!clientId || loadToken !== this.loadToken || !this.videoEl) return;
-        log.info('PlayReady DRM ready', 'event=playback.dash.drm.ready',
-          this.callbacks.playbackLabel(loadToken));
-        this.activeDrm = 'PlayReady';
-        this.playNativeDash(url, clientId);
-      }).catch(error => {
-        if (loadToken !== this.loadToken) return;
-        log.warn('PlayReady setup failed', 'event=playback.dash.drm.failed',
-          this.callbacks.playbackLabel(loadToken), error);
-        this.callbacks.onError('unsupported');
+        : detected?.type === 'clearkey'
+          ? { ...defaults, type: 'clearkey', clearKeys: {} }
+          : { ...defaults, type: 'widevine' };
+      this.loadWithShaka(url, loadToken, config);
+      return;
+    }
+    if (configured?.type !== 'playready' && detected?.type !== 'playready') {
+      this.playNativeDash(url);
+      return;
+    }
+    void this.preparePlayReady(configured?.type === 'playready' ? configured : DETECTED_PLAYREADY, loadToken)
+      .then(clientId => {
+        if (clientId) this.playNativeDash(url, clientId);
       });
+  }
+
+  /** Loads a PlayReady client for this load; '' when it failed (reported unless quiet) or went stale. */
+  private preparePlayReady(config: PlayReadyConfig, loadToken: number, quiet = false): Promise<string> {
+    if (config.unsupportedOptions.length) {
+      log.warn('Ignoring unsupported native PlayReady options',
+        'event=playback.dash.drm.options.unsupported',
+        this.callbacks.playbackLabel(loadToken),
+        `options=${config.unsupportedOptions.join(',')}`);
+    }
+    return this.playReadyDrm.prepare(config, response => {
+      if (loadToken !== this.loadToken) return;
+      log.warn('PlayReady rights error', 'event=playback.dash.drm.rights',
+        this.callbacks.playbackLabel(loadToken),
+        `state=${String(response.errorState ?? '')}`);
+      this.callbacks.onError('unsupported');
+    }).then(clientId => {
+      if (!clientId || loadToken !== this.loadToken || !this.videoEl) return '';
+      log.info('PlayReady DRM ready', 'event=playback.dash.drm.ready',
+        this.callbacks.playbackLabel(loadToken));
+      this.activeDrm = 'PlayReady';
+      return clientId;
+    }, error => {
+      if (loadToken !== this.loadToken) return '';
+      log.warn('PlayReady setup failed', 'event=playback.dash.drm.failed',
+        this.callbacks.playbackLabel(loadToken), error);
+      // A guessed client's failure leaves the caller to fall back.
+      if (!quiet) this.callbacks.onError('unsupported');
+      return '';
     });
   }
 
@@ -600,9 +1077,12 @@ export class PlayerPipeline {
     if (mime) source.type = mime;
     videoEl.appendChild(source);
     videoEl.load();
-    videoEl.play().catch(e => log.warn('Native play() rejected',
-      'event=playback.play.rejected',
-      this.videoLabel(videoEl), 'path=native', this.callbacks.mediaState(videoEl), e));
+    const seq = ++this.nativePlaySeq;
+    videoEl.play().catch(e => {
+      if (seq !== this.nativePlaySeq) return;
+      log.warn('Native play() rejected', 'event=playback.play.rejected',
+        this.videoLabel(videoEl), 'path=native', this.callbacks.mediaState(videoEl), e);
+    });
   }
 
   private loadWithHls(
@@ -879,6 +1359,8 @@ export class PlayerPipeline {
   private async loadManifest(
     url: string, seq: number, loadToken: number, format: 'hls' | 'dash' = 'hls',
     beforeNotify?: (manifest: MpdManifest | null) => void,
+    // Runs before the tracks hear of the manifest, or of its failure.
+    hold?: (manifest: MpdManifest | null) => Promise<void>,
   ): Promise<MpdManifest | null> {
     const dash = format === 'dash';
     const controller = new AbortController();
@@ -902,31 +1384,25 @@ export class PlayerPipeline {
         `format=${format} bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
       const parsed = dash ? parseMpd(text, url) : null;
       beforeNotify?.(parsed);
-      const audio = parsed ? parsed.audio : parseAudioRenditions(text);
-      const subtitles = parsed ? parsed.subtitles : parseSubtitleRenditions(text);
-      const closedCaptions = parsed ? parsed.closedCaptions : parseClosedCaptions(text);
-      const variants = parsed ? parsed.variants : parseVariants(text);
-      if (audio.length >= 2) {
-        log.info('manifest audio:', audio.map(r => r.name || r.lang || '?').join(', '));
+      if (hold) {
+        await hold(parsed);
+        if (seq !== this.manifestSeq) return null;
       }
-      if (subtitles.length) {
-        log.info('manifest subtitles:', subtitles.map(r => r.name || r.lang || '?').join(', '));
-      }
-      if (closedCaptions.length) {
-        log.info('manifest closed captions:',
-          closedCaptions.map(c => c.instreamId || c.name || '?').join(', '));
-      }
-      if (variants.length) log.info('manifest variants:', variants.length);
-      this.callbacks.onManifest({
-        audio: audio.length >= 2 ? audio : [],
-        subtitles,
-        closedCaptions,
-        variants,
-        masterUrl: subtitles.length ? url : '',
-      });
+      this.notifyManifest(url, loadToken, text, parsed);
       return parsed;
     } catch (e) {
       if (controller.signal.aborted) return null;
+      if (hold) {
+        await hold(null);
+        if (seq !== this.manifestSeq) return null;
+      }
+      if (this.luna) {
+        log.info('Subtitles unavailable on Luna playback', 'event=subtitles.luna.unavailable',
+          this.callbacks.playbackLabel(loadToken), 'stage=manifest', `reason=${fetchFailureReason(e)}`);
+        // Settled with nothing, so Luna audio stops waiting for names.
+        this.callbacks.onManifest({ audio: [], subtitles: [], closedCaptions: [], variants: [], masterUrl: '' });
+        return null;
+      }
       log.warn('Manifest fetch failed', 'event=playback.manifest.failed',
         this.callbacks.playbackLabel(loadToken),
         `elapsed=${String(Date.now() - started)}ms`, e);
@@ -934,6 +1410,43 @@ export class PlayerPipeline {
     } finally {
       if (this.manifestController === controller) this.manifestController = null;
     }
+  }
+
+  private notifyManifest(url: string, loadToken: number, text: string, parsed: MpdManifest | null): void {
+    const audio = parsed ? parsed.audio : parseAudioRenditions(text);
+    const luna = this.luna !== null;
+    // The compositor toggle (setSubtitleEnable) would reach the placeholder's
+    // pipeline, not Luna's, so on Luna only self-rendered WebVTT stays.
+    const subtitles = parsed
+      ? parsed.subtitles.filter(subtitle => !luna || subtitle.dash?.kind !== 'native')
+      : parseSubtitleRenditions(text);
+    if (parsed && subtitles.length < parsed.subtitles.length) {
+      log.info('Subtitles unavailable on Luna playback', 'event=subtitles.luna.unavailable',
+        this.callbacks.playbackLabel(loadToken), 'stage=manifest', 'reason=compositor',
+        `count=${String(parsed.subtitles.length - subtitles.length)}`);
+    }
+    const closedCaptions = parsed ? parsed.closedCaptions : parseClosedCaptions(text);
+    const variants = parsed ? parsed.variants : parseVariants(text);
+    if (audio.length >= 2) {
+      log.info('manifest audio:', audio.map(r => r.name || r.lang || '?').join(', '));
+    }
+    if (subtitles.length) {
+      log.info('manifest subtitles:', subtitles.map(r => r.name || r.lang || '?').join(', '));
+    }
+    if (closedCaptions.length) {
+      log.info('manifest closed captions:',
+        closedCaptions.map(c => c.instreamId || c.name || '?').join(', '));
+    }
+    if (variants.length) log.info('manifest variants:', variants.length);
+    // On Luna the manifest only feeds the self-rendered WebVTT subtitles and
+    // audio names; UMS alone picks the variant.
+    this.callbacks.onManifest({
+      audio: audio.length >= 2 || luna ? audio : [],
+      subtitles,
+      closedCaptions: luna ? [] : closedCaptions,
+      variants: luna ? [] : variants,
+      masterUrl: subtitles.length ? url : '',
+    });
   }
 
   private cancelManifest(): void {
