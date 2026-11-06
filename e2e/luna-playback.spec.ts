@@ -333,3 +333,41 @@ test('a header channel plays through Luna and a channel switch releases its pipe
   await expect(osd.locator('.osd-channel-name')).toHaveText('Bravo');
   await expect(osd.locator('.osd-message')).toHaveCount(0);
 });
+
+test('Luna audio names come from the master and an audio pick switches the UMS track', async ({ page }) => {
+  await installFakeUms(page, { media: { 'http://host/a.m3u8': { durationMs: 0, audio: ['l1', 'l2'] } } });
+  await routeStreams(page, {
+    'http://host/a.m3u8': {
+      type: 'application/vnd.apple.mpegurl',
+      body: [
+        '#EXTM3U',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Track 1",LANGUAGE="l1",DEFAULT=YES,URI="http://host/a1.m3u8"',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Track 2",LANGUAGE="l2",URI="http://host/a2.m3u8"',
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="Track 3",LANGUAGE="l1",URI="http://host/s1.m3u8"',
+        '#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO="a",SUBTITLES="s"',
+        'http://host/v.m3u8',
+      ].join('\n'),
+    },
+  });
+  await startFirstChannel(page, HEADER_M3U);
+  await waitForPlaying(page, 'lm-1');
+
+  await seedPointer(page);
+  await page.keyboard.press('ArrowRight');
+  const menu = page.locator('#player-menu');
+  await expect(menu).toBeVisible();
+  const audioRow = menu.locator('[data-menu-action="__audio_open__"]');
+  await expect(audioRow.locator('.menu-item-value')).toHaveText('Track 1');
+  await audioRow.click();
+  await expect(menu.locator('[data-menu-action="__audio_track__"] .menu-track-label'))
+    .toHaveText(['Track 1', 'Track 2']);
+  await menu.locator('[data-menu-action="__audio_track__"][data-track-index="1"]').click();
+  await expect.poll(async () => callsOf(await lunaProbe(page), 'selectTrack', 'lm-1').map(call => call.params))
+    .toEqual([{ mediaId: 'lm-1', type: 'audio', index: 1 }]);
+  await expect(audioRow.locator('.menu-item-value')).toHaveText('Track 2');
+
+  // The WebVTT rendition is self-rendered, so the menu offers it.
+  await menu.locator('[data-menu-action="__subs_open__"]').click();
+  await expect(menu.locator('[data-menu-action="__subs_track__"] .menu-track-label'))
+    .toContainText(['Off', 'Track 3']);
+});

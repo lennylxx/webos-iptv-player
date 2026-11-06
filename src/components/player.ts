@@ -162,7 +162,10 @@ export class Player {
       onError: reason => this.onError(reason),
       onAudioTracksUpdated: () => {
         this.tracks.applyHlsAudioSelection();
+        this.tracks.applyLunaAudioSelection();
         if (this.osd.isVisible()) this.osd.render();
+        // A Luna switch confirms later, so the open menu's Audio row needs it too.
+        this.onPlaybackStateChanged();
       },
       onSubtitleTracksUpdated: () => {
         this.tracks.applyHlsSubtitleSelection();
@@ -170,6 +173,7 @@ export class Player {
       },
       onManifest: manifest => this.applyPipelineManifest(manifest),
       onPlaybackPathChange: () => {
+        this.tracks.stopSelfRender();
         // A path change reloads the element, which reads NETWORK_NO_SOURCE
         // until its resource selection runs: a tick due now would call that
         // source refused.
@@ -183,6 +187,7 @@ export class Player {
       getVideoElement: () => this.videoEl,
       getChannel: () => this.currentChannel,
       getVod: () => this.vod,
+      playbackLabel: () => this.playbackLabel(),
     });
     this.playbackRate = new PlaybackRateController(() => this.videoEl, {
       onFallback: rate => this.onPlaybackRateFallback(rate),

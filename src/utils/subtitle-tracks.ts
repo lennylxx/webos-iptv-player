@@ -24,6 +24,13 @@ export function languageName(lang: string): string {
   return (two && ISO6391.getNativeName(two)) || lang;
 }
 
+/** A comparable language code: 3-letter codes fold to 2 (deu/ger → de); '' and und match nothing named. */
+export function languageKey(lang: string): string {
+  const code = lang.trim().toLowerCase().split('-')[0];
+  if (!code || code === 'und') return '';
+  return (code.length === 3 ? (iso6392BTo1[code] || iso6392TTo1[code]) : '') || code;
+}
+
 /** Display label for a subtitle: its name, then the language (as an endonym when known),
  *  then a positional fallback. */
 export function subtitleLabel(opt: SubtitleOption): string {

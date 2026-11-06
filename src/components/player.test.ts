@@ -1654,6 +1654,21 @@ describe('Player VOD mode', () => {
     expect(player.getPlaybackRateState()).toEqual({ available: true, rate: 1.5 });
   });
 
+  it('refreshes the player menu when the audio tracks change', () => {
+    const onStateChanged = vi.fn();
+    player = new Player(container, vi.fn(), undefined, undefined, undefined, onStateChanged);
+    player.init(fakeVideo(3600));
+    player.playVod(req());
+    onStateChanged.mockClear();
+    const pipeline = (player as unknown as {
+      pipeline: { callbacks: { onAudioTracksUpdated(): void } };
+    }).pipeline;
+
+    pipeline.callbacks.onAudioTracksUpdated();
+
+    expect(onStateChanged).toHaveBeenCalled();
+  });
+
   it('does not offer playback speed while the Luna pipeline plays', () => {
     player.init(fakeVideo(3600));
     player.playVod(req());

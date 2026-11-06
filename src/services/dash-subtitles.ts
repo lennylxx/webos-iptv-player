@@ -16,6 +16,7 @@ export class DashSubtitles {
   private seen = new Set<string>();
   private gen = 0;
   private _active = false;
+  private clock: (() => number) | null = null;
 
   get active(): boolean {
     return this._active;
@@ -25,16 +26,19 @@ export class DashSubtitles {
     video: HTMLVideoElement,
     manifestUrl: string,
     want?: { name?: string; lang?: string },
+    // Another pipeline's playback clock, when the element plays a placeholder.
+    clock?: () => number,
   ): Promise<void> {
     this.stop();
     const gen = ++this.gen;
     this.video = video;
+    this.clock = clock ?? null;
     try {
       const subtitle = await this.loadSubtitle(manifestUrl, want, gen);
       if (gen !== this.gen || !subtitle) return;
       this._active = true;
-      this.cueTrack.attach(video, t('player.subtitles'), subtitle.lang || 'und');
-      log.info('subtitles on:', subtitle.name || subtitle.lang || '?');
+      this.cueTrack.attach(video, t('player.subtitles'), subtitle.lang || 'und', this.clock ?? undefined);
+      log.info('subtitles on:', 'format=webvtt', 'source=dash');
       await this.refresh(manifestUrl, want, gen);
       if (gen === this.gen) {
         this.timer = setInterval(
@@ -59,6 +63,10 @@ export class DashSubtitles {
     this.seen.clear();
   }
 
+  private now(): number {
+    return this.clock ? this.clock() : (this.video?.currentTime ?? 0);
+  }
+
   setOffset(seconds: number): void {
     this.cueTrack.setOffset(seconds);
   }
@@ -74,7 +82,8 @@ export class DashSubtitles {
   ): Promise<ManifestSubtitle | null> {
     const res = await fetch(manifestUrl);
     if (!res.ok) throw new Error(`HTTP ${String(res.status)}`);
-    const parsed = parseMpd(await res.text(), res.url, this.video?.currentTime);
+    const now = this.now();
+    const parsed = parseMpd(await res.text(), res.url, Number.isFinite(now) ? now : undefined);
     if (gen !== this.gen) return null;
     return pickWebVttSubtitle(parsed.subtitles, want);
   }
@@ -93,8 +102,10 @@ export class DashSubtitles {
       const segments = source.segments?.length
         ? source.segments
         : source.url ? [{ url: source.url, start: 0, duration: 0 }] : [];
-      const currentTime = this.video.currentTime;
-      const seekable = this.video.seekable;
+      const currentTime = this.now();
+      // No cue can be placed before the clock reports a position.
+      if (!Number.isFinite(currentTime)) return;
+      const seekable = this.clock ? null : this.video.seekable;
       const ahead = seekable?.length
         ? seekable.end(seekable.length - 1) + 5
         : currentTime + 15;
@@ -125,7 +136,7 @@ export class DashSubtitles {
       for (const key of Array.from(this.seen)) {
         if (!currentKeys.has(key)) this.seen.delete(key);
       }
-      this.cueTrack.prune(this.video.currentTime - CUE_RETENTION_S);
+      this.cueTrack.prune(this.now() - CUE_RETENTION_S);
     } catch (e) {
       log.debug('subtitles refresh failed:', e);
     }

@@ -83,6 +83,10 @@ function pipeline(overrides: Partial<PlayerPipeline> = {}): PlayerPipeline {
     setMseAudioTrack: () => false,
     mseSubtitleOptions: () => [],
     setMseSubtitleTrack: () => false,
+    lunaClock: () => null,
+    isLunaActive: () => false,
+    lunaAudioTracks: () => [],
+    selectLunaAudio: () => Promise.resolve(false),
     ...overrides,
   } as PlayerPipeline;
 }
@@ -141,6 +145,7 @@ describe('PlayerTracks', () => {
       getVideoElement: () => video,
       getChannel: () => channel,
       getVod: () => vod,
+      playbackLabel: () => 'session=1 load=7',
     });
   });
 
@@ -391,7 +396,31 @@ describe('PlayerTracks', () => {
         video,
         'http://host/stream.mpd',
         { name: 'Track 1', lang: 'l1' },
+        undefined,
       );
+    });
+
+    it("self-renders DASH WebVTT on Luna's clock and stops it with the path", () => {
+      setup([{
+        ...rendition('Track 1', 'l1'),
+        dash: { kind: 'webvtt', url: 'http://host/sub.vtt' },
+      }]);
+      trackInternals(tracks).masterUrl = 'http://host/stream.mpd';
+      const clock = () => 42;
+      trackInternals(tracks).pipeline = pipeline({ lunaClock: () => clock });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      tracks.selectSubtitleTrack(0);
+
+      expect(dashSubs.start).toHaveBeenCalledWith(
+        video, 'http://host/stream.mpd', { name: 'Track 1', lang: 'l1' }, clock);
+      expect(log.mock.calls.map(args => args.join(' '))).toContainEqual(expect.stringContaining(
+        'event=subtitles.luna.start session=1 load=7 index=0 count=1 pick=user format=dash'));
+      (dashSubs as { active: boolean }).active = true;
+      vi.mocked(dashSubs.stop).mockClear();
+      tracks.stopSelfRender();
+      expect(dashSubs.stop).toHaveBeenCalled();
+      log.mockRestore();
     });
 
     it.each(['stpp', 'wvtt'])(
@@ -520,6 +549,129 @@ describe('PlayerTracks', () => {
       vi.unstubAllGlobals();
     });
 
+    it("self-renders on Luna's clock and reports one unavailable event per load", () => {
+      setup([rendition('Track 1', 'l1')]);
+      const clock = () => 42;
+      trackInternals(tracks).pipeline = pipeline({ lunaClock: () => clock });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      tracks.selectSubtitleTrack(0);
+      expect(subs.start).toHaveBeenCalledWith(
+        video,
+        'http://host/master.m3u8',
+        { name: 'Track 1', lang: 'l1' },
+        expect.objectContaining({ clock, onUnavailable: expect.any(Function) }),
+      );
+      const { onUnavailable } = subs.start.mock.calls[0][3] as { onUnavailable(reason: string): void };
+      onUnavailable('network');
+      onUnavailable('segment_http_404');
+      const events = () => log.mock.calls.map(args => args.join(' '))
+        .filter(line => line.includes('event=subtitles.luna.unavailable'));
+      expect(events()).toEqual([
+        expect.stringContaining('event=subtitles.luna.unavailable session=1 load=7 stage=render reason=network'),
+      ]);
+      expect(tracks.getSubtitleTracks()).toEqual([expect.objectContaining({ active: true, available: true })]);
+
+      // A permanent reason still lands after a transient one, once.
+      onUnavailable('no_pdt');
+      onUnavailable('http_404');
+      expect(events()).toEqual([
+        expect.stringContaining('reason=network'),
+        expect.stringContaining('event=subtitles.luna.unavailable session=1 load=7 stage=render reason=no_pdt'),
+      ]);
+      expect(tracks.getSubtitleTracks()).toEqual([expect.objectContaining({ active: false, available: false })]);
+
+      tracks.resetForLoad();
+      onUnavailable('network');
+      expect(events()).toHaveLength(3);
+      log.mockRestore();
+    });
+
+    it.each(['http_403', 'no_pdt', 'fmp4', 'encrypted', 'no_rendition'])(
+      'moves the checkmark to Off when Luna can never render it (%s)',
+      reason => {
+        setup([rendition('Track 1', 'l1'), rendition('Track 2', 'l2')]);
+        trackInternals(tracks).pipeline = pipeline({ lunaClock: () => () => 42 });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const savePref = vi.spyOn(StorageService, 'setSubtitlePref');
+        tracks.selectSubtitleTrack(0);
+        savePref.mockClear();
+
+        const { onUnavailable } = subs.start.mock.calls[0][3] as { onUnavailable(reason: string): void };
+        onUnavailable(reason);
+
+        const options = tracks.getSubtitleTracks();
+        expect(options.map(item => item.active)).toEqual([false, false]);
+        expect(options.map(item => item.available)).toEqual([false, true]);
+        expect(savePref).not.toHaveBeenCalled();
+        expect(log.mock.calls.map(args => args.join(' ')).join('\n')).toContain(
+          `event=subtitles.luna.reset session=1 load=7 index=0 reason=${reason}`);
+        savePref.mockRestore();
+        log.mockRestore();
+      },
+    );
+
+    it('keeps a Luna rendition checked after a transient failure', () => {
+      setup([rendition('Track 1', 'l1')]);
+      trackInternals(tracks).pipeline = pipeline({ lunaClock: () => () => 42 });
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      tracks.selectSubtitleTrack(0);
+
+      const { onUnavailable } = subs.start.mock.calls[0][3] as { onUnavailable(reason: string): void };
+      onUnavailable('network');
+      onUnavailable('segment_http_404');
+
+      expect(tracks.getSubtitleTracks()).toEqual([expect.objectContaining({ active: true, available: true })]);
+      vi.restoreAllMocks();
+    });
+
+    it('stops self-rendering when playback switches path mid-load', () => {
+      setup([rendition('Track 1', 'l1')], 0);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      tracks.stopSelfRender();
+
+      expect(subs.stop).toHaveBeenCalled();
+      expect(tracks.getSubtitleTracks()).toEqual([expect.objectContaining({ active: false })]);
+      expect(log.mock.calls.map(args => args.join(' ')).join('\n')).toContain(
+        'event=subtitles.self_render.stopped session=1 load=7 reason=path_change');
+      log.mockRestore();
+    });
+
+    it('logs the Luna self-render start with the pick source', () => {
+      setup([rendition('Track 1', 'l1'), rendition('Track 2', 'l2')]);
+      trackInternals(tracks).pipeline = pipeline({ lunaClock: () => () => 42 });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      tracks.selectSubtitleTrack(1);
+
+      expect(log.mock.calls.map(args => args.join(' ')).join('\n')).toContain(
+        'event=subtitles.luna.start session=1 load=7 index=1 count=2 pick=user format=hls');
+      log.mockRestore();
+    });
+
+    it('logs Luna subtitle anchoring and a silent clock once each', () => {
+      setup([rendition('Track 1', 'l1')]);
+      trackInternals(tracks).pipeline = pipeline({ lunaClock: () => () => 42 });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      tracks.selectSubtitleTrack(0);
+      const { onAnchor, onClockWait } = subs.start.mock.calls[0][3] as {
+        onAnchor(src: string, holdBackS: number): void;
+        onClockWait(waitedMs: number): void;
+      };
+
+      onAnchor('clock-edge', 4);
+      onClockWait(10000);
+
+      expect(log.mock.calls.map(args => args.join(' ')).join('\n')).toContain(
+        'event=subtitles.luna.anchor session=1 load=7 src=clock-edge holdBackS=4');
+      expect(warn.mock.calls.map(args => args.join(' ')).join('\n')).toContain(
+        'event=subtitles.luna.clock.waiting session=1 load=7 waitedMs=10000');
+      log.mockRestore();
+      warn.mockRestore();
+    });
+
     it('lists the manifest renditions with the self-rendered one active and all selectable', () => {
       setup([rendition('Track 1', 'l1'), rendition('Track 2', 'l2')], 1);
       const options = tracks.getSubtitleTracks();
@@ -632,6 +784,18 @@ describe('PlayerTracks', () => {
 
       expect(vodSubs.show).toHaveBeenCalledWith(0);
       expect(vodSubs.hide).not.toHaveBeenCalled();
+    });
+
+    it('hides the live self-renderer tracks from the VOD picker', () => {
+      const timeline = nativeTextTrack('hidden', { label: 'Subtitles' });
+      const display = nativeTextTrack('showing', { label: 'Subtitles' });
+      setup({ text: [nativeTextTrack('disabled', { label: 'Track 1' }), timeline, display] });
+      trackInternals(tracks).subs = {
+        owns: vi.fn((track: unknown) => track === timeline || track === display),
+        stop: vi.fn(),
+      };
+
+      expect(tracks.getSubtitleTracks().map(item => item.label)).toEqual(['Track 1']);
     });
 
     it('lists a sidecar once and hides its renderer track from the picker', () => {
@@ -1270,5 +1434,172 @@ describe('PlayerTracks', () => {
     expect(internals.vodTextSidecars).toEqual([]);
     expect(internals.vodAssSidecars).toEqual([]);
     expect(internals.activeAssIndex).toBe(-1);
+  });
+});
+
+describe('PlayerTracks Luna audio', () => {
+  let video: HTMLVideoElement;
+  let luna: Array<{ index: number; language: string; selected: boolean }>;
+  let selectLunaAudio: ReturnType<typeof vi.fn>;
+  let tracks: PlayerTracks;
+  let log: ReturnType<typeof vi.spyOn>;
+
+  const manifest = (audio: Array<{ name: string; lang: string }>) => ({
+    audio: audio.map(item => ({ ...item, isDefault: false })),
+    subtitles: [],
+    closedCaptions: [],
+    variants: [],
+    masterUrl: '',
+  });
+  const logged = (): string => log.mock.calls.map(args => args.join(' ')).join('\n');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(StorageService.getAudioPref).mockReturnValue(null);
+    luna = [
+      { index: 0, language: 'l1', selected: true },
+      { index: 1, language: 'l2', selected: false },
+    ];
+    selectLunaAudio = vi.fn(() => Promise.resolve(true));
+    video = { audioTracks: undefined, textTracks: [] } as unknown as HTMLVideoElement;
+    tracks = new PlayerTracks(pipeline({
+      isLunaActive: () => true,
+      lunaAudioTracks: () => luna,
+      selectLunaAudio,
+    }), {
+      getVideoElement: () => video,
+      getChannel: () => CHANNEL,
+      getVod: () => null,
+      playbackLabel: () => 'session=1 load=7',
+    });
+    log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    log.mockRestore();
+  });
+
+  it('names UMS audio from the manifest, pairing same-language renditions in order', () => {
+    luna = [
+      { index: 0, language: 'l1', selected: false },
+      { index: 1, language: 'l2', selected: true },
+      { index: 2, language: 'l1', selected: false },
+    ];
+    tracks.applyManifest(manifest([
+      { name: 'Track 1', lang: 'l1' },
+      { name: 'Track 2', lang: 'l1' },
+      { name: 'Track 3', lang: 'l2' },
+    ]));
+
+    expect(tracks.getAudioTracks()).toEqual([
+      { index: 0, label: 'Track 1', active: false, available: true },
+      { index: 1, label: 'Track 3', active: true, available: true },
+      { index: 2, label: 'Track 2', active: false, available: true },
+    ]);
+    expect(logged()).toContain(
+      'event=audio.luna.tracks session=1 load=7 count=3 manifest=3 naming=manifest pick=none index=1');
+  });
+
+  it('names UMS audio by position when UMS lists no languages, but does not switch to a saved pick', () => {
+    vi.mocked(StorageService.getAudioPref).mockReturnValue({ name: 'Track 2', lang: '' });
+    luna = [
+      { index: 0, language: '', selected: true },
+      { index: 1, language: '', selected: false },
+    ];
+    tracks.applyManifest(manifest([{ name: 'Track 1', lang: 'l1' }, { name: 'Track 2', lang: 'l2' }]));
+
+    expect(tracks.getAudioTracks().map(item => item.label)).toEqual(['Track 1', 'Track 2']);
+    expect(selectLunaAudio).not.toHaveBeenCalled();
+    expect(logged()).toContain(
+      'event=audio.luna.tracks session=1 load=7 count=2 manifest=2 naming=order pick=unpaired index=0');
+  });
+
+  it('labels UMS audio by language or position when the manifest does not pair', () => {
+    luna = [
+      { index: 0, language: 'l1', selected: true },
+      { index: 1, language: '', selected: false },
+    ];
+    tracks.applyManifest(manifest([{ name: 'Track 1', lang: 'l1' }]));
+
+    expect(tracks.getAudioTracks().map(item => item.label)).toEqual(['l1', 'Audio 2']);
+    expect(logged()).toContain('event=audio.luna.tracks session=1 load=7 count=2 manifest=1 naming=count_mismatch');
+  });
+
+  it('numbers unnamed UMS tracks that share a language instead of repeating it', () => {
+    luna = [
+      { index: 0, language: 'l1', selected: true },
+      { index: 1, language: 'l1', selected: false },
+      { index: 2, language: 'l2', selected: false },
+    ];
+    tracks.applyManifest(manifest([]));
+
+    expect(tracks.getAudioTracks().map(item => item.label)).toEqual(['Audio 1', 'Audio 2', 'l2']);
+  });
+
+  it('shows no audio menu when UMS lists one track, whatever the manifest declares', () => {
+    luna = [{ index: 0, language: 'l1', selected: true }];
+    tracks.applyManifest(manifest([{ name: 'Track 1', lang: 'l1' }, { name: 'Track 2', lang: 'l2' }]));
+
+    expect(tracks.getAudioTracks()).toHaveLength(1);
+    expect(logged()).not.toContain('event=audio.luna.tracks');
+  });
+
+  it('reapplies the saved pick once UMS lists the audio and the manifest settles', () => {
+    vi.mocked(StorageService.getAudioPref).mockReturnValue({ name: 'Track 2', lang: 'l2' });
+
+    tracks.applyLunaAudioSelection();
+    expect(selectLunaAudio).not.toHaveBeenCalled();
+    tracks.applyManifest(manifest([{ name: 'Track 1', lang: 'l1' }, { name: 'Track 2', lang: 'l2' }]));
+    tracks.applyLunaAudioSelection();
+
+    expect(selectLunaAudio).toHaveBeenCalledExactlyOnceWith(1);
+    expect(StorageService.getAudioPref).toHaveBeenCalledWith(channelKey(CHANNEL), legacyChannelKey(CHANNEL));
+    expect(StorageService.setAudioPref).not.toHaveBeenCalled();
+    expect(logged()).toContain('event=audio.luna.tracks session=1 load=7 count=2 manifest=2 naming=manifest pick=saved index=1');
+  });
+
+  it('matches a saved language when the manifest failed', () => {
+    vi.mocked(StorageService.getAudioPref).mockReturnValue({ name: 'Track 2', lang: 'l2' });
+
+    tracks.applyManifest(manifest([]));
+
+    expect(selectLunaAudio).toHaveBeenCalledExactlyOnceWith(1);
+    expect(logged()).toContain('naming=no_manifest pick=saved index=1');
+  });
+
+  it('keeps the stream default when the saved pick is not offered', () => {
+    vi.mocked(StorageService.getAudioPref).mockReturnValue({ name: 'Track 9', lang: 'l9' });
+
+    tracks.applyManifest(manifest([{ name: 'Track 1', lang: 'l1' }, { name: 'Track 2', lang: 'l2' }]));
+
+    expect(selectLunaAudio).not.toHaveBeenCalled();
+    expect(logged()).toContain('pick=missed index=0');
+  });
+
+  it('switches Luna audio and remembers it only once UMS confirms', async () => {
+    tracks.applyManifest(manifest([{ name: 'Track 1', lang: 'l1' }, { name: 'Track 2', lang: 'l2' }]));
+    selectLunaAudio.mockResolvedValueOnce(false);
+
+    tracks.selectAudioTrack(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(StorageService.setAudioPref).not.toHaveBeenCalled();
+    // The menu reads UMS's selection, which a refused switch left alone.
+    expect(tracks.getAudioTracks().map(item => item.active)).toEqual([true, false]);
+
+    tracks.selectAudioTrack(1);
+    await vi.waitFor(() => expect(StorageService.setAudioPref).toHaveBeenCalledWith(
+      channelKey(CHANNEL), { name: 'Track 2', lang: 'l2' }));
+    expect(selectLunaAudio).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the placeholder's own audio tracks alone", () => {
+    const audio = [audioTrack(true, '', ''), audioTrack(false, '', '')];
+    video = { audioTracks: audio, textTracks: [] } as unknown as HTMLVideoElement;
+    vi.mocked(StorageService.getAudioPref).mockReturnValue({ name: '', lang: 'l2' });
+
+    tracks.applyNativeAudioSelection();
+
+    expect(audio.map(item => item.enabled)).toEqual([true, false]);
   });
 });

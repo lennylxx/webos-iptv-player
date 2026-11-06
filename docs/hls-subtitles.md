@@ -326,6 +326,23 @@ under the same `channelPrefKey()` as the subtitle pick (`subtitle_offsets` map).
 - In-band **CEA-608/708** and **TTML/IMSC** are drawn by the native compositor with no cue
   access, so the offset control is hidden while they are the active caption.
 
+## Public test streams
+
+These vendor developer test streams, all from Apple's HLS examples,
+reproduce the subtitle paths on a TV.
+Load them through a local M3U; never hardcode them into code or tests.
+Availability can change.
+
+| Subtitles | Manifest |
+|---|---|
+| None (basic VOD, 4:3) | `https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8` |
+| WebVTT renditions, multiple audio (fMP4) | `https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8` |
+| CEA-608 (`CC1`, TS) | `https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8` |
+
+Adding `#EXTVLCOPT:http-referrer=http://ref.test/` above a URL routes it
+through Luna header playback (see `docs/mpeg-dash.md`); these servers
+ignore the header.
+
 ---
 
 *Conventions: **✅ confirmed on device** marks facts verified on real hardware; **(standard)** marks

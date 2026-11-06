@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { wallToMediaSeconds, newestPdt, oldestPdt, lowPercentile, cueKey, parseMediaPlaylist, pickVideoVariant, planSameTextMerges } from './hls-subtitles';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { HlsSubtitles, wallToMediaSeconds, newestPdt, oldestPdt, lowPercentile, cueKey, parseMediaPlaylist, pickVideoVariant, planSameTextMerges, isPermanentSubtitleFailure } from './hls-subtitles';
 
 // Synthetic timeline mirroring a live HLS stream: media-time 0 maps to wall clock
 // E0; 4s segments; the playhead trails the live edge. Numbers, no real stream.
@@ -217,5 +217,220 @@ describe('pickVideoVariant', () => {
   it('returns null for a master with no video variant (bare media playlist)', () => {
     const media = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg0.ts';
     expect(pickVideoVariant(media)).toBeNull();
+  });
+});
+
+describe('HlsSubtitles with an external clock', () => {
+  const MASTER = [
+    '#EXTM3U',
+    '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="l1",LANGUAGE="l1",URI="s.m3u8"',
+    '#EXT-X-STREAM-INF:BANDWIDTH=1000,SUBTITLES="s"',
+    'v.m3u8',
+  ].join('\n');
+  const PLAYLIST = [
+    '#EXTM3U',
+    '#EXT-X-TARGETDURATION:4',
+    '#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00.000Z',
+    '#EXTINF:4,', 's0.vtt',
+    '#EXTINF:4,', 's1.vtt',
+  ].join('\n');
+  const CUE_VTT = 'WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n\n00:00:01.000 --> 00:00:03.000\nAlpha\n';
+
+  class FakeVTTCue {
+    constructor(public startTime: number, public endTime: number, public text: string) {}
+  }
+
+  function fakeTrack() {
+    const cues: FakeVTTCue[] = [];
+    return {
+      mode: 'disabled',
+      cues,
+      addCue: (cue: FakeVTTCue) => cues.push(cue),
+      removeCue: (cue: FakeVTTCue) => { cues.splice(cues.indexOf(cue), 1); },
+    };
+  }
+
+  function serve(files: Record<string, string | number>) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const body = files[url];
+      if (body === undefined) throw new TypeError('Failed to fetch');
+      const status = typeof body === 'number' ? body : 200;
+      return { ok: status === 200, status, url, text: async () => String(body) };
+    }));
+  }
+
+  function placeholder() {
+    const tracks = [fakeTrack(), fakeTrack()];
+    const listeners: Array<() => void> = [];
+    let added = 0;
+    const video = {
+      currentTime: 0.5,
+      paused: false,
+      seekable: { length: 0 },
+      addTextTrack: () => tracks[added++],
+      addEventListener: (_type: string, listener: () => void) => listeners.push(listener),
+      removeEventListener: () => {},
+    };
+    return { video: video as unknown as HTMLVideoElement, timeline: tracks[0], display: tracks[1], listeners };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('times live cues on the clock and shows them while current', async () => {
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    serve({
+      'http://host/a.m3u8': MASTER,
+      'http://host/s.m3u8': PLAYLIST,
+      'http://host/s0.vtt': 'WEBVTT\n',
+      'http://host/s1.vtt': CUE_VTT,
+    });
+    const { video, timeline, display, listeners } = placeholder();
+    let now = 500;
+    const subs = new HlsSubtitles();
+
+    await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => now });
+
+    // Newest segment s1 (P0+4s, 4s) less 3 target durations pins clock 500 to
+    // P0-4s, so its cue at P0+5s lands at 509 whatever the element's own time.
+    expect(timeline.cues).toEqual([expect.objectContaining({ startTime: 509, endTime: 511, text: 'Alpha' })]);
+    expect(display.cues).toEqual([]);
+    now = 510;
+    for (const listener of listeners) listener();
+    expect(display.cues.map(cue => cue.text)).toEqual(['Alpha']);
+    subs.stop();
+    expect(display.cues).toEqual([]);
+  });
+
+  it('logs the subtitle rendition by index, never its playlist URL', async () => {
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    serve({ 'http://host/a.m3u8': MASTER, 'http://host/s.m3u8': PLAYLIST });
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const subs = new HlsSubtitles();
+
+    await subs.start(placeholder().video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+    subs.stop();
+
+    const line = logged.mock.calls.map(args => args.join(' '))
+      .find(text => text.includes('subtitles on'));
+    logged.mockRestore();
+    expect(line).toContain('index=0');
+    expect(line).not.toContain('host');
+  });
+
+  describe('anchoring', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+      vi.stubGlobal('VTTCue', FakeVTTCue);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('waits for the first clock position before pinning cue timing', async () => {
+      serve({
+        'http://host/a.m3u8': MASTER,
+        'http://host/s.m3u8': PLAYLIST,
+        'http://host/s0.vtt': 'WEBVTT\n',
+        'http://host/s1.vtt': CUE_VTT,
+      });
+      const { video, timeline } = placeholder();
+      let now = NaN;
+      const onAnchor = vi.fn();
+      const subs = new HlsSubtitles();
+
+      await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => now, onAnchor });
+      expect(timeline.cues).toEqual([]);
+      expect(onAnchor).not.toHaveBeenCalled();
+
+      now = 500;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(timeline.cues).toEqual([expect.objectContaining({ startTime: 509, endTime: 511 })]);
+      expect(onAnchor.mock.calls).toEqual([['clock-edge', 12]]);
+      subs.stop();
+    });
+
+    it('reports a clock that never reports a position once', async () => {
+      serve({ 'http://host/a.m3u8': MASTER, 'http://host/s.m3u8': PLAYLIST });
+      const { video } = placeholder();
+      const onClockWait = vi.fn();
+      const subs = new HlsSubtitles();
+
+      await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => NaN, onClockWait });
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(onClockWait).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(onClockWait.mock.calls).toEqual([[10000]]);
+      subs.stop();
+    });
+
+    it('keeps the pinned clock anchor when a seekable range appears', async () => {
+      const files: Record<string, string> = {
+        'http://host/a.m3u8': MASTER,
+        'http://host/s.m3u8': PLAYLIST,
+        'http://host/s0.vtt': 'WEBVTT\n',
+        'http://host/s1.vtt': 'WEBVTT\n',
+      };
+      serve(files);
+      const { video, timeline } = placeholder();
+      const subs = new HlsSubtitles();
+      await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+
+      Object.assign(video, { seekable: { length: 1, start: () => 0, end: () => 1000 } });
+      files['http://host/s.m3u8'] = `${PLAYLIST}\n#EXTINF:4,\ns2.vtt`;
+      files['http://host/s2.vtt'] = CUE_VTT;
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // s2 starts at P0+8s, so its cue at P0+9s stays on the clock mapping (513).
+      expect(timeline.cues).toEqual([expect.objectContaining({ startTime: 513, endTime: 515 })]);
+      subs.stop();
+    });
+
+    it('treats a refused segment as transient but still reports a refused playlist after it', async () => {
+      const files: Record<string, string | number> = {
+        'http://host/a.m3u8': MASTER,
+        'http://host/s.m3u8': PLAYLIST,
+        'http://host/s0.vtt': 404,
+        'http://host/s1.vtt': 'WEBVTT\n',
+      };
+      serve(files);
+      const { video } = placeholder();
+      const onUnavailable = vi.fn();
+      const subs = new HlsSubtitles();
+      await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500, onUnavailable });
+      expect(onUnavailable.mock.calls).toEqual([['segment_http_404']]);
+
+      files['http://host/s.m3u8'] = 404;
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(onUnavailable.mock.calls).toEqual([['segment_http_404'], ['http_404']]);
+      expect(isPermanentSubtitleFailure('segment_http_404')).toBe(false);
+      expect(isPermanentSubtitleFailure('http_404')).toBe(true);
+      subs.stop();
+    });
+  });
+
+  it.each([
+    ['a refused master', { 'http://host/a.m3u8': 403 }, 'http_403'],
+    ['an unreachable master', {}, 'network'],
+    ['a refused subtitle playlist', { 'http://host/a.m3u8': MASTER, 'http://host/s.m3u8': 403 }, 'http_403'],
+    ['a playlist without dates', {
+      'http://host/a.m3u8': MASTER,
+      'http://host/s.m3u8': '#EXTM3U\n#EXTINF:4,\ns0.vtt',
+    }, 'no_pdt'],
+  ])('reports %s once', async (_name, files, reason) => {
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    serve(files);
+    const { video, timeline } = placeholder();
+    const onUnavailable = vi.fn();
+    const subs = new HlsSubtitles();
+
+    await subs.start(video, 'http://host/a.m3u8', undefined, { clock: () => 500, onUnavailable });
+    subs.stop();
+
+    expect(onUnavailable.mock.calls).toEqual([[reason]]);
+    expect(timeline.cues).toEqual([]);
   });
 });

@@ -14,7 +14,11 @@ import type {
   VodPlayback,
 } from '../types';
 import { StorageService } from '../services/storage-service';
-import { HlsSubtitles } from '../services/hls-subtitles';
+import {
+  HlsSubtitles,
+  isPermanentSubtitleFailure,
+  type HlsSubtitlesOptions,
+} from '../services/hls-subtitles';
 import { DashSubtitles } from '../services/dash-subtitles';
 import { VodSubtitles } from '../services/vod-subtitles';
 import { AssSubtitles, isAssSidecar } from '../services/ass-subtitles';
@@ -24,6 +28,7 @@ import {
   audioLabel,
   chooseAudioIndex,
   isPrefMatch,
+  mapLunaAudio,
   mergeManifestNames,
   nativeAudioOptions,
 } from '../utils/audio-tracks';
@@ -33,6 +38,8 @@ import {
   closedCaptionLabel,
   formatSubtitleOffset,
   isSubtitlePrefMatch,
+  languageKey,
+  languageName,
   manifestSubtitleOptions,
   nativeSubtitleOptions,
   shiftForeignTrack,
@@ -72,6 +79,7 @@ interface PlayerTracksOptions {
   getVideoElement: () => HTMLVideoElement | null;
   getChannel: () => Channel | null;
   getVod: () => VodPlayback | null;
+  playbackLabel: () => string;
 }
 
 export class PlayerTracks {
@@ -83,6 +91,14 @@ export class PlayerTracks {
   private ccRequestSeq = 0;
   private selfRenderIndex = -1; // manifest subtitle rendition currently self-rendered (-1 = off)
   private masterUrl = ''; // HLS master URL of the active stream, for re-pointing self-render
+  // One subtitles.luna.unavailable event per load, plus one when a permanent reason follows.
+  private lunaSubsReported: 'none' | 'transient' | 'permanent' = 'none';
+  private manifestSettled = false; // this load's master playlist was parsed or failed
+  private lunaAudioReported = false; // one audio.luna.tracks decision per load
+  private lunaAudioPicked = false; // the user switched Luna audio this load
+  private lunaAudioSeq = 0;
+  private unavailableSubs = new Set<number>(); // renditions Luna can never self-render this load
+  private subtitlePick: 'saved' | 'forced' | 'user' = 'user';
   private subs = new HlsSubtitles(); // self-rendered subtitles on the webOS native path
   private dashSubs = new DashSubtitles(); // self-rendered DASH WebVTT on the native path
   private vodSubs = new VodSubtitles(); // sidecar SRT/WebVTT tracks for VOD (Xtream)
@@ -108,6 +124,12 @@ export class PlayerTracks {
     this.ccRequestSeq++;
     this.selfRenderIndex = -1;
     this.masterUrl = '';
+    this.lunaSubsReported = 'none';
+    this.manifestSettled = false;
+    this.lunaAudioReported = false;
+    this.lunaAudioPicked = false;
+    this.lunaAudioSeq++;
+    this.unavailableSubs.clear();
     this.subs.stop();
     this.dashSubs.stop();
     this.clearVodSubtitles();
@@ -118,7 +140,9 @@ export class PlayerTracks {
     this.manifestSubtitles = manifest.subtitles;
     this.manifestClosedCaptions = manifest.closedCaptions;
     this.masterUrl = manifest.masterUrl;
-    if (manifest.audio.length) this.applyNativeAudioSelection();
+    this.manifestSettled = true;
+    if (this.pipeline.isLunaActive()) this.applyLunaAudioSelection();
+    else if (manifest.audio.length) this.applyNativeAudioSelection();
     // Off unless FORCED or a saved pick (spec-correct — see applySelfRenderSelection).
     if (manifest.subtitles.length) this.applySelfRenderSelection();
     // Re-apply a saved CC choice now the manifest confirms captions exist.
@@ -436,6 +460,7 @@ export class PlayerTracks {
    */
   private audioOptions(): AudioOption[] {
     if (this.pipeline.isMseActive()) return this.pipeline.mseAudioOptions();
+    if (this.pipeline.isLunaActive()) return this.lunaAudioOptions().options;
     const list = this.options.getVideoElement()?.audioTracks;
     if (!list) return [];
     return mergeManifestNames(nativeAudioOptions(list), this.manifestAudio);
@@ -448,7 +473,7 @@ export class PlayerTracks {
   // lists the native-exposed renditions first (default / first-per-language).
   private displayAudioOptions(): Array<AudioOption & { available: boolean }> {
     const options = this.audioOptions();
-    if (this.manifestAudio.length > options.length) {
+    if (this.manifestAudio.length > options.length && !this.pipeline.isLunaActive()) {
       return this.manifestAudio.map((manifest, index) => ({
         index,
         name: manifest.name,
@@ -466,9 +491,10 @@ export class PlayerTracks {
 
   /** Audio tracks for the picker. Labels prefer name, then language, then a position. */
   getAudioTracks(): AudioTrackOption[] {
-    return this.displayAudioOptions().map(option => ({
+    const options = this.displayAudioOptions();
+    return options.map(option => ({
       index: option.index,
-      label: audioLabel(option),
+      label: this.audioOptionLabel(option, options),
       active: option.active,
       available: option.available,
     }));
@@ -479,6 +505,10 @@ export class PlayerTracks {
   selectAudioTrack(index: number): void {
     const option = this.displayAudioOptions().find(item => item.index === index);
     if (!option || !option.available) return;
+    if (this.pipeline.isLunaActive()) {
+      this.switchLunaAudio(option);
+      return;
+    }
     if (this.pipeline.isMseActive()) {
       if (!this.pipeline.setMseAudioTrack(index)) return;
     } else {
@@ -488,6 +518,72 @@ export class PlayerTracks {
     }
     this.rememberAudio(option);
     showToast(t('player.switchingAudio', { name: audioLabel(option) }));
+  }
+
+  // Luna names only what the manifest pairs one-to-one; otherwise a language
+  // (as an endonym) or, when two unnamed tracks share it, a position.
+  private audioOptionLabel(option: AudioOption, options: readonly AudioOption[]): string {
+    if (!this.pipeline.isLunaActive() || option.name || !option.lang) return audioLabel(option);
+    const key = languageKey(option.lang);
+    const shared = options.some(other => other.index !== option.index && !other.name
+      && (key ? languageKey(other.lang) === key : other.lang === option.lang));
+    return shared ? audioLabel({ ...option, lang: '' }) : languageName(option.lang);
+  }
+
+  private lunaAudioOptions(): { options: AudioOption[]; naming: string } {
+    const tracks = this.pipeline.lunaAudioTracks();
+    const { renditions, naming } = mapLunaAudio(tracks, this.manifestAudio);
+    const options = tracks.map(track => {
+      const rendition = renditions?.[track.index];
+      return {
+        index: track.index,
+        name: rendition?.name ?? '',
+        lang: rendition?.lang || track.language,
+        // UMS's pick stands in for the manifest DEFAULT, as on the native path.
+        isDefault: track.selected,
+        active: track.selected,
+      };
+    });
+    return { options, naming };
+  }
+
+  // The saved pick is matched once UMS lists the audio and the manifest has
+  // settled (its names may be what the pick saved), once per load.
+  applyLunaAudioSelection(): void {
+    if (!this.pipeline.isLunaActive() || this.lunaAudioReported || !this.manifestSettled) return;
+    const { options, naming } = this.lunaAudioOptions();
+    if (options.length < 2) return;
+    this.lunaAudioReported = true;
+    const pref = StorageService.getAudioPref(this.preferenceKey(), this.legacyPreferenceKey());
+    // UMS may list ISO 639-2 codes where the pick saved a 2-letter one.
+    const keyed = options.map(option => ({ ...option, lang: languageKey(option.lang) }));
+    // Names paired by position are display-only: a wrong guess must not switch.
+    const paired = naming !== 'order';
+    const keyedPref = pref && paired ? { name: pref.name, lang: languageKey(pref.lang) } : null;
+    const index = chooseAudioIndex(keyed, keyedPref);
+    const matched = isPrefMatch(keyed.find(option => option.index === index), keyedPref);
+    const pick = !pref ? 'none' : !paired ? 'unpaired' : matched ? 'saved' : 'missed';
+    this.logAudioChoice('luna', options, pref, index);
+    log.info('Luna audio tracks', 'event=audio.luna.tracks', this.options.playbackLabel(),
+      `count=${String(options.length)}`, `manifest=${String(this.manifestAudio.length)}`,
+      `naming=${naming}`, `pick=${pick}`, `index=${String(index)}`);
+    const option = options.find(item => item.index === index);
+    if (!matched || !option || option.active || this.lunaAudioPicked) return;
+    this.switchLunaAudio(option, false);
+  }
+
+  // The menu reads UMS's selection, so a refused switch leaves the old track checked.
+  private switchLunaAudio(option: AudioOption, user = true): void {
+    const seq = ++this.lunaAudioSeq;
+    if (user) {
+      this.lunaAudioPicked = true;
+      showToast(t('player.switchingAudio', {
+        name: this.audioOptionLabel(option, this.lunaAudioOptions().options),
+      }));
+    }
+    void this.pipeline.selectLunaAudio(option.index).then(ok => {
+      if (ok && user && seq === this.lunaAudioSeq) this.rememberAudio(option);
+    });
   }
 
   private rememberAudio(option: AudioOption): void {
@@ -533,6 +629,7 @@ export class PlayerTracks {
 
   applyNativeAudioSelection(): void {
     if (this.pipeline.isMseActive()) return; // hls.js owns the rendition; videoEl exposes only the active one
+    if (this.pipeline.isLunaActive()) return; // the element holds only the placeholder clip
     const list = this.options.getVideoElement()?.audioTracks;
     if (!list || list.length < 2) return;
     const options = this.audioOptions();
@@ -560,7 +657,7 @@ export class PlayerTracks {
       const list = this.options.getVideoElement()?.textTracks;
       const native = list
         ? nativeSubtitleOptions(list)
-          .filter(option => !this.vodSubs.owns(list[option.index]))
+          .filter(option => !this.ownsTextTrack(list[option.index]))
         : [];
       const sidecars = this.vodTextSidecars.map((sidecar, index) => ({
         index: VOD_SUBTITLE_BASE + index,
@@ -597,7 +694,10 @@ export class PlayerTracks {
   // Each displayed rendition has a distinct control path. Native DASH exposes
   // one compositor toggle because setSubtitleEnable cannot select a rendition.
   private displaySubtitleOptions(): Array<SubtitleOption & { available: boolean }> {
-    return this.subtitleOptions().map(option => ({ ...option, available: true }));
+    return this.subtitleOptions().map(option => ({
+      ...option,
+      available: !this.unavailableSubs.has(option.index),
+    }));
   }
 
   /** Subtitle tracks for the picker (the menu prepends its own "Off" row). On the
@@ -652,6 +752,7 @@ export class PlayerTracks {
     const option = this.displaySubtitleOptions().find(item => item.index === index);
     if (!option || !option.available) return;
     this.setNativeCC(false);
+    this.subtitlePick = 'user';
     this.applySubtitleChoice(index);
     this.rememberSubtitle({ off: false, name: option.name, lang: option.lang });
     showToast(t('player.subtitlesTrack', { name: subtitleLabel(option) }));
@@ -765,12 +866,71 @@ export class PlayerTracks {
     } else if (manifest.dash?.kind === 'webvtt') {
       this.subs.stop();
       this.setNativeCC(false);
-      void this.dashSubs.start(video, this.masterUrl, want);
+      const clock = this.pipeline.lunaClock();
+      if (clock) {
+        log.info('Luna subtitles self-rendered', 'event=subtitles.luna.start',
+          this.options.playbackLabel(), `index=${String(index)}`,
+          `count=${String(this.manifestSubtitles.length)}`, `pick=${this.subtitlePick}`, 'format=dash');
+      }
+      void this.dashSubs.start(video, this.masterUrl, want, clock ?? undefined);
     } else {
       this.dashSubs.stop();
       this.setNativeCC(false);
-      void this.subs.start(video, this.masterUrl, want);
+      const luna = this.lunaSubtitleOptions(index);
+      if (luna) {
+        log.info('Luna subtitles self-rendered', 'event=subtitles.luna.start',
+          this.options.playbackLabel(), `index=${String(index)}`,
+          `count=${String(this.manifestSubtitles.length)}`, `pick=${this.subtitlePick}`, 'format=hls');
+        void this.subs.start(video, this.masterUrl, want, luna);
+      } else {
+        void this.subs.start(video, this.masterUrl, want);
+      }
     }
+  }
+
+  // Luna plays behind a placeholder element, so cues follow Luna's clock, and
+  // a failed header-less subtitle fetch stays silent. A rendition that can
+  // never render moves the checkmark to Off without touching the saved pick.
+  private lunaSubtitleOptions(index: number): HlsSubtitlesOptions | null {
+    const clock = this.pipeline.lunaClock();
+    if (!clock) return null;
+    return {
+      clock,
+      onAnchor: (src, holdBackS) => {
+        log.info('Luna subtitles anchored', 'event=subtitles.luna.anchor',
+          this.options.playbackLabel(), `src=${src}`, `holdBackS=${String(holdBackS)}`);
+      },
+      onClockWait: waitedMs => {
+        log.warn('Luna subtitles wait for the playback clock', 'event=subtitles.luna.clock.waiting',
+          this.options.playbackLabel(), `waitedMs=${String(waitedMs)}`);
+      },
+      onUnavailable: reason => {
+        const label = this.options.playbackLabel();
+        const permanent = isPermanentSubtitleFailure(reason);
+        if (this.lunaSubsReported === 'none' || (permanent && this.lunaSubsReported === 'transient')) {
+          this.lunaSubsReported = permanent ? 'permanent' : 'transient';
+          log.info('Subtitles unavailable on Luna playback', 'event=subtitles.luna.unavailable',
+            label, 'stage=render', `reason=${reason}`);
+        }
+        if (!permanent || this.selfRenderIndex !== index) return;
+        this.unavailableSubs.add(index);
+        this.selfRenderIndex = -1;
+        this.subs.stop();
+        log.info('Luna subtitle selection reset to Off', 'event=subtitles.luna.reset',
+          label, `index=${String(index)}`, `reason=${reason}`);
+      },
+    };
+  }
+
+  /** Playback changed path mid-load; the next manifest restarts the remembered pick. */
+  stopSelfRender(): void {
+    this.unavailableSubs.clear();
+    if (this.selfRenderIndex < 0 && !this.subs.active && !this.dashSubs.active) return;
+    this.subs.stop();
+    this.dashSubs.stop();
+    this.selfRenderIndex = -1;
+    log.info('Self-rendered subtitles stopped', 'event=subtitles.self_render.stopped',
+      this.options.playbackLabel(), 'reason=path_change');
   }
 
   // Spec-correct tune-in default for self-rendered WebVTT: subtitles stay off
@@ -791,6 +951,7 @@ export class PlayerTracks {
     const options = this.subtitleOptions();
     const index = chooseSubtitleIndex(options, pref);
     this.logSubtitleChoice('self-render', options, pref, index);
+    this.subtitlePick = pref && !pref.off ? 'saved' : 'forced';
     this.applySubtitleChoice(index);
   }
 

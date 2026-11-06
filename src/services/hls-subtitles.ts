@@ -1,4 +1,5 @@
 import { parseWebVTT } from '../utils/webvtt';
+import { FetchTextError, fetchFailureReason } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
 import { WebVttCueTrack } from './webvtt-cue-track';
@@ -10,10 +11,23 @@ const WINDOW = 15;           // only the most recent N segments (~30s); playlist
 const CUE_RETENTION_S = 30;  // drop cues this far behind the playhead
 const CALIB_REMEASURE_MS = 6000;  // re-sample the reconstructed startDate this often (averaged)
 const MERGE_GAP_S = 1.0;          // merge same-text cues within this gap (boundary-split blink/overlap)
+const LIVE_HOLD_BACK_TARGETS = 3; // HLS players start live this many target durations behind the end
+const CLOCK_WAIT_MS = 10000; // an external clock silent this long is worth a diag event
 
-interface Segment { uri: string; pdtMs: number | null; }
-interface Rendition { name: string; lang: string; uri: string; def: boolean; }
-interface MediaPlaylist { segs: Segment[]; unsupported: 'fmp4' | 'encrypted' | null; }
+interface Segment { uri: string; pdtMs: number | null; durS: number; }
+interface Rendition { name: string; lang: string; uri: string; def: boolean; index: number; }
+interface MediaPlaylist { segs: Segment[]; unsupported: 'fmp4' | 'encrypted' | null; targetS: number; }
+
+export interface HlsSubtitlesOptions {
+  /** Playback clock replacing the element's own media time (Luna playback). */
+  clock?: () => number;
+  /** Called at most once per start when the subtitles cannot be shown. */
+  onUnavailable?: (reason: string) => void;
+  /** Called once per start when cue timing is first anchored. */
+  onAnchor?: (src: string, holdBackS: number) => void;
+  /** Called once per start when the clock still has no position after CLOCK_WAIT_MS. */
+  onClockWait?: (waitedMs: number) => void;
+}
 
 /**
  * Self-rendered HLS subtitles for the webOS native player. The TV plays the video
@@ -42,6 +56,17 @@ export class HlsSubtitles {
   private calibAt = 0;                            // Date.now() of the last calibration
   private startDateSamples: number[] = [];        // reconstructions, averaged to cut quantization jitter
   private videoHasNoPdt = false;                  // video playlist carries no PDT → can't reconstruct, stop trying
+  private clock: (() => number) | null = null;
+  private clockEdge: { media: number; wallMs: number; src: string } | null = null;
+  private onUnavailable: ((reason: string) => void) | null = null;
+  private shown = false; // a cue was placed, so a later failure is transient
+  private reported = false;
+  private reportedPermanent = false;
+  private options: HlsSubtitlesOptions = {};
+  private startedAt = 0;
+  private holdBackS = 0;
+  private anchorReported = false;
+  private clockWaitReported = false;
 
   /** True once we own subtitle rendering — the native picker must defer to us. */
   get active(): boolean {
@@ -52,17 +77,37 @@ export class HlsSubtitles {
     return this.cueTrack.current;
   }
 
-  async start(video: HTMLVideoElement, masterUrl: string, want?: { name?: string; lang?: string }): Promise<void> {
+  async start(
+    video: HTMLVideoElement,
+    masterUrl: string,
+    want?: { name?: string; lang?: string },
+    options: HlsSubtitlesOptions = {},
+  ): Promise<void> {
     this.stop();
     const gen = ++this.gen;
     this.video = video;
+    this.clock = options.clock ?? null;
+    this.clockEdge = null;
+    this.onUnavailable = options.onUnavailable ?? null;
+    this.options = options;
+    this.startedAt = Date.now();
+    this.holdBackS = 0;
+    this.anchorReported = false;
+    this.clockWaitReported = false;
+    this.shown = false;
+    this.reported = false;
+    this.reportedPermanent = false;
     try {
-      const res = await fetch(masterUrl);
+      const res = await fetchOk(masterUrl);
       if (gen !== this.gen) return;
       const masterText = await res.text();
       const rend = pickSubtitleRendition(masterText, want);
       if (gen !== this.gen) return;
-      if (!rend) { log.info('no subtitle rendition with a URI in the master'); return; }
+      if (!rend) {
+        log.info('no subtitle rendition with a URI in the master');
+        this.report('no_rendition');
+        return;
+      }
       this.subsUrl = new URL(rend.uri, res.url).href;
       // Also grab a video variant playlist: its oldest PDT vs seekable.start
       // reconstructs getStartDate (see maybeCalibrate).
@@ -71,13 +116,15 @@ export class HlsSubtitles {
       this.reconStartDateMs = null; this.calibAt = 0; this.startDateSamples = []; this.videoHasNoPdt = false;
       this._active = true; // claim ownership before addTextTrack fires its addtrack event
       this.loggedNoAnchor = false;
-      this.cueTrack.attach(video, t('player.subtitles'), rend.lang || 'und');
-      log.info('subtitles on:', rend.name || rend.lang || '?', '| playlist', this.subsUrl);
+      this.cueTrack.attach(video, t('player.subtitles'), rend.lang || 'und', this.clock ?? undefined);
+      log.info('subtitles on:', 'format=webvtt', `index=${String(rend.index)}`);
       await this.refresh(gen);
       this.timer = setInterval(() => void this.refresh(gen), POLL_MS);
     } catch (e) {
+      if (gen !== this.gen) return;
       this._active = false;
       log.warn('subtitles start failed:', e);
+      this.report(fetchFailureReason(e));
     }
   }
 
@@ -94,9 +141,8 @@ export class HlsSubtitles {
 
   private async refresh(gen: number): Promise<void> {
     if (gen !== this.gen || !this.video || !this.track) return;
-    const v = this.video;
     try {
-      const res = await fetch(this.subsUrl);
+      const res = await fetchOk(this.subsUrl);
       if (gen !== this.gen || !this.track) return;
       const pl = parseMediaPlaylist(await res.text());
       if (pl.unsupported) {
@@ -105,20 +151,23 @@ export class HlsSubtitles {
         log.info('subtitles: cannot self-render this rendition —', pl.unsupported);
         if (this.timer) { clearInterval(this.timer); this.timer = null; }
         this._active = false;
+        this.report(pl.unsupported);
         return;
       }
       const all = pl.segs;
       const base = res.url;
       await this.maybeCalibrate(gen);
       if (gen !== this.gen || !this.track) return;
-      const anchor = this.anchor(all);
+      const anchor = this.anchor(all, pl.targetS);
       if (!anchor && !this.loggedNoAnchor && all.length > 0 && !all.some(s => s.pdtMs != null)) {
         this.loggedNoAnchor = true;
         log.info('subtitles: no PROGRAM-DATE-TIME in the playlist — cannot anchor cue timing');
+        this.report('no_pdt');
       }
+      this.noteAnchor(anchor);
       if (!anchor) return;
 
-      const ct = v.currentTime;
+      const ct = this.now();
       const windowUris = new Set<string>();
       let added = 0;
       for (const seg of all.slice(-WINDOW)) {
@@ -127,7 +176,16 @@ export class HlsSubtitles {
         this.seen.add(seg.uri);
         const segMedia = wallToMediaSeconds(anchor, seg.pdtMs);
         if (segMedia < ct - 4) continue; // already played past the playhead — don't fetch it
-        const vtt = await (await fetch(new URL(seg.uri, base).href)).text();
+        const segRes = await fetch(new URL(seg.uri, base).href);
+        if (gen !== this.gen || !this.track) return;
+        if (!segRes.ok) {
+          // Live CDNs often refuse the newest or oldest segment for a moment; only
+          // a refused playlist says the rendition is gone.
+          this.report(`segment_http_${String(segRes.status)}`);
+          if (gen !== this.gen) return;
+          continue;
+        }
+        const vtt = await segRes.text();
         if (gen !== this.gen || !this.track) return;
         const { mapLocal, cues } = parseWebVTT(vtt);
         if (!cues.length) continue;
@@ -161,12 +219,41 @@ export class HlsSubtitles {
       this.seen = new Set([...this.seen].filter(u => windowUris.has(u))); // bound to the window
       this.pruneKeys();
       if (added) {
+        this.shown = true;
         this.mergeSameTextCues();
         this.prune();
       }
     } catch (e) {
       log.debug('subtitles refresh failed:', e);
+      if (gen === this.gen) this.report(fetchFailureReason(e));
     }
+  }
+
+  private now(): number {
+    return this.clock ? this.clock() : (this.video?.currentTime ?? 0);
+  }
+
+  private noteAnchor(anchor: { src: string } | null): void {
+    if (anchor) {
+      if (this.anchorReported) return;
+      this.anchorReported = true;
+      this.options.onAnchor?.(anchor.src, Math.round(this.holdBackS * 10) / 10);
+      return;
+    }
+    const waited = Date.now() - this.startedAt;
+    if (!this.clock || this.clockWaitReported || Number.isFinite(this.now()) || waited < CLOCK_WAIT_MS) return;
+    this.clockWaitReported = true;
+    this.options.onClockWait?.(waited);
+  }
+
+  // Once per start, except that a permanent reason still follows a transient one.
+  private report(reason: string): void {
+    if (this.shown || !this.onUnavailable) return;
+    const permanent = isPermanentSubtitleFailure(reason);
+    if (this.reported && (this.reportedPermanent || !permanent)) return;
+    this.reported = true;
+    this.reportedPermanent = permanent;
+    this.onUnavailable(reason);
   }
 
   /** Shift all self-rendered cues (and any added later) by `seconds` relative to their true
@@ -203,16 +290,37 @@ export class HlsSubtitles {
   //    (maybeCalibrate), sidestepping the live-edge hold-back.
   //  - edge (fallback, no video PDT): newest PDT ↔ `seekable.end`, accepting the
   //    hold-back skew (cues run a few seconds early).
-  private anchor(segments: Segment[]): { media: number; wallMs: number; src: string } | null {
+  // With an external clock and no seekable range (Luna live), pin the clock
+  // to the newest PDT less the live hold-back once, while playing.
+  private anchor(segments: Segment[], targetS = 0): { media: number; wallMs: number; src: string } | null {
     const v = this.video;
-    if (!v || !v.seekable || !v.seekable.length) return null;
-    const sd = (v as unknown as { getStartDate?: () => Date }).getStartDate?.();
+    if (!v) return null;
+    // Once pinned, a later seekable range must not remap cues mid-load.
+    if (this.clockEdge) return this.clockEdge;
+    if (!v.seekable || !v.seekable.length) return this.clock ? this.clockEdgeAnchor(segments, targetS) : null;
+    // The element's own start date belongs to the placeholder under a clock.
+    const sd = this.clock ? undefined : (v as unknown as { getStartDate?: () => Date }).getStartDate?.();
     const sdMs = sd ? sd.getTime() : NaN;
     if (Number.isFinite(sdMs)) return { media: 0, wallMs: sdMs, src: 'getStartDate' };
     if (this.reconStartDateMs != null) return { media: 0, wallMs: this.reconStartDateMs, src: 'recon' };
     const newest = newestPdt(segments);
     if (newest == null) return null;
     return { media: v.seekable.end(v.seekable.length - 1), wallMs: newest, src: 'edge' };
+  }
+
+  private clockEdgeAnchor(
+    segments: Segment[], targetS: number,
+  ): { media: number; wallMs: number; src: string } | null {
+    if (this.clockEdge) return this.clockEdge;
+    if (!this.video || this.video.paused || !Number.isFinite(this.now())) return null;
+    let newest: Segment | null = null;
+    for (const s of segments) if (s.pdtMs != null && (!newest || s.pdtMs > newest.pdtMs!)) newest = s;
+    if (!newest || newest.pdtMs == null) return null;
+    const target = targetS || newest.durS;
+    this.holdBackS = LIVE_HOLD_BACK_TARGETS * target;
+    const wallMs = newest.pdtMs + (newest.durS - this.holdBackS) * 1000;
+    this.clockEdge = { media: this.now(), wallMs, src: 'clock-edge' };
+    return this.clockEdge;
   }
 
   // Reconstruct getStartDate (wall-clock of currentTime=0) from the VIDEO feed, avoiding
@@ -250,7 +358,7 @@ export class HlsSubtitles {
   }
 
   private prune(): void {
-    this.cueTrack.prune((this.video?.currentTime ?? 0) - CUE_RETENTION_S);
+    this.cueTrack.prune(this.now() - CUE_RETENTION_S);
   }
 
   // Bound the dedup map: keep only keys from roughly the last 90s of subtitle time.
@@ -333,9 +441,12 @@ export function parseMediaPlaylist(text: string): MediaPlaylist {
   let dur = 0;                        // EXTINF of the next segment (seconds)
   let nextWall: number | null = null; // predicted wall start of the next segment (carry-forward)
   let unsupported: MediaPlaylist['unsupported'] = null;
+  let targetS = 0;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
-    if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
+    if (line.startsWith('#EXT-X-TARGETDURATION:')) {
+      targetS = parseFloat(line.slice('#EXT-X-TARGETDURATION:'.length)) || 0;
+    } else if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
       const v = Date.parse(line.slice('#EXT-X-PROGRAM-DATE-TIME:'.length));
       pdt = Number.isFinite(v) ? v : null;
     } else if (line.startsWith('#EXTINF:')) {
@@ -350,14 +461,30 @@ export function parseMediaPlaylist(text: string): MediaPlaylist {
       // Per §6.2.1 a server need only tag PROGRAM-DATE-TIME once (or per discontinuity);
       // carry it forward by summing EXTINF so later segments aren't dropped for lack of a tag.
       const segPdt: number | null = pdt != null ? pdt : nextWall;
-      segs.push({ uri: line, pdtMs: segPdt });
+      segs.push({ uri: line, pdtMs: segPdt, durS: dur });
       nextWall = segPdt != null ? segPdt + dur * 1000 : null;
       pdt = null;
       dur = 0;
     }
   }
-  return { segs, unsupported };
+  return { segs, unsupported, targetS };
 }
+
+/** A failure retrying the same rendition cannot fix: a refused master or
+ *  subtitle playlist, or a rendition the self-renderer cannot draw. */
+export function isPermanentSubtitleFailure(reason: string): boolean {
+  return /^http_4\d\d$/.test(reason)
+    || reason === 'no_pdt' || reason === 'fmp4' || reason === 'encrypted' || reason === 'no_rendition';
+}
+
+async function fetchOk(url: string): Promise<Response> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new FetchTextError('http', `HTTP ${String(res.status)}`, res.status);
+  }
+  return res;
+}
+
 
 /** First video variant playlist URI in a master (any variant — they share one
  *  timeline), so we can read the video feed's oldest PROGRAM-DATE-TIME to reconstruct
@@ -381,7 +508,10 @@ function pickSubtitleRendition(master: string, want?: { name?: string; lang?: st
     const attr = (k: string): string => line.match(new RegExp(`[:,]\\s*${k}="([^"]*)"`))?.[1] ?? '';
     const uri = attr('URI');
     if (!uri) continue;
-    subs.push({ name: attr('NAME'), lang: attr('LANGUAGE'), uri, def: /[:,]DEFAULT=YES(?:,|$)/.test(line) });
+    subs.push({
+      name: attr('NAME'), lang: attr('LANGUAGE'), uri,
+      def: /[:,]DEFAULT=YES(?:,|$)/.test(line), index: subs.length,
+    });
   }
   if (!subs.length) return null;
   if (want?.name) {

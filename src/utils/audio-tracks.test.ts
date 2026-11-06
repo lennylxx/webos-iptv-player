@@ -8,6 +8,7 @@ import {
   isPrefMatch,
   parseAudioRenditions,
   mergeManifestNames,
+  mapLunaAudio,
 } from './audio-tracks';
 
 const opt = (over: Partial<AudioOption>): AudioOption => ({
@@ -106,6 +107,21 @@ describe('chooseAudioIndex', () => {
   it('falls back to the default when the pref matches nothing', () => {
     expect(chooseAudioIndex(opts, { name: 'gone', lang: 'gone' })).toBe(0);
   });
+
+  // ISO 639 folding needs real codes; Luna saves ger/deu where a manifest says de.
+  it('matches a 3-letter saved language against a 2-letter track, and back', () => {
+    const two = [opt({ index: 0, lang: 'en', isDefault: true }), opt({ index: 1, lang: 'de' })];
+    const three = [opt({ index: 0, lang: 'eng', isDefault: true }), opt({ index: 1, lang: 'ger' })];
+    expect(chooseAudioIndex(two, { name: '', lang: 'ger' })).toBe(1);
+    expect(chooseAudioIndex(three, { name: '', lang: 'de' })).toBe(1);
+  });
+
+  it('prefers an exact language over a folded one and keeps regional codes exact', () => {
+    const both = [opt({ index: 0, lang: 'deu', isDefault: true }), opt({ index: 1, lang: 'de' })];
+    expect(chooseAudioIndex(both, { name: '', lang: 'de' })).toBe(1);
+    const regional = [opt({ index: 0, lang: 'en', isDefault: true }), opt({ index: 1, lang: 'de-AT' })];
+    expect(chooseAudioIndex(regional, { name: '', lang: 'de' })).toBe(0);
+  });
 });
 
 describe('isPrefMatch', () => {
@@ -119,6 +135,12 @@ describe('isPrefMatch', () => {
   it('matches by name or language, case-insensitively', () => {
     expect(isPrefMatch(o, { name: 'track 2', lang: '' })).toBe(true);
     expect(isPrefMatch(o, { name: '', lang: 'L2' })).toBe(true);
+  });
+
+  it('matches a folded 3-letter language in either direction', () => {
+    expect(isPrefMatch(opt({ index: 0, lang: 'de' }), { name: '', lang: 'ger' })).toBe(true);
+    expect(isPrefMatch(opt({ index: 0, lang: 'deu' }), { name: '', lang: 'de' })).toBe(true);
+    expect(isPrefMatch(opt({ index: 0, lang: 'en' }), { name: '', lang: 'ger' })).toBe(false);
   });
 
   it('does not count two empty fields as a match', () => {
@@ -188,5 +210,40 @@ describe('mergeManifestNames', () => {
       { name: 'Track 2', lang: '', isDefault: false },
     ]);
     expect(merged[0].lang).toBe('l1'); // native lang kept
+  });
+});
+
+describe('mapLunaAudio', () => {
+  const rendition = (name: string, lang: string) => ({ name, lang, isDefault: false });
+
+  it('pairs by language, in order among same-language renditions', () => {
+    const manifest = [rendition('Track 1', 'l1'), rendition('Track 2', 'l2'), rendition('Track 3', 'l1')];
+    expect(mapLunaAudio([{ language: 'l2' }, { language: 'l1' }, { language: 'l1' }], manifest)).toEqual({
+      renditions: [manifest[1], manifest[0], manifest[2]],
+      naming: 'manifest',
+    });
+  });
+
+  it('folds a 3-letter UMS code onto the manifest\'s 2-letter one', () => {
+    const manifest = [rendition('Track 1', 'de'), rendition('Track 2', '')];
+    expect(mapLunaAudio([{ language: 'ger' }, { language: 'und' }], manifest).naming).toBe('manifest');
+  });
+
+  it('pairs by position when UMS lists no languages', () => {
+    const manifest = [rendition('Track 1', 'l1'), rendition('Track 2', 'l2')];
+    expect(mapLunaAudio([{ language: '' }, { language: '' }], manifest)).toEqual({
+      renditions: manifest,
+      naming: 'order',
+    });
+    expect(mapLunaAudio([{ language: '' }], manifest).naming).toBe('count_mismatch');
+    expect(mapLunaAudio([{ language: 'l2' }, { language: '' }], manifest).naming).toBe('lang_mismatch');
+  });
+
+  it('gives up when the lists cannot pair one-to-one', () => {
+    expect(mapLunaAudio([{ language: 'l1' }], []).naming).toBe('no_manifest');
+    expect(mapLunaAudio([{ language: 'l1' }], [rendition('Track 1', 'l1'), rendition('Track 2', 'l2')]))
+      .toEqual({ renditions: null, naming: 'count_mismatch' });
+    expect(mapLunaAudio([{ language: 'l1' }, { language: 'l1' }],
+      [rendition('Track 1', 'l1'), rendition('Track 2', 'l2')]).naming).toBe('lang_mismatch');
   });
 });

@@ -3,6 +3,7 @@ import type { SubtitleOption, ManifestSubtitle } from '../types';
 import {
   subtitleLabel,
   languageName,
+  languageKey,
   hlsSubtitleOptions,
   manifestSubtitleOptions,
   chooseSubtitleIndex,
@@ -30,6 +31,16 @@ describe('subtitleLabel', () => {
     expect(subtitleLabel(opt({ index: 0, name: '', lang: 'EN' }))).toBe('English'); // case-insensitive
     expect(subtitleLabel(opt({ index: 0, name: '', lang: 'de-DE' }))).toBe('Deutsch'); // region subtag tolerated
     expect(subtitleLabel(opt({ index: 0, name: 'Deutsch', lang: 'de' }))).toBe('Deutsch'); // an explicit name still wins
+  });
+});
+
+describe('languageKey', () => {
+  it('folds 3-letter codes, case, and region, and keys und as no language', () => {
+    expect(languageKey('ger')).toBe('de');
+    expect(languageKey('DEU')).toBe('de');
+    expect(languageKey('de-DE')).toBe('de');
+    expect(languageKey('und')).toBe('');
+    expect(languageKey('l1')).toBe('l1');
   });
 });
 
