@@ -16,6 +16,7 @@ import { registerLanService, startLanStandalone } from './lan/service';
 import { resolveDataDir } from './upload/store';
 import { registerReminderService } from './reminder/service';
 import { registerManifestFetchService } from './fetch/service';
+import { installServiceLog, serviceLogDir } from './service-log';
 import { createLogger } from './logger';
 
 const log = createLogger('service');
@@ -26,16 +27,24 @@ const log = createLogger('service');
 const SERVICE_ID: string = require('./services.json').id;
 // The service id is the app id (which webOS requires as its prefix) + ".service".
 const APP_ID = SERVICE_ID.replace(/\.service$/, '');
-const DATA_DIR = resolveDataDir(process.env.WEBOS_UPLOAD_DIR);
-
-log.info('starting, SERVICE_ID=' + SERVICE_ID + ', DATA_DIR=' + DATA_DIR);
 
 let Service;
+let serviceLoadError = '';
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   Service = require('webos-service');
 } catch (e) {
-  log.info('webos-service not available (' + (e instanceof Error ? e.message : String(e)) +
+  serviceLoadError = e instanceof Error ? e.message : String(e);
+}
+// Only on the TV: a local run must not write into the host's /tmp.
+if (Service) installServiceLog(serviceLogDir(process.versions.node) + '/' + SERVICE_ID + '.log');
+
+const DATA_DIR = resolveDataDir(process.env.WEBOS_UPLOAD_DIR);
+
+log.info('starting, SERVICE_ID=' + SERVICE_ID + ', DATA_DIR=' + DATA_DIR);
+
+if (!Service) {
+  log.info('webos-service not available (' + serviceLoadError +
     '), falling back to direct HTTP listener');
   startLanStandalone(DATA_DIR);
 }

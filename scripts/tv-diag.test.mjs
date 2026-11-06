@@ -22,6 +22,7 @@ import {
   formatDiagnosticSummary,
   runNativeProbe,
   runNativePlaylistProbe,
+  readServiceLog,
   inspectorWebSocketUrl,
   startAresInspector,
   startNativeMetricWindow,
@@ -393,6 +394,44 @@ exit 23
     }
   });
 
+  it('reads the rotated and current service log from the TV temp root', () => {
+    let command = '';
+    const result = readServiceLog({
+      execFile: (_file, args) => {
+        command = args[1];
+        return "\rEnter passphrase for key '/home/user/.ssh/key': \r\n"
+          + 'line 1\r\n\nline 2\n';
+      },
+    });
+
+    expect(command).toContain('temp_root=/media/developer/temp');
+    expect(command).toContain('temp_root=/tmp');
+    expect(command).toContain('if [ -e "$log" ] || [ -e "$log.1" ]; then cat "$log.1" "$log"');
+    expect(command).toContain('log="$temp_root/com.lennylxx.iptv.service.log"');
+    expect(result).toEqual({ lines: ['line 1', 'line 2'], error: '' });
+    expect(readServiceLog({
+      execFile: () => { throw Object.assign(new Error('x'), { stderr: 'tv.sh: connection timed out\n' }); },
+    })).toEqual({ lines: [], error: 'tv.sh: connection timed out' });
+    expect(formatDiagnosticSummary({
+      capturedAt: '', app: {}, environment: {}, state: {}, playlists: [],
+      serviceLog: { lines: [], error: 'tv.sh: connection timed out' },
+    })).toContain('Service log: unavailable (tv.sh: connection timed out)');
+    expect(formatDiagnosticSummary({
+      capturedAt: '', app: {}, environment: {}, state: {}, playlists: [],
+      serviceLog: {
+        lines: [
+          '2026-01-01T00:00:00.000Z log [lan] peer sent warn and error words',
+          '2026-01-01T00:00:01.000Z error [service] failed',
+        ],
+        error: '',
+      },
+    })).toContain('2 lines, 2026-01-01T00:00:00.000Z to 2026-01-01T00:00:01.000Z | warnings=0 errors=1');
+    expect(readServiceLog({ execFile: () => '__IPTV_NO_SERVICE_LOG__\r\n' })).toEqual({
+      lines: [],
+      error: 'no service log on the TV; has the service started?',
+    });
+  });
+
   it('normalizes network events without request headers', () => {
     const redactor = new DiagnosticRedactor();
     const records = normalizeNetworkRecords([
@@ -574,10 +613,18 @@ exit 23
         text: '[Playlist] Playlist load completed event=playlist.load.completed'
           + ' source=network channels=0 all=0 groups=0 epg=1 sources=1 failed=1',
       }],
+      serviceLog: {
+        lines: [
+          '2026-01-01T00:00:00.000Z log [fetch] fetchManifest outcome=ok status=200',
+          '2026-01-01T00:00:01.000Z warn [lan] fetch http://host/get.php?username=user1 failed',
+        ],
+        error: '',
+      },
       networkEvents: [],
     });
     const serialized = JSON.stringify(report);
-    expect(report.schemaVersion).toBe(4);
+    expect(report.schemaVersion).toBe(5);
+    expect(report.serviceLog.lines[0]).toContain('fetchManifest outcome=ok');
     expect(serialized).not.toContain('user1');
     expect(serialized).not.toContain('pass1');
     expect(serialized).not.toContain('Alpha.m3u8');
@@ -589,6 +636,9 @@ exit 23
       'Media source: type=video/x-matroska canPlayType="" — source skipped without an error event',
     );
     expect(summary).toContain('Codec support: 1/2 playable | rejected: video/x-matroska');
+    expect(summary).toContain(
+      'Service log: 2 lines, 2026-01-01T00:00:00.000Z to 2026-01-01T00:00:01.000Z | warnings=1 errors=0',
+    );
   });
 
   it('reports catalog counts as unknown when the app exposes no snapshot', () => {
@@ -689,8 +739,13 @@ describe('diagnostic capture recovery', () => {
         child: { killed: false, kill() { this.killed = true; } },
       }),
       now: () => new Date('2026-09-10T05:00:01.000Z'),
+      execFile: () => '2026-09-10T05:00:00.500Z error [service] failed\n',
     });
 
+    expect(report.serviceLog).toEqual({
+      lines: ['2026-09-10T05:00:00.500Z error [service] failed'],
+      error: '',
+    });
     expect(report.capture).toEqual({
       complete: false,
       phase: 'capturing-final-state',

@@ -5,8 +5,12 @@
 //
 // Usage:
 //   node scripts/tv-logs.mjs [--app <id>] [--port 9998] [--seconds N] [--history]
+//   node scripts/tv-logs.mjs --service [--seconds N] [--history]
 // IP comes from `ares-setup-device` (default device, or TV_DEVICE=<name>).
-import { pathToFileURL } from 'node:url';
+// --service tails the bundled service's log file over ssh instead.
+import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { formatOptions, parseArgs } from './cli-args.mjs';
 import {
   connectCdpWithAresFallback,
@@ -21,9 +25,15 @@ import {
 const DEFAULT_APP_ID = 'com.lennylxx.iptv';
 const DEFAULT_PORT = 9998;
 const DEFAULT_SECONDS = 0;
+// Mirrors serviceLogDir() in bundled-service/src/service-log.ts.
+const SERVICE_LOG_TEMP_ROOT = [
+  'node_major=$(node -e \'process.stdout.write(process.versions.node.split(".")[0])\')',
+  'if [ "$node_major" -ge 20 ]; then temp_root=/media/developer/temp; else temp_root=/tmp; fi',
+].join('; ');
 
 const usage = 'Usage: tv-logs.mjs [--app <id>] [--port '
-  + `${String(DEFAULT_PORT)}] [--seconds N] [--history]`;
+  + `${String(DEFAULT_PORT)}] [--seconds N] [--history]\n`
+  + '       tv-logs.mjs --service [--seconds N] [--history]';
 
 export const LOGS_SPEC = {
   maxPositionals: 0,
@@ -52,7 +62,13 @@ export const LOGS_SPEC = {
     history: {
       type: 'boolean',
       default: false,
-      description: 'Also stream browser log entries, including earlier ones',
+      description: 'Also stream browser log entries, including earlier ones;'
+        + ' with --service, print the saved log first',
+    },
+    service: {
+      type: 'boolean',
+      default: false,
+      description: "Tail the bundled service's log file over ssh",
     },
     help: { type: 'boolean', short: 'h', default: false, description: 'Show this help' },
   },
@@ -60,7 +76,8 @@ export const LOGS_SPEC = {
 
 export const LOGS_HELP = `${usage}
 
-Stream the app's DevTools console to the terminal over CDP.
+Stream the app's DevTools console to the terminal over CDP, or with
+--service, the bundled service's log file over ssh.
 
 ${formatOptions(LOGS_SPEC)}`;
 
@@ -71,8 +88,31 @@ function parseLogsArgs(argv) {
     port: values.port,
     seconds: values.seconds,
     history: values.history,
+    service: values.service,
     help: values.help,
   };
+}
+
+export function serviceLogCommand({ history, seconds }) {
+  const tail = `tail -n ${history ? '+1' : '0'} -F "$log" 2>/dev/null`;
+  return [
+    SERVICE_LOG_TEMP_ROOT,
+    'log="$temp_root/com.lennylxx.iptv.service.log"',
+    '[ -e "$log" ] || echo "tv-logs: waiting for $log; has the service started?" >&2',
+    ...(history ? ['cat "$log.1" 2>/dev/null'] : []),
+    // webOS 4 busybox may lack a positional `timeout`; stop tail by hand.
+    seconds > 0 ? `${tail} & tail_pid=$!; sleep ${String(seconds)}; kill $tail_pid` : tail,
+    'exit 0',
+  ].join('; ');
+}
+
+function streamServiceLog({ history, seconds }) {
+  const tvSh = path.join(path.dirname(fileURLToPath(import.meta.url)), 'tv.sh');
+  const child = spawn(tvSh, ['run', serviceLogCommand({ history, seconds })], {
+    stdio: 'inherit',
+    env: { ...process.env, TV_TIMEOUT: String(seconds > 0 ? seconds + 60 : 0) },
+  });
+  child.on('exit', (code) => process.exit(code ?? 1));
 }
 
 const toErrorMessage = (value) => {
@@ -94,6 +134,10 @@ async function main(argv) {
     process.exit(0);
   }
   const { appId, port, seconds, history } = options;
+  if (options.service) {
+    streamServiceLog({ history, seconds });
+    return;
+  }
 
   // Resolve the device IP from ares-setup-device (no secrets needed for CDP).
   let ip;

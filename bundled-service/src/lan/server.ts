@@ -238,7 +238,7 @@ export function startServer(
         try {
           const content = await readBody(req);
           const meta = uploads.save(query('name') || 'playlist.m3u', content);
-          uploadLog.info('saved "' + meta.name + '" (' + meta.count + ' channels) as ' + meta.id + '.m3u');
+          uploadLog.info('saved ' + meta.count + ' channels as ' + meta.id + '.m3u');
           try { onChange?.('uploads-changed'); } catch (cbErr) { log.error('onChange callback threw:', cbErr); }
           sendJson(res, 200, meta);
         } catch (e) {

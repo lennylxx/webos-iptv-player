@@ -72,7 +72,7 @@ function expectStatus(response, status, route) {
 }
 
 function cleanup() {
-  ['alpha.m3u', 'alpha.json'].forEach(function (name) {
+  ['alpha.m3u', 'alpha.json', 'service.log', 'service.log.1'].forEach(function (name) {
     var file = path.join(dataDir, name);
     if (fs.existsSync(file)) fs.unlinkSync(file);
   });
@@ -211,8 +211,32 @@ startServer(0, dataDir).then(function (bound) {
 }).then(function () {
   return manifestFetchSmoke();
 }).then(function () {
+  serviceLogSmoke();
   finish();
 }, finish);
+
+// The log tee on the real runtime: file mode, line format, and rotation.
+function serviceLogSmoke() {
+  var installServiceLog = require(path.join(buildDir, 'service-log')).installServiceLog;
+  var createLogger = require(path.join(buildDir, 'logger')).createLogger;
+  var file = path.join(dataDir, 'service.log');
+  var target = { log: function () {}, info: function () {}, warn: function () {}, error: function () {} };
+  // A strict umask must not keep the developer shell out.
+  var umask = process.umask(63);
+  installServiceLog(file, target, fs, 120);
+  var log = createLogger('smoke', target);
+  log.info('one');
+  process.umask(umask);
+  target.log('[other] not from a logger');
+  log.warn('two');
+  var text = fs.readFileSync(file, 'utf8');
+  if (!/^\d{4}-\d\d-\d\dT[^ ]+Z log \[smoke\] one\n[^ ]+ warn \[smoke\] two\n$/.test(text)) {
+    throw new Error('service log lines: ' + JSON.stringify(text));
+  }
+  if ((fs.statSync(file).mode & 511) !== 420) throw new Error('service log is not 0644');
+  log.error(new Array(80).join('x'));
+  if (!fs.existsSync(file + '.1')) throw new Error('service log did not rotate');
+}
 
 // fetchManifest through its Luna registration: caller check, header
 // forwarding, URL credentials, a redirect, and gzip decoding against a

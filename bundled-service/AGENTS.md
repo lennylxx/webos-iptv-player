@@ -18,8 +18,9 @@ It must run on webOS 4's Node.js 0.12.2:
 - route newer Node APIs through `compat.ts`;
 - the final JavaScript build is gated, like the app bundle.
 
-Log through `createLogger(tag)` (`src/logger.ts`), never bare `console`,
-so every line carries its `[tag]`.
+Log through `createLogger(tag)` (`src/logger.ts`), never bare `console`:
+only its lines, plus every warning and error, reach the service log file
+that `tv.sh logs --service` and `tv.sh diag` read.
 
 ## Contract with the app
 

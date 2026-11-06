@@ -60,7 +60,7 @@ export function registerReminderService(service: LunaService): void {
   service.register('fireReminderAlert', (msg) => {
     const payload = msg.payload || {};
     const { title = '', channelName = '', channelKey = '', appId = '' } = payload;
-    log.info('fireReminderAlert for "' + title + '"');
+    log.info('fireReminderAlert');
     const copy = localizedAlertCopy(payload);
     if (copy === null) {
       log.error('localized alert copy missing');
@@ -69,7 +69,8 @@ export function registerReminderService(service: LunaService): void {
     }
     fireAlert(buildAlertPayload(title, channelName, channelKey, appId, copy), (ok, detail) => {
       if (ok) log.info('alert fired: ' + detail);
-      else log.error('alert failed: ' + detail);
+      // The exec error quotes the command line, program title included.
+      else log.error('alert failed');
       msg.respond({ fired: ok, result: detail });
     });
   });

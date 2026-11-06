@@ -14,6 +14,7 @@
 #   scripts/tv.sh shell                   # interactive shell
 #   scripts/tv.sh reboot                  # reboot the TV through Luna
 #   scripts/tv.sh logs [--app <id>] ...   # stream the app's DevTools console
+#   scripts/tv.sh logs --service ...      # tail the bundled service's log file
 #   scripts/tv.sh eval [--app <id>] '<js>'# evaluate JS in the app page (CDP);
 #                                         # also: --file <path.js>, or `-` for stdin
 #   scripts/tv.sh perf [--app <id>] ...   # CDP perf counters, recordings, GC, snapshots
@@ -22,7 +23,8 @@
 #   scripts/tv.sh input ...               # remote keys, pointer, wheel, wake
 #
 # Pick a non-default device with TV_DEVICE=<name>; override the expect timeout
-# with TV_TIMEOUT=<seconds> (default 120).
+# with TV_TIMEOUT=<seconds> (default 120; 0 lets a command run unbounded
+# while authentication still gives up after 120).
 set -uo pipefail
 
 action="${1:-}"; shift || true
@@ -101,7 +103,9 @@ export TV_KEY="$key_path" TV_PORT="$port" TV_HOST="$user@$ip" \
 
 run_transport() {
   expect <<'EOF'
-set timeout $env(TV_TIMEOUT)
+set command_timeout $env(TV_TIMEOUT)
+if {$command_timeout == 0} { set command_timeout -1 }
+set timeout [expr {$command_timeout < 0 ? 120 : $command_timeout}]
 set mode $env(TV_MODE)
 set interactive [expr {$mode eq "shell"}]
 set expected_disconnect 0
@@ -145,6 +149,7 @@ if {!$interactive} {
     exit [lindex $auth 3]
   }
   log_user 1
+  set timeout $command_timeout
 }
 
 if {$mode eq "push" || $mode eq "pull"} {
@@ -169,8 +174,19 @@ switch -- $mode {
 }
 spawn -noecho {*}$args
 set ready 0
+set seen_output 0
 expect {
+  -re {__TV_REBOOT_REQUESTED__} {
+    if {$env(TV_EXPECT_DISCONNECT) eq "1"} {
+      set expected_disconnect 1
+    }
+    exp_continue
+  }
+  -re {\n} { set seen_output 1; exp_continue }
   -re {[Pp]assphrase.*:} {
+    # Once a command prints, prompt-like text is its output, such as a log
+    # line quoting a password field.
+    if {!$interactive && $seen_output} { exp_continue }
     if {[string length $env(TV_PASSPHRASE)] == 0} {
       puts stderr "tv.sh: private key passphrase required"
       exit 1
@@ -182,6 +198,7 @@ expect {
     exp_continue
   }
   -re {[Pp]assword:} {
+    if {!$interactive && $seen_output} { exp_continue }
     if {[string length $env(TV_PASSWORD)] == 0} {
       puts stderr "tv.sh: login password required"
       exit 1
@@ -198,12 +215,6 @@ expect {
     } else {
       exp_continue
     }
-  }
-  -re {__TV_REBOOT_REQUESTED__} {
-    if {$env(TV_EXPECT_DISCONNECT) eq "1"} {
-      set expected_disconnect 1
-    }
-    exp_continue
   }
   timeout {
     if {$interactive} {

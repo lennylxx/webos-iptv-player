@@ -110,6 +110,13 @@ ${formatOptions(DIAGNOSTIC_SPEC)}
 combined. Reports stay local and are never uploaded.`;
 
 const PREVIEW_BYTES = 2048;
+const SERVICE_LOG_LINES = 500;
+// Mirrors serviceLogDir() in bundled-service/src/service-log.ts.
+const SERVICE_LOG_TEMP_ROOT = [
+  'node_major=$(node -e \'process.stdout.write(process.versions.node.split(".")[0])\')',
+  'if [ "$node_major" -ge 20 ]; then temp_root=/media/developer/temp; else temp_root=/tmp; fi',
+].join('; ');
+const NO_SERVICE_LOG = '__IPTV_NO_SERVICE_LOG__';
 const PLAYLIST_PROBE_TIMEOUT_MS = 5000;
 const SINGLE_CONNECTION_SKIP_REASON = 'xtream-max-connections-at-most-one';
 const SAFE_QUERY_VALUES = new Set([
@@ -372,6 +379,7 @@ export function assembleDiagnosticReport({
   probe,
   native,
   nativeMetrics = null,
+  serviceLog = null,
   logs,
   networkEvents,
 }) {
@@ -439,7 +447,7 @@ export function assembleDiagnosticReport({
     } : null,
   } : null;
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     capturedAt,
     redacted: !full,
     capture,
@@ -453,6 +461,10 @@ export function assembleDiagnosticReport({
     input: extractInputTimeline(safeLogs),
     xtream: extractXtreamTimeline(safeLogs),
     logs: safeLogs,
+    serviceLog: serviceLog ? {
+      lines: serviceLog.lines.map((line) => redactor.text(line)),
+      error: redactor.text(serviceLog.error),
+    } : null,
     network: normalizeNetworkRecords(networkEvents, redactor),
   };
 }
@@ -606,6 +618,21 @@ export function formatDiagnosticSummary(report) {
     `Warnings: ${String((report.logs ?? []).filter((entry) => entry.level === 'warning').length)}`,
   );
   lines.push(`Errors: ${String((report.logs ?? []).filter((entry) => entry.level === 'error').length)}`);
+  if (report.serviceLog?.error) {
+    lines.push(`Service log: unavailable (${report.serviceLog.error.split(/\r?\n/)[0]})`);
+  } else if (report.serviceLog) {
+    const serviceLines = report.serviceLog.lines;
+    const countLevel = (level) => serviceLines.filter((line) => line.split(' ')[1] === level).length;
+    // The file outlives app sessions, so show which time the lines cover.
+    const span = serviceLines.length
+      ? `, ${serviceLines[0].split(' ')[0]} to ${serviceLines[serviceLines.length - 1].split(' ')[0]}`
+      : '';
+    lines.push(
+      `Service log: ${String(serviceLines.length)} lines${span}`
+      + ` | warnings=${String(countLevel('warn'))}`
+      + ` errors=${String(countLevel('error'))}`,
+    );
+  }
   return lines.join('\n');
 }
 
@@ -1433,6 +1460,33 @@ export function runNativeProbe(url, { execFile = execFileSync } = {}) {
   }
 }
 
+export function readServiceLog({ execFile = execFileSync } = {}) {
+  const command = [
+    SERVICE_LOG_TEMP_ROOT,
+    'log="$temp_root/com.lennylxx.iptv.service.log"',
+    'if [ -e "$log" ] || [ -e "$log.1" ]; then'
+      + ` cat "$log.1" "$log" 2>/dev/null | tail -n ${String(SERVICE_LOG_LINES)};`
+      + ` else echo ${NO_SERVICE_LOG}; fi`,
+    'exit 0',
+  ].join('; ');
+  try {
+    const output = execFile(
+      path.join('scripts', 'tv.sh'),
+      ['run', command],
+      { encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    const lines = output.replace(/^\s*Enter passphrase for key '[^']+':\s*/i, '')
+      .split(/\r?\n/).filter((line) => line.trim());
+    if (lines.indexOf(NO_SERVICE_LOG) >= 0) {
+      return { lines: [], error: 'no service log on the TV; has the service started?' };
+    }
+    return { lines, error: '' };
+  } catch (error) {
+    const detail = error?.stderr || error?.stdout || toErrorMessage(error);
+    return { lines: [], error: String(detail).trim() || toErrorMessage(error) };
+  }
+}
+
 export function runNativePlaylistProbe(playlist, options = {}) {
   if (playlist?.__skipNativeProbe) {
     return {
@@ -1603,6 +1657,7 @@ export async function captureDiagnostics(options, overrides = {}) {
       probe: effectiveProbe,
       native,
       nativeMetrics,
+      serviceLog: readServiceLog({ execFile: dependencies.execFile }),
       logs,
       networkEvents,
     });

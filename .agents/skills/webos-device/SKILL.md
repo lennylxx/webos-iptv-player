@@ -23,7 +23,7 @@ load the new bundle. If you install another way, close and relaunch it.
 
 | Command | Use |
 | --- | --- |
-| `tv.sh logs` | Tail the app's DevTools console. |
+| `tv.sh logs` | Tail the app's DevTools console; `--service` tails the bundled service's log file over ssh. |
 | `tv.sh eval '<js>'` | Probe live DOM or app state. |
 | `tv.sh perf` | Performance counters and profiles. |
 | `tv.sh diag` | Diagnostics report. |
@@ -35,7 +35,8 @@ load the new bundle. If you install another way, close and relaunch it.
 | `tv.sh reboot` | Reboot the TV through Luna. |
 
 Pick a non-default device with `TV_DEVICE=<name>`; override the expect
-timeout with `TV_TIMEOUT=<seconds>` (default 120). `logs`, `eval`, `perf`,
+timeout with `TV_TIMEOUT=<seconds>` (default 120; `0` lets a `run` command
+go unbounded while sign-in still times out). `logs`, `eval`, `perf`,
 `diag`, `capt`, and `input` print their full options with `-h` or
 `--help`.
 
