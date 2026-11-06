@@ -2,6 +2,7 @@
 
 var fs = require('fs');
 var http = require('http');
+var zlib = require('zlib');
 var os = require('os');
 var path = require('path');
 var vm = require('vm');
@@ -208,5 +209,77 @@ startServer(0, dataDir).then(function (bound) {
     });
   });
 }).then(function () {
+  return manifestFetchSmoke();
+}).then(function () {
   finish();
 }, finish);
+
+// fetchManifest through its Luna registration: caller check, header
+// forwarding, URL credentials, a redirect, and gzip decoding against a
+// loopback origin.
+function manifestFetchSmoke() {
+  var registerManifestFetchService =
+    require(path.join(buildDir, 'fetch', 'service')).registerManifestFetchService;
+  var handler = null;
+  registerManifestFetchService({
+    register: function (name, h) { if (name === 'fetchManifest') handler = h; },
+  }, 'com.example.app');
+  if (!handler) throw new Error('fetchManifest was not registered');
+  var playlist = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv1.m3u8\n';
+  var origin = http.createServer(function (req, res) {
+    if (req.url === '/a') {
+      res.writeHead(302, { Location: '/b/master.m3u8' });
+      res.end();
+      return;
+    }
+    if (req.headers.referer !== 'http://host/r' || req.headers['user-agent'] !== 'Agent 1' ||
+        req.headers.cookie !== 'c=1' || req.headers['x-split'] !== undefined ||
+        req.headers.authorization !== 'Basic ' + new Buffer('u1:p1').toString('base64')) {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'Content-Encoding': 'gzip' });
+    res.end(zlib.gzipSync(playlist));
+  });
+  function call(sender, payload) {
+    return new Promise(function (resolve) {
+      handler({ sender: sender, payload: payload, respond: resolve });
+    });
+  }
+  return new Promise(function (resolve) {
+    origin.listen(0, '127.0.0.1', resolve);
+  }).then(function () {
+    var base = 'http://127.0.0.1:' + origin.address().port;
+    var payload = {
+      url: base.replace('http://', 'http://u1:p1@') + '/a',
+      headers: {
+        Referer: 'http://host/r',
+        'User-Agent': 'Agent 1',
+        Cookie: 'c=1',
+        'X-Split': 'a\r\nX-Injected: 1',
+      },
+      maxBytes: 1024,
+      timeoutMs: 5000,
+    };
+    return call('com.example.other', payload).then(function (denied) {
+      if (denied.returnValue !== false || denied.errorCode !== 'denied') {
+        throw new Error('fetchManifest answered another caller');
+      }
+      return call('com.example.app 1234', payload);
+    }).then(function (result) {
+      if (result.returnValue !== true || result.text !== playlist ||
+          result.url !== base + '/b/master.m3u8') {
+        throw new Error('fetchManifest failed: ' + JSON.stringify(result));
+      }
+      return call('com.example.app', { url: 'file:///a' });
+    }).then(function (rejected) {
+      if (rejected.errorCode !== 'bad_url') throw new Error('fetchManifest accepted a file URL');
+    });
+  }).then(function () {
+    origin.close();
+  }, function (error) {
+    origin.close();
+    throw error;
+  });
+}

@@ -10,6 +10,12 @@ const cacheMocks = vi.hoisted(() => ({
 
 vi.mock('../services/idb-cache', () => cacheMocks);
 
+const manifestService = vi.hoisted(() => ({
+  fetchManifestViaService: vi.fn(),
+}));
+
+vi.mock('../services/manifest-service', () => manifestService);
+
 const luna = vi.hoisted(() => ({
   sessions: [] as Array<{
     uri: string;
@@ -579,6 +585,8 @@ describe('PlayerPipeline webOS Luna routing', () => {
     cacheMocks.setCachedStreamMime.mockReset();
     Object.defineProperty(navigator, 'userAgent', { configurable: true, value: WEBOS_25 });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(MASTER)));
+    manifestService.fetchManifestViaService.mockReset();
+    manifestService.fetchManifestViaService.mockResolvedValue({ ok: false, reason: 'unavailable' });
     logs = [];
     const record = (...args: unknown[]) => { logs.push(args.join(' ')); };
     vi.spyOn(console, 'log').mockImplementation(record);
@@ -634,6 +642,136 @@ describe('PlayerPipeline webOS Luna routing', () => {
     });
     expect(pipeline.isLunaActive()).toBe(true);
     expect(video.querySelector('source')).toBeNull();
+  });
+
+  describe('manifest through the bundled service', () => {
+    const refused = () => vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
+    const serviceLogs = () => logs.filter(line => line.includes('event=playback.luna.manifest.service'));
+
+    it('reads a refused master through the service with the channel headers', async () => {
+      refused();
+      manifestService.fetchManifestViaService.mockResolvedValue(
+        { ok: true, status: 200, url: 'http://host/b/a.m3u8', text: MASTER });
+      const pipeline = await pipelineFor(videoElement());
+
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+      expect(manifestService.fetchManifestViaService).toHaveBeenCalledExactlyOnceWith(
+        'http://host/a.m3u8', { ...REFERER, 'User-Agent': WEBOS_25 },
+        expect.objectContaining({ maxBytes: 256 * 1024, timeoutMs: 5000, graceMs: 3000 }));
+      // Relative URIs resolve against the URL the service ended on, and
+      // subtitles start from this text: the page would be refused again.
+      expect(pipeline.opts.onManifest).toHaveBeenCalledWith(expect.objectContaining({
+        audio: [expect.objectContaining({ name: 'Track 1' }), expect.objectContaining({ name: 'Track 2' })],
+        subtitles: [expect.objectContaining({ name: 'l1' })],
+        masterUrl: 'http://host/b/a.m3u8',
+        masterText: MASTER,
+      }));
+      expect(serviceLogs()).toEqual([
+        expect.stringMatching(/event=playback\.luna\.manifest\.service load=1 outcome=ok page=http_403 elapsed=\d+ms/),
+      ]);
+      expect(logs.join('\n')).not.toContain('event=subtitles.luna.unavailable');
+      expect(logs.join('\n')).not.toContain('http://host/');
+    });
+
+    it('keeps the channel User-Agent, whatever its case, and sends an encoded URL', async () => {
+      refused();
+      const headers = { ...REFERER, 'user-agent': 'Agent 1' };
+      const pipeline = await pipelineFor(videoElement());
+
+      pipeline.load('http://host/\u00e9/a.m3u8', null, { headers });
+
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+      expect(manifestService.fetchManifestViaService).toHaveBeenCalledExactlyOnceWith(
+        'http://host/%C3%A9/a.m3u8', headers, expect.anything());
+    });
+
+    it('stays quiet when the channel changes while the service reads', async () => {
+      refused();
+      let answer: (result: unknown) => void = () => {};
+      manifestService.fetchManifestViaService.mockReturnValueOnce(
+        new Promise(resolve => { answer = resolve; }));
+      const pipeline = await pipelineFor(videoElement());
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      await vi.waitFor(() => expect(manifestService.fetchManifestViaService).toHaveBeenCalledOnce());
+      const signal = (manifestService.fetchManifestViaService.mock.calls[0][2] as { signal: AbortSignal }).signal;
+
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+      pipeline.load('http://host/b.m3u8', null, { headers: REFERER });
+      expect(signal.aborted).toBe(true);
+      answer({ ok: true, status: 200, url: 'http://host/a.m3u8', text: MASTER });
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(pipeline.opts.onManifest).not.toHaveBeenCalled();
+      expect(serviceLogs()).toEqual([]);
+      expect(logs.join('\n')).not.toContain('event=subtitles.luna.unavailable');
+    });
+
+    it.each([
+      ['fails', { ok: false, reason: 'http_403' }, 'http_403'],
+      ['returns something other than a playlist', { ok: true, status: 200, url: 'http://host/a.m3u8', text: '<html>' }, 'parse'],
+    ])('keeps the empty manifest when the service %s', async (_name, result, reason) => {
+      refused();
+      manifestService.fetchManifestViaService.mockResolvedValue(result);
+      const pipeline = await pipelineFor(videoElement());
+
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+      expect(pipeline.opts.onManifest).toHaveBeenCalledWith(
+        { audio: [], subtitles: [], closedCaptions: [], variants: [], masterUrl: '' });
+      expect(serviceLogs()).toEqual([expect.stringContaining(
+        `event=playback.luna.manifest.service load=1 outcome=failed reason=${reason} page=http_403`)]);
+      expect(logs.filter(line => line.includes('event=subtitles.luna.unavailable')))
+        .toEqual([expect.stringContaining('stage=manifest reason=http_403')]);
+      expect(pipeline.isLunaActive()).toBe(true);
+    });
+
+    it.each([
+      ['a server error', () => Promise.resolve(new Response('', { status: 503 }))],
+      ['a network error', () => Promise.reject(new TypeError('Failed to fetch'))],
+    ])('does not ask the service after %s', async (_name, response) => {
+      vi.stubGlobal('fetch', vi.fn(response));
+      const pipeline = await pipelineFor(videoElement());
+
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+      expect(manifestService.fetchManifestViaService).not.toHaveBeenCalled();
+      expect(serviceLogs()).toEqual([]);
+    });
+
+    it('reads a master with URL credentials through the service, which the page cannot fetch', async () => {
+      const pageFetch = vi.fn(() => Promise.reject(new TypeError('Request cannot be constructed')));
+      vi.stubGlobal('fetch', pageFetch);
+      manifestService.fetchManifestViaService.mockResolvedValue(
+        { ok: true, status: 200, url: 'http://host/a.m3u8', text: MASTER });
+      const pipeline = await pipelineFor(videoElement());
+
+      pipeline.load('http://u1:p1@host/a.m3u8', null, { headers: REFERER });
+
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+      expect(pageFetch).not.toHaveBeenCalled();
+      expect(manifestService.fetchManifestViaService).toHaveBeenCalledExactlyOnceWith(
+        'http://u1:p1@host/a.m3u8', expect.anything(), expect.anything());
+      expect(pipeline.opts.onManifest).toHaveBeenCalledWith(expect.objectContaining({ masterText: MASTER }));
+      expect(serviceLogs()).toEqual([
+        expect.stringMatching(/outcome=ok page=credentials elapsed=\d+ms/),
+      ]);
+      expect(logs.join('\n')).not.toContain('p1');
+    });
+
+    it('does not ask the service for a stream on the video element', async () => {
+      refused();
+      const pipeline = await pipelineFor(videoElement());
+
+      pipeline.load('http://host/a.m3u8', null);
+
+      await vi.waitFor(() => expect(logs.join('\n')).toContain('event=playback.manifest.failed'));
+      expect(pipeline.isLunaActive()).toBe(false);
+      expect(manifestService.fetchManifestViaService).not.toHaveBeenCalled();
+    });
   });
 
   it("exposes only the loaded Luna pipeline's mediaId, never a stale one", async () => {
@@ -1174,6 +1312,88 @@ describe('PlayerPipeline webOS Luna routing', () => {
       expect(luna.sessions[0]).toMatchObject({ transport: 'MPEG-DASH' });
       await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalled());
       expect(vi.mocked(pipeline.opts.onManifest).mock.calls[0][0].subtitles).toEqual([]);
+    });
+
+    it('reads a refused MPD through the service before the Luna load', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('denied', { status: 403 })));
+      manifestService.fetchManifestViaService.mockResolvedValue(
+        { ok: true, status: 200, url: 'http://host/b/a.mpd', text: mpd() });
+      const pipeline = await pipelineFor(videoElement());
+
+      pipeline.load('http://host/a.mpd', null, { headers: REFERER });
+
+      await vi.waitFor(() => expect(luna.sessions).toHaveLength(1));
+      // A shorter budget: the Luna load waits on this read.
+      expect(manifestService.fetchManifestViaService).toHaveBeenCalledExactlyOnceWith(
+        'http://host/a.mpd', { ...REFERER, 'User-Agent': WEBOS_25 },
+        expect.objectContaining({ maxBytes: 1024 * 1024, timeoutMs: 2500, graceMs: 500 }));
+      // Read, so its DRM is known.
+      expect(logs.join('\n')).toContain('event=playback.path.luna load=1 reason=url headers=referer format=dash drm=none');
+      expect(logs.join('\n')).not.toContain('mpd=unreadable');
+      expect(logs.join('\n')).toContain('event=playback.luna.manifest.service load=1 outcome=ok page=http_403');
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+      expect(vi.mocked(pipeline.opts.onManifest).mock.calls[0][0].subtitles).toHaveLength(2);
+    });
+
+    it('drops WebVTT a service-read live MPD lists in a SegmentTimeline, which never refreshes', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('denied', { status: 403 })));
+      const timeline = mpd().replace('<Representation id="s1"/>', `<SegmentTemplate media="s-$Time$.vtt">
+        <SegmentTimeline><S t="0" d="4" r="2"/></SegmentTimeline></SegmentTemplate><Representation id="s1"/>`);
+      manifestService.fetchManifestViaService.mockResolvedValue(
+        { ok: true, status: 200, url: 'http://host/b/a.mpd', text: timeline });
+      const pipeline = await pipelineFor(videoElement());
+
+      pipeline.load('http://host/a.mpd', null, { headers: REFERER });
+
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+      const manifest = vi.mocked(pipeline.opts.onManifest).mock.calls[0][0];
+      // The native rendition rides the compositor and needs no MPD re-read.
+      expect(manifest.subtitles).toEqual([expect.objectContaining({ lang: 'l2', dash: { kind: 'native' } })]);
+      expect(manifest.masterText).toBe(timeline);
+      expect(logs.filter(line => line.includes('event=subtitles.luna.unavailable'))).toEqual([
+        expect.stringContaining('load=1 stage=manifest reason=dynamic_mpd'),
+      ]);
+    });
+
+    it('keeps the service-read MPD text and live filter when Luna falls back to the element', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('denied', { status: 403 })));
+      const timeline = mpd().replace('<Representation id="s1"/>', `<SegmentTemplate media="s-$Time$.vtt">
+        <SegmentTimeline><S t="0" d="4" r="2"/></SegmentTimeline></SegmentTemplate><Representation id="s1"/>`);
+      manifestService.fetchManifestViaService.mockResolvedValue(
+        { ok: true, status: 200, url: 'http://host/b/a.mpd', text: timeline });
+      const pipeline = await pipelineFor(videoElement());
+      pipeline.load('http://host/a.mpd', null, { headers: REFERER });
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+
+      luna.sessions[0].onFallback('error', 1003);
+
+      expect(pipeline.opts.onManifest).toHaveBeenCalledTimes(2);
+      const manifest = vi.mocked(pipeline.opts.onManifest).mock.calls[1][0];
+      expect(manifest.subtitles).toEqual([expect.objectContaining({ lang: 'l2', dash: { kind: 'native' } })]);
+      expect(manifest.masterUrl).toBe('http://host/b/a.mpd');
+      expect(manifest.masterText).toBe(timeline);
+      // Only the Luna read reports; the element plays the fallback.
+      expect(logs.filter(line => line.includes('reason=dynamic_mpd'))).toHaveLength(1);
+    });
+
+    it('neither loads Luna nor reports when the channel changes while the service reads the MPD', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('denied', { status: 403 })));
+      let answer: (result: unknown) => void = () => {};
+      manifestService.fetchManifestViaService.mockReturnValueOnce(
+        new Promise(resolve => { answer = resolve; }));
+      const pipeline = await pipelineFor(videoElement());
+      pipeline.load('http://host/a.mpd', null, { headers: REFERER });
+      await vi.waitFor(() => expect(manifestService.fetchManifestViaService).toHaveBeenCalledOnce());
+
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+      pipeline.load('http://host/b.m3u8', null);
+      answer({ ok: true, status: 200, url: 'http://host/a.mpd', text: mpd() });
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(luna.sessions).toHaveLength(0);
+      expect(pipeline.opts.onManifest).not.toHaveBeenCalled();
+      expect(logs.join('\n')).not.toContain('event=playback.luna.manifest.service');
+      expect(logs.join('\n')).not.toContain('event=playback.path.luna');
     });
 
     it.each([

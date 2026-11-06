@@ -29,7 +29,7 @@ on newer TVs and supplies focused fallbacks for Node 0.12.
 
 The service exposes the Luna methods and HTTP routes below.
 
-Luna (called by the app's LAN/reminder clients and by Activity Manager):
+Luna (called by the app's LAN/reminder/manifest clients and by Activity Manager):
 
 | Method | Subscribe? | Purpose |
 |---|---|---|
@@ -39,6 +39,7 @@ Luna (called by the app's LAN/reminder clients and by Activity Manager):
 | `serviceEvents` | **yes** | Push channel for `uploads-changed` and `setup-changed` events. |
 | `getDevMode` | no | Report whether Developer Mode is available for interactive reminder alerts. |
 | `fireReminderAlert` | no | Raise the Developer Mode reminder alert requested by Activity Manager. |
+| `fetchManifest` | no | GET a stream's master playlist or MPD with the channel's HTTP headers; app-only. |
 
 HTTP (called by phones, and by the app for reconcile):
 
@@ -58,6 +59,69 @@ HTTP (called by phones, and by the app for reconcile):
 | `/uploads?name=foo.m3u&token=…` | POST | Save a playlist; fires `serviceEvents`. |
 | `/uploads/:id[.m3u]` | GET | Serve a stored playlist. |
 | `/uploads/:id?token=…` | DELETE | Remove an upload; loopback callers do not need the token. |
+
+## Manifest fetch
+
+`fetchManifest` serves the app's Luna header playback: the page cannot send
+Referer, User-Agent, or Cookie, so a server that checks them refuses the
+page's master playlist or MPD read. On the Luna path the app calls it once
+per load, for the master playlist or MPD alone, after that read fails with
+an HTTP 4xx, or in place of that read when the URL carries
+`user:password@`, which the page's `fetch()` rejects (`src/services/manifest-service.ts`,
+`bundled-service/src/fetch/`). The app sends the URL percent-encoded
+(`new URL(url).href`), because Node.js 0.12's `url.parse` passes a
+non-ASCII path through as raw bytes.
+
+The app waits `timeoutMs` plus a grace period for the service to start:
+5000 + 3000 ms for an HLS master, which never holds playback, and
+2500 + 500 ms for an MPD, which holds the Luna load until it settles
+(`CONFIG.PLAYER`).
+
+Request:
+
+```json
+{"url": "http://host/a.m3u8", "headers": {"Referer": "http://host/", "User-Agent": "Agent 1"}, "maxBytes": 262144, "timeoutMs": 5000}
+```
+
+- **Caller:** only the app is answered, identified by the LS2 application
+  id, then the sender service name, then webos-service's `message.sender`;
+  a lookup that throws counts as empty.
+  An application id or `message.sender` must be `com.lennylxx.iptv`,
+  alone or with WAM's `" <pid>"` suffix; only a sender service name may
+  also be `com.lennylxx.iptv-<digits>`, since another app's id can end
+  in `-<digits>`. Any other caller gets `denied` without a request being
+  made, and the service logs `fetchManifest outcome=denied sender="<id>"
+  source=applicationID|senderServiceName|sender|none` with every digit of
+  the id replaced by `N`.
+- **URL:** `http:` and `https:` only.
+- **Headers:** the same set the app passes to `com.webos.media/load`: every
+  header the playlist parser kept, minus hop-by-hop, framing, and routing
+  headers (`Host`, `Connection`, `Content-Length`, `Transfer-Encoding`,
+  `Proxy-*`, and the like) and `Accept-Encoding`. Names must be RFC 7230
+  tokens and values free of CR, LF, and NUL; at most 32 headers. Cookie and
+  Authorization never go over https, as on the Luna path, and never follow
+  a redirect to another origin.
+- **User-Agent:** Node.js sends none of its own, and many origins refuse a
+  request without one, so the app adds the TV's `navigator.userAgent`
+  when the channel declares no User-Agent (matched case-insensitively).
+- **URL credentials:** a `user:password@` in the URL is sent as Basic
+  auth under the Cookie rule: over http only, on the first request and
+  same-origin redirects. An Authorization header the channel declares
+  takes precedence. The `url` in the answer never carries them.
+- **Redirects:** 301, 302, 303, 307, and 308, at most 5, http and https
+  only.
+- **Limits:** `timeoutMs` (default 5000, at most 10000) covers the whole
+  redirect chain; `maxBytes` (at most 1 MiB) caps the decoded body.
+- **Encoding:** gzip and deflate bodies are decoded; a leading UTF-8 BOM
+  is dropped.
+
+Success returns `{returnValue: true, status, url, text}`, where `url` is the
+final URL after redirects; the app resolves relative URIs against it.
+Failure returns `{returnValue: false, errorCode, errorText}`, plus `status`
+when a response arrived. `errorCode` is one of `bad_url`, `denied`,
+`timeout`, `too_large`, `too_many_redirects`, `network`, `decode`, or
+`http_NNN`. The service logs only the outcome and the status or error code,
+never the URL, headers, or body.
 
 ## Event-driven updates
 

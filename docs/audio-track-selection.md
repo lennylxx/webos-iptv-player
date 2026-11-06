@@ -132,7 +132,8 @@ UMS reports — the rule above still holds for the `<video>` path:
 - A switch counts on `trackSelected`, or on the call's success when no event follows within
   `LUNA_MEDIA_AUDIO_EVENT_MS`. A refused call or a pipeline error meanwhile keeps the previous
   track checked and logs `audio.luna.switch.failed`; the pick is saved only once it succeeds.
-- Names come from the header-less master fetch, paired with UMS's list by language (in order
+- Names come from the master fetch (header-less, or through the bundled service after a 4xx or
+  for a URL with credentials; see `docs/mpeg-dash.md`), paired with UMS's list by language (in order
   among same-language renditions) only when every track pairs one-to-one, or by position when
   UMS lists no language at all and the counts match; otherwise the label is
   the language's endonym, then "Audio N" (also when two unnamed tracks share a language). A saved

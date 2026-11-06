@@ -11,6 +11,7 @@ import {
 } from '../services/drm-config';
 import { PlayReadyDrm } from '../services/playready-drm';
 import { loadShaka, type ShakaNamespaceLike } from '../services/shaka-loader';
+import { fetchManifestViaService } from '../services/manifest-service';
 import { parseAudioRenditions } from '../utils/audio-tracks';
 import { FetchTextError, fetchFailureReason, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
@@ -50,11 +51,19 @@ const win = window as unknown as Record<string, unknown>;
 
 type LunaRouteReason = 'url' | 'cache' | 'probe' | 'guess' | 'ua_only';
 
+// A manifest as read: its text, its final URL, and whether only the service could read it.
+interface ManifestRead {
+  text: string;
+  baseUrl: string;
+  viaService: boolean;
+}
+
 interface LunaDash {
   extras: Record<string, string> | null;
   clientId: string;
   // The header-less MPD read; null when it failed, so its DRM is unknown.
   parsed: MpdManifest | null;
+  read: ManifestRead | null;
   // clientId is a guessed PlayReady client, tried after a clear load failed for this reason.
   guessedAfter?: LunaFallbackReason;
   // This load is the one PlayReady retry; its clear failure is already recorded.
@@ -157,6 +166,8 @@ export interface PipelineManifest {
   closedCaptions: ManifestClosedCaption[];
   variants: StreamVariant[];
   masterUrl: string;
+  /** The master or MPD at masterUrl, when only the bundled service could read it. */
+  masterText?: string;
 }
 
 export interface PipelineLoadOptions {
@@ -177,6 +188,37 @@ export interface PlayerPipelineOptions {
   onManifest: (manifest: PipelineManifest) => void;
   /** Playback moved between Luna and the element mid-load; clocked renderers must restart. */
   onPlaybackPathChange: () => void;
+}
+
+// Node's HTTP client sends no User-Agent of its own, and many origins refuse
+// a request without one, so the service sends the TV's unless the channel sets it.
+function withDefaultUserAgent(headers: Record<string, string>): Record<string, string> {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  if (!ua || Object.keys(headers).some(name => name.toLowerCase() === 'user-agent')) return headers;
+  const out: Record<string, string> = {};
+  Object.keys(headers).forEach(name => { out[name] = headers[name]; });
+  out['User-Agent'] = ua;
+  return out;
+}
+
+class UrlCredentialsError extends Error {}
+
+function hasUrlCredentials(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return !!(parsed.username || parsed.password);
+  } catch {
+    return false;
+  }
+}
+
+// The service's Node 0.12 url.parse sends a non-ASCII path as raw bytes.
+function serviceRequestUrl(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
 }
 
 export class PlayerPipeline {
@@ -804,7 +846,9 @@ export class PlayerPipeline {
           this.activeDrm = '';
         }
         // Reuse the MPD read, so the fallback keeps within the startup watchdog.
-        if (dash.parsed) this.notifyManifest(url, '', dash.parsed);
+        if (dash.parsed && dash.read) {
+          this.notifyManifest(dash.read.baseUrl, dash.read.text, dash.parsed, dash.read.viaService, token);
+        }
         this.playDash(url, dash.extras, token, dash.parsed);
         return;
       }
@@ -876,16 +920,17 @@ export class PlayerPipeline {
     luna.start();
     // DASH already read its MPD before the load.
     if (dash) return;
-    // Fetched without the channel's headers, for subtitle renditions and audio
-    // names only, so Luna never waits on it.
+    // For subtitle renditions and audio names only, so Luna never waits on it:
+    // the page reads it without the channel's headers, the service after a 4xx.
     this.cancelManifest();
-    void this.loadManifest(url, this.manifestSeq, token);
+    void this.loadManifest(url, this.manifestSeq, token, 'hls', undefined, undefined, headers);
   }
 
   /**
    * DASH reads its MPD without the channel's headers first, as the element
    * path does, to find its DRM: clear and PlayReady DASH load through Luna,
-   * Widevine and ClearKey stay on Shaka. A refused MPD loads Luna as configured.
+   * Widevine and ClearKey stay on Shaka. A 4xx MPD is read again through the
+   * bundled service with the headers; an MPD still unread loads Luna as configured.
    */
   private loadLunaDash(
     url: string,
@@ -899,7 +944,7 @@ export class PlayerPipeline {
     let handled = false;
     let skipped = '';
     let started = false;
-    const holdLuna = async (parsed: MpdManifest | null): Promise<void> => {
+    const holdLuna = async (parsed: MpdManifest | null, read: ManifestRead | null): Promise<void> => {
       if (token !== this.loadToken || !this.videoEl) return;
       const detected = configured ? null : parsed?.drm ?? null;
       if (detected && detected.type !== 'playready') {
@@ -928,7 +973,7 @@ export class PlayerPipeline {
       started = true;
       if (this.lunaPreparing === token) this.lunaPreparing = -1;
       this.loadLuna(url, headers, token, reason, 'application/dash+xml',
-        { extras, clientId, parsed, guessedAfter });
+        { extras, clientId, parsed, read, guessedAfter });
     };
     this.cancelManifest();
     // Pending until Luna starts, so suspend during the MPD read unloads it.
@@ -937,16 +982,16 @@ export class PlayerPipeline {
       if (!configured && (parsed?.drm?.type === 'widevine' || parsed?.drm?.type === 'clearkey')) {
         this.msePending = true;
       }
-    }, async parsed => {
+    }, async (parsed, read) => {
       // A throw after the hold re-enters it from the manifest's catch.
       if (held) return;
       held = true;
       try {
-        await holdLuna(parsed);
+        await holdLuna(parsed, read);
       } finally {
         if (!started && this.lunaPreparing === token) this.lunaPreparing = -1;
       }
-    }).then(parsed => {
+    }, headers).then(parsed => {
       if (handled || token !== this.loadToken || !this.videoEl) return;
       if (reason === 'ua_only') {
         this.callbacks.onError();
@@ -1365,21 +1410,42 @@ export class PlayerPipeline {
     url: string, seq: number, loadToken: number, format: 'hls' | 'dash' = 'hls',
     beforeNotify?: (manifest: MpdManifest | null) => void,
     // Runs before the tracks hear of the manifest, or of its failure.
-    hold?: (manifest: MpdManifest | null) => Promise<void>,
+    hold?: (manifest: MpdManifest | null, read: ManifestRead | null) => Promise<void>,
+    // The Luna path's headers: a 4xx page fetch retries through the bundled service.
+    lunaHeaders?: Record<string, string>,
   ): Promise<MpdManifest | null> {
     const dash = format === 'dash';
     const controller = new AbortController();
     const started = Date.now();
+    const maxBytes = dash ? CONFIG.PLAYER.MPD_MAX_BYTES : CONFIG.PLAYER.MANIFEST_MAX_BYTES;
     this.manifestController?.abort();
     this.manifestController = controller;
     try {
-      const text = await fetchLimitedText(
-        url,
-        dash ? CONFIG.PLAYER.MPD_MAX_BYTES : CONFIG.PLAYER.MANIFEST_MAX_BYTES,
-        CONFIG.PLAYER.MANIFEST_TIMEOUT,
-        controller.signal,
-        dash ? mpdOpeningVerdict : '#EXTM3U',
-      );
+      let text: string;
+      let baseUrl = url;
+      let viaService = false;
+      try {
+        // The page's fetch() rejects a URL with user:password@ outright.
+        if (lunaHeaders && hasUrlCredentials(url)) throw new UrlCredentialsError();
+        text = await fetchLimitedText(
+          url,
+          maxBytes,
+          CONFIG.PLAYER.MANIFEST_TIMEOUT,
+          controller.signal,
+          dash ? mpdOpeningVerdict : '#EXTM3U',
+        );
+      } catch (e) {
+        const credentials = e instanceof UrlCredentialsError;
+        const status = e instanceof FetchTextError && e.code === 'http' ? e.status : 0;
+        if (!lunaHeaders || controller.signal.aborted
+          || (!credentials && (status < 400 || status >= 500))) throw e;
+        const fetched = await this.fetchManifestThroughService(url, lunaHeaders, dash, maxBytes,
+          controller.signal, loadToken, credentials ? 'credentials' : fetchFailureReason(e));
+        if (!fetched) throw e;
+        text = fetched.text;
+        baseUrl = fetched.url;
+        viaService = true;
+      }
       if (seq !== this.manifestSeq) return null;
       if (dash && !isMpdText(text)) {
         throw new FetchTextError('invalid_content', 'Response is not an MPD');
@@ -1387,18 +1453,18 @@ export class PlayerPipeline {
       log.debug('Manifest fetched', 'event=playback.manifest.fetched',
         this.callbacks.playbackLabel(loadToken),
         `format=${format} bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
-      const parsed = dash ? parseMpd(text, url) : null;
+      const parsed = dash ? parseMpd(text, baseUrl) : null;
       beforeNotify?.(parsed);
       if (hold) {
-        await hold(parsed);
+        await hold(parsed, { text, baseUrl, viaService });
         if (seq !== this.manifestSeq) return null;
       }
-      this.notifyManifest(url, text, parsed);
+      this.notifyManifest(baseUrl, text, parsed, viaService, loadToken);
       return parsed;
     } catch (e) {
       if (controller.signal.aborted) return null;
       if (hold) {
-        await hold(null);
+        await hold(null, null);
         if (seq !== this.manifestSeq) return null;
       }
       if (this.luna) {
@@ -1417,10 +1483,55 @@ export class PlayerPipeline {
     }
   }
 
-  private notifyManifest(url: string, text: string, parsed: MpdManifest | null): void {
+  // The page cannot send Referer, User-Agent, or Cookie; the bundled service can.
+  private async fetchManifestThroughService(
+    url: string,
+    headers: Record<string, string>,
+    dash: boolean,
+    maxBytes: number,
+    signal: AbortSignal,
+    loadToken: number,
+    page: string,
+  ): Promise<{ text: string; url: string } | null> {
+    const started = Date.now();
+    const result = await fetchManifestViaService(serviceRequestUrl(url), withDefaultUserAgent(headers), {
+      maxBytes,
+      // DASH holds the Luna load until this settles.
+      timeoutMs: dash ? CONFIG.PLAYER.DASH_MANIFEST_SERVICE_TIMEOUT : CONFIG.PLAYER.MANIFEST_TIMEOUT,
+      graceMs: dash ? CONFIG.PLAYER.DASH_MANIFEST_SERVICE_GRACE_MS : CONFIG.PLAYER.MANIFEST_SERVICE_GRACE_MS,
+      signal,
+    });
+    if (signal.aborted) return null;
+    let reason = result.ok ? '' : result.reason;
+    if (result.ok && !(dash ? isMpdText(result.text) : result.text.indexOf('#EXTM3U') === 0)) {
+      reason = 'parse';
+    }
+    const label = this.callbacks.playbackLabel(loadToken);
+    const elapsed = `elapsed=${String(Date.now() - started)}ms`;
+    if (!result.ok || reason) {
+      log.warn('Manifest service fetch failed', 'event=playback.luna.manifest.service', label,
+        'outcome=failed', `reason=${reason}`, `page=${page}`, elapsed);
+      return null;
+    }
+    log.info('Manifest fetched through the service', 'event=playback.luna.manifest.service', label,
+      'outcome=ok', `page=${page}`, elapsed);
+    return { text: result.text, url: result.url };
+  }
+
+  private notifyManifest(
+    url: string, text: string, parsed: MpdManifest | null, viaService = false, loadToken = this.loadToken,
+  ): void {
     const audio = parsed ? parsed.audio : parseAudioRenditions(text);
     const luna = this.luna !== null;
-    const subtitles = parsed ? parsed.subtitles : parseSubtitleRenditions(text);
+    let subtitles = parsed ? parsed.subtitles : parseSubtitleRenditions(text);
+    // The page cannot re-read the MPD for the segments a live window adds.
+    if (viaService && subtitles.some(s => s.dash?.needsManifestRefresh)) {
+      subtitles = subtitles.filter(s => !s.dash?.needsManifestRefresh);
+      if (luna) {
+        log.info('Subtitles unavailable on Luna playback', 'event=subtitles.luna.unavailable',
+          this.callbacks.playbackLabel(loadToken), 'stage=manifest', 'reason=dynamic_mpd');
+      }
+    }
     const closedCaptions = parsed ? parsed.closedCaptions : parseClosedCaptions(text);
     const variants = parsed ? parsed.variants : parseVariants(text);
     if (audio.length >= 2) {
@@ -1442,6 +1553,8 @@ export class PlayerPipeline {
       closedCaptions,
       variants: luna ? [] : variants,
       masterUrl: subtitles.length ? url : '',
+      // The page would be refused again, so subtitles start from this text.
+      masterText: subtitles.length && viaService ? text : undefined,
     });
   }
 

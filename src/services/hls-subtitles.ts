@@ -27,6 +27,8 @@ export interface HlsSubtitlesOptions {
   onAnchor?: (src: string, holdBackS: number) => void;
   /** Called once per start when the clock still has no position after CLOCK_WAIT_MS. */
   onClockWait?: (waitedMs: number) => void;
+  /** The master already read, at masterUrl, when the page cannot read it again. */
+  masterText?: string;
 }
 
 /**
@@ -98,9 +100,14 @@ export class HlsSubtitles {
     this.reported = false;
     this.reportedPermanent = false;
     try {
-      const res = await fetchOk(masterUrl);
-      if (gen !== this.gen) return;
-      const masterText = await res.text();
+      let masterText = options.masterText;
+      let masterBase = masterUrl;
+      if (masterText === undefined) {
+        const res = await fetchOk(masterUrl);
+        if (gen !== this.gen) return;
+        masterText = await res.text();
+        masterBase = res.url;
+      }
       const rend = pickSubtitleRendition(masterText, want);
       if (gen !== this.gen) return;
       if (!rend) {
@@ -108,11 +115,11 @@ export class HlsSubtitles {
         this.report('no_rendition');
         return;
       }
-      this.subsUrl = new URL(rend.uri, res.url).href;
+      this.subsUrl = new URL(rend.uri, masterBase).href;
       // Also grab a video variant playlist: its oldest PDT vs seekable.start
       // reconstructs getStartDate (see maybeCalibrate).
       const variant = pickVideoVariant(masterText);
-      this.videoVariantUrl = variant ? new URL(variant, res.url).href : '';
+      this.videoVariantUrl = variant ? new URL(variant, masterBase).href : '';
       this.reconStartDateMs = null; this.calibAt = 0; this.startDateSamples = []; this.videoHasNoPdt = false;
       this._active = true; // claim ownership before addTextTrack fires its addtrack event
       this.loggedNoAnchor = false;

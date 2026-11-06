@@ -157,6 +157,61 @@ describe('DashSubtitles helpers', () => {
     vi.unstubAllGlobals();
   });
 
+  it('skips a rendition the menu dropped when it reuses a read MPD', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse('2020-01-01T00:01:00Z'));
+    const manifest = `<?xml version="1.0"?><MPD
+      xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic"
+      availabilityStartTime="2020-01-01T00:00:00Z">
+      <Period start="PT0S">
+        <AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">
+          <SegmentTemplate media="dropped-$Time$.vtt" timescale="1">
+            <SegmentTimeline><S t="0" d="4" r="20"/></SegmentTimeline>
+          </SegmentTemplate>
+          <Representation id="s1"/>
+        </AdaptationSet>
+        <AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">
+          <SegmentTemplate media="kept-$Number$.vtt" timescale="1" duration="4"/>
+          <Representation id="s2"/>
+        </AdaptationSet>
+      </Period></MPD>`;
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      url,
+      text: async () => 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('VTTCue', class {
+      constructor(
+        public startTime: number,
+        public endTime: number,
+        public text: string,
+      ) {}
+    });
+    const video = {
+      currentTime: 0,
+      addTextTrack: () => ({
+        mode: 'disabled',
+        cues: [],
+        addCue: () => {},
+        removeCue: () => {},
+      }),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    const service = new DashSubtitles();
+
+    await service.start(video, 'http://host/stream.mpd', { lang: 'l1' }, () => 60, manifest);
+
+    const urls = fetchMock.mock.calls.map(([url]) => url);
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.every(url => url.includes('/kept-'))).toBe(true);
+    service.stop();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   it('requests SegmentList mediaRange entries with a Range header', async () => {
     vi.useFakeTimers();
     const manifest = `<?xml version="1.0"?><MPD

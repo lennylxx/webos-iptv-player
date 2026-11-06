@@ -53,6 +53,12 @@ export const CONFIG = {
     // Long live SegmentTimelines need a larger budget so the parser receives
     // complete MPD XML.
     MPD_MAX_BYTES: 1024 * 1024,
+    // A master or MPD the page was refused is read again through the bundled
+    // service, which may still be starting. DASH holds the Luna load for it,
+    // so its budget is shorter.
+    MANIFEST_SERVICE_GRACE_MS: 3000,
+    DASH_MANIFEST_SERVICE_TIMEOUT: 2500,
+    DASH_MANIFEST_SERVICE_GRACE_MS: 500,
     // mediaOption selects the native MPEG-DASH transport deterministically;
     // bare delegates selection to URI typefinding for provider compatibility.
     DASH_SOURCE: 'mediaOption' as 'mediaOption' | 'bare',

@@ -178,6 +178,38 @@ headers. HTTPS streams keep the Cookie and Authorization stripping.
   PlayReady channel whose MPD needs its headers should declare
   `#KODIPROP:inputstream.adaptive.license_type=com.microsoft.playready`
   to skip this guess.
+- A master playlist or MPD the page read refuses with an HTTP 4xx, or
+  whose URL carries `user:password@` (the page's `fetch()` rejects it), is
+  read through the bundled service's `fetchManifest`
+  (`docs/lan-service.md`), which sends the channel's Luna headers. Its
+  body is parsed as the page's would be, with relative URIs resolved
+  against the final URL, so a header-protected MPD still reveals its DRM
+  and a master its audio names and subtitles. A self-rendered WebVTT
+  rendition then starts from that body instead of reading the master or
+  MPD again from the page, which would be refused. Subtitle playlists and
+  segments are still read from the page without the headers; an HLS
+  subtitle playlist refused there with an HTTP 4xx, or a first DASH
+  WebVTT segment refused with HTTP 401 or 403, resets the pick to Off
+  (on Luna, `subtitles.luna.unavailable stage=render` and
+  `subtitles.luna.reset`). Any other 4xx on a DASH segment, such as a
+  404 at a live edge the origin has not reached yet, retries on the next
+  poll. A dynamic MPD that lists its WebVTT segments in a closed
+  SegmentTimeline or a SegmentList gains new segments only when re-read,
+  so the menu leaves those renditions out, also after a fallback to the
+  element, and Luna logs
+  `subtitles.luna.unavailable stage=manifest reason=dynamic_mpd`; a
+  duration-based SegmentTemplate, or a SegmentTimeline whose last `S`
+  repeats until the next one (`r="-1"`) in an MPD with an
+  `availabilityStartTime`, derives its segments from the clock and
+  stays. The MPD read holds the Luna load, so it gets a shorter budget
+  (2500 ms plus a 500 ms service-start grace, against 5000 plus 3000 ms
+  for a master). Each
+  attempt logs `playback.luna.manifest.service outcome=ok page=<page>
+  elapsed=<ms>ms` or `outcome=failed reason=<code> page=<page>
+  elapsed=<ms>ms`, where `<page>` is `http_NNN` or `credentials`; a
+  failure keeps the header-less outcome. A 5xx or network error, a media
+  playlist, a segment, and a stream on the element never reach the
+  service.
 - PlayReady loads the DRM client first and passes
   `option.drm: {type: 'playready', clientId}` beside `option.transmission`.
   License handling is unchanged: the license request never carries the

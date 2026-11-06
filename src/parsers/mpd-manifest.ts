@@ -389,8 +389,9 @@ function dashSubtitleSource(
   const scopes = [period, set].concat(rep ? [rep] : []);
   const periodStart = isoDurationSeconds(period.getAttribute('start') || '');
   const periodDuration = isoDurationSeconds(period.getAttribute('duration') || '');
+  const dynamic = root.getAttribute('type') === 'dynamic';
   const listed = segmentListSegments(scopes, base.url, periodStart);
-  if (listed.length) return { kind, segments: listed };
+  if (listed.length) return { kind, segments: listed, ...(dynamic ? { needsManifestRefresh: true } : {}) };
   const media = templateAttr(scopes, 'media');
   if (media) {
     const timescale = parseInt(templateAttr(scopes, 'timescale') || '1', 10) || 1;
@@ -401,7 +402,6 @@ function dashSubtitleSource(
     ) || 0;
     const repId = rep?.getAttribute('id') || '';
     const bandwidth = rep?.getAttribute('bandwidth') || '';
-    const dynamic = root.getAttribute('type') === 'dynamic';
     const presentationDuration = periodDuration || Math.max(
       0,
       isoDurationSeconds(root.getAttribute('mediaPresentationDuration') || '')
@@ -433,7 +433,15 @@ function dashSubtitleSource(
       presentationTime,
       presentationEnd,
     ) : [];
-    const segments = timeline.length ? timeline : durationSegments(
+    if (timeline.length) {
+      // A last S that repeats to the next one (r < 0) runs to now on every
+      // parse, but only when "now" is known from availabilityStartTime.
+      const last = timelineElement ? children(timelineElement, 'S').pop() : undefined;
+      const openEnded = presentationEnd !== null
+        && (parseInt(last?.getAttribute('r') || '0', 10) || 0) < 0;
+      return { kind, segments: timeline, ...(dynamic && !openEnded ? { needsManifestRefresh: true } : {}) };
+    }
+    const segments = durationSegments(
       root,
       parseInt(templateAttr(scopes, 'duration') || '0', 10) || 0,
       media,

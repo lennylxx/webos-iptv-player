@@ -28,6 +28,8 @@ interface FakeUmsOptions {
   media: Record<string, MediaScript>;
   // Methods answered only on release(), so the app sees them in flight.
   hold?: string[];
+  // fetchManifest bodies the bundled service returns, by URL.
+  service?: Record<string, string>;
 }
 
 const APP_ID = 'com.lennylxx.iptv';
@@ -108,6 +110,14 @@ async function installFakeUms(page: Page, options: FakeUmsOptions): Promise<void
         const mediaId = typeof params.mediaId === 'string' ? params.mediaId : '';
         const item = media.get(mediaId);
         const ok = { returnValue: true, mediaId };
+        if (uri === `luna://${'com.lennylxx.iptv.service'}/fetchManifest`) {
+          probe.calls.push({ method, params });
+          const text = options.service?.[String(params.url)];
+          this.answer(method, text === undefined
+            ? { returnValue: false, errorCode: 'http_404', errorText: 'Not found' }
+            : { returnValue: true, status: 200, url: params.url, text });
+          return;
+        }
         if (uri === 'luna://com.webos.service.videooutput/display/setDisplayWindow') {
           probe.calls.push({ method, params });
           this.answer(method, { returnValue: true });
@@ -379,10 +389,21 @@ test('picking CC on Luna enables the compositor on the Luna mediaId and reads on
     '#EXT-X-STREAM-INF:BANDWIDTH=1,CLOSED-CAPTIONS="cc"',
     'http://host/v.m3u8',
   ].join('\n');
-  await installFakeUms(page, { media: {}, hold: ['setSubtitleEnable'] });
-  await routeStreams(page, { 'http://host/a.m3u8': { type: 'application/vnd.apple.mpegurl', body: master } });
+  await installFakeUms(page, {
+    media: {},
+    hold: ['setSubtitleEnable'],
+    service: { 'http://host/a.m3u8': master },
+  });
+  // A header-protected server refuses the page; the bundled service, which
+  // sends the channel's headers, reads the master instead.
+  await routeStreams(page, { 'http://host/a.m3u8': { status: 403, type: 'text/plain', body: 'Forbidden' } });
   await startFirstChannel(page, HEADER_M3U);
   await waitForPlaying(page, 'lm-1');
+  await expect.poll(async () => callsOf(await lunaProbe(page), 'fetchManifest').length).toBe(1);
+  expect(callsOf(await lunaProbe(page), 'fetchManifest')[0].params).toMatchObject({
+    url: 'http://host/a.m3u8',
+    headers: { Referer: 'http://host/r', 'User-Agent': 'Agent 1' },
+  });
 
   await seedPointer(page);
   await page.keyboard.press('ArrowRight');

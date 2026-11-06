@@ -217,9 +217,159 @@ describe('PlayerTracks', () => {
       video,
       'http://host/master.m3u8',
       { name: 'Track 2', lang: 'l2' },
+      { masterText: undefined },
     );
     expect(tracks.getSubtitleTracks().map(item => item.active))
       .toEqual([false, true]);
+  });
+
+  describe('subtitles from a manifest only the bundled service could read', () => {
+    const MASTER = [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="Track 1",LANGUAGE="l1",URI="s.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1000,SUBTITLES="s"',
+      'v.m3u8',
+    ].join('\n');
+    const MPD = `<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static">
+      <Period><AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">
+        <BaseURL>sub.vtt</BaseURL><Representation id="s1"/>
+      </AdaptationSet></Period></MPD>`;
+    let fetched: string[];
+
+    beforeEach(() => {
+      fetched = [];
+      // The page is refused everything but the subtitle files themselves.
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        fetched.push(url);
+        if (url.endsWith('/b/s.m3u8')) {
+          return { ok: true, status: 200, url, text: async () => '#EXTM3U\n#EXT-X-TARGETDURATION:4\n' };
+        }
+        if (url.endsWith('/b/sub.vtt')) return { ok: true, status: 200, url, text: async () => 'WEBVTT\n' };
+        return { ok: false, status: 403, url, text: async () => '' };
+      }));
+      vi.stubGlobal('VTTCue', class {});
+      video = {
+        currentTime: 0,
+        seekable: { length: 0 },
+        textTracks: { length: 0 },
+        addTextTrack: () => ({ mode: 'disabled', cues: [], addCue: () => {}, removeCue: () => {} }),
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      } as unknown as HTMLVideoElement;
+      trackInternals(tracks).pipeline = pipeline({ lunaClock: () => () => 42, isLunaActive: () => true });
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      tracks.resetForLoad();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('starts an HLS pick from the service text without reading the master again', async () => {
+      tracks.applyManifest({
+        audio: [],
+        subtitles: [{ name: 'Track 1', lang: 'l1', isDefault: false, isForced: false }],
+        closedCaptions: [],
+        variants: [],
+        masterUrl: 'http://host/b/a.m3u8',
+        masterText: MASTER,
+      });
+
+      tracks.selectSubtitleTrack(0);
+
+      await vi.waitFor(() => expect(fetched).toContain('http://host/b/s.m3u8'));
+      expect(fetched).not.toContain('http://host/b/a.m3u8');
+      expect(tracks.getSubtitleTracks()).toEqual([expect.objectContaining({ active: true, available: true })]);
+    });
+
+    it('starts a DASH pick from the service text without reading the MPD again', async () => {
+      tracks.applyManifest({
+        audio: [],
+        subtitles: [{
+          name: 'Track 1', lang: 'l1', isDefault: false, isForced: false,
+          dash: { kind: 'webvtt', url: 'http://host/b/sub.vtt' },
+        }],
+        closedCaptions: [],
+        variants: [],
+        masterUrl: 'http://host/b/a.mpd',
+        masterText: MPD,
+      });
+
+      tracks.selectSubtitleTrack(0);
+
+      await vi.waitFor(() => expect(fetched).toContain('http://host/b/sub.vtt'));
+      expect(fetched).not.toContain('http://host/b/a.mpd');
+    });
+
+    it.each([
+      ['Luna', () => () => 42],
+      ['the video element', () => null],
+    ])('resets a DASH pick on %s to Off when the page is refused its first segment', async (_name, lunaClock) => {
+      const lines: string[] = [];
+      vi.mocked(console.log).mockImplementation((...args: unknown[]) => { lines.push(args.join(' ')); });
+      trackInternals(tracks).pipeline = pipeline({ lunaClock, isLunaActive: () => lunaClock() !== null });
+      const onChanged = vi.fn();
+      (trackInternals(tracks).options as { onChanged?: () => void }).onChanged = onChanged;
+      tracks.applyManifest({
+        audio: [],
+        subtitles: [{
+          name: 'Track 1', lang: 'l1', isDefault: false, isForced: false,
+          dash: { kind: 'webvtt', url: 'http://host/c/sub.vtt' },
+        }],
+        closedCaptions: [],
+        variants: [],
+        masterUrl: 'http://host/c/a.mpd',
+        masterText: MPD.replace('sub.vtt', 'http://host/c/sub.vtt'),
+      });
+
+      tracks.selectSubtitleTrack(0);
+
+      await vi.waitFor(() => expect(tracks.getSubtitleTracks())
+        .toEqual([expect.objectContaining({ active: false, available: false })]));
+      expect(onChanged).toHaveBeenCalledTimes(1);
+      const lunaEvents = lines.filter(line => /event=subtitles\.luna\.(unavailable|reset)/.test(line));
+      // The element plays a Luna fallback; it reports nothing as Luna.
+      expect(lunaEvents).toEqual(lunaClock() ? [
+        expect.stringContaining('event=subtitles.luna.unavailable session=1 load=7 stage=render reason=segment_http_403'),
+        expect.stringContaining('event=subtitles.luna.reset session=1 load=7 index=0 reason=segment_http_403'),
+      ] : []);
+      expect(StorageService.setSubtitlePref).toHaveBeenLastCalledWith(
+        channelKey(CHANNEL), { off: false, name: 'Track 1', lang: 'l1' });
+      // Stopped: the 2 s refresh never asks again.
+      const count = fetched.length;
+      await new Promise(resolve => setTimeout(resolve, 2100));
+      expect(fetched).toHaveLength(count);
+    });
+
+    it('keeps polling a DASH pick whose first segment is not found yet', async () => {
+      const lines: string[] = [];
+      vi.mocked(console.log).mockImplementation((...args: unknown[]) => { lines.push(args.join(' ')); });
+      tracks.applyManifest({
+        audio: [],
+        subtitles: [{
+          name: 'Track 1', lang: 'l1', isDefault: false, isForced: false,
+          dash: { kind: 'webvtt', url: 'http://host/d/sub.vtt' },
+        }],
+        closedCaptions: [],
+        variants: [],
+        masterUrl: 'http://host/d/a.mpd',
+        masterText: MPD.replace('sub.vtt', 'http://host/d/sub.vtt'),
+      });
+      vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
+        fetched.push(String(url));
+        return { ok: false, status: 404, url, text: async () => '' } as unknown as Response;
+      });
+
+      tracks.selectSubtitleTrack(0);
+
+      await vi.waitFor(() => expect(fetched).toContain('http://host/d/sub.vtt'));
+      await vi.waitFor(() => expect(fetched.filter(url => url === 'http://host/d/sub.vtt')).toHaveLength(2),
+        { timeout: 3000 });
+      expect(tracks.getSubtitleTracks()).toEqual([expect.objectContaining({ active: true, available: true })]);
+      expect(lines.join('\n')).not.toContain('event=subtitles.luna.reset');
+    });
   });
 
   it('switches between native and ASS VOD subtitles', () => {
@@ -328,6 +478,7 @@ describe('PlayerTracks', () => {
         video,
         'http://host/master.m3u8',
         { name: 'Track 2', lang: 'l2' },
+        { masterText: undefined },
       );
     });
 
@@ -343,6 +494,7 @@ describe('PlayerTracks', () => {
         video,
         expect.any(String),
         { name: 'Track 2', lang: 'l2' },
+        { masterText: undefined },
       );
     });
 
@@ -364,6 +516,7 @@ describe('PlayerTracks', () => {
         video,
         'http://host/master.m3u8',
         { name: 'Track 2', lang: 'l2' },
+        { masterText: undefined },
       );
       expect(StorageService.setSubtitlePref).toHaveBeenCalledWith(
         channelKey(CHANNEL),
@@ -397,6 +550,8 @@ describe('PlayerTracks', () => {
         'http://host/stream.mpd',
         { name: 'Track 1', lang: 'l1' },
         undefined,
+        undefined,
+        undefined,
       );
     });
 
@@ -413,7 +568,7 @@ describe('PlayerTracks', () => {
       tracks.selectSubtitleTrack(0);
 
       expect(dashSubs.start).toHaveBeenCalledWith(
-        video, 'http://host/stream.mpd', { name: 'Track 1', lang: 'l1' }, clock);
+        video, 'http://host/stream.mpd', { name: 'Track 1', lang: 'l1' }, clock, undefined, expect.any(Function));
       expect(log.mock.calls.map(args => args.join(' '))).toContainEqual(expect.stringContaining(
         'event=subtitles.luna.start session=1 load=7 index=0 count=1 pick=user format=dash'));
       (dashSubs as { active: boolean }).active = true;

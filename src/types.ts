@@ -478,6 +478,8 @@ export interface DashSubtitleSource {
   kind: 'webvtt' | 'native';
   url?: string;
   segments?: DashSubtitleSegment[];
+  // A dynamic MPD lists these segments itself, so only a re-read MPD has new ones.
+  needsManifestRefresh?: true;
 }
 
 /** A subtitle rendition declared by an HLS master or DASH MPD. */

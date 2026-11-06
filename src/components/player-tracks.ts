@@ -95,6 +95,7 @@ export class PlayerTracks {
   private ccRefusedMediaId = ''; // Luna pipeline that refused an enable; only a user pick retries it
   private selfRenderIndex = -1; // manifest subtitle rendition currently self-rendered (-1 = off)
   private masterUrl = ''; // HLS master URL of the active stream, for re-pointing self-render
+  private masterText: string | undefined; // the master as the bundled service read it, if it did
   // One subtitles.luna.unavailable event per load, plus one when a permanent reason follows.
   private lunaSubsReported: 'none' | 'transient' | 'permanent' = 'none';
   private manifestSettled = false; // this load's master playlist was parsed or failed
@@ -130,6 +131,7 @@ export class PlayerTracks {
     this.ccRefusedMediaId = '';
     this.selfRenderIndex = -1;
     this.masterUrl = '';
+    this.masterText = undefined;
     this.lunaSubsReported = 'none';
     this.manifestSettled = false;
     this.lunaAudioReported = false;
@@ -146,6 +148,7 @@ export class PlayerTracks {
     this.manifestSubtitles = manifest.subtitles;
     this.manifestClosedCaptions = manifest.closedCaptions;
     this.masterUrl = manifest.masterUrl;
+    this.masterText = manifest.masterText;
     this.manifestSettled = true;
     if (this.pipeline.isLunaActive()) this.applyLunaAudioSelection();
     else if (manifest.audio.length) this.applyNativeAudioSelection();
@@ -905,7 +908,11 @@ export class PlayerTracks {
           this.options.playbackLabel(), `index=${String(index)}`,
           `count=${String(this.manifestSubtitles.length)}`, `pick=${this.subtitlePick}`, 'format=dash');
       }
-      void this.dashSubs.start(video, this.masterUrl, want, clock ?? undefined);
+      // Every reason DASH reports is permanent.
+      const onUnavailable = clock || this.masterText !== undefined
+        ? (reason: string) => this.lunaSubsUnavailable(index, reason, true)
+        : undefined;
+      void this.dashSubs.start(video, this.masterUrl, want, clock ?? undefined, this.masterText, onUnavailable);
     } else {
       this.dashSubs.stop();
       this.setNativeCC(false);
@@ -914,9 +921,10 @@ export class PlayerTracks {
         log.info('Luna subtitles self-rendered', 'event=subtitles.luna.start',
           this.options.playbackLabel(), `index=${String(index)}`,
           `count=${String(this.manifestSubtitles.length)}`, `pick=${this.subtitlePick}`, 'format=hls');
+        luna.masterText = this.masterText;
         void this.subs.start(video, this.masterUrl, want, luna);
       } else {
-        void this.subs.start(video, this.masterUrl, want);
+        void this.subs.start(video, this.masterUrl, want, { masterText: this.masterText });
       }
     }
   }
@@ -937,22 +945,30 @@ export class PlayerTracks {
         log.warn('Luna subtitles wait for the playback clock', 'event=subtitles.luna.clock.waiting',
           this.options.playbackLabel(), `waitedMs=${String(waitedMs)}`);
       },
-      onUnavailable: reason => {
-        const label = this.options.playbackLabel();
-        const permanent = isPermanentSubtitleFailure(reason);
-        if (this.lunaSubsReported === 'none' || (permanent && this.lunaSubsReported === 'transient')) {
-          this.lunaSubsReported = permanent ? 'permanent' : 'transient';
-          log.info('Subtitles unavailable on Luna playback', 'event=subtitles.luna.unavailable',
-            label, 'stage=render', `reason=${reason}`);
-        }
-        if (!permanent || this.selfRenderIndex !== index) return;
-        this.unavailableSubs.add(index);
-        this.selfRenderIndex = -1;
-        this.subs.stop();
-        log.info('Luna subtitle selection reset to Off', 'event=subtitles.luna.reset',
-          label, `index=${String(index)}`, `reason=${reason}`);
-      },
+      onUnavailable: reason => this.lunaSubsUnavailable(index, reason, isPermanentSubtitleFailure(reason)),
     };
+  }
+
+  private lunaSubsUnavailable(index: number, reason: string, permanent: boolean): void {
+    const label = this.options.playbackLabel();
+    // A service-read MPD also reaches the element after a Luna fallback;
+    // only Luna playback logs its failures.
+    const luna = this.pipeline.lunaClock() !== null;
+    if (luna && (this.lunaSubsReported === 'none' || (permanent && this.lunaSubsReported === 'transient'))) {
+      this.lunaSubsReported = permanent ? 'permanent' : 'transient';
+      log.info('Subtitles unavailable on Luna playback', 'event=subtitles.luna.unavailable',
+        label, 'stage=render', `reason=${reason}`);
+    }
+    if (!permanent || this.selfRenderIndex !== index) return;
+    this.unavailableSubs.add(index);
+    this.selfRenderIndex = -1;
+    this.subs.stop();
+    this.dashSubs.stop();
+    if (luna) {
+      log.info('Luna subtitle selection reset to Off', 'event=subtitles.luna.reset',
+        label, `index=${String(index)}`, `reason=${reason}`);
+    }
+    this.options.onChanged?.();
   }
 
   /** Playback changed path mid-load; the next manifest restarts the remembered pick. */

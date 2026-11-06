@@ -292,7 +292,10 @@ path (`src/utils/subtitle-tracks.ts`, `src/components/player-tracks.ts`).
   app loads itself, behind a placeholder `<video>`. The same toggle then targets the Luna pipeline's own
   `mediaId` from `load`, never the placeholder's, once that pipeline loaded; a replaced pipeline gets a
   fresh call with its new id. A refused toggle logs
-  `subtitles.luna.compositor.failed enable code`.
+  `subtitles.luna.compositor.failed enable code`. A master the bundled service read for
+  the page (after an HTTP 4xx, or for a URL with credentials) also starts self-rendered WebVTT,
+  so the pick never reads the master from the page again; a refused subtitle playlist still
+  resets it to Off.
 - **Styling** is owned by the native compositor + the TV's accessibility settings, which the app can't
   read (`settingsservice` = Access denied, §4). The default 608 face is a monospaced HanYang font
   (`HYDefault`) — Courier-like — so `::cue` does **not** style pipeline captions.

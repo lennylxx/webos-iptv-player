@@ -13,6 +13,8 @@ function mpd(body: string, attrs = 'type="static"'): string {
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" ${attrs}>${body}</MPD>`;
 }
 
+const LIVE = 'type="dynamic" availabilityStartTime="2020-01-01T00:00:00Z"';
+
 const VIDEO_SET = `
   <AdaptationSet contentType="video" mimeType="video/mp4">
     <Representation id="v1" width="1920" height="1080" codecs="avc1.640028" frameRate="30000/1001"/>
@@ -263,6 +265,34 @@ describe('parseMpd', () => {
       { url: 'http://host/sub-2.vtt', start: 2, duration: 2 },
       { url: 'http://host/sub-3.vtt', start: 4, duration: 2 },
     ]);
+  });
+
+  it.each([
+    ['a static SegmentTimeline', 'type="static"',
+      '<SegmentTemplate media="s-$Time$.vtt"><SegmentTimeline><S t="0" d="2" r="2"/></SegmentTimeline></SegmentTemplate>',
+      false],
+    ['a closed dynamic SegmentTimeline', LIVE,
+      '<SegmentTemplate media="s-$Time$.vtt"><SegmentTimeline><S t="0" d="2" r="2"/></SegmentTimeline></SegmentTemplate>',
+      true],
+    ['a dynamic SegmentTimeline ending r="-1"', LIVE,
+      '<SegmentTemplate media="s-$Time$.vtt"><SegmentTimeline><S t="0" d="2" r="-1"/></SegmentTimeline></SegmentTemplate>',
+      false],
+    ['a dynamic SegmentTimeline ending r="-1" without availabilityStartTime', 'type="dynamic"',
+      '<SegmentTemplate media="s-$Time$.vtt"><SegmentTimeline><S t="0" d="2" r="-1"/></SegmentTimeline></SegmentTemplate>',
+      true],
+    ['a dynamic SegmentList', LIVE,
+      '<SegmentList duration="2"><SegmentURL media="a.vtt"/><SegmentURL media="b.vtt"/></SegmentList>',
+      true],
+    ['a dynamic $Number$ template with a duration', LIVE,
+      '<SegmentTemplate media="s-$Number$.vtt" duration="2"/>',
+      false],
+  ])('flags WebVTT that needs a manifest re-read for %s', (_name, attrs, segments, flagged) => {
+    const r = parseMpd(mpd(`<Period start="PT0S">
+      <AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">${segments}
+        <Representation id="s1"/>
+      </AdaptationSet></Period>`, attrs), 'http://host/stream.mpd', 10);
+    expect(r.subtitles[0].dash?.segments?.length).toBeGreaterThan(0);
+    expect(r.subtitles[0].dash?.needsManifestRefresh === true).toBe(flagged);
   });
 
   it('resolves SegmentList URLs and timeline timing', () => {
