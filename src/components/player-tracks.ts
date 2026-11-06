@@ -689,12 +689,11 @@ export class PlayerTracks {
     const options = manifestSubtitleOptions(this.manifestSubtitles, this.selfRenderIndex);
     const native = options.filter(option =>
       this.manifestSubtitles[option.index]?.dash?.kind === 'native');
-    const exposedNative = native.find(option => option.isForced)
-      ?? native.find(option => option.isDefault)
-      ?? native[0];
+    // The firmware compositor draws only the first native AdaptationSet,
+    // whatever its role, so that is the one the menu can truthfully name.
     return options.filter(option =>
       this.manifestSubtitles[option.index]?.dash?.kind !== 'native'
-      || option.index === exposedNative?.index);
+      || option.index === native[0]?.index);
   }
 
   // Each displayed rendition has a distinct control path. Native DASH exposes
@@ -720,7 +719,8 @@ export class PlayerTracks {
       tracks.push({
         index: CC_SUBTITLE_INDEX,
         label: closedCaptionLabel(this.manifestClosedCaptions),
-        active: this.ccEnabled && this.selfRenderIndex < 0,
+        // A pick re-renders the menu before setSubtitleEnable answers.
+        active: (this.ccPending ?? this.ccEnabled) && this.selfRenderIndex < 0,
         available: true,
       });
     }

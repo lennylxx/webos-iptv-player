@@ -141,7 +141,9 @@ Native `stpp`, `wvtt` and CEA tracks may not appear as Blink `TextTrack`
 objects. Picker activation uses
 `com.webos.media/setSubtitleEnable` after the native media ID is available.
 Selection is applied again on `playing` because the media ID can appear after
-`loadedmetadata`.
+`loadedmetadata`. The compositor draws only the first native `stpp` or `wvtt`
+AdaptationSet, whatever its role or language, so the picker lists only that
+rendition.
 
 App `::cue` styling and subtitle offsets apply only to self-rendered raw WebVTT.
 Native compositor positioning and styling are controlled by the media stream

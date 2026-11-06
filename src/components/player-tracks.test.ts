@@ -442,7 +442,7 @@ describe('PlayerTracks', () => {
       },
     );
 
-    it('exposes only one native DASH compositor rendition', () => {
+    it('exposes only the first native DASH rendition, which the compositor draws', () => {
       setup([
         {
           ...rendition('Track 1', 'l1'),
@@ -459,7 +459,7 @@ describe('PlayerTracks', () => {
       ]);
 
       expect(tracks.getSubtitleTracks().map(item => item.label))
-        .toEqual(['Track 2', 'Track 3']);
+        .toEqual(['Track 1', 'Track 3']);
     });
 
     it('does not restore a hidden native DASH rendition', () => {
@@ -619,6 +619,17 @@ describe('PlayerTracks', () => {
         expect(requests[1].params).toEqual({ mediaId: 'luna1', enable: false });
         expect(requests.map(request => request.uri))
           .not.toContain('luna://com.webos.media/selectTrack');
+      });
+
+      it('shows a CC pick as on while setSubtitleEnable is pending', () => {
+        lunaSetup([], [{ name: 'CC 1', lang: '', instreamId: 'CC1', isDefault: false }]);
+        lunaMediaId = 'luna1';
+
+        tracks.selectSubtitleTrack(-2);
+        expect(tracks.getSubtitleTracks()[0].active).toBe(true);
+
+        requests[0].respond({ returnValue: false, errorCode: 7 });
+        expect(tracks.getSubtitleTracks()[0].active).toBe(false);
       });
 
       it('lists and enables CEA-708-only captions on Luna', () => {

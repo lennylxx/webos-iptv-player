@@ -372,7 +372,7 @@ test('Luna audio names come from the master and an audio pick switches the UMS t
     .toContainText(['Off', 'Track 3']);
 });
 
-test('picking CC on Luna enables the compositor on the Luna mediaId', async ({ page }) => {
+test('picking CC on Luna enables the compositor on the Luna mediaId and reads on at once', async ({ page }) => {
   const master = [
     '#EXTM3U',
     '#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID="cc",NAME="Track 1",INSTREAM-ID="CC1"',
@@ -391,8 +391,10 @@ test('picking CC on Luna enables the compositor on the Luna mediaId', async ({ p
   await expect(subsRow.locator('.menu-item-value')).toHaveText('Off');
   await subsRow.click();
   await menu.locator('[data-menu-action="__subs_track__"]', { hasText: 'Track 1 [CC]' }).click();
-  await expect.poll(async () => (await lunaProbe(page)).pending).toBe(1);
+  // Before UMS answers, the main menu already reads the pick.
+  await expect(subsRow.locator('.menu-item-value')).toHaveText('Track 1 [CC]');
   let probe = await lunaProbe(page);
+  expect(probe.pending).toBe(1);
   expect(callsOf(probe, 'setSubtitleEnable').map(call => call.params))
     .toEqual([{ mediaId: 'lm-1', enable: true }]);
   // Not the placeholder's own mediaId.
@@ -401,9 +403,58 @@ test('picking CC on Luna enables the compositor on the Luna mediaId', async ({ p
 
   await page.evaluate(() => (window as unknown as { __lunaE2EControl: { release(): void } })
     .__lunaE2EControl.release());
-  await expect.poll(async () => (await lunaProbe(page)).pending).toBe(0);
+  await page.waitForTimeout(100);
+  await expect(subsRow.locator('.menu-item-value')).toHaveText('Track 1 [CC]');
   probe = await lunaProbe(page);
   expect(callsOf(probe, 'setSubtitleEnable')).toHaveLength(1);
+});
+
+test('Luna DASH lists only the first native subtitle AdaptationSet', async ({ page }) => {
+  const mpd = `<?xml version="1.0" encoding="utf-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
+     mediaPresentationDuration="PT600S" minBufferTime="PT2S">
+  <Period>
+    <AdaptationSet contentType="video" mimeType="video/mp4">
+      <Representation id="v1" width="1280" height="720" codecs="avc1.4d401f" bandwidth="800000"/>
+    </AdaptationSet>
+    <AdaptationSet contentType="audio" mimeType="audio/mp4" lang="l1">
+      <Representation id="a1" codecs="mp4a.40.2" bandwidth="96000"/>
+    </AdaptationSet>
+    <AdaptationSet contentType="text" mimeType="application/mp4" lang="l1" codecs="stpp.ttml.im1t">
+      <Label>Track 1</Label>
+      <Representation id="s1" bandwidth="1000"/>
+    </AdaptationSet>
+    <AdaptationSet contentType="text" mimeType="application/mp4" lang="l2" codecs="wvtt">
+      <Label>Track 2</Label>
+      <Representation id="s2" bandwidth="1000"/>
+    </AdaptationSet>
+  </Period>
+</MPD>`;
+  await installFakeUms(page, { media: { 'http://host/a.mpd': { durationMs: 600000 } } });
+  await routeStreams(page, { 'http://host/a.mpd': { type: 'application/dash+xml', body: mpd } });
+  await startFirstChannel(page, [
+    '#EXTM3U',
+    '#EXTINF:-1 tvg-id="ch1",Alpha',
+    '#EXTVLCOPT:http-referrer=http://host/r',
+    'http://host/a.mpd',
+  ].join('\n'));
+  await waitForPlaying(page, 'lm-1');
+  expect(callsOf(await lunaProbe(page), 'load')[0].params).toMatchObject({
+    uri: 'http://host/a.mpd',
+    payload: { mediaTransportType: 'MPEG-DASH' },
+  });
+
+  await seedPointer(page);
+  await page.keyboard.press('ArrowRight');
+  const menu = page.locator('#player-menu');
+  await menu.locator('[data-menu-action="__subs_open__"]').click();
+  const tracks = menu.locator('[data-menu-action="__subs_track__"]:not([data-track-index="-1"])');
+  await expect(tracks).toHaveCount(1);
+  await expect(tracks).toHaveText(/Track 1/);
+  await tracks.click();
+  await expect.poll(async () => callsOf(await lunaProbe(page), 'setSubtitleEnable').map(call => call.params))
+    .toEqual([{ mediaId: 'lm-1', enable: true }]);
+  await expect(menu.locator('[data-menu-action="__subs_open__"] .menu-item-value')).toHaveText(/Track 1/);
 });
 
 for (const kind of ['finite', 'live'] as const) {
