@@ -190,8 +190,9 @@ headers. HTTPS streams keep the Cookie and Authorization stripping.
   no Luna retry.
 - Audio comes from the UMS `sourceInfo` list and switches with
   `selectTrack {type: 'audio'}`. Raw WebVTT is self-rendered on the Luna
-  clock; compositor subtitles (`stpp`, `wvtt`, CEA) are hidden, since
-  `setSubtitleEnable` would reach the placeholder's pipeline.
+  clock. Compositor subtitles (`stpp`, `wvtt`, CEA) stay in the menu and
+  toggle with `setSubtitleEnable` on the Luna pipeline's own `mediaId`,
+  not the placeholder's.
 
 Verified on webOS 25: UMS sends the `transmission` headers on the MPD,
 init, and media segment requests, through 302 redirects, absolute
@@ -204,8 +205,6 @@ Limits:
   that checks them fails.
 - webOS 4 has no usable window ID for the load, so these channels stay
   on `<video>` there.
-- Unverified: that the live DASH media timeline matches the Luna
-  position clock, which DASH WebVTT on Luna relies on.
 
 ## Native PlayReady DRM
 
@@ -332,11 +331,9 @@ Availability can change.
 | PlayReady | Big Buck Bunny CBCS 1080p | `https://test.playready.microsoft.com/media/dash/APPLEENC_CBCS_BBB_1080p/1080p.mpd` | `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(persist:false,ck:W31bfVt9W31bfVt9W31bfQ==,ckt:aescbc)` |
 | Widevine | Angel One | `https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd` | `https://proxy.uat.widevine.com/proxy` |
 | ClearKey | Angel One | `https://storage.googleapis.com/shaka-demo-assets/angel-one-clearkey/dash.mpd` | `https://cwip-shaka-proxy.appspot.com/clearkey?_u3wDe7erb7v8Lqt8A3QDQ=ABEiM0RVZneImaq7zN3u_w` |
-| None | Angel One (multiple audio, `stpp` subtitles) | `https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd` | — |
-| None | Tears of Steel (TTML subtitles) | `https://storage.googleapis.com/shaka-demo-assets/tos-ttml/dash.mpd` | — |
 
 The PlayReady streams come from Microsoft's PlayReady test server; the
-Widevine, ClearKey, and clear ones from Shaka Player's demo catalog
+Widevine and ClearKey ones from Shaka Player's demo catalog
 (`demo/common/assets.js`). A plain GET on a Widevine or ClearKey license
 URL returns HTTP 400, which is expected without a CDM challenge. The
 Axinom multi-DRM vectors need an `X-AxDRM-Message` header whose value
@@ -356,6 +353,23 @@ Set the DRM with the Kodi properties above. Adding a header such as
 https://test.playready.microsoft.com/media/profficialsite/tearsofsteel_4k.ism/manifest.mpd
 ```
 
+### Subtitle and caption test streams
+
+These unencrypted streams cover each DASH subtitle type.
+No DASH CEA-708 stream is listed; HLS ones are in `docs/hls-subtitles.md`.
+
+| Subtitles | Manifest |
+|---|---|
+| `wvtt` | `https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd` |
+| `wvtt` | `https://storage.googleapis.com/shaka-demo-assets/sintel-mp4-wvtt/dash.mpd` |
+| Raw TTML sidecar | `https://storage.googleapis.com/shaka-demo-assets/tos-ttml/dash.mpd` |
+| `stpp.ttml.im1t` | `https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel-ttml.ism/.mpd` |
+| `stpp`, multiple languages | `https://livesim2.dashif.org/vod/testpic_2s/multi_subs.mpd` |
+| Raw TTML sidecar | `https://demo.unified-streaming.com/k8s/features/stable/no-handler-origin/tears-of-steel/tears-of-steel-ttml-sidecar.mpd` |
+| Raw TTML sidecar | `https://livesim2.dashif.org/vod/testpic_2s/ttml_subs.mpd` |
+| CEA-608 (`CC1`, `CC3`) | `https://livesim2.dashif.org/vod/testpic_2s/cea608.mpd` |
+| CEA-608, simulated live | `https://livesim2.dashif.org/livesim2/testpic_2s/cea608.mpd` |
+
 ## Known limitations
 
 - Widevine and ClearKey require compatible MSE codecs and their corresponding
@@ -363,4 +377,3 @@ https://test.playready.microsoft.com/media/profficialsite/tearsofsteel_4k.ism/ma
 - Metadata and subtitle discovery use the first Period.
 - Multi-Period subtitle continuation, xlink, encrypted WebVTT, BaseURL failover
   and UTCTiming correction are not implemented.
-- Native `wvtt` positioning and styling have not been verified.

@@ -288,6 +288,11 @@ path (`src/utils/subtitle-tracks.ts`, `src/components/player-tracks.ts`).
   `enable:false` on load; it's already off.) The flip side: a retail-TV global "Closed Captions: off"
   can *suppress* drawing even when `setSubtitleEnable` succeeds — the app can't toggle it, so a stubborn
   stream may need the user to enable captions in TV settings.
+- **Luna header playback** (channels with M3U headers, `docs/mpeg-dash.md`) plays through a pipeline the
+  app loads itself, behind a placeholder `<video>`. The same toggle then targets the Luna pipeline's own
+  `mediaId` from `load`, never the placeholder's, once that pipeline loaded; a replaced pipeline gets a
+  fresh call with its new id. A refused toggle logs
+  `subtitles.luna.compositor.failed enable code`.
 - **Styling** is owned by the native compositor + the TV's accessibility settings, which the app can't
   read (`settingsservice` = Access denied, §4). The default 608 face is a monospaced HanYang font
   (`HYDefault`) — Courier-like — so `::cue` does **not** style pipeline captions.
@@ -299,9 +304,9 @@ path (`src/utils/subtitle-tracks.ts`, `src/components/player-tracks.ts`).
 TTML/IMSC arrives as fMP4 `stpp` segments (`CODECS="stpp.TTML.im1t"`), is demuxed as a **real pipeline
 track**, and is drawn by the native compositor via `setSubtitleEnable` — the same on/off surface as 608.
 
-- **Verified on device.** ✅ No public HLS+IMSC1 source exists (every IMSC test vector is DASH `.mpd`),
-  so it was verified with a **hand-built `stpp` fMP4 rendition** (built from a TTML doc → `init.mp4` +
-  `.m4s` + HLS manifests, video from a public TS test stream). Like 608, it is **not surfaced as a
+- **Verified on device.** ✅ Verified with a **hand-built `stpp` fMP4 rendition** (built from a TTML
+  doc → `init.mp4` + `.m4s` + HLS manifests, video from a public TS test stream); a public HLS+IMSC1
+  stream is listed under [Public test streams](#public-test-streams). Like 608, it is **not surfaced as a
   `TextTrack`** ✅ (`textTracks` stays empty 20 s+), and `setSubtitleEnable` draws it on screen.
 - **Detection would differ from 608.** An IMSC rendition is declared `TYPE=SUBTITLES` (like WebVTT,
   **not** `TYPE=CLOSED-CAPTIONS`), so `parseClosedCaptions` never sees it. Today it falls onto the WebVTT
@@ -328,16 +333,25 @@ under the same `channelPrefKey()` as the subtitle pick (`subtitle_offsets` map).
 
 ## Public test streams
 
-These vendor developer test streams, all from Apple's HLS examples,
-reproduce the subtitle paths on a TV.
+These public developer test streams reproduce the subtitle paths on a TV.
 Load them through a local M3U; never hardcode them into code or tests.
-Availability can change.
+Availability can change. All are VOD, unencrypted, and need no headers.
 
 | Subtitles | Manifest |
 |---|---|
 | None (basic VOD, 4:3) | `https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8` |
-| WebVTT renditions, multiple audio (fMP4) | `https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8` |
-| CEA-608 (`CC1`, TS) | `https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8` |
+| WebVTT renditions incl. FORCED (TS) | `https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8` |
+| CEA-608 (`CC1`, TS), WebVTT renditions, multiple audio | `https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8` |
+| CEA-608 (`CC1`, fMP4), WebVTT renditions, multiple audio | `https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8` |
+| fMP4 WebVTT (`wvtt`) | `https://storage.googleapis.com/shaka-demo-assets/angel-one/hls.m3u8` |
+| TTML/IMSC1 (`stpp.ttml.im1t`, fMP4) | `https://test-streams.mux.dev/tos_ismc/main.m3u8` |
+| CEA-708 (`SERVICE1`, TS) | `https://mtoczko.github.io/hls-test-streams/test-cea708-p16/playlist.m3u8` |
+
+The Angel One master doesn't declare `wvtt` in `CODECS`; its subtitle
+segments are `wvtt` samples. The 708 stream carries DTVCC
+service blocks, not just 608 pairs.
+
+DASH caption and subtitle streams are listed in `docs/mpeg-dash.md`.
 
 Adding `#EXTVLCOPT:http-referrer=http://ref.test/` above a URL routes it
 through Luna header playback (see `docs/mpeg-dash.md`); these servers

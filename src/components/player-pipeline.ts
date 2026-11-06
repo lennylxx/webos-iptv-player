@@ -295,6 +295,11 @@ export class PlayerPipeline {
     return this.luna ? this.luna.selectAudio(index) : Promise.resolve(false);
   }
 
+  /** The Luna pipeline's own mediaId once it loaded; empty before, or off Luna. */
+  lunaMediaId(): string {
+    return this.luna?.isLoaded() ? this.luna.mediaId : '';
+  }
+
   /** Where the Luna picture goes; the element's own rect does not move it. */
   setLunaDisplay(display: LunaDisplay): void {
     this.lunaDisplay = display;
@@ -799,7 +804,7 @@ export class PlayerPipeline {
           this.activeDrm = '';
         }
         // Reuse the MPD read, so the fallback keeps within the startup watchdog.
-        if (dash.parsed) this.notifyManifest(url, token, '', dash.parsed);
+        if (dash.parsed) this.notifyManifest(url, '', dash.parsed);
         this.playDash(url, dash.extras, token, dash.parsed);
         return;
       }
@@ -1388,7 +1393,7 @@ export class PlayerPipeline {
         await hold(parsed);
         if (seq !== this.manifestSeq) return null;
       }
-      this.notifyManifest(url, loadToken, text, parsed);
+      this.notifyManifest(url, text, parsed);
       return parsed;
     } catch (e) {
       if (controller.signal.aborted) return null;
@@ -1412,19 +1417,10 @@ export class PlayerPipeline {
     }
   }
 
-  private notifyManifest(url: string, loadToken: number, text: string, parsed: MpdManifest | null): void {
+  private notifyManifest(url: string, text: string, parsed: MpdManifest | null): void {
     const audio = parsed ? parsed.audio : parseAudioRenditions(text);
     const luna = this.luna !== null;
-    // The compositor toggle (setSubtitleEnable) would reach the placeholder's
-    // pipeline, not Luna's, so on Luna only self-rendered WebVTT stays.
-    const subtitles = parsed
-      ? parsed.subtitles.filter(subtitle => !luna || subtitle.dash?.kind !== 'native')
-      : parseSubtitleRenditions(text);
-    if (parsed && subtitles.length < parsed.subtitles.length) {
-      log.info('Subtitles unavailable on Luna playback', 'event=subtitles.luna.unavailable',
-        this.callbacks.playbackLabel(loadToken), 'stage=manifest', 'reason=compositor',
-        `count=${String(parsed.subtitles.length - subtitles.length)}`);
-    }
+    const subtitles = parsed ? parsed.subtitles : parseSubtitleRenditions(text);
     const closedCaptions = parsed ? parsed.closedCaptions : parseClosedCaptions(text);
     const variants = parsed ? parsed.variants : parseVariants(text);
     if (audio.length >= 2) {
@@ -1438,12 +1434,12 @@ export class PlayerPipeline {
         closedCaptions.map(c => c.instreamId || c.name || '?').join(', '));
     }
     if (variants.length) log.info('manifest variants:', variants.length);
-    // On Luna the manifest only feeds the self-rendered WebVTT subtitles and
-    // audio names; UMS alone picks the variant.
+    // On Luna the manifest only feeds subtitles, captions and audio names;
+    // UMS alone picks the variant.
     this.callbacks.onManifest({
       audio: audio.length >= 2 || luna ? audio : [],
       subtitles,
-      closedCaptions: luna ? [] : closedCaptions,
+      closedCaptions,
       variants: luna ? [] : variants,
       masterUrl: subtitles.length ? url : '',
     });

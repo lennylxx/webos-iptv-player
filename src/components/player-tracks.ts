@@ -80,6 +80,8 @@ interface PlayerTracksOptions {
   getChannel: () => Channel | null;
   getVod: () => VodPlayback | null;
   playbackLabel: () => string;
+  // The pick changed without a user action, e.g. a reset to Off.
+  onChanged?: () => void;
 }
 
 export class PlayerTracks {
@@ -89,6 +91,8 @@ export class PlayerTracks {
   private ccEnabled = false; // live state of the native caption compositor (setSubtitleEnable)
   private ccPending: boolean | null = null;
   private ccRequestSeq = 0;
+  private ccMediaId = ''; // the pipeline ccEnabled/ccPending describe
+  private ccRefusedMediaId = ''; // Luna pipeline that refused an enable; only a user pick retries it
   private selfRenderIndex = -1; // manifest subtitle rendition currently self-rendered (-1 = off)
   private masterUrl = ''; // HLS master URL of the active stream, for re-pointing self-render
   // One subtitles.luna.unavailable event per load, plus one when a permanent reason follows.
@@ -122,6 +126,8 @@ export class PlayerTracks {
     this.ccEnabled = false; // fresh pipeline — captions start off (608 doesn't auto-draw)
     this.ccPending = null;
     this.ccRequestSeq++;
+    this.ccMediaId = '';
+    this.ccRefusedMediaId = '';
     this.selfRenderIndex = -1;
     this.masterUrl = '';
     this.lunaSubsReported = 'none';
@@ -721,8 +727,8 @@ export class PlayerTracks {
     return tracks;
   }
 
-  // In-band CC is offered only on the native pipeline (setSubtitleEnable is a
-  // webOS Luna verb) and only when the master advertises CLOSED-CAPTIONS.
+  // In-band CC is offered only on webOS (setSubtitleEnable is a Luna verb),
+  // native or Luna playback, and only when the master advertises CLOSED-CAPTIONS.
   private ccAvailable(): boolean {
     return isWebOS() && this.manifestClosedCaptions.length > 0;
   }
@@ -732,6 +738,7 @@ export class PlayerTracks {
    *  expose. CC and the other subtitle paths are mutually exclusive. */
   selectSubtitleTrack(index: number): void {
     if (index === CC_SUBTITLE_INDEX) {
+      this.ccRefusedMediaId = '';
       this.subs.stop(); // self-render and the native compositor can't both draw
       this.dashSubs.stop();
       this.selfRenderIndex = -1;
@@ -743,6 +750,7 @@ export class PlayerTracks {
       return;
     }
     if (index === -1) {
+      this.ccRefusedMediaId = '';
       this.setNativeCC(false);
       this.applySubtitleChoice(-1);
       this.rememberSubtitle({ off: true, name: '', lang: '' });
@@ -751,6 +759,7 @@ export class PlayerTracks {
     }
     const option = this.displaySubtitleOptions().find(item => item.index === index);
     if (!option || !option.available) return;
+    this.ccRefusedMediaId = '';
     this.setNativeCC(false);
     this.subtitlePick = 'user';
     this.applySubtitleChoice(index);
@@ -759,19 +768,29 @@ export class PlayerTracks {
   }
 
   // Toggle the native caption compositor (CEA-608/708, IMSC/stpp and wvtt) via Luna. Only
-  // fires on a real state change, and needs the pipeline's mediaId — exposed on
-  // the native element once decoding starts. selectTrack is deliberately avoided:
+  // fires on a real state change of the current pipeline, and needs its mediaId — the
+  // native element's once decoding starts, or on Luna playback the Luna pipeline's own
+  // (the element's is the placeholder's). selectTrack is deliberately avoided:
   // it decode-freezes the video, so this is enable/disable only.
   private setNativeCC(enable: boolean): void {
-    if (!isWebOS() || this.ccPending === enable
-        || (this.ccPending === null && enable === this.ccEnabled)) return;
-    const video = this.options.getVideoElement() as
-      (HTMLVideoElement & { mediaId?: string }) | null;
-    const mediaId = video?.mediaId;
+    if (!isWebOS()) return;
+    const luna = this.pipeline.isLunaActive();
+    const mediaId = luna
+      ? this.pipeline.lunaMediaId()
+      : (this.options.getVideoElement() as (HTMLVideoElement & { mediaId?: string }) | null)?.mediaId;
     if (!mediaId) {
       if (enable) log.warn('CC: no mediaId yet — will retry on track/metadata events');
       return;
     }
+    if (mediaId !== this.ccMediaId) {
+      // A new pipeline starts with captions off; answers for the old one are stale.
+      this.ccMediaId = mediaId;
+      this.ccEnabled = false;
+      this.ccPending = null;
+      this.ccRequestSeq++;
+    }
+    if (this.ccPending === enable || (this.ccPending === null && enable === this.ccEnabled)) return;
+    if (enable && mediaId === this.ccRefusedMediaId) return;
     if (!isLunaAvailable()) return;
     const requestSeq = ++this.ccRequestSeq;
     this.ccPending = enable;
@@ -788,6 +807,20 @@ export class PlayerTracks {
         if (requestSeq !== this.ccRequestSeq) return;
         this.ccPending = null;
         log.warn('CC: setSubtitleEnable failed:', JSON.stringify(error));
+        if (luna) {
+          log.warn('Luna subtitle compositor refused', 'event=subtitles.luna.compositor.failed',
+            this.options.playbackLabel(), `enable=${String(enable)}`,
+            `code=${String(typeof error.errorCode === 'number' ? error.errorCode : -1)}`);
+          if (enable) {
+            // Every buffering cycle replays `playing`; don't re-ask this pipeline.
+            this.ccRefusedMediaId = mediaId;
+            if (this.manifestSubtitles[this.selfRenderIndex]?.dash?.kind === 'native') {
+              this.unavailableSubs.add(this.selfRenderIndex);
+              this.selfRenderIndex = -1;
+            }
+          }
+        }
+        this.options.onChanged?.();
       },
     });
   }
@@ -925,6 +958,11 @@ export class PlayerTracks {
   /** Playback changed path mid-load; the next manifest restarts the remembered pick. */
   stopSelfRender(): void {
     this.unavailableSubs.clear();
+    // The old pipeline's caption answers are stale; the new path starts off.
+    this.ccRequestSeq++;
+    this.ccPending = null;
+    this.ccEnabled = false;
+    this.ccMediaId = '';
     if (this.selfRenderIndex < 0 && !this.subs.active && !this.dashSubs.active) return;
     this.subs.stop();
     this.dashSubs.stop();

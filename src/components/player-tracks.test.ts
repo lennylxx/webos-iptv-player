@@ -549,6 +549,228 @@ describe('PlayerTracks', () => {
       vi.unstubAllGlobals();
     });
 
+    describe('compositor subtitles on Luna playback', () => {
+      let requests: Array<{ uri: string; params: Record<string, unknown>; respond(response: unknown): void }>;
+      let lunaMediaId: string;
+      let userAgent: { mockRestore(): void };
+
+      beforeEach(() => {
+        userAgent = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('webOS');
+        requests = [];
+        class FakePalmServiceBridge {
+          onservicecallback: ((message: string) => void) | null = null;
+
+          call(uri: string, payload: string): void {
+            requests.push({
+              uri,
+              params: JSON.parse(payload) as Record<string, unknown>,
+              respond: (response) => this.onservicecallback?.(JSON.stringify(response)),
+            });
+          }
+
+          cancel(): void {
+            this.onservicecallback = null;
+          }
+        }
+        vi.stubGlobal('PalmServiceBridge', FakePalmServiceBridge);
+        lunaMediaId = '';
+      });
+
+      afterEach(() => {
+        userAgent.mockRestore();
+        vi.unstubAllGlobals();
+      });
+
+      const lunaSetup = (manifestSubtitles: unknown[], closedCaptions: unknown[] = []) => {
+        setup(manifestSubtitles);
+        (video as HTMLVideoElement & { mediaId?: string }).mediaId = 'placeholder1';
+        trackInternals(tracks).manifestClosedCaptions = closedCaptions;
+        trackInternals(tracks).pipeline = pipeline({
+          isLunaActive: () => true,
+          lunaClock: () => () => 42,
+          lunaMediaId: () => lunaMediaId,
+        });
+      };
+
+      it("toggles captions on Luna's own pipeline, not the placeholder's", () => {
+        lunaSetup([], [{ name: 'CC 1', lang: '', instreamId: 'CC1', isDefault: false }]);
+
+        expect(tracks.getSubtitleTracks()).toEqual([
+          expect.objectContaining({ index: -2, label: 'CC 1 [CC]', active: false, available: true }),
+        ]);
+        // Not loaded yet: nothing goes to the placeholder meanwhile.
+        tracks.selectSubtitleTrack(-2);
+        expect(requests).toHaveLength(0);
+        expect(StorageService.setSubtitlePref).toHaveBeenCalledWith(
+          channelKey(CHANNEL), { off: false, cc: true, name: '', lang: '' });
+        vi.mocked(StorageService.getSubtitlePref)
+          .mockReturnValue({ off: false, cc: true, name: '', lang: '' });
+
+        lunaMediaId = 'luna1';
+        tracks.reapplyNativeSubtitleCompositor();
+        expect(requests).toEqual([expect.objectContaining({
+          uri: 'luna://com.webos.media/setSubtitleEnable',
+          params: { mediaId: 'luna1', enable: true },
+        })]);
+        requests[0].respond({ returnValue: true });
+        expect(tracks.getSubtitleTracks()[0].active).toBe(true);
+
+        tracks.selectSubtitleTrack(-1);
+        expect(requests[1].params).toEqual({ mediaId: 'luna1', enable: false });
+        expect(requests.map(request => request.uri))
+          .not.toContain('luna://com.webos.media/selectTrack');
+      });
+
+      it('lists and enables CEA-708-only captions on Luna', () => {
+        lunaSetup([], [{ name: 'Track 1', lang: 'l1', instreamId: 'SERVICE1', isDefault: false }]);
+        lunaMediaId = 'luna1';
+
+        expect(tracks.getSubtitleTracks()).toEqual([
+          expect.objectContaining({ index: -2, available: true }),
+        ]);
+        tracks.selectSubtitleTrack(-2);
+
+        expect(requests).toEqual([expect.objectContaining({
+          uri: 'luna://com.webos.media/setSubtitleEnable',
+          params: { mediaId: 'luna1', enable: true },
+        })]);
+      });
+
+      it('lists a DASH compositor rendition on Luna and enables it there', () => {
+        lunaSetup([
+          { ...rendition('Track 1', 'l1'), dash: { kind: 'native' } },
+          { ...rendition('Track 2', 'l2'), dash: { kind: 'webvtt', url: 'http://host/sub.vtt' } },
+        ]);
+        lunaMediaId = 'luna1';
+
+        expect(tracks.getSubtitleTracks().map(item => item.label)).toEqual(['Track 1', 'Track 2']);
+        tracks.selectSubtitleTrack(0);
+
+        expect(dashSubs.start).not.toHaveBeenCalled();
+        expect(requests).toEqual([expect.objectContaining({
+          params: { mediaId: 'luna1', enable: true },
+        })]);
+      });
+
+      it('re-enables on a replaced Luna pipeline and ignores the stale answer', () => {
+        lunaSetup([{ ...rendition('Track 1', 'l1'), dash: { kind: 'native' } }]);
+        lunaMediaId = 'luna1';
+        tracks.selectSubtitleTrack(0);
+        expect(requests[0].params).toEqual({ mediaId: 'luna1', enable: true });
+
+        lunaMediaId = 'luna2';
+        tracks.reapplyNativeSubtitleCompositor();
+        requests[0].respond({ returnValue: true });
+        expect(requests).toHaveLength(2);
+        expect(requests[1].params).toEqual({ mediaId: 'luna2', enable: true });
+        expect(trackInternals(tracks).ccEnabled).toBe(false);
+        requests[1].respond({ returnValue: true });
+        expect(trackInternals(tracks).ccEnabled).toBe(true);
+
+        // Already on for luna2: no repeat call.
+        tracks.reapplyNativeSubtitleCompositor();
+        expect(requests).toHaveLength(2);
+        expect(requests.map(request => request.params.mediaId)).not.toContain('placeholder1');
+      });
+
+      it('reports a refused Luna compositor toggle', () => {
+        lunaSetup([{ ...rendition('Track 1', 'l1'), dash: { kind: 'native' } }]);
+        lunaMediaId = 'luna1';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        tracks.selectSubtitleTrack(0);
+        requests[0].respond({ returnValue: false, errorCode: 7 });
+
+        expect(warn.mock.calls.map(args => args.join(' '))).toContainEqual(expect.stringContaining(
+          'event=subtitles.luna.compositor.failed session=1 load=7 enable=true code=7'));
+        warn.mockRestore();
+      });
+
+      it('stops re-asking a pipeline that refused, and resets the menu', () => {
+        lunaSetup([{ ...rendition('Track 1', 'l1'), dash: { kind: 'native' } }]);
+        lunaMediaId = 'luna1';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const onChanged = vi.fn();
+        (trackInternals(tracks).options as { onChanged?: () => void }).onChanged = onChanged;
+
+        tracks.selectSubtitleTrack(0);
+        expect(onChanged).not.toHaveBeenCalled();
+        requests[0].respond({ returnValue: false, errorCode: 7 });
+        // An open menu re-reads the pick.
+        expect(onChanged).toHaveBeenCalledTimes(1);
+        tracks.reapplyNativeSubtitleCompositor();
+        tracks.reapplyNativeSubtitleCompositor();
+
+        expect(requests).toHaveLength(1);
+        expect(warn.mock.calls.filter(args => args.join(' ')
+          .includes('event=subtitles.luna.compositor.failed'))).toHaveLength(1);
+        expect(tracks.getSubtitleTracks()).toEqual([
+          expect.objectContaining({ index: 0, active: false, available: false }),
+        ]);
+        warn.mockRestore();
+      });
+
+      it('ignores a refusal from the Luna pipeline after falling back to native', () => {
+        lunaSetup([{ ...rendition('Track 1', 'l1'), dash: { kind: 'native' } }]);
+        lunaMediaId = 'luna1';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        tracks.selectSubtitleTrack(0);
+
+        tracks.stopSelfRender();
+        trackInternals(tracks).pipeline = pipeline({ isLunaActive: () => false });
+        (video as HTMLVideoElement & { mediaId?: string }).mediaId = '';
+        tracks.selectSubtitleTrack(0);
+        requests[0].respond({ returnValue: false, errorCode: 7 });
+
+        expect(tracks.getSubtitleTracks()).toEqual([
+          expect.objectContaining({ index: 0, active: true, available: true }),
+        ]);
+        warn.mockRestore();
+      });
+
+      it('keeps a refused pipeline unasked after a click on a grayed row', () => {
+        lunaSetup([rendition('Track 1', 'l1')],
+          [{ name: 'Track 2', lang: 'l2', instreamId: 'CC1', isDefault: false }]);
+        vi.mocked(StorageService.getSubtitlePref)
+          .mockReturnValue({ off: false, cc: true, name: '', lang: '' });
+        lunaMediaId = 'luna1';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        tracks.reapplyNativeSubtitleCompositor();
+        requests[0].respond({ returnValue: false, errorCode: 7 });
+        (trackInternals(tracks).unavailableSubs as Set<number>).add(0);
+        tracks.selectSubtitleTrack(0);
+        tracks.reapplyNativeSubtitleCompositor();
+
+        expect(requests).toHaveLength(1);
+        warn.mockRestore();
+      });
+
+      it('retries a refused caption toggle only on a user pick or a new pipeline', () => {
+        lunaSetup([], [{ name: 'Track 1', lang: 'l1', instreamId: 'CC1', isDefault: false }]);
+        vi.mocked(StorageService.getSubtitlePref)
+          .mockReturnValue({ off: false, cc: true, name: '', lang: '' });
+        lunaMediaId = 'luna1';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        tracks.reapplyNativeSubtitleCompositor();
+        requests[0].respond({ returnValue: false, errorCode: 7 });
+        tracks.reapplyNativeSubtitleCompositor();
+        expect(requests).toHaveLength(1);
+        expect(tracks.getSubtitleTracks()[0].active).toBe(false);
+
+        tracks.selectSubtitleTrack(-2);
+        expect(requests).toHaveLength(2);
+        requests[1].respond({ returnValue: false, errorCode: 7 });
+
+        lunaMediaId = 'luna2';
+        tracks.reapplyNativeSubtitleCompositor();
+        expect(requests).toHaveLength(3);
+        expect(requests[2].params).toEqual({ mediaId: 'luna2', enable: true });
+        warn.mockRestore();
+      });
+    });
+
     it("self-renders on Luna's clock and reports one unavailable event per load", () => {
       setup([rendition('Track 1', 'l1')]);
       const clock = () => 42;

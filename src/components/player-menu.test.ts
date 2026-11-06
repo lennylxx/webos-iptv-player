@@ -527,6 +527,26 @@ describe('PlayerMenu', () => {
       expect(items().find((i) => i.dataset.menuAction === '__subs_offset__')).toBeUndefined();
     });
 
+    it('refresh() moves the check to Off after a reset and keeps focus', () => {
+      subtitleTracks = SUBS;
+      menu.show();
+      for (let i = 0; i < MENU_ACTIONS; i++) menu.handleAction('down');
+      menu.handleAction('select');     // open picker (Track 2 focused at idx 3)
+      menu.handleAction('up');         // focus Track 1 (idx 2)
+
+      subtitleTracks = [
+        { index: 0, label: 'Track 1', active: false },
+        { index: 1, label: 'Track 2', active: false, available: false },
+      ];
+      menu.refresh();
+
+      const rows = items();
+      expect(rows[1].querySelector('.menu-check')!.textContent).toBe('✓'); // Off marked
+      expect(rows[3].querySelector('.menu-check')!.textContent).toBe('');
+      expect(rows[3].classList.contains('unavailable')).toBe(true);
+      expect(rows[2].classList.contains('focused')).toBe(true);            // still on Track 1
+    });
+
     it('greys a subtitle track marked unavailable, but never the Off row', () => {
       subtitleTracks = [{ index: 0, label: 'Track 1', active: false, available: false }];
       menu.show();

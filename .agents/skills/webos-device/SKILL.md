@@ -71,6 +71,8 @@ Notes:
 - Never inject `KEY_EXIT` (evdev 174): webOS closes the app.
 - `tv.sh input key power` turns the TV off and `tv.sh input wake` turns
   it back on. Use them only when the user asks.
+- `tv.sh input key home` opens webOS Home and sends the app to the
+  background; use it to test suspend and resume.
 
 ## When the device is required
 

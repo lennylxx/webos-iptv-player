@@ -61,8 +61,9 @@ export const KEYS = new Map([
   ['forward', [208, 417]],
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [String(n), [n + 1, 48 + n]]),
   ['0', [11, 48]],
-  // webOS keeps power for itself; no page sees a key event for it.
+  // webOS keeps power and home for itself; no page sees a key event for them.
   ['power', [116, null]],
+  ['home', [773, null]],
 ]);
 
 // Relative ClickableMouse step -> CSS pixels moved, measured on webOS 25 with
@@ -174,7 +175,8 @@ Coordinates are CSS pixels on the 1920x1080 app canvas. A positive wheel count
 scrolls down, a negative one up, at --at or else where the pointer is. A
 hidden webOS cursor reappears at the screen center on the next move; any key
 press hides it. Keys go straight to the TV, so they work with the app closed.
-power turns the TV off; wake turns it back on. --cdp cannot send power or wake.
+power turns the TV off; wake turns it back on. home opens webOS Home. --cdp
+cannot send power, home, or wake.
 
 tap skips the remote: it finds the first visible element by CSS selector, by
 data-key, or by the text (or else aria-label) of a [data-focusable] element,

@@ -22,6 +22,8 @@ const luna = vi.hoisted(() => ({
     destroy: ReturnType<typeof vi.fn>;
     setDisplay: ReturnType<typeof vi.fn>;
     selectAudio: ReturnType<typeof vi.fn>;
+    isLoaded: ReturnType<typeof vi.fn>;
+    element: { mediaId: string };
   }>,
 }));
 
@@ -33,6 +35,8 @@ vi.mock('./luna-media-element', () => ({
     readonly clockTime = vi.fn(() => 42);
     readonly audioTracks = vi.fn(() => [{ index: 0, language: 'l1', selected: true }]);
     readonly selectAudio = vi.fn(() => Promise.resolve(true));
+    readonly isLoaded = vi.fn(() => false);
+    mediaId = '';
     constructor(_video: HTMLVideoElement, options: {
       uri: string;
       headers: Record<string, string>;
@@ -40,7 +44,8 @@ vi.mock('./luna-media-element', () => ({
       onStarted?: () => void;
     }) {
       luna.sessions.push({ ...options, start: this.start, destroy: this.destroy,
-        setDisplay: this.setDisplay, selectAudio: this.selectAudio });
+        setDisplay: this.setDisplay, selectAudio: this.selectAudio, isLoaded: this.isLoaded,
+        element: this });
     }
   },
 }));
@@ -559,7 +564,8 @@ describe('PlayerPipeline webOS Luna routing', () => {
     '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Track 1",URI="a1.m3u8"',
     '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Track 2",URI="a2.m3u8"',
     '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="l1",URI="s1.m3u8"',
-    '#EXT-X-STREAM-INF:BANDWIDTH=1000,AUDIO="a",SUBTITLES="s"',
+    '#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID="cc",NAME="CC 1",INSTREAM-ID="CC1"',
+    '#EXT-X-STREAM-INF:BANDWIDTH=1000,AUDIO="a",SUBTITLES="s",CLOSED-CAPTIONS="cc"',
     'v.m3u8',
   ].join('\n');
   const REFERER = { Referer: 'http://host/' };
@@ -607,7 +613,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
     expect(logs.join('\n')).not.toContain('http://host/');
   });
 
-  it('reads only subtitle and audio renditions from the master while Luna plays', async () => {
+  it('reads only subtitle, caption and audio renditions from the master while Luna plays', async () => {
     let respond: (response: Response) => void = () => {};
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { respond = resolve; })));
     const video = videoElement();
@@ -622,12 +628,36 @@ describe('PlayerPipeline webOS Luna routing', () => {
     expect(pipeline.opts.onManifest).toHaveBeenCalledWith({
       audio: [expect.objectContaining({ name: 'Track 1' }), expect.objectContaining({ name: 'Track 2' })],
       subtitles: [expect.objectContaining({ name: 'l1' })],
-      closedCaptions: [],
+      closedCaptions: [expect.objectContaining({ instreamId: 'CC1' })],
       variants: [],
       masterUrl: 'http://host/a.m3u8',
     });
     expect(pipeline.isLunaActive()).toBe(true);
     expect(video.querySelector('source')).toBeNull();
+  });
+
+  it("exposes only the loaded Luna pipeline's mediaId, never a stale one", async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    const video = videoElement();
+    (video as HTMLVideoElement & { mediaId?: string }).mediaId = 'placeholder1';
+    const pipeline = await pipelineFor(video);
+
+    pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+    const first = luna.sessions[0];
+    first.element.mediaId = 'luna1';
+    expect(pipeline.lunaMediaId()).toBe('');
+    first.isLoaded.mockReturnValue(true);
+    expect(pipeline.lunaMediaId()).toBe('luna1');
+
+    pipeline.load('http://host/b.m3u8', null, { headers: REFERER });
+    expect(first.destroy).toHaveBeenCalled();
+    expect(pipeline.lunaMediaId()).toBe('');
+    luna.sessions[1].element.mediaId = 'luna2';
+    luna.sessions[1].isLoaded.mockReturnValue(true);
+    expect(pipeline.lunaMediaId()).toBe('luna2');
+
+    luna.sessions[1].onFallback('error', 1);
+    expect(pipeline.lunaMediaId()).toBe('');
   });
 
   it.each([
@@ -1110,14 +1140,15 @@ describe('PlayerPipeline webOS Luna routing', () => {
       expect(video.querySelector('source')).toBeNull();
       expect(logs.join('\n')).toContain(
         'event=playback.path.luna load=1 reason=url headers=referer format=dash drm=none');
-      // Only the self-rendered WebVTT rendition stays; the compositor one
-      // would toggle the placeholder's pipeline.
+      // The compositor rendition stays too: it toggles Luna's own pipeline.
       await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
       const manifest = vi.mocked(pipeline.opts.onManifest).mock.calls[0][0];
-      expect(manifest.subtitles).toEqual([expect.objectContaining({ lang: 'l1' })]);
+      expect(manifest.subtitles).toEqual([
+        expect.objectContaining({ lang: 'l1' }),
+        expect.objectContaining({ lang: 'l2', dash: { kind: 'native' } }),
+      ]);
       expect(manifest.audio).toHaveLength(1);
-      expect(logs.join('\n')).toContain(
-        'event=subtitles.luna.unavailable load=1 stage=manifest reason=compositor count=1');
+      expect(logs.join('\n')).not.toContain('event=subtitles.luna.unavailable');
       expect(fetch).toHaveBeenCalledOnce();
       expect(logs.join('\n')).not.toContain('http://host/');
     });

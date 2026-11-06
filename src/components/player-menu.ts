@@ -153,12 +153,23 @@ export class PlayerMenu {
     }
   }
 
-  // Re-reads player state, e.g. after a speed change was found not to apply.
+  // Re-reads player state, e.g. after a speed change was found not to apply
+  // or a subtitle pick fell back to Off.
   refresh(): void {
     if (!this.isVisible) return;
     if (this.mode === 'speed') {
       if (this.getPlaybackRateState().available) this.render();
       else this.openMain();
+      return;
+    }
+    if ((this.mode === 'audio' || this.mode === 'subtitles') && this.el) {
+      const focusedKey = this.keyAt(this.focusIdx);
+      this.render();
+      const rows = this.rows();
+      const idx = rows.findIndex(row => row.dataset.key === focusedKey);
+      this.focusIdx = idx >= 0 ? idx : Math.max(0, Math.min(this.focusIdx, rows.length - 1));
+      this.scope?.track(this.keyAt(this.focusIdx));
+      Focus.flush();
       return;
     }
     if (this.mode !== 'main' || !this.el) return;

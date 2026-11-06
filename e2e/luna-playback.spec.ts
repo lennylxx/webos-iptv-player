@@ -372,6 +372,40 @@ test('Luna audio names come from the master and an audio pick switches the UMS t
     .toContainText(['Off', 'Track 3']);
 });
 
+test('picking CC on Luna enables the compositor on the Luna mediaId', async ({ page }) => {
+  const master = [
+    '#EXTM3U',
+    '#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID="cc",NAME="Track 1",INSTREAM-ID="CC1"',
+    '#EXT-X-STREAM-INF:BANDWIDTH=1,CLOSED-CAPTIONS="cc"',
+    'http://host/v.m3u8',
+  ].join('\n');
+  await installFakeUms(page, { media: {}, hold: ['setSubtitleEnable'] });
+  await routeStreams(page, { 'http://host/a.m3u8': { type: 'application/vnd.apple.mpegurl', body: master } });
+  await startFirstChannel(page, HEADER_M3U);
+  await waitForPlaying(page, 'lm-1');
+
+  await seedPointer(page);
+  await page.keyboard.press('ArrowRight');
+  const menu = page.locator('#player-menu');
+  const subsRow = menu.locator('[data-menu-action="__subs_open__"]');
+  await expect(subsRow.locator('.menu-item-value')).toHaveText('Off');
+  await subsRow.click();
+  await menu.locator('[data-menu-action="__subs_track__"]', { hasText: 'Track 1 [CC]' }).click();
+  await expect.poll(async () => (await lunaProbe(page)).pending).toBe(1);
+  let probe = await lunaProbe(page);
+  expect(callsOf(probe, 'setSubtitleEnable').map(call => call.params))
+    .toEqual([{ mediaId: 'lm-1', enable: true }]);
+  // Not the placeholder's own mediaId.
+  expect(probe.calls.some(call => call.method === 'setSubtitleEnable'
+    && String(call.params.mediaId).indexOf('_ph') === 0)).toBe(false);
+
+  await page.evaluate(() => (window as unknown as { __lunaE2EControl: { release(): void } })
+    .__lunaE2EControl.release());
+  await expect.poll(async () => (await lunaProbe(page)).pending).toBe(0);
+  probe = await lunaProbe(page);
+  expect(callsOf(probe, 'setSubtitleEnable')).toHaveLength(1);
+});
+
 for (const kind of ['finite', 'live'] as const) {
   test(`a paused ${kind} Luna channel comes back paused${kind === 'finite' ? ' at its position' : ''} after suspend`,
     async ({ page }) => {

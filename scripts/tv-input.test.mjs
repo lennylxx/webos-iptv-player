@@ -364,6 +364,11 @@ describe('TV input key map', () => {
     expect(parseInputArgs(['key', 'power'])).toMatchObject({ command: 'key', keys: ['power'] });
     expect(() => parseInputArgs(['key', 'power', '--cdp'])).toThrow(/--cdp cannot send power/);
   });
+
+  it('sends home only through the TV input devices', () => {
+    expect(parseInputArgs(['key', 'home'])).toMatchObject({ command: 'key', keys: ['home'] });
+    expect(() => parseInputArgs(['key', 'home', '--cdp'])).toThrow(/--cdp cannot send home/);
+  });
 });
 
 describe('TV pointer planning', () => {
