@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 import {
   KEYS,
@@ -13,9 +14,17 @@ import {
   parseArpMac,
   parseTvMac,
   learnMac,
+  logWatch,
+  settleTarget,
   wakeTv,
   POINTER_GAIN,
   parseInputArgs,
+  parseTarget,
+  runStep,
+  splitWords,
+  tap,
+  targetScript,
+  waitFor,
   readCachedMac,
   writeCachedMac,
   planAxis,
@@ -83,6 +92,261 @@ describe('TV input arguments', () => {
     expect(() => parseInputArgs(['key', 'ok', '--no-wait'])).toThrow(/--no-wait is only valid for wake/);
     expect(() => parseInputArgs(['move', '1', '1', '--gap', '5'])).toThrow(/--gap is only valid for key or wheel/);
     expect(() => parseInputArgs(['key', 'up', '--at', '1', '1'])).toThrow(/--at is only valid for wheel/);
+  });
+});
+
+describe('TV tap', () => {
+  it('parses a selector, a data-key, or text, and adds --wait to actions', () => {
+    expect(parseInputArgs(['tap', '#channels', '.item'])).toMatchObject({
+      command: 'tap', target: { by: 'selector', value: '#channels .item' },
+    });
+    expect(parseInputArgs(['tap', 'key=ch1', '--wait', '1', '--wait-timeout', '2'])).toMatchObject({
+      target: { by: 'key', value: 'ch1' }, wait: '1', waitTimeout: 2,
+    });
+    expect(parseTarget('text=Alpha News')).toEqual({ by: 'text', value: 'Alpha News' });
+    expect(() => parseInputArgs(['tap'])).toThrow(/tap needs/);
+    expect(() => parseTarget('key=')).toThrow(/key= needs a value/);
+    expect(() => parseInputArgs(['pos', '--wait', '1'])).toThrow(/--wait is only valid/);
+    expect(() => parseInputArgs(['pos', '--if', '1'])).toThrow(/--if is only valid/);
+  });
+
+  const page = (body) => {
+    const dom = new JSDOM(`<body>${body}</body>`, { runScripts: 'outside-only' });
+    const { window } = dom;
+    window.Element.prototype.getBoundingClientRect = function rect() {
+      const hidden = this.hasAttribute('data-hidden');
+      const top = Number(this.getAttribute('data-top') ?? 200);
+      return { left: 100, top, width: hidden ? 0 : 300, height: hidden ? 0 : 60 };
+    };
+    window.Element.prototype.scrollIntoView = function scroll() { this.setAttribute('data-scrolled', ''); };
+    let cover = null;
+    // Without a cover, the point hits the [data-key] row whose box holds it.
+    window.document.elementFromPoint = (x, y) => cover || Array.prototype.find.call(
+      window.document.querySelectorAll('[data-key]'),
+      (e) => {
+        const r = e.getBoundingClientRect();
+        return r.height && y >= r.top && y < r.top + r.height;
+      },
+    ) || window.document.body;
+    return {
+      window,
+      cover: (selector) => { cover = window.document.querySelector(selector); },
+      evaluate: async (expression) => window.eval(expression),
+    };
+  };
+
+  // A DevTools mouse: each event goes to whatever is at the point right then.
+  const mouse = (p, calls = [], beforePress = () => {}) => {
+    let point = null;
+    const fire = (type) => {
+      const el = p.window.document.elementFromPoint(point.x, point.y);
+      el.dispatchEvent(new p.window.MouseEvent(type, {
+        bubbles: true, clientX: point.x, clientY: point.y,
+      }));
+    };
+    return {
+      move: async (to) => {
+        point = to;
+        calls.push(['move', to]);
+        fire('mousemove');
+      },
+      click: async () => {
+        beforePress();
+        calls.push(['click']);
+        fire('mousedown');
+        fire('mouseup');
+        fire('click');
+      },
+    };
+  };
+
+  it('finds the visible element by selector, data-key, or exact text first', async () => {
+    const p = page(`
+      <div class="row" data-hidden data-key="ch1">hidden</div>
+      <div class="row" data-focusable data-key="ch1">Alpha News</div>
+      <div data-focusable data-key="ch2">Alpha</div>
+      <div data-focusable data-key="edit" aria-label="Edit list"></div>`);
+    expect(await p.evaluate(targetScript({ by: 'selector', value: '.row' }, 'measure')))
+      .toMatchObject({ found: true, x: 250, y: 230, name: 'div[data-key=ch1]', text: 'Alpha News' });
+    expect(await p.evaluate(targetScript({ by: 'key', value: 'ch2' }, 'measure'))).toMatchObject({ text: 'Alpha' });
+    expect(await p.evaluate(targetScript({ by: 'text', value: 'alpha' }, 'measure'))).toMatchObject({ name: 'div[data-key=ch2]' });
+    expect(await p.evaluate(targetScript({ by: 'text', value: 'news' }, 'measure'))).toMatchObject({ name: 'div[data-key=ch1]' });
+    expect(await p.evaluate(targetScript({ by: 'text', value: 'edit list' }, 'measure'))).toMatchObject({ name: 'div[data-key=edit]' });
+    expect(await p.evaluate(targetScript({ by: 'key', value: 'ch9' }, 'measure'))).toEqual({ found: false });
+  });
+
+  it('scrolls the target into view, then clicks its center', async () => {
+    const p = page('<div data-focusable data-key="ch1"><span>Bravo</span></div>');
+    p.cover('span');
+    const calls = [];
+    const hit = await tap(p, mouse(p, calls), { by: 'text', value: 'Bravo' }, 0, async () => {});
+    expect(p.window.document.querySelector('[data-scrolled]')).not.toBeNull();
+    expect(hit).toMatchObject({ x: 250, y: 230, covered: null, verified: true, landed: 'div[data-key=ch1] "Bravo"' });
+    expect(calls).toEqual([['move', { x: 250, y: 230 }], ['click']]);
+  });
+
+  it('fails, naming the row hit, when the list moves between measuring and clicking', async () => {
+    const p = page(`
+      <div data-focusable data-key="ch1" data-top="140">Alpha</div>
+      <div data-focusable data-key="ch2" data-top="200">Bravo</div>
+      <div data-focusable data-key="ch3" data-top="260">Charlie</div>`);
+    const scroll = () => {
+      p.window.document.querySelectorAll('[data-key]').forEach((row) => {
+        row.setAttribute('data-top', String(Number(row.getAttribute('data-top')) - 60));
+      });
+    };
+    await expect(tap(p, mouse(p, [], scroll), { by: 'key', value: 'ch2' }, 0, async () => {}))
+      .rejects.toThrow('tapped div[data-key=ch2] "Bravo" at 250,230, but the press at 250,230 hit '
+        + 'div[data-key=ch3] "Charlie", not div[data-key=ch2]; div[data-key=ch2] had moved from 100,200 300x60 to 100,140 300x60; retry with --settle');
+  });
+
+  it('fails when the app re-renders the row between press and click', async () => {
+    const p = page('<div data-focusable data-key="ch1">Alpha</div>');
+    const row = p.window.document.querySelector('[data-key=ch1]');
+    row.addEventListener('mousedown', () => {
+      const fresh = row.cloneNode(true);
+      row.replaceWith(fresh);
+    });
+    await expect(tap(p, mouse(p), { by: 'key', value: 'ch1' }, 0, async () => {}))
+      .rejects.toThrow('but the click at 250,230 hit div[data-key=ch1] "Alpha", not div[data-key=ch1]; '
+        + 'div[data-key=ch1] was no longer in the page');
+  });
+
+  it('settles: waits until the target box holds still before clicking', async () => {
+    const p = page('<div data-focusable data-key="ch1" data-top="500">Alpha</div>');
+    const row = p.window.document.querySelector('[data-key=ch1]');
+    let clock = 0;
+    const wait = async (ms) => {
+      clock += ms;
+      const top = Number(row.getAttribute('data-top'));
+      if (top > 200) row.setAttribute('data-top', String(top - 100));
+    };
+    const calls = [];
+    const hit = await tap(p, mouse(p, calls), { by: 'key', value: 'ch1' }, 5, wait, () => clock, 100);
+    expect(hit).toMatchObject({ y: 230, settledMs: 100, verified: true });
+    expect(calls[0]).toEqual(['move', { x: 250, y: 230 }]);
+    const still = () => clock;
+    let flip = 0;
+    const moving = async (ms) => {
+      clock += ms;
+      flip += 1;
+      row.setAttribute('data-top', String(flip % 2 ? 300 : 310));
+    };
+    await expect(settleTarget(p, { by: 'key', value: 'ch1' }, 100, 0.3, moving, still))
+      .rejects.toThrow(/div\[data-key=ch1\] kept moving for 0.3 s; last at 100,3\d0 300x60/);
+  });
+
+  it('refuses a covered or missing target instead of clicking something else', async () => {
+    const p = page('<div data-focusable data-key="ch1">Charlie</div><div id="overlay"></div>');
+    p.cover('#overlay');
+    const backend = { move: async () => { throw new Error('moved'); }, click: async () => {} };
+    await expect(tap(p, backend, { by: 'key', value: 'ch1' }, 0, async () => {}))
+      .rejects.toThrow('div[data-key=ch1] is covered by div#overlay at 250,230');
+    await expect(tap(p, backend, { by: 'key', value: 'ch2' }, 0, async () => {}))
+      .rejects.toThrow('no visible element matches key=ch2 within 0 s');
+  });
+
+  it('waits for a target that appears late, such as a menu that is opening', async () => {
+    const p = page('');
+    let clock = 0;
+    const wait = async (ms) => {
+      clock += ms;
+      if (clock === 300) p.window.document.body.innerHTML = '<div data-focusable data-key="t2">Track 2</div>';
+    };
+    expect(await tap(p, mouse(p), { by: 'text', value: 'Track 2' }, 1, wait, () => clock))
+      .toMatchObject({ name: 'div[data-key=t2]' });
+  });
+
+  it('splits do steps like a shell and runs each with its own options', () => {
+    expect(splitWords(`key down --if "a('x') && b" 'c d'\\ e`)).toEqual(['key', 'down', '--if', "a('x') && b", 'c d e']);
+    expect(() => splitWords('tap "x')).toThrow(/unclosed "/);
+    expect(parseInputArgs(['do', 'tap text=Audio', 'key down ok --gap 0 --if "1"', '--cdp', '--wait', 'done'])).toMatchObject({
+      command: 'do',
+      wait: 'done',
+      steps: [
+        { command: 'tap', target: { by: 'text', value: 'Audio' }, cdp: true },
+        { command: 'key', keys: ['down', 'ok'], gap: 0, when: '1', cdp: true },
+      ],
+    });
+    expect(() => parseInputArgs(['do'])).toThrow(/do needs/);
+    expect(() => parseInputArgs(['do', 'wake'])).toThrow(/do cannot run "wake"/);
+    expect(() => parseInputArgs(['do', 'key menu'])).toThrow(/unknown key menu/);
+  });
+
+  it('points a step option written after the step back inside its quotes', () => {
+    expect(() => parseInputArgs(['do', 'key right --cdp', '--if', 'menu', 'tap key=a']))
+      .toThrow(`--if belongs to one step: put it inside that step's quotes, as in do 'key down --cdp --if "<js>"'`);
+    expect(() => parseInputArgs(['do', 'tap key=a', '--settle'])).toThrow(/--settle belongs to one step/);
+    expect(() => parseInputArgs(['do', 'tap key=a', '--settle=50'])).toThrow(/--settle belongs to one step/);
+    expect(parseInputArgs(['do', 'tap key=a --settle=50', '--wait-log', 'x'])).toMatchObject({
+      waitLog: /x/, steps: [{ settle: 50 }],
+    });
+  });
+
+  it('parses --settle with an optional time and --wait-log as a regex', () => {
+    expect(parseInputArgs(['tap', 'key=a', '--settle'])).toMatchObject({ settle: 100 });
+    expect(parseInputArgs(['tap', 'key=a', '--settle=250'])).toMatchObject({ settle: 250 });
+    expect(parseInputArgs(['tap', 'key=a'])).toMatchObject({ settle: undefined });
+    expect(() => parseInputArgs(['tap', 'key=a', '--settle=0'])).toThrow(/--settle: must be a positive integer/);
+    expect(() => parseInputArgs(['key', 'ok', '--settle'])).toThrow(/--settle is only valid for tap/);
+    expect(parseInputArgs(['key', 'ok', '--wait-log', 'event=a\\.b'])).toMatchObject({ waitLog: /event=a\.b/ });
+    expect(() => parseInputArgs(['key', 'ok', '--wait-log', '('])).toThrow(/Invalid value for --wait-log/);
+  });
+
+  it('--wait-log prints the first console line the action caused', async () => {
+    const listeners = new Map();
+    const client = {
+      on: (method, fn) => {
+        listeners.set(method, fn);
+        return () => listeners.delete(method);
+      },
+      call: async () => ({}),
+    };
+    const emit = (text) => listeners.get('Runtime.consoleAPICalled')({ type: 'log', args: [{ value: text }] });
+    let clock = 0;
+    const logs = logWatch(client, async (ms) => {
+      clock += ms;
+      if (clock === 100) emit('[Player] event=playback.path path=luna');
+    }, () => clock);
+    emit('[Player] event=playback.path path=old');
+    const printed = [];
+    const log = console.log;
+    console.log = (line) => printed.push(line);
+    try {
+      const step = parseInputArgs(['key', 'ok', '--cdp', '--wait-log', 'playback\\.path']);
+      const backends = { cdp: () => ({ key: async () => emit('[App] key ok') }) };
+      await runStep({ evaluate: async () => true }, client, step, backends, logs);
+    } finally {
+      console.log = log;
+    }
+    expect(printed).toEqual(['log [Player] event=playback.path path=luna']);
+    await expect(logs.waitFor(/never/, logs.mark() - 1, 0.1))
+      .rejects.toThrow('--wait-log timed out after 0.1 s; no console line matched /never/ (1 seen; last: "[Player] event=playback.path path=luna")');
+    logs.stop();
+    expect(listeners.size).toBe(0);
+  });
+
+  it('sends nothing when --if is falsy or throws', async () => {
+    const sent = [];
+    const backends = { cdp: () => ({ key: async (keys) => sent.push(...keys) }), evdev: () => { throw new Error('evdev'); } };
+    const step = parseInputArgs(['key', 'down', '--cdp', '--if', 'menu']);
+    await expect(runStep({ evaluate: async () => null }, null, step, backends))
+      .rejects.toThrow('--if was null; nothing sent');
+    await expect(runStep({ evaluate: async () => { throw new Error('nope'); } }, null, step, backends))
+      .rejects.toThrow('--if threw nope; nothing sent');
+    expect(sent).toEqual([]);
+    await runStep({ evaluate: async () => true }, null, step, backends);
+    expect(sent).toEqual(['down']);
+  });
+
+  it('polls --wait until truthy, or times out with the last value', async () => {
+    let clock = 0;
+    const values = [null, 0, 'ready'];
+    const p = { evaluate: async () => values.shift() };
+    expect(await waitFor(p, 'x', 5, () => clock, async (ms) => { clock += ms; })).toBe('ready');
+    const failing = { evaluate: async () => { throw new Error('boom'); } };
+    await expect(waitFor(failing, 'x', 0.2, () => clock, async (ms) => { clock += ms; }))
+      .rejects.toThrow('--wait timed out after 0.2 s; it last threw boom');
   });
 });
 

@@ -23,6 +23,7 @@ import {
   resolveConfiguredDevice,
   resolveConfiguredDeviceIp,
 } from './cdp-client.mjs';
+import { enableCdpLogs, normalizeCdpLogEvent, subscribeCdpLogs } from './cdp-logs.mjs';
 import { formatOptions, parseArgs } from './cli-args.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,8 @@ const DEFAULT_SSH_PORT = 9922;
 const SSH_GRACE_SECONDS = 5;
 const WAKE_PORTS = [9, 7];
 const LIMITED_BROADCAST = '255.255.255.255';
+const DEFAULT_SETTLE_MS = 100;
+const SETTLE_POLL_MS = 50;
 
 // name -> [Linux evdev code on the "LGE RCU" device, DOM keyCode it produces]
 export const KEYS = new Map([
@@ -68,7 +71,7 @@ export const KEYS = new Map([
 export const POINTER_GAIN = [[16, 58], [12, 41], [8, 22], [6, 14], [4, 8], [3, 5], [2, 2], [1, 1]];
 
 export const INPUT_SPEC = {
-  commands: ['key', 'move', 'click', 'wheel', 'pos', 'wake'],
+  commands: ['key', 'move', 'click', 'wheel', 'tap', 'do', 'pos', 'wake'],
   options: {
     gap: {
       type: 'integer',
@@ -84,6 +87,39 @@ export const INPUT_SPEC = {
       commands: ['wheel'],
       valueName: '<px>',
       description: 'Scroll at this x y point instead of at the pointer',
+    },
+    if: {
+      type: 'string',
+      commands: ['key', 'move', 'click', 'wheel', 'tap'],
+      valueName: '<js>',
+      description: 'Act only if this page expression is truthy, or else fail',
+    },
+    wait: {
+      type: 'string',
+      commands: ['key', 'move', 'click', 'wheel', 'tap', 'do'],
+      valueName: '<js>',
+      description: 'Then poll this page expression until it is truthy and print it',
+    },
+    'wait-timeout': {
+      type: 'number',
+      positive: true,
+      default: 5,
+      commands: ['key', 'move', 'click', 'wheel', 'tap', 'do'],
+      valueName: '<s>',
+      description: 'Seconds to wait for --wait and --wait-log, for tap to find '
+        + 'its target, and for --settle',
+    },
+    'wait-log': {
+      type: 'string',
+      commands: ['key', 'move', 'click', 'wheel', 'tap', 'do'],
+      valueName: '<regex>',
+      description: 'Then wait for a console line matching this regex and print it',
+    },
+    settle: {
+      type: 'boolean',
+      commands: ['tap'],
+      description: `Click only once the target's box has held still for ${String(DEFAULT_SETTLE_MS)} ms; `
+        + '--settle=<ms> sets the time',
     },
     cdp: {
       type: 'boolean',
@@ -125,6 +161,8 @@ Usage:
   scripts/tv.sh input move <x> <y>
   scripts/tv.sh input click [<x> <y>]
   scripts/tv.sh input wheel <notches> [--at <x> <y>] [--gap <ms>]
+  scripts/tv.sh input tap <selector> | key=<data-key> | text=<text>
+  scripts/tv.sh input do '<step>'... [--cdp] [--wait <js>] [--wait-log <regex>]
   scripts/tv.sh input pos
   scripts/tv.sh input wake [--timeout <s>] [--no-wait]
   scripts/tv.sh input wake --learn
@@ -137,6 +175,39 @@ scrolls down, a negative one up, at --at or else where the pointer is. A
 hidden webOS cursor reappears at the screen center on the next move; any key
 press hides it. Keys go straight to the TV, so they work with the app closed.
 power turns the TV off; wake turns it back on. --cdp cannot send power or wake.
+
+tap skips the remote: it finds the first visible element by CSS selector, by
+data-key, or by the text (or else aria-label) of a [data-focusable] element,
+exact match first. It waits up to --wait-timeout for the element to appear,
+scrolls it into view, and clicks its center with a DevTools mouse event, the
+same trusted click a Magic Remote sends. It fails, naming the element, when
+something else covers that point. A virtualized list renders only rows near
+its focus, so a far row is not found until the list scrolls there. It then
+checks where the press and click landed and fails, naming what was hit and
+where the target had moved, when they missed the target. --settle waits for
+a list that is still scrolling or re-rendering to hold still first.
+
+--if '<js>' checks the page first and fails, sending nothing, unless the
+expression is truthy: guard a down or ok that must land in an open menu, or it
+zaps channels instead.
+
+do runs each quoted step (any key, move, click, wheel, tap, or pos command,
+with its own --if and --wait) in order over one DevTools connection and stops
+at the first failure. --cdp on do applies to every step; a trailing --wait
+runs after the last one.
+  scripts/tv.sh input do 'tap text=Audio' 'key down ok --cdp --gap 0' --wait '<js>'
+Put a step's --if or --wait expression in double quotes inside the step.
+--if, --gap, --at, and --settle belong to one step and go inside its quotes.
+
+--wait '<js>' runs after the action in the same connection: it polls the
+expression every 100 ms until it is truthy and prints the value, or fails
+after --wait-timeout seconds, so one call both acts and confirms. Example:
+  scripts/tv.sh input tap text=ch2 --wait "document.querySelector('#player:not(.hidden)') && 'playing'"
+
+--wait-log '<regex>' listens to the page console from just before the action
+(from the first step of a do) and prints the first line that matches, or
+fails after --wait-timeout seconds. It runs before --wait. Example:
+  scripts/tv.sh input tap key=ch:2 --wait-log 'event=playback\\.path'
 
 wake sends a Wake-on-LAN packet, then waits until the TV answers over SSH and
 reports it is active, not in standby. The TV's
@@ -159,10 +230,63 @@ const coordinate = (value, name, max) => {
   return number;
 };
 
-export function parseInputArgs(argv) {
-  if (!argv.length || argv.includes('-h') || argv.includes('--help')) return { help: true };
+// --settle takes an optional =<ms>, which the shared parser has no form for.
+function takeSettle(argv) {
+  let settle;
+  const rest = argv.filter((arg) => {
+    const match = /^--settle(?:=(.*))?$/s.exec(arg);
+    if (!match) return true;
+    if (match[1] === undefined) {
+      settle = DEFAULT_SETTLE_MS;
+      return true;
+    }
+    const ms = Number(match[1]);
+    if (!match[1] || !Number.isInteger(ms) || ms <= 0) {
+      throw new Error('Invalid value for --settle: must be a positive integer of ms');
+    }
+    settle = ms;
+    return false;
+  });
+  if (settle !== undefined && !rest.includes('--settle')) rest.push('--settle');
+  return { argv: rest, settle };
+}
+
+// A do step's own option written after the step, outside its quotes.
+function checkDoOptions(argv) {
+  for (const arg of argv.slice(1)) {
+    if (arg === '--') return;
+    const name = /^--([\w-]+)/.exec(arg)?.[1];
+    const spec = name && Object.hasOwn(INPUT_SPEC.options, name) ? INPUT_SPEC.options[name] : null;
+    if (!spec || !spec.commands || spec.commands.includes('do')) continue;
+    const value = spec.type === 'boolean' ? '' : ` ${spec.valueName === '<js>' ? '"<js>"' : spec.valueName ?? '<value>'}`;
+    throw new Error(`--${name} belongs to one step: put it inside that step's quotes, `
+      + `as in do 'key down --cdp --${name}${value}', not after the step`);
+  }
+}
+
+const regex = (source, flag) => {
+  try {
+    return new RegExp(source);
+  } catch (e) {
+    throw new Error(`Invalid value for ${flag}: ${e.message}`);
+  }
+};
+
+export function parseInputArgs(rawArgv) {
+  if (!rawArgv.length || rawArgv.includes('-h') || rawArgv.includes('--help')) return { help: true };
+  if (rawArgv[0] === 'do') checkDoOptions(rawArgv);
+  const { argv, settle } = takeSettle(rawArgv);
   const { command, values, positionals: rest } = parseArgs(argv, INPUT_SPEC);
-  const options = { help: false, cdp: values.cdp ?? false, app: values.app, gap: values.gap };
+  const options = {
+    help: false,
+    cdp: values.cdp ?? false,
+    app: values.app,
+    gap: values.gap,
+    when: values.if,
+    wait: values.wait,
+    waitLog: values['wait-log'] === undefined ? undefined : regex(values['wait-log'], '--wait-log'),
+    waitTimeout: values['wait-timeout'],
+  };
   const point = () => ({
     x: coordinate(rest[0], 'x', SCREEN.width),
     y: coordinate(rest[1], 'y', SCREEN.height),
@@ -194,6 +318,22 @@ export function parseInputArgs(argv) {
       };
       return { ...options, command, notches, at };
     }
+    case 'tap': {
+      const text = rest.join(' ').trim();
+      if (!text) throw new Error('tap needs <selector>, key=<data-key>, or text=<text>');
+      return { ...options, command, target: parseTarget(text), settle };
+    }
+    case 'do': {
+      if (!rest.length) throw new Error('do needs at least one quoted step');
+      const steps = rest.map((step) => {
+        const parsed = parseInputArgs(splitWords(step));
+        if (parsed.help || ['do', 'wake'].includes(parsed.command)) {
+          throw new Error(`do cannot run "${step}"`);
+        }
+        return options.cdp ? { ...parsed, cdp: true } : parsed;
+      });
+      return { ...options, command, steps };
+    }
     case 'pos':
       if (rest.length) throw new Error('pos takes no arguments');
       return { ...options, command };
@@ -210,6 +350,236 @@ export function parseInputArgs(argv) {
     default:
       throw new Error(`unknown command ${command}`);
   }
+}
+
+// Shell-style words: whitespace splits, quotes group, backslash escapes.
+export function splitWords(text) {
+  const words = [];
+  let word = null;
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"' && i + 1 < text.length) word += text[++i];
+      else word += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      word ??= '';
+    } else if (c === '\\' && i + 1 < text.length) {
+      word = (word ?? '') + text[++i];
+    } else if (/\s/.test(c)) {
+      if (word !== null) words.push(word);
+      word = null;
+    } else {
+      word = (word ?? '') + c;
+    }
+  }
+  if (quote) throw new Error(`unclosed ${quote} in "${text}"`);
+  if (word !== null) words.push(word);
+  return words;
+}
+
+export function parseTarget(text) {
+  const match = /^(key|text)=(.*)$/s.exec(text);
+  if (!match) return { by: 'selector', value: text };
+  if (!match[2]) throw new Error(`${match[1]}= needs a value`);
+  return { by: match[1], value: match[2] };
+}
+
+const describeTarget = (target) => (target.by === 'selector' ? target.value : `${target.by}=${target.value}`);
+
+// Runs in the page. Chromium 53 compatible: no optional chaining or spread.
+// mode 'scroll' scrolls the target into view; 'measure' reports its center and
+// what covers it; 'arm' also records, from the window capture phase, where the
+// next pointer events land and where the target is at that moment.
+export function targetScript(target, mode) {
+  return `(() => {
+  const by = ${JSON.stringify(target.by)};
+  const value = ${JSON.stringify(target.value)};
+  const mode = ${JSON.stringify(mode)};
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+  };
+  const text = (el) => ((el.textContent || '').replace(/\\s+/g, ' ').trim()
+    || el.getAttribute('aria-label') || '');
+  let el = null;
+  if (by === 'selector') {
+    el = Array.prototype.find.call(document.querySelectorAll(value), visible) || null;
+  } else if (by === 'key') {
+    el = Array.prototype.find.call(document.querySelectorAll('[data-key]'),
+      (e) => e.getAttribute('data-key') === value && visible(e)) || null;
+  } else {
+    const want = value.toLowerCase();
+    const items = Array.prototype.filter.call(document.querySelectorAll('[data-focusable]'), visible);
+    el = items.find((e) => text(e).toLowerCase() === want)
+      || items.find((e) => text(e).toLowerCase().indexOf(want) >= 0) || null;
+  }
+  if (!el) return { found: false };
+  if (mode === 'scroll') {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    return { found: true };
+  }
+  const name = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '')
+    + (e.getAttribute('data-key') ? '[data-key=' + e.getAttribute('data-key') + ']' : '');
+  const box = (e) => {
+    const r = e.getBoundingClientRect();
+    return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+  };
+  const rect = box(el);
+  const x = Math.round(rect[0] + rect[2] / 2);
+  const y = Math.round(rect[1] + rect[3] / 2);
+  const hit = document.elementFromPoint(x, y);
+  if (mode === 'arm') {
+    const tap = window.__tvTap || (window.__tvTap = {});
+    tap.el = el;
+    tap.events = [];
+    if (!tap.installed) {
+      tap.installed = true;
+      const keyed = (e) => {
+        let n = e;
+        while (n && n.nodeType === 1 && !n.getAttribute('data-key')) n = n.parentNode;
+        return n && n.nodeType === 1 ? n : e;
+      };
+      const record = (e) => {
+        const t = window.__tvTap;
+        if (!t.el || t.events.length >= 8 || !e.target || e.target.nodeType !== 1) return;
+        const k = keyed(e.target);
+        t.events.push({
+          type: e.type, x: e.clientX, y: e.clientY,
+          hit: name(k), key: k.getAttribute('data-key'), text: text(k).slice(0, 60),
+          inside: t.el === e.target || t.el.contains(e.target),
+          attached: document.documentElement.contains(t.el),
+          rect: box(t.el),
+        });
+      };
+      ['mousemove', 'mousedown', 'mouseup', 'click'].forEach((type) => {
+        window.addEventListener(type, record, true);
+      });
+    }
+  }
+  return {
+    found: true, x: x, y: y, rect: rect, name: name(el), text: text(el).slice(0, 60),
+    covered: hit && hit !== el && !el.contains(hit) ? name(hit) : null,
+  };
+})()`;
+}
+
+const TAP_REPORT = `(() => {
+  const t = window.__tvTap;
+  if (!t || !t.el) return null;
+  const events = t.events;
+  t.el = null;
+  t.events = [];
+  return events;
+})()`;
+
+export async function waitFor(page, expression, seconds, now = Date.now, wait = sleep) {
+  const deadline = now() + seconds * 1000;
+  for (;;) {
+    let value;
+    let error = null;
+    try {
+      value = await page.evaluate(expression);
+    } catch (e) {
+      error = e;
+    }
+    if (!error && value) return value;
+    if (now() >= deadline) {
+      const last = error ? `threw ${error.message}` : `was ${JSON.stringify(value)}`;
+      throw new Error(`--wait timed out after ${String(seconds)} s; it last ${last}`);
+    }
+    await wait(100);
+  }
+}
+
+const sameRect = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
+const at = (point) => `${String(point.x)},${String(point.y)}`;
+const rectText = (rect) => `${String(rect[0])},${String(rect[1])} ${String(rect[2])}x${String(rect[3])}`;
+
+// Polls the target until its box is unchanged for ms, so a list that is
+// still scrolling or re-rendering cannot move a row under the click.
+export async function settleTarget(page, target, ms, seconds, wait = sleep, now = Date.now) {
+  const start = now();
+  const deadline = start + seconds * 1000;
+  let last = await page.evaluate(targetScript(target, 'measure'));
+  let since = start;
+  let moves = 0;
+  for (;;) {
+    if (!last || !last.found) throw new Error(`${describeTarget(target)} disappeared while settling`);
+    if (now() - since >= ms) return { ...last, moves, settledMs: since - start };
+    if (now() >= deadline) {
+      throw new Error(`${last.name} kept moving for ${String(seconds)} s; last at ${rectText(last.rect)}`);
+    }
+    await wait(SETTLE_POLL_MS);
+    const next = await page.evaluate(targetScript(target, 'measure'));
+    if (!next || !next.found || !sameRect(next.rect, last.rect)) {
+      since = now();
+      moves += 1;
+    }
+    last = next;
+  }
+}
+
+// Judges the recorded pointer events: the press and the click must both land
+// inside the measured element, or the app acted on something else.
+export function checkTapEvents(hit, events) {
+  if (!events) return { verified: false, problem: 'the page lost the tap recorder' };
+  const press = events.find((e) => e.type === 'mousedown');
+  const click = events.find((e) => e.type === 'click');
+  const where = (e) => `${e.hit}${e.text ? ` "${e.text}"` : ''}`;
+  const moved = (e) => {
+    if (!e.attached) return `; ${hit.name} was no longer in the page`;
+    if (sameRect(e.rect, hit.rect)) return '';
+    const hint = hit.settledMs === undefined ? '; retry with --settle' : '';
+    return `; ${hit.name} had moved from ${rectText(hit.rect)} to ${rectText(e.rect)}${hint}`;
+  };
+  if (!press) return { verified: false, events, problem: `no mousedown reached the page at ${at(hit)}` };
+  if (!press.inside) {
+    return { verified: false, events, problem: `the press at ${at(hit)} hit ${where(press)}, not ${hit.name}${moved(press)}` };
+  }
+  if (!click) {
+    return { verified: false, events, problem: `the press hit ${hit.name}, but no click followed${moved(press)}` };
+  }
+  if (!click.inside) {
+    return { verified: false, events, problem: `the click at ${at(hit)} hit ${where(click)}, not ${hit.name}${moved(click)}` };
+  }
+  return { verified: true, events, landed: where(click) };
+}
+
+export async function tap(page, backend, target, seconds = 5, wait = sleep, now = Date.now, settle) {
+  const deadline = now() + seconds * 1000;
+  let located = await page.evaluate(targetScript(target, 'scroll'));
+  while ((!located || !located.found) && now() < deadline) {
+    await wait(100);
+    located = await page.evaluate(targetScript(target, 'scroll'));
+  }
+  if (!located || !located.found) {
+    throw new Error(`no visible element matches ${describeTarget(target)} within ${String(seconds)} s`);
+  }
+  await wait(150);
+  const settled = settle ? await settleTarget(page, target, settle, seconds, wait, now) : null;
+  const hit = await page.evaluate(targetScript(target, 'arm'));
+  if (!hit || !hit.found) throw new Error(`${describeTarget(target)} disappeared after scrolling`);
+  if (settled) hit.settledMs = settled.settledMs;
+  if (hit.x < 0 || hit.x >= SCREEN.width || hit.y < 0 || hit.y >= SCREEN.height) {
+    throw new Error(`${hit.name} is off the canvas at ${at(hit)}`);
+  }
+  if (hit.covered) throw new Error(`${hit.name} is covered by ${hit.covered} at ${at(hit)}`);
+  await backend.move({ x: hit.x, y: hit.y });
+  await backend.click();
+  let events;
+  try {
+    events = await page.evaluate(TAP_REPORT);
+  } catch (e) {
+    return { ...hit, verified: false, problem: `could not read where the click landed: ${e.message}` };
+  }
+  const check = checkTapEvents(hit, events);
+  if (!check.verified && check.events) {
+    throw new Error(`tapped ${hit.name} "${hit.text}" at ${at(hit)}, but ${check.problem}`);
+  }
+  return { ...hit, ...check };
 }
 
 // Split one axis distance into relative steps, largest first.
@@ -234,6 +604,8 @@ export function planMove(from, to) {
 }
 
 const REMOTE_HELPER = join(SCRIPT_DIR, 'tv-input-remote.js');
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const shellQuote = (value) => `'${value.replace(/'/g, "'\\''")}'`;
 
@@ -260,8 +632,6 @@ const TRACKER = `(() => {
   }
   return { x: t.x, y: t.y, visible: t.visible };
 })()`;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function runOnTv(steps) {
   if (!steps.length) return;
@@ -324,7 +694,7 @@ const keyScript = (keyCode, type) => `(() => {
   (document.activeElement || document.body).dispatchEvent(e);
 })()`;
 
-function cdpBackend(page, client) {
+export function cdpBackend(page, client) {
   let last = { x: SCREEN.width / 2, y: SCREEN.height / 2 };
   const mouse = (type, extra = {}) => client.call('Input.dispatchMouseEvent', {
     type, x: last.x, y: last.y, ...extra,
@@ -686,6 +1056,90 @@ export async function wakeTv(options, {
   throw new Error(`the TV did not answer within ${String(seconds)} s; check that Wake-on-LAN is enabled on the TV`);
 }
 
+// Collects console lines on the open DevTools connection; a cursor taken just
+// before an action lets --wait-log match only what the action caused.
+export function logWatch(client, wait = sleep, now = Date.now) {
+  const lines = [];
+  const stops = subscribeCdpLogs(client, (method, params) => {
+    lines.push(normalizeCdpLogEvent(method, params).text);
+  });
+  return {
+    lines,
+    // Enabling replays earlier messages before it resolves; the caller marks after.
+    start: () => enableCdpLogs(client, { history: true }),
+    mark: () => lines.length,
+    async waitFor(pattern, cursor, seconds) {
+      const deadline = now() + seconds * 1000;
+      for (;;) {
+        const line = lines.slice(cursor).find((text) => pattern.test(text));
+        if (line !== undefined) return line;
+        if (now() >= deadline) {
+          const seen = lines.length - cursor;
+          const last = seen ? `; last: ${JSON.stringify(lines[lines.length - 1].slice(0, 200))}` : '';
+          throw new Error(`--wait-log timed out after ${String(seconds)} s; no console line matched `
+            + `${String(pattern)} (${String(seen)} seen${last})`);
+        }
+        await wait(50);
+      }
+    },
+    stop: () => stops.forEach((stop) => stop()),
+  };
+}
+
+const printValue = (value) => console.log(typeof value === 'object' ? JSON.stringify(value) : String(value));
+
+export async function runStep(page, client, options, backends = {
+  cdp: () => cdpBackend(page, client),
+  evdev: () => evdevBackend(page),
+}, logs = null) {
+  if (options.when !== undefined) {
+    let value;
+    try {
+      value = await page.evaluate(options.when);
+    } catch (e) {
+      throw new Error(`--if threw ${e.message}; nothing sent`);
+    }
+    if (!value) throw new Error(`--if was ${JSON.stringify(value)}; nothing sent`);
+  }
+  const backend = options.cdp || options.command === 'tap' ? backends.cdp() : backends.evdev();
+  const cursor = options.waitLog ? logs.mark() : 0;
+  switch (options.command) {
+    case 'tap': {
+      const hit = await tap(page, backend, options.target, options.waitTimeout, sleep, Date.now, options.settle);
+      const settled = hit.settledMs ? ` once it held still (moved for ${String(hit.settledMs)} ms)` : '';
+      const landed = hit.verified ? `; click landed on ${hit.landed}` : `; ${hit.problem}`;
+      console.log(`tapped ${hit.name} "${hit.text}" at ${at(hit)}${settled}${landed}`);
+      break;
+    }
+    case 'key':
+      await backend.key(options.keys, options.gap);
+      break;
+    case 'move':
+      await backend.move(options.to);
+      break;
+    case 'click':
+      if (options.to) await backend.move(options.to);
+      await backend.click();
+      break;
+    case 'wheel':
+      await backend.wheel(options.notches, options.gap, options.at);
+      break;
+    default:
+      break;
+  }
+  if (!['key', 'tap'].includes(options.command)) {
+    await sleep(150);
+    const pos = await backend.position();
+    console.log(`pointer ${pos.x},${pos.y}`);
+  }
+  await finishWaits(page, options, logs, cursor);
+}
+
+async function finishWaits(page, options, logs, cursor) {
+  if (options.waitLog) console.log(`log ${await logs.waitFor(options.waitLog, cursor, options.waitTimeout)}`);
+  if (options.wait) printValue(await waitFor(page, options.wait, options.waitTimeout));
+}
+
 async function main() {
   let options;
   try {
@@ -702,7 +1156,8 @@ async function main() {
     await wakeTv(options);
     return;
   }
-  if (options.command === 'key' && !options.cdp) {
+  if (options.command === 'key' && !options.cdp && !options.wait && !options.waitLog
+      && options.when === undefined) {
     await evdevBackend(null).key(options.keys, options.gap);
     return;
   }
@@ -718,38 +1173,32 @@ async function main() {
   const page = {
     async evaluate(expression) {
       const { result, exceptionDetails } = await client.call('Runtime.evaluate', {
-        expression, returnByValue: true,
+        expression, returnByValue: true, awaitPromise: true,
       });
       if (exceptionDetails) throw new Error(exceptionDetails.exception?.description || exceptionDetails.text);
       return result.value;
     },
   };
+  const steps = options.command === 'do' ? options.steps : [];
+  const logs = [options, ...steps].some((step) => step.waitLog) ? logWatch(client) : null;
   try {
     await page.evaluate(TRACKER);
-    const backend = options.cdp ? cdpBackend(page, client) : evdevBackend(page);
-    switch (options.command) {
-      case 'key':
-        await backend.key(options.keys, options.gap);
-        break;
-      case 'move':
-        await backend.move(options.to);
-        break;
-      case 'click':
-        if (options.to) await backend.move(options.to);
-        await backend.click();
-        break;
-      case 'wheel':
-        await backend.wheel(options.notches, options.gap, options.at);
-        break;
-      default:
-        break;
+    if (logs) await logs.start();
+    if (options.command !== 'do') {
+      await runStep(page, client, options, undefined, logs);
+      return;
     }
-    if (options.command !== 'key') {
-      await sleep(150);
-      const pos = await backend.position();
-      console.log(`pointer ${pos.x},${pos.y}`);
+    const cursor = logs ? logs.mark() : 0;
+    for (const [i, step] of steps.entries()) {
+      try {
+        await runStep(page, client, step, undefined, logs);
+      } catch (e) {
+        throw new Error(`step ${String(i + 1)} (${step.command}): ${e.message}`);
+      }
     }
+    await finishWaits(page, options, logs, cursor);
   } finally {
+    logs?.stop();
     connection.close();
   }
 }
