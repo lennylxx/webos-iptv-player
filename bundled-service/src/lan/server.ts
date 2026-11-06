@@ -22,6 +22,10 @@ import {
 } from '../setup/actions';
 import { parseSetupState, SetupStateStore } from '../setup/state';
 import { isValidUploadId, UploadStore } from '../upload/store';
+import { createLogger } from '../logger';
+
+const log = createLogger('lan');
+const uploadLog = createLogger('upload');
 
 export type ServiceChangeEvent = 'uploads-changed' | 'setup-changed';
 
@@ -197,7 +201,7 @@ export function startServer(
         try {
           const action = setupActions.add(parseSetupAction(JSON.parse(await readBody(req, 64 * 1024))));
           try { onChange?.('setup-changed'); } catch (cbErr) {
-            console.error('[lan] onChange callback threw:', cbErr);
+            log.error('onChange callback threw:', cbErr);
           }
           sendJson(res, 201, { id: action.id, type: action.type });
         } catch (e) {
@@ -234,8 +238,8 @@ export function startServer(
         try {
           const content = await readBody(req);
           const meta = uploads.save(query('name') || 'playlist.m3u', content);
-          console.log('[upload] saved "' + meta.name + '" (' + meta.count + ' channels) as ' + meta.id + '.m3u');
-          try { onChange?.('uploads-changed'); } catch (cbErr) { console.error('[lan] onChange callback threw:', cbErr); }
+          uploadLog.info('saved "' + meta.name + '" (' + meta.count + ' channels) as ' + meta.id + '.m3u');
+          try { onChange?.('uploads-changed'); } catch (cbErr) { log.error('onChange callback threw:', cbErr); }
           sendJson(res, 200, meta);
         } catch (e) {
           sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
@@ -265,7 +269,7 @@ export function startServer(
             return;
           }
           const ok = uploads.delete(id);
-          if (ok) { try { onChange?.('uploads-changed'); } catch (cbErr) { console.error('[lan] onChange callback threw:', cbErr); } }
+          if (ok) { try { onChange?.('uploads-changed'); } catch (cbErr) { log.error('onChange callback threw:', cbErr); } }
           sendJson(res, ok ? 200 : 404, { deleted: ok, id });
         } else {
           try {
@@ -300,10 +304,10 @@ export function startServer(
       const addr = server.address();
       const actualPort = addr && typeof addr === 'object' ? addr.port : port;
       boundPort = actualPort;
-      console.log('[lan] listening on http://0.0.0.0:' + actualPort);
-      console.log('[lan] setup page: http://' + getLanIp() + ':' + actualPort + '/setup');
+      log.info('listening on http://0.0.0.0:' + actualPort);
+      log.info('setup page: http://' + getLanIp() + ':' + actualPort + '/setup');
       // Permanent error handler so post-listen errors don't crash the process.
-      server.on('error', (e) => console.error('[lan] server error:', e));
+      server.on('error', (e) => log.error('server error:', e));
       resolve({ server, port: actualPort });
     };
     server.once('error', onError);

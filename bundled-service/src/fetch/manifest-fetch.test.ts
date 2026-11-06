@@ -296,7 +296,7 @@ describe('fetchManifest Luna method', () => {
     try {
       await call({ sender: 'com.example.other2 1234', payload: { url: `${base}/a.m3u8` } });
       expect(warn).toHaveBeenCalledWith(
-        '[fetch] fetchManifest outcome=denied sender="com.example.otherN NNNN" source=sender');
+        '[fetch]', 'fetchManifest outcome=denied sender="com.example.otherN NNNN" source=sender');
     } finally {
       warn.mockRestore();
     }

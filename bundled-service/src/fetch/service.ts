@@ -5,6 +5,9 @@
  */
 
 import { fetchManifest, manifestFetchFailure, type ManifestFetchRequest } from './manifest-fetch';
+import { createLogger } from '../logger';
+
+const log = createLogger('fetch');
 
 // Minimal shape of the webos-service Service object this module uses.
 interface LunaService {
@@ -75,18 +78,18 @@ export function registerManifestFetchService(service: LunaService, appId: string
       try {
         msg.respond(result);
       } catch (e) {
-        console.error('[fetch] fetchManifest respond failed:', e);
+        log.error('fetchManifest respond failed:', e);
       }
     };
     if (!isAppCaller(msg, appId)) {
-      console.warn('[fetch] fetchManifest outcome=denied sender=' + senderShape(msg));
+      log.warn('fetchManifest outcome=denied sender=' + senderShape(msg));
       respond(manifestFetchFailure('denied', 'Caller is not allowed'));
       return;
     }
     fetchManifest(msg.payload || {}, (result) => {
       // No URL, header, or body in the log.
-      if (result.returnValue) console.log('[fetch] fetchManifest outcome=ok status=' + String(result.status));
-      else console.log('[fetch] fetchManifest outcome=failed reason=' + result.errorCode);
+      if (result.returnValue) log.info('fetchManifest outcome=ok status=' + String(result.status));
+      else log.info('fetchManifest outcome=failed reason=' + result.errorCode);
       respond(result);
     });
   });

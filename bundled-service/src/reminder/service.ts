@@ -5,6 +5,9 @@
  */
 
 import { isDevMode, buildAlertPayload, fireAlert, type AlertCopy } from './alert';
+import { createLogger } from '../logger';
+
+const log = createLogger('reminder');
 
 // Minimal shape of the webos-service Service object this module uses.
 interface LunaService {
@@ -57,16 +60,16 @@ export function registerReminderService(service: LunaService): void {
   service.register('fireReminderAlert', (msg) => {
     const payload = msg.payload || {};
     const { title = '', channelName = '', channelKey = '', appId = '' } = payload;
-    console.log('[reminder] fireReminderAlert for "' + title + '"');
+    log.info('fireReminderAlert for "' + title + '"');
     const copy = localizedAlertCopy(payload);
     if (copy === null) {
-      console.error('[reminder] localized alert copy missing');
+      log.error('localized alert copy missing');
       msg.respond({ fired: false, result: 'Complete localized alert copy is required' });
       return;
     }
     fireAlert(buildAlertPayload(title, channelName, channelKey, appId, copy), (ok, detail) => {
-      if (ok) console.log('[reminder] alert fired: ' + detail);
-      else console.error('[reminder] alert failed: ' + detail);
+      if (ok) log.info('alert fired: ' + detail);
+      else log.error('alert failed: ' + detail);
       msg.respond({ fired: ok, result: detail });
     });
   });

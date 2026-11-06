@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { mkdirRecursive, stringEndsWith } from '../compat';
+import { createLogger } from '../logger';
+
+const log = createLogger('upload');
 
 export interface UploadMeta {
   id: string;
@@ -29,17 +32,17 @@ export function resolveDataDir(envOverride?: string): string {
       const probe = path.join(dir, '.probe');
       fs.writeFileSync(probe, 'ok');
       fs.unlinkSync(probe);
-      console.log('[upload] resolveDataDir: using ' + dir);
+      log.info('resolveDataDir: using ' + dir);
       return dir;
     } catch (e) {
-      console.log('[upload] resolveDataDir: candidate ' + dir + ' not writable: ' +
+      log.info('resolveDataDir: candidate ' + dir + ' not writable: ' +
         (e instanceof Error ? e.message : String(e)));
     }
   }
 
   const fallback = '/tmp/iptv-uploads';
   try { mkdirRecursive(fallback); } catch { /* ignore */ }
-  console.warn('[upload] resolveDataDir: all candidates failed, falling back to ' + fallback);
+  log.warn('resolveDataDir: all candidates failed, falling back to ' + fallback);
   return fallback;
 }
 
@@ -120,8 +123,8 @@ export class UploadStore {
     const jsonPath = this.metaPath(id);
     fs.writeFileSync(m3uPath, content, 'utf-8');
     fs.writeFileSync(jsonPath, JSON.stringify(meta), 'utf-8');
-    console.log('[upload] wrote ' + m3uPath + ' (' + content.length + ' bytes)');
-    console.log('[upload] wrote ' + jsonPath);
+    log.info('wrote ' + m3uPath + ' (' + content.length + ' bytes)');
+    log.info('wrote ' + jsonPath);
     return meta;
   }
 
@@ -130,7 +133,7 @@ export class UploadStore {
     for (const file of [this.filePath(id), this.metaPath(id)]) {
       try {
         fs.unlinkSync(file);
-        console.log('[upload] removed ' + file);
+        log.info('removed ' + file);
         removed = true;
       } catch { /* file already gone */ }
     }

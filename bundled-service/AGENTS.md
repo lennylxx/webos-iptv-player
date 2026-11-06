@@ -18,6 +18,9 @@ It must run on webOS 4's Node.js 0.12.2:
 - route newer Node APIs through `compat.ts`;
 - the final JavaScript build is gated, like the app bundle.
 
+Log through `createLogger(tag)` (`src/logger.ts`), never bare `console`,
+so every line carries its `[tag]`.
+
 ## Contract with the app
 
 - **Luna:** `start` / `stop` / `heartbeat` / `serviceEvents` for LAN
