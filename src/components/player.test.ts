@@ -1065,6 +1065,89 @@ describe('Player live playback', () => {
   });
 });
 
+describe('Player Luna suspend and resume', () => {
+  type LunaPipeline = { isLunaActive(): boolean; lunaClock(): (() => number) | null };
+
+  function startOnLuna(duration: number, at: number) {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.load = vi.fn();
+    const v = document.createElement('video');
+    let paused = false;
+    Object.defineProperties(v, {
+      duration: { value: duration, configurable: true },
+      paused: { get: () => paused, configurable: true },
+      pause: { value: () => { paused = true; }, configurable: true },
+    });
+    container.appendChild(v);
+    player.init(v);
+    player.play(0);
+    const pipeline = (player as unknown as { pipeline: LunaPipeline }).pipeline;
+    const active = vi.spyOn(pipeline, 'isLunaActive').mockReturnValue(true);
+    vi.spyOn(pipeline, 'lunaClock').mockReturnValue(() => at);
+    return { unload: () => active.mockReturnValue(false) };
+  }
+
+  // The element the resumed load plays on, with a working clock.
+  function reloaded(duration: number) {
+    const fresh = player.getVideoElement()!;
+    let time = 0;
+    const pause = vi.fn();
+    Object.defineProperties(fresh, {
+      duration: { value: duration, configurable: true },
+      currentTime: { get: () => time, set: (t: number) => { time = t; }, configurable: true },
+      pause: { value: pause, configurable: true },
+    });
+    return { fresh, pause, time: () => time };
+  }
+
+  const events = (spy: { mock: { calls: unknown[][] } }, name: string) => spy.mock.calls
+    .map(args => args.join(' ')).filter(text => text.includes(`event=${name} `));
+
+  it('reloads a paused finite stream at its position and pauses it again', () => {
+    const luna = startOnLuna(60, 11.1);
+    (player as unknown as { pauseToggle(): void }).pauseToggle();
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    player.suspend();
+    luna.unload();
+    player.resume();
+    const { fresh, pause, time } = reloaded(60);
+    fresh.dispatchEvent(new Event('loadedmetadata'));
+    expect(time()).toBe(11.1);
+    expect(pause).not.toHaveBeenCalled();
+    fresh.dispatchEvent(new Event('playing'));
+
+    expect(pause).toHaveBeenCalledOnce();
+    expect((player as unknown as { userPaused: boolean }).userPaused).toBe(true);
+    expect(events(info, 'playback.luna.suspend')).toEqual([
+      expect.stringContaining('kind=finite atS=10 paused=1'),
+    ]);
+    expect(events(info, 'playback.luna.resume')).toEqual([
+      expect.stringContaining('atS=10 paused=1'),
+    ]);
+    fresh.dispatchEvent(new Event('playing'));
+    expect(pause).toHaveBeenCalledOnce();
+  });
+
+  it('reloads a playing live stream at its edge and keeps it playing', () => {
+    const luna = startOnLuna(Infinity, 30);
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    player.suspend();
+    luna.unload();
+    player.resume();
+    const { fresh, pause, time } = reloaded(Infinity);
+    fresh.dispatchEvent(new Event('loadedmetadata'));
+    fresh.dispatchEvent(new Event('playing'));
+
+    expect(time()).toBe(0);
+    expect(pause).not.toHaveBeenCalled();
+    expect(events(info, 'playback.luna.suspend')).toEqual([
+      expect.stringContaining('kind=live atS=0 paused=0'),
+    ]);
+  });
+});
+
 describe('Player Recently Watched recording', () => {
   const touchLive = () => vi.mocked(StorageService.touchRecentlyWatchedLive);
 

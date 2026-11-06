@@ -66,6 +66,7 @@ import {
   channelKey,
   channelStreamKey,
 } from '../utils/channel';
+import { ParentalControlService, liveParentalRequest } from '../services/parental-control';
 
 const channels: Channel[] = [1, 2].map((index) => ({
   id: `ch${index}`, name: `Channel ${index}`, logo: '', group: '',
@@ -565,6 +566,338 @@ describe('Player live preview', () => {
   });
 });
 
+describe('Player Luna resume', () => {
+  const resumeEvents = () => vi.mocked(console.log).mock.calls
+    .map(args => args.join(' ')).filter(text => text.includes('event=playback.luna.resume '));
+
+  function withAuthorizer(authorize: (channel: Channel, action: () => void) => boolean): void {
+    player.stop();
+    player = new Player(
+      container, vi.fn(), vi.fn(), () => true, vi.fn(), onStateChanged, canResume, authorize,
+    );
+    player.init(document.querySelector('video')!);
+  }
+
+  function suspendPausedLuna(): void {
+    player.play(0);
+    pipeline.isLunaActive.mockReturnValue(true);
+    (player as unknown as { userPaused: boolean }).userPaused = true;
+    vi.spyOn(currentVideo(), 'paused', 'get').mockReturnValue(true);
+    player.suspend();
+    pipeline.isLunaActive.mockReturnValue(false);
+  }
+
+  // The re-pause settles only when the test says UMS answered.
+  function holdPause(): () => void {
+    let land = () => {};
+    const landed = new Promise<void>((resolve) => { land = resolve; });
+    vi.spyOn(currentVideo(), 'pause').mockReturnValue(landed as unknown as undefined);
+    return land;
+  }
+
+  it('keeps a paused Luna restore through a PIN asked on resume', () => {
+    let deferred: (() => void) | null = null;
+    let allowed = true;
+    withAuthorizer((_channel, action) => {
+      if (allowed) { action(); return true; }
+      deferred = action;
+      return false;
+    });
+    suspendPausedLuna();
+    allowed = false;
+
+    player.resume();
+    expect(deferred).not.toBeNull();
+    (deferred as unknown as () => void)();
+    playing();
+
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1')]);
+  });
+
+  it('stays silent until a paused Luna restore has paused again', async () => {
+    suspendPausedLuna();
+    player.resume();
+    expect(currentVideo().muted).toBe(true);
+    expect(player.getLivePlaybackSnapshot()?.muted).toBe(false);
+
+    const land = holdPause();
+    pipeline.isLunaActive.mockReturnValue(true);
+    playing();
+    await Promise.resolve();
+    expect(currentVideo().muted).toBe(true);
+
+    land();
+    await vi.waitFor(() => expect(currentVideo().muted).toBe(false));
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1 path=luna')]);
+  });
+
+  it('keeps the user\'s mute after a paused Luna restore', async () => {
+    player.play(0);
+    currentVideo().muted = true;
+    pipeline.isLunaActive.mockReturnValue(true);
+    (player as unknown as { userPaused: boolean }).userPaused = true;
+    vi.spyOn(currentVideo(), 'paused', 'get').mockReturnValue(true);
+    player.suspend();
+    pipeline.isLunaActive.mockReturnValue(false);
+
+    player.resume();
+    playing();
+    await Promise.resolve();
+
+    expect(currentVideo().muted).toBe(true);
+    player.stop();
+    player.play(0);
+    expect(currentVideo().muted).toBe(true);
+  });
+
+  it('restores a Luna resume after the playlist rebinds the channel while hidden', () => {
+    suspendPausedLuna();
+    const replacement = { ...channels[0] };
+    playlist.channels = [replacement, channels[1]];
+    player.syncCurrentIndex();
+    expect(player.getCurrentChannel()).toBe(replacement);
+
+    player.resume();
+    playing();
+
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1 path=native')]);
+  });
+  it('waits for the return to retune a hidden Luna session whose token rotated', () => {
+    const oldChannel = { ...channels[0], url: `${channels[0].url}?token=old` };
+    playlist.channels = [oldChannel];
+    player.play(0);
+    vi.spyOn(currentVideo(), 'duration', 'get').mockReturnValue(60);
+    pipeline.lunaClock.mockReturnValueOnce((() => 11) as unknown as null);
+    suspendPausedLuna();
+    const replacement = { ...oldChannel, url: `${channels[0].url}?token=new` };
+    playlist.channels = [replacement];
+    pipeline.load.mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(pipeline.load).not.toHaveBeenCalled();
+    expect(player.getCurrentChannel()).toBe(replacement);
+    player.resume();
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    expect(pipeline.load).toHaveBeenCalledWith(replacement.url, null, { headers: {} });
+    expect((player as unknown as { pendingResumeSecs: number }).pendingResumeSecs).toBe(11);
+    playing();
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1')]);
+  });
+
+  it('asks a hidden session for the PIN of a locked stand-in only on return', () => {
+    let deferred: (() => void) | null = null;
+    let allowed = true;
+    const authorize = vi.fn((_channel: Channel, action: () => void) => {
+      if (allowed) { action(); return true; }
+      deferred = action;
+      return false;
+    });
+    withAuthorizer(authorize);
+    const current: Channel = {
+      ...channels[0], group: 'g1', playlistIds: ['p1'], httpHeaders: { Referer: 'http://host/a' },
+    };
+    const locked: Channel = { ...channels[0], group: 'g2', playlistIds: ['p1'] };
+    playlist.channels = [current];
+    suspendPausedLuna();
+    allowed = false;
+    authorize.mockClear();
+    vi.spyOn(ParentalControlService, 'decision')
+      .mockReturnValue({ allowed: false, concealed: false, reason: 'parent' });
+    playlist.channels = [locked];
+    pipeline.load.mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(authorize).not.toHaveBeenCalled();
+    expect(pipeline.load).not.toHaveBeenCalled();
+    player.resume();
+    expect(authorize).toHaveBeenCalledWith(locked, expect.any(Function), false, true);
+    expect(pipeline.load).not.toHaveBeenCalled();
+    (deferred as unknown as () => void)();
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    playing();
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1')]);
+  });
+
+  it('retunes a session hidden while paused only once visible again', () => {
+    const oldChannel = { ...channels[0], url: `${channels[0].url}?token=old` };
+    playlist.channels = [oldChannel];
+    player.play(0);
+    player.suspend();
+    const replacement = { ...oldChannel, url: `${channels[0].url}?token=new` };
+    playlist.channels = [replacement];
+    pipeline.load.mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(pipeline.load).not.toHaveBeenCalled();
+    player.resume();
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    expect(player.getCurrentChannel()).toBe(replacement);
+  });
+
+  it('asks for the PIN and keeps the pause when a paused hidden session retunes', () => {
+    let deferred: (() => void) | null = null;
+    let allowed = true;
+    const authorize = vi.fn((_channel: Channel, action: () => void) => {
+      if (allowed) { action(); return true; }
+      deferred = action;
+      return false;
+    });
+    withAuthorizer(authorize);
+    const oldChannel = { ...channels[0], url: `${channels[0].url}?token=old` };
+    playlist.channels = [oldChannel];
+    player.play(0);
+    (player as unknown as { userPaused: boolean }).userPaused = true;
+    vi.spyOn(currentVideo(), 'paused', 'get').mockReturnValue(true);
+    player.suspend();
+    const replacement = { ...oldChannel, url: `${channels[0].url}?token=new` };
+    playlist.channels = [replacement];
+    player.syncCurrentIndex();
+    allowed = false;
+    authorize.mockClear();
+    pipeline.load.mockClear();
+
+    player.resume();
+
+    expect(authorize).toHaveBeenCalledWith(replacement, expect.any(Function), false, true);
+    expect(pipeline.load).not.toHaveBeenCalled();
+    expect(vi.mocked(console.log).mock.calls.map(args => args.join(' '))
+      .filter(text => text.includes('event=parental.playback.relocked')))
+      .toEqual([expect.stringContaining('reason=resume')]);
+    (deferred as unknown as () => void)();
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    expect(pipeline.load).toHaveBeenCalledWith(replacement.url, null, { headers: {} });
+    const pause = vi.spyOn(currentVideo(), 'pause');
+    playing();
+    expect(pause).toHaveBeenCalled();
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1')]);
+  });
+
+  it('keeps the pause when an unlocked paused hidden session retunes', () => {
+    const oldChannel = { ...channels[0], url: `${channels[0].url}?token=old` };
+    playlist.channels = [oldChannel];
+    player.play(0);
+    (player as unknown as { userPaused: boolean }).userPaused = true;
+    vi.spyOn(currentVideo(), 'paused', 'get').mockReturnValue(true);
+    player.suspend();
+    const replacement = { ...oldChannel, url: `${channels[0].url}?token=new` };
+    playlist.channels = [replacement];
+    player.syncCurrentIndex();
+    pipeline.load.mockClear();
+
+    player.resume();
+
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    const pause = vi.spyOn(currentVideo(), 'pause');
+    playing();
+    expect(pause).toHaveBeenCalled();
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1')]);
+  });
+
+  it('keeps a pending paused restore when hidden again before it lands', () => {
+    player.play(0);
+    vi.spyOn(currentVideo(), 'duration', 'get').mockReturnValue(60);
+    pipeline.lunaClock.mockReturnValueOnce((() => 11) as unknown as null);
+    suspendPausedLuna();
+    player.resume();
+    pipeline.isLunaActive.mockReturnValue(true);
+    vi.spyOn(currentVideo(), 'duration', 'get').mockReturnValue(60);
+    pipeline.lunaClock.mockReturnValueOnce((() => 0) as unknown as null);
+    vi.spyOn(currentVideo(), 'paused', 'get').mockReturnValue(false);
+
+    player.suspend();
+    pipeline.isLunaActive.mockReturnValue(false);
+    player.resume();
+
+    expect((player as unknown as { pendingResumeSecs: number }).pendingResumeSecs).toBe(11);
+    playing();
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1')]);
+  });
+
+  function finiteAt(position: number, paused: boolean): void {
+    const element = currentVideo();
+    vi.spyOn(element, 'duration', 'get').mockReturnValue(60);
+    vi.spyOn(element, 'paused', 'get').mockReturnValue(paused);
+    element.currentTime = position;
+    (player as unknown as { userPaused: boolean }).userPaused = paused;
+  }
+
+  it('keeps the pause and position when a refresh lands after resume', () => {
+    const oldChannel = { ...channels[0], url: `${channels[0].url}?token=old` };
+    playlist.channels = [oldChannel];
+    suspendPausedLuna();
+    player.resume();
+    playing();
+    finiteAt(20, true);
+    pipeline.load.mockClear();
+    player.syncCurrentIndex();
+    expect(pipeline.load).not.toHaveBeenCalled();
+    const replacement = { ...oldChannel, url: `${channels[0].url}?token=new` };
+    playlist.channels = [replacement];
+    vi.mocked(console.log).mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    expect(pipeline.load).toHaveBeenCalledWith(replacement.url, null, { headers: {} });
+    expect((player as unknown as { pendingResumeSecs: number }).pendingResumeSecs).toBe(20);
+    expect(currentVideo().muted).toBe(true);
+    const pause = vi.spyOn(currentVideo(), 'pause');
+    playing();
+    expect(pause).toHaveBeenCalled();
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1')]);
+  });
+
+  it('keeps a playing finite stream playing at its position when its token rotates', () => {
+    const oldChannel = { ...channels[0], url: `${channels[0].url}?token=old` };
+    playlist.channels = [oldChannel];
+    player.play(0);
+    playing();
+    finiteAt(20, false);
+    playlist.channels = [{ ...oldChannel, url: `${channels[0].url}?token=new` }];
+    pipeline.load.mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    expect((player as unknown as { pendingResumeSecs: number }).pendingResumeSecs).toBe(20);
+    expect(currentVideo().muted).toBe(false);
+    const pause = vi.spyOn(currentVideo(), 'pause');
+    playing();
+    expect(pause).not.toHaveBeenCalled();
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=0')]);
+  });
+
+  it('plays the refreshed copy when a token rotates while resume waits for the PIN', () => {
+    let deferred: (() => void) | null = null;
+    let allowed = true;
+    withAuthorizer((_channel, action) => {
+      if (allowed) { action(); return true; }
+      deferred = action;
+      return false;
+    });
+    const oldChannel = { ...channels[0], url: `${channels[0].url}?token=old` };
+    playlist.channels = [oldChannel];
+    suspendPausedLuna();
+    allowed = false;
+    player.resume();
+    const replacement = { ...oldChannel, url: `${channels[0].url}?token=new` };
+    playlist.channels = [replacement];
+    player.syncCurrentIndex();
+    pipeline.load.mockClear();
+
+    (deferred as unknown as () => void)();
+
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    expect(pipeline.load).toHaveBeenCalledWith(replacement.url, null, { headers: {} });
+    expect(player.getCurrentChannel()).toBe(replacement);
+    playing();
+    expect(resumeEvents()).toEqual([expect.stringContaining('paused=1')]);
+  });
+});
+
 describe('Player channel rebind', () => {
   it('saves the last channel stream so autoplay can pick it among shared keys', () => {
     const channel: Channel = { ...channels[0], httpHeaders: { Referer: 'http://host/a' } };
@@ -596,5 +929,45 @@ describe('Player channel rebind', () => {
     expect(pipeline.load).not.toHaveBeenCalled();
     expect(player.getCurrentChannel()).toBe(copyB);
     expect(player.getCurrentIndex()).toBe(1);
+  });
+
+  it('asks for the PIN when a rebind falls back to a locked channel sharing the key', () => {
+    let deferred: (() => void) | null = null;
+    let allowed = true;
+    const authorize = vi.fn((_channel: Channel, action: () => void) => {
+      if (allowed) { action(); return true; }
+      deferred = action;
+      return false;
+    });
+    const onBack = vi.fn();
+    player.stop();
+    player = new Player(
+      container, onBack, vi.fn(), () => true, vi.fn(), onStateChanged, canResume, authorize,
+    );
+    player.init(document.querySelector('video')!);
+    const current: Channel = {
+      ...channels[0], group: 'g1', playlistIds: ['p1'], httpHeaders: { Referer: 'http://host/a' },
+    };
+    const locked: Channel = { ...channels[0], group: 'g2', playlistIds: ['p1'] };
+    playlist.channels = [current];
+    player.play(0);
+    allowed = false;
+    authorize.mockClear();
+    const lockedParents = JSON.stringify(liveParentalRequest(locked).parents);
+    vi.spyOn(ParentalControlService, 'decision').mockImplementation(request =>
+      JSON.stringify(request.parents) === lockedParents
+        ? { allowed: false, concealed: false, reason: 'parent' }
+        : { allowed: true });
+    playlist.channels = [locked];
+    pipeline.load.mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(authorize).toHaveBeenCalledWith(locked, expect.any(Function), false, true);
+    expect(pipeline.load).not.toHaveBeenCalled();
+    expect(onBack).toHaveBeenCalledOnce();
+    (deferred as unknown as () => void)();
+    expect(pipeline.load).toHaveBeenCalledOnce();
+    expect(player.getCurrentChannel()).toBe(locked);
   });
 });

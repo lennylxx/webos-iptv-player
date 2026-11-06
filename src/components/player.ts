@@ -28,7 +28,11 @@ import {
 } from '../utils/channel';
 import { dvrWindow, dvrState, type DvrWindow } from '../utils/dvr';
 import { PlaylistService } from '../services/playlist-service';
-import { ParentalControlService, liveParentalRequest } from '../services/parental-control';
+import {
+  ParentalControlService,
+  liveParentalRequest,
+  parentalTargetKey,
+} from '../services/parental-control';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { CONFIG } from '../config';
@@ -58,6 +62,17 @@ import {
 import { PlayerTracks } from './player-tracks';
 
 const log = createLogger('Player');
+
+interface LunaResume {
+  channel: Channel;
+  position: number;
+  paused: boolean;
+}
+
+// A coarse position for diagnostics, in 10 s steps.
+function secondsBucket(seconds: number): string {
+  return Number.isFinite(seconds) && seconds > 0 ? String(Math.floor(seconds / 10) * 10) : '0';
+}
 
 // True on the TV's webOS WebView; false in desktop preview / tests.
 const STREAMING_MIMES = new Set(['application/vnd.apple.mpegurl', 'application/dash+xml']);
@@ -89,6 +104,11 @@ export class Player {
   private pendingResumeSecs = 0;
   private pendingSeekTarget: number | null = null;
   private wasPlayingBeforeHide = false;
+  private hidden = false;
+  private syncOnResume = false;
+  // Counts rebinds that only swapped the channel object, so a deferred play
+  // can pick the copy a refresh put in its place.
+  private rebinds = 0;
   private dvrPauseTick: ReturnType<typeof setInterval> | null = null;
   // Catch-up progress checkpointing. Wall-clock time of the last periodic save;
   // reset to Date.now() on every new catch-up session so the first checkpoint
@@ -118,6 +138,12 @@ export class Player {
   // The user paused the element; startup, reloads, and `play` clear it.
   private userPaused = false;
   private lunaStallHeldLoad = -1; // one playback.luna.stall.held event per load
+  // Hiding unloads Luna even when paused, unlike the element; resume reloads
+  // at this position (0 for live) and pauses again once playing.
+  private lunaResume: LunaResume | null = null;
+  private lunaRestore: LunaResume | null = null;
+  // The user's mute while a paused restore plays silently, until it pauses.
+  private lunaRestoreMute: boolean | null = null;
   private liveSessionActive = false;
   private playbackActive = false;
   private livePreviewMode = false;
@@ -311,7 +337,7 @@ export class Player {
         this.logVodTracks(el);
         this.vodTracksLatePending = true;
       }
-      if ((this.vod || this.catchupInfo) && this.pendingResumeSecs > 0 && Number.isFinite(el.duration) && el.duration > 0) {
+      if ((this.vod || this.catchupInfo || this.lunaRestore) && this.pendingResumeSecs > 0 && Number.isFinite(el.duration) && el.duration > 0) {
         const target = Math.min(this.pendingResumeSecs, el.duration - 1);
         log.info('resume seek', this.videoLabel(el), '| requested:', this.pendingResumeSecs,
           '| target:', target, '| duration:', el.duration);
@@ -371,6 +397,7 @@ export class Player {
       if (this.resyncing) this.endResync();
       this.confirmLiveHistory(el);
       if (this.osd.isVisible()) this.osd.resetTimer();
+      this.finishLunaRestore(el);
     });
     onCurrent('waiting', () => {
       update('buffering');
@@ -412,6 +439,28 @@ export class Player {
     });
   }
 
+  private finishLunaRestore(el: HTMLVideoElement): void {
+    const restore = this.lunaRestore;
+    if (!restore) return;
+    this.lunaRestore = null;
+    if (restore.paused) {
+      this.userPaused = true;
+      // Luna answers its pause command asynchronously; unmute after it lands.
+      const paused = el.pause() as unknown;
+      void Promise.resolve(paused).then(() => this.endLunaRestoreMute(el));
+    }
+    log.info('Playback restored after a Luna suspend', 'event=playback.luna.resume',
+      this.playbackLabel(), `atS=${secondsBucket(el.currentTime)}`, `paused=${restore.paused ? 1 : 0}`,
+      `path=${this.pipeline.isLunaActive() ? 'luna' : 'native'}`);
+  }
+
+  private endLunaRestoreMute(el: HTMLVideoElement): void {
+    const muted = this.lunaRestoreMute;
+    if (muted === null || el !== this.videoEl) return;
+    this.lunaRestoreMute = null;
+    el.muted = muted;
+  }
+
   private playbackLabel(load = this.pipeline.currentLoadToken()): string {
     return `session=${String(this.playbackGeneration)} load=${String(load)}`;
   }
@@ -448,6 +497,7 @@ export class Player {
   }
 
   suspend(): void {
+    this.hidden = true;
     this.startupWatchdog.stop();
     if (!this.videoEl || !this.currentChannel) return;
     if (this.wasPlayingBeforeHide) return; // already suspended
@@ -468,11 +518,42 @@ export class Player {
         );
         this.saveCatchupProgress();
       }
+      if (this.pipeline.isLunaActive() || this.lunaRestore) {
+        this.captureLunaResume(this.videoEl, this.currentChannel);
+      }
       this.stallWatchdog.stop();
       this.tracks.suspend();
       this.pipeline.destroy();
       this.recreateVideoEl();
     }
+  }
+
+  private captureResumePoint(el: HTMLVideoElement, channel: Channel): LunaResume & {
+    kind: 'catchup' | 'finite' | 'live';
+  } {
+    const clock = this.pipeline.lunaClock();
+    const at = this.pendingSeekTarget ?? (clock ? clock() : el.currentTime);
+    const kind = this.catchupInfo ? 'catchup' : Number.isFinite(el.duration) ? 'finite' : 'live';
+    // Catch-up keeps its own resume point; a live stream reloads at its edge.
+    let position = kind === 'finite' && Number.isFinite(at) && at > 0 ? at : 0;
+    let paused = this.userPaused && el.paused;
+    // A restore that hasn't landed yet: its seek and pause still stand, and
+    // userPaused is only set once the restore pauses.
+    const restore = this.lunaRestore;
+    if (restore) {
+      if (this.pendingResumeSecs > 0 || position === 0) position = restore.position;
+      paused = paused || restore.paused;
+    }
+    return { channel, position, paused, kind };
+  }
+
+  private captureLunaResume(el: HTMLVideoElement, channel: Channel): void {
+    const { position, paused, kind } = this.captureResumePoint(el, channel);
+    this.lunaRestore = null;
+    this.lunaResume = { channel, position, paused };
+    log.info('Luna playback suspended', 'event=playback.luna.suspend', this.playbackLabel(),
+      `kind=${kind}`, `atS=${secondsBucket(kind === 'catchup' ? this.catchupSuspendPos : position)}`,
+      `paused=${paused ? 1 : 0}`);
   }
 
   /**
@@ -503,6 +584,9 @@ export class Player {
   }
 
   resume(): void {
+    this.hidden = false;
+    const syncOnResume = this.syncOnResume;
+    this.syncOnResume = false;
     if (!this.videoEl) return;
     if (!this.canResumePlayback()) {
       this.stop();
@@ -517,20 +601,30 @@ export class Player {
       return;
     }
     if (!this.currentChannel) return;
-    if (this.wasPlayingBeforeHide) {
-      this.wasPlayingBeforeHide = false;
-      const channel = this.currentChannel;
-      const index = this.currentIndex;
-      const catchup = this.catchupInfo || undefined;
-      const preview = this.livePreviewMode;
-      // Backgrounding relocks parental controls, so a locked channel asks again
-      // in full screen; a preview the user didn't start just stops.
-      if (!this.authorizeLive(channel, () => this.playResolved(channel, index, catchup), preview, !preview)) {
-        log.info('Resume waits for the parental PIN', 'event=parental.playback.relocked',
-          'kind=live', `preview=${String(preview)}`, `catchup=${String(!!catchup)}`);
-        this.stop();
-        if (!preview) this.onBack();
-      }
+    if (!this.wasPlayingBeforeHide) {
+      if (syncOnResume) this.syncCurrentIndex(true);
+      return;
+    }
+    this.wasPlayingBeforeHide = false;
+    const channel = this.currentChannel;
+    const index = this.currentIndex;
+    const catchup = this.catchupInfo || undefined;
+    const preview = this.livePreviewMode;
+    // stop() below drops it; the PIN's play must still restore it.
+    const lunaResume = this.lunaResume;
+    const rebinds = this.rebinds;
+    const play = () => {
+      const latest = this.latestRebind(channel, index, rebinds);
+      if (lunaResume) this.lunaResume = { ...lunaResume, channel: latest.channel };
+      this.playResolved(latest.channel, latest.channelIndex, catchup);
+    };
+    // Backgrounding relocks parental controls, so a locked channel asks again
+    // in full screen; a preview the user didn't start just stops.
+    if (!this.authorizeLive(channel, play, preview, !preview)) {
+      log.info('Resume waits for the parental PIN', 'event=parental.playback.relocked',
+        'kind=live', `preview=${String(preview)}`, `catchup=${String(!!catchup)}`);
+      this.stop();
+      if (!preview) this.onBack();
     }
   }
 
@@ -674,6 +768,14 @@ export class Player {
       this.pendingResumeSecs = catchup?.resumeSecs ?? 0;
     }
     this.pendingSeekTarget = null;
+    // By stream, not object: a playlist rebind while hidden replaces the channel.
+    this.lunaRestore = this.lunaResume
+      && channelStreamIdentity(this.lunaResume.channel) === channelStreamIdentity(channel)
+      ? this.lunaResume : null;
+    this.lunaResume = null;
+    if (this.lunaRestore && this.lunaRestore.position > 0) {
+      this.pendingResumeSecs = this.lunaRestore.position;
+    }
 
     log.info('play index', channelIndex, '|', channel.name, catchup ? '(catchup)' : '');
     this.currentChannel = channel;
@@ -690,6 +792,12 @@ export class Player {
     this.videoEl.muted = this.livePreviewMode && this.previewMuteOverride !== null
       ? this.previewMuteOverride
       : this.liveMuted;
+    this.lunaRestoreMute = null;
+    if (this.lunaRestore?.paused) {
+      // Luna plays a moment before it can pause again; keep that silent.
+      this.lunaRestoreMute = this.videoEl.muted;
+      this.videoEl.muted = true;
+    }
     this.videoEl.volume = this.liveVolume;
     this.catchupCheckpointAt = Date.now(); // reset periodic-save timer for the new session
     this.osd.clearFailedIcons();
@@ -772,6 +880,8 @@ export class Player {
     this.currentScope = null;
     this.catchupInfo = null;
     this.vod = v;
+    this.lunaResume = null;
+    this.lunaRestore = null;
     this.pendingResumeSecs = v.resumeSecs > 0 ? v.resumeSecs : 0;
     this.pendingSeekTarget = null;
     this.osd.clearFailedIcons();
@@ -964,6 +1074,8 @@ export class Player {
     this.playbackActive = false;
     this.wasPlayingBeforeHide = false;
     this.userPaused = false;
+    this.lunaResume = null;
+    this.lunaRestore = null;
     this.startPlaybackGeneration();
     this.clearUpNextTimer();
     this.vodTracksLatePending = false;
@@ -1287,26 +1399,30 @@ export class Player {
     if (!this.liveSessionActive || !this.currentChannel || !this.videoEl || this.vod || this.catchupInfo) return null;
     return {
       channel: this.currentChannel,
-      muted: this.videoEl.muted,
+      muted: this.lunaRestoreMute ?? this.videoEl.muted,
       status: this.livePlaybackStatus,
     };
   }
 
   togglePreviewMute(): void {
     if (!this.livePreviewMode || !this.liveSessionActive || !this.videoEl) return;
-    this.previewMuteOverride = !this.videoEl.muted;
-    this.videoEl.muted = this.previewMuteOverride;
+    this.previewMuteOverride = !(this.lunaRestoreMute ?? this.videoEl.muted);
+    // A restore still silenced until its pause takes the choice when it ends.
+    if (this.lunaRestoreMute !== null) this.lunaRestoreMute = this.previewMuteOverride;
+    else this.videoEl.muted = this.previewMuteOverride;
     this.onPlaybackStateChanged();
   }
 
   private rememberLiveAudio(): void {
     if (!this.videoEl) return;
-    if (this.livePreviewMode) this.previewMuteOverride = !!this.videoEl.muted;
-    else this.liveMuted = !!this.videoEl.muted;
+    const muted = this.lunaRestoreMute ?? !!this.videoEl.muted;
+    if (this.livePreviewMode) this.previewMuteOverride = muted;
+    else this.liveMuted = muted;
     this.liveVolume = Number.isFinite(this.videoEl.volume) ? this.videoEl.volume : 1;
   }
 
   private restoreLiveMute(): void {
+    this.lunaRestoreMute = null;
     this.previewMuteOverride = null;
     if (this.videoEl) this.videoEl.muted = this.liveMuted;
   }
@@ -1639,8 +1755,9 @@ export class Player {
     return this.currentChannel;
   }
 
-  /** Rebind live playback after the channel catalog is rebuilt or reordered. */
-  syncCurrentIndex(): void {
+  /** Rebind live playback after the channel catalog is rebuilt or reordered;
+   *  `resumed` replays a rebind deferred while the page was hidden. */
+  syncCurrentIndex(resumed = false): void {
     const current = this.currentChannel;
     if (!current) return;
     const resolved = PlaylistService.resolveChannelKey(
@@ -1660,10 +1777,61 @@ export class Player {
           !== this.resolveStreamUrl(resolved.channel, null)
           || channelStreamIdentity(current)
             !== channelStreamIdentity(resolved.channel))) {
-      // Already authorized: a refreshed stream URL must not ask for the PIN.
-      this.playResolved(resolved.channel, resolved.channelIndex);
+      const { channel, channelIndex } = resolved;
+      if (this.wasPlayingBeforeHide) {
+        // Suspended: resume() plays and re-authorizes the rebound channel.
+        if (this.lunaResume) this.lunaResume = { ...this.lunaResume, channel };
+        this.rebinds++;
+        this.currentChannel = channel;
+        this.currentIndex = channelIndex;
+        this.currentIndexAnchor = channelIndex;
+        this.onTvPlaybackChanged(channelIndex, null);
+        this.onPlaybackStateChanged();
+        return;
+      }
+      if (this.hidden) {
+        // Hidden with the page's player kept: reload once visible, never here.
+        this.syncOnResume = true;
+        return;
+      }
+      const preview = this.livePreviewMode;
+      // The reload keeps the user's pause and position, even when it lands
+      // after resume() already restarted the stream.
+      const point = this.videoEl ? this.captureResumePoint(this.videoEl, channel) : null;
+      const rebinds = this.rebinds;
+      const play = () => {
+        const latest = this.latestRebind(channel, channelIndex, rebinds);
+        if (point && (point.paused || point.position > 0)) {
+          this.lunaResume = { channel: latest.channel, position: point.position, paused: point.paused };
+        }
+        this.playResolved(latest.channel, latest.channelIndex);
+      };
+      if (resumed) {
+        // Backgrounding relocked parental controls, as resume() honors.
+        if (!this.authorizeLive(channel, play, preview, !preview)) {
+          log.info('Rebound channel waits for the parental PIN', 'event=parental.playback.relocked',
+            'kind=live', `preview=${String(preview)}`, 'catchup=false', 'reason=resume');
+          this.stop();
+          if (!preview) this.onBack();
+        }
+        return;
+      }
+      // Already authorized: a refreshed stream must not ask for the PIN. A
+      // stand-in under other parental groups that locks it must.
+      if (sameParentalScope(current, channel)
+          || ParentalControlService.decision(liveParentalRequest(channel)).allowed) {
+        play();
+        return;
+      }
+      if (!this.authorizeLive(channel, play, preview, !preview)) {
+        log.info('Rebound channel waits for the parental PIN', 'event=parental.playback.relocked',
+          'kind=live', `preview=${String(preview)}`, 'catchup=false', 'reason=rebind');
+        this.stop();
+        if (!preview) this.onBack();
+      }
       return;
     }
+    this.rebinds++;
     this.currentChannel = resolved.channel;
     this.currentIndex = resolved.channelIndex;
     this.currentIndexAnchor = resolved.channelIndex;
@@ -1672,6 +1840,22 @@ export class Player {
       this.catchupInfo ? this.catchupInfo.start * 1000 : null,
     );
     this.onPlaybackStateChanged();
+  }
+
+  // A play deferred behind the PIN: a refresh meanwhile may have rebound the
+  // stream to a fresh copy, whose token the stale one no longer carries.
+  private latestRebind(
+    channel: Channel,
+    channelIndex: number,
+    rebinds: number,
+  ): { channel: Channel; channelIndex: number } {
+    const current = this.currentChannel;
+    if (rebinds === this.rebinds || !current
+        || channelStreamIdentity(current) !== channelStreamIdentity(channel)
+        || !sameParentalScope(current, channel)) {
+      return { channel, channelIndex };
+    }
+    return { channel: current, channelIndex: this.currentIndex };
   }
 
   getAudioTracks(): AudioTrackOption[] {
@@ -1828,6 +2012,15 @@ export class Player {
 function elementSrc(video: HTMLVideoElement | null): string {
   const src = video?.currentSrc || '';
   return src.indexOf(CONFIG.PLAYER.LUNA_MEDIA_PLACEHOLDER) < 0 ? src : '';
+}
+
+// Same channel key and the same groups: what the PIN unlocked still covers it.
+function sameParentalScope(a: Channel, b: Channel): boolean {
+  const scope = (channel: Channel) => {
+    const request = liveParentalRequest(channel);
+    return [request.target, ...request.parents].map(parentalTargetKey).sort().join('\n');
+  };
+  return scope(a) === scope(b);
 }
 
 function sameParentalItem(a: VodQueueItem, b: VodQueueItem): boolean {

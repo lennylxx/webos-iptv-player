@@ -371,3 +371,65 @@ test('Luna audio names come from the master and an audio pick switches the UMS t
   await expect(menu.locator('[data-menu-action="__subs_track__"] .menu-track-label'))
     .toContainText(['Off', 'Track 3']);
 });
+
+for (const kind of ['finite', 'live'] as const) {
+  test(`a paused ${kind} Luna channel comes back paused${kind === 'finite' ? ' at its position' : ''} after suspend`,
+    async ({ page }) => {
+      await installFakeUms(page, {
+        media: { 'http://host/a.m3u8': { durationMs: kind === 'finite' ? 600000 : 0 } },
+      });
+      await routeStreams(page, {});
+      await startFirstChannel(page, HEADER_M3U);
+      await waitForPlaying(page, 'lm-1');
+      // Let the clock run past its first report.
+      await expect.poll(async () => (await lunaProbe(page)).positions['lm-1']).toBeGreaterThan(START_MS);
+
+      await pressKey(page, 19); // pause
+      await expect.poll(async () => callsOf(await lunaProbe(page), 'pause', 'lm-1').length).toBe(1);
+      await expect.poll(() => page.evaluate(() =>
+        (document.getElementById('video-player') as HTMLVideoElement).paused)).toBe(true);
+      const pausedAt = (await lunaProbe(page)).positions['lm-1'];
+
+      await setHidden(page, true);
+      await expect.poll(async () => (await lunaProbe(page)).unloaded).toEqual(['lm-1']);
+      let probe = await lunaProbe(page);
+      expect(probe.cancelled).toEqual(['lm-1']);
+      expect(probe.subscribed).toEqual([]);
+      expect(callsOf(probe, 'load')).toHaveLength(1);
+
+      await setHidden(page, false);
+      await expect.poll(async () => callsOf(await lunaProbe(page), 'pause', 'lm-2').length).toBe(1);
+      probe = await lunaProbe(page);
+      expect(callsOf(probe, 'load')[1].params).toEqual(callsOf(probe, 'load')[0].params);
+      expect(probe.subscribed).toEqual(['lm-2']);
+      const control = probe.calls.filter(call => call.params.mediaId === 'lm-2'
+        && ['seek', 'play', 'pause'].indexOf(call.method) >= 0);
+      if (kind === 'finite') {
+        expect(control.map(call => call.method)).toEqual(['seek', 'play', 'pause']);
+        expect(control[0].params.position).toBe(pausedAt);
+      } else {
+        // A live stream reloads at its edge.
+        expect(control.map(call => call.method)).toEqual(['play', 'pause']);
+      }
+      // It plays a moment before the pause lands, silently; sound returns after.
+      const volumes = probe.calls.filter(call => call.method === 'setVolume' && call.params.mediaId === 'lm-2');
+      const pauseAt = probe.calls.indexOf(control[control.length - 1]);
+      expect(volumes.filter(call => probe.calls.indexOf(call) < pauseAt).every(call => call.params.volume === 0))
+        .toBe(true);
+      await expect.poll(async () => {
+        const all = callsOf(await lunaProbe(page), 'setVolume', 'lm-2');
+        return all[all.length - 1]?.params.volume;
+      }).toBe(100);
+
+      await expect(page.locator('#view-player')).toBeVisible();
+      expect(await page.evaluate(() =>
+        (document.getElementById('video-player') as HTMLVideoElement).paused)).toBe(true);
+      await pressKey(page, 405);
+      await expect(page.locator('#player-osd .osd-channel-name')).toHaveText('Alpha');
+      await expect(page.locator('#player-osd .osd-message')).toHaveCount(0);
+      // Play resumes the reloaded pipeline, not the released one.
+      await pressKey(page, 415);
+      await expect.poll(async () => callsOf(await lunaProbe(page), 'play', 'lm-2').length).toBe(2);
+      expect(callsOf(await lunaProbe(page), 'play', 'lm-1')).toHaveLength(1);
+    });
+}
