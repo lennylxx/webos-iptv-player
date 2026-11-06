@@ -3,6 +3,7 @@ import {
   type Channel,
   type ChannelGroupId,
   type EpgSource,
+  type LastChannel,
   type ParsedPlaylist,
   type PlaylistTab,
 } from '../types';
@@ -19,6 +20,10 @@ import {
 } from '../utils/xtream-url';
 import {
   channelKey,
+  channelExactStreamIdentity,
+  channelExactStreamKey,
+  channelStreamIdentity,
+  channelStreamKey,
   legacyChannelKey,
 } from '../utils/channel';
 import { createXtreamLiveStreamIdResolver } from '../utils/xtream-live-match';
@@ -142,7 +147,8 @@ class PlaylistServiceImpl {
   private channelsByPlaylistGroup = new Map<string, Map<string, Channel[]>>();
   private groupsByPlaylist = new Map<string, string[]>();
   private groupKeyByDisplay = new Map<string, string>();
-  private channelByKey = new Map<string, Channel>();
+  // Channels sharing a key (one URL with other headers or DRM), in order.
+  private channelsByKey = new Map<string, Channel[]>();
   private channelByLegacyKey = new Map<string, Channel | null>();
   private channelSearchIndex: PreparedSearchItem<Channel>[] = [];
   private channelSearchByPlaylist = new Map<string, PreparedSearchItem<Channel>[]>();
@@ -255,7 +261,7 @@ class PlaylistServiceImpl {
     this.channelsByPlaylistGroup = new Map();
     this.groupsByPlaylist = new Map();
     this.groupKeyByDisplay = new Map();
-    this.channelByKey = new Map();
+    this.channelsByKey = new Map();
     this.channelByLegacyKey = new Map();
     this.channelSearchIndex = [];
     this.channelSearchByPlaylist = new Map();
@@ -523,8 +529,14 @@ class PlaylistServiceImpl {
         log.info('Parsed', parsed.channels.length, 'channels,', parsed.groups.length, 'groups',
           parsed.epgUrl ? `| epg: ${parsed.epgUrl}` : '');
         let added = 0, dupes = 0;
+        // Merging de-duplicates by stream: the same location sent with other
+        // headers or options is another channel. channelKey stays URL-only,
+        // so a plain channel keeps its favorites and history. The location is
+        // compared exactly: entries differing only by a token may come from
+        // different accounts, and each must keep its own working token.
         for (const ch of parsed.channels) {
-          const existing = byUrl.get(ch.url);
+          const identity = channelExactStreamIdentity(ch);
+          const existing = byUrl.get(identity);
           if (existing) {
             // Same stream in an earlier playlist: keep the one channel object
             // (so "All" stays de-duplicated), but record this playlist too so
@@ -533,7 +545,7 @@ class PlaylistServiceImpl {
             dupes++;
           } else {
             ch.playlistIds = [plKey];
-            byUrl.set(ch.url, ch);
+            byUrl.set(identity, ch);
             allChannels.push(ch);
             added++;
           }
@@ -797,7 +809,7 @@ class PlaylistServiceImpl {
     this.channelsByPlaylist = new Map();
     this.channelsByPlaylistGroup = new Map();
     this.groupKeyByDisplay = new Map();
-    this.channelByKey = new Map();
+    this.channelsByKey = new Map();
     this.channelByLegacyKey = new Map();
     this.channelSearchIndex = [];
     this.channelSearchByPlaylist = new Map();
@@ -811,12 +823,14 @@ class PlaylistServiceImpl {
     for (let i = 0; i < this.channels.length; i++) {
       const ch = this.channels[i];
       this.indexMap.set(ch, i);
-      this.channelByKey.set(channelKey(ch), ch);
+      const key = channelKey(ch);
+      this.appendIndexed(this.channelsByKey, key, ch);
+      // A legacy key is ambiguous only across different streams, not across
+      // entries that share one channelKey.
       const legacyKey = legacyChannelKey(ch);
-      this.channelByLegacyKey.set(
-        legacyKey,
-        this.channelByLegacyKey.has(legacyKey) ? null : ch,
-      );
+      const legacy = this.channelByLegacyKey.get(legacyKey);
+      if (legacy === undefined) this.channelByLegacyKey.set(legacyKey, ch);
+      else if (legacy && channelKey(legacy) !== key) this.channelByLegacyKey.set(legacyKey, null);
       if (ch.group) {
         groupSet.add(ch.group);
         if (!this.groupKeyByDisplay.has(ch.group)) {
@@ -918,9 +932,9 @@ class PlaylistServiceImpl {
     if (group === 'builtin:all' || group === 'builtin:recently-watched') return all;
     if (group === 'builtin:favorites') {
       const favorites = StorageService.getFavorites()
-        .map(key => this.channelByKey.get(key))
-        .filter((channel): channel is Channel =>
-          !!channel && (!playlist || channel.playlistIds.includes(playlist)));
+        .map(key => this.channelsByKey.get(key)
+          ?.find(channel => !playlist || channel.playlistIds.includes(playlist)))
+        .filter((channel): channel is Channel => !!channel);
       favorites.sort((a, b) => this.indexOf(a) - this.indexOf(b));
       return favorites;
     }
@@ -983,8 +997,28 @@ class PlaylistServiceImpl {
     return this.indexMap.get(channel) ?? -1;
   }
 
-  resolveChannelKey(key: string): { channel: Channel; channelIndex: number } | null {
-    const channel = this.channelByKey.get(key) ?? this.channelByLegacyKey.get(key);
+  /** `exactStream` (a channelExactStreamIdentity) picks the entry among
+   *  copies that differ only by a token, such as one channel on two accounts;
+   *  `stream` (a channelStreamIdentity) picks the entry among channels
+   *  sharing the key, such as one URL with and without headers; otherwise the
+   *  first entry `prefer` accepts, else the first entry. */
+  resolveChannelKey(
+    key: string,
+    stream?: string,
+    prefer?: (channel: Channel) => boolean,
+    exactStream?: string,
+  ): { channel: Channel; channelIndex: number } | null {
+    this.ensureDerivedIndexes();
+    const shared = this.channelsByKey.get(key) ?? [];
+    const same = stream
+      ? shared.filter(channel => channelStreamIdentity(channel) === stream)
+      : [];
+    const exact = exactStream
+      ? same.filter(channel => channelExactStreamIdentity(channel) === exactStream)
+      : [];
+    const pick = (list: Channel[]) => (prefer && list.find(prefer)) || list[0];
+    const channel = pick(exact) ?? pick(same) ?? pick(shared)
+      ?? this.channelByLegacyKey.get(key);
     if (!channel) return null;
     const channelIndex = this.indexOf(channel);
     return channelIndex < 0 ? null : { channel, channelIndex };
@@ -1000,20 +1034,49 @@ class PlaylistServiceImpl {
     return -1;
   }
 
-  private indexOfUniqueKey(key: string): number {
-    let match = -1;
+  /** The saved stream (a channelStreamKey) picks its entry among channels
+   *  sharing the key, and the saved exact stream (a channelExactStreamKey),
+   *  else the saved index, picks among copies that differ only by a token;
+   *  without a stream the first entry plays. A legacy key shared by
+   *  different streams stays ambiguous. */
+  resolveLastChannelIndex(last: LastChannel | null): number {
+    const legacyIndex = last ? last.index : 0;
+    const stableKey = last?.key ?? '';
+    const streamKey = last?.stream ?? '';
+    const exactKey = last?.exact ?? '';
+    if (!stableKey) return legacyIndex;
+    const matches = (channel: Channel | undefined) => !!channel
+      && channelKey(channel) === stableKey
+      && (!streamKey || channelStreamKey(channel) === streamKey);
+    let first = -1;
+    let stream = -1;
+    let legacy = -1;
+    let legacyKey = '';
+    let legacyAmbiguous = false;
     for (let i = 0; i < this.channels.length; i++) {
       const channel = this.channels[i];
-      if (channelKey(channel) !== key && legacyChannelKey(channel) !== key) continue;
-      if (match >= 0) return -1;
-      match = i;
+      const key = channelKey(channel);
+      if (key === stableKey) {
+        if (matches(channel)) {
+          if (exactKey && channelExactStreamKey(channel) === exactKey) return i;
+          if (stream < 0) stream = i;
+        }
+        if (first < 0) first = i;
+      } else if (legacyChannelKey(channel) === stableKey) {
+        if (legacy < 0) {
+          legacy = i;
+          legacyKey = key;
+        } else if (key !== legacyKey) {
+          legacyAmbiguous = true;
+        }
+      }
     }
-    return match;
-  }
-
-  resolveLastChannelIndex(stableKey: string, legacyIndex: number): number {
-    if (!stableKey) return legacyIndex;
-    return this.indexOfUniqueKey(stableKey);
+    if (stream >= 0) {
+      // Token rotated on every copy: the saved index still tells them apart.
+      return streamKey && matches(this.channels[legacyIndex]) ? legacyIndex : stream;
+    }
+    if (first >= 0) return first;
+    return legacyAmbiguous ? -1 : legacy;
   }
 }
 

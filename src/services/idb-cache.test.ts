@@ -426,14 +426,14 @@ describe('idb-cache', () => {
     await setCachedPlaylist(channels, [], 1234);
     expect(cacheRecordRef(channels)).toEqual({
       store: 'playlist-cache',
-      key: 'combined-v3',
+      key: 'combined-v4',
       timestamp: 1234,
     });
     const read = await getCachedPlaylist(null);
     expect(read?.channels).not.toBe(channels);
     expect(cacheRecordRef(read?.channels)).toEqual({
       store: 'playlist-cache',
-      key: 'combined-v3',
+      key: 'combined-v4',
       timestamp: 1234,
     });
 

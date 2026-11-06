@@ -624,7 +624,7 @@ export class EpgGrid {
               const sel = globalIndex === this.selectedChannelIdx;
               return html`
                 <div class="epg-channel-item ${sel ? 'selected' : ''}"
-                     data-key="${channelKey(ch)}"
+                     data-key="ch:${String(globalIndex)}"
                      data-channel-idx="${globalIndex}"
                      data-channel-pos="${itemIndex}" data-hover-target
                      style="top:${this.channelVirtualizer.getItemOffset(itemIndex)}px">

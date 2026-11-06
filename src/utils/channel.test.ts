@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { Channel } from '../types';
 import {
+  channelExactStreamIdentity,
+  channelHttpHeaders,
   channelKey,
+  channelStreamIdentity,
+  channelStreamKey,
   legacyChannelKey,
 } from './channel';
 
@@ -54,5 +58,49 @@ describe('legacyChannelKey', () => {
   it('reproduces query-stripped persisted keys for migration', () => {
     expect(legacyChannelKey(ch('http://host/a?id=1')))
       .toBe(legacyChannelKey(ch('http://host/a?id=2')));
+  });
+});
+
+describe('channelHttpHeaders', () => {
+  it('merges cached extras under the declared headers', () => {
+    expect(channelHttpHeaders({
+      ...ch('http://host/a'),
+      extras: { 'http-referrer': 'http://host/old', 'http-user-agent': 'ua1' },
+      httpHeaders: { referer: 'http://host/new', Cookie: 'c=1' },
+    })).toEqual({ 'User-Agent': 'ua1', referer: 'http://host/new', Cookie: 'c=1' });
+  });
+
+  it('is empty for a channel without headers', () => {
+    expect(channelHttpHeaders(ch('http://host/a'))).toEqual({});
+  });
+});
+
+describe('channelStreamIdentity', () => {
+  const piped = (url: string, urlSuffix?: string): Channel => ({ ...ch(url), urlSuffix });
+
+  it('survives a rotated token, header suffix included', () => {
+    const before = piped('http://host/a?id=1&token=t1', 'User-Agent=ua1');
+    const after = piped('http://host/a?token=t2&id=1', 'User-Agent=ua1');
+    expect(channelStreamIdentity(after)).toBe(channelStreamIdentity(before));
+    expect(channelStreamKey(after)).toBe(channelStreamKey(before));
+    expect(channelExactStreamIdentity(after)).not.toBe(channelExactStreamIdentity(before));
+  });
+
+  it('still tells a header suffix or other query apart', () => {
+    const base = piped('http://host/a?id=1&token=t1', 'User-Agent=ua1');
+    expect(channelStreamIdentity(piped('http://host/a?id=1&token=t2')))
+      .not.toBe(channelStreamIdentity(base));
+    expect(channelStreamIdentity(piped('http://host/a?id=1&token=t2', 'User-Agent=ua2')))
+      .not.toBe(channelStreamIdentity(base));
+    expect(channelStreamIdentity(piped('http://host/a?id=2&token=t1', 'User-Agent=ua1')))
+      .not.toBe(channelStreamIdentity(base));
+  });
+
+  it('survives a rotated token when the query itself holds a pipe', () => {
+    const before = piped('http://host/a?ids=1|2&token=t1', 'User-Agent=ua1');
+    const after = piped('http://host/a?ids=1|2&token=t2', 'User-Agent=ua1');
+    expect(channelStreamIdentity(after)).toBe(channelStreamIdentity(before));
+    expect(channelStreamIdentity(piped('http://host/a?ids=1|2&token=t2')))
+      .toBe(channelStreamIdentity(piped('http://host/a?ids=1|2&token=t1')));
   });
 });

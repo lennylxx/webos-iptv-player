@@ -452,13 +452,13 @@ export class ParentalControls {
           const groupKey = PlaylistService.getGroupKeyForDisplay(name);
           const channels = PlaylistService.getByGroup(`source:${name}`, source.account.id);
           const key = `live:${source.account.id}:${groupKey}`;
-          const members = channels.map(channel => this.liveItem(channel));
+          const members = this.liveItems(channels);
           for (const member of members) this.setMemberGroup(ruleKey(member), key);
           const target: LiveGroupTarget = { kind: 'live-group', playlistId: source.account.id, groupKey };
           return {
             key,
             name: groupDisplayLabel(name),
-            count: channels.length,
+            count: members.length,
             suggested: isAdultGroupName(name) || channels.some(isAdultChannel),
             target,
                   members,
@@ -721,7 +721,7 @@ export class ParentalControls {
           const channels = display
             ? PlaylistService.getByGroup(`source:${display}`, source.account.id)
             : [];
-          items = channels.map(channel => this.liveItem(channel));
+          items = this.liveItems(channels);
         } else {
           const categoryId = (group.target as CatalogCategoryTarget).categoryId;
           items = source.kind === 'vod'
@@ -756,6 +756,20 @@ export class ParentalControls {
       }
     })();
     return this.itemsLoad;
+  }
+
+  // Rules key a channel by channelKey, which token-only copies share: one row
+  // per key, or the duplicate data-key breaks morph and focus.
+  private liveItems(channels: Channel[]): ItemEntry[] {
+    const seen = new Set<string>();
+    const items: ItemEntry[] = [];
+    for (const channel of channels) {
+      const item = this.liveItem(channel);
+      if (seen.has(item.key)) continue;
+      seen.add(item.key);
+      items.push(item);
+    }
+    return items;
   }
 
   private liveItem(channel: Channel): ItemEntry {

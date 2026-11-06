@@ -51,7 +51,8 @@ export const RecentlyWatchedService = {
     const items: RecentlyWatchedItem[] = [];
 
     for (const entry of StorageService.getRecentlyWatchedLive()) {
-      const resolved = PlaylistService.resolveChannelKey(entry.channelKey);
+      const resolved = PlaylistService.resolveChannelKey(entry.channelKey, undefined,
+        channel => matchesPlaylist(channel, playlistId));
       if (!resolved || !matchesPlaylist(resolved.channel, playlistId)) continue;
       items.push({
         kind: 'live',
@@ -62,7 +63,8 @@ export const RecentlyWatchedService = {
 
     for (const stored of StorageService.getAllCatchupProgress()) {
       if (stored.completed || stored.position < CONFIG.CATCHUP.RESUME_MIN_SECS) continue;
-      const resolved = PlaylistService.resolveChannelKey(stored.channelKey);
+      const resolved = PlaylistService.resolveChannelKey(stored.channelKey, undefined,
+        channel => matchesPlaylist(channel, playlistId));
       if (!resolved || !matchesPlaylist(resolved.channel, playlistId)) continue;
       if (!XtreamArchiveService.isAvailable(resolved.channel, stored.progStart)) {
         removeUnavailable(stored);

@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist';
@@ -293,6 +293,35 @@ function syncUserRecords(
     next,
     previous.filter(item => !nextKeys.has(item.key)).map(item => item.key),
   );
+}
+
+function parseLastChannel(stored: unknown): LastChannel | null {
+  if (!stored || typeof stored !== 'object') return null;
+  const value = stored as Record<string, unknown>;
+  if (typeof value.index !== 'number' || !Number.isFinite(value.index)) return null;
+  const last: LastChannel = { index: value.index };
+  for (const field of ['key', 'stream', 'exact'] as const) {
+    const text = value[field];
+    if (typeof text === 'string' && text) last[field] = text;
+  }
+  return last;
+}
+
+// TODO: Remove once all supported installs store the last channel as one
+// record instead of a bare index plus iptv_last_channel_key.
+function migrateLegacyLastChannel(): void {
+  const stored = get<unknown>('last_channel', null);
+  const hasLegacyKey = localStorage.getItem(PREFIX + 'last_channel_key') !== null;
+  if (typeof stored !== 'number' && !hasLegacyKey) return;
+  const legacyKey = hasLegacyKey ? get<unknown>('last_channel_key', null) : null;
+  let last = typeof stored === 'number' && Number.isFinite(stored)
+    ? { index: stored } as LastChannel
+    : parseLastChannel(stored);
+  if (typeof legacyKey === 'string' && legacyKey && !last?.key) {
+    last = { ...(last ?? { index: 0 }), key: legacyKey };
+  }
+  if (last) set('last_channel', last);
+  remove('last_channel_key');
 }
 
 // TODO: Remove this localStorage migration path once all supported installs use IndexedDB v4.
@@ -879,21 +908,14 @@ export const StorageService = {
     syncUserRecords('reminders', previous, next);
   },
 
-  getLastChannel(): number {
-    return get<number>('last_channel', 0);
+  getLastChannel(): LastChannel | null {
+    migrateLegacyLastChannel();
+    return parseLastChannel(get<unknown>('last_channel', null));
   },
-  setLastChannel(index: number): void {
-    set('last_channel', index);
-  },
-
-  // Companion to last_channel: the channelKey survives a reorder or a provider
-  // reshuffle, where the index does not. The index stays as the fallback for an
-  // install that predates this key.
-  getLastChannelKey(): string {
-    return get<string>('last_channel_key', '');
-  },
-  setLastChannelKey(key: string): void {
-    set('last_channel_key', key);
+  setLastChannel(last: LastChannel): void {
+    set('last_channel', last);
+    // TODO: Remove with migrateLegacyLastChannel.
+    remove('last_channel_key');
   },
   getChannelCustomization(): ChannelCustomization | null {
     const data = userData

@@ -6,7 +6,8 @@ import {
   parseM3U,
   parseM3UBytes,
 } from './m3u-parser';
-import { UNCATEGORIZED_GROUP } from '../types';
+import { UNCATEGORIZED_GROUP, type Channel } from '../types';
+import { channelKey, legacyChannelKey } from '../utils/channel';
 
 describe('parseM3U', () => {
   it('parses a basic channel with URL', () => {
@@ -214,6 +215,139 @@ describe('parseM3U', () => {
     expect(ch.extras).toMatchObject({
       'http-user-agent': 'Agent',
       'http-referrer': 'http://host/a',
+    });
+  });
+
+  it('splits a pipe header suffix off the stream URL', () => {
+    const ch = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1,Channel',
+      'http://host/a.m3u8?x=1|Referer=http%3A%2F%2Fhost%2F&User-Agent=Agent+1.0'
+        + '&!X-Test=v%26w&Cookie=a=b',
+    ].join('\n')).channels[0];
+    expect(ch.url).toBe('http://host/a.m3u8?x=1');
+    expect(ch.httpHeaders).toEqual({
+      Referer: 'http://host/',
+      'User-Agent': 'Agent 1.0',
+      'X-Test': 'v&w',
+      Cookie: 'a=b',
+    });
+    expect(ch.extras).toEqual({
+      'http-referrer': 'http://host/',
+      'http-user-agent': 'Agent 1.0',
+    });
+  });
+
+  it('hands the location prefilter the URL without its header suffix', () => {
+    const seen: string[] = [];
+    const parser = new M3UStreamParser('', {
+      streamLocationPrefilter: location => {
+        seen.push(location);
+        return true;
+      },
+    });
+    parser.write('#EXTM3U\n#EXTINF:-1,A\nhttp://host/a.m3u8|Referer=http://host/\n');
+    const channels = parser.finish().channels;
+    expect(seen).toEqual(['http://host/a.m3u8']);
+    expect(channels[0].httpHeaders).toEqual({ Referer: 'http://host/' });
+  });
+
+  it('keeps a pipe that is not a header suffix in the URL', () => {
+    const urls = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1,A',
+      'http://host/a|b',
+      '#EXTINF:-1,B',
+      'http://host/b?q=x|y',
+    ].join('\n')).channels.map(channel => channel.url);
+    expect(urls).toEqual(['http://host/a|b', 'http://host/b?q=x|y']);
+  });
+
+  it('needs a known header name before a pipe counts as a header suffix', () => {
+    const channels = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1,A',
+      'http://host/a.m3u8?a=1|b=2',
+      '#EXTINF:-1,B',
+      'http://host/a|b/c.m3u8|Referer=http://host/',
+      '#EXTINF:-1,C',
+      'http://host/c.m3u8|User-Agent=Agent|1',
+    ].join('\n')).channels;
+    expect(channels.map(channel => channel.url)).toEqual([
+      'http://host/a.m3u8?a=1|b=2',
+      'http://host/a|b/c.m3u8',
+      'http://host/c.m3u8',
+    ]);
+    expect(channels[0].httpHeaders).toBeUndefined();
+    expect(channels[1].httpHeaders).toEqual({ Referer: 'http://host/' });
+    expect(channels[2].httpHeaders).toEqual({ 'User-Agent': 'Agent|1' });
+  });
+
+  it('keeps an unencoded query inside a pipe Referer intact', () => {
+    const ch = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1,A',
+      'http://host/a.m3u8|Referer=http://host/?p=1&q=2&User-Agent=Agent',
+    ].join('\n')).channels[0];
+    expect(ch.httpHeaders).toEqual({ Referer: 'http://host/?p=1&q=2', 'User-Agent': 'Agent' });
+  });
+
+  it('drops header values that break lines and names that are unsafe', () => {
+    const ch = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1,A',
+      '#EXTHTTP:{"Host":"h","Content-Length":"1","Bad Name":"v","X-Ok":"v",'
+        + '"X-Line":"a\\r\\nX-Evil: 1"}',
+      'http://host/a.m3u8|Referer=http://host/%0D%0AX-Evil:1&Cookie=c%00d&Origin=http://host',
+    ].join('\n')).channels[0];
+    expect(ch.httpHeaders).toEqual({ 'X-Ok': 'v', Origin: 'http://host' });
+    expect(ch.extras?.['http-referrer']).toBeUndefined();
+  });
+
+  it('keeps the channel identity of a line with a header suffix', () => {
+    const line = 'http://host/a.m3u8?x=1|Referer=http%3A%2F%2Fhost%2F';
+    const ch = parseM3U(['#EXTM3U', '#EXTINF:-1,A', line].join('\n')).channels[0];
+    expect(ch.url).toBe('http://host/a.m3u8?x=1');
+    const before = { url: line } as Channel;
+    expect(channelKey(ch)).toBe(channelKey(before));
+    expect(legacyChannelKey(ch)).toBe(legacyChannelKey(before));
+  });
+
+  it('parses KODIPROP inputstream.adaptive header properties', () => {
+    const ch = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1,Channel',
+      '#KODIPROP:inputstream.adaptive.manifest_headers=Authorization=Bearer%20t1',
+      '#KODIPROP:inputstream.adaptive.stream_headers=referrer=http%3A%2F%2Fhost%2F',
+      'http://host/a.m3u8',
+    ].join('\n')).channels[0];
+    expect(ch.httpHeaders).toEqual({
+      Authorization: 'Bearer t1',
+      Referer: 'http://host/',
+    });
+    expect(ch.extras?.['http-referrer']).toBe('http://host/');
+  });
+
+  it('merges header sources by precedence regardless of tag order', () => {
+    const ch = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1 user-agent="Agent 0" referrer="http://host/0" http-referrer="http://host/0",Ch',
+      '#EXTHTTP:{"referer":"http://host/2","Cookie":"c=2"}',
+      '#EXTVLCOPT:http-referrer=http://host/1',
+      '#EXTVLCOPT:http-cookie=c=1',
+      '#EXTVLCOPT:http-origin=http://host',
+      '#KODIPROP:inputstream.adaptive.stream_headers=user-agent=Agent%201',
+      'http://host/a.m3u8|Cookie=c%3D3',
+    ].join('\n')).channels[0];
+    expect(ch.httpHeaders).toEqual({
+      Referer: 'http://host/2',
+      'user-agent': 'Agent 1',
+      Origin: 'http://host',
+      Cookie: 'c=3',
+    });
+    expect(ch.extras).toMatchObject({
+      'http-referrer': 'http://host/2',
+      'http-user-agent': 'Agent 1',
     });
   });
 

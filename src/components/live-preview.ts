@@ -11,7 +11,7 @@ import type {
   LivePlaybackSnapshot,
   Programme,
 } from '../types';
-import { channelKey } from '../utils/channel';
+import { channelExactStreamIdentity, channelKey } from '../utils/channel';
 import { html, raw, show, hide, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { isSourceEnabled } from '../utils/playlist';
@@ -131,15 +131,14 @@ export class LivePreview {
     if (!channel) return;
     this.options.blurTabBar();
     const current = this.options.player.getLivePlaybackSnapshot();
-    if (mode === 'expand-current' && this.isShowing && current
-        && channelKey(current.channel) === channelKey(channel)
-        && current.channel.url === channel.url) {
+    const isCurrent = !!current
+      && channelExactStreamIdentity(current.channel) === channelExactStreamIdentity(channel);
+    if (mode === 'expand-current' && this.isShowing && isCurrent) {
       this.expand();
       return;
     }
     this.options.player.enterLivePreview();
-    if (!current || channelKey(current.channel) !== channelKey(channel)
-        || current.channel.url !== channel.url) {
+    if (!isCurrent) {
       this.options.player.play(index, undefined, scope);
     }
     this.options.channelList.render(false);

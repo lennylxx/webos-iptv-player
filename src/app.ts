@@ -967,10 +967,7 @@ class App {
 
       if (StorageService.getAutoPlay()) {
         // The per-stream key survives customization and provider reshuffles.
-        const lastCh = PlaylistService.resolveLastChannelIndex(
-          StorageService.getLastChannelKey(),
-          StorageService.getLastChannel(),
-        );
+        const lastCh = PlaylistService.resolveLastChannelIndex(StorageService.getLastChannel());
         const last = PlaylistService.channels[lastCh];
         // A locked channel must not open a PIN prompt over a cold start.
         if (last && ParentalControlService.decision(liveParentalRequest(last)).allowed) {

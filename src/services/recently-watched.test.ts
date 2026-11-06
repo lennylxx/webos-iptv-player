@@ -35,8 +35,9 @@ const { data, archiveMock, storageMock, epgMock, playlistMock } = vi.hoisted(() 
     },
     playlistMock: {
       channels: data.channels,
-      resolveChannelKey: vi.fn((key: string) => {
-        const exact = data.channels.find(ch => channelKey(ch) === key);
+      resolveChannelKey: vi.fn((key: string, _stream?: string, prefer?: (ch: Channel) => boolean) => {
+        const shared = data.channels.filter(ch => channelKey(ch) === key);
+        const exact = (prefer && shared.find(prefer)) || shared[0];
         if (exact) return { channel: exact, channelIndex: data.channels.indexOf(exact) };
         const legacy = data.channels.filter(ch => legacyChannelKey(ch) === key);
         return legacy.length === 1
@@ -117,6 +118,16 @@ describe('RecentlyWatchedService.getItems', () => {
     data.live.push({ channelKey: legacyChannelKey(ch), updatedAt: 3000 });
 
     expect(RecentlyWatchedService.getItems()[0]?.channel).toBe(ch);
+  });
+
+  it('shows the entry in the filtered playlist among channels sharing a key', () => {
+    const first = channel();
+    const second = channel({ id: 'ch2', playlistIds: ['p2'], httpHeaders: { Referer: 'http://host/r' } });
+    data.channels.push(first, second);
+    data.live.push({ channelKey: channelKey(first), updatedAt: 3000 });
+
+    expect(RecentlyWatchedService.getItems('p2').map(item => item.channel)).toEqual([second]);
+    expect(RecentlyWatchedService.getItems().map(item => item.channel)).toEqual([first]);
   });
 
   it('does not guess an ambiguous legacy channel key', () => {

@@ -18,7 +18,13 @@ import {
   xtreamCredentialsFromLiveUrl,
 } from '../utils/xtream-url';
 import { show, hide } from '../utils/dom';
-import { channelKey } from '../utils/channel';
+import {
+  channelExactStreamIdentity,
+  channelExactStreamKey,
+  channelKey,
+  channelStreamIdentity,
+  channelStreamKey,
+} from '../utils/channel';
 import { dvrWindow, dvrState, type DvrWindow } from '../utils/dvr';
 import { PlaylistService } from '../services/playlist-service';
 import { ParentalControlService, liveParentalRequest } from '../services/parental-control';
@@ -653,8 +659,12 @@ export class Player {
     this.videoEl.volume = this.liveVolume;
     this.catchupCheckpointAt = Date.now(); // reset periodic-save timer for the new session
     this.osd.clearFailedIcons();
-    if (channelIndex >= 0) StorageService.setLastChannel(channelIndex);
-    StorageService.setLastChannelKey(channelKey(channel));
+    StorageService.setLastChannel({
+      index: channelIndex >= 0 ? channelIndex : StorageService.getLastChannel()?.index ?? 0,
+      key: channelKey(channel),
+      stream: channelStreamKey(channel),
+      exact: channelExactStreamKey(channel),
+    });
 
     const url = this.resolveStreamUrl(channel, catchup || null);
     if (catchup) log.debug('catchup URL:', diagnosticStreamUrl(url));
@@ -1561,8 +1571,14 @@ export class Player {
 
   /** Rebind live playback after the channel catalog is rebuilt or reordered. */
   syncCurrentIndex(): void {
-    if (!this.currentChannel) return;
-    const resolved = PlaylistService.resolveChannelKey(channelKey(this.currentChannel));
+    const current = this.currentChannel;
+    if (!current) return;
+    const resolved = PlaylistService.resolveChannelKey(
+      channelKey(current),
+      channelStreamIdentity(current),
+      channel => channel.group === current.group,
+      channelExactStreamIdentity(current),
+    );
     if (!resolved) {
       this.currentIndex = -1;
       this.onTvPlaybackChanged(-1, this.catchupInfo ? this.catchupInfo.start * 1000 : null);
@@ -1570,8 +1586,10 @@ export class Player {
       return;
     }
     if (this.liveSessionActive && !this.catchupInfo
-        && this.resolveStreamUrl(this.currentChannel, null)
-          !== this.resolveStreamUrl(resolved.channel, null)) {
+        && (this.resolveStreamUrl(current, null)
+          !== this.resolveStreamUrl(resolved.channel, null)
+          || channelStreamIdentity(current)
+            !== channelStreamIdentity(resolved.channel))) {
       // Already authorized: a refreshed stream URL must not ask for the PIN.
       this.playResolved(resolved.channel, resolved.channelIndex);
       return;

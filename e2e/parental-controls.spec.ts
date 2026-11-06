@@ -1202,6 +1202,38 @@ test('channel editing and Reset Customization ask for the PIN while live locks a
   await expect(page.locator('[data-confirm-action="confirm"]')).toBeVisible();
 });
 
+test('lists copies that differ only by a token as one channel row', async ({ page }) => {
+  await neuterVideo(page);
+  await routePlaylist(page, [
+    '#EXTM3U',
+    '#EXTINF:-1 group-title="Kids",Channel One',
+    'http://streams.example.com/one.m3u8?token=t1',
+    '#EXTINF:-1 group-title="Kids",Channel One',
+    'http://streams.example.com/one.m3u8?token=t2',
+    '#EXTINF:-1 group-title="Kids",Channel Two',
+    'http://streams.example.com/two.m3u8',
+  ].join('\n'));
+  await routeLiveManifest(page);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await enterTab(page, 'settings');
+  await page.locator('#manage-parental-controls').click();
+  const prompt = page.locator('.parental-pin-prompt');
+  await prompt.locator('.parental-pin-input').fill('1234');
+  await expect(prompt.locator('h2')).toContainText('Confirm');
+  await prompt.locator('.parental-pin-input').fill('1234');
+
+  const view = page.locator('#view-parental-controls');
+  const kids = view.locator('[data-parental-group]').filter({ hasText: 'Kids' });
+  await kids.click();
+  const items = view.locator('.parental-column-item [data-parental-item]');
+  await expect(items.filter({ hasText: 'Channel Two' })).toHaveCount(1);
+  await expect(items.filter({ hasText: 'Channel One' })).toHaveCount(1);
+  const keys = await view.locator('.parental-column-item [data-key]')
+    .evaluateAll(rows => rows.map(row => row.getAttribute('data-key')));
+  expect(new Set(keys).size).toBe(keys.length);
+});
+
 test('shows a merged channel locked by its group in another playlist', async ({ page }) => {
   await neuterVideo(page);
   await routePlaylist(page);

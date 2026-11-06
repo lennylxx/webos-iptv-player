@@ -55,6 +55,16 @@ const LICENSE_DATA_KEYS = [
   'license_data',
 ];
 
+/** Every playlist option parseDrmConfig reads. */
+export const DRM_OPTION_KEYS: readonly string[] = [
+  ...LICENSE_TYPE_KEYS,
+  ...DRM_KEYS,
+  ...DRM_LEGACY_KEYS,
+  ...LICENSE_KEY_KEYS,
+  ...CUSTOM_DATA_KEYS,
+  ...LICENSE_DATA_KEYS,
+];
+
 function firstExtra(extras: Record<string, string>, keys: string[]): string {
   for (const key of keys) {
     const value = extras[key]?.trim();

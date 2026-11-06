@@ -22,6 +22,8 @@ export interface Channel {
   sourceAttributes?: Record<string, string>;
   /** Headers declared by EXTHTTP, preserved for playback backends that support them. */
   httpHeaders?: Record<string, string>;
+  /** The raw `|Name=value` header suffix split off `url`; part of the identity. */
+  urlSuffix?: string;
   /** Optional logical channel number declared by the source. */
   channelNumber?: number;
   /** EPG shift in hours declared by tvg-shift/timeshift. */
@@ -53,6 +55,15 @@ export interface Channel {
   catchupTimeZone?: string;
   /** Fixed fallback when the provider timezone is absent or unsupported. */
   catchupTimeOffsetMinutes?: number;
+}
+
+/** The last played live channel, for autoplay: the identities resolve it
+ *  most precise first (exact, stream, key), the index last. */
+export interface LastChannel {
+  index: number;
+  key?: string;
+  stream?: string;
+  exact?: string;
 }
 
 export type LivePlaybackStatus = 'loading' | 'playing' | 'buffering' | 'paused' | 'error';

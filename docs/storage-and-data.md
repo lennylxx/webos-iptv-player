@@ -85,8 +85,7 @@ This is the complete active key inventory:
 | --- | --- | --- | --- |
 | `iptv_playlists` | `PlaylistEntry[]` | Stable id, display name, source URL/type, uploaded channel count, and Xtream username, password, and live-output preference | Configuration |
 | `iptv_epg_url` | `string` | Manually configured XMLTV URL | Configuration |
-| `iptv_last_channel` | `number` | Last played channel's array index | Navigation state |
-| `iptv_last_channel_key` | `string` | Stable key of the last played channel; survives source reordering | Navigation state |
+| `iptv_last_channel` | `{ index, key?, stream?, exact? }` | Last played channel: its array index, stable channel key, stream hash (URL with rotating tokens dropped, plus headers and DRM options), and exact hash (URL as written). Autoplay resolves exact, then stream, then key, then index | Navigation state |
 | `iptv_selectedXtream` | `string \| null` | Account id used by Movies, Series, and Search | Navigation state |
 | `iptv_show_hidden_channels` | `boolean` | Whether normal lists reveal hidden channels in a dimmed state | Preference |
 | `iptv_auto_play` | `boolean` | Whether startup automatically plays the selected channel | Preference |

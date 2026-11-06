@@ -341,6 +341,9 @@ export class M3UStreamParser {
 
   private processLocation(line: string, format: ParsedPlaylist['format']): void {
     if (line.charCodeAt(0) === 35) return;
+    const pipeAt = headerSuffixStart(line);
+    const pipeHeaders = pipeAt >= 0 ? line.slice(pipeAt + 1) : '';
+    if (pipeAt >= 0) line = line.slice(0, pipeAt);
     if (!this.current && format === 'unknown' && !isPlaylistLocation(line)) {
       this.addIssue(
         'warning',
@@ -363,6 +366,12 @@ export class M3UStreamParser {
     }
     if (!this.current) this.current = emptyChannel(nameFromUrl(line));
     this.current.url = line;
+    if (pipeHeaders) {
+      this.current.urlSuffix = pipeHeaders;
+      addEncodedHeaders(this.current, pipeHeaders, HEADER_RANK_PIPE);
+    } else {
+      delete this.current.urlSuffix;
+    }
     if (this.current.catchup.toLowerCase() === 'xc' && !this.current.catchupSource) {
       const inferred = xtreamCredentialsFromLiveUrl(line);
       if (inferred) {
@@ -544,6 +553,7 @@ const OPTIONAL_CHANNEL_STRING_KEYS = [
   'catchupAccountId',
   'catchupStreamId',
   'catchupTimeZone',
+  'urlSuffix',
 ] as const;
 
 function detachChannelStrings(channels: readonly Channel[]): void {
@@ -740,6 +750,7 @@ function parseExtInf(body: string): Channel {
   }
   if (attrs.radio === 'true' || attrs.radio === '1') channel.radio = true;
   preserveUnknownAttributes(channel, attrs);
+  applyExtInfHeaders(channel, attrs);
   return channel;
 }
 
@@ -870,10 +881,156 @@ function addExtra(channel: Channel, body: string, kodi: boolean): void {
   if (equals <= 0) return;
   if (!channel.extras) channel.extras = {};
   const key = body.slice(0, equals).trim().toLowerCase();
-  channel.extras[key] = body.slice(equals + 1).trim();
+  const value = body.slice(equals + 1).trim();
+  channel.extras[key] = value;
   if (kodi) {
     if (!channel.sourceAttributes) channel.sourceAttributes = {};
-    channel.sourceAttributes[`kodiprop:${key}`] = body.slice(equals + 1).trim();
+    channel.sourceAttributes[`kodiprop:${key}`] = value;
+    if (key === 'inputstream.adaptive.stream_headers'
+        || key === 'inputstream.adaptive.manifest_headers') {
+      addEncodedHeaders(channel, value, HEADER_RANK_OPTION);
+    }
+    return;
+  }
+  const header = EXTVLCOPT_HEADER_KEYS[key];
+  if (header && value) setHeader(channel, header, value, HEADER_RANK_OPTION);
+}
+
+const HEADER_RANK_EXTINF = 0;
+const HEADER_RANK_OPTION = 1;
+const HEADER_RANK_EXTHTTP = 2;
+const HEADER_RANK_PIPE = 3;
+
+const EXTVLCOPT_HEADER_KEYS: Record<string, string | undefined> = {
+  'http-referrer': 'Referer',
+  'http-user-agent': 'User-Agent',
+  'http-origin': 'Origin',
+  'http-cookie': 'Cookie',
+};
+
+const EXTINF_HEADER_ATTRIBUTES: ReadonlyArray<readonly [string, string]> = [
+  ['user-agent', 'User-Agent'],
+  ['http-user-agent', 'User-Agent'],
+  ['referrer', 'Referer'],
+  ['referer', 'Referer'],
+  ['http-referrer', 'Referer'],
+];
+
+// Later sources win per header name; a header set by a higher-ranked source
+// survives a lower-ranked tag that appears after it.
+const headerRanks = new WeakMap<Channel, Record<string, number>>();
+
+function headerKey(name: string): string {
+  const lower = name.toLowerCase();
+  return lower === 'referrer' ? 'referer' : lower;
+}
+
+// RFC 7230 token; values must not smuggle extra header lines.
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const UNSAFE_HEADER_VALUE = /[\r\n\0]/;
+const FORBIDDEN_HEADERS = new Set([
+  'connection',
+  'content-length',
+  'expect',
+  'host',
+  'keep-alive',
+  'proxy-authorization',
+  'proxy-connection',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+function setHeader(channel: Channel, name: string, value: string, rank: number): void {
+  if (!HEADER_NAME.test(name) || UNSAFE_HEADER_VALUE.test(value)) return;
+  const key = headerKey(name);
+  if (FORBIDDEN_HEADERS.has(key)) return;
+  let ranks = headerRanks.get(channel);
+  if (!ranks) {
+    ranks = {};
+    headerRanks.set(channel, ranks);
+  }
+  const headers = channel.httpHeaders ?? (channel.httpHeaders = {});
+  let winner = value;
+  if ((ranks[key] ?? -1) > rank) {
+    for (const existing of Object.keys(headers)) {
+      if (headerKey(existing) === key) winner = headers[existing];
+    }
+  } else {
+    ranks[key] = rank;
+    for (const existing of Object.keys(headers)) {
+      if (headerKey(existing) === key) delete headers[existing];
+    }
+    headers[key === 'referer' ? 'Referer' : name] = value;
+  }
+  // The EXTVLCOPT extras stay in sync with the winning header for older readers.
+  if (key === 'user-agent' || key === 'referer') {
+    if (!channel.extras) channel.extras = {};
+    channel.extras[key === 'referer' ? 'http-referrer' : 'http-user-agent'] = winner;
+  }
+}
+
+function applyExtInfHeaders(channel: Channel, attrs: Record<string, string>): void {
+  for (const [attr, header] of EXTINF_HEADER_ATTRIBUTES) {
+    const value = attrs[attr];
+    if (value) setHeader(channel, header, value, HEADER_RANK_EXTINF);
+  }
+}
+
+const HEADER_SUFFIX = /^!?[A-Za-z0-9_.-]+=[^&]*(?:&!?[A-Za-z0-9_.-]+=[^&]*)*$/;
+const KNOWN_SUFFIX_HEADERS = new Set([
+  'authorization',
+  'cookie',
+  'origin',
+  'referer',
+  'referrer',
+  'user-agent',
+]);
+
+function suffixKey(pair: string): string {
+  return decodeHeaderPart(pair.slice(0, pair.indexOf('='))).trim().replace(/^!/, '').toLowerCase();
+}
+
+/** Index of the Kodi-style `|Name=value&Name2=value2` suffix, or -1. Only a
+ *  suffix naming a known header counts, so a `|` inside the URL stays put. */
+export function headerSuffixStart(location: string): number {
+  for (let pipe = location.lastIndexOf('|'); pipe > 0; pipe = location.lastIndexOf('|', pipe - 1)) {
+    const suffix = location.slice(pipe + 1);
+    if (!HEADER_SUFFIX.test(suffix)) continue;
+    if (suffix.split('&').some(pair => KNOWN_SUFFIX_HEADERS.has(suffixKey(pair)))) return pipe;
+  }
+  return -1;
+}
+
+function decodeHeaderPart(value: string): string {
+  const spaced = value.replace(/\+/g, ' ');
+  try {
+    return decodeURIComponent(spaced);
+  } catch {
+    return spaced;
+  }
+}
+
+function addEncodedHeaders(channel: Channel, encoded: string, rank: number): void {
+  const pairs: Array<[string, string]> = [];
+  for (const pair of encoded.split('&')) {
+    const equals = pair.indexOf('=');
+    if (equals <= 0) continue;
+    const name = decodeHeaderPart(pair.slice(0, equals)).trim().replace(/^!/, '');
+    const value = decodeHeaderPart(pair.slice(equals + 1)).trim();
+    const previous = pairs[pairs.length - 1];
+    // An unencoded `&` inside a Referer/Origin URL query splits it; rejoin
+    // the stray pair instead of sending it as a header of its own.
+    if (previous && !KNOWN_SUFFIX_HEADERS.has(name.toLowerCase())
+        && /^(referer|referrer|origin)$/i.test(previous[0]) && previous[1].indexOf('?') >= 0) {
+      previous[1] += `&${name}=${value}`;
+      continue;
+    }
+    pairs.push([name, value]);
+  }
+  for (const [name, value] of pairs) {
+    if (name && value) setHeader(channel, name, value, rank);
   }
 }
 
@@ -891,27 +1048,13 @@ function parseHttpHeaders(
   try {
     const value: unknown = JSON.parse(body);
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
-    const headers: Record<string, string> = {};
     for (const key of Object.keys(value)) {
       const header = (value as Record<string, unknown>)[key];
-      if (typeof header === 'string') headers[key] = header;
+      if (typeof header === 'string') setHeader(channel, key, header, HEADER_RANK_EXTHTTP);
     }
-    channel.httpHeaders = headers;
-    if (!channel.extras) channel.extras = {};
-    const userAgent = headerValue(headers, 'user-agent');
-    const referrer = headerValue(headers, 'referer') || headerValue(headers, 'referrer');
-    if (userAgent) channel.extras['http-user-agent'] = userAgent;
-    if (referrer) channel.extras['http-referrer'] = referrer;
   } catch {
     addIssue('warning', 'bad-exthttp', 'EXTHTTP payload is not valid JSON', line);
   }
-}
-
-function headerValue(headers: Record<string, string>, wanted: string): string {
-  for (const key of Object.keys(headers)) {
-    if (key.toLowerCase() === wanted) return headers[key];
-  }
-  return '';
 }
 
 function collectEpgUrls(attributes: Record<string, string>): string[] {

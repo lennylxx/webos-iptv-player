@@ -43,7 +43,7 @@ vi.mock('../services/epg-service', () => ({
 }));
 vi.mock('../services/storage-service', () => ({
   StorageService: {
-    setLastChannel: vi.fn(), setLastChannelKey: vi.fn(),
+    getLastChannel: vi.fn(() => null), setLastChannel: vi.fn(),
     setCatchupProgress: vi.fn(), setResume: vi.fn(),
     touchRecentlyWatchedLive: vi.fn(),
     getChannelCycleMode: vi.fn(() => 'global'),
@@ -58,7 +58,12 @@ vi.mock('./toast', () => ({ showToast: vi.fn() }));
 import { Player } from './player';
 import { CONFIG } from '../config';
 import { StorageService } from '../services/storage-service';
-import { channelKey } from '../utils/channel';
+import {
+  channelExactStreamIdentity,
+  channelExactStreamKey,
+  channelKey,
+  channelStreamKey,
+} from '../utils/channel';
 
 const channels: Channel[] = [1, 2].map((index) => ({
   id: `ch${index}`, name: `Channel ${index}`, logo: '', group: '',
@@ -225,6 +230,21 @@ describe('Player live preview', () => {
     expect(player.getCurrentIndex()).toBe(0);
     expect(pipeline.load).toHaveBeenCalledOnce();
     expect(pipeline.load).toHaveBeenCalledWith(replacement.url, replacement.extras, undefined);
+  });
+
+  it('retunes a replacement channel whose stream options changed', () => {
+    const oldChannel = { ...channels[0], extras: { 'http-referrer': 'http://host/a' } };
+    playlist.channels = [oldChannel];
+    player.enterLivePreview();
+    player.play(0);
+    const replacement = { ...oldChannel, extras: { 'http-referrer': 'http://host/b' } };
+    playlist.channels = [replacement];
+    pipeline.load.mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(player.getCurrentChannel()).toBe(replacement);
+    expect(pipeline.load).toHaveBeenCalledOnce();
   });
 
   it('retunes a refreshed URL without asking for the PIN again', () => {
@@ -468,5 +488,39 @@ describe('Player live preview', () => {
     expect(player.getLivePlaybackSnapshot()).toEqual({
       channel: channels[0], muted: false, status: 'loading',
     });
+  });
+});
+
+describe('Player channel rebind', () => {
+  it('saves the last channel stream so autoplay can pick it among shared keys', () => {
+    const channel: Channel = { ...channels[0], httpHeaders: { Referer: 'http://host/a' } };
+    playlist.channels = [channel];
+
+    player.play(0);
+
+    expect(StorageService.setLastChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ index: 0, stream: channelStreamKey(channel) }));
+  });
+
+  it('keeps the playing copy among copies that differ only by a token', () => {
+    const copyA = { ...channels[0], url: `${channels[0].url}?token=A` };
+    const copyB = { ...channels[0], url: `${channels[0].url}?token=B` };
+    playlist.channels = [copyA, copyB];
+    playlist.resolveChannelKey.mockImplementation((key: string, _stream?: string,
+      _prefer?: (channel: Channel) => boolean, exact?: string) => {
+      const shared = playlist.channels.filter(item => channelKey(item) === key);
+      const channel = shared.find(item => channelExactStreamIdentity(item) === exact) ?? shared[0];
+      return channel ? { channel, channelIndex: playlist.channels.indexOf(channel) } : null;
+    });
+    player.play(1);
+    expect(StorageService.setLastChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ index: 1, exact: channelExactStreamKey(copyB) }));
+    pipeline.load.mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(pipeline.load).not.toHaveBeenCalled();
+    expect(player.getCurrentChannel()).toBe(copyB);
+    expect(player.getCurrentIndex()).toBe(1);
   });
 });

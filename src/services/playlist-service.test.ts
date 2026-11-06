@@ -94,7 +94,12 @@ vi.mock('../utils/fetch-helper', async (importOriginal) => ({
 import { PlaylistService } from './playlist-service';
 import { fetchAndParseM3U } from '../parsers/m3u-loader';
 import {
+  channelExactStreamIdentity,
+  channelExactStreamKey,
+  channelHttpHeaders,
   channelKey,
+  channelStreamIdentity,
+  channelStreamKey,
   legacyChannelKey,
 } from '../utils/channel';
 import { ChannelCustomizationService } from './channel-customization';
@@ -145,6 +150,69 @@ describe('PlaylistService.refresh', () => {
   it('merges playlists and de-duplicates channels by URL', async () => {
     const channels = await PlaylistService.refresh();
     expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  });
+
+  it('keeps channels that share a URL but send different headers', async () => {
+    fetchTextMock.mockImplementation((url: string) => Promise.resolve(url.includes('p1')
+      ? '#EXTM3U\n#EXTINF:-1,Alpha\nhttp://stream/u1|Referer=http://host/a\n'
+      : '#EXTM3U\n#EXTINF:-1,Bravo\nhttp://stream/u1|Referer=http://host/b\n'
+        + '#EXTINF:-1,Bravo Dup\nhttp://stream/u1|Referer=http://host/b\n'));
+    const channels = await PlaylistService.refresh();
+    expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+  });
+
+  it('keeps channels that share a URL but declare different option headers', async () => {
+    fetchTextMock.mockImplementation((url: string) => Promise.resolve(url.includes('p1')
+      ? '#EXTM3U\n#EXTINF:-1,Alpha\n#EXTVLCOPT:http-referrer=http://host/a\nhttp://stream/u1\n'
+        + '#EXTINF:-1,Bravo\n#EXTHTTP:{"Cookie":"c=1"}\nhttp://stream/u1\n'
+        + '#EXTINF:-1,Charlie\n'
+        + '#KODIPROP:inputstream.adaptive.stream_headers=Referer=http%3A%2F%2Fhost%2Fc\n'
+        + 'http://stream/u1\n'
+        + '#EXTINF:-1,Delta\nhttp://stream/u2\n'
+      : '#EXTM3U\n#EXTINF:-1,Alpha Dup\n#EXTVLCOPT:http-referrer=http://host/a\nhttp://stream/u1\n'
+        + '#EXTINF:-1,Delta Dup\nhttp://stream/u2\n'));
+    const channels = await PlaylistService.refresh();
+    expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']);
+    expect(channels.map(c => channelHttpHeaders(c))).toEqual([
+      { Referer: 'http://host/a' }, { Cookie: 'c=1' }, { Referer: 'http://host/c' }, {},
+    ]);
+    expect(channels.map(c => c.playlistIds)).toEqual([['a', 'b'], ['a'], ['a'], ['a', 'b']]);
+  });
+
+  it('keeps channels that share a URL but use different DRM options', async () => {
+    fetchTextMock.mockImplementation((url: string) => Promise.resolve(url.includes('p1')
+      ? '#EXTM3U\n#EXTINF:-1,Alpha\n'
+        + '#KODIPROP:inputstream.adaptive.license_type=com.microsoft.playready\n'
+        + '#KODIPROP:inputstream.adaptive.license_key=http://host/l1\nhttp://stream/u1\n'
+        + '#EXTINF:-1,Bravo\nhttp://stream/u1\n'
+      : '#EXTM3U\n#EXTINF:-1,Bravo Dup\nhttp://stream/u1\n'));
+    const channels = await PlaylistService.refresh();
+    expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    expect(channels.map(c => c.playlistIds)).toEqual([['a'], ['a', 'b']]);
+  });
+
+  it('merges channels whose options differ only in what playback ignores', async () => {
+    fetchTextMock.mockImplementation((url: string) => Promise.resolve(url.includes('p1')
+      ? '#EXTM3U\n#EXTINF:-1,Alpha\n#EXTVLCOPT:network-caching=1000\nhttp://stream/u1\n'
+      : '#EXTM3U\n#EXTINF:-1,Alpha Dup\n#EXTVLCOPT:http-reconnect=true\nhttp://stream/u1\n'));
+    const channels = await PlaylistService.refresh();
+    expect(channels.map(c => c.name)).toEqual(['Alpha']);
+    expect(channels[0].playlistIds).toEqual(['a', 'b']);
+  });
+
+  it('resolves the exact stream among channels that share a key', async () => {
+    fetchTextMock.mockImplementation((url: string) => Promise.resolve(url.includes('p1')
+      ? '#EXTM3U\n#EXTINF:-1,Alpha\n#EXTVLCOPT:http-referrer=http://host/a\nhttp://stream/u1\n'
+        + '#EXTINF:-1,Bravo\nhttp://stream/u1\n'
+        + '#EXTINF:-1,Charlie\n#EXTVLCOPT:http-user-agent=Agent 1\nhttp://stream/u1\n'
+      : '#EXTM3U\n'));
+    const [alpha, bravo, charlie] = await PlaylistService.refresh();
+    const key = channelKey(alpha);
+    expect(channelKey(bravo)).toBe(key);
+    for (const channel of [alpha, bravo, charlie]) {
+      expect(PlaylistService.resolveChannelKey(key, channelStreamIdentity({ ...channel }))?.channel)
+        .toBe(channel);
+    }
   });
 
   it('schedules the next refresh from the last successful refresh time', async () => {
@@ -1346,6 +1414,83 @@ describe('PlaylistService.getByGroup', () => {
 
     expect(PlaylistService.getByGroup('builtin:favorites').map(c => c.name)).toEqual(['Alpha']);
   });
+
+  it('shows the first of channels sharing a favorite key, in the filtered playlist', () => {
+    const first = channel({ name: 'Alpha', url: 'http://host/a', playlistIds: ['P1'] });
+    const second = channel({
+      name: 'Bravo', url: 'http://host/a', playlistIds: ['P2'], httpHeaders: { Referer: 'http://host/r' },
+    });
+    PlaylistService.channels = [first, second];
+    storageMock.getFavorites.mockReturnValue([channelKey(first)]);
+
+    expect(PlaylistService.getByGroup('builtin:favorites').map(c => c.name)).toEqual(['Alpha']);
+    expect(PlaylistService.getByGroup('builtin:favorites', 'P2').map(c => c.name)).toEqual(['Bravo']);
+  });
+});
+
+describe('PlaylistService.resolveChannelKey', () => {
+  const alpha = channel({ name: 'Alpha', group: 'g1', url: 'http://host/a' });
+  const bravo = channel({
+    name: 'Bravo', group: 'g2', url: 'http://host/a', httpHeaders: { Referer: 'http://host/r' },
+  });
+  const charlie = channel({ name: 'Charlie', group: 'g2', url: 'http://host/a', extras: {
+    'inputstream.adaptive.license_type': 'com.microsoft.playready',
+  } });
+
+  beforeEach(() => {
+    PlaylistService.channels = [alpha, bravo, charlie];
+  });
+
+  it('picks the first of channels sharing a key without a stream', () => {
+    expect(PlaylistService.resolveChannelKey(channelKey(alpha))).toEqual({ channel: alpha, channelIndex: 0 });
+  });
+
+  it('prefers the exact stream, then a preferred entry, then the first', () => {
+    const key = channelKey(alpha);
+    const inG2 = (item: Channel) => item.group === 'g2';
+    expect(PlaylistService.resolveChannelKey(key, channelStreamIdentity(charlie))?.channel).toBe(charlie);
+    expect(PlaylistService.resolveChannelKey(key, 'gone', inG2)?.channel).toBe(bravo);
+    expect(PlaylistService.resolveChannelKey(key, 'gone')?.channel).toBe(alpha);
+  });
+
+  it('keeps the exact stream across a rotated token', () => {
+    const playing = channel({
+      url: 'http://host/c?token=t1', httpHeaders: { 'User-Agent': 'ua1' },
+    });
+    const plain = channel({ url: 'http://host/c?token=t2' });
+    const withAgent = channel({
+      url: 'http://host/c?token=t2', httpHeaders: { 'User-Agent': 'ua1' },
+    });
+    PlaylistService.channels = [plain, withAgent];
+
+    expect(PlaylistService.resolveChannelKey(channelKey(playing), channelStreamIdentity(playing))
+      ?.channel).toBe(withAgent);
+    expect(PlaylistService.resolveLastChannelIndex({
+      index: 0, key: channelKey(playing), stream: channelStreamKey(playing),
+    })).toBe(1);
+  });
+
+  it('tells apart copies that differ only by a token', () => {
+    const copyA = channel({ group: 'g1', url: 'http://host/c?token=A' });
+    const copyB = channel({ group: 'g1', url: 'http://host/c?token=B' });
+    PlaylistService.channels = [copyA, copyB];
+    const inG1 = (item: Channel) => item.group === 'g1';
+
+    expect(PlaylistService.resolveChannelKey(channelKey(copyB), channelStreamIdentity(copyB),
+      inG1, channelExactStreamIdentity(copyB))?.channel).toBe(copyB);
+    // A rotated token on the playing copy falls back to the stable stream.
+    expect(PlaylistService.resolveChannelKey(channelKey(copyB), channelStreamIdentity(copyB),
+      inG1, 'gone')?.channel).toBe(copyA);
+  });
+
+  it('resolves a legacy key that only channels sharing one key carry', () => {
+    const first = channel({ url: 'http://host/b?id=1' });
+    const second = channel({ url: 'http://host/b?id=1', httpHeaders: { Referer: 'http://host/r' } });
+    PlaylistService.channels = [first, second];
+    expect(legacyChannelKey(first)).not.toBe(channelKey(first));
+
+    expect(PlaylistService.resolveChannelKey(legacyChannelKey(first))?.channel).toBe(first);
+  });
 });
 
 function localSearchResults(query: string, playlist?: string): Channel[] {
@@ -1552,9 +1697,10 @@ describe('PlaylistService customization', () => {
     await PlaylistService.refresh();
     const savedKey = channelKey(PlaylistService.channels[1]);
 
-    expect(PlaylistService.resolveLastChannelIndex(savedKey, 0)).toBe(1);
-    expect(PlaylistService.resolveLastChannelIndex('missing', 0)).toBe(-1);
-    expect(PlaylistService.resolveLastChannelIndex('', 1)).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 0, key: savedKey })).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 0, key: 'missing' })).toBe(-1);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 1 })).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex(null)).toBe(0);
   });
 
   it('resolves query-distinguished streams precisely for autoplay', () => {
@@ -1564,7 +1710,7 @@ describe('PlaylistService customization', () => {
     ];
 
     const second = channelKey(PlaylistService.channels[1]);
-    expect(PlaylistService.resolveLastChannelIndex(second, 0)).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 0, key: second })).toBe(1);
   });
 
   it('uses a stable query identity after a stream token rotates', () => {
@@ -1574,7 +1720,42 @@ describe('PlaylistService customization', () => {
     ];
     const old = channel({ url: 'http://host/stream?id=2&token=A' });
 
-    expect(PlaylistService.resolveLastChannelIndex(channelKey(old), 0)).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 0, key: channelKey(old) })).toBe(1);
+  });
+
+  it('resumes the saved stream among channels sharing its key, else the first', () => {
+    PlaylistService.channels = [
+      channel({ url: 'http://host/stream' }),
+      channel({ url: 'http://host/stream', httpHeaders: { Referer: 'http://host/r' } }),
+    ];
+    const [first, second] = PlaylistService.channels;
+    const key = channelKey(second);
+
+    expect(PlaylistService.resolveLastChannelIndex({ index: 0, key, stream: channelStreamKey(second) })).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 0, key, stream: channelStreamKey(first) })).toBe(0);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 1, key })).toBe(0);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 1, key, stream: 'gone' })).toBe(0);
+  });
+
+  it('resumes the saved copy among copies that differ only by a token', () => {
+    PlaylistService.channels = [
+      channel({ url: 'http://host/stream?token=A' }),
+      channel({ url: 'http://host/stream?token=B' }),
+    ];
+    const [copyA, copyB] = PlaylistService.channels;
+    const key = channelKey(copyB);
+    const stream = channelStreamKey(copyB);
+
+    expect(PlaylistService.resolveLastChannelIndex({
+      index: 0, key, stream, exact: channelExactStreamKey(copyB),
+    })).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex({
+      index: 1, key, stream, exact: channelExactStreamKey(copyA),
+    })).toBe(0);
+    // Every token rotated: the saved index still picks the copy.
+    expect(PlaylistService.resolveLastChannelIndex({ index: 1, key, stream, exact: 'gone' })).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 1, key, stream })).toBe(1);
+    expect(PlaylistService.resolveLastChannelIndex({ index: 5, key, stream, exact: 'gone' })).toBe(0);
   });
 
   it('does not use an ambiguous legacy autoplay key', () => {
@@ -1583,10 +1764,9 @@ describe('PlaylistService customization', () => {
       channel({ url: 'http://host/stream?id=2' }),
     ];
 
-    expect(PlaylistService.resolveLastChannelIndex(
-      legacyChannelKey(PlaylistService.channels[1]),
-      0,
-    )).toBe(-1);
+    expect(PlaylistService.resolveLastChannelIndex({
+      index: 0, key: legacyChannelKey(PlaylistService.channels[1]),
+    })).toBe(-1);
   });
 
   it('keeps empty custom groups in global navigation only', async () => {

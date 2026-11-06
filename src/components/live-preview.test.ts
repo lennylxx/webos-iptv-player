@@ -216,6 +216,23 @@ describe('LivePreview', () => {
     expect(playerPlay).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['headers', { 'http-referrer': 'http://host/r' }],
+    ['DRM options', { 'inputstream.adaptive.license_type': 'com.microsoft.playready' }],
+  ])('switches to a same-URL channel with other %s instead of expanding', (_, extras) => {
+    const current = { ...state(), channel: { ...state().channel, extras } };
+    const plain = state().channel;
+    PlaylistService.channels = [current.channel, plain];
+    StorageService.setLivePreview(true);
+    liveSnapshot.mockReturnValue(current);
+    view.applyState(current);
+
+    preview.selectChannel(1, undefined, null, 'expand-current');
+
+    expect(actions.onExpand).not.toHaveBeenCalled();
+    expect(playerPlay).toHaveBeenCalledWith(1, undefined, null);
+  });
+
   it('routes numeric-style fullscreen selection around live preview', () => {
     StorageService.setLivePreview(true);
 
