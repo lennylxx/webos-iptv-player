@@ -170,6 +170,15 @@ A DASH channel with HTTP headers that the page pipeline would overwrite
 uses `mediaTransportType: 'MPEG-DASH'` and the same `option.transmission`
 headers. HTTPS streams keep the Cookie and Authorization stripping.
 
+Settings → Advanced → **HTTP headers** controls this path for HLS and
+DASH alike. **Media service** (the default) behaves as described here.
+**Off** keeps every header channel on `<video>` without its headers and
+logs `playback.luna.skipped reason=setting`, also for the User-Agent-only
+retry; when such a channel fails and Media service would have sent its
+headers, the OSD says headers are off instead of showing the generic
+error. **Local proxy** is shown but not selectable yet. The setting is
+read on each load.
+
 - The MPD is first read without the channel's headers to find its DRM,
   as the element path does. A refused MPD loads Luna as configured and
   logs `playback.path.luna drm=unknown mpd=unreadable`. If that load fails

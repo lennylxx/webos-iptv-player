@@ -745,6 +745,7 @@ export class Settings {
     const textSize = StorageService.getTextSize();
     const localePreference = StorageService.getLocalePreference();
     const liveReconnectAttempts = StorageService.getLiveReconnectAttempts();
+    const headerPlayback = StorageService.getHeaderPlayback();
     const numberEntryOsdTimeoutMs = StorageService.getNumberEntryOsdTimeoutMs();
     const playerOsdTimeoutMs = StorageService.getPlayerOsdTimeoutMs();
     const animationMode = StorageService.getAnimationMode();
@@ -1073,6 +1074,20 @@ export class Settings {
                       })),
                       String(liveReconnectAttempts),
                     )}
+                    </div>
+                  </div>
+                  <div class="settings-advanced-row">
+                    <div class="settings-advanced-group" aria-hidden="true"></div>
+                    <div class="settings-advanced-description">
+                      <div class="settings-item-title">${t('settings.httpHeaders')}</div>
+                      <div class="settings-item-hint">${t('settings.httpHeadersHint')}</div>
+                    </div>
+                    <div class="settings-advanced-control">
+                    ${toggleGroup('header-playback', [
+                      { value: 'off', label: t('common.off') },
+                      { value: 'luna', label: t('settings.httpHeadersMediaService') },
+                      { value: 'proxy', label: t('settings.httpHeadersLocalProxy') },
+                    ], headerPlayback, ['proxy'])}
                     </div>
                   </div>
                   <div class="settings-advanced-row">
@@ -2907,6 +2922,9 @@ export class Settings {
       ($('#live-reconnect-attempts', this.container) as HTMLElement | null)?.dataset.value,
     );
     StorageService.setLiveReconnectAttempts(liveReconnectAttempts);
+
+    const headerPlayback = $('#header-playback .toggle-option.active', this.container)?.dataset.value;
+    if (headerPlayback === 'off' || headerPlayback === 'luna') StorageService.setHeaderPlayback(headerPlayback);
 
     const numberEntryOsdTimeoutMs = Number(
       ($('#number-entry-osd-timeout', this.container) as HTMLElement | null)?.dataset.value,

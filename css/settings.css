@@ -264,9 +264,16 @@
 
 .settings-advanced-control {
   display: flex;
-  flex: 0 0 360px;
+  flex: 0 0 auto;
+  align-items: center;
   justify-content: flex-end;
+  min-width: 360px;
   margin-left: 24px;
+}
+
+/* A long hint must not wrap the option labels and stretch the buttons. */
+.settings-advanced-control .toggle-option {
+  white-space: nowrap;
 }
 
 .settings-advanced-control > .dropdown {

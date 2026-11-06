@@ -194,6 +194,7 @@ function callbacks(overrides: Partial<PlayerPipelineOptions> = {}): PlayerPipeli
     playbackLabel: token => `load=${String(token)}`,
     mediaState: () => '',
     isCatchup: () => false,
+    headerPlayback: () => 'luna',
     onError: vi.fn(),
     onAudioTracksUpdated: vi.fn(),
     onSubtitleTracksUpdated: vi.fn(),

@@ -1021,6 +1021,20 @@ describe('Player live playback', () => {
     expect(healthMock.recordPlaybackFailure).toHaveBeenCalledOnce();
   });
 
+  it('says HTTP headers are off when a channel that needed them fails', async () => {
+    playlistMock.channels = [{}, {}];
+    player.play(0);
+    await flush();
+    const pipeline = (player as unknown as { pipeline: { headersTurnedOff(): boolean } }).pipeline;
+    vi.spyOn(pipeline, 'headersTurnedOff').mockReturnValue(true);
+    Object.defineProperty(video, 'error', { configurable: true, value: { code: 4, message: '' } });
+
+    video.dispatchEvent(new Event('error'));
+
+    expect(container.querySelector('#player-osd')?.textContent)
+      .toContain('Playback error — HTTP headers are off. Trying the next channel…');
+  });
+
   it('cancels a pending reconnect when the user changes channel or stops', async () => {
     playlistMock.channels = [{}, {}];
     player.play(0);

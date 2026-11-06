@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist';
@@ -1061,6 +1061,13 @@ export const StorageService = {
     if (!this.setFavorites([...new Set(migrated)])) return;
     if (!set('fav_url_keyed', true)) return;
     set('fav_stream_keyed', true);
+  },
+
+  getHeaderPlayback(): HeaderPlayback {
+    return get<unknown>('header_playback', 'luna') === 'off' ? 'off' : 'luna';
+  },
+  setHeaderPlayback(mode: HeaderPlayback): void {
+    set('header_playback', mode);
   },
 
   getAutoPlay(): boolean {

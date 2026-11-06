@@ -242,6 +242,15 @@ describe('StorageService', () => {
     StorageService.setPlaylistsReplacedHandler(() => {});
   });
 
+  it('plays header channels through the media service unless turned off', () => {
+    expect(StorageService.getHeaderPlayback()).toBe('luna');
+    StorageService.setHeaderPlayback('off');
+    expect(localStorage.getItem('iptv_header_playback')).toBe('"off"');
+    expect(StorageService.getHeaderPlayback()).toBe('off');
+    localStorage.setItem('iptv_header_playback', '"proxy"');
+    expect(StorageService.getHeaderPlayback()).toBe('luna');
+  });
+
   it('persists live preview on and off independently from autoplay and sources', () => {
     StorageService.setAutoPlay(true);
     StorageService.setPlaylists([{ id: 'p1', name: 'P1', url: 'http://host/a' }]);

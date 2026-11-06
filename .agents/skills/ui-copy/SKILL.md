@@ -133,8 +133,11 @@ a new term after review, add a row here.
 | Name sort direction | A–Z / Z–A | A–Z / Z–A |
 | Date added / Year sort direction | Newest / Oldest | 最新 / 最早 |
 | Rating sort direction | Highest / Lowest | 最高 / 最低 |
+| Header-channel playback setting | HTTP headers | HTTP 请求头 |
+| Header playback modes | Off / Media service / Local proxy | 关闭 / 媒体服务 / 本地代理 |
 
-Rejected: 片单 (watchlist), 正在播放 for NOW, 节目单 (guide),
+Rejected: 片单 (watchlist), HTTP 标头 (headers), Luna / System player
+(header playback mode), 正在播放 for NOW, 节目单 (guide),
 全局频道 / "Global" for all channels, "programme",
 Ascending / Descending / 升序 / 降序 / Asc / Desc and 最旧 (sort
 direction),

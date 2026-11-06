@@ -1,4 +1,4 @@
-import type { AudioOption, ManifestAudio, ManifestClosedCaption, ManifestSubtitle, SubtitleOption } from '../types';
+import type { AudioOption, HeaderPlayback, ManifestAudio, ManifestClosedCaption, ManifestSubtitle, SubtitleOption } from '../types';
 import { CONFIG } from '../config';
 import { getCachedStreamMime, setCachedStreamMime } from '../services/idb-cache';
 import { parseMpd, type MpdManifest } from '../parsers/mpd-manifest';
@@ -182,6 +182,8 @@ export interface PlayerPipelineOptions {
   playbackLabel: (loadToken: number) => string;
   mediaState: (video: HTMLVideoElement) => string;
   isCatchup: () => boolean;
+  /** The HTTP headers setting, read per load. */
+  headerPlayback: () => HeaderPlayback;
   onError: (reason?: 'unsupported') => void;
   onAudioTracksUpdated: () => void;
   onSubtitleTracksUpdated: () => void;
@@ -263,6 +265,7 @@ export class PlayerPipeline {
   // The load whose Luna start waits on its MPD read or a PlayReady client.
   private lunaPreparing = -1;
   private lunaSkipToken = -1; // one playback.luna.skipped event per load
+  private headersOffToken = -1;
 
   constructor(private callbacks: PlayerPipelineOptions) {}
 
@@ -298,6 +301,11 @@ export class PlayerPipeline {
 
   setMseSubtitleTrack(index: number): boolean {
     return this.engine?.setSubtitleTrack(index) ?? false;
+  }
+
+  /** The current load would have sent its headers, but HTTP headers is Off. */
+  headersTurnedOff(): boolean {
+    return this.headersOffToken === this.loadToken;
   }
 
   /** A header-carrying stream plays through com.webos.media, not the element. */
@@ -712,15 +720,23 @@ export class PlayerPipeline {
     format: 'hls' | 'dash' = 'hls',
   ): Record<string, string> | null {
     if (!isWebOS() || !(userAgentOnly ? hasOnlyUserAgent(headers) : hasLunaHeaders(headers))) return null;
-    const skip = this.lunaOff ? 'latched_off'
+    const otherSkip = this.lunaOff ? 'latched_off'
       : this.lunaFailed.has(url) ? 'failed_before'
       : this.lunaFellBack.has(url) ? 'fell_back'
       : lunaDrmSkip(parseDrmConfig(extras), format);
-    if (skip) {
-      this.noteLunaSkip(token, headers, skip, userAgentOnly);
+    const unsafe = tlsUnsafeHeaderNames(url, headers);
+    if (this.callbacks.headerPlayback() === 'off') {
+      // Blame the setting only when Media service would have sent the headers.
+      if (!otherSkip && (userAgentOnly || hasLunaHeaders(withoutHeaders(headers, unsafe)))) {
+        this.headersOffToken = token;
+      }
+      this.noteLunaSkip(token, headers, 'setting', userAgentOnly);
       return null;
     }
-    const unsafe = tlsUnsafeHeaderNames(url, headers);
+    if (otherSkip) {
+      this.noteLunaSkip(token, headers, otherSkip, userAgentOnly);
+      return null;
+    }
     if (!unsafe.length) return headers;
     const kept = withoutHeaders(headers, unsafe);
     const usable = hasLunaHeaders(kept);

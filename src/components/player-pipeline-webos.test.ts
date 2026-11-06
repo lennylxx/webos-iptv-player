@@ -61,6 +61,7 @@ function callbacks(): PlayerPipelineOptions {
     playbackLabel: token => `load=${String(token)}`,
     mediaState: () => '',
     isCatchup: () => false,
+    headerPlayback: () => 'luna',
     onError: vi.fn(),
     onAudioTracksUpdated: vi.fn(),
     onSubtitleTracksUpdated: vi.fn(),
@@ -1037,6 +1038,33 @@ describe('PlayerPipeline webOS Luna routing', () => {
     expect(logs.join('\n')).toContain('event=playback.luna.skipped load=4 reason=latched_off headers=referer');
   });
 
+  it('plays a header channel on the element when HTTP headers are off', async () => {
+    const video = videoElement();
+    const pipeline = await pipelineFor(video);
+    pipeline.opts.headerPlayback = () => 'off';
+
+    pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+
+    expect(luna.sessions).toHaveLength(0);
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalled());
+    expect(logs.join('\n')).toContain('event=playback.luna.skipped load=1 reason=setting headers=referer');
+    expect(pipeline.headersTurnedOff()).toBe(true);
+
+    pipeline.opts.headerPlayback = () => 'luna';
+    pipeline.load('http://host/b.m3u8', null, { headers: REFERER });
+    expect(pipeline.headersTurnedOff()).toBe(false);
+  });
+
+  it('does not blame the off setting when Media service would skip Luna too', async () => {
+    const pipeline = await pipelineFor(videoElement());
+    pipeline.opts.headerPlayback = () => 'off';
+
+    pipeline.load('https://host/a.m3u8', null, { headers: { Cookie: 'c=1' } });
+
+    expect(logs.join('\n')).toContain('event=playback.luna.skipped load=1 reason=setting headers=cookie');
+    expect(pipeline.headersTurnedOff()).toBe(false);
+  });
+
   it('withholds credentials from an https stream on the Luna path', async () => {
     const pipeline = await pipelineFor(videoElement());
     pipeline.load('https://host/a.m3u8', null, {
@@ -1100,6 +1128,18 @@ describe('PlayerPipeline webOS Luna routing', () => {
       expect(logs.join('\n')).toContain('event=playback.path.luna load=1 reason=ua_only');
       expect(pipeline.retryWithLuna()).toBe(false);
       expect(luna.sessions).toHaveLength(1);
+    });
+
+    it('blames the off setting when it blocks the User-Agent retry', async () => {
+      const pipeline = await pipelineFor(videoElement());
+      pipeline.opts.headerPlayback = () => 'off';
+      pipeline.load('http://host/a.m3u8', null, { headers: UA });
+      expect(pipeline.headersTurnedOff()).toBe(false);
+
+      expect(pipeline.retryWithLuna()).toBe(false);
+
+      expect(luna.sessions).toHaveLength(0);
+      expect(pipeline.headersTurnedOff()).toBe(true);
     });
 
     it('surfaces the error when the Luna retry fails too', async () => {

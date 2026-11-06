@@ -185,6 +185,7 @@ export class Player {
       playbackLabel: loadToken => this.playbackLabel(loadToken),
       mediaState: video => this.mediaState(video),
       isCatchup: () => this.catchupInfo !== null,
+      headerPlayback: () => StorageService.getHeaderPlayback(),
       onError: reason => this.onError(reason),
       onAudioTracksUpdated: () => {
         this.tracks.applyHlsAudioSelection();
@@ -258,7 +259,7 @@ export class Player {
           `cause=${recovery.cause}`,
           this.recoveryState(recovery));
         this.markLiveUnavailable(recovery.cause === 'stall' ? 'stall_exhausted' : 'playback_error');
-        this.osd.updateMessage(t('player.streamError'));
+        this.osd.updateMessage(this.streamErrorMessage());
         this.channelUp();
       },
       holdStall: recovery => this.holdStallForLuna(recovery),
@@ -1315,11 +1316,15 @@ export class Player {
     }
     this.stallWatchdog.stop();
     this.markLiveUnavailable('playback_error');
-    this.osd.updateMessage(t('player.streamError'));
+    this.osd.updateMessage(this.streamErrorMessage());
     this.errorAdvanceTimer = setTimeout(() => {
       this.errorAdvanceTimer = null;
       this.channelUp();
     }, 2000);
+  }
+
+  private streamErrorMessage(): string {
+    return t(this.pipeline.headersTurnedOff() ? 'player.streamErrorHeadersOff' : 'player.streamError');
   }
 
   private markLiveUnavailable(reason: string): void {
