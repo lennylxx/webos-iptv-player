@@ -29,7 +29,7 @@ type DragCandidate = { target: EditTarget; x: number; y: number };
 
 interface ChannelListEditorOptions {
   render: () => void;
-  moveListFocus: (delta: number) => boolean;
+  stepChannelList: (action: 'up' | 'down' | 'channel_up' | 'channel_down') => boolean;
   onEnterManagement: () => void;
   onChannelsChanged: () => void;
   onEpgMappingChanged: () => void;
@@ -723,17 +723,17 @@ export class ChannelListEditor {
     switch (action) {
       case 'up':
       case 'down':
+      case 'channel_up':
+      case 'channel_down':
+        // Management never leaves the list through its ends.
+        if (!this.options.stepChannelList(action)
+            && this.nav.focused?.dataset.listPosition === undefined) {
+          this.nav.move(action === 'up' || action === 'channel_up' ? 'up' : 'down');
+        }
+        return true;
       case 'left':
       case 'right':
-        if ((action === 'up' || action === 'down')
-            && this.options.moveListFocus(action === 'up' ? -1 : 1)) return true;
         this.nav.move(action);
-        return true;
-      case 'channel_up':
-        if (!this.options.moveListFocus(-1)) this.nav.move('up');
-        return true;
-      case 'channel_down':
-        if (!this.options.moveListFocus(1)) this.nav.move('down');
         return true;
       case 'select':
         this.activateFavoriteTarget();

@@ -84,6 +84,7 @@ export class ChannelList {
   private previewFocused = false;
   private playingCatchupStart: number | null = null;
   private recentItems: RecentlyWatchedItem[] = [];
+  private footerReturnRow: string | null = null;
   private failedLogos = new Set<string>();
   private readonly channelVirtualizer = new VirtualList({
     itemSize: CHANNEL_ROW_STRIDE,
@@ -167,6 +168,7 @@ export class ChannelList {
     });
     this.nav = new SpatialNav(container, (el) => {
       this.editor?.trackFocus(el);
+      if (!el?.closest('.edit-hints')) this.footerReturnRow = null;
       if (el) this.onListFocus();
       const via = this.navVia;
       this.navVia = 'key';
@@ -191,7 +193,7 @@ export class ChannelList {
     this.container.addEventListener('click', () => this.onListFocus(), true);
     this.editor = new ChannelListEditor(container, this.nav, {
       render: () => this.render(),
-      moveListFocus: (delta) => this.moveVirtualFocus(delta),
+      stepChannelList: (action) => this.stepChannelList(action),
       onEnterManagement,
       onChannelsChanged: () => this.onChannelsChanged(),
       onEpgMappingChanged,
@@ -629,7 +631,7 @@ export class ChannelList {
     switch (action) {
       case 'up':
       case 'down':
-        if (this.moveVirtualFocus(action === 'up' ? -1 : 1)) return true;
+        if (this.stepChannelList(action)) return true;
         // Above the sidebar's top sits the tab bar, never the channel list.
         if (action === 'up' && this.nav.focused?.closest('.sidebar')) {
           const edit = this.container.querySelector<HTMLElement>('[data-edit-channels]');
@@ -645,11 +647,11 @@ export class ChannelList {
         return this.nav.move(action);
 
       case 'channel_up':
-        if (!this.moveVirtualFocus(-1)) this.nav.move('up');
+        if (!this.stepChannelList(action)) this.nav.move('up');
         break;
 
       case 'channel_down':
-        if (!this.moveVirtualFocus(1)) this.nav.move('down');
+        if (!this.stepChannelList(action)) this.nav.move('down');
         break;
 
       case 'select': {
@@ -1191,6 +1193,61 @@ export class ChannelList {
     return { top: rect.top, bottom };
   }
 
+  // A channel row that couldn't step further sits at a list end; the
+  // geometric fallback would leave the list for the group sidebar.
+  // Up from the footer returns to the row Down left, else the lowest row it
+  // doesn't cover, not to whatever the geometric pick finds in the sidebar.
+  private focusRowAboveFooter(): boolean {
+    const footer = this.nav.focused?.closest<HTMLElement>('.edit-hints');
+    const main = this.container.querySelector<HTMLElement>('.channel-main');
+    if (!footer || !main) return false;
+    const left = this.footerReturnRow === null ? null
+      : main.querySelector<HTMLElement>(`[data-list-position="${this.footerReturnRow}"]`);
+    this.footerReturnRow = null;
+    // A row scrolled out of view resumes in view instead of being scrolled back to.
+    if (left && this.rowVisibility(left, 'channel') !== 'none') {
+      this.nav.focus(left);
+      return true;
+    }
+    const limit = Math.min(main.getBoundingClientRect().bottom, footer.getBoundingClientRect().top) + 1;
+    let best: HTMLElement | null = null;
+    let bestBottom = -Infinity;
+    for (const row of Array.from(main.querySelectorAll<HTMLElement>('[data-list-position]'))) {
+      const bottom = row.getBoundingClientRect().bottom;
+      if (bottom <= limit && bottom > bestBottom) {
+        best = row;
+        bestBottom = bottom;
+      }
+    }
+    if (!best) return false;
+    this.nav.focus(best);
+    return true;
+  }
+
+  // Up/Down/CH+/CH- within the list and its footer; false leaves the move
+  // to SpatialNav.
+  private stepChannelList(action: 'up' | 'down' | 'channel_up' | 'channel_down'): boolean {
+    if (this.moveVirtualFocus(action === 'up' || action === 'channel_up' ? -1 : 1)) return true;
+    if (action === 'channel_up' || action === 'channel_down') return this.atChannelListEnd();
+    if (action === 'up') return this.focusRowAboveFooter();
+    if (!this.atChannelListEnd()) return false;
+    // The footer actions below the list are only reached from its last row.
+    const footer = this.container.querySelector<HTMLElement>('.edit-hints [data-focusable]');
+    const from = this.nav.focused;
+    if (footer && from && !from.closest('.edit-hints')) {
+      this.footerReturnRow = from.dataset.listPosition ?? null;
+      this.nav.focus(footer);
+    }
+    return true;
+  }
+
+  // The footer below the list is a dead end for Down and CH+/CH- too.
+  private atChannelListEnd(): boolean {
+    const focused = this.nav.focused;
+    if (!focused || !this.container.contains(focused)) return false;
+    return focused.dataset.listPosition !== undefined || !!focused.closest('.edit-hints');
+  }
+
   private moveVirtualFocus(delta: number): boolean {
     if (this.resumeScrolledAway()) return true;
     const focused = this.nav.focused;
@@ -1217,8 +1274,15 @@ export class ChannelList {
     }
     const rawPosition = focused?.dataset.listPosition;
     if (rawPosition === undefined) return false;
-    if (this.currentGroup === 'builtin:recently-watched') return false;
     const position = parseInt(rawPosition, 10);
+    if (this.currentGroup === 'builtin:recently-watched') {
+      const target = this.container.querySelector<HTMLElement>(
+        `.channel-main [data-list-position="${String(position + delta)}"]`,
+      );
+      if (!target) return false;
+      this.nav.focus(target);
+      return true;
+    }
     const count = PlaylistService.getGroupCount(
       this.currentGroup,
       this.currentPlaylist || undefined,

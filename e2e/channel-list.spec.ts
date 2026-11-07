@@ -528,6 +528,227 @@ test('Up at the top of the sidebar goes to the tab bar, not the scrolled list', 
   await expect(page.locator('#view-channels .focused')).toHaveCount(0);
 });
 
+// One channel per group, so the group sidebar reaches below the short list.
+function manyGroupsPlaylist(): string {
+  const lines = ['#EXTM3U'];
+  for (let i = 1; i <= 12; i++) {
+    lines.push(`#EXTINF:-1 tvg-id="c${i}" group-title="G${i}",Ch ${i}`);
+    lines.push(`http://host/${i}.m3u8`);
+  }
+  return lines.join('\n');
+}
+
+test('Down and CH- at the last channel and CH+ at the first stay in the list', async ({ page }) => {
+  await routePlaylist(page, manyGroupsPlaylist());
+  await seedPlaylist(page);
+  await page.goto('/');
+  await focusFirstChannelRow(page);
+  const main = page.locator('#view-channels .channel-main');
+  const focused = page.locator('#view-channels .focused');
+
+  await page.keyboard.press('PageUp');
+  await expect(main.locator('[data-list-position="0"]')).toHaveClass(/\bfocused\b/);
+  await expect(focused).toHaveCount(1);
+
+  for (let i = 0; i < 11; i++) await page.keyboard.press('ArrowDown');
+  const last = main.locator('[data-list-position="11"]');
+  await expect(last).toHaveClass(/\bfocused\b/);
+  for (const key of ['ArrowDown', 'PageDown']) {
+    await page.keyboard.press(key);
+    await expect(last).toHaveClass(/\bfocused\b/);
+    await expect(focused).toHaveCount(1);
+  }
+});
+
+function channelKey(url: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < url.length; i++) {
+    hash ^= url.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+async function pressKeyCode(page: Page, keyCode: number): Promise<void> {
+  await page.evaluate(
+    (k) => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: k, bubbles: true })),
+    keyCode,
+  );
+}
+
+// Clicks a group, then takes the keys back to its first row.
+async function openGroupByPointer(page: Page, group: string): Promise<void> {
+  await page.locator(`[data-group="${group}"]`).click();
+  await page.mouse.move(0, 0);
+  await focusFirstChannelRow(page);
+}
+
+test('Down and CH- at the last Recently Watched item and CH+ at the first stay in the list', async ({
+  page,
+}) => {
+  await page.addInitScript((keys) => {
+    localStorage.setItem('iptv_recently_watched_live', JSON.stringify([
+      { channelKey: keys[0], updatedAt: 2000 },
+      { channelKey: keys[1], updatedAt: 1000 },
+    ]));
+  }, [channelKey('http://host/1.m3u8'), channelKey('http://host/2.m3u8')]);
+  await routePlaylist(page, manyGroupsPlaylist());
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await openGroupByPointer(page, 'builtin:recently-watched');
+  const main = page.locator('#view-channels .channel-main');
+  const focused = page.locator('#view-channels .focused');
+
+  await page.keyboard.press('PageUp');
+  await expect(main.locator('[data-list-position="0"]')).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowDown');
+  const last = main.locator('[data-list-position="1"]');
+  await expect(last).toHaveClass(/\bfocused\b/);
+  for (const key of ['ArrowDown', 'PageDown']) {
+    await page.keyboard.press(key);
+    await expect(last).toHaveClass(/\bfocused\b/);
+    await expect(focused).toHaveCount(1);
+  }
+});
+
+test('Down from the last Favorites row reaches Manage favorites', async ({ page }) => {
+  await page.addInitScript((keys) => {
+    localStorage.setItem('iptv_favorites', JSON.stringify(keys));
+  }, [channelKey('http://host/1.m3u8'), channelKey('http://host/2.m3u8')]);
+  await routePlaylist(page, manyGroupsPlaylist());
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await openGroupByPointer(page, 'builtin:favorites');
+  const main = page.locator('#view-channels .channel-main');
+
+  await page.keyboard.press('ArrowDown');
+  await expect(main.locator('[data-list-position="1"]')).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('[data-favorite-manage]')).toHaveClass(/\bfocused\b/);
+  await expect(page.locator('#view-channels .focused')).toHaveCount(1);
+  for (const key of ['ArrowDown', 'PageDown', 'PageUp']) {
+    await page.keyboard.press(key);
+    await expect(page.locator('[data-favorite-manage]')).toHaveClass(/\bfocused\b/);
+  }
+  await page.keyboard.press('ArrowUp');
+  await expect(main.locator('[data-list-position="1"]')).toHaveClass(/\bfocused\b/);
+  await expect(page.locator('#view-channels .focused')).toHaveCount(1);
+});
+
+test('Down from the last row in edit mode reaches the edit actions', async ({ page }) => {
+  await routePlaylist(page, manyGroupsPlaylist());
+  await seedPlaylist(page);
+  await page.goto('/');
+  await focusFirstChannelRow(page);
+  await pressKeyCode(page, 405);
+  await expect(page.locator('.channel-view.editing .edit-hints')).toBeVisible();
+  const main = page.locator('#view-channels .channel-main');
+
+  for (let i = 0; i < 11; i++) await page.keyboard.press('ArrowDown');
+  await expect(main.locator('[data-list-position="11"]')).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowDown');
+  const actions = page.locator('#view-channels .edit-hints');
+  await expect(actions.locator('.focused')).toHaveCount(1);
+  for (let i = 0; i < 6 && !(await actions.locator('[data-epg-action].focused').count()); i++) {
+    await page.keyboard.press('ArrowRight');
+  }
+  await expect(actions.locator('[data-epg-action]')).toHaveClass(/\bfocused\b/);
+  await expect(page.locator('#view-channels .focused')).toHaveCount(1);
+  await page.keyboard.press('ArrowUp');
+  await expect(main.locator('[data-list-position="11"]')).toHaveClass(/\bfocused\b/);
+});
+
+test('Favorite management keeps Up, Down, and CH+/CH- inside the list', async ({ page }) => {
+  await page.addInitScript((keys) => {
+    localStorage.setItem('iptv_favorites', JSON.stringify(keys));
+  }, [channelKey('http://host/1.m3u8'), channelKey('http://host/2.m3u8')]);
+  await routePlaylist(page, manyGroupsPlaylist());
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await openGroupByPointer(page, 'builtin:favorites');
+  const main = page.locator('#view-channels .channel-main');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-channels .favorite-hints')).toBeVisible();
+  await expect(main.locator('[data-list-position="0"]')).toHaveClass(/\bfocused\b/);
+
+  for (const key of ['ArrowUp', 'PageUp']) {
+    await page.keyboard.press(key);
+    await expect(main.locator('[data-list-position="0"]')).toHaveClass(/\bfocused\b/);
+  }
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('PageDown');
+  await expect(main.locator('[data-list-position="1"]')).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowDown');
+  const actions = page.locator('#view-channels .favorite-hints');
+  await expect(actions.locator('.focused')).toHaveCount(1);
+  await page.keyboard.press('ArrowDown');
+  await expect(actions.locator('.focused')).toHaveCount(1);
+  await page.keyboard.press('ArrowUp');
+  await expect(main.locator('[data-list-position="1"]')).toHaveClass(/\bfocused\b/);
+  await expect(page.locator('#view-channels .focused')).toHaveCount(1);
+});
+
+test('Up from the edit actions skips a remembered row scrolled out of view', async ({ page }) => {
+  await routePlaylist(page, manyGroupsPlaylist());
+  await seedPlaylist(page);
+  await page.goto('/');
+  await focusFirstChannelRow(page);
+  await pressKeyCode(page, 405);
+  await expect(page.locator('.channel-view.editing .edit-hints')).toBeVisible();
+  const main = page.locator('#view-channels .channel-main');
+  for (let i = 0; i < 12; i++) await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#view-channels .edit-hints .focused')).toHaveCount(1);
+
+  await main.evaluate((el) => { el.scrollTop = 0; });
+  await page.waitForTimeout(100);
+  await page.keyboard.press('ArrowUp');
+  await expect(main.locator('[data-list-position].focused')).toHaveCount(1);
+  await expect(main.locator('[data-list-position="11"]')).not.toHaveClass(/\bfocused\b/);
+  expect(await main.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test('Up from the edit actions forgets a row left before switching groups', async ({ page }) => {
+  const lines = ['#EXTM3U'];
+  for (let i = 1; i <= 32; i++) {
+    lines.push(`#EXTINF:-1 group-title="${i <= 11 ? 'A' : 'B'}",Ch ${i}`);
+    lines.push(`http://host/${i}.m3u8`);
+  }
+  await routePlaylist(page, lines.join('\n'));
+  await seedPlaylist(page);
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await openGroupByPointer(page, 'source:A');
+  await pressKeyCode(page, 405);
+  for (let i = 0; i < 11; i++) await page.keyboard.press('ArrowDown');
+  const actions = page.locator('#view-channels .edit-hints');
+  await expect(actions.locator('.focused')).toHaveCount(1);
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#view-channels .sidebar .focused')).toHaveCount(1);
+  await pressKeyCode(page, 405);
+  await expect(page.locator('.channel-view.editing')).toHaveCount(0);
+  await page.locator('[data-group="source:B"]').click();
+  await page.mouse.move(0, 0);
+  await focusFirstChannelRow(page);
+  await pressKeyCode(page, 405);
+  await expect(page.locator('.channel-view.editing .edit-hints')).toBeVisible();
+  await actions.locator('[data-edit-action="green"]').click();
+  await expect(actions.locator('[data-edit-action="green"]')).toHaveClass(/\bfocused\b/);
+
+  await page.keyboard.press('ArrowUp');
+  const main = page.locator('#view-channels .channel-main');
+  const row = main.locator('[data-list-position].focused');
+  await expect(row).toHaveCount(1);
+  const footerTop = (await actions.boundingBox())!.y;
+  const box = (await row.boundingBox())!;
+  expect(box.y + box.height).toBeLessThanOrEqual(footerTop + 1);
+});
+
 // The list moved focus scrolled out of view to a row of `list`.
 function repairedIn(events: string[], list: 'channel' | 'group', target: 'nearest' | 'grabbed'): boolean {
   const fields = [
