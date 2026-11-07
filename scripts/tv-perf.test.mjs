@@ -6,9 +6,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  enableCdpLogs,
   normalizeCdpLogEvent,
   redactLogText,
   serializeCdpLogEvent,
+  subscribeCdpLogs,
 } from './cdp-logs.mjs';
 import {
   CSV_HEADER,
@@ -1083,6 +1085,74 @@ describe('CDP log recording', () => {
       level: 'error',
       text: 'Bravo',
     });
+  });
+
+  const fakeLogClient = (missing) => {
+    const handlers = new Map();
+    return {
+      calls: [],
+      on(method, handler) {
+        handlers.set(method, handler);
+        return () => handlers.delete(method);
+      },
+      emit(method, params) {
+        handlers.get(method)?.(params);
+      },
+      async call(method) {
+        this.calls.push(method);
+        if (missing.includes(method)) {
+          throw Object.assign(new Error(`${method}: '${method}' wasn't found`), { protocolCode: -32601 });
+        }
+        return {};
+      },
+    };
+  };
+
+  it('reads console output from the Console domain on an engine without the Log domain', async () => {
+    const client = fakeLogClient(['Log.enable', 'Log.disable']);
+    const events = [];
+    subscribeCdpLogs(client, (method, params) => events.push(normalizeCdpLogEvent(method, params)));
+
+    await enableCdpLogs(client, { history: true });
+    client.emit('Console.messageAdded', { message: {
+      source: 'console-api', level: 'warning', text: '[Tag]', timestamp: 1767225600.5,
+      parameters: [{ type: 'string', value: '[Tag]' }, { type: 'string', value: 'Alpha' },
+        { type: 'number', value: 2 }],
+    } });
+    client.emit('Console.messageAdded', { message: {
+      source: 'javascript', level: 'error', text: 'Uncaught Error: Bravo',
+    } });
+
+    expect(client.calls).toEqual(['Runtime.enable', 'Log.enable', 'Console.enable']);
+    expect(events).toEqual([
+      { observedAt: '2026-01-01T00:00:00.500Z', source: 'console', level: 'warning', text: '[Tag] Alpha 2' },
+      expect.objectContaining({ source: 'exception', level: 'error', text: 'Uncaught Error: Bravo' }),
+    ]);
+
+    const live = fakeLogClient(['Log.disable']);
+    await expect(enableCdpLogs(live)).resolves.toBeUndefined();
+    expect(live.calls).toEqual(['Runtime.enable', 'Log.disable', 'Console.enable']);
+  });
+
+  it('ignores Console messages on an engine that reports them through Runtime', async () => {
+    const client = fakeLogClient([]);
+    const events = [];
+    subscribeCdpLogs(client, (method) => events.push(method));
+
+    await enableCdpLogs(client, { history: true });
+    client.emit('Console.messageAdded', { message: { source: 'console-api', text: 'Alpha' } });
+    client.emit('Runtime.consoleAPICalled', { type: 'log', args: [{ value: 'Alpha' }] });
+
+    expect(events).toEqual(['Runtime.consoleAPICalled']);
+  });
+
+  it('still fails when enabling the Log domain fails for another reason', async () => {
+    const client = fakeLogClient([]);
+    client.call = async (method) => {
+      if (method === 'Log.enable') throw new Error('Log.enable: boom');
+      return {};
+    };
+    await expect(enableCdpLogs(client, { history: true })).rejects.toThrow('Log.enable: boom');
   });
 
   it('records CDP logs through the monitor connection', async () => {

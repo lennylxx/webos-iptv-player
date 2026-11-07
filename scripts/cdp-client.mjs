@@ -484,7 +484,9 @@ export class CdpClient {
       if (!pending) return;
       this.pending.delete(message.id);
       if (message.error) {
-        pending.reject(new Error(`${pending.method}: ${message.error.message}`));
+        const error = new Error(`${pending.method}: ${message.error.message}`);
+        error.protocolCode = message.error.code;
+        pending.reject(error);
         return;
       }
       pending.resolve(message.result);

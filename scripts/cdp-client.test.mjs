@@ -95,8 +95,8 @@ class FakeWebSocket {
     this.emit('message', { data: JSON.stringify({ id, result }) });
   }
 
-  reject(id, message) {
-    this.emit('message', { data: JSON.stringify({ id, error: { message } }) });
+  reject(id, message, code) {
+    this.emit('message', { data: JSON.stringify({ id, error: { message, code } }) });
   }
 
   emit(type, event) {
@@ -635,7 +635,7 @@ describe('CdpClient', () => {
   it('rejects protocol errors with the originating method name', async () => {
     FakeWebSocket.behavior = {
       onSend(socket, message) {
-        setTimeout(() => socket.reject(message.id, 'boom'), 0);
+        setTimeout(() => socket.reject(message.id, 'boom', -32601), 0);
       },
     };
 
@@ -644,6 +644,7 @@ describe('CdpClient', () => {
     });
 
     await expect(client.call('Page.enable')).rejects.toThrow('Page.enable: boom');
+    await expect(client.call('Log.enable')).rejects.toMatchObject({ protocolCode: -32601 });
     client.close();
   });
 

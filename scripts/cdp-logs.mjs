@@ -76,6 +76,26 @@ export function normalizeCdpLogEvent(
     };
   }
 
+  if (method === 'Console.messageAdded') {
+    const message = params.message ?? {};
+    const parameters = message.parameters ?? [];
+    const source = message.source === 'console-api' ? 'console'
+      : message.source === 'javascript' && message.level === 'error' ? 'exception'
+        : message.source ?? 'browser';
+    return {
+      // The legacy Console domain stamps seconds, not milliseconds.
+      observedAt: formatObservedAt(
+        typeof message.timestamp === 'number' ? message.timestamp * 1000 : undefined,
+        observedAt,
+      ),
+      source,
+      level: message.level ?? 'log',
+      text: parameters.length > 0
+        ? parameters.map((argument) => renderArgument(argument, redactSensitive)).join(' ')
+        : redact(message.text ?? '', redactSensitive),
+    };
+  }
+
   throw new Error(`Unsupported CDP log event: ${method}`);
 }
 
@@ -90,11 +110,31 @@ export function subscribeCdpLogs(client, listener) {
     client.on('Runtime.exceptionThrown', (params) =>
       listener('Runtime.exceptionThrown', params)),
     client.on('Log.entryAdded', (params) => listener('Log.entryAdded', params)),
+    // A modern engine reports console calls on Runtime as well, so only an
+    // engine without the Log domain gets them from Console.
+    client.on('Console.messageAdded', (params) => {
+      if (legacyConsoleClients.has(client)) listener('Console.messageAdded', params);
+    }),
   ];
 }
 
+const legacyConsoleClients = new WeakSet();
+const METHOD_NOT_FOUND = -32601;
+
+// True once enableCdpLogs found an engine without the Log domain
+// (Chromium 53 on webOS 4), which also ignores Runtime.evaluate awaitPromise.
+export const isLegacyCdpEngine = (client) => legacyConsoleClients.has(client);
+
+// Chromium 53 (webOS 4) has no Log domain and never sends
+// Runtime.consoleAPICalled; its console output arrives only as
+// Console.messageAdded, history included.
 export async function enableCdpLogs(client, { history = false } = {}) {
   await client.call('Runtime.enable');
-  if (history) await client.call('Log.enable');
+  try {
+    await client.call(history ? 'Log.enable' : 'Log.disable');
+  } catch (error) {
+    if (error?.protocolCode !== METHOD_NOT_FOUND) throw error;
+    legacyConsoleClients.add(client);
+  }
   await client.call('Console.enable');
 }

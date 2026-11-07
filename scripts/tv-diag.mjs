@@ -12,6 +12,7 @@ import {
 } from './cdp-client.mjs';
 import {
   enableCdpLogs,
+  isLegacyCdpEngine,
   normalizeCdpLogEvent,
   subscribeCdpLogs,
 } from './cdp-logs.mjs';
@@ -256,7 +257,13 @@ export class DiagnosticRedactor {
   text(value) {
     if (this.full) return String(value);
     let text = String(value);
-    for (const secret of this.secrets) text = text.split(secret).join(valueSummary(secret));
+    // A secret counts only as a whole token, so a short path segment cannot
+    // eat letters out of ordinary words.
+    for (const secret of this.secrets) {
+      const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      text = text.replace(new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, 'g'),
+        () => valueSummary(secret));
+    }
     text = text.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (url) => this.url(url));
     for (const [host, replacement] of this.hosts) {
       text = text.split(host).join(replacement);
@@ -1520,15 +1527,56 @@ async function pollForTarget(options, dependencies) {
   throw lastError ?? new Error('Timed out waiting for app inspector');
 }
 
+const evaluationError = (result) => (result.exceptionDetails
+  ? new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
+  : null);
+
+const LEGACY_EVALUATION_TIMEOUT_MS = 60000;
+const LEGACY_EVALUATION_POLL_MS = 100;
+let legacyEvaluations = 0;
+
+// Chromium 53 can't parse the probes' ES2017+ syntax and returns a pending
+// Promise for awaitPromise, so the probe is lowered to its engine, parks its
+// result on window, and is polled.
+export async function evaluateOnLegacyEngine(client, expression, wait = delay) {
+  const slot = `__iptvDiag${String(++legacyEvaluations)}`;
+  const wrapped = `window.${slot} = { done: false };
+Promise.resolve(${expression}).then(
+  (value) => { window.${slot} = { done: true, value }; },
+  (error) => { window.${slot} = { done: true, error: String((error && error.stack) || error) }; },
+);`;
+  // Loaded on demand: esbuild can't start under the jsdom test environment.
+  const { transformSync } = await import('esbuild');
+  const started = await client.call('Runtime.evaluate', {
+    expression: transformSync(wrapped, { loader: 'js', target: 'chrome53' }).code,
+  });
+  const startError = evaluationError(started);
+  if (startError) throw startError;
+  const deadline = Date.now() + LEGACY_EVALUATION_TIMEOUT_MS;
+  for (;;) {
+    const polled = await client.call('Runtime.evaluate', {
+      expression: `(function () { var r = window.${slot}; if (r && r.done) delete window.${slot}; return r; })()`,
+      returnByValue: true,
+    });
+    const state = polled.result?.value;
+    if (state?.done) {
+      if (state.error) throw new Error(state.error);
+      return state.value;
+    }
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for a page probe');
+    await wait(LEGACY_EVALUATION_POLL_MS);
+  }
+}
+
 const evaluate = async (client, expression) => {
+  if (isLegacyCdpEngine(client)) return evaluateOnLegacyEngine(client, expression);
   const result = await client.call('Runtime.evaluate', {
     expression,
     awaitPromise: true,
     returnByValue: true,
   });
-  if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
-  }
+  const error = evaluationError(result);
+  if (error) throw error;
   return result.result?.value;
 };
 
