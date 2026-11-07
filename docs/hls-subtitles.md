@@ -288,14 +288,9 @@ path (`src/utils/subtitle-tracks.ts`, `src/components/player-tracks.ts`).
   `enable:false` on load; it's already off.) The flip side: a retail-TV global "Closed Captions: off"
   can *suppress* drawing even when `setSubtitleEnable` succeeds — the app can't toggle it, so a stubborn
   stream may need the user to enable captions in TV settings.
-- **Luna header playback** (channels with M3U headers, `docs/mpeg-dash.md`) plays through a pipeline the
-  app loads itself, behind a placeholder `<video>`. The same toggle then targets the Luna pipeline's own
-  `mediaId` from `load`, never the placeholder's, once that pipeline loaded; a replaced pipeline gets a
-  fresh call with its new id. A refused toggle logs
-  `subtitles.luna.compositor.failed enable code`. A master the bundled service read for
-  the page (after an HTTP 4xx, or for a URL with credentials) also starts self-rendered WebVTT,
-  so the pick never reads the master from the page again; a refused subtitle playlist still
-  resets it to Off.
+- **Luna header playback** (channels with M3U headers) plays through a pipeline the app loads
+  itself, behind a placeholder `<video>`; the same toggle targets that pipeline's own `mediaId`,
+  never the placeholder's. See [HTTP header playback](http-header-playback.md#subtitles).
 - **Styling** is owned by the native compositor + the TV's accessibility settings, which the app can't
   read (`settingsservice` = Access denied, §4). The default 608 face is a monospaced HanYang font
   (`HYDefault`) — Courier-like — so `::cue` does **not** style pipeline captions.
@@ -357,7 +352,7 @@ service blocks, not just 608 pairs.
 DASH caption and subtitle streams are listed in `docs/mpeg-dash.md`.
 
 Adding `#EXTVLCOPT:http-referrer=http://ref.test/` above a URL routes it
-through Luna header playback (see `docs/mpeg-dash.md`); these servers
+through [HTTP header playback](http-header-playback.md); these servers
 ignore the header.
 
 ---

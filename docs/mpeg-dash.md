@@ -11,7 +11,12 @@ ClearKey and the desktop preview use Shaka through MSE.
 | webOS, clear or PlayReady | Native `MPEG-DASH` transport | HTML5 audio tracks, self-rendered raw WebVTT, and the native subtitle compositor |
 | webOS, clear or PlayReady, with channel HTTP headers | Luna `com.webos.media/load` with `MPEG-DASH` transport | UMS `sourceInfo` audio tracks and self-rendered raw WebVTT on the Luna clock |
 | webOS, Widevine or ClearKey | Shaka DASH-only through MSE/EME | The `MseEngine` adapter |
+| webOS, Widevine or ClearKey, with channel HTTP headers, Local proxy | Shaka DASH-only through the loopback proxy | The `MseEngine` adapter |
 | Desktop preview | Shaka DASH-only | The `MseEngine` adapter |
+
+A header channel's Luna load may fall back to the native element or, in
+Local proxy mode, to the proxy; see
+[HTTP header playback](http-header-playback.md#escalation-chain).
 
 ## Shaka webOS compatibility
 
@@ -164,90 +169,13 @@ The pads are configured by `DVR_GO_LIVE_PAD` and `DVR_OLDEST_PAD`.
 
 ## Luna header playback
 
-A DASH channel with HTTP headers that the page pipeline would overwrite
-(Referer, User-Agent, Cookie, Authorization) loads through
-`luna://com.webos.media/load` on webOS, as header HLS does. The payload
-uses `mediaTransportType: 'MPEG-DASH'` and the same `option.transmission`
-headers. HTTPS streams keep the Cookie and Authorization stripping.
-
-Settings → Advanced → **HTTP headers** controls this path for HLS and
-DASH alike. **Media service** (the default) behaves as described here.
-**Off** keeps every header channel on `<video>` without its headers and
-logs `playback.luna.skipped reason=setting`, also for the User-Agent-only
-retry; when such a channel fails and Media service would have sent its
-headers, the OSD says headers are off instead of showing the generic
-error. **Local proxy** is shown but not selectable yet. The setting is
-read on each load.
-
-- The MPD is first read without the channel's headers to find its DRM,
-  as the element path does. A refused MPD loads Luna as configured and
-  logs `playback.path.luna drm=unknown mpd=unreadable`. If that load fails
-  (`load_failed` or `error`), Luna retries once as PlayReady
-  (`playback.luna.drm.retry`) before the stream counts as failed. A
-  PlayReady channel whose MPD needs its headers should declare
-  `#KODIPROP:inputstream.adaptive.license_type=com.microsoft.playready`
-  to skip this guess.
-- A master playlist or MPD the page read refuses with an HTTP 4xx, or
-  whose URL carries `user:password@` (the page's `fetch()` rejects it), is
-  read through the bundled service's `fetchManifest`
-  (`docs/lan-service.md`), which sends the channel's Luna headers. Its
-  body is parsed as the page's would be, with relative URIs resolved
-  against the final URL, so a header-protected MPD still reveals its DRM
-  and a master its audio names and subtitles. A self-rendered WebVTT
-  rendition then starts from that body instead of reading the master or
-  MPD again from the page, which would be refused. Subtitle playlists and
-  segments are still read from the page without the headers; an HLS
-  subtitle playlist refused there with an HTTP 4xx, or a first DASH
-  WebVTT segment refused with HTTP 401 or 403, resets the pick to Off
-  (on Luna, `subtitles.luna.unavailable stage=render` and
-  `subtitles.luna.reset`). Any other 4xx on a DASH segment, such as a
-  404 at a live edge the origin has not reached yet, retries on the next
-  poll. A dynamic MPD that lists its WebVTT segments in a closed
-  SegmentTimeline or a SegmentList gains new segments only when re-read,
-  so the menu leaves those renditions out, also after a fallback to the
-  element, and Luna logs
-  `subtitles.luna.unavailable stage=manifest reason=dynamic_mpd`; a
-  duration-based SegmentTemplate, or a SegmentTimeline whose last `S`
-  repeats until the next one (`r="-1"`) in an MPD with an
-  `availabilityStartTime`, derives its segments from the clock and
-  stays. The MPD read holds the Luna load, so it gets a shorter budget
-  (2500 ms plus a 500 ms service-start grace, against 5000 plus 3000 ms
-  for a master). Each
-  attempt logs `playback.luna.manifest.service outcome=ok page=<page>
-  elapsed=<ms>ms` or `outcome=failed reason=<code> page=<page>
-  elapsed=<ms>ms`, where `<page>` is `http_NNN` or `credentials`; a
-  failure keeps the header-less outcome. A 5xx or network error, a media
-  playlist, a segment, and a stream on the element never reach the
-  service.
-- PlayReady loads the DRM client first and passes
-  `option.drm: {type: 'playready', clientId}` beside `option.transmission`.
-  License handling is unchanged: the license request never carries the
-  channel's headers.
-- Widevine and ClearKey stay on Shaka (`playback.luna.skipped
-  reason=drm_mse`); an unsupported scheme logs `reason=drm_unsupported`.
-- A Luna failure falls back to the native element, reusing the MPD read
-  instead of fetching it again. A PlayReady client is released and a
-  fresh one is prepared for the element.
-- A User-Agent-only channel that failed on the element drops the element's
-  source and DRM client before its Luna DASH retry. A stream on Shaka gets
-  no Luna retry.
-- Audio comes from the UMS `sourceInfo` list and switches with
-  `selectTrack {type: 'audio'}`. Raw WebVTT is self-rendered on the Luna
-  clock. Compositor subtitles (`stpp`, `wvtt`, CEA) stay in the menu and
-  toggle with `setSubtitleEnable` on the Luna pipeline's own `mediaId`,
-  not the placeholder's.
-
-Verified on webOS 25: UMS sends the `transmission` headers on the MPD,
-init, and media segment requests, through 302 redirects, absolute
-BaseURLs, and live MPD refreshes, and PlayReady plays with a direct Luna
-load.
-
-Limits:
-
-- License requests do not get the channel's headers; a license server
-  that checks them fails.
-- webOS 4 has no usable window ID for the load, so these channels stay
-  on `<video>` there.
+A clear or PlayReady DASH channel with HTTP headers loads through
+`luna://com.webos.media/load` with the `MPEG-DASH` transport, as header
+HLS does; Widevine and ClearKey stay on Shaka, through the local proxy
+when that is enabled. See
+[HTTP header playback](http-header-playback.md#media-service-luna) for
+the escalation, the header-less MPD read, the PlayReady retry,
+subtitles, and audio.
 
 ## Native PlayReady DRM
 
@@ -384,7 +312,7 @@ isn't public, so they can't be reproduced outside Shaka's hosted demo.
 
 Set the DRM with the Kodi properties above. Adding a header such as
 `#EXTVLCOPT:http-referrer=http://ref.test/` routes the channel through
-[Luna header playback](#luna-header-playback); these servers ignore it.
+[HTTP header playback](http-header-playback.md); these servers ignore it.
 
 ```m3u
 #EXTM3U

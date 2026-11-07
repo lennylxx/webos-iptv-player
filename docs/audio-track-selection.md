@@ -114,37 +114,19 @@ match** (so a collapsed list isn't mislabelled):
 ## Per-track-source memory
 
 The chosen track is remembered as `{ name, language }` and re-applied on the next tune-in — matched
-by name, then language, else the stream default. Live/catch-up channels key on `channelKey`; VOD
+by name, then language, else the stream default. A saved language matches across ISO 639 forms
+(a three-letter code, bibliographic or terminology, matches its two-letter form) on both the `<video>` and Luna paths; a regional code still needs an exact
+match. Live/catch-up channels key on `channelKey`; VOD
 (Xtream movies/episodes) keys on `vod:<account>:<kind>:<itemId>`, so a movie and an episode each keep
 their own pick. The manifest names are what make this reliable for HLS; the empty-metadata native
 tracks alone can't be keyed, but a VOD container's tracks usually carry real labels.
 
 ## Header channels on Luna playback
 
-A channel whose HTTP headers make it play through `com.webos.media/load` (see
-`src/components/luna-media-element.ts`) has no usable `audioTracks`: the `<video>` holds only a
-silent placeholder clip. There the app owns the pipeline, so it switches with
-`selectTrack {mediaId, type:"audio", index}` on **its own Luna `mediaId`**, bounded by the list
-UMS reports — the rule above still holds for the `<video>` path:
-
-- `sourceInfo.programInfo[0].audioTrackInfo[]` lists the renditions (language and `selected`, no
-  name). The menu appears when it holds ≥2 tracks, once `loadCompleted` arrives.
-- A switch counts on `trackSelected`, or on the call's success when no event follows within
-  `LUNA_MEDIA_AUDIO_EVENT_MS`. A refused call or a pipeline error meanwhile keeps the previous
-  track checked and logs `audio.luna.switch.failed`; the pick is saved only once it succeeds.
-- Names come from the master fetch (header-less, or through the bundled service after a 4xx or
-  for a URL with credentials; see `docs/mpeg-dash.md`), paired with UMS's list by language (in order
-  among same-language renditions) only when every track pairs one-to-one, or by position when
-  UMS lists no language at all and the counts match; otherwise the label is
-  the language's endonym, then "Audio N" (also when two unnamed tracks share a language). A saved
-  language matches across ISO 639 forms (`ger`/`deu` ↔ `de`) on both paths; a regional code still
-  matches exactly.
-- The saved pick is re-applied once both UMS's list and the manifest (or its failure) are known,
-  and `audio.luna.tracks` logs the count, naming, and pick once per load. Names paired by position
-  (`naming=order`) are display-only: they never re-apply a saved pick (`pick=unpaired`). A `sourceInfo` re-push
-  with the same count and languages keeps a confirmed switch; `audio.luna.tracks.changed` logs the
-  first re-push that differs.
-- **Never** call `selectTrack` with `type:"text"`: it kills the pipeline.
+A header channel playing through `com.webos.media/load` has only a silent placeholder in its
+`<video>`, so the app switches with `selectTrack {mediaId, type:"audio", index}` on its own Luna
+`mediaId` (never `type:"text"`, which kills the pipeline). The menu, naming, and saved-pick rules
+are in [HTTP header playback](http-header-playback.md#audio-tracks).
 
 ## Desktop preview (hls.js)
 

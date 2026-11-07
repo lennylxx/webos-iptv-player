@@ -24,6 +24,8 @@ on newer TVs and supplies focused fallbacks for Node 0.12.
 
 - **Luna bus** — in-process IPC between the app and the service.
 - **HTTP** — `0.0.0.0:<ephemeral>` for phones, `127.0.0.1:<same>` for the app's reconcile fetches.
+- **Loopback proxy** — a separate `127.0.0.1:<ephemeral>` server for
+  Local proxy header playback; see [Loopback proxy](#loopback-proxy).
 
 ## APIs
 
@@ -40,6 +42,9 @@ Luna (called by the app's LAN/reminder/manifest clients and by Activity Manager)
 | `getDevMode` | no | Report whether Developer Mode is available for interactive reminder alerts. |
 | `fireReminderAlert` | no | Raise the Developer Mode reminder alert requested by Activity Manager. |
 | `fetchManifest` | no | GET a stream's master playlist or MPD with the channel's HTTP headers; app-only. |
+| `openProxy` | no | Open a loopback proxy session that sends a stream's HTTP headers; app-only. |
+| `touchProxy` | no | Keep a loopback proxy session alive and report its last upstream status; app-only. |
+| `closeProxy` | no | End a loopback proxy session; app-only. |
 
 HTTP (called by phones, and by the app for reconcile):
 
@@ -62,20 +67,13 @@ HTTP (called by phones, and by the app for reconcile):
 
 ## Manifest fetch
 
-`fetchManifest` serves the app's Luna header playback: the page cannot send
-Referer, User-Agent, or Cookie, so a server that checks them refuses the
-page's master playlist or MPD read. On the Luna path the app calls it once
-per load, for the master playlist or MPD alone, after that read fails with
-an HTTP 4xx, or in place of that read when the URL carries
-`user:password@`, which the page's `fetch()` rejects (`src/services/manifest-service.ts`,
-`bundled-service/src/fetch/`). The app sends the URL percent-encoded
-(`new URL(url).href`), because Node.js 0.12's `url.parse` passes a
-non-ASCII path through as raw bytes.
-
-The app waits `timeoutMs` plus a grace period for the service to start:
-5000 + 3000 ms for an HLS master, which never holds playback, and
-2500 + 500 ms for an MPD, which holds the Luna load until it settles
-(`CONFIG.PLAYER`).
+`fetchManifest` reads a header channel's master playlist or MPD with the
+channel's HTTP headers for the app's Media service path, which calls it
+once per load (`src/services/manifest-service.ts`, `bundled-service/src/fetch/`);
+when and how long the app waits is in
+[HTTP header playback](http-header-playback.md#manifests-the-page-cannot-read).
+The app sends the URL percent-encoded (`new URL(url).href`), because
+Node.js 0.12's `url.parse` passes a non-ASCII path through as raw bytes.
 
 Request:
 
@@ -90,9 +88,8 @@ Request:
   alone or with WAM's `" <pid>"` suffix; only a sender service name may
   also be `com.lennylxx.iptv-<digits>`, since another app's id can end
   in `-<digits>`. Any other caller gets `denied` without a request being
-  made, and the service logs `fetchManifest outcome=denied sender="<id>"
-  source=applicationID|senderServiceName|sender|none` with every digit of
-  the id replaced by `N`.
+  made, and the service logs the denial with the caller's id, every digit
+  replaced by `N`, and which lookup supplied it.
 - **URL:** `http:` and `https:` only.
 - **Headers:** the same set the app passes to `com.webos.media/load`: every
   header the playlist parser kept, minus hop-by-hop, framing, and routing
@@ -122,6 +119,104 @@ when a response arrived. `errorCode` is one of `bad_url`, `denied`,
 `timeout`, `too_large`, `too_many_redirects`, `network`, `decode`, or
 `http_NNN`. The service logs only the outcome and the status or error code,
 never the URL, headers, or body.
+
+## Loopback proxy
+
+The proxy plays a header channel in Local proxy mode by sending its
+headers on every manifest and segment the page's own players request
+(`bundled-service/src/proxy/`, `src/services/proxy-service.ts`). When the
+app uses it, how sessions are kept and reopened, and its security model
+are in [HTTP header playback](http-header-playback.md#local-proxy); this
+section is the service contract.
+
+Request (`openProxy`):
+
+```json
+{"url": "http://host/a.m3u8", "headers": {"Referer": "http://host/", "User-Agent": "Agent 1"}}
+```
+
+Success returns `{returnValue: true, url, token}`; failure returns
+`{returnValue: false, errorCode, errorText}` with `errorCode` `bad_url`,
+`denied`, `blocked` (a loopback upstream), or `unavailable` (the server
+could not bind). `touchProxy {token}` marks the session used and returns
+`{returnValue: true, alive, lastStatus, manifestStatus, cookies}`, the
+last upstream status of any request and of a manifest (0 before the
+first) and the cookies the session's jar refused, counted by `https`,
+`domain`, `malformed`, and `cap`
+([cookie rules](http-header-playback.md#cookies)). `closeProxy
+{token}` returns `{returnValue: true, closed, cookies}`. Callers are
+checked as for `fetchManifest`.
+
+- **Server:** `127.0.0.1` only, on an ephemeral port, started on the
+  first `openProxy` and closed 30 s after its last session ends. The
+  service holds a `proxyKeepAlive` activity from the first session until
+  that close. The socket timeout is off.
+- **Sessions:** a 128-bit random hex token names one stream's URL and
+  headers. A session ends on `closeProxy`, after 2 minutes without a
+  request or touch, or when a ninth opens: at most 8 are kept, and the
+  oldest idle one goes first, then the oldest streaming one.
+- **URL:** `http://127.0.0.1:<port>/p/<token>/<http|https>/<host[:port]><path>?<query>`.
+  The upstream path stays intact, so a relative URI resolves under the
+  proxy even where the rewriter left it alone. Userinfo and fragments
+  are dropped.
+- **Upstreams:** a loopback upstream (`127.0.0.0/8`, `::1`, `0.0.0.0`,
+  and their mapped forms) fails `openProxy` with `blocked`; a request
+  or redirect that reaches one, by name or resolved address, gets 403.
+  LAN addresses stay allowed.
+- **Requests:** GET, HEAD, and OPTIONS only (OPTIONS answers the CORS
+  preflight and allows `Range`); every response carries
+  `Access-Control-Allow-Origin: *` and exposes `Content-Length`,
+  `Content-Range`, and `Accept-Ranges`. A `Host` other than
+  `127.0.0.1:<port>` or `localhost:<port>` gets 403; an unknown or
+  expired token gets 404.
+- **Headers:** the channel's headers go upstream, sanitized as for
+  `fetchManifest`; when the channel sets no User-Agent, the app supplies
+  the TV's, as for `fetchManifest`. Cookie, Authorization, and URL credentials go only to
+  the session's own origin and never over https; another origin gets
+  the rest. Of the client's headers only `Range`, `If-Range`, and
+  `Accept` (when the channel sets none) pass; its cookies never do.
+  Hop-by-hop headers are dropped both ways, and upstream `Set-Cookie`
+  never reaches the client. Cookies the session's jar stored are added
+  to matching requests ([cookie rules](http-header-playback.md#cookies)).
+- **Redirects:** followed in the service, at most 5, under the
+  `fetchManifest` rules.
+- **Manifests:** a 200 GET whose type or body is an HLS playlist
+  (`#EXTM3U`) or an MPD (`<MPD`) is read whole (at most 4 MiB; gzip and
+  deflate decoded) and rewritten against its final URL; a body whose
+  first 1 KiB is only whitespace streams through. HLS: URI lines
+  and every `URI="…"` attribute (`EXT-X-MEDIA`, `EXT-X-MAP`, `EXT-X-KEY`,
+  `EXT-X-I-FRAME-STREAM-INF`, `EXT-X-SESSION-KEY`, …); `data:`, `skd:`, and
+  other non-http URIs stay. DASH: `BaseURL`, `Location`, and
+  `PatchLocation`; absolute or root-relative `SegmentTemplate@media` and
+  `@initialization`, `SegmentURL@media`, and `Initialization@sourceURL`,
+  with `$…$` identifiers kept. A `../` above the upstream root stops at
+  the root (RFC 3986), never climbing into the proxy's own path. After a redirect an MPD without a top-level
+  `BaseURL` gains one, so relative segments resolve against the final URL.
+  License URLs (`dashif:laurl`, `ms:laurl`, `clearkey:Laurl`) are left
+  alone; license requests keep their usual path.
+- **Segments:** streamed with backpressure, passing status,
+  `Content-Type`, `Content-Length`, `Content-Range`, and `Accept-Ranges`.
+  At most 6 upstream requests run per origin, the rest queue. No
+  response headers within 10 s gives 504, a body that stalls upstream
+  for 30 s ends (time spent waiting on a paused client does not count),
+  and a network error gives 502. A client that disconnects aborts
+  the upstream request.
+- **Logging:** never URLs, headers, or bodies. One line per session when
+  it ends, with why it ended and its request, byte, status-class, abort,
+  and rewrite counts; a bind failure is a warning.
+
+### Running it on a desktop
+
+Off the TV (no `webos-service`) the service starts the proxy at once on
+`IPTV_PROXY_PORT` (default 47390) and adds three loopback control routes:
+`POST /open` with the `openProxy` JSON body, answering
+`{returnValue, url, token}` (400 on failure), and `POST /touch` and
+`POST /close` with `{token}`. They take the same `Host` check, accept an
+`Origin` only from `localhost` or `127.0.0.1`, and are never served on
+webOS. `IPTV_PROXY_ALLOW_LOOPBACK=1` lets the proxy reach an upstream on
+this machine (other than itself), as the E2E server is. How to run the
+desktop preview against it is in
+[HTTP header playback](http-header-playback.md#desktop-preview).
 
 ## Event-driven updates
 
