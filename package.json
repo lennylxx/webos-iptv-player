@@ -14,6 +14,7 @@
     "build": "npm run typecheck && node esbuild.config.mjs",
     "service:typecheck": "tsc -p bundled-service/tsconfig.json --noEmit",
     "service:build": "rm -rf build/bundled-service && tsc -p bundled-service/tsconfig.json && node scripts/service-compat-gate.mjs build/bundled-service && cp bundled-service/package.json bundled-service/src/services.json build/bundled-service/ && cp bundled-service/src/setup/setup-page.html build/bundled-service/setup/",
+    "service:standalone": "npm run service:build && node build/bundled-service/index.js",
     "service:smoke": "npm run service:build && node scripts/run-service-smoke.mjs",
     "service:smoke:matrix": "npm run service:build && node scripts/run-service-smoke.mjs --matrix",
     "manifest": "node scripts/generate-homebrew-manifest.mjs",

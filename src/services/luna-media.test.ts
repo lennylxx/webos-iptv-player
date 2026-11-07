@@ -14,7 +14,7 @@ vi.mock('./luna', () => ({
 }));
 
 const {
-  buildLoadParameters, findWindowId, foregroundAppInfo, hasLunaHeaders, loadMedia, lunaHeaderNames,
+  buildLoadParameters, findWindowId, foregroundAppInfo, hasLunaHeaders, isMissingMethod, loadMedia, lunaHeaderNames,
   LunaMediaError, mediaCommand, setDisplayWindow, tlsUnsafeHeaderNames, validWindowId, withoutHeaders,
 } = await import('./luna-media');
 const { CONFIG } = await import('../config');
@@ -153,6 +153,25 @@ describe('Luna media calls', () => {
     requests[1].options.onFailure?.({ returnValue: false, errorText: 'Bad state' });
     await expect(coded).rejects.toMatchObject({ code: 5 });
     await expect(uncoded).rejects.toMatchObject({ code: -1 });
+  });
+
+  it('tells a method the bus does not have from a transient failure', async () => {
+    const replies = [
+      { returnValue: false, errorCode: -1, errorText: 'Unknown method "getForegroundAppInfo" for category "/"' },
+      { returnValue: false, errorCode: -1, errorText: 'Service does not exist: com.webos.media.' },
+      { returnValue: false, errorCode: -1, errorText: 'Internal error' },
+      { returnValue: false, errorCode: 5, errorText: 'Unknown method' },
+    ];
+    const errors = await Promise.all(replies.map((reply, index) => {
+      const pending = foregroundAppInfo().catch((error: unknown) => error);
+      requests[index].options.onFailure?.(reply);
+      return pending;
+    }));
+    // A missing service is transient: at boot, or while uMediaServer restarts.
+    expect(errors.map(isMissingMethod)).toEqual([true, false, false, false]);
+    expect(isMissingMethod(new LunaMediaError('failed', -1, false, 'Method "getForegroundAppInfo" does not exist')))
+      .toBe(true);
+    expect(isMissingMethod(new LunaMediaError('timed out', -1, true, 'Unknown method'))).toBe(false);
   });
 
   it('positions the picture in app coordinates or full screen', () => {

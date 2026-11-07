@@ -3,6 +3,7 @@ import {
   buildLoadParameters,
   findWindowId,
   foregroundAppInfo,
+  isMissingMethod,
   LunaMediaError,
   loadMedia,
   mediaCommand,
@@ -14,7 +15,7 @@ import {
   type LunaDisplay,
   type LunaTransport,
 } from '../services/luna-media';
-import type { LunaRequestHandle } from '../services/luna';
+import { isLunaAvailable, type LunaRequestHandle } from '../services/luna';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('Player');
@@ -35,10 +36,19 @@ export interface LunaMediaElementOptions {
   playReadyClientId?: string;
   /** The playback label (`session=… load=…`) its diag events carry. */
   label: string;
-  /** Called at most once, before loadCompleted, after the element is restored. */
-  onFallback: (reason: LunaFallbackReason, code: number, stage: LunaFallbackStage) => void;
+  /**
+   * Called at most once, before loadCompleted, after the element is
+   * restored. unsupported: the TV answered that it has no window lookup,
+   * which no retry changes.
+   */
+  onFallback: (reason: LunaFallbackReason, code: number, stage: LunaFallbackStage, unsupported?: boolean) => void;
   /** Called once, when the stream first plays. */
   onStarted?: () => void;
+  /**
+   * Called on a pipeline error after the stream played; true when the caller
+   * moved the stream elsewhere, so no error event follows.
+   */
+  onPlaybackError?: (code: number) => boolean;
   /** Called when the audio list or its selection changes, once loaded. */
   onAudioTracks?: () => void;
 }
@@ -207,6 +217,7 @@ export class LunaMediaElement {
   private appliedDisplay = '';
   private saved = new Map<string, PropertyDescriptor | undefined>();
   private hadLoop = false;
+  private placeholderStarted = false;
   private phase: 'window' | 'load' | 'completed' = 'window';
   private windowMiss: { stage: LunaFallbackStage; code: number } = { stage: 'media_id', code: 0 };
   private startAt = 0;
@@ -268,7 +279,6 @@ export class LunaMediaElement {
     }, CONFIG.PLAYER.LUNA_MEDIA_DEADLINE_MS);
     window.addEventListener('pagehide', this.onPageHide);
     for (const type of MEDIA_EVENTS) window.addEventListener(type, this.suppress, true);
-    this.startPlaceholder();
     this.install();
     this.emit('loadstart');
     void this.run();
@@ -332,6 +342,19 @@ export class LunaMediaElement {
   }
 
   private async run(): Promise<void> {
+    // On webOS 4 a placeholder clip played for nothing leaves the native
+    // pipeline unable to play the next source, so the window lookup is
+    // proven before the element is touched.
+    try {
+      await foregroundAppInfo();
+    } catch (error) {
+      if (this.state !== 'starting') return;
+      const unsupported = isMissingMethod(error) && isLunaAvailable();
+      this.fail('no_window', errorCode(error), 'app_info', unsupported);
+      return;
+    }
+    if (this.state !== 'starting') return;
+    this.startPlaceholder();
     let windowId = '';
     try {
       windowId = await this.placeholderWindowId();
@@ -388,8 +411,6 @@ export class LunaMediaElement {
 
   private async placeholderWindowId(): Promise<string> {
     const deadline = Date.now() + CONFIG.PLAYER.LUNA_MEDIA_WINDOW_TIMEOUT_MS;
-    // Without the service (no bridge, older firmware) fail now, not at the deadline.
-    if (!this.placeholderMediaId()) await foregroundAppInfo();
     for (;;) {
       if (this.state !== 'starting') return '';
       const mediaId = this.placeholderMediaId();
@@ -424,6 +445,7 @@ export class LunaMediaElement {
 
   private startPlaceholder(): void {
     const video = this.video;
+    this.placeholderStarted = true;
     this.hadLoop = video.loop;
     video.classList.add('luna-media');
     video.removeAttribute('src');
@@ -440,24 +462,28 @@ export class LunaMediaElement {
   private restore(): void {
     window.removeEventListener('pagehide', this.onPageHide);
     for (const type of MEDIA_EVENTS) window.removeEventListener(type, this.suppress, true);
-    for (const type of MEDIA_EVENTS) window.addEventListener(type, this.quiet, true);
-    quietEnders.set(this.video, this.endQuiet);
-    this.quietTimer = setTimeout(this.endQuiet, CONFIG.PLAYER.LUNA_MEDIA_PLACEHOLDER_QUIET_MS);
+    if (this.placeholderStarted) {
+      for (const type of MEDIA_EVENTS) window.addEventListener(type, this.quiet, true);
+      quietEnders.set(this.video, this.endQuiet);
+      this.quietTimer = setTimeout(this.endQuiet, CONFIG.PLAYER.LUNA_MEDIA_PLACEHOLDER_QUIET_MS);
+    }
     this.uninstall();
     const video = this.video;
-    video.classList.remove('luna-media');
-    video.loop = this.hadLoop;
     if (video.muted !== this.mutedState) video.muted = this.mutedState;
     if (video.volume !== this.volumeState) video.volume = this.volumeState;
+    if (!this.placeholderStarted) return;
+    video.classList.remove('luna-media');
+    video.loop = this.hadLoop;
     protoMethod('pause').call(video);
     video.removeAttribute('src');
     video.innerHTML = '';
     protoMethod('load').call(video);
   }
 
-  private fail(reason: LunaFallbackReason, code: number, stage: LunaFallbackStage): void {
+  private fail(reason: LunaFallbackReason, code: number, stage: LunaFallbackStage, unsupported = false): void {
     this.destroy();
-    this.options.onFallback(reason, code, stage);
+    if (unsupported) this.options.onFallback(reason, code, stage, true);
+    else this.options.onFallback(reason, code, stage);
   }
 
   private clearTimers(): void {
@@ -859,6 +885,7 @@ export class LunaMediaElement {
     if (this.audioSwitch) this.failAudio(this.audioSwitch, 'error', code);
     log.warn('Luna playback error', 'event=playback.luna.error', this.options.label,
       `code=${String(code)}`, `source=${source}`);
+    if (this.started && this.options.onPlaybackError?.(code)) return;
     this.errorState = { code: MEDIA_ERR_NETWORK, message: `UMS error ${String(code)}` } as MediaError;
     this.emit('error');
   }

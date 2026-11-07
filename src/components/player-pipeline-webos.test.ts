@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlayerPipelineOptions } from './player-pipeline';
+import { CONFIG } from '../config';
 
 const cacheMocks = vi.hoisted(() => ({
   getCachedStreamMime: vi.fn(),
@@ -16,6 +17,14 @@ const manifestService = vi.hoisted(() => ({
 
 vi.mock('../services/manifest-service', () => manifestService);
 
+const proxyService = vi.hoisted(() => ({
+  openStreamProxy: vi.fn(),
+  closeStreamProxy: vi.fn(),
+  touchStreamProxy: vi.fn(),
+}));
+
+vi.mock('../services/proxy-service', () => proxyService);
+
 const luna = vi.hoisted(() => ({
   sessions: [] as Array<{
     uri: string;
@@ -23,6 +32,7 @@ const luna = vi.hoisted(() => ({
     onFallback: (reason: string, code: number, stage?: string) => void;
     playReadyClientId?: string;
     onStarted?: () => void;
+    onPlaybackError?: (code: number) => boolean;
     onAudioTracks?: () => void;
     start: ReturnType<typeof vi.fn>;
     destroy: ReturnType<typeof vi.fn>;
@@ -584,6 +594,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
     luna.sessions.length = 0;
     cacheMocks.getCachedStreamMime.mockReset();
     cacheMocks.setCachedStreamMime.mockReset();
+    localStorage.clear();
     Object.defineProperty(navigator, 'userAgent', { configurable: true, value: WEBOS_25 });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(MASTER)));
     manifestService.fetchManifestViaService.mockReset();
@@ -1106,6 +1117,611 @@ describe('PlayerPipeline webOS Luna routing', () => {
     expect(luna.sessions).toHaveLength(1);
   });
 
+  describe('Local proxy', () => {
+    const TOKEN = 'a'.repeat(32);
+    const PROXIED = `http://127.0.0.1:1/p/${TOKEN}/http/host/a.m3u8`;
+    const PROXIED_TS = `http://127.0.0.1:1/p/${TOKEN}/http/host/a.ts`;
+    let opened: Array<(result: unknown) => void>;
+
+    beforeEach(() => {
+      opened = [];
+      proxyService.openStreamProxy.mockReset();
+      proxyService.closeStreamProxy.mockReset();
+      proxyService.touchStreamProxy.mockReset();
+      proxyService.touchStreamProxy.mockResolvedValue(null);
+      proxyService.openStreamProxy.mockImplementation(() => new Promise(resolve => opened.push(resolve)));
+    });
+
+    async function proxyPipeline(video = videoElement()) {
+      const pipeline = await pipelineFor(video);
+      pipeline.opts.headerPlayback = () => 'proxy';
+      return pipeline;
+    }
+
+    it('sends no header-less probe for a channel only the proxy can play', async () => {
+      const probe = vi.fn().mockResolvedValue(new Response('', {
+        headers: { 'content-type': 'application/vnd.apple.mpegurl' },
+      }));
+      vi.stubGlobal('fetch', probe);
+      cacheMocks.getCachedStreamMime.mockResolvedValue(null);
+      localStorage.setItem('iptv_luna_window_unsupported', JSON.stringify(navigator.userAgent));
+      const latched = await proxyPipeline();
+      latched.load('http://host/live/ch1', null, { headers: REFERER });
+      await vi.waitFor(() => expect(proxyService.openStreamProxy).toHaveBeenCalledOnce());
+      expect(probe).not.toHaveBeenCalled();
+
+      // Media service needs the type, so a channel it will play is probed.
+      localStorage.removeItem('iptv_luna_window_unsupported');
+      const pipeline = await proxyPipeline();
+      pipeline.load('http://host/live/ch2', null, { headers: REFERER });
+      await vi.waitFor(() => expect(luna.sessions).toHaveLength(1));
+      expect(probe).toHaveBeenCalledWith('http://host/live/ch2', expect.anything());
+    });
+
+    it.each([false, true])('gives a stream Media service skips once typed to the proxy, never to the bare element (cached=%s)', async cached => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', {
+        headers: { 'content-type': 'application/vnd.apple.mpegurl' },
+      })));
+      cacheMocks.getCachedStreamMime.mockResolvedValue(cached ? 'application/vnd.apple.mpegurl' : null);
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+
+      pipeline.load('http://host/live/ch1', {
+        'inputstream.adaptive.license_type': 'com.microsoft.playready',
+      }, { headers: REFERER });
+      await vi.waitFor(() => expect(logs.join('\n'))
+        .toMatch(/event=playback\.chain\.escalated load=1 from=luna to=proxy cause=luna_skipped/));
+      opened[0]({ ok: true, url: PROXIED, token: TOKEN });
+
+      await vi.waitFor(() => expect(video.querySelector('source')?.src).toBe(PROXIED));
+      expect(video.play).toHaveBeenCalledOnce();
+      expect(luna.sessions).toHaveLength(0);
+    });
+
+    it('tries Media service first, opening the proxy alongside it', async () => {
+      const pipeline = await proxyPipeline();
+
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+
+      expect(luna.sessions).toHaveLength(1);
+      expect(proxyService.openStreamProxy).toHaveBeenCalledWith('http://host/a.m3u8',
+        { ...REFERER, 'User-Agent': WEBOS_25 });
+      opened[0]({ ok: true, url: PROXIED, token: TOKEN });
+      luna.sessions[0].onStarted?.();
+
+      await vi.waitFor(() => expect(proxyService.closeStreamProxy).toHaveBeenCalledWith(TOKEN));
+      expect(pipeline.isProxied()).toBe(false);
+    });
+
+    it('moves a channel Media service cannot play to the proxy, and starts it there next time', async () => {
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      opened[0]({ ok: true, url: PROXIED, token: TOKEN });
+
+      luna.sessions[0].onFallback('error', 1003);
+
+      await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+      expect(video.querySelector('source')?.src).toBe(PROXIED);
+      expect(proxyService.openStreamProxy).toHaveBeenCalledOnce();
+      expect(pipeline.isProxied()).toBe(true);
+      const text = logs.join('\n');
+      expect(text).toMatch(/event=playback\.chain\.escalated load=1 from=luna to=proxy cause=luna_error elapsedMs=\d+/);
+      expect(text).toContain('Luna playback fell back to the local proxy event=playback.luna.fallback load=1 reason=error');
+      expect(text).not.toContain('fell back to the video element');
+      expect(text).toMatch(/event=playback\.proxy\.opened load=1 format=hls elapsedMs=\d+/);
+      expect(text).toContain('event=playback.path.native load=1 via=proxy reason=url');
+      expect(text).not.toContain('http://host/');
+      expect(text).not.toContain(TOKEN);
+
+      pipeline.notePlaying();
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(1);
+      expect(proxyService.openStreamProxy).toHaveBeenCalledTimes(2);
+    });
+
+    it('starts a Referer channel on Luna again after its headerless fallback played', async () => {
+      const video = videoElement();
+      const pipeline = await pipelineFor(video);
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      luna.sessions[0].onFallback('error', 1003);
+      expect(video.querySelector('source')?.src).toBe('http://host/a.m3u8');
+      pipeline.notePlaying();
+
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(2);
+    });
+
+    it('escalates a Referer channel remembered on the element to Luna when the element fails', async () => {
+      const { streamRouteKey } = await import('../utils/url');
+      const video = videoElement();
+      const pipeline = await pipelineFor(video);
+      (pipeline as unknown as { chainWinners: Map<string, string> }).chainWinners
+        .set(streamRouteKey('http://host/a.m3u8'), 'video');
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(0);
+
+      expect(pipeline.escalate()).toBe(true);
+      expect(luna.sessions).toHaveLength(1);
+      expect(logs.join('\n')).toContain('event=playback.path.luna load=1 reason=url headers=referer');
+    });
+
+    it('keeps Media service when the setting stops there', async () => {
+      const pipeline = await pipelineFor(videoElement());
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+
+      luna.sessions[0].onFallback('error', 1003);
+
+      expect(proxyService.openStreamProxy).not.toHaveBeenCalled();
+      expect(logs.join('\n')).toContain('event=playback.path.native load=1 reason=luna_fallback');
+    });
+
+    it('stops escalating once the chain has run too long', async () => {
+      const now = vi.spyOn(Date, 'now');
+      now.mockReturnValue(1000);
+      const pipeline = await proxyPipeline();
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      now.mockReturnValue(1001 + CONFIG.PLAYER.HEADER_CHAIN_CAP_MS);
+
+      luna.sessions[0].onFallback('timeout', 0);
+
+      expect(logs.join('\n')).toContain('event=playback.chain.capped load=1 step=luna next=proxy');
+      expect(logs.join('\n')).not.toContain('event=playback.chain.escalated');
+      expect(pipeline.opts.onError).toHaveBeenCalledOnce();
+    });
+
+    it('plays a Widevine MPD with headers on Shaka through the proxy', async () => {
+      const mpd = '<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period>'
+        + '<AdaptationSet contentType="video" mimeType="video/mp4">'
+        + '<ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"/>'
+        + '<Representation id="v1" codecs="avc1.640028"/></AdaptationSet></Period></MPD>';
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(mpd)));
+      const pipeline = await proxyPipeline();
+      const proxiedMpd = `http://127.0.0.1:1/p/${TOKEN}/http/host/a.mpd`;
+
+      pipeline.load('http://host/a.mpd', null, { headers: REFERER });
+      await vi.waitFor(() => expect(opened).toHaveLength(1));
+      opened[0]({ ok: true, url: proxiedMpd, token: TOKEN });
+
+      await vi.waitFor(() => expect(pipeline.isMseActive()).toBe(true));
+      expect(fetch).toHaveBeenCalledWith(proxiedMpd, expect.anything());
+      expect(luna.sessions).toHaveLength(0);
+      expect(logs.join('\n')).toContain('event=playback.chain.escalated load=1 from=luna to=proxy cause=drm_mse');
+      expect(logs.join('\n')).toMatch(/event=playback\.proxy\.opened load=1 format=dash/);
+    });
+
+    it('opens the proxy first for a stream Media service cannot play, and never plays it without its Referer', async () => {
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+
+      pipeline.load('http://host/a.ts', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(0);
+      opened[0]({ ok: false, reason: 'timeout' });
+
+      await vi.waitFor(() => expect(pipeline.opts.onError).toHaveBeenCalledOnce());
+      expect(logs.join('\n')).toContain('event=playback.proxy.failed load=1 reason=timeout fallback=none');
+      expect(video.querySelector('source')).toBeNull();
+      expect(pipeline.escalate()).toBe(false);
+    });
+
+    it('names no next step when the proxy was the last one', async () => {
+      const pipeline = await proxyPipeline();
+      pipeline.load('http://host/a.m3u8', null, { headers: { 'User-Agent': 'ua1' } });
+      expect(proxyService.openStreamProxy).not.toHaveBeenCalled();
+      expect(pipeline.escalate()).toBe(true);
+      expect(luna.sessions).toHaveLength(1);
+
+      luna.sessions[0].onFallback('error', 1003);
+      opened[0]({ ok: false, reason: 'unavailable' });
+
+      await vi.waitFor(() => expect(pipeline.opts.onError).toHaveBeenCalledOnce());
+      expect(logs.join('\n')).toContain('event=playback.proxy.failed load=1 reason=unavailable fallback=none');
+    });
+
+    it('stops the old source before the new session opens', async () => {
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+      pipeline.load('http://host/b.m3u8', null);
+      expect(video.querySelector('source')).not.toBeNull();
+
+      pipeline.load('http://host/a.ts', null, { headers: REFERER });
+
+      expect(opened).toHaveLength(1);
+      expect(video.querySelector('source')).toBeNull();
+      expect(video.load).toHaveBeenCalled();
+    });
+
+    it('drops a proxied source before its session closes', async () => {
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+      pipeline.load('http://host/a.ts', null, { headers: REFERER });
+      opened[0]({ ok: true, url: PROXIED_TS, token: TOKEN });
+      await vi.waitFor(() => expect(video.querySelector('source')?.src).toBe(PROXIED_TS));
+      const attached: Array<string | undefined> = [];
+      proxyService.closeStreamProxy.mockImplementation(() => {
+        attached.push(video.querySelector('source')?.src);
+      });
+
+      pipeline.load('http://host/b.m3u8', null);
+
+      expect(attached).toEqual([undefined]);
+    });
+
+    it('closes a session that opens after a newer load, and the current one on reload and destroy', async () => {
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+
+      pipeline.load('http://host/a.ts', null, { headers: REFERER });
+      pipeline.load('http://host/b.ts', null, { headers: REFERER });
+      opened[0]({ ok: true, url: PROXIED_TS, token: 'stale' });
+      await vi.waitFor(() => expect(proxyService.closeStreamProxy).toHaveBeenCalledWith('stale'));
+      expect(video.querySelector('source')).toBeNull();
+
+      opened[1]({ ok: true, url: PROXIED_TS.replace('a.ts', 'b.ts'), token: TOKEN });
+      await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+      expect(proxyService.closeStreamProxy).toHaveBeenCalledTimes(1);
+
+      pipeline.load('http://host/b.ts', null, { headers: REFERER, reload: true });
+      expect(proxyService.closeStreamProxy).toHaveBeenLastCalledWith(TOKEN);
+      opened[2]({ ok: true, url: PROXIED_TS, token: 'next' });
+      await vi.waitFor(() => expect(video.play).toHaveBeenCalledTimes(2));
+      pipeline.destroy();
+      expect(proxyService.closeStreamProxy).toHaveBeenLastCalledWith('next');
+      expect(proxyService.closeStreamProxy).toHaveBeenCalledTimes(3);
+    });
+
+    it('keeps its session alive while the player holds it', async () => {
+      vi.useFakeTimers();
+      try {
+        const video = videoElement();
+        const pipeline = await proxyPipeline(video);
+        pipeline.load('http://host/a.ts', null, { headers: REFERER });
+        opened[0]({ ok: true, url: PROXIED_TS, token: TOKEN });
+        await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+
+        await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.PROXY_TOUCH_INTERVAL * 2);
+        expect(proxyService.touchStreamProxy).toHaveBeenCalledTimes(2);
+        expect(proxyService.touchStreamProxy).toHaveBeenCalledWith(TOKEN);
+
+        const expired = vi.fn();
+        pipeline.opts.onProxyExpired = expired;
+        proxyService.touchStreamProxy.mockResolvedValue({ alive: false, lastStatus: 0, manifestStatus: 0, cookies: {} });
+        await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.PROXY_TOUCH_INTERVAL);
+        expect(logs.join('\n')).toContain('event=playback.proxy.expired load=1');
+        expect(expired).toHaveBeenCalledOnce();
+
+        pipeline.destroy();
+        await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.PROXY_TOUCH_INTERVAL * 2);
+        expect(proxyService.touchStreamProxy).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('logs the cookies a session did not keep once, when it ends', async () => {
+      vi.useFakeTimers();
+      try {
+        const video = videoElement();
+        const pipeline = await proxyPipeline(video);
+        pipeline.load('http://host/a.ts', null, { headers: REFERER });
+        opened[0]({ ok: true, url: PROXIED_TS, token: TOKEN });
+        await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+        proxyService.touchStreamProxy.mockResolvedValue(
+          { alive: true, lastStatus: 200, manifestStatus: 0, cookies: { domain: 1 } });
+        await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.PROXY_TOUCH_INTERVAL * 2);
+        expect(logs.join('\n')).not.toContain('event=playback.proxy.cookie');
+        proxyService.closeStreamProxy.mockResolvedValue({ domain: 2, https: 1 });
+
+        pipeline.load('http://host/b.m3u8', null);
+        await vi.waitFor(() => expect(logs.join('\n')).toContain('event=playback.proxy.cookie'));
+
+        const events = logs.filter(line => line.includes('event=playback.proxy.cookie'));
+        expect(events).toHaveLength(2);
+        expect(events[0]).toContain('event=playback.proxy.cookie load=1 reason=domain count=2');
+        expect(events[1]).toContain('event=playback.proxy.cookie load=1 reason=https count=1');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('logs the last cookies a touch reported when the session expired or its close got no answer', async () => {
+      vi.useFakeTimers();
+      try {
+        const video = videoElement();
+        const pipeline = await proxyPipeline(video);
+        pipeline.load('http://host/a.ts', null, { headers: REFERER });
+        opened[0]({ ok: true, url: PROXIED_TS, token: TOKEN });
+        await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+        proxyService.touchStreamProxy.mockResolvedValue(
+          { alive: true, lastStatus: 200, manifestStatus: 0, cookies: { cap: 3 } });
+        await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.PROXY_TOUCH_INTERVAL);
+        proxyService.touchStreamProxy.mockResolvedValue(
+          { alive: false, lastStatus: 0, manifestStatus: 0, cookies: {} });
+        await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.PROXY_TOUCH_INTERVAL);
+        expect(logs.join('\n')).toContain('event=playback.proxy.cookie load=1 reason=cap count=3');
+
+        pipeline.load('http://host/a.ts', null, { headers: REFERER, reload: true });
+        opened[1]({ ok: true, url: PROXIED_TS, token: 'b'.repeat(32) });
+        await vi.waitFor(() => expect(video.play).toHaveBeenCalledTimes(2));
+        proxyService.touchStreamProxy.mockResolvedValue(
+          { alive: true, lastStatus: 200, manifestStatus: 0, cookies: { malformed: 1 } });
+        await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.PROXY_TOUCH_INTERVAL);
+        proxyService.closeStreamProxy.mockResolvedValue(null);
+        pipeline.destroy();
+        await vi.waitFor(() => expect(logs.join('\n')).toContain('reason=malformed count=1'));
+        expect(logs.filter(line => line.includes('event=playback.proxy.cookie'))).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports a manifest an earlier step read and the proxy was refused, and stops there', async () => {
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      opened[0]({ ok: true, url: PROXIED, token: TOKEN });
+      await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalled());
+      luna.sessions[0].onFallback('error', 1003);
+      await vi.waitFor(() => expect(video.querySelector('source')?.src).toBe(PROXIED));
+      let status: (value: unknown) => void = () => {};
+      proxyService.touchStreamProxy.mockReturnValue(new Promise(resolve => { status = resolve; }));
+
+      expect(pipeline.escalate()).toBe(false);
+
+      expect(proxyService.touchStreamProxy).toHaveBeenCalledWith(TOKEN);
+      expect(video.querySelector('source')?.src).toBe(PROXIED);
+      status({ alive: true, lastStatus: 403, manifestStatus: 403, cookies: {} });
+      await vi.waitFor(() => expect(logs.join('\n')).toContain('event=playback.chain.manifest_once'));
+      const text = logs.join('\n');
+      expect(text).toContain('event=playback.proxy.upstream load=1 last=403 manifest=403');
+      expect(text).toContain('event=playback.chain.manifest_once load=1 step=proxy status=403 earlier=luna');
+      expect(text).not.toContain('to=video');
+    });
+
+    it('proxies an http URL with user:password, and keeps the channel URL as the route key', async () => {
+      cacheMocks.getCachedStreamMime.mockResolvedValue('application/vnd.apple.mpegurl');
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+
+      pipeline.load('http://u1:p1@host/live/ch1', null);
+      expect(proxyService.openStreamProxy).toHaveBeenCalledOnce();
+      opened[0]({ ok: true, url: `http://127.0.0.1:1/p/${TOKEN}/http/host/live/ch1`, token: TOKEN });
+
+      await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+      expect(cacheMocks.getCachedStreamMime).toHaveBeenCalledWith('http://host/live');
+      expect(logs.join('\n')).toContain('event=playback.proxy.opened load=1 format=unknown');
+    });
+
+    it('plays a User-Agent-only channel on the element, then Media service, then the proxy', async () => {
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+
+      pipeline.load('http://host/a.m3u8', null, { headers: { 'User-Agent': 'ua1' } });
+      expect(proxyService.openStreamProxy).not.toHaveBeenCalled();
+      expect(video.querySelector('source')?.src).toBe('http://host/a.m3u8');
+
+      expect(pipeline.escalate()).toBe(true);
+      expect(luna.sessions).toHaveLength(1);
+      expect(proxyService.openStreamProxy).toHaveBeenCalledOnce();
+      opened[0]({ ok: true, url: PROXIED, token: TOKEN });
+      luna.sessions[0].onFallback('error', 1003);
+
+      await vi.waitFor(() => expect(video.querySelector('source')?.src).toBe(PROXIED));
+      expect(pipeline.opts.onError).not.toHaveBeenCalled();
+    });
+
+    it('leaves https credential-only channels off the proxy', async () => {
+      const pipeline = await proxyPipeline();
+
+      pipeline.load('https://host/a.m3u8', null, { headers: { Cookie: 'c=1' } });
+      pipeline.load('https://u1:p1@host/a.m3u8', null);
+
+      expect(proxyService.openStreamProxy).not.toHaveBeenCalled();
+      expect(pipeline.escalate()).toBe(false);
+    });
+
+    it('has a step to escalate to only while one is left and the cap has not passed', async () => {
+      const now = vi.spyOn(Date, 'now');
+      now.mockReturnValue(1000);
+      const pipeline = await proxyPipeline();
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(pipeline.canEscalate()).toBe(true);
+
+      now.mockReturnValue(1001 + CONFIG.PLAYER.HEADER_CHAIN_CAP_MS);
+      expect(pipeline.canEscalate()).toBe(false);
+
+      now.mockReturnValue(2000);
+      pipeline.load('http://host/a.ts', null, { headers: REFERER });
+      expect(pipeline.canEscalate()).toBe(false);
+    });
+
+    it('counts a proxy step as pending until its session opens', async () => {
+      const pipeline = await proxyPipeline();
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(pipeline.isProxyPending()).toBe(false);
+
+      luna.sessions[0].onFallback('error', 1003);
+      expect(pipeline.isProxyPending()).toBe(true);
+
+      opened[0]({ ok: true, url: PROXIED, token: TOKEN });
+      await vi.waitFor(() => expect(pipeline.isProxied()).toBe(true));
+      expect(pipeline.isProxyPending()).toBe(false);
+
+      // A stream Luna cannot take starts at the proxy.
+      pipeline.load('http://host/b.ts', null, { headers: REFERER });
+      expect(pipeline.isProxyPending()).toBe(true);
+    });
+
+    it('moves a Luna stream that played, then failed, to the proxy', async () => {
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      luna.sessions[0].onStarted?.();
+      await vi.waitFor(() => expect(proxyService.openStreamProxy).toHaveBeenCalledOnce());
+
+      const restarted = vi.fn();
+      pipeline.opts.onStepRestarted = restarted;
+      expect(luna.sessions[0].onPlaybackError?.(1003)).toBe(true);
+      expect(luna.sessions[0].destroy).toHaveBeenCalled();
+      expect(restarted).toHaveBeenCalledOnce();
+      expect(pipeline.opts.onPlaybackPathChange).toHaveBeenCalled();
+      opened[1]({ ok: true, url: PROXIED, token: TOKEN });
+
+      await vi.waitFor(() => expect(video.querySelector('source')?.src).toBe(PROXIED));
+      expect(pipeline.opts.onError).not.toHaveBeenCalled();
+      const text = logs.join('\n');
+      expect(text).toMatch(/event=playback\.chain\.escalated load=1 from=luna to=proxy cause=luna_played_error/);
+      expect(text).not.toContain('event=playback.luna.fallback');
+
+      // The proxy, not Luna, wins the route once it plays.
+      pipeline.notePlaying();
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(1);
+    });
+
+    it('leaves a played Luna stream that failed in Media service mode to the reconnect', async () => {
+      const video = videoElement();
+      const pipeline = await pipelineFor(video);
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      luna.sessions[0].onStarted?.();
+
+      expect(luna.sessions[0].onPlaybackError?.(1003)).toBe(false);
+      expect(luna.sessions[0].destroy).not.toHaveBeenCalled();
+      expect(video.querySelector('source')).toBeNull();
+      expect(proxyService.openStreamProxy).not.toHaveBeenCalled();
+      expect(logs.join('\n')).not.toContain('event=playback.chain.escalated');
+    });
+
+    it('starts a User-Agent-only channel Luna cannot take on the element, whatever its MIME', async () => {
+      localStorage.setItem('iptv_luna_window_unsupported', JSON.stringify(navigator.userAgent));
+      cacheMocks.getCachedStreamMime.mockResolvedValue('video/mp2t');
+      const video = videoElement();
+      const pipeline = await proxyPipeline(video);
+
+      pipeline.load('http://host/live/ch1', null, { headers: { 'User-Agent': 'ua1' } });
+
+      await vi.waitFor(() => expect(video.querySelector('source')?.src).toBe('http://host/live/ch1'));
+      expect(proxyService.openStreamProxy).not.toHaveBeenCalled();
+      expect(logs.join('\n')).not.toContain('event=playback.chain.escalated');
+    });
+
+    it('names a Luna step this load already tried, not a remembered one, when it skips Luna', async () => {
+      const pipeline = await proxyPipeline();
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      const internals = pipeline as unknown as {
+        chain: { step: string; tried: string[] };
+        lunaSkipToken: number;
+        lunaHeaders(url: string, headers: Record<string, string>, extras: null, token: number): unknown;
+      };
+      internals.chain.step = 'video';
+      internals.chain.tried = ['luna', 'proxy', 'video'];
+      internals.lunaSkipToken = -1;
+
+      expect(internals.lunaHeaders('http://host/a.m3u8', REFERER, null, pipeline.currentLoadToken())).toBeNull();
+
+      expect(logs.join('\n')).toContain('event=playback.luna.skipped load=1 reason=tried headers=referer');
+    });
+  });
+
+  describe('Luna without a window lookup', () => {
+    beforeEach(() => {
+      proxyService.openStreamProxy.mockReset();
+      proxyService.openStreamProxy.mockReturnValue(new Promise(() => {}));
+    });
+
+    it('marks a load that can escalate as a header chain, but not one the setting keeps on the element', async () => {
+      const pipeline = await pipelineFor(videoElement());
+      pipeline.opts.headerPlayback = () => 'proxy';
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(pipeline.isHeaderChain()).toBe(true);
+
+      pipeline.opts.headerPlayback = () => 'off';
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(pipeline.isHeaderChain()).toBe(false);
+
+      pipeline.load('http://host/a.m3u8', null, {});
+      expect(pipeline.isHeaderChain()).toBe(false);
+    });
+
+    it('marks a load left with only the proxy step as a header chain', async () => {
+      localStorage.setItem('iptv_luna_window_unsupported', JSON.stringify(navigator.userAgent));
+      const pipeline = await pipelineFor(videoElement());
+      pipeline.opts.headerPlayback = () => 'proxy';
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(pipeline.isProxyPending()).toBe(true);
+      expect(pipeline.canEscalate()).toBe(false);
+      expect(pipeline.isHeaderChain()).toBe(true);
+    });
+
+    it('latches a firmware that answered it has no window lookup, and skips Luna on the next launch', async () => {
+      const first = await pipelineFor(videoElement());
+      first.opts.headerPlayback = () => 'proxy';
+      first.load('http://host/a.m3u8', null, { headers: REFERER });
+
+      luna.sessions[0].onFallback('no_window', -1, 'app_info', true);
+
+      expect(logs.filter(line => line.includes('event=playback.luna.window_unsupported')))
+        .toEqual([expect.stringContaining('event=playback.luna.window_unsupported load=1 stage=app_info code=-1')]);
+      expect(logs.join('\n')).toContain('event=playback.chain.escalated load=1 from=luna to=proxy');
+
+      vi.resetModules();
+      const proxied = await pipelineFor(videoElement());
+      proxied.opts.headerPlayback = () => 'proxy';
+      proxied.load('http://host/b.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(1);
+      expect(proxyService.openStreamProxy).toHaveBeenCalledTimes(2);
+      expect(logs.filter(line => line.includes('reason=no_window_latched')))
+        .toEqual([expect.stringContaining('event=playback.luna.skipped load=1 reason=no_window_latched headers=referer')]);
+
+      vi.resetModules();
+      const video = videoElement();
+      const next = await pipelineFor(video);
+      next.load('http://host/c.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(1);
+      expect(video.querySelector('source')?.src).toBe('http://host/c.m3u8');
+      expect(logs.join('\n')).toContain('event=playback.luna.skipped load=1 reason=no_window_latched');
+      expect(logs.filter(line => line.includes('event=playback.luna.window_unsupported'))).toHaveLength(1);
+    });
+
+    it('tries Luna again under another user agent', async () => {
+      const first = await pipelineFor(videoElement());
+      first.load('http://host/a.m3u8', null, { headers: REFERER });
+      luna.sessions[0].onFallback('no_window', -1, 'app_info', true);
+
+      vi.resetModules();
+      Object.defineProperty(navigator, 'userAgent', { configurable: true, value: WEBOS_25.replace('120', '121') });
+      const next = await pipelineFor(videoElement());
+      next.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(2);
+    });
+
+    it('tries Luna again once the header playback setting changes', async () => {
+      const pipeline = await pipelineFor(videoElement());
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      luna.sessions[0].onFallback('no_window', -1, 'app_info', true);
+      pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(1);
+
+      const { StorageService } = await import('../services/storage-service');
+      StorageService.setHeaderPlayback('proxy');
+      StorageService.setHeaderPlayback('luna');
+      pipeline.load('http://host/b.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(2);
+    });
+
+    it('keeps a transient window miss to this launch', async () => {
+      const first = await pipelineFor(videoElement());
+      first.load('http://host/a.m3u8', null, { headers: REFERER });
+      luna.sessions[0].onFallback('no_window', -1, 'app_info');
+
+      vi.resetModules();
+      const next = await pipelineFor(videoElement());
+      next.load('http://host/a.m3u8', null, { headers: REFERER });
+      expect(luna.sessions).toHaveLength(2);
+      expect(logs.join('\n')).not.toContain('event=playback.luna.window_unsupported');
+    });
+  });
+
   describe('User-Agent-only retry', () => {
     const UA = { 'User-Agent': 'ua1' };
 
@@ -1119,14 +1735,14 @@ describe('PlayerPipeline webOS Luna routing', () => {
         expect(vi.mocked(fetch).mock.calls).toHaveLength(fetches);
       });
 
-      expect(pipeline.retryWithLuna()).toBe(true);
+      expect(pipeline.escalate()).toBe(true);
 
       expect(pipeline.opts.onPlaybackPathChange).toHaveBeenCalledOnce();
       expect(luna.sessions).toHaveLength(1);
       expect(luna.sessions[0]).toMatchObject({ uri: 'http://host/a.m3u8', headers: UA });
       expect(logs.join('\n')).toContain('event=playback.luna.fallback load=1 reason=ua_only');
       expect(logs.join('\n')).toContain('event=playback.path.luna load=1 reason=ua_only');
-      expect(pipeline.retryWithLuna()).toBe(false);
+      expect(pipeline.escalate()).toBe(false);
       expect(luna.sessions).toHaveLength(1);
     });
 
@@ -1136,7 +1752,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
       pipeline.load('http://host/a.m3u8', null, { headers: UA });
       expect(pipeline.headersTurnedOff()).toBe(false);
 
-      expect(pipeline.retryWithLuna()).toBe(false);
+      expect(pipeline.escalate()).toBe(false);
 
       expect(luna.sessions).toHaveLength(0);
       expect(pipeline.headersTurnedOff()).toBe(true);
@@ -1146,14 +1762,14 @@ describe('PlayerPipeline webOS Luna routing', () => {
       const video = videoElement();
       const pipeline = await pipelineFor(video);
       pipeline.load('http://host/a.m3u8', null, { headers: UA });
-      pipeline.retryWithLuna();
+      pipeline.escalate();
       video.innerHTML = '';
 
       luna.sessions[0].onFallback('error', 1003);
 
       expect(pipeline.opts.onError).toHaveBeenCalledOnce();
       expect(video.querySelector('source')).toBeNull();
-      expect(pipeline.retryWithLuna()).toBe(false);
+      expect(pipeline.escalate()).toBe(false);
     });
 
     it('does not log the failed element play() the Luna placeholder aborts', async () => {
@@ -1164,7 +1780,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
       }));
       const pipeline = await pipelineFor(video);
       pipeline.load('http://host/a.m3u8', null, { headers: UA });
-      pipeline.retryWithLuna();
+      pipeline.escalate();
 
       // The placeholder's load() interrupts the element's pending play().
       reject(new DOMException('interrupted by a new load request', 'AbortError'));
@@ -1192,18 +1808,18 @@ describe('PlayerPipeline webOS Luna routing', () => {
     ])('does not retry %s', async (_name, headers, extras) => {
       const pipeline = await pipelineFor(videoElement());
       pipeline.load('http://host/a.m3u8', extras, { headers });
-      expect(pipeline.retryWithLuna()).toBe(false);
+      expect(pipeline.escalate()).toBe(false);
       expect(luna.sessions).toHaveLength(0);
     });
 
     it('does not retry a stream Luna already failed this session', async () => {
       const pipeline = await pipelineFor(videoElement());
       pipeline.load('http://host/a.m3u8', null, { headers: UA });
-      pipeline.retryWithLuna();
+      pipeline.escalate();
       luna.sessions[0].onFallback('load_failed', 12);
 
       pipeline.load('http://host/a.m3u8', null, { headers: UA });
-      expect(pipeline.retryWithLuna()).toBe(false);
+      expect(pipeline.escalate()).toBe(false);
       expect(luna.sessions).toHaveLength(1);
     });
   });
@@ -1531,7 +2147,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
       await vi.waitFor(() => expect(video.querySelector('source')).not.toBeNull());
       expect(luna.sessions).toHaveLength(0);
 
-      expect(pipeline.retryWithLuna()).toBe(true);
+      expect(pipeline.escalate()).toBe(true);
 
       await vi.waitFor(() => expect(luna.sessions).toHaveLength(1));
       expect(luna.sessions[0]).toMatchObject({ transport: 'MPEG-DASH', headers: { 'User-Agent': 'ua1' } });
@@ -1549,7 +2165,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
       vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
       drmCalls.length = 0;
 
-      expect(pipeline.retryWithLuna()).toBe(true);
+      expect(pipeline.escalate()).toBe(true);
 
       expect(video.querySelector('source')).toBeNull();
       expect(drmCalls).toEqual(['unload']);
@@ -1566,7 +2182,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
       pipeline.load('http://host/a.mpd', null, { headers: { 'User-Agent': 'ua1' } });
       await vi.waitFor(() => expect(video.querySelector('source')).not.toBeNull());
       vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
-      pipeline.retryWithLuna();
+      pipeline.escalate();
 
       // The retry's load() interrupts the element's pending play() while the MPD read waits.
       reject(new DOMException('interrupted by a new load request', 'AbortError'));
@@ -1582,7 +2198,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
       pipeline.load('http://host/a.mpd', null, { headers: { 'User-Agent': 'ua1' } });
       await vi.waitFor(() => expect(pipeline.isMseActive()).toBe(true));
 
-      expect(pipeline.retryWithLuna()).toBe(false);
+      expect(pipeline.escalate()).toBe(false);
 
       expect(luna.sessions).toHaveLength(0);
       expect(logs.join('\n')).not.toContain('reason=ua_only');

@@ -242,13 +242,25 @@ describe('StorageService', () => {
     StorageService.setPlaylistsReplacedHandler(() => {});
   });
 
-  it('plays header channels through the media service unless turned off', () => {
+  it('plays header channels through the media service unless set otherwise', () => {
     expect(StorageService.getHeaderPlayback()).toBe('luna');
     StorageService.setHeaderPlayback('off');
     expect(localStorage.getItem('iptv_header_playback')).toBe('"off"');
     expect(StorageService.getHeaderPlayback()).toBe('off');
-    localStorage.setItem('iptv_header_playback', '"proxy"');
+    StorageService.setHeaderPlayback('proxy');
+    expect(localStorage.getItem('iptv_header_playback')).toBe('"proxy"');
+    expect(StorageService.getHeaderPlayback()).toBe('proxy');
+    localStorage.setItem('iptv_header_playback', '"other"');
     expect(StorageService.getHeaderPlayback()).toBe('luna');
+  });
+
+  it('clears the window lookup latch when the header playback setting changes', () => {
+    StorageService.setHeaderPlayback('proxy');
+    StorageService.setLunaWindowUnsupported('ua1');
+    StorageService.setHeaderPlayback('proxy');
+    expect(StorageService.getLunaWindowUnsupported()).toBe('ua1');
+    StorageService.setHeaderPlayback('luna');
+    expect(StorageService.getLunaWindowUnsupported()).toBeNull();
   });
 
   it('persists live preview on and off independently from autoplay and sources', () => {

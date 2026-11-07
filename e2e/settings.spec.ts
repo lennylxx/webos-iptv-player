@@ -733,6 +733,27 @@ test.describe('Settings navigation', () => {
     expect(rowCounts).toEqual([5, 5, 5]);
   });
 
+  test('selects and saves Local proxy for HTTP headers', async ({ page }) => {
+    await routePlaylist(page);
+    await seedPlaylist(page);
+    await page.goto('/');
+    await enterTab(page, 'settings');
+    await page.locator('[data-settings-target="advanced"]').click();
+
+    const proxy = page.locator('#header-playback .toggle-option[data-value="proxy"]');
+    await expect(proxy).toBeEnabled();
+    await proxy.click();
+    await expect(proxy).toHaveClass(/active/);
+    await page.locator('#save-settings').click();
+    await expect(page.locator('#view-channels')).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem('iptv_header_playback'))).toBe('"proxy"');
+
+    await page.reload();
+    await enterTab(page, 'settings');
+    await page.locator('[data-settings-target="advanced"]').click();
+    await expect(proxy).toHaveClass(/active/);
+  });
+
   test('the text size picker scales only fonts and persists', async ({ page }) => {
     await routePlaylist(page);
     await seedPlaylist(page);

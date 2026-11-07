@@ -1087,7 +1087,7 @@ export class Settings {
                       { value: 'off', label: t('common.off') },
                       { value: 'luna', label: t('settings.httpHeadersMediaService') },
                       { value: 'proxy', label: t('settings.httpHeadersLocalProxy') },
-                    ], headerPlayback, ['proxy'])}
+                    ], headerPlayback)}
                     </div>
                   </div>
                   <div class="settings-advanced-row">
@@ -2924,7 +2924,9 @@ export class Settings {
     StorageService.setLiveReconnectAttempts(liveReconnectAttempts);
 
     const headerPlayback = $('#header-playback .toggle-option.active', this.container)?.dataset.value;
-    if (headerPlayback === 'off' || headerPlayback === 'luna') StorageService.setHeaderPlayback(headerPlayback);
+    if (headerPlayback === 'off' || headerPlayback === 'luna' || headerPlayback === 'proxy') {
+      StorageService.setHeaderPlayback(headerPlayback);
+    }
 
     const numberEntryOsdTimeoutMs = Number(
       ($('#number-entry-osd-timeout', this.container) as HTMLElement | null)?.dataset.value,

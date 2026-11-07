@@ -10,6 +10,7 @@ import * as http from 'http';
 import { SetupActionStore } from '../setup/actions';
 import { SetupStateStore } from '../setup/state';
 import { startServer, type ServiceChangeEvent } from './server';
+import { createKeepAlive, type ActivityManagerLike } from '../keep-alive';
 import { createLogger } from '../logger';
 
 const log = createLogger('lan');
@@ -17,10 +18,7 @@ const log = createLogger('lan');
 // Minimal shape of the webos-service Service object this module uses.
 interface LunaService {
   register(method: string, handler: (msg: LunaMsg) => void): void;
-  activityManager: {
-    create(name: string, cb: () => void): void;
-    complete(name: string, cb: () => void): void;
-  };
+  activityManager: ActivityManagerLike;
 }
 
 type LunaMsg = {
@@ -59,7 +57,7 @@ export function registerLanService(service: LunaService, dataDir: string): void 
   // `stop`, since the service process stays alive across the cycle (webos-service
   // holds the Luna bus connection, keeping Node's event loop running even after
   // we close the HTTP server and complete the keepAlive activity).
-  let keepAliveCreated = false;
+  const keepAlive = createKeepAlive(() => service.activityManager, 'keepAlive', log);
   let bindInProgress = false;
 
   function broadcastChange(event: ServiceChangeEvent): void {
@@ -86,10 +84,7 @@ export function registerLanService(service: LunaService, dataDir: string): void 
       server = r.server;
       actualPort = r.port;
       log.info('HTTP server ready on port ' + actualPort);
-      if (!keepAliveCreated) {
-        service.activityManager.create('keepAlive', () => { /* keep service alive */ });
-        keepAliveCreated = true;
-      }
+      keepAlive.hold();
       // Drain any `start` calls that arrived before this bind finished.
       for (const m of pendingStarts) m.respond({ running: true, port: actualPort });
       pendingStarts.length = 0;
@@ -134,14 +129,7 @@ export function registerLanService(service: LunaService, dataDir: string): void 
     // service lifetime and would be stale after a restart anyway.
     const droppedSubs = subscribers.length;
     subscribers.length = 0;
-    try {
-      service.activityManager.complete('keepAlive', () => {
-        log.info('keepAlive activity completed');
-      });
-    } catch (e) {
-      log.warn('activityManager.complete failed (ignoring):', e);
-    }
-    keepAliveCreated = false;
+    keepAlive.release();
     const wasRunning = !!server;
     if (server) {
       const s = server;

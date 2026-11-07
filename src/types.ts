@@ -384,9 +384,10 @@ export interface ChannelScope {
  *  the default) or stays within the launch scope above ('active'). */
 export type ChannelCycleMode = 'global' | 'active';
 
-/** How a channel whose playlist sets HTTP headers sends them; 'off' plays it
- *  on the video element without them. */
-export type HeaderPlayback = 'off' | 'luna';
+/** How a channel whose playlist sets HTTP headers sends them: 'luna' through
+ *  the media service, 'proxy' through the bundled service's loopback proxy,
+ *  and 'off' plays it on the video element without them. */
+export type HeaderPlayback = 'off' | 'luna' | 'proxy';
 
 export type NavDirection = 'up' | 'down' | 'left' | 'right';
 

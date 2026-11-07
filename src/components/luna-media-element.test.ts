@@ -193,6 +193,7 @@ describe('LunaMediaElement', () => {
 
   it('ignores a stale window entry until the placeholder has its own', async () => {
     media.foregroundAppInfo
+      .mockResolvedValueOnce({ returnValue: true })
       .mockResolvedValueOnce(windowInfo('old'))
       .mockResolvedValue(windowInfo('ph1', '_Window_Id_8'));
     start();
@@ -542,6 +543,53 @@ describe('LunaMediaElement', () => {
     expect(media.loadMedia).not.toHaveBeenCalled();
   });
 
+  it('never plays the placeholder when the TV answers that it has no window lookup', async () => {
+    Object.defineProperty(window, 'PalmServiceBridge', { configurable: true, value: function Bridge() {} });
+    try {
+      media.foregroundAppInfo.mockRejectedValue(new LunaMediaError('getForegroundAppInfo failed', -1, false,
+        'Unknown method "getForegroundAppInfo" for category "/"'));
+      const { onFallback } = start();
+      await flush();
+
+      expect(onFallback).toHaveBeenCalledWith('no_window', -1, 'app_info', true);
+      expect(video.hasAttribute('src')).toBe(false);
+      expect(video.classList.contains('luna-media')).toBe(false);
+      expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+      expect(HTMLMediaElement.prototype.load).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(window, 'PalmServiceBridge');
+    }
+  });
+
+  it('keeps any other window lookup error a transient miss', async () => {
+    Object.defineProperty(window, 'PalmServiceBridge', { configurable: true, value: function Bridge() {} });
+    try {
+      media.foregroundAppInfo.mockRejectedValue(new LunaMediaError('getForegroundAppInfo failed', -1, false,
+        'Internal error'));
+      const { onFallback } = start();
+      await flush();
+
+      expect(onFallback).toHaveBeenCalledWith('no_window', -1, 'app_info');
+      expect(video.hasAttribute('src')).toBe(false);
+    } finally {
+      Reflect.deleteProperty(window, 'PalmServiceBridge');
+    }
+  });
+
+  it('keeps a window lookup that timed out a transient miss', async () => {
+    Object.defineProperty(window, 'PalmServiceBridge', { configurable: true, value: function Bridge() {} });
+    try {
+      media.foregroundAppInfo.mockRejectedValue(new LunaMediaError('getForegroundAppInfo timed out', -1, true));
+      const { onFallback } = start();
+      await flush();
+
+      expect(onFallback).toHaveBeenCalledWith('no_window', -1, 'app_info');
+      expect(video.hasAttribute('src')).toBe(false);
+    } finally {
+      Reflect.deleteProperty(window, 'PalmServiceBridge');
+    }
+  });
+
   function watch(): { onReload: ReturnType<typeof vi.fn> } {
     const onReload = vi.fn();
     new StallWatchdog({
@@ -680,6 +728,32 @@ describe('LunaMediaElement', () => {
     onEvent({ currentTime: { currentTime: 1000 } });
     onEvent({ playing: true });
     expect(onStarted).toHaveBeenCalledOnce();
+  });
+
+  it('hands a pipeline error after the start to the caller, not before it', async () => {
+    const seen = recordEvents();
+    const onFallback = vi.fn();
+    const onPlaybackError = vi.fn(() => true);
+    new LunaMediaElement(video, {
+      uri: 'http://host/a.m3u8', headers: { Referer: 'http://host/' }, label: 'session=1 load=1',
+      onFallback, onPlaybackError,
+    }).start();
+    await flush();
+    onEvent({ loadCompleted: true });
+    onEvent({ error: { errorCode: 1003 } });
+    expect(onPlaybackError).not.toHaveBeenCalled();
+    expect(seen).toContain('error');
+
+    seen.length = 0;
+    onEvent({ playing: true });
+    onEvent({ error: { errorCode: 1004 } });
+    expect(onPlaybackError).toHaveBeenCalledWith(1004);
+    expect(seen).not.toContain('error');
+    expect(onFallback).not.toHaveBeenCalled();
+
+    onPlaybackError.mockReturnValue(false);
+    onEvent({ error: { errorCode: 1005 } });
+    expect(seen).toContain('error');
   });
 
   it('mutes a muted preview before the forced play', async () => {

@@ -36,7 +36,7 @@ const DROPPED_HEADERS = [
 // As on the app's Luna path, UMS does not verify TLS certificates, so
 // credentials never travel over https; they also never leave their origin.
 const CREDENTIAL_HEADERS = ['authorization', 'cookie'];
-const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
+export const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
 
 export interface ManifestFetchRequest {
   url?: unknown;
@@ -68,7 +68,7 @@ export function manifestFetchFailure(errorCode: string, errorText: string, statu
   return result;
 }
 
-function httpUrl(input: unknown): nodeUrl.Url | null {
+export function httpUrl(input: unknown): nodeUrl.Url | null {
   if (typeof input !== 'string' || !input || /[\0-\x20\x7f]/.test(input)) return null;
   const parsed = nodeUrl.parse(input);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
@@ -100,7 +100,7 @@ export function sanitizeHeaders(input: unknown): Record<string, string> {
   return headers;
 }
 
-function withoutCredentials(headers: Record<string, string>): Record<string, string> {
+export function withoutCredentials(headers: Record<string, string>): Record<string, string> {
   const kept: Record<string, string> = {};
   Object.keys(headers).forEach((name) => {
     if (CREDENTIAL_HEADERS.indexOf(name) < 0) kept[name] = headers[name];
@@ -129,7 +129,7 @@ function reportedHref(url: nodeUrl.Url): string {
   return url.auth ? href.replace(/^(https?:\/\/)[^@\/?#]*@/i, '$1') : href;
 }
 
-function origin(url: nodeUrl.Url): string {
+export function origin(url: nodeUrl.Url): string {
   const port = url.port || (url.protocol === 'https:' ? '443' : '80');
   return url.protocol + '//' + (url.hostname || '').toLowerCase() + ':' + port;
 }

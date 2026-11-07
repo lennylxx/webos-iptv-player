@@ -41,8 +41,17 @@ export function streamRouteKey(url: string): string {
   }
 }
 
+// A local proxy URL: /p/<token>/<scheme>/<host><path>.
+const PROXIED_PATH = /^\/p\/[^/]*\/(https?)\/([^/?#]+)(.*)$/;
+
 export function diagnosticStreamUrl(url: string): string {
   try {
+    const proxied = /^(https?:\/\/[^/]+)(\/p\/.*)$/.exec(url);
+    const upstream = proxied ? PROXIED_PATH.exec(proxied[2]) : null;
+    if (proxied && upstream) {
+      const inner = diagnosticStreamUrl(`${upstream[1]}://${upstream[2]}${upstream[3]}`);
+      return `${proxied[1]}/p/***/${upstream[1]}/${inner.replace(/^https?:\/\//, '')}`;
+    }
     const parsed = new URL(url);
     if (parsed.username) parsed.username = '***';
     if (parsed.password) parsed.password = '***';

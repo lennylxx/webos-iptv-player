@@ -329,6 +329,174 @@ describe('PlayerPipeline desktop routing', () => {
   });
 });
 
+describe('PlayerPipeline desktop Local proxy', () => {
+  const TOKEN = 'a'.repeat(32);
+  const PROXIED = `http://127.0.0.1:1/p/${TOKEN}/http/host/a.m3u8`;
+  const CONTROL = `http://127.0.0.1:${String(CONFIG.PLAYER.DEV_PROXY_PORT)}`;
+
+  function logLines(): string[] {
+    const lines: string[] = [];
+    const record = (...args: unknown[]) => { lines.push(args.join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(record);
+    vi.spyOn(console, 'warn').mockImplementation(record);
+    return lines;
+  }
+
+  it('opens a session on the standalone service and plays its URL through hls.js', async () => {
+    installPreviewGlobals();
+    const lines = logLines();
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url === `${CONTROL}/open`) {
+        return new Response(JSON.stringify({ returnValue: true, url: PROXIED, token: TOKEN }));
+      }
+      if (url === `${CONTROL}/close`) return new Response('{}');
+      return contentTypeResponse('application/vnd.apple.mpegurl');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const pipeline = new PlayerPipeline(callbacks({ headerPlayback: () => 'proxy' }));
+    pipeline.setVideoElement(videoElement());
+
+    pipeline.load('http://host/a.m3u8', null, { headers: { Referer: 'http://host/' } });
+
+    await vi.waitFor(() => expect(FakeHls.instances[0]?.loadSource).toHaveBeenCalledWith(PROXIED));
+    const open = fetchMock.mock.calls.find(call => call[0] === `${CONTROL}/open`)!;
+    expect(JSON.parse(String(open[1]?.body))).toMatchObject({
+      url: 'http://host/a.m3u8',
+      headers: { Referer: 'http://host/' },
+    });
+    expect(lines.join('\n')).toMatch(/event=playback\.proxy\.opened load=1 format=hls elapsedMs=\d+/);
+    expect(lines.join('\n')).toContain('event=playback.path.hls load=1 via=proxy reason=probe');
+
+    pipeline.destroy();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`${CONTROL}/close`, expect.objectContaining({
+      body: JSON.stringify({ token: TOKEN }),
+    })));
+  });
+
+  it('fails a Referer channel when the standalone service is unreachable, rather than play it without the header', async () => {
+    installPreviewGlobals();
+    const lines = logLines();
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.indexOf(CONTROL) === 0) throw new TypeError('Failed to fetch');
+      return contentTypeResponse('application/vnd.apple.mpegurl');
+    }));
+    const cb = callbacks({ headerPlayback: () => 'proxy' });
+    const pipeline = new PlayerPipeline(cb);
+    pipeline.setVideoElement(videoElement());
+
+    pipeline.load('http://host/a.m3u8', null, { headers: { Referer: 'http://host/' } });
+
+    await vi.waitFor(() => expect(cb.onError).toHaveBeenCalledOnce());
+    expect(FakeHls.instances).toHaveLength(0);
+    expect(lines.join('\n')).toContain('event=playback.proxy.failed load=1 reason=unavailable fallback=none');
+    expect(cb.onError).toHaveBeenCalledWith('unsupported');
+    expect(lines.join('\n')).toContain('event=playback.chain.stopped load=1 step=proxy next=none reason=unavailable');
+  });
+
+  it('does not hand a proxied stream that reached its server to the element without headers', async () => {
+    installPreviewGlobals();
+    const lines = logLines();
+    let lastStatus = 200;
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url === `${CONTROL}/open`) {
+        return new Response(JSON.stringify({ returnValue: true, url: PROXIED, token: TOKEN }));
+      }
+      if (url === `${CONTROL}/touch`) {
+        return new Response(JSON.stringify({
+          returnValue: true, alive: true, lastStatus, manifestStatus: lastStatus, cookies: {},
+        }));
+      }
+      if (url === `${CONTROL}/close`) return new Response('{}');
+      return contentTypeResponse('application/vnd.apple.mpegurl');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const cb = callbacks({ headerPlayback: () => 'proxy' });
+    const pipeline = new PlayerPipeline(cb);
+    pipeline.setVideoElement(videoElement());
+
+    // A user:password URL has no header the element lacks, so the element stays a last step.
+    pipeline.load('http://u1:p1@host/a.m3u8', null);
+    await vi.waitFor(() => expect(FakeHls.instances[0]?.loadSource).toHaveBeenCalledWith(PROXIED));
+    expect(pipeline.escalate()).toBe(true);
+
+    await vi.waitFor(() => expect(cb.onError).toHaveBeenCalledOnce());
+    expect(FakeHls.instances).toHaveLength(1);
+    expect(lines.join('\n')).toContain('event=playback.chain.stopped load=1 step=proxy next=video last=200');
+
+    // A proxy the server refused still leaves the element its turn.
+    lastStatus = 403;
+    pipeline.load('http://u1:p1@host/b.m3u8', null);
+    await vi.waitFor(() => expect(FakeHls.instances[1]?.loadSource).toHaveBeenCalledWith(PROXIED));
+    expect(pipeline.escalate()).toBe(true);
+    await vi.waitFor(() => expect(lines.join('\n')).toContain('event=playback.chain.escalated load=2 from=proxy to=video'));
+  });
+
+  it('settles a second escalation during the upstream check once', async () => {
+    installPreviewGlobals();
+    const lines = logLines();
+    const touched = deferred();
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url === `${CONTROL}/open`) {
+        return new Response(JSON.stringify({ returnValue: true, url: PROXIED, token: TOKEN }));
+      }
+      if (url === `${CONTROL}/touch`) {
+        await touched.promise;
+        return new Response(JSON.stringify({
+          returnValue: true, alive: true, lastStatus: 200, manifestStatus: 200, cookies: {},
+        }));
+      }
+      if (url === `${CONTROL}/close`) return new Response('{}');
+      return contentTypeResponse('application/vnd.apple.mpegurl');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const cb = callbacks({ headerPlayback: () => 'proxy' });
+    const pipeline = new PlayerPipeline(cb);
+    pipeline.setVideoElement(videoElement());
+
+    pipeline.load('http://u1:p1@host/a.m3u8', null);
+    await vi.waitFor(() => expect(FakeHls.instances[0]?.loadSource).toHaveBeenCalledWith(PROXIED));
+    expect(pipeline.escalate()).toBe(true);
+    expect(pipeline.escalate()).toBe(true);
+    await vi.waitFor(() => expect(lines.join('\n')).toContain('event=playback.chain.escalated load=1 from=proxy to=video'));
+
+    touched.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(cb.onError).not.toHaveBeenCalled();
+    expect(lines.join('\n')).not.toContain('event=playback.chain.stopped');
+  });
+
+  it('counts an escalation to the proxy as pending while the old engine tears down', async () => {
+    installPreviewGlobals();
+    logLines();
+    const opened = deferred();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === `${CONTROL}/open`) {
+        await opened.promise;
+        return new Response(JSON.stringify({ returnValue: true, url: PROXIED, token: TOKEN }));
+      }
+      if (url.indexOf(CONTROL) === 0) return new Response('{}');
+      return contentTypeResponse('application/dash+xml');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const pipeline = new PlayerPipeline(callbacks({ headerPlayback: () => 'proxy' }));
+    pipeline.setVideoElement(videoElement());
+    pipeline.load('http://host/a', null, { headers: { 'User-Agent': 'ua1' } });
+    await vi.waitFor(() => expect(lastShakaPlayer()).toBeDefined());
+    const teardown = deferred();
+    lastShakaPlayer()!.destroy.mockReturnValue(teardown.promise);
+
+    expect(pipeline.escalate()).toBe(true);
+    expect(pipeline.isProxyPending()).toBe(true);
+
+    teardown.resolve();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`${CONTROL}/open`, expect.anything()));
+    expect(pipeline.isProxyPending()).toBe(true);
+    opened.resolve();
+    await vi.waitFor(() => expect(pipeline.isProxyPending()).toBe(false));
+  });
+});
+
 describe('PlayerPipeline loader lifecycle', () => {
   it('ignores a content-type result that arrives after destroy', async () => {
     let resolveProbe: ((response: Response) => void) | undefined;

@@ -59,6 +59,16 @@ export const CONFIG = {
     MANIFEST_SERVICE_GRACE_MS: 3000,
     DASH_MANIFEST_SERVICE_TIMEOUT: 2500,
     DASH_MANIFEST_SERVICE_GRACE_MS: 500,
+    // Opening a loopback proxy session; the first open may cold-start the service.
+    PROXY_OPEN_TIMEOUT: 5000,
+    PROXY_FIRST_OPEN_TIMEOUT: 8000,
+    // Under the service's 2-minute idle expiry, so a paused player keeps its session.
+    PROXY_TOUCH_INTERVAL: 45000,
+    // A channel with HTTP headers starts no further step after this long, so
+    // a dead stream does not wait out every step's deadline.
+    HEADER_CHAIN_CAP_MS: 25000,
+    // Desktop preview: the standalone service's proxy port (IPTV_PROXY_PORT).
+    DEV_PROXY_PORT: 47390,
     // mediaOption selects the native MPEG-DASH transport deterministically;
     // bare delegates selection to URI typefinding for provider compatibility.
     DASH_SOURCE: 'mediaOption' as 'mediaOption' | 'bare',

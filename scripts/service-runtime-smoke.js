@@ -211,6 +211,8 @@ startServer(0, dataDir).then(function (bound) {
 }).then(function () {
   return manifestFetchSmoke();
 }).then(function () {
+  return proxySmoke();
+}).then(function () {
   serviceLogSmoke();
   finish();
 }, finish);
@@ -303,6 +305,189 @@ function manifestFetchSmoke() {
   }).then(function () {
     origin.close();
   }, function (error) {
+    origin.close();
+    throw error;
+  });
+}
+
+function proxyGet(url, headers) {
+  return new Promise(function (resolve, reject) {
+    var req = http.request(require('url').parse(url), function (res) {
+      var chunks = [];
+      res.on('data', function (chunk) { chunks.push(chunk); });
+      res.on('end', function () {
+        resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) });
+      });
+    });
+    if (headers) {
+      Object.keys(headers).forEach(function (name) { req.setHeader(name, headers[name]); });
+    }
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// The loopback proxy through openProxy: a rewritten gzip playlist, a
+// segment Range, a cookie from the playlist, keep-alive reuse, a paused
+// client, a loopback host name, and a client abort, against an origin that
+// refuses a request without the channel's Referer.
+function proxySmoke() {
+  var registerProxyService = require(path.join(buildDir, 'proxy', 'service')).registerProxyService;
+  var createStreamProxy = require(path.join(buildDir, 'proxy', 'server')).createStreamProxy;
+  var handlers = {};
+  // The origin below listens on loopback, which a real proxy refuses.
+  var proxy = registerProxyService({
+    register: function (name, h) { handlers[name] = h; },
+  }, 'com.example.app', createStreamProxy({ allowLoopback: true, bodyIdleMs: 200 }));
+  var strict = createStreamProxy();
+  var segment = new Buffer(200000);
+  segment.fill(7);
+  var big = new Buffer(8 * 1024 * 1024);
+  big.fill(3);
+  var aborted = false;
+  var origin = http.createServer(function (req, res) {
+    if (req.headers.referer !== 'http://host/r') {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+    if (req.url === '/live/index.m3u8') {
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Content-Encoding': 'gzip',
+        'Set-Cookie': 'sid=s1; Path=/live',
+      });
+      res.end(zlib.gzipSync('#EXTM3U\n#EXTINF:4,\nseg1.ts\n#EXTINF:4,\nslow.ts\n'));
+    } else if (req.url === '/live/big.ts') {
+      res.writeHead(200, { 'Content-Type': 'video/mp2t', 'Content-Length': big.length });
+      res.end(big);
+    } else if (req.url === '/live/seg1.ts') {
+      if (req.headers.cookie !== 'sid=s1') {
+        res.writeHead(401);
+        res.end();
+        return;
+      }
+      var range = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range || '');
+      if (!range) {
+        res.writeHead(200, { 'Content-Type': 'video/mp2t', 'Content-Length': segment.length });
+        res.end(segment);
+        return;
+      }
+      res.writeHead(206, {
+        'Content-Type': 'video/mp2t',
+        'Content-Range': 'bytes ' + range[1] + '-' + range[2] + '/' + segment.length,
+      });
+      res.end(segment.slice(Number(range[1]), Number(range[2]) + 1));
+    } else {
+      res.writeHead(200, { 'Content-Type': 'video/mp2t' });
+      res.write(segment);
+      req.socket.on('close', function () { aborted = true; });
+    }
+  });
+  function call(name, sender, payload) {
+    return new Promise(function (resolve) {
+      handlers[name]({ sender: sender, payload: payload, respond: resolve });
+    });
+  }
+  var opened = null;
+  return new Promise(function (resolve) {
+    origin.listen(0, '127.0.0.1', resolve);
+  }).then(function () {
+    var payload = {
+      url: 'http://127.0.0.1:' + origin.address().port + '/live/index.m3u8',
+      headers: { Referer: 'http://host/r' },
+    };
+    return call('openProxy', 'com.example.other', payload).then(function (denied) {
+      if (denied.errorCode !== 'denied') throw new Error('openProxy answered another caller');
+      return call('openProxy', 'com.example.app 1234', payload);
+    });
+  }).then(function (result) {
+    if (result.returnValue !== true || !/^http:\/\/127\.0\.0\.1:\d+\/p\/[0-9a-f]{32}\/http\//.test(result.url)) {
+      throw new Error('openProxy failed: ' + JSON.stringify(result));
+    }
+    opened = result;
+    return proxyGet(result.url);
+  }).then(function (playlist) {
+    var lines = playlist.body.toString('utf8').split('\n');
+    var prefix = opened.url.slice(0, opened.url.lastIndexOf('/') + 1);
+    if (playlist.status !== 200 || lines[2] !== prefix + 'seg1.ts' ||
+        Number(playlist.headers['content-length']) !== playlist.body.length) {
+      throw new Error('proxy playlist: ' + playlist.status + ' ' + JSON.stringify(lines));
+    }
+    return proxyGet(lines[2]).then(function (full) {
+      if (full.status !== 200 || full.body.length !== segment.length) throw new Error('proxy segment failed');
+      var chain = Promise.resolve();
+      for (var i = 0; i < 20; i++) {
+        chain = chain.then(function () { return proxyGet(lines[2]); }).then(function (again) {
+          if (again.status !== 200) throw new Error('proxy keep-alive segment: ' + again.status);
+        });
+      }
+      return chain;
+    }).then(function () {
+      return new Promise(function (resolve, reject) {
+        http.get(require('url').parse(prefix + 'big.ts'), function (res) {
+          var length = 0;
+          res.pause();
+          setTimeout(function () {
+            res.on('data', function (chunk) { length += chunk.length; });
+            res.on('end', function () {
+              if (length === big.length) resolve();
+              else reject(new Error('paused proxy response cut at ' + length));
+            });
+            res.resume();
+          }, 600);
+        }).on('error', reject);
+      });
+    }).then(function () {
+      return call('touchProxy', 'com.example.app', { token: opened.token });
+    }).then(function (touched) {
+      if (touched.alive !== true || touched.manifestStatus !== 200 || touched.lastStatus !== 200 ||
+          !touched.cookies || typeof touched.cookies !== 'object') {
+        throw new Error('touchProxy: ' + JSON.stringify(touched));
+      }
+      return new Promise(function (resolve) {
+        strict.open({ url: 'http://localhost:' + origin.address().port + '/live/index.m3u8' }, resolve);
+      });
+    }).then(function (local) {
+      if (local.returnValue !== true) throw new Error('strict proxy open: ' + JSON.stringify(local));
+      return proxyGet(local.url);
+    }).then(function (refused) {
+      if (refused.status !== 403) throw new Error('proxy reached a loopback host name: ' + refused.status);
+      return proxyGet(lines[2], { Range: 'bytes=5-14' });
+    }).then(function (part) {
+      if (part.status !== 206 || part.body.length !== 10 ||
+          part.headers['content-range'] !== 'bytes 5-14/' + segment.length) {
+        throw new Error('proxy range: ' + part.status);
+      }
+      return new Promise(function (resolve, reject) {
+        var req = http.get(require('url').parse(lines[4]), function (res) {
+          res.once('data', function () { req.abort(); });
+        });
+        req.on('error', function () { /* aborted */ });
+        var started = Date.now();
+        (function poll() {
+          if (aborted) resolve();
+          else if (Date.now() - started > 3000) reject(new Error('proxy did not abort upstream'));
+          else setTimeout(poll, 20);
+        })();
+      });
+    });
+  }).then(function () {
+    return call('closeProxy', 'com.example.app', { token: opened.token });
+  }).then(function (closed) {
+    if (closed.closed !== true || !closed.cookies || typeof closed.cookies !== 'object') {
+      throw new Error('closeProxy failed');
+    }
+    return proxyGet(opened.url);
+  }).then(function (gone) {
+    if (gone.status !== 404) throw new Error('closed proxy session still served');
+  }).then(function () {
+    proxy.stop();
+    strict.stop();
+    origin.close();
+  }, function (error) {
+    proxy.stop();
+    strict.stop();
     origin.close();
     throw error;
   });

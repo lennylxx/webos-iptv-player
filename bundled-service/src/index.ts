@@ -7,15 +7,19 @@
  * - LAN setup and uploads over HTTP + Luna (lan/, setup/)
  * - Reminder alerts through dev-mode interactive createAlert (reminder/)
  * - Manifest fetch that carries the channel's headers (fetch/)
+ * - Loopback stream proxy that plays a header-gated stream (proxy/)
  *
  * Off webOS (local testing), it falls back to a direct upload HTTP
- * listener.
+ * listener and a loopback proxy on IPTV_PROXY_PORT (default 47390) whose
+ * POST /open, /touch, and /close stand in for the Luna methods;
+ * IPTV_PROXY_ALLOW_LOOPBACK=1 lets it reach an upstream on this machine.
  */
 
 import { registerLanService, startLanStandalone } from './lan/service';
 import { resolveDataDir } from './upload/store';
 import { registerReminderService } from './reminder/service';
 import { registerManifestFetchService } from './fetch/service';
+import { registerProxyService, startProxyStandalone } from './proxy/service';
 import { installServiceLog, serviceLogDir } from './service-log';
 import { createLogger } from './logger';
 
@@ -47,6 +51,7 @@ if (!Service) {
   log.info('webos-service not available (' + serviceLoadError +
     '), falling back to direct HTTP listener');
   startLanStandalone(DATA_DIR);
+  startProxyStandalone(process.env.IPTV_PROXY_PORT, process.env.IPTV_PROXY_ALLOW_LOOPBACK === '1');
 }
 
 if (Service) {
@@ -56,6 +61,7 @@ if (Service) {
     registerLanService(service, DATA_DIR);
     registerReminderService(service);
     registerManifestFetchService(service, APP_ID);
+    registerProxyService(service, APP_ID);
   } catch (e) {
     log.error('failed to register Luna service:', e);
     throw e;

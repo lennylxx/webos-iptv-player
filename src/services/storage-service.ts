@@ -1063,10 +1063,22 @@ export const StorageService = {
     set('fav_stream_keyed', true);
   },
 
+  // The user agent whose Luna answered it has no window lookup.
+  getLunaWindowUnsupported(): string | null {
+    const value = get<unknown>('luna_window_unsupported', null);
+    return typeof value === 'string' ? value : null;
+  },
+  setLunaWindowUnsupported(userAgent: string): void {
+    set('luna_window_unsupported', userAgent);
+  },
+
   getHeaderPlayback(): HeaderPlayback {
-    return get<unknown>('header_playback', 'luna') === 'off' ? 'off' : 'luna';
+    const mode = get<unknown>('header_playback', 'luna');
+    return mode === 'off' || mode === 'proxy' ? mode : 'luna';
   },
   setHeaderPlayback(mode: HeaderPlayback): void {
+    // A new setting gives Media service's window lookup another try.
+    if (mode !== this.getHeaderPlayback()) remove('luna_window_unsupported');
     set('header_playback', mode);
   },
 

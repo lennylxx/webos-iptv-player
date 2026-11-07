@@ -40,7 +40,7 @@ const {
     tzMode: 'device' as TzMode,
     channelCycleMode: 'global' as ChannelCycleMode,
     liveReconnectAttempts: 3,
-    headerPlayback: 'luna' as 'off' | 'luna',
+    headerPlayback: 'luna' as 'off' | 'luna' | 'proxy',
     numberEntryOsdTimeoutMs: 1200,
     playerOsdTimeoutMs: 5000,
     playlistRefreshHours: 6,
@@ -131,7 +131,7 @@ const {
       setTextSize: vi.fn((s: string) => { state.textSize = s; }),
       setTzMode: vi.fn(),
       setChannelCycleMode: vi.fn((m: ChannelCycleMode) => { state.channelCycleMode = m; }),
-      setHeaderPlayback: vi.fn((mode: 'off' | 'luna') => { state.headerPlayback = mode; }),
+      setHeaderPlayback: vi.fn((mode: 'off' | 'luna' | 'proxy') => { state.headerPlayback = mode; }),
       setLiveReconnectAttempts: vi.fn((attempts: number) => {
         state.liveReconnectAttempts = attempts;
       }),
@@ -1608,19 +1608,25 @@ describe('Settings.save', () => {
     expect(onSave).toHaveBeenCalledWith('apply');
   });
 
-  it('saves the HTTP headers mode and keeps Local proxy unselectable', () => {
+  it('saves the HTTP headers mode, Local proxy included', () => {
     state.playlists = [];
     settings.render();
     const option = (value: string) => container.querySelector<HTMLButtonElement>(`#header-playback [data-value="${value}"]`)!;
     expect(option('luna').classList.contains('active')).toBe(true);
-    expect(option('proxy').disabled).toBe(true);
-    expect(option('proxy').hasAttribute('data-focusable')).toBe(false);
+    expect(option('proxy').disabled).toBe(false);
+    expect(option('proxy').hasAttribute('data-focusable')).toBe(true);
 
     click('#header-playback [data-value="off"]');
     click('#save-settings');
 
     expect(storageMock.setHeaderPlayback).toHaveBeenCalledWith('off');
     expect(onSave).toHaveBeenCalledWith('apply');
+
+    click('#header-playback [data-value="proxy"]');
+    click('#save-settings');
+
+    expect(storageMock.setHeaderPlayback).toHaveBeenLastCalledWith('proxy');
+    expect(state.headerPlayback).toBe('proxy');
   });
 
   it('saves playlist and guide refresh intervals without forcing a data reload', () => {

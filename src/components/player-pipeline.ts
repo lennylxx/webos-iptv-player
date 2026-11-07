@@ -12,6 +12,15 @@ import {
 import { PlayReadyDrm } from '../services/playready-drm';
 import { loadShaka, type ShakaNamespaceLike } from '../services/shaka-loader';
 import { fetchManifestViaService } from '../services/manifest-service';
+import { StorageService } from '../services/storage-service';
+import {
+  closeStreamProxy,
+  openStreamProxy,
+  touchStreamProxy,
+  type StreamProxyCookies,
+  type StreamProxyResult,
+  type StreamProxyStatus,
+} from '../services/proxy-service';
 import { parseAudioRenditions } from '../utils/audio-tracks';
 import { FetchTextError, fetchFailureReason, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
@@ -50,6 +59,37 @@ const log = createLogger('Player');
 const win = window as unknown as Record<string, unknown>;
 
 type LunaRouteReason = 'url' | 'cache' | 'probe' | 'guess' | 'ua_only';
+
+// How far a channel with HTTP headers escalates when a step fails to start:
+// the element, then Media service, then the loopback proxy.
+type ChainStep = 'video' | 'luna' | 'proxy';
+
+// How loadSource came to this URL: the chain step it plays, and for the
+// loopback proxy, whose session-specific URL stands for it, the channel's own.
+interface SourceRoute {
+  step: ChainStep;
+  original?: string;
+}
+
+interface HeaderChain {
+  token: number;
+  url: string;
+  key: string;
+  extras: Record<string, string> | null;
+  opts: PipelineLoadOptions | undefined;
+  // The steps the setting allows and the channel can use, in order.
+  steps: ChainStep[];
+  step: ChainStep;
+  tried: ChainStep[];
+  startedAt: number;
+  won: boolean;
+  // The first step whose manifest read got a 2xx, and each step's failed status.
+  manifestOk: ChainStep | '';
+  manifestFailed: Partial<Record<ChainStep, number>>;
+  manifestOnceLogged: boolean;
+  // A proxy step's upstream status was read before the element's turn.
+  upstreamChecked: boolean;
+}
 
 // A manifest as read: its text, its final URL, and whether only the service could read it.
 interface ManifestRead {
@@ -190,6 +230,10 @@ export interface PlayerPipelineOptions {
   onManifest: (manifest: PipelineManifest) => void;
   /** Playback moved between Luna and the element mid-load; clocked renderers must restart. */
   onPlaybackPathChange: () => void;
+  /** A stream that had played moved to a step that has not: it counts as unstarted again. */
+  onStepRestarted?: () => void;
+  /** The current load's proxy session expired under it. */
+  onProxyExpired?: () => void;
 }
 
 // Node's HTTP client sends no User-Agent of its own, and many origins refuse
@@ -266,6 +310,19 @@ export class PlayerPipeline {
   private lunaPreparing = -1;
   private lunaSkipToken = -1; // one playback.luna.skipped event per load
   private headersOffToken = -1;
+  private proxyToken = '';
+  // The held session's load label and the cookies its jar refused so far.
+  private proxySession: { label: string; cookies: StreamProxyCookies } | null = null;
+  private proxyTouchTimer: ReturnType<typeof setInterval> | null = null;
+  // The failed proxy step's status read, which its session must outlive.
+  private proxyStatusPending: Promise<StreamProxyStatus | null> | null = null;
+  // The load whose proxy step waits on a teardown or a session open.
+  private proxyStarting = -1;
+  // A session opened while Luna tries the same load, ready if Luna fails.
+  private proxyOpen: { token: number; promise: Promise<StreamProxyResult> } | null = null;
+  private chain: HeaderChain | null = null;
+  // The step that played each channel after an earlier one failed.
+  private chainWinners = new Map<string, ChainStep>();
 
   constructor(private callbacks: PlayerPipelineOptions) {}
 
@@ -373,6 +430,12 @@ export class PlayerPipeline {
     if (!opts?.reload) this.lunaFellBack.clear();
     this.cancelManifest();
     this.destroyLoaders();
+    // The old session's source leaves before the session closes, so its
+    // refused requests do not fail the new load.
+    if (this.proxyToken) this.detachSource(videoEl);
+    this.closeProxy();
+    this.dropProxyOpen();
+    this.chain = this.planChain(url, extras, token, opts);
     this.videoLoadLabels.set(videoEl, label);
     this.playReadyDrm.release();
     this.activeDrm = '';
@@ -395,7 +458,7 @@ export class PlayerPipeline {
           label, `owner=(${teardown.label})`, `elapsedMs=${Date.now() - queuedAt}`);
       }
       this.msePending = false;
-      this.loadSource(url, extras, token, opts);
+      this.startChain(url, extras, token, opts);
     };
     if (teardown) {
       this.msePending = true;
@@ -419,6 +482,7 @@ export class PlayerPipeline {
     extras: Record<string, string> | null,
     token: number,
     opts?: PipelineLoadOptions,
+    route?: SourceRoute,
   ): void {
     const videoEl = this.videoEl;
     if (!videoEl) return;
@@ -441,8 +505,10 @@ export class PlayerPipeline {
         return;
       }
       const headers = opts?.headers ?? {};
+      // A User-Agent channel that played on Luna before starts there.
+      const lunaUa = this.chainFor(token)?.step === 'luna' && hasOnlyUserAgent(headers);
       const lunaHeaders = isHlsUrl || isDashUrl
-        ? this.lunaHeaders(url, headers, extras, token, false, isDashUrl ? 'dash' : 'hls') : null;
+        ? this.lunaHeaders(url, headers, extras, token, lunaUa, isDashUrl ? 'dash' : 'hls') : null;
       if (lunaHeaders) {
         if (isDashUrl) this.loadLunaDash(url, lunaHeaders, extras, token, 'url');
         else this.loadLuna(url, lunaHeaders, token, 'url');
@@ -455,7 +521,7 @@ export class PlayerPipeline {
           : 'application/vnd.apple.mpegurl';
         if (!isHlsUrl && !isDashUrl) this.noteLunaSkip(token, headers, 'non_hls');
         log.info('Selected webOS native playback', 'event=playback.path.native',
-          this.callbacks.playbackLabel(token),
+          this.callbacks.playbackLabel(token), ...this.viaProxy(token),
           'reason=url', '| webOS native | catchup:', this.callbacks.isCatchup(), '| MIME', mime);
         if (isDashUrl) {
           this.rememberUaRetry(url, headers, extras, token, mime);
@@ -469,12 +535,13 @@ export class PlayerPipeline {
         this.playNativeMime(url, mime);
         return;
       }
-      const routeKey = streamRouteKey(url);
+      // A proxy URL's token changes per play; the route belongs to the channel's URL.
+      const routeKey = streamRouteKey(route?.original ?? url);
       void getCachedStreamMime(routeKey).then(cachedMime => {
         if (token !== this.loadToken || !this.videoEl) return;
         const cachedDash = cachedMime === 'application/dash+xml';
         const cachedLunaHeaders = cachedMime === 'application/vnd.apple.mpegurl' || cachedDash
-          ? this.lunaHeaders(url, headers, extras, token, false, cachedDash ? 'dash' : 'hls') : null;
+          ? this.lunaHeaders(url, headers, extras, token, lunaUa, cachedDash ? 'dash' : 'hls') : null;
         if (cachedLunaHeaders) {
           if (cachedDash) this.loadLunaDash(url, cachedLunaHeaders, extras, token, 'cache');
           else this.loadLuna(url, cachedLunaHeaders, token, 'cache');
@@ -482,10 +549,13 @@ export class PlayerPipeline {
         }
         if (cachedMime) {
           if (cachedMime !== 'application/vnd.apple.mpegurl' && !cachedDash) {
+            if (this.toProxy(token, 'non_hls')) return;
             this.noteLunaSkip(token, headers, 'non_hls');
           }
+          // A Luna step that skipped the stream hands it to the proxy, not the bare element.
+          if (this.toProxy(token, 'luna_skipped')) return;
           log.info('Selected webOS native playback', 'event=playback.path.native',
-            this.callbacks.playbackLabel(token),
+            this.callbacks.playbackLabel(token), ...this.viaProxy(token),
             'reason=cache', '| webOS native | cached MIME', cachedMime,
             '| catchup:', this.callbacks.isCatchup());
           if (cachedMime === 'application/vnd.apple.mpegurl') {
@@ -510,14 +580,17 @@ export class PlayerPipeline {
           // unknown type tries Luna too; its fallback covers a wrong guess.
           const probedDash = mime === 'application/dash+xml';
           const probedLunaHeaders = mime === 'application/vnd.apple.mpegurl' || !contentType || probedDash
-            ? this.lunaHeaders(url, headers, extras, token, false, probedDash ? 'dash' : 'hls') : null;
+            ? this.lunaHeaders(url, headers, extras, token, lunaUa, probedDash ? 'dash' : 'hls') : null;
           if (probedLunaHeaders) {
             if (probedDash) this.loadLunaDash(url, probedLunaHeaders, extras, token, 'probe');
             else this.loadLuna(url, probedLunaHeaders, token, contentType ? 'probe' : 'guess', mime);
             return;
           }
+          if (contentType && mime !== 'application/vnd.apple.mpegurl' && !probedDash
+              && this.toProxy(token, 'non_hls')) return;
+          if (this.toProxy(token, 'luna_skipped')) return;
           log.info('Selected webOS native playback', 'event=playback.path.native',
-            this.callbacks.playbackLabel(token),
+            this.callbacks.playbackLabel(token), ...this.viaProxy(token),
             'reason=probe', '| webOS native | content-type:', contentType || '(none)',
             '| catchup:', this.callbacks.isCatchup(), '| MIME', mime || '(auto)');
           if (contentType && mime !== 'application/vnd.apple.mpegurl' && !probedDash) {
@@ -565,12 +638,12 @@ export class PlayerPipeline {
         '| isHls:', isHls, '| isTs:', isTs, '| isFlv:', isFlv, '| isDash:', isDash);
       if (isTs || isFlv) {
         log.info('Selected mpegts.js playback', 'event=playback.path.mpegts',
-          this.callbacks.playbackLabel(token),
+          this.callbacks.playbackLabel(token), ...this.viaProxy(token),
           'reason=probe');
         this.loadWithMpegts(url, isFlv, token);
       } else if (isDash) {
         log.info('Selected Shaka playback', 'event=playback.path.dash',
-          this.callbacks.playbackLabel(token),
+          this.callbacks.playbackLabel(token), ...this.viaProxy(token),
           'reason=probe');
         const configured = parseDrmConfig(extras);
         if (configured?.type === 'unsupported') {
@@ -586,7 +659,7 @@ export class PlayerPipeline {
         );
       } else if (isDirect) {
         log.info('Selected direct playback', 'event=playback.path.direct',
-          this.callbacks.playbackLabel(token),
+          this.callbacks.playbackLabel(token), ...this.viaProxy(token),
           'reason=probe');
         this.videoEl.src = url;
         this.videoEl.play().catch(e => log.warn('Direct play() rejected',
@@ -594,7 +667,7 @@ export class PlayerPipeline {
           this.callbacks.playbackLabel(token), 'path=direct', e));
       } else {
         log.info('Selected hls.js playback', 'event=playback.path.hls',
-          this.callbacks.playbackLabel(token),
+          this.callbacks.playbackLabel(token), ...this.viaProxy(token),
           'reason=probe');
         this.loadWithHls(url, extras, token);
       }
@@ -608,8 +681,430 @@ export class PlayerPipeline {
     this.loadToken++;
     this.cancelManifest();
     this.destroyLoaders();
+    this.closeProxy();
+    this.dropProxyOpen();
     this.playReadyDrm.release();
     this.activeDrm = '';
+  }
+
+  /** The current load plays through a loopback proxy session. */
+  isProxied(): boolean {
+    return this.proxyToken !== '';
+  }
+
+  /**
+   * The current load's step failed to start: try the next step its HTTP
+   * headers setting allows. False when none is left, or time ran out.
+   */
+  escalate(): boolean {
+    const chain = this.chainFor(this.loadToken);
+    if (!chain || chain.won || !this.videoEl) return false;
+    // A Luna step that already handed the stream to the element.
+    if (chain.step === 'luna' && !this.luna && this.lunaPreparing !== chain.token) {
+      chain.step = 'video';
+      if (chain.tried.indexOf('video') < 0) chain.tried.push('video');
+    }
+    this.reportStepFailure(chain);
+    return this.advance(chain, 'startup');
+  }
+
+  /**
+   * The current load escalates through header playback steps, or has only a
+   * step that sends headers: a reload reruns either past HEADER_CHAIN_CAP_MS.
+   */
+  isHeaderChain(): boolean {
+    const chain = this.chainFor(this.loadToken);
+    return !!chain && (chain.steps.length > 1 || chain.steps[0] !== 'video')
+      && this.callbacks.headerPlayback() !== 'off';
+  }
+
+  /** The current load has a step left to escalate to within HEADER_CHAIN_CAP_MS. */
+  canEscalate(): boolean {
+    const chain = this.chainFor(this.loadToken);
+    return !!chain && !chain.won && this.nextStep(chain) !== null
+      && Date.now() - chain.startedAt <= CONFIG.PLAYER.HEADER_CHAIN_CAP_MS;
+  }
+
+  /** A proxy step about to load, its session not open yet; the element sits detached. */
+  isProxyPending(): boolean {
+    return this.proxyStarting === this.loadToken;
+  }
+
+  /** The element played a frame; Luna reports its own start. */
+  notePlaying(): void {
+    const chain = this.chainFor(this.loadToken);
+    if (!chain || this.luna || chain.step === 'luna') return;
+    this.chainWon(chain);
+  }
+
+  private chainFor(token: number): HeaderChain | null {
+    const chain = this.chain;
+    return chain && chain.token === token ? chain : null;
+  }
+
+  private planChain(
+    url: string,
+    extras: Record<string, string> | null,
+    token: number,
+    opts: PipelineLoadOptions | undefined,
+  ): HeaderChain | null {
+    if (opts?.direct) return null;
+    const headers = opts?.headers ?? {};
+    const sendable = withoutHeaders(headers, tlsUnsafeHeaderNames(url, headers));
+    // The element cannot send Referer, Cookie, or other headers; only the
+    // proxy plays a URL with user:password the page refuses.
+    const needsHeaders = hasLunaHeaders(sendable);
+    const userAgentOnly = hasOnlyUserAgent(headers);
+    const credentials = /^http:/i.test(url) && hasUrlCredentials(url);
+    const proxy = (needsHeaders || userAgentOnly || credentials)
+      && this.callbacks.headerPlayback() === 'proxy';
+    const steps: ChainStep[] = [];
+    // Luna mode logs its own skips when the step runs.
+    if (proxy && (needsHeaders || userAgentOnly) && isWebOS() && this.lunaWindowUnsupported()) {
+      this.noteLunaSkip(token, headers, 'no_window_latched', userAgentOnly);
+    }
+    if (!needsHeaders && !(credentials && proxy)) steps.push('video');
+    if ((needsHeaders || userAgentOnly) && this.lunaPossible(url, extras)) steps.push('luna');
+    if (proxy) steps.push('proxy');
+    // The element still tries a stream whose server may not need the headers,
+    // unless the proxy was the last step that could send them.
+    if (steps.indexOf('video') < 0 && !(proxy && needsHeaders)) steps.push('video');
+    const key = streamRouteKey(url);
+    const remembered = this.chainWinners.get(key);
+    const step = remembered && steps.indexOf(remembered) >= 0 ? remembered : steps[0];
+    return {
+      token, url, key, extras, opts, steps, step,
+      tried: [step],
+      startedAt: Date.now(),
+      won: false,
+      manifestOk: '',
+      manifestFailed: {},
+      manifestOnceLogged: false,
+      upstreamChecked: false,
+    };
+  }
+
+  // Luna steps known to fail before they start; lunaHeaders logs the reason.
+  private lunaPossible(url: string, extras: Record<string, string> | null): boolean {
+    if (!isWebOS() || this.lunaOff || this.lunaWindowUnsupported() || this.lunaFailed.has(url)
+        || this.lunaFellBack.has(url)) return false;
+    const mime = streamUrlMime(url);
+    if (mime === 'video/mp2t' || mime === 'video/x-flv') return false;
+    // An extension-less URL may still classify as DASH, the one format Luna
+    // plays with PlayReady.
+    return !lunaDrmSkip(parseDrmConfig(extras), mime === 'application/vnd.apple.mpegurl' ? 'hls' : 'dash');
+  }
+
+  private startChain(
+    url: string,
+    extras: Record<string, string> | null,
+    token: number,
+    opts: PipelineLoadOptions | undefined,
+  ): void {
+    const chain = this.chainFor(token);
+    if (chain?.step === 'proxy') {
+      this.loadThroughProxy(chain);
+      return;
+    }
+    this.loadSource(url, extras, token, opts, chain ? { step: chain.step } : undefined);
+  }
+
+  private nextStep(chain: HeaderChain): ChainStep | null {
+    for (const step of chain.steps) {
+      if (chain.tried.indexOf(step) < 0) return step;
+    }
+    return null;
+  }
+
+  /**
+   * Moves the chain to its next untried step. `announce` runs just before
+   * that step loads, or with 'none' when no step is left.
+   */
+  private advance(
+    chain: HeaderChain,
+    cause: string,
+    announce?: (next: ChainStep | 'none') => void,
+  ): boolean {
+    const from = chain.step;
+    const label = this.callbacks.playbackLabel(chain.token);
+    for (let next = this.nextStep(chain); next; next = this.nextStep(chain)) {
+      chain.tried.push(next);
+      const pendingStatus = this.proxyStatusPending;
+      if (from === 'proxy' && next === 'video' && pendingStatus && !chain.upstreamChecked) {
+        chain.tried.pop();
+        chain.upstreamChecked = true;
+        void pendingStatus.then(status => {
+          // Another trigger already moved the chain on while the status was read.
+          if (chain.token !== this.loadToken || chain.step !== 'proxy'
+              || chain.tried.indexOf('video') >= 0) return;
+          if (status && status.lastStatus >= 200 && status.lastStatus < 300) {
+            chain.tried.push('video');
+            // The proxy reached the server, so the element without headers cannot.
+            log.warn('Header playback stopped escalating', 'event=playback.chain.stopped', label,
+              'step=proxy', 'next=video', `last=${String(status.lastStatus)}`);
+            announce?.('none');
+            this.callbacks.onError();
+            return;
+          }
+          if (!this.advance(chain, cause, announce)) this.callbacks.onError();
+        });
+        return true;
+      }
+      const elapsedMs = Date.now() - chain.startedAt;
+      if (elapsedMs > CONFIG.PLAYER.HEADER_CHAIN_CAP_MS) {
+        log.warn('Header playback stopped escalating', 'event=playback.chain.capped', label,
+          `step=${from}`, `next=${next}`, `elapsedMs=${String(elapsedMs)}`);
+        break;
+      }
+      chain.step = next;
+      // A User-Agent retry knows its probed type; any other Luna step loads as usual.
+      if (next === 'luna' && from === 'video' && this.uaRetry) {
+        announce?.(next);
+        if (this.retryWithLuna()) return true;
+        chain.step = from;
+        continue;
+      }
+      announce?.(next);
+      if (next !== 'luna') {
+        log.warn('Header playback escalated', 'event=playback.chain.escalated', label,
+          `from=${from}`, `to=${next}`, `cause=${cause}`, `elapsedMs=${String(elapsedMs)}`);
+      }
+      this.callbacks.onPlaybackPathChange();
+      this.cancelManifest();
+      this.destroyLoaders();
+      this.uaRetry = null;
+      if (next === 'proxy') this.proxyStarting = chain.token;
+      const go = () => {
+        if (chain.token !== this.loadToken || !this.videoEl) return;
+        if (next === 'proxy') {
+          this.loadThroughProxy(chain);
+          return;
+        }
+        this.closeProxy();
+        if (this.videoEl) this.detachSource(this.videoEl);
+        this.loadSource(chain.url, chain.extras, chain.token, chain.opts, { step: next as ChainStep });
+      };
+      const teardown = this.engineTeardown;
+      if (teardown) {
+        this.msePending = true;
+        void teardown.promise.then(() => {
+          this.msePending = false;
+          go();
+        }, () => {
+          this.msePending = false;
+          if (this.proxyStarting === chain.token) this.proxyStarting = -1;
+          if (chain.token === this.loadToken) this.callbacks.onError();
+        });
+      } else {
+        go();
+      }
+      return true;
+    }
+    announce?.('none');
+    return false;
+  }
+
+  /** A Luna step that cannot play the stream gives it to the proxy, when that is next. */
+  private toProxy(token: number, cause: string, announce?: () => void): boolean {
+    const chain = this.chainFor(token);
+    if (!chain || chain.step !== 'luna' || this.nextStep(chain) !== 'proxy') return false;
+    if (chain.won) {
+      // A Luna stream that played, then failed: the proxy still sends the
+      // headers, and its cap counts from now. The proxy wins the route only
+      // once it plays.
+      chain.won = false;
+      chain.startedAt = Date.now();
+      this.chainWinners.delete(chain.key);
+    }
+    return this.advance(chain, cause, next => { if (next === 'proxy') announce?.(); });
+  }
+
+  private chainWon(chain: HeaderChain): void {
+    if (chain.won || chain.token !== this.loadToken) return;
+    chain.won = true;
+    // The element without the channel's headers is only a last resort, never a start.
+    if (chain.step === chain.steps[0] || (chain.step === 'video' && this.chainNeedsHeaders(chain))) {
+      this.chainWinners.delete(chain.key);
+    } else {
+      this.chainWinners.set(chain.key, chain.step);
+    }
+    if (chain.step !== 'proxy') this.dropProxyOpen();
+  }
+
+  private chainNeedsHeaders(chain: HeaderChain): boolean {
+    const headers = chain.opts?.headers ?? {};
+    return hasLunaHeaders(withoutHeaders(headers, tlsUnsafeHeaderNames(chain.url, headers)));
+  }
+
+  // A one-time manifest URL: an earlier step read it, so a later one cannot.
+  private reportStepFailure(chain: HeaderChain): void {
+    const step = chain.step;
+    const proxyToken = this.proxyToken;
+    if (step === 'proxy' && proxyToken) {
+      const label = this.callbacks.playbackLabel(chain.token);
+      const pending = touchStreamProxy(proxyToken).then(status => {
+        if (!status) return null;
+        this.noteProxyCookies(proxyToken, status.cookies);
+        log.warn('Local proxy step failed', 'event=playback.proxy.upstream', label,
+          `last=${String(status.lastStatus)}`, `manifest=${String(status.manifestStatus)}`);
+        this.checkManifestOnce(chain, step, status.manifestStatus || chain.manifestFailed.proxy || 0);
+        return status;
+      });
+      this.proxyStatusPending = pending;
+      return;
+    }
+    this.checkManifestOnce(chain, step, chain.manifestFailed[step] ?? 0);
+  }
+
+  private checkManifestOnce(chain: HeaderChain, step: ChainStep, status: number): void {
+    if (chain.manifestOnceLogged || status < 400 || !chain.manifestOk || chain.manifestOk === step) return;
+    chain.manifestOnceLogged = true;
+    log.warn('Manifest refused after an earlier step read it', 'event=playback.chain.manifest_once',
+      this.callbacks.playbackLabel(chain.token), `step=${step}`, `status=${String(status)}`,
+      `earlier=${chain.manifestOk}`);
+  }
+
+  private viaProxy(token: number): string[] {
+    return this.proxyToken && this.chainFor(token)?.step === 'proxy' ? ['via=proxy'] : [];
+  }
+
+  // Stops the element's source, so it neither keeps playing nor errors
+  // under the load that replaces it.
+  private detachSource(videoEl: HTMLVideoElement): void {
+    if (!videoEl.getAttribute('src') && !videoEl.querySelector('source')) return;
+    videoEl.removeAttribute('src');
+    videoEl.innerHTML = '';
+    this.nativePlaySeq++;
+    videoEl.load();
+  }
+
+  private closeProxy(): void {
+    const proxyToken = this.proxyToken;
+    const session = this.proxySession;
+    this.proxyToken = '';
+    this.proxySession = null;
+    if (this.proxyTouchTimer !== null) {
+      clearInterval(this.proxyTouchTimer);
+      this.proxyTouchTimer = null;
+    }
+    const pending = this.proxyStatusPending;
+    this.proxyStatusPending = null;
+    if (!proxyToken) return;
+    const close = () => Promise.resolve(closeStreamProxy(proxyToken)).then(cookies => {
+      if (session) PlayerPipeline.logProxyCookies(session.label, cookies ?? session.cookies);
+    });
+    if (pending) void pending.then(close, close);
+    else void close();
+  }
+
+  private noteProxyCookies(proxyToken: string, cookies: StreamProxyCookies): void {
+    if (this.proxySession && proxyToken === this.proxyToken) this.proxySession.cookies = cookies;
+  }
+
+  // Once per session and reason, when the session ends: the service's own
+  // log is not in a diag report.
+  private static logProxyCookies(label: string, cookies: StreamProxyCookies): void {
+    Object.keys(cookies).sort().forEach(reason => {
+      log.warn('Local proxy did not keep a cookie', 'event=playback.proxy.cookie', label,
+        `reason=${reason}`, `count=${String(cookies[reason])}`);
+    });
+  }
+
+  private dropProxyOpen(): void {
+    const pending = this.proxyOpen;
+    this.proxyOpen = null;
+    if (pending) {
+      void pending.promise.then(result => {
+        if (result.ok) void closeStreamProxy(result.token);
+      });
+    }
+  }
+
+  private openProxy(chain: HeaderChain): Promise<StreamProxyResult> {
+    const headers = chain.opts?.headers ?? {};
+    return openStreamProxy(serviceRequestUrl(chain.url), withDefaultUserAgent(headers));
+  }
+
+  // While Luna tries, a proxy session opens too, so a Luna failure does not
+  // wait for it.
+  private preopenProxy(token: number): void {
+    const chain = this.chainFor(token);
+    if (!chain || this.proxyOpen || chain.steps.indexOf('proxy') < 0
+        || chain.tried.indexOf('proxy') >= 0) return;
+    this.proxyOpen = { token, promise: this.openProxy(chain) };
+  }
+
+  // The service expires a session no request used for two minutes; a paused
+  // or fully buffered player still holds it.
+  private startProxyTouch(token: number): void {
+    const proxyToken = this.proxyToken;
+    this.proxyTouchTimer = setInterval(() => {
+      void touchStreamProxy(proxyToken).then(status => {
+        if (!status || proxyToken !== this.proxyToken) return;
+        if (status.alive) {
+          this.noteProxyCookies(proxyToken, status.cookies);
+          return;
+        }
+        if (this.proxyTouchTimer !== null) clearInterval(this.proxyTouchTimer);
+        this.proxyTouchTimer = null;
+        log.warn('Local proxy session expired', 'event=playback.proxy.expired',
+          this.callbacks.playbackLabel(token));
+        const session = this.proxySession;
+        this.proxySession = null;
+        if (session) PlayerPipeline.logProxyCookies(session.label, session.cookies);
+        // The element would wait on 404s without ever erroring.
+        if (token === this.loadToken) this.callbacks.onProxyExpired?.();
+      });
+    }, CONFIG.PLAYER.PROXY_TOUCH_INTERVAL);
+  }
+
+  /**
+   * Opens a loopback proxy session that sends the channel's headers, then
+   * plays its URL on the element or an MSE library without them. A session
+   * that cannot open moves the chain to its next step.
+   */
+  private loadThroughProxy(chain: HeaderChain): void {
+    const { token, url, extras } = chain;
+    const videoEl = this.videoEl;
+    if (!videoEl) return;
+    this.detachSource(videoEl);
+    const started = Date.now();
+    const pending = this.proxyOpen;
+    const opening = pending?.token === token ? pending.promise : this.openProxy(chain);
+    if (pending?.token === token) this.proxyOpen = null;
+    this.proxyStarting = token;
+    void opening.then(result => {
+      if (this.proxyStarting === token) this.proxyStarting = -1;
+      if (token !== this.loadToken || !this.videoEl || chain.step !== 'proxy') {
+        if (result.ok) void closeStreamProxy(result.token);
+        return;
+      }
+      const label = this.callbacks.playbackLabel(token);
+      if (!result.ok) {
+        const advanced = this.advance(chain, 'proxy_failed', next => {
+          log.warn('Local proxy unavailable', 'event=playback.proxy.failed', label,
+            `reason=${result.reason}`, `fallback=${next}`);
+        });
+        if (advanced) return;
+        // Reloading reopens the same failing session; no step is left to try.
+        log.warn('Header playback stopped escalating', 'event=playback.chain.stopped', label,
+          'step=proxy', 'next=none', `reason=${result.reason}`);
+        this.callbacks.onError('unsupported');
+        return;
+      }
+      this.proxyToken = result.token;
+      this.proxySession = { label, cookies: {} };
+      this.startProxyTouch(token);
+      const mime = streamUrlMime(url);
+      const format = mime === 'application/vnd.apple.mpegurl' ? 'hls'
+        : mime === 'application/dash+xml' ? 'dash'
+        : mime === 'video/mp2t' ? 'ts'
+        : mime === 'video/x-flv' ? 'flv' : 'unknown';
+      log.info('Local proxy opened', 'event=playback.proxy.opened', label,
+        `format=${format}`, `elapsedMs=${String(Date.now() - started)}`);
+      this.loadSource(result.url, extras, token, { ...chain.opts, headers: {} },
+        { step: 'proxy', original: url });
+    });
   }
 
   private destroyLoaders(): void {
@@ -720,9 +1215,13 @@ export class PlayerPipeline {
     format: 'hls' | 'dash' = 'hls',
   ): Record<string, string> | null {
     if (!isWebOS() || !(userAgentOnly ? hasOnlyUserAgent(headers) : hasLunaHeaders(headers))) return null;
-    const otherSkip = this.lunaOff ? 'latched_off'
+    const chain = this.chainFor(token);
+    const otherSkip = this.lunaWindowUnsupported() ? 'no_window_latched'
+      : this.lunaOff ? 'latched_off'
       : this.lunaFailed.has(url) ? 'failed_before'
       : this.lunaFellBack.has(url) ? 'fell_back'
+      : chain && chain.step !== 'luna' && chain.steps.indexOf('luna') >= 0
+        ? chain.tried.indexOf('luna') >= 0 ? 'tried' : 'remembered'
       : lunaDrmSkip(parseDrmConfig(extras), format);
     const unsafe = tlsUnsafeHeaderNames(url, headers);
     if (this.callbacks.headerPlayback() === 'off') {
@@ -769,7 +1268,7 @@ export class PlayerPipeline {
    * A User-Agent-only channel that failed to start on the element, where the
    * page's own User-Agent replaces the channel's, gets one Luna try per load.
    */
-  retryWithLuna(): boolean {
+  private retryWithLuna(): boolean {
     const retry = this.uaRetry;
     this.uaRetry = null;
     const videoEl = this.videoEl;
@@ -799,6 +1298,20 @@ export class PlayerPipeline {
     if (dash) this.loadLunaDash(retry.url, headers, retry.extras, retry.token, 'ua_only');
     else this.loadLuna(retry.url, headers, retry.token, 'ua_only', retry.mime);
     return true;
+  }
+
+  // Read each time: a change of the header playback setting clears it.
+  private lunaWindowUnsupported(): boolean {
+    return StorageService.getLunaWindowUnsupported() === navigator.userAgent;
+  }
+
+  // Kept across launches until the header playback setting changes; a
+  // timeout or any other error stays on the per-session count.
+  private latchNoWindow(code: number, label: string): void {
+    if (this.lunaWindowUnsupported()) return;
+    StorageService.setLunaWindowUnsupported(navigator.userAgent);
+    log.warn('Luna window lookup unsupported on this firmware', 'event=playback.luna.window_unsupported',
+      label, 'stage=app_info', `code=${String(code)}`);
   }
 
   // A load UMS rejects is permanent for the session; a stream error, a
@@ -844,15 +1357,30 @@ export class PlayerPipeline {
       `drm=${dash?.clientId ? 'playready' : drmUnknown ? 'unknown' : 'none'}`,
       ...(drmUnknown ? ['mpd=unreadable'] : []));
     const fallBack = (fallback: LunaFallbackReason, code: number, stage: string): void => {
-      log.warn('Luna playback fell back to the video element',
-        'event=playback.luna.fallback', label,
-        `reason=${fallback}`, `code=${String(code)}`, `stage=${stage}`);
-      if (token !== this.loadToken || videoEl !== this.videoEl) return;
+      const note = (to: string): void => {
+        log.warn(`Luna playback fell back to ${to}`,
+          'event=playback.luna.fallback', label,
+          `reason=${fallback}`, `code=${String(code)}`, `stage=${stage}`);
+      };
+      if (token !== this.loadToken || videoEl !== this.videoEl) {
+        note('nothing: its load was replaced');
+        return;
+      }
+      const chain = this.chainFor(token);
+      if (chain) this.reportStepFailure(chain);
+      if (this.toProxy(token, `luna_${fallback}`, () => note('the local proxy'))) return;
       this.callbacks.onPlaybackPathChange();
       // The element already failed this stream once.
-      if (reason === 'ua_only') {
+      if (reason === 'ua_only' || (chain && (chain.tried.indexOf('video') >= 0
+          || chain.steps.indexOf('video') < 0))) {
+        note('nothing: every step failed');
         this.callbacks.onError();
         return;
+      }
+      note('the video element');
+      if (chain) {
+        chain.step = 'video';
+        chain.tried.push('video');
       }
       this.cancelManifest();
       if (dash) {
@@ -881,9 +1409,10 @@ export class PlayerPipeline {
       transport: dash ? 'MPEG-DASH' : 'HLS',
       playReadyClientId: dash?.clientId || undefined,
       label,
-      onFallback: (fallback, code, stage) => {
+      onFallback: (fallback, code, stage, unsupported) => {
         if (this.luna !== luna) return;
         this.luna = null;
+        if (unsupported) this.latchNoWindow(code, label);
         if (dash?.guessedAfter) this.lunaPlayReadyUrls.delete(url);
         const current = token === this.loadToken && videoEl === this.videoEl;
         // An MPD unreadable without headers hid its DRM: a load that failed
@@ -921,9 +1450,20 @@ export class PlayerPipeline {
         fallBack(fallback, code, stage);
       },
       onStarted: () => {
+        const chain = this.chainFor(token);
+        if (chain && this.luna === luna) this.chainWon(chain);
         this.lunaTransientFailures.delete(url);
         this.lunaNoWindows = 0;
         if (dash?.guessedAfter) this.lunaPlayReadyUrls.set(url, dash.guessedAfter);
+      },
+      // A pipeline error after the start is no failed start: it counts toward
+      // no Luna fallback, but the proxy may still send the headers.
+      onPlaybackError: () => {
+        if (this.luna !== luna || token !== this.loadToken || videoEl !== this.videoEl
+          || !this.toProxy(token, 'luna_played_error')) return false;
+        this.callbacks.onStepRestarted?.();
+        this.callbacks.onPlaybackPathChange();
+        return true;
       },
       onAudioTracks: () => {
         if (this.luna === luna) this.callbacks.onAudioTracksUpdated();
@@ -931,6 +1471,7 @@ export class PlayerPipeline {
     });
     this.luna = luna;
     this.lunaUrl = url;
+    this.preopenProxy(token);
     luna.setDisplay(this.lunaDisplay);
     this.nativePlaySeq++;
     luna.start();
@@ -1009,6 +1550,7 @@ export class PlayerPipeline {
       }
     }, headers).then(parsed => {
       if (handled || token !== this.loadToken || !this.videoEl) return;
+      if (this.toProxy(token, skipped || 'luna_skipped')) return;
       if (reason === 'ua_only') {
         this.callbacks.onError();
         return;
@@ -1041,7 +1583,7 @@ export class PlayerPipeline {
         } : {}),
       });
     log.info('Native DASH source', 'event=playback.path.native.dash',
-      this.callbacks.playbackLabel(this.loadToken),
+      this.callbacks.playbackLabel(this.loadToken), ...this.viaProxy(this.loadToken),
       `hint=${bare && !clientId ? 'none' : 'mediaOption'}`,
       `drm=${clientId ? 'playready' : 'none'}`);
     this.playNative(url, type);
@@ -1434,6 +1976,9 @@ export class PlayerPipeline {
     const controller = new AbortController();
     const started = Date.now();
     const maxBytes = dash ? CONFIG.PLAYER.MPD_MAX_BYTES : CONFIG.PLAYER.MANIFEST_MAX_BYTES;
+    const chain = this.chainFor(loadToken);
+    const step: ChainStep | null = !chain ? null
+      : lunaHeaders ? 'luna' : chain.step === 'luna' ? 'video' : chain.step;
     this.manifestController?.abort();
     this.manifestController = controller;
     try {
@@ -1466,6 +2011,7 @@ export class PlayerPipeline {
       if (dash && !isMpdText(text)) {
         throw new FetchTextError('invalid_content', 'Response is not an MPD');
       }
+      if (chain && step && !chain.manifestOk) chain.manifestOk = step;
       log.debug('Manifest fetched', 'event=playback.manifest.fetched',
         this.callbacks.playbackLabel(loadToken),
         `format=${format} bytes=${String(text.length)} elapsed=${String(Date.now() - started)}ms`);
@@ -1479,6 +2025,9 @@ export class PlayerPipeline {
       return parsed;
     } catch (e) {
       if (controller.signal.aborted) return null;
+      if (chain && step && e instanceof FetchTextError && e.code === 'http') {
+        chain.manifestFailed[step] = e.status;
+      }
       if (hold) {
         await hold(null, null);
         if (seq !== this.manifestSeq) return null;

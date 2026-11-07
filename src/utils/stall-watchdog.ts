@@ -24,6 +24,8 @@ export interface StallWatchdogOptions {
   // True when another owner (a start deadline) handles this stall; the
   // reload budget is left untouched.
   holdStall?: (recovery: StallRecovery) => boolean;
+  // False when a reload cannot help: the recovery escalates at once.
+  canReload?: () => boolean;
   pollMs: number;
   freezeTicks: number;
   maxReloads: number;
@@ -39,6 +41,7 @@ export class StallWatchdog {
   private readonly onReload: (recovery: StallRecovery) => void;
   private readonly onEscalate: (recovery: StallRecovery) => void;
   private readonly holdStall: (recovery: StallRecovery) => boolean;
+  private readonly canReload: () => boolean;
   private readonly pollMs: number;
   private readonly freezeTicks: number;
   private maxReloads: number;
@@ -53,6 +56,7 @@ export class StallWatchdog {
     this.onReload = opts.onReload;
     this.onEscalate = opts.onEscalate;
     this.holdStall = opts.holdStall ?? (() => false);
+    this.canReload = opts.canReload ?? (() => true);
     this.pollMs = opts.pollMs;
     this.freezeTicks = opts.freezeTicks;
     this.maxReloads = opts.maxReloads;
@@ -118,7 +122,7 @@ export class StallWatchdog {
       reloadCount: this.reloadCount,
       maxReloads: this.maxReloads,
     };
-    if (this.reloadCount < this.maxReloads) {
+    if (this.reloadCount < this.maxReloads && this.canReload()) {
       recovery.reloadCount = ++this.reloadCount;
       this.onReload(recovery);
       return true;

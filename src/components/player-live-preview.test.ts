@@ -6,8 +6,10 @@ const { pipeline, tracks, osd, playlist, health } = vi.hoisted(() => ({
   pipeline: {
     load: vi.fn(), destroy: vi.fn(), setVideoElement: vi.fn(),
     currentLoadToken: vi.fn(() => 1), videoLabel: vi.fn(() => 'video'),
-    isLunaActive: vi.fn(() => false), isLunaPending: vi.fn(() => false),
-    isLunaStarting: vi.fn(() => false), lunaClock: vi.fn(() => null), setLunaDisplay: vi.fn(), lunaStreamUrl: vi.fn(() => ''), retryWithLuna: vi.fn(() => false),
+    isLunaActive: vi.fn(() => false), isLunaPending: vi.fn(() => false), isProxyPending: vi.fn(() => false),
+    canEscalate: vi.fn(() => false),
+    isLunaStarting: vi.fn(() => false), lunaClock: vi.fn(() => null), setLunaDisplay: vi.fn(), lunaStreamUrl: vi.fn(() => ''), escalate: vi.fn(() => false),
+    notePlaying: vi.fn(), isProxied: vi.fn(() => false),
   },
   tracks: {
     resetForLoad: vi.fn(), suspend: vi.fn(), stop: vi.fn(), attachVod: vi.fn(),
@@ -323,6 +325,20 @@ describe('Player live preview', () => {
       expect(pipeline.load).toHaveBeenCalledOnce();
     } finally {
       pipeline.isLunaPending.mockReturnValue(false);
+    }
+  });
+
+  it('unloads a stream whose proxy session is still opening on suspend and restarts it on resume', () => {
+    player.play(0);
+    pipeline.isProxyPending.mockReturnValue(true);
+    pipeline.load.mockClear();
+    try {
+      player.suspend();
+      expect(pipeline.destroy).toHaveBeenCalled();
+      player.resume();
+      expect(pipeline.load).toHaveBeenCalledOnce();
+    } finally {
+      pipeline.isProxyPending.mockReturnValue(false);
     }
   });
 

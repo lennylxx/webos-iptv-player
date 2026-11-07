@@ -33,6 +33,7 @@ vi.mock('../services/storage-service', () => ({
     getSubtitleOffset: vi.fn(() => 0), setSubtitleOffset: vi.fn(),
     getChannelCycleMode: vi.fn(() => 'global'),
     getLiveReconnectAttempts: vi.fn(() => 3),
+    getHeaderPlayback: vi.fn(() => 'off'),
     getPlayerOsdTimeoutMs: vi.fn(() => 5000),
     getPlaylists: vi.fn(() => [{
       id: 'x',
@@ -920,7 +921,7 @@ describe('Player live playback', () => {
     expect(line).not.toContain(CONFIG.PLAYER.LUNA_MEDIA_PLACEHOLDER);
   });
 
-  it('hands a channel that never started to a Luna retry instead of reconnecting', () => {
+  it('hands a channel that never started to the next header step instead of reconnecting', () => {
     playlistMock.channels = [{}, {}];
     HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
     HTMLMediaElement.prototype.load = vi.fn();
@@ -928,8 +929,8 @@ describe('Player live playback', () => {
     container.appendChild(video);
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     player.init(video);
-    const pipeline = (player as unknown as { pipeline: { retryWithLuna(): boolean } }).pipeline;
-    const retry = vi.spyOn(pipeline, 'retryWithLuna').mockReturnValue(true);
+    const pipeline = (player as unknown as { pipeline: { escalate(): boolean } }).pipeline;
+    const retry = vi.spyOn(pipeline, 'escalate').mockReturnValue(true);
     player.play(0);
 
     video.dispatchEvent(new Event('error'));
@@ -944,6 +945,261 @@ describe('Player live playback', () => {
     expect(retry).not.toHaveBeenCalled();
     expect(error.mock.calls.map(args => args.join(' ')).join('\n'))
       .toContain('event=playback.video.error');
+  });
+
+  it('reopens a proxied stream that had played once, then takes the normal error path', () => {
+    playlistMock.channels = [{}, {}];
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.load = vi.fn();
+    video = document.createElement('video');
+    container.appendChild(video);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    player.init(video);
+    const internals = player as unknown as {
+      pipeline: { isProxied(): boolean };
+      reloadCurrentStream(): void;
+    };
+    vi.spyOn(internals.pipeline, 'isProxied').mockReturnValue(true);
+    const reload = vi.spyOn(internals, 'reloadCurrentStream').mockImplementation(() => {});
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+
+    video.dispatchEvent(new Event('error'));
+
+    expect(reload).toHaveBeenCalledOnce();
+    expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toContain('event=playback.proxy.reopen');
+    expect(error.mock.calls.map(args => args.join(' ')).join('\n'))
+      .not.toContain('event=playback.video.error');
+
+    video.dispatchEvent(new Event('error'));
+    expect(reload).toHaveBeenCalledOnce();
+    expect(error.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toContain('event=playback.video.error');
+  });
+
+  it('does not reopen a proxy session for a stream that never started', () => {
+    playlistMock.channels = [{}, {}];
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.load = vi.fn();
+    video = document.createElement('video');
+    container.appendChild(video);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    player.init(video);
+    const internals = player as unknown as {
+      pipeline: { isProxied(): boolean };
+      reloadCurrentStream(): void;
+      onStartupFailure(failure: 'unsupported', probe: { readyState: number; networkState: number }, ms: number): void;
+    };
+    vi.spyOn(internals.pipeline, 'isProxied').mockReturnValue(true);
+    const reload = vi.spyOn(internals, 'reloadCurrentStream').mockImplementation(() => {});
+    player.play(0);
+
+    internals.onStartupFailure('unsupported', { readyState: 0, networkState: 2 }, 10000);
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+      .not.toContain('event=playback.proxy.reopen');
+    expect(error.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toContain('event=playback.video.error');
+  });
+
+  it('treats the proxy step a played Luna stream moved to as unstarted', () => {
+    playlistMock.channels = [{}, {}];
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    video = document.createElement('video');
+    container.appendChild(video);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    player.init(video);
+    const internals = player as unknown as {
+      pipeline: {
+        isProxied(): boolean; isHeaderChain(): boolean;
+        callbacks: { onStepRestarted(): void };
+      };
+      reloadCurrentStream(): void;
+      startupWatchdog: { start(): void };
+    };
+    vi.spyOn(internals.pipeline, 'isProxied').mockReturnValue(true);
+    vi.spyOn(internals.pipeline, 'isHeaderChain').mockReturnValue(true);
+    const reload = vi.spyOn(internals, 'reloadCurrentStream').mockImplementation(() => {});
+    const watchdog = vi.spyOn(internals.startupWatchdog, 'start');
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    watchdog.mockClear();
+
+    internals.pipeline.callbacks.onStepRestarted();
+    expect(watchdog).toHaveBeenCalled();
+    playlistMock.getByIndex.mockClear();
+    video.dispatchEvent(new Event('error'));
+    vi.advanceTimersByTime(2000);
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+      .not.toContain('event=playback.proxy.reopen');
+    expect(playlistMock.getByIndex).toHaveBeenCalledWith(1);
+    expect(error.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toMatch(/event=playback\.recovery\.exhausted .*chain=unstarted/);
+  });
+
+  it('reconnects a live channel that played when its reload finds the source gone', () => {
+    playlistMock.channels = [{}, {}];
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    video = document.createElement('video');
+    container.appendChild(video);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    player.init(video);
+    const internals = player as unknown as {
+      reloadCurrentStream(): void;
+      onStartupFailure(failure: 'unsupported', probe: { readyState: number; networkState: number }, ms: number): void;
+    };
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    internals.reloadCurrentStream();
+    playlistMock.getByIndex.mockClear();
+
+    internals.onStartupFailure('unsupported', { readyState: 0, networkState: 3 }, 500);
+    vi.advanceTimersByTime(2000);
+
+    expect(playlistMock.getByIndex).not.toHaveBeenCalledWith(1);
+    expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toMatch(/event=playback\.recovery\.reload .*cause=error .*reloads=1\//);
+  });
+
+  it('gives up on a header channel no step started instead of rerunning its chain', () => {
+    playlistMock.channels = [{}, {}];
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    video = document.createElement('video');
+    container.appendChild(video);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    player.init(video);
+    const pipeline = (player as unknown as { pipeline: { isHeaderChain(): boolean } }).pipeline;
+    vi.spyOn(pipeline, 'isHeaderChain').mockReturnValue(true);
+    player.play(0);
+    playlistMock.getByIndex.mockClear();
+
+    video.dispatchEvent(new Event('error'));
+    vi.advanceTimersByTime(2000);
+
+    expect(container.querySelector('video')).toBe(video);
+    expect(playlistMock.getByIndex).toHaveBeenCalledWith(1);
+    expect(error.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toMatch(/event=playback\.recovery\.exhausted .*cause=error .*chain=unstarted/);
+  });
+
+  it('fails a channel only the proxy could play at once when the proxy is unavailable', async () => {
+    playlistMock.channels = [{}, {}];
+    playlistMock.getByIndex.mockReturnValue({ ...CHANNEL, httpHeaders: { Referer: 'http://host/' } });
+    vi.mocked(StorageService.getHeaderPlayback).mockReturnValue('proxy');
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      player.play(0);
+      await vi.waitFor(() => expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+        .toContain('event=playback.chain.stopped'));
+      playlistMock.getByIndex.mockClear();
+      vi.advanceTimersByTime(10000);
+
+      expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+        .not.toContain('event=playback.recovery.reload');
+      expect(error.mock.calls.map(args => args.join(' ')).join('\n')
+        .match(/event=playback\.video\.error/g)).toHaveLength(1);
+      expect(playlistMock.getByIndex).toHaveBeenCalledWith(1);
+    } finally {
+      vi.mocked(StorageService.getHeaderPlayback).mockReturnValue('off');
+    }
+  });
+
+  it('leaves a header step that hangs to the startup watchdog, which escalates it', async () => {
+    playlistMock.channels = [{}, {}];
+    Object.assign(video, { readyState: 0, networkState: 2 });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const internals = player as unknown as {
+      pipeline: { isHeaderChain(): boolean; canEscalate(): boolean; escalate(): boolean };
+      stallWatchdog: { start(): void };
+    };
+    vi.spyOn(internals.pipeline, 'isHeaderChain').mockReturnValue(true);
+    vi.spyOn(internals.pipeline, 'canEscalate').mockReturnValue(true);
+    const escalate = vi.spyOn(internals.pipeline, 'escalate').mockReturnValue(true);
+    player.play(0);
+    await flush();
+    video.dispatchEvent(new Event('loadstart'));
+    internals.stallWatchdog.start();
+    playlistMock.getByIndex.mockClear();
+
+    vi.advanceTimersByTime(CONFIG.PLAYER.STALL_POLL_MS * (CONFIG.PLAYER.STALL_FREEZE_TICKS + 1));
+    expect(escalate).not.toHaveBeenCalled();
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(CONFIG.PLAYER.STARTUP_TIMEOUT);
+    expect(escalate).toHaveBeenCalled();
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
+  });
+
+  it('gives up on a hanging header chain with no step left, without rerunning it', async () => {
+    playlistMock.channels = [{}, {}];
+    Object.assign(video, { readyState: 0, networkState: 2 });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const internals = player as unknown as {
+      pipeline: { isHeaderChain(): boolean; canEscalate(): boolean };
+      stallWatchdog: { start(): void };
+      reloadCurrentStream(): void;
+    };
+    vi.spyOn(internals.pipeline, 'isHeaderChain').mockReturnValue(true);
+    vi.spyOn(internals.pipeline, 'canEscalate').mockReturnValue(false);
+    const reload = vi.spyOn(internals, 'reloadCurrentStream');
+    player.play(0);
+    await flush();
+    video.dispatchEvent(new Event('loadstart'));
+    internals.stallWatchdog.start();
+    playlistMock.getByIndex.mockClear();
+
+    vi.advanceTimersByTime(CONFIG.PLAYER.STALL_POLL_MS * (CONFIG.PLAYER.STALL_FREEZE_TICKS + 1));
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(playlistMock.getByIndex).toHaveBeenCalledWith(1);
+    expect(error.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toMatch(/event=playback\.recovery\.exhausted .*cause=stall .*chain=unstarted/);
+  });
+
+  it('still reconnects a header channel that played before it stalled', () => {
+    playlistMock.channels = [{}, {}];
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    video = document.createElement('video');
+    container.appendChild(video);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    player.init(video);
+    const pipeline = (player as unknown as { pipeline: { isHeaderChain(): boolean } }).pipeline;
+    vi.spyOn(pipeline, 'isHeaderChain').mockReturnValue(true);
+    player.play(0);
+    video.dispatchEvent(new Event('playing'));
+    playlistMock.getByIndex.mockClear();
+
+    video.dispatchEvent(new Event('error'));
+    vi.advanceTimersByTime(2000);
+    const second = container.querySelector('video')!;
+    expect(second).not.toBe(video);
+
+    second.dispatchEvent(new Event('error'));
+    vi.advanceTimersByTime(2000);
+    expect(container.querySelector('video')).not.toBe(second);
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
   });
 
   it('coalesces errors and reconnects the same channel before advancing', async () => {
@@ -1141,6 +1397,84 @@ describe('Player Luna suspend and resume', () => {
     ]);
     fresh.dispatchEvent(new Event('playing'));
     expect(pause).toHaveBeenCalledOnce();
+  });
+
+  function startProxied(duration: number, at: number) {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.load = vi.fn();
+    const v = document.createElement('video');
+    let paused = false;
+    Object.defineProperties(v, {
+      duration: { value: duration, configurable: true },
+      currentTime: { get: () => at, set: () => {}, configurable: true },
+      paused: { get: () => paused, configurable: true },
+    });
+    container.appendChild(v);
+    player.init(v);
+    const pipeline = (player as unknown as { pipeline: { isProxied(): boolean } }).pipeline;
+    vi.spyOn(pipeline, 'isProxied').mockReturnValue(true);
+    player.play(0);
+    v.dispatchEvent(new Event('playing'));
+    return Object.assign(v, { systemPause: () => { paused = true; } });
+  }
+
+  type ProxyCallbacks = { pipeline: { callbacks: { onProxyExpired(): void } }; pendingSeekTarget: number | null };
+
+  it('releases a proxied stream the TV paused before hiding the app, and resumes it where it was', () => {
+    const v = startProxied(60, 11.1);
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    v.systemPause();
+
+    player.suspend();
+    expect(player.getVideoElement()).not.toBe(v);
+    player.resume();
+    const { fresh, pause, time } = reloaded(60);
+    fresh.dispatchEvent(new Event('loadedmetadata'));
+    fresh.dispatchEvent(new Event('playing'));
+
+    expect(time()).toBe(11.1);
+    expect(pause).not.toHaveBeenCalled();
+    expect(events(info, 'playback.luna.suspend')).toEqual([
+      expect.stringContaining('kind=finite atS=10 paused=0'),
+    ]);
+  });
+
+  it('reopens a session the service expired under a played stream, at its pending seek', () => {
+    const v = startProxied(60, 11.1);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const internals = player as unknown as ProxyCallbacks;
+    internals.pendingSeekTarget = 30;
+
+    internals.pipeline.callbacks.onProxyExpired();
+    const { fresh, time } = reloaded(60);
+    fresh.dispatchEvent(new Event('loadedmetadata'));
+
+    expect(fresh).not.toBe(v);
+    expect(time()).toBe(30);
+  });
+
+  it('reopens an expired proxy session for a finite stream where it was', () => {
+    const v = startProxied(60, 11.1);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    v.dispatchEvent(new Event('error'));
+    const { fresh, time } = reloaded(60);
+    fresh.dispatchEvent(new Event('loadedmetadata'));
+
+    expect(fresh).not.toBe(v);
+    expect(time()).toBe(11.1);
+  });
+
+  it('resumes a proxied finite stream hidden while it played where it was', () => {
+    startProxied(60, 11.1);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    player.suspend();
+    player.resume();
+    const { fresh, time } = reloaded(60);
+    fresh.dispatchEvent(new Event('loadedmetadata'));
+
+    expect(time()).toBe(11.1);
   });
 
   it('reloads a playing live stream at its edge and keeps it playing', () => {
@@ -2395,6 +2729,15 @@ describe('stream routing', () => {
     expect(diagnosticStreamUrl(
       'http://host/catchup/ch1.m3u8?start=10&end=20&auth=secret',
     )).toBe('http://host/catchup/ch1.m3u8?start=10&end=20&auth=***');
+  });
+
+  it('redacts the whole local proxy token and treats the upstream URL as a direct one', () => {
+    const token = 'ab'.repeat(16);
+    expect(diagnosticStreamUrl(
+      `http://127.0.0.1:8080/p/${token}/http/host/live/u1/p1/1.ts?token=x&start=10`,
+    )).toBe('http://127.0.0.1:8080/p/***/http/host/live/***/***/1.ts?token=***&start=10');
+    expect(diagnosticStreamUrl(`http://127.0.0.1:8080/p/${token}/https/host:8443/a.m3u8`))
+      .toBe('http://127.0.0.1:8080/p/***/https/host:8443/a.m3u8');
   });
 
   it('maps detected content types to native MIME values', () => {

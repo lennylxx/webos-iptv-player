@@ -135,6 +135,12 @@ export class Player {
   private stallWatchdog: StallWatchdog;
   private startupWatchdog: StartupWatchdog;
   private startupPending = false;
+  private proxyReopened = false;
+  // A frame came from the current load, or from any load since the user's.
+  private loadPlayed = false;
+  private channelPlayed = false;
+  // A reopened proxy session seeks back to where a finite stream was.
+  private reopenResume = false;
   // The user paused the element; startup, reloads, and `play` clear it.
   private userPaused = false;
   private lunaStallHeldLoad = -1; // one playback.luna.stall.held event per load
@@ -209,6 +215,15 @@ export class Player {
         // in the same instant it starts.
         this.stallWatchdog.restartFreeze();
       },
+      // A Luna stream that failed after playing moved to the proxy: that
+      // step has its own start to make, and its failure must not rerun Luna.
+      onStepRestarted: () => {
+        this.loadPlayed = false;
+        this.channelPlayed = false;
+        this.startupPending = true;
+        this.startupWatchdog.start();
+      },
+      onProxyExpired: () => this.onError(),
     });
     this.tracks = new PlayerTracks(this.pipeline, {
       getVideoElement: () => this.videoEl,
@@ -257,12 +272,17 @@ export class Player {
         log.error('Live stream recovery exhausted; advancing channel',
           'event=playback.recovery.exhausted', this.playbackLabel(),
           `cause=${recovery.cause}`,
-          this.recoveryState(recovery));
+          this.recoveryState(recovery),
+          ...(this.chainUnstarted() ? ['chain=unstarted'] : []));
         this.markLiveUnavailable(recovery.cause === 'stall' ? 'stall_exhausted' : 'playback_error');
         this.osd.updateMessage(this.streamErrorMessage());
         this.channelUp();
       },
-      holdStall: recovery => this.holdStallForLuna(recovery),
+      // A step that hangs is the startup watchdog's to escalate.
+      holdStall: recovery => this.holdStallForLuna(recovery)
+        || (this.startupPending && this.pipeline.canEscalate()),
+      // A reload reruns a header chain from its first step, past HEADER_CHAIN_CAP_MS.
+      canReload: () => !this.chainUnstarted(),
       pollMs: CONFIG.PLAYER.STALL_POLL_MS,
       freezeTicks: CONFIG.PLAYER.STALL_FREEZE_TICKS,
       maxReloads: CONFIG.PLAYER.DEFAULT_LIVE_RECONNECT_ATTEMPTS,
@@ -339,12 +359,13 @@ export class Player {
         this.logVodTracks(el);
         this.vodTracksLatePending = true;
       }
-      if ((this.vod || this.catchupInfo || this.lunaRestore) && this.pendingResumeSecs > 0 && Number.isFinite(el.duration) && el.duration > 0) {
+      if ((this.vod || this.catchupInfo || this.lunaRestore || this.reopenResume) && this.pendingResumeSecs > 0 && Number.isFinite(el.duration) && el.duration > 0) {
         const target = Math.min(this.pendingResumeSecs, el.duration - 1);
         log.info('resume seek', this.videoLabel(el), '| requested:', this.pendingResumeSecs,
           '| target:', target, '| duration:', el.duration);
         el.currentTime = target;
         this.pendingResumeSecs = 0;
+        this.reopenResume = false;
       }
       this.tracks.applyNativeAudioSelection();
       this.tracks.applyNativeSubtitleSelection();
@@ -358,6 +379,8 @@ export class Player {
     });
     onCurrent('loadeddata', () => {
       this.startupPending = false;
+      this.notePlayed();
+      this.pipeline.notePlaying();
       if (this.catchupInfo) this.catchupVariantConfirmed = true;
     });
     // Intrinsic size changes mid-stream (ABR up/down-switch) so the OSD pills
@@ -383,6 +406,8 @@ export class Player {
     });
     onCurrent('playing', () => {
       this.startupPending = false;
+      this.notePlayed();
+      this.pipeline.notePlaying();
       const recovered = this.errorRetryPending;
       if (recovered) {
         this.cancelErrorAdvance();
@@ -504,9 +529,11 @@ export class Player {
     if (!this.videoEl || !this.currentChannel) return;
     if (this.wasPlayingBeforeHide) return; // already suspended
     // A Luna pipeline lives outside the page, so hiding always unloads it,
-    // as it does one still waiting on its PlayReady client.
+    // as it does one still waiting on its PlayReady client. A proxied stream
+    // is released too: the TV pauses the element before the app hears it is
+    // hidden, and a paused player keeps fetching through its session.
     this.wasPlayingBeforeHide = !this.videoEl.paused || this.pipeline.isLunaActive()
-      || this.pipeline.isLunaPending();
+      || this.pipeline.isLunaPending() || this.pipeline.isProxyPending() || this.pipeline.isProxied();
     if (this.wasPlayingBeforeHide) {
       // Save catch-up position and remember it for resume() BEFORE the element is destroyed.
       // Prefer a not-yet-applied resume seek: if we suspend before loadedmetadata
@@ -520,7 +547,9 @@ export class Player {
         );
         this.saveCatchupProgress();
       }
-      if (this.pipeline.isLunaActive() || this.lunaRestore) {
+      // A proxied stream reopens its session on resume, a finite one where it
+      // was, and a paused one paused again.
+      if (this.pipeline.isLunaActive() || this.lunaRestore || this.pipeline.isProxied()) {
         this.captureLunaResume(this.videoEl, this.currentChannel);
       }
       this.stallWatchdog.stop();
@@ -1100,6 +1129,7 @@ export class Player {
     hide(this.container);
     this.vod = null;
     this.pendingResumeSecs = 0;
+    this.reopenResume = false;
     this.pendingSeekTarget = null;
     this.catchupCheckpointAt = 0;
     this.catchupSuspendPos = -1;
@@ -1167,6 +1197,12 @@ export class Player {
   }
 
   private loadStream(url: string, extras: Record<string, string> | null, opts?: PipelineLoadOptions): void {
+    if (!opts?.reload) {
+      this.proxyReopened = false;
+      this.channelPlayed = false;
+      this.reopenResume = false;
+    }
+    this.loadPlayed = false;
     this.tracks.resetForLoad();
     this.vodTracksLatePending = false;
     this.manifestVariants = [];
@@ -1213,14 +1249,17 @@ export class Player {
     if (deferred) {
       log.warn('Stream produced no frame', 'event=playback.startup.failed',
         this.playbackLabel(), ...detail);
-      this.retryStartupWithLuna();
+      this.escalateStartup();
       return;
     }
     log.error('Stream never started', 'event=playback.startup.failed',
       this.playbackLabel(), ...detail);
-    if (this.retryStartupWithLuna()) return;
+    if (this.escalateStartup()) return;
     this.startupPending = false;
-    this.onError('unsupported');
+    // A live source that already played on this channel failed its reload:
+    // the server is away, not the format, so the reconnect budget applies.
+    const reconnect = this.channelPlayed && this.liveSessionActive && !this.catchupInfo && !this.vod;
+    this.onError(reconnect ? undefined : 'unsupported');
   }
 
   private applyPipelineManifest(manifest: PipelineManifest): void {
@@ -1228,19 +1267,48 @@ export class Player {
     this.tracks.applyManifest(manifest);
   }
 
-  // The element sends its own User-Agent, so a channel that names one gets a
-  // Luna try when it never started.
-  private retryStartupWithLuna(): boolean {
-    if (!this.startupPending || !this.pipeline.retryWithLuna()) return false;
+  // A channel with HTTP headers that never started moves to the next step
+  // the setting allows: the element, Media service, then the local proxy.
+  private escalateStartup(): boolean {
+    if (!this.startupPending || !this.pipeline.escalate()) return false;
     this.startupWatchdog.start();
     if (this.liveSessionActive && !this.catchupInfo && isWebOS()) this.stallWatchdog.resume();
+    return true;
+  }
+
+  private notePlayed(): void {
+    this.loadPlayed = true;
+    this.channelPlayed = true;
+  }
+
+  // A header channel that no step started since the user's load.
+  private chainUnstarted(): boolean {
+    return !this.channelPlayed && this.pipeline.isHeaderChain();
+  }
+
+  // A proxy session the service expired, or lost, fails a stream that had
+  // played: one fresh session resumes it where it was. Xtream VOD plays
+  // direct, never through the proxy.
+  private reopenProxy(): boolean {
+    if (this.startupPending || !this.loadPlayed || this.proxyReopened || this.vod || !this.currentChannel
+        || !this.pipeline.isProxied()) return false;
+    this.proxyReopened = true;
+    const v = this.videoEl;
+    const position = this.pendingSeekTarget ?? v?.currentTime ?? 0;
+    if (position > 0 && (this.catchupInfo || (v && Number.isFinite(v.duration)))) {
+      this.pendingResumeSecs = Math.max(this.pendingResumeSecs, position);
+      this.reopenResume = true;
+    }
+    log.warn('Reopening the local proxy session', 'event=playback.proxy.reopen', this.playbackLabel());
+    this.reloadCurrentStream();
     return true;
   }
 
   private onError(reason?: 'unsupported'): void {
     if (!this.playbackActive || this.wasPlayingBeforeHide) return;
     if (this.errorAdvanceTimer !== null) return;
-    if (this.retryStartupWithLuna()) return;
+    if (this.escalateStartup()) return;
+    if (this.reopenProxy()) return;
     if (this.liveSessionActive) {
       this.livePlaybackStatus = 'error';
       this.onPlaybackStateChanged();

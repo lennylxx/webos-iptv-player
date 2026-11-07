@@ -18,10 +18,19 @@ export interface LunaDisplayRect {
 export type LunaDisplay = LunaDisplayRect | 'full';
 
 export class LunaMediaError extends Error {
-  constructor(message: string, readonly code: number) {
+  /** timedOut: no answer, so not proof the method is missing. */
+  constructor(message: string, readonly code: number, readonly timedOut = false, readonly text = '') {
     super(message);
     this.name = 'LunaMediaError';
   }
+}
+
+// The bus's own answer for a method this firmware does not have. A missing
+// service is transient (at boot, or while uMediaServer restarts), as is any
+// other failure.
+export function isMissingMethod(error: unknown): boolean {
+  return error instanceof LunaMediaError && !error.timedOut && error.code === -1
+    && /unknown method|\bmethod\b[^:]*\bdoes not exist/i.test(error.text);
 }
 
 interface LunaHeaderFields {
@@ -155,7 +164,7 @@ function call<T extends LunaResponse>(
     const timer = setTimeout(() => {
       timedOut = true;
       if (!onLateSuccess) request.cancel();
-      reject(new LunaMediaError(`${method} timed out`, -1));
+      reject(new LunaMediaError(`${method} timed out`, -1, true));
     }, CONFIG.PLAYER.LUNA_MEDIA_CALL_TIMEOUT_MS);
     const succeed = (response: T): void => {
       clearTimeout(timer);
@@ -177,7 +186,10 @@ function call<T extends LunaResponse>(
         }
         clearTimeout(timer);
         if (timedOut) request.cancel();
-        else reject(new LunaMediaError(`${method} failed`, responseCode(response)));
+        else {
+          reject(new LunaMediaError(`${method} failed`, responseCode(response), false,
+            typeof response?.errorText === 'string' ? response.errorText : ''));
+        }
       },
     });
   });
