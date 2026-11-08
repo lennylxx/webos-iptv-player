@@ -4,6 +4,7 @@ import { createLogger } from '../utils/logger';
 import type { VodCategory, VodItem, VodInfo, SeriesCategory, SeriesItem, SeriesInfo, Episode, SidecarSubtitle } from '../types';
 import { CONFIG } from '../config';
 import { runAppWorkerTask } from '../workers/app-worker-client';
+import type { XtreamCatalogStreamResponse } from './xtream-catalog-stream';
 
 const log = createLogger('Xtream');
 
@@ -271,6 +272,125 @@ async function fetchCatalogArray(
   return items;
 }
 
+interface SharedCatalogStream {
+  token: string;
+  task: Promise<XtreamCatalogStreamResponse>;
+  batches: unknown[][];
+  waiters: number;
+  settled: boolean;
+}
+
+// Callers asking for the same catalog at once share one download.
+const sharedCatalogStreams = new Map<string, SharedCatalogStream>();
+let nextCatalogStreamToken = 1;
+
+export interface WholeCatalogOptions {
+  keepUnknownCategories?: boolean;
+}
+
+// One request for a whole catalog, streamed and parsed off the UI thread.
+// The worker stops once every caller has aborted.
+async function streamCatalogInWorker<T>(
+  kind: 'vod' | 'series',
+  url: string,
+  accountId: string,
+  categoryIds: string[],
+  signal?: AbortSignal,
+  options: WholeCatalogOptions = {},
+): Promise<T[]> {
+  const cancelled = (): XtreamRequestError =>
+    new XtreamRequestError('cancelled', 'Xtream request was cancelled');
+  if (signal?.aborted) throw cancelled();
+  const timeout = CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS;
+  const maxBytes = CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES;
+  const keepUnknownCategories = !!options.keepUnknownCategories;
+  const key = JSON.stringify([kind, url, accountId, categoryIds, keepUnknownCategories]);
+  let stream = sharedCatalogStreams.get(key);
+  if (!stream) {
+    const token = `catalog-${String(nextCatalogStreamToken++)}`;
+    const batches: unknown[][] = [];
+    const task = runAppWorkerTask('xtream.catalog-stream', {
+      url, kind, accountId, categoryIds, keepUnknownCategories, token,
+      headersTimeout: CONFIG.XTREAM.WHOLE_CATALOG_HEADERS_TIMEOUT_MS,
+      idleTimeout: CATALOG_TIMEOUT, timeout, maxBytes,
+    }, chunk => {
+      batches.push(chunk.items);
+    });
+    const started: SharedCatalogStream = { token, task, batches, waiters: 0, settled: false };
+    const settle = (): void => {
+      started.settled = true;
+      if (sharedCatalogStreams.get(key) === started) sharedCatalogStreams.delete(key);
+    };
+    task.then(settle, settle);
+    sharedCatalogStreams.set(key, started);
+    stream = started;
+  }
+  const joined = stream;
+  joined.waiters++;
+  let left = false;
+  const leave = (): void => {
+    if (left) return;
+    left = true;
+    joined.waiters--;
+    if (joined.waiters > 0 || joined.settled) return;
+    if (sharedCatalogStreams.get(key) === joined) sharedCatalogStreams.delete(key);
+    runAppWorkerTask('xtream.catalog-stream.cancel', { token: joined.token }).catch(() => undefined);
+  };
+  let onAbort = (): void => undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      leave();
+      reject(cancelled());
+    };
+    signal?.addEventListener('abort', onAbort);
+  });
+  let response;
+  try {
+    response = await Promise.race([joined.task, aborted]);
+  } catch (err) {
+    if (err instanceof XtreamRequestError) throw err;
+    throw new XtreamRequestError('request_failed', 'Catalog worker failed');
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    leave();
+  }
+  if (response.failure) {
+    const error = new XtreamRequestError(response.failure, 'Xtream catalog stream failed');
+    logRequestFailure(url, error, timeout, maxBytes);
+    throw error;
+  }
+  const items: T[] = [];
+  for (const batch of joined.batches as T[][]) {
+    for (let i = 0; i < batch.length; i++) items.push(batch[i]);
+  }
+  return items;
+}
+
+export function vodItemFrom(s: Record<string, unknown>, accountId: string): VodItem {
+  return {
+    accountId,
+    streamId: toStr(s.stream_id),
+    name: toStr(s.name),
+    poster: toStr(s.stream_icon),
+    rating: toStr(s.rating),
+    categoryId: toStr(s.category_id),
+    containerExtension: toStr(s.container_extension),
+    ...catalogSortMetadata(s),
+  };
+}
+
+export function seriesItemFrom(s: Record<string, unknown>, accountId: string): SeriesItem {
+  return {
+    accountId,
+    seriesId: toStr(s.series_id),
+    name: toStr(s.name),
+    poster: toStr(s.cover),
+    rating: toStr(s.rating),
+    categoryId: toStr(s.category_id),
+    ...catalogSortMetadata(s, true),
+  };
+}
+
 // Coerce an unknown JSON value to an array of plain objects (empty if not an array).
 function asArray(v: unknown): Record<string, unknown>[] {
   return Array.isArray(v)
@@ -510,17 +630,19 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         signal,
       );
       return arr
-        .map((s) => ({
-          accountId,
-          streamId: toStr(s.stream_id),
-          name: toStr(s.name),
-          poster: toStr(s.stream_icon),
-          rating: toStr(s.rating),
-          categoryId: toStr(s.category_id),
-          containerExtension: toStr(s.container_extension),
-          ...catalogSortMetadata(s),
-        }))
+        .map(s => vodItemFrom(s, accountId))
         .filter((v) => v.streamId !== '');
+    },
+
+    /** The whole movie catalog in one streamed request, parsed in the worker. */
+    getAllVodStreams(
+      categoryIds: string[],
+      signal?: AbortSignal,
+      options?: WholeCatalogOptions,
+    ): Promise<VodItem[]> {
+      return streamCatalogInWorker<VodItem>(
+        'vod', xtreamPlayerApi(creds, 'get_vod_streams'), accountId, categoryIds, signal, options,
+      );
     },
 
     async getVodInfo(vodId: string, signal?: AbortSignal): Promise<VodInfo | null> {
@@ -570,16 +692,19 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         signal,
       );
       return arr
-        .map((s) => ({
-          accountId,
-          seriesId: toStr(s.series_id),
-          name: toStr(s.name),
-          poster: toStr(s.cover),
-          rating: toStr(s.rating),
-          categoryId: toStr(s.category_id),
-          ...catalogSortMetadata(s, true),
-        }))
+        .map(s => seriesItemFrom(s, accountId))
         .filter((s) => s.seriesId !== '');
+    },
+
+    /** The whole series catalog in one streamed request, parsed in the worker. */
+    getAllSeries(
+      categoryIds: string[],
+      signal?: AbortSignal,
+      options?: WholeCatalogOptions,
+    ): Promise<SeriesItem[]> {
+      return streamCatalogInWorker<SeriesItem>(
+        'series', xtreamPlayerApi(creds, 'get_series'), accountId, categoryIds, signal, options,
+      );
     },
 
     async getSeriesInfo(seriesId: string, signal?: AbortSignal): Promise<SeriesInfo | null> {

@@ -278,6 +278,64 @@ describe('Xtream Live catalog in the app worker', () => {
   });
 });
 
+describe('whole Xtream catalog in the app worker', () => {
+  const item = { accountId: 'x1', streamId: '1', categoryId: '1' };
+  function holdStream() {
+    let finish: (response: object) => void = () => {};
+    runWorkerTaskMock.mockImplementation((task: string, _payload: unknown, onChunk?: (chunk: object) => void) => {
+      if (task !== 'xtream.catalog-stream') return Promise.resolve();
+      return new Promise((resolve) => {
+        finish = (response) => {
+          onChunk?.({ kind: 'vod', items: [item] });
+          resolve(response);
+        };
+      });
+    });
+    return { finish: () => finish({ items: 1, inputBytes: 1, elapsedMs: 1 }) };
+  }
+  const tasks = () => runWorkerTaskMock.mock.calls.map(call => call[0] as string);
+
+  it('shares one load between callers asking at once', async () => {
+    const stream = holdStream();
+    const client = createXtreamClient(creds);
+    const first = client.getAllVodStreams(['1']);
+    const second = client.getAllVodStreams(['1']);
+    stream.finish();
+    expect(await first).toEqual([item]);
+    expect(await second).toEqual([item]);
+    expect(tasks()).toEqual(['xtream.catalog-stream']);
+  });
+
+  it('cancels the worker load once every caller has aborted', async () => {
+    holdStream();
+    const client = createXtreamClient(creds);
+    const a = new AbortController();
+    const b = new AbortController();
+    const first = client.getAllVodStreams(['1'], a.signal);
+    const second = client.getAllVodStreams(['1'], b.signal);
+    a.abort();
+    await expect(first).rejects.toMatchObject({ code: 'cancelled' });
+    expect(tasks()).toEqual(['xtream.catalog-stream']);
+    b.abort();
+    await expect(second).rejects.toMatchObject({ code: 'cancelled' });
+    const token = (runWorkerTaskMock.mock.calls[0][1] as { token: string }).token;
+    expect(runWorkerTaskMock).toHaveBeenLastCalledWith('xtream.catalog-stream.cancel', { token });
+  });
+
+  it('starts a new load after a canceled one', async () => {
+    const stream = holdStream();
+    const client = createXtreamClient(creds);
+    const a = new AbortController();
+    const first = client.getAllVodStreams(['1'], a.signal);
+    a.abort();
+    await expect(first).rejects.toMatchObject({ code: 'cancelled' });
+    const second = client.getAllVodStreams(['1']);
+    stream.finish();
+    expect(await second).toEqual([item]);
+    expect(tasks().filter(task => task === 'xtream.catalog-stream')).toHaveLength(2);
+  });
+});
+
 describe('XtreamClient program archive listings', () => {
   it('parses timestamps and explicit has_archive flags', async () => {
     fetchTextMock.mockResolvedValue(JSON.stringify({

@@ -185,6 +185,8 @@ export class Search {
   // Shared by a reopen, so closing Search does not restart the load.
   private catalogLoad: { accountId: string; promise: Promise<CatalogSources> } | null = null;
   private catalogLoading = false;
+  // The generation of the full query that replaces partial results, while in flight.
+  private completingPartial: number | null = null;
   // Until every source is indexed, queries wait and the results show a hint.
   private pendingIndex: PendingIndex | null = null;
   private active = false;
@@ -196,6 +198,8 @@ export class Search {
   private workerIndexReady = false;
   // A post failed, so the worker may hold a partial index; the next query rebuilds it.
   private workerIndexLost = false;
+  // Sources that settled without an index: answers leave them out until the rebuild.
+  private lostSources: Partial<Record<keyof PendingIndex, true>> | null = null;
   // One rebuild of a lost index per session; queries meanwhile wait for it.
   private recovery: { sessionId: number; done: Promise<boolean> } | null = null;
   // A rebuild of the session's lost index failed: until `at`, its queries rank
@@ -301,6 +305,8 @@ export class Search {
     const sessionId = ++this.workerSession;
     this.invalidateWorkerIndex();
     this.workerIndexLost = false;
+    this.lostSources = null;
+    this.completingPartial = null;
     this.recoveryRetry = null;
     const now = Date.now();
     this.indexStats = { startedAt: now, hintAt: query.trim() ? now : 0, persisted: 0, built: 0, posted: 0 };
@@ -314,11 +320,22 @@ export class Search {
         this.indexWorker({ sessionId, reset: true }).then(resolve, reject);
       });
     });
+    const primary = this.indexChannelsAndProgrammes(sessionId, workerReset).catch((error: unknown) => {
+      if (sessionId !== this.workerSession) return;
+      // Queries rebuild a lost index themselves; don't leave the hint up.
+      log.error('Search index build failed', 'event=search.worker.index.failed', error);
+      this.indexLost(sessionId, 'error', 'channels', 'programmes');
+    });
     if (account) {
       this.catalogLoading = true;
-      const catalogIndexed = this.loadCatalog(account).then(async (sources) => {
-        if (!await workerReset || sessionId !== this.workerSession) return false;
-        return this.indexCatalog(sessionId, sources.movies, sources.series);
+      // A landing catalog holds the UI thread for seconds, so channels and
+      // programs get indexed, and answer, first.
+      const catalogIndexed = primary.then(() => {
+        if (sessionId !== this.workerSession) return false;
+        return this.loadCatalog(account).then(async (sources) => {
+          if (!await workerReset || sessionId !== this.workerSession) return false;
+          return this.indexCatalog(sessionId, sources.movies, sources.series);
+        });
       });
       const settled = (indexed: boolean): void => {
         if (sessionId !== this.workerSession) return;
@@ -334,14 +351,7 @@ export class Search {
         this.applyPendingFocus();
       });
     }
-    try {
-      await this.indexChannelsAndProgrammes(sessionId, workerReset);
-    } catch (error) {
-      if (sessionId !== this.workerSession) return;
-      // Queries rebuild a lost index themselves; don't leave the hint up.
-      log.error('Search index build failed', 'event=search.worker.index.failed', error);
-      this.indexLost(sessionId, 'error', 'channels', 'programmes');
-    }
+    await primary;
   }
 
   private async indexChannelsAndProgrammes(
@@ -439,6 +449,7 @@ export class Search {
   invalidateCatalog(): void {
     this.abortCatalogLoad();
     this.pendingIndex = null;
+    this.completingPartial = null;
     this.workerSession++;
     this.recoveryRetry = null;
     this.allVod = [];
@@ -639,6 +650,10 @@ export class Search {
       );
     }
     this.workerIndexLost = true;
+    if (this.pendingIndex) {
+      this.lostSources = { ...this.lostSources };
+      for (const source of sources) this.lostSources[source] = true;
+    }
     this.indexSettled(sessionId, ...sources);
   }
 
@@ -677,14 +692,45 @@ export class Search {
   private indexSettled(sessionId: number, ...sources: Array<keyof PendingIndex>): void {
     const pending = this.pendingIndex;
     if (!pending || sessionId !== this.workerSession) return;
+    const wasPartial = this.partialIndex();
     for (const source of sources) pending[source] = false;
-    if (pending.channels || pending.programmes || pending.catalog) return;
+    if (pending.channels) return;
+    if (pending.programmes || pending.catalog) {
+      // Channels answer at once; programs and the catalog join as they land.
+      if (this.active && this.query.trim()) this.requery(wasPartial);
+      return;
+    }
     this.pendingIndex = null;
     this.logIndexReady(this.indexMode());
     if (!this.workerIndexLost) this.markWorkerIndexReady(this.account);
     if (!this.active) return;
-    if (this.query.trim()) void this.startQuery(++this.queryGeneration);
-    else this.render();
+    if (!this.query.trim()) {
+      this.render();
+      return;
+    }
+    this.requery(wasPartial);
+  }
+
+  private requery(wasPartial: boolean): void {
+    const generation = ++this.queryGeneration;
+    if (!wasPartial) {
+      void this.startQuery(generation);
+      return;
+    }
+    // Keep the partial results on screen, and their focus, until the fuller set replaces them.
+    this.completingPartial = generation;
+    void this.startQuery(generation, true).then(() => {
+      if (this.completingPartial === generation) this.completingPartial = null;
+      if (generation !== this.queryGeneration) return;
+      this.applyPendingFocus();
+    });
+  }
+
+  // Channels are searchable while programs or the catalog still load.
+  private partialIndex(): boolean {
+    const pending = this.pendingIndex;
+    if (!pending || pending.channels || !(pending.programmes || pending.catalog)) return false;
+    return !this.workerIndexLost || (!!this.lostSources && !this.lostSources.channels);
   }
 
   private onSelect(): void {
@@ -737,7 +783,7 @@ export class Search {
   private applyPendingFocus(): void {
     if (!this.focusPending || !this.active || this.queryPending) return;
     const first = this.container.querySelector<HTMLElement>('.search-results [data-focusable]');
-    if (!first && (this.catalogLoading || this.pendingIndex)) {
+    if (!first && (this.catalogLoading || this.pendingIndex || this.completingPartial !== null)) {
       // Wait in the search box, not on a blank screen, for the catalog.
       if (!this.focusWaitingInBox) {
         this.focusWaitingInBox = true;
@@ -1117,7 +1163,8 @@ export class Search {
     const query = this.query;
     const sessionId = this.workerSession;
     if (!query.trim()) return;
-    if (this.pendingIndex) {
+    const partial = this.partialIndex();
+    if (this.pendingIndex && !partial) {
       // The ready index runs this query; until then the hint stands in.
       if (!this.indexStats.hintAt) this.indexStats.hintAt = Date.now();
       this.render();
@@ -1134,7 +1181,7 @@ export class Search {
     let retryPending = false;
     const lists = this.indexedLists();
     try {
-      if (this.workerIndexLost) {
+      if (this.workerIndexLost && !partial) {
         recoveryAttempted = true;
         retryPending = this.recoveryRetryPending(sessionId);
         if (!retryPending) response = await this.recoverWorkerQuery(sessionId, query, 'lost');
@@ -1143,7 +1190,8 @@ export class Search {
           sessionId,
           query,
           limit: this.resultLimit,
-          includeCatalog: !!this.account,
+          includeCatalog: !!this.account && !this.pendingIndex?.catalog && !this.lostSources?.catalog,
+          includeProgrammes: !this.pendingIndex?.programmes && !this.lostSources?.programmes,
         });
       }
     } catch (error) {
@@ -1324,6 +1372,7 @@ export class Search {
     // or a reopen reuse it, and queries wait for this rebuild.
     this.invalidateWorkerIndex();
     this.workerIndexLost = true;
+    this.lostSources = null;
     if (!await this.indexWorker({ sessionId, reset: true })) return false;
     // Any list may be replaced meanwhile, and a newer post of a source may
     // carry an older list: post until the worker holds the current lists,
@@ -1578,9 +1627,10 @@ export class Search {
 
     // Xtream: horizontal poster rails for catalog results. M3U-only channels and
     // EPG programs use compact rows so their metadata remains readable.
+    const partial = this.partialIndex();
     const resultsBody = !q
       ? html``
-      : this.pendingIndex
+      : this.pendingIndex && (!partial || (!hasResults && !this.queryPending))
         ? html`<p class="catalog-hint search-empty">${t('search.preparing')}</p>`
       : this.queryPending
         ? html``
@@ -1627,8 +1677,11 @@ export class Search {
       <div class="search-view ${isXtream ? '' : 'search-lists'} ${
         hasMixedLists ? 'search-lists-mixed' : ''
       }" data-nav-container data-search-query="${q}"
-           data-search-pending="${this.queryPending ? 'true' : 'false'}">
-        <div class="search-results">${resultsBody}</div>
+           data-search-pending="${this.queryPending ? 'true' : 'false'}"
+           data-search-partial="${partial ? 'true' : 'false'}">
+        <div class="search-results">${resultsBody}${partial && q && hasResults && !this.queryPending
+          ? html`<p class="catalog-hint search-loading-more">${t('common.loading')}</p>`
+          : ''}</div>
       </div>
     `);
     this.restoreVirtualOffsets();

@@ -31,6 +31,8 @@
 .search-input.focused { border-color: var(--accent, #3ea6ff); }
 .search-results { display: block; }
 .search-empty { margin-top: 40px; }
+/* Movies and series are still loading under the channel and program results. */
+.search-loading-more { margin-top: 12px; }
 
 .search-virtual-section { margin-bottom: 28px; }
 

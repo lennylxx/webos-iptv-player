@@ -711,6 +711,9 @@ export function installInteractiveProbe(config) {
     });
     await typeQuery('firstCandidate', config.needle, () =>
       searchSettled(config.needle) && !!searchView().querySelector(SEARCH_RESULTS));
+    // Channels and programs answer first; movies and series join once indexed.
+    await watch('allResults', () => searchSettled(config.needle)
+      && searchView().getAttribute('data-search-partial') === 'false');
     probe.hits = {
       channels: document.querySelectorAll(
         '#view-search .search-channel-row, #view-search .search-channel-tile',
@@ -914,6 +917,7 @@ export function summarizeInteractiveRun(raw) {
       firstCandidateMs: round(m.firstCandidate - m.firstCandidateTypedAt),
       firstCandidateFromOpenMs: round(m.firstCandidate - m.searchClickAt),
       fromLaunchMs: round(m.firstCandidate),
+      allResultsMs: round(m.allResults - m.firstCandidateTypedAt),
       indexReadyFromOpenMs: indexReady ? round(indexReady.last - m.searchClickAt) : null,
       broadQueryMs: round(m.broadQuery - m.broadQueryTypedAt),
       noMatchQueryMs: round(m.noMatchQuery - m.noMatchQueryTypedAt),

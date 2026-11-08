@@ -66,7 +66,7 @@ is a warm one:
 | `m3u` | A 200,000-channel M3U with EPG until a D-pad key moves focus in Live |
 | `xtreamMovies` | An Xtream account until Live, then Movies, answer a key |
 | `m3uWarm`, `xtreamMoviesWarm` | The same relaunch after a seed launch filled the caches |
-| `searchCold` | Search opened at once: input ready, then the first candidate for a typed query |
+| `searchCold` | Search opened at once: input ready, the first candidate for a typed query, then all results once movies and series are indexed (`allResultsMs`) |
 | `searchSteady` | The same after Live is ready |
 
 The Xtream fixture holds 50,000 Live streams, 200,000 movies, 200,000 series,

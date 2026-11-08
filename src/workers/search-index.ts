@@ -351,7 +351,9 @@ export class SearchWorkerIndex {
     if (request.sessionId !== this.sessionId) return null;
     return {
       channels: rankedFields(this.channels, request.query, request.limit),
-      programmes: rankedFields(this.programmes, request.query, request.limit),
+      programmes: request.includeProgrammes === false
+        ? emptyResult()
+        : rankedFields(this.programmes, request.query, request.limit),
       movies: request.includeCatalog
         ? rankedNames(this.movies, request.query, request.limit)
         : emptyResult(),

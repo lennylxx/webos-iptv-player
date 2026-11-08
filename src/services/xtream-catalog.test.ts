@@ -10,6 +10,8 @@ const { clientMock, cacheStore, cacheState } = vi.hoisted(() => ({
     getSeriesCategories: vi.fn(),
     getSeries: vi.fn(),
     getSeriesInfo: vi.fn(),
+    getAllVodStreams: vi.fn(),
+    getAllSeries: vi.fn(),
   },
   cacheStore: new Map<string, {
     key: string;
@@ -1143,5 +1145,116 @@ describe('xtream-catalog whole-catalog (search)', () => {
       data: [], state: { complete: true },
     });
     expect(cacheStore.get('x1|series-v2|1')?.data).toEqual([]);
+  });
+});
+
+describe('xtream-catalog one-request catalog', () => {
+  class FakeWorker {}
+  const movie = (streamId: string, categoryId: string) =>
+    ({ accountId: 'x1', streamId, name: `Movie ${streamId}`, categoryId });
+
+  beforeEach(() => {
+    vi.stubGlobal('Worker', FakeWorker);
+    clientMock.getVodCategories.mockResolvedValue([
+      { id: '2', name: 'Cat B' }, { id: '1', name: 'Cat A' },
+    ]);
+    clientMock.getVodStreams.mockImplementation(async (categoryId: string) =>
+      [movie(`p${categoryId}`, categoryId)]);
+    return () => vi.unstubAllGlobals();
+  });
+
+  it('loads the whole catalog in one request ordered by the panel categories', async () => {
+    clientMock.getAllVodStreams.mockResolvedValue([movie('20', '2'), movie('10', '1')]);
+    const out = await loadAllVodStreams(account);
+    expect(clientMock.getAllVodStreams.mock.calls[0][0]).toEqual(['2', '1']);
+    expect(out.map(item => item.streamId)).toEqual(['20', '10']);
+    expect(clientMock.getVodStreams).not.toHaveBeenCalled();
+    expect(cacheStore.get('x1|vod_all')).toMatchObject({ data: out, state: { complete: true } });
+  });
+
+  it.each([
+    ['a failed request', () => Promise.reject(new XtreamRequestError('too_large', 'big')), 'too_large'],
+    ['an empty list', () => Promise.resolve([]), 'empty'],
+  ])('falls back to per-category loads after %s until the next refresh', async (_name, whole, code) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    clientMock.getAllVodStreams.mockImplementation(whole);
+    const out = await loadAllVodStreams(account);
+    expect(out.map(item => item.streamId)).toEqual(['p2', 'p1']);
+    expect(warn.mock.calls.some(call => call.includes('event=xtream.catalog.whole_failed')
+      && call.includes(`code=${code}`))).toBe(true);
+    warn.mockRestore();
+    expect(cacheStore.get('x1|vod_all_whole')?.data).toEqual({ code });
+
+    const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
+    cacheStore.set('x1|vod_all', {
+      ...cacheStore.get('x1|vod_all')!,
+      timestamp: stale,
+      state: { complete: true, refreshAfter: stale, freshSince: stale },
+    });
+    for (const id of ['1', '2']) cacheStore.delete(`x1|vod_streams-v2|${id}`);
+    await loadAllVodStreams(account);
+    await vi.waitFor(() => expect(clientMock.getVodStreams).toHaveBeenCalledTimes(4));
+    expect(clientMock.getAllVodStreams).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries the whole request again soon after a timeout', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    clientMock.getAllVodStreams.mockRejectedValueOnce(new XtreamRequestError('timeout', 'slow'));
+    await loadAllVodStreams(account);
+    warn.mockRestore();
+    const marker = cacheStore.get('x1|vod_all_whole')!;
+    expect((marker.data as { retryAt: number }).retryAt)
+      .toBeLessThanOrEqual(Date.now() + CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS);
+    cacheStore.set('x1|vod_all_whole', { ...marker, data: { code: 'timeout', retryAt: Date.now() - 1 } });
+    const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
+    cacheStore.set('x1|vod_all', {
+      ...cacheStore.get('x1|vod_all')!,
+      timestamp: stale,
+      state: { complete: true, refreshAfter: stale, freshSince: stale },
+    });
+    clientMock.getAllVodStreams.mockResolvedValue([movie('20', '2'), movie('10', '1')]);
+    await loadAllVodStreams(account);
+    await vi.waitFor(() => expect(cacheStore.get('x1|vod_all')?.data).toEqual([movie('20', '2'), movie('10', '1')]));
+    expect(clientMock.getAllVodStreams).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps newer categories and waits to reorder them when categories are stale', async () => {
+    const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
+    cacheStore.set('x1|vod_all', {
+      data: [movie('10', '1')],
+      timestamp: stale,
+      state: { complete: true, refreshAfter: stale, freshSince: stale },
+    });
+    clientMock.getVodCategories.mockRejectedValue(new XtreamRequestError('timeout', 'slow'));
+    clientMock.getAllVodStreams.mockResolvedValue([movie('10', '1'), movie('11', '1')]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await loadAllVodStreams(account);
+    await vi.waitFor(() => expect(cacheStore.get('x1|vod_all')?.data).toHaveLength(2));
+    warn.mockRestore();
+    expect(clientMock.getAllVodStreams.mock.calls[0][2]).toEqual({ keepUnknownCategories: true });
+    const state = cacheStore.get('x1|vod_all')?.state as { complete: boolean; refreshAfter: number };
+    expect(state.complete).toBe(false);
+    expect(state.refreshAfter).toBeGreaterThan(Date.now() + CONFIG.XTREAM.CATALOG_RETRY_DELAY_MS);
+    expect(state.refreshAfter).toBeLessThanOrEqual(Date.now() + CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS);
+  });
+
+  it('propagates cancellation without marking the panel for per-category loads', async () => {
+    const controller = new AbortController();
+    clientMock.getAllVodStreams.mockImplementation((_ids: string[], signal: AbortSignal) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(new XtreamRequestError('cancelled', 'cancelled')));
+    }));
+    const load = loadAllVodStreams(account, controller.signal);
+    await settle();
+    controller.abort();
+    await expect(load).rejects.toMatchObject({ code: 'cancelled' });
+    expect(cacheStore.has('x1|vod_all_whole')).toBe(false);
+    expect(clientMock.getVodStreams).not.toHaveBeenCalled();
+  });
+
+  it('loads series in one request too', async () => {
+    clientMock.getSeriesCategories.mockResolvedValue([{ id: '1', name: 'Cat A' }]);
+    clientMock.getAllSeries.mockResolvedValue([{ accountId: 'x1', seriesId: 's1', categoryId: '1' }]);
+    expect(await loadAllSeries(account)).toEqual([{ accountId: 'x1', seriesId: 's1', categoryId: '1' }]);
+    expect(clientMock.getSeries).not.toHaveBeenCalled();
   });
 });

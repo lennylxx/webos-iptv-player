@@ -12,6 +12,11 @@ import type {
   XtreamLiveStreamsRequest,
   XtreamLiveStreamsResponse,
 } from '../services/xtream-client';
+import type {
+  XtreamCatalogStreamChunk,
+  XtreamCatalogStreamRequest,
+  XtreamCatalogStreamResponse,
+} from '../services/xtream-catalog-stream';
 
 export interface M3UWorkerRequest {
   url: string;
@@ -225,6 +230,8 @@ export interface SearchQueryRequest {
   query: string;
   limit: number;
   includeCatalog: boolean;
+  // False while the page still builds its program list.
+  includeProgrammes?: boolean;
 }
 
 export interface SearchRankedIndices {
@@ -292,6 +299,15 @@ export interface AppWorkerTasks {
   'xtream.live-streams': {
     request: XtreamLiveStreamsRequest;
     response: XtreamLiveStreamsResponse;
+  };
+  'xtream.catalog-stream': {
+    request: XtreamCatalogStreamRequest;
+    response: XtreamCatalogStreamResponse;
+    chunk: XtreamCatalogStreamChunk;
+  };
+  'xtream.catalog-stream.cancel': {
+    request: { token: string };
+    response: void;
   };
   'search.index': {
     request: SearchIndexRequest;

@@ -3,6 +3,7 @@ import {
   createXtreamClient,
   isXtreamRequestCancelled,
   XtreamRequestError,
+  type WholeCatalogOptions,
 } from './xtream-client';
 import {
   catalogCacheGeneration,
@@ -474,8 +475,15 @@ async function fetchWholeCatalog<T extends { categoryId: string }>(
   fetchCategories: (signal?: AbortSignal) => Promise<Array<{ id: string }>>,
   itemId: (item: T) => string,
   previous?: T[],
+  fetchAll?: WholeCatalogFetch<T>,
 ): Promise<CatalogListResult<T>> {
   ensureActive(signal);
+  if (fetchAll) {
+    const whole = await fetchCatalogInOneRequest(
+      accountId, resource, signal, fetchAll, fetchCategories, previous,
+    );
+    if (whole) return whole;
+  }
   const controller = new AbortController();
   const deadline = Date.now() + CONFIG.XTREAM.CATALOG_LOAD_BUDGET_MS;
   let expired = false;
@@ -501,6 +509,102 @@ async function fetchWholeCatalog<T extends { categoryId: string }>(
     );
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
+    controller.abort();
+  }
+}
+
+// One streamed request instead of one per category: thousands of categories
+// otherwise take minutes. A panel that can't serve it falls back to
+// per-category loads until the catalog's next refresh.
+type WholeCatalogFetch<T> = (
+  categoryIds: string[],
+  signal?: AbortSignal,
+  options?: WholeCatalogOptions,
+) => Promise<T[]>;
+
+async function fetchCatalogInOneRequest<T extends { categoryId: string }>(
+  accountId: string,
+  resource: 'vod_all' | 'series_all',
+  signal: AbortSignal | undefined,
+  fetchAll: WholeCatalogFetch<T>,
+  fetchCategories: (signal?: AbortSignal) => Promise<Array<{ id: string }>>,
+  previous?: T[],
+): Promise<CatalogListResult<T> | null> {
+  const generation = catalogCacheGeneration();
+  const fallbackKey = `${accountId}|${resource}_whole`;
+  const fallback = await getCachedCatalog<{ code: string; retryAt?: number }>(fallbackKey);
+  ensureCatalogActive(generation, signal);
+  if (fallback && fresh(fallback.timestamp)
+    && !(typeof fallback.data.retryAt === 'number' && Date.now() >= fallback.data.retryAt)) return null;
+  const controller = new AbortController();
+  const cancel = (): void => controller.abort();
+  signal?.addEventListener('abort', cancel);
+  const context: CatalogLoadContext = {
+    generation,
+    signal,
+    requestSignal: controller.signal,
+    timedOut: () => false,
+  };
+  const oldCategories = Array.from(new Set((previous ?? []).map(item => item.categoryId)))
+    .filter(id => !!id)
+    .map(id => ({ id }));
+  try {
+    // The worker orders the catalog by category, so it needs the ids first.
+    const categories = await fetchPartition(
+      `${accountId}|${resource === 'vod_all' ? 'vod_categories' : 'series_categories'}`,
+      context, fetchCategories,
+      oldCategories.length ? oldCategories : undefined,
+      true,
+    );
+    ensureCatalogActive(generation, signal);
+    if (!categories.ok && !categories.available) return null;
+    const categoryIds = Array.from(new Set(categories.data.map(category => category.id)));
+    const whole = await fetchAll(categoryIds, controller.signal, {
+      keepUnknownCategories: !categories.ok,
+    }).then(
+      data => ({ ok: true as const, data }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    ensureCatalogActive(generation, signal);
+    let code: string | null = null;
+    if (!whole.ok) {
+      if (isXtreamRequestCancelled(whole.error)) throw whole.error;
+      code = whole.error instanceof XtreamRequestError ? whole.error.code : 'request_failed';
+    } else if (!whole.data.length && categoryIds.length) {
+      // Some panels answer an unfiltered request with an empty list.
+      code = 'empty';
+    }
+    if (code !== null) {
+      log.warn(
+        'Whole catalog request failed; loading per category',
+        'event=xtream.catalog.whole_failed',
+        `resource=${resource}`,
+        `code=${code}`,
+      );
+      // A timeout or a lost worker may clear up; a bad answer won't.
+      const marker = code === 'timeout' || code === 'request_failed'
+        ? { code, retryAt: Date.now() + CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS }
+        : { code };
+      await setCachedCatalog(fallbackKey, marker, StorageService.getXtreamCatalogRefreshIntervalMs());
+      ensureCatalogActive(generation, signal);
+      return null;
+    }
+    const result = whole.ok ? whole.data : [];
+    const now = Date.now();
+    return {
+      data: result,
+      unchanged: previous !== undefined && sameCatalogItems(previous, result),
+      // Stale category ids put newer categories' items last; reorder later.
+      state: categories.ok
+        ? {
+          complete: true,
+          refreshAfter: now + StorageService.getXtreamCatalogRefreshIntervalMs(),
+          freshSince: now,
+        }
+        : { complete: false, refreshAfter: now + CONFIG.XTREAM.WHOLE_CATALOG_RETRY_MS },
+    };
+  } finally {
     signal?.removeEventListener('abort', cancel);
     controller.abort();
   }
@@ -662,6 +766,7 @@ export function loadAllVodStreams(
         client.getVodCategories,
         item => item.streamId,
         cached?.data,
+        typeof Worker === 'undefined' ? undefined : client.getAllVodStreams,
       );
     },
   );
@@ -684,6 +789,7 @@ export function loadAllSeries(
         client.getSeriesCategories,
         item => item.seriesId,
         cached?.data,
+        typeof Worker === 'undefined' ? undefined : client.getAllSeries,
       );
     },
   );

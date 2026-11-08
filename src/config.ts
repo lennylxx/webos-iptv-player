@@ -142,6 +142,13 @@ export const CONFIG = {
     ACCOUNT_MAX_BYTES: 1024 * 1024,      // account/server metadata response budget
     CATEGORY_MAX_BYTES: 2 * 1024 * 1024, // category-list response budget
     CATALOG_MAX_BYTES: 32 * 1024 * 1024, // full or per-category stream-list budget
+    // One streamed request for a whole catalog; the worker keeps only parsed items.
+    WHOLE_CATALOG_MAX_BYTES: 256 * 1024 * 1024,
+    WHOLE_CATALOG_TIMEOUT_MS: 5 * 60 * 1000,
+    WHOLE_CATALOG_HEADERS_TIMEOUT_MS: 2 * 60 * 1000,
+    // After a failure that may clear up, or with stale categories, try the
+    // whole request again this much later rather than every launch or never.
+    WHOLE_CATALOG_RETRY_MS: 30 * 60 * 1000,
     DETAIL_MAX_BYTES: 8 * 1024 * 1024,   // VOD/series detail and episode response budget
     BACKGROUND_REFRESH_CONCURRENCY: 2,   // stale catalog lists re-fetched at once; the rest queue
     RAIL_CATEGORIES: 6,                  // categories preloaded as rails in the browse view
