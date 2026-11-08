@@ -1,4 +1,14 @@
 import { CLEARKEY_SCHEME, PLAYREADY_SCHEME, WIDEVINE_SCHEME } from '../parsers/mpd-manifest';
+import {
+  CUSTOM_DATA_KEYS,
+  DRM_KEYS,
+  DRM_LEGACY_KEYS,
+  LICENSE_DATA_KEYS,
+  LICENSE_KEY_KEYS,
+  LICENSE_TYPE_KEYS,
+} from './drm-option-keys';
+
+export { DRM_OPTION_KEYS } from './drm-option-keys';
 
 export interface PlayReadyConfig {
   type: 'playready';
@@ -34,36 +44,6 @@ export function isShakaDrmConfig(config: DrmConfig | null): config is ShakaDrmCo
   return config?.type === 'widevine' || config?.type === 'clearkey';
 }
 
-const LICENSE_TYPE_KEYS = [
-  'inputstream.adaptive.license_type',
-  'license_type',
-  'drm_type',
-];
-const DRM_KEYS = ['inputstream.adaptive.drm'];
-const DRM_LEGACY_KEYS = [
-  'inputstream.adaptive.drm_legacy',
-  'drm_legacy',
-];
-const LICENSE_KEY_KEYS = [
-  'inputstream.adaptive.license_key',
-  'license_key',
-  'drm_license_url',
-];
-const CUSTOM_DATA_KEYS = ['drm_custom_data'];
-const LICENSE_DATA_KEYS = [
-  'inputstream.adaptive.license_data',
-  'license_data',
-];
-
-/** Every playlist option parseDrmConfig reads. */
-export const DRM_OPTION_KEYS: readonly string[] = [
-  ...LICENSE_TYPE_KEYS,
-  ...DRM_KEYS,
-  ...DRM_LEGACY_KEYS,
-  ...LICENSE_KEY_KEYS,
-  ...CUSTOM_DATA_KEYS,
-  ...LICENSE_DATA_KEYS,
-];
 
 function firstExtra(extras: Record<string, string>, keys: string[]): string {
   for (const key of keys) {

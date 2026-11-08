@@ -57,6 +57,35 @@ describe('fetchAndParseM3UInWorker', () => {
     });
   });
 
+  it('merges a playlist\'s repeated streams across channel batches', async () => {
+    const lines = ['#EXTM3U'];
+    for (let i = 0; i < 600; i++) {
+      lines.push(`#EXTINF:-1,ch${String(i)}`, `http://host/s${String(i % 550)}`);
+    }
+    lines.push('#EXTINF:-1,agent', '#EXTVLCOPT:http-user-agent=Agent', 'http://host/s0');
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      streamResponse([new TextEncoder().encode(lines.join('\n'))])));
+    const batched = [] as Awaited<ReturnType<
+      typeof fetchAndParseM3UInWorker
+    >>['data']['channels'];
+
+    const result = await fetchAndParseM3UInWorker({
+      url: 'http://host/a',
+      timeout: 5000,
+      playlistId: 'pl1',
+    }, chunk => {
+      if (chunk.kind === 'channels') batched.push(...chunk.channels);
+    });
+
+    const channels = batched.concat(result.data.channels);
+    expect(channels.map(ch => ch.name)).toEqual([
+      ...Array.from({ length: 550 }, (_, i) => `ch${String(i)}`),
+      'agent',
+    ]);
+    expect(channels.every(ch => ch.playlistIds.join() === 'pl1')).toBe(true);
+    expect(result.metrics.duplicates).toBe(50);
+  });
+
   it('preserves every M3U metadata surface through catalog filtering and batching', async () => {
     const source = [
       '#EXTM3U url-tvg="http://host/a.xml,http://host/b.xml" '

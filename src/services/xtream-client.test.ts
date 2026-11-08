@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const { fetchTextMock } = vi.hoisted(() => ({ fetchTextMock: vi.fn() }));
 vi.mock('../utils/fetch-helper', async (importOriginal) => ({
@@ -6,9 +6,12 @@ vi.mock('../utils/fetch-helper', async (importOriginal) => ({
   fetchLimitedText: fetchTextMock,
 }));
 
+const { runWorkerTaskMock } = vi.hoisted(() => ({ runWorkerTaskMock: vi.fn() }));
+vi.mock('../workers/app-worker-client', () => ({ runAppWorkerTask: runWorkerTaskMock }));
+
 import { FetchTextError } from '../utils/fetch-helper';
 import { CONFIG } from '../config';
-import { createXtreamClient } from './xtream-client';
+import { createXtreamClient, loadLiveStreamsCatalog } from './xtream-client';
 
 const creds = { baseUrl: 'http://host:8080', username: 'u1', password: 'p1' };
 
@@ -215,6 +218,63 @@ describe('XtreamClient live archive metadata', () => {
       available: false,
       streams: [],
     });
+  });
+});
+
+describe('Xtream Live catalog in the app worker', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('parses the catalog off the UI thread when a worker is available', async () => {
+    vi.stubGlobal('Worker', class {});
+    runWorkerTaskMock.mockResolvedValueOnce({ available: true, streams: [] });
+    expect(await createXtreamClient(creds).getLiveStreamsResult()).toEqual({
+      available: true,
+      streams: [],
+    });
+    expect(runWorkerTaskMock).toHaveBeenCalledWith('xtream.live-streams', expect.objectContaining({
+      url: expect.stringContaining('action=get_live_streams'),
+    }));
+    expect(fetchTextMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to this thread when the worker fails', async () => {
+    vi.stubGlobal('Worker', class {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runWorkerTaskMock.mockRejectedValueOnce(new Error('worker crashed'));
+    fetchTextMock.mockResolvedValueOnce('[{"stream_id":1,"name":"ch1"}]');
+    const result = await createXtreamClient(creds).getLiveStreamsResult();
+    expect(result.available).toBe(true);
+    expect(result.streams).toHaveLength(1);
+    expect(fetchTextMock).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      '[Xtream]',
+      'Xtream live catalog worker failed',
+      'event=xtream.live_catalog.worker_failed',
+      expect.any(Error),
+    );
+    warn.mockRestore();
+  });
+
+  it('keeps a request failure the worker reports without refetching', async () => {
+    vi.stubGlobal('Worker', class {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runWorkerTaskMock.mockResolvedValueOnce({ available: false, streams: [], failure: 'invalid_json' });
+    expect(await createXtreamClient(creds).getLiveStreamsResult())
+      .toEqual({ available: false, streams: [] });
+    expect(fetchTextMock).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('returns a failure code instead of throwing in the worker', async () => {
+    const request = { url: 'http://host/a', timeout: 1000, maxBytes: 1000 };
+    fetchTextMock.mockResolvedValueOnce('<html>nope</html>');
+    expect(await loadLiveStreamsCatalog(request))
+      .toEqual({ available: false, streams: [], failure: 'invalid_json' });
+    fetchTextMock.mockResolvedValueOnce('[{"stream_id":1,"name":"ch1"}]');
+    const loaded = await loadLiveStreamsCatalog(request);
+    expect(loaded.available).toBe(true);
+    expect(loaded.streams).toHaveLength(1);
+    expect(loaded.failure).toBeUndefined();
   });
 });
 

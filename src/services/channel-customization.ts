@@ -159,11 +159,11 @@ class ChannelCustomizationServiceImpl {
   // --- Group state
 
   isGroupHidden(groupKey: string): boolean {
-    return this.record.groupOverrides[groupKey]?.hidden === true;
+    return ownEntry(this.record.groupOverrides, groupKey)?.hidden === true;
   }
 
   groupLabel(groupKey: string): string {
-    return this.record.groupOverrides[groupKey]?.name || groupKey;
+    return ownEntry(this.record.groupOverrides, groupKey)?.name || groupKey;
   }
 
   toggleGroupHidden(groupKey: string): boolean {
@@ -229,27 +229,43 @@ class ChannelCustomizationServiceImpl {
     const rank = new Map<string, number>();
     for (let i = 0; i < d.order.length; i++) rank.set(d.order[i], i);
 
+    // An uncustomized playlist needs no channel keys, no ranks, and no sort;
+    // at 200k channels each of those is a visible stall on a TV.
+    const keyed = d.order.length > 0 || hasOwnEntries(d.overrides);
+    const groupOverrides = hasOwnEntries(d.groupOverrides) ? d.groupOverrides : null;
     const kept: { ch: Channel; rank: number; index: number }[] = [];
+    const visible: Channel[] = [];
     for (let i = 0; i < channels.length; i++) {
       const ch = channels[i];
-      const key = channelKey(ch);
-      const ov = d.overrides[key];
+      const key = keyed ? channelKey(ch) : '';
+      const ov = keyed ? d.overrides[key] : undefined;
 
       const srcName = ch.sourceName ?? ch.name;
       const srcGroup = ch.sourceGroup ?? ch.group;
       const gKey = ov?.group ?? srcGroup;
-      const label = d.groupOverrides[gKey]?.name || gKey;
+      const gov = groupOverrides ? ownEntry(groupOverrides, gKey) : undefined;
+      const label = gov?.name || gKey;
 
       ch.name = ov?.name || srcName;
-      if (ch.name !== srcName) ch.sourceName = srcName; else delete ch.sourceName;
+      // Deleting an absent property still costs a runtime call per channel.
+      if (ch.name !== srcName) ch.sourceName = srcName;
+      else if (ch.sourceName !== undefined) delete ch.sourceName;
       ch.group = label;
-      if (label !== srcGroup) ch.sourceGroup = srcGroup; else delete ch.sourceGroup;
-      if (label !== gKey) ch.groupKey = gKey; else delete ch.groupKey;
+      if (label !== srcGroup) ch.sourceGroup = srcGroup;
+      else if (ch.sourceGroup !== undefined) delete ch.sourceGroup;
+      if (label !== gKey) ch.groupKey = gKey;
+      else if (ch.groupKey !== undefined) delete ch.groupKey;
 
-      const hidden = ov?.hidden === true || d.groupOverrides[gKey]?.hidden === true;
+      const hidden = ov?.hidden === true || gov?.hidden === true;
       if (hidden && !includeHidden) continue;
+      if (!d.order.length) {
+        if (sourceIndices) sourceIndices[visible.length] = i;
+        visible.push(ch);
+        continue;
+      }
       kept.push({ ch, rank: rank.get(key) ?? d.order.length + i, index: i });
     }
+    if (!d.order.length) return visible;
 
     // Legacy Chromium sort is not stable — the index tiebreak keeps it deterministic.
     kept.sort((a, b) => a.rank - b.rank || a.index - b.index);
@@ -279,12 +295,24 @@ class ChannelCustomizationServiceImpl {
 
   private mutateGroup(groupKey: string, fn: (ov: GroupOverride) => void): void {
     if (!groupKey) return;
-    const ov = this.record.groupOverrides[groupKey] ?? {};
+    const ov = ownEntry(this.record.groupOverrides, groupKey) ?? {};
     fn(ov);
     if (isEmpty(ov)) delete this.record.groupOverrides[groupKey];
     else this.record.groupOverrides[groupKey] = ov;
     this.persist();
   }
+}
+
+// A provider group may be named like an Object.prototype member.
+function ownEntry<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
+}
+
+function hasOwnEntries(record: object): boolean {
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) return true;
+  }
+  return false;
 }
 
 function isEmpty(ov: ChannelOverride | GroupOverride): boolean {

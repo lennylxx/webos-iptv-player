@@ -8,6 +8,10 @@ import type {
 import type { XMLTVParseStats } from '../parsers/xmltv-parser';
 import type { XtreamLiveReference } from '../utils/xtream-live-match';
 import type { XtreamGroupNameFilter } from '../utils/xtream-category-filter';
+import type {
+  XtreamLiveStreamsRequest,
+  XtreamLiveStreamsResponse,
+} from '../services/xtream-client';
 
 export interface M3UWorkerRequest {
   url: string;
@@ -15,6 +19,8 @@ export interface M3UWorkerRequest {
   xtreamLive?: XtreamLiveReference[];
   xtreamBaseUrl?: string;
   xtreamGroupFilter?: XtreamGroupNameFilter;
+  /** De-duplicate streams in the worker and stamp each channel with it. */
+  playlistId?: string;
 }
 
 export interface M3UWorkerResponse {
@@ -26,6 +32,8 @@ export interface M3UWorkerResponse {
     chunks: number;
     channelsKept: number;
     channelsDropped: number;
+    /** Set when the worker de-duplicated the playlist by stream. */
+    duplicates?: number;
     elapsedMs: number;
   };
 }
@@ -280,6 +288,10 @@ export interface AppWorkerTasks {
     request: XMLTVWorkerRequest;
     response: XMLTVWorkerResponse;
     chunk: XMLTVWorkerChunk;
+  };
+  'xtream.live-streams': {
+    request: XtreamLiveStreamsRequest;
+    response: XtreamLiveStreamsResponse;
   };
   'search.index': {
     request: SearchIndexRequest;

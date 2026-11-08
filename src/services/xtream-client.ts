@@ -3,6 +3,7 @@ import { xtreamPlayerApi, type XtreamCredentials } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
 import type { VodCategory, VodItem, VodInfo, SeriesCategory, SeriesItem, SeriesInfo, Episode, SidecarSubtitle } from '../types';
 import { CONFIG } from '../config';
+import { runAppWorkerTask } from '../workers/app-worker-client';
 
 const log = createLogger('Xtream');
 
@@ -179,7 +180,7 @@ function logRequestFailure(
   );
 }
 
-async function fetchJsonStrict(
+async function fetchJsonValue(
   url: string,
   timeout: number,
   maxBytes: number,
@@ -189,17 +190,52 @@ async function fetchJsonStrict(
   try {
     text = await fetchLimitedText(url, maxBytes, timeout, signal);
   } catch (err) {
-    const requestError = mapFetchError(err);
-    logRequestFailure(url, requestError, timeout, maxBytes);
-    throw requestError;
+    throw mapFetchError(err);
   }
   try {
     return JSON.parse(text);
   } catch {
-    const requestError =
-      new XtreamRequestError('invalid_json', 'Xtream response was not valid JSON');
-    logRequestFailure(url, requestError, timeout, maxBytes);
-    throw requestError;
+    throw new XtreamRequestError('invalid_json', 'Xtream response was not valid JSON');
+  }
+}
+
+async function fetchJsonStrict(
+  url: string,
+  timeout: number,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  try {
+    return await fetchJsonValue(url, timeout, maxBytes, signal);
+  } catch (err) {
+    if (err instanceof XtreamRequestError) logRequestFailure(url, err, timeout, maxBytes);
+    throw err;
+  }
+}
+
+export interface XtreamLiveStreamsRequest {
+  url: string;
+  timeout: number;
+  maxBytes: number;
+}
+
+export interface XtreamLiveStreamsResponse extends XtreamLiveCatalogResult {
+  failure?: XtreamRequestErrorCode;
+}
+
+/** Worker side of `getLiveStreamsResult`: never throws, so the main thread logs. */
+export async function loadLiveStreamsCatalog(
+  request: XtreamLiveStreamsRequest,
+): Promise<XtreamLiveStreamsResponse> {
+  try {
+    const value = await fetchJsonValue(request.url, request.timeout, request.maxBytes);
+    return { available: Array.isArray(value), streams: parseLiveStreams(value) };
+  } catch (err) {
+    return {
+      available: false,
+      streams: [],
+      failure: err instanceof XtreamRequestError ? err.code : 'request_failed',
+    };
   }
 }
 
@@ -337,11 +373,39 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
     },
 
     async getLiveStreamsResult(signal?: AbortSignal): Promise<XtreamLiveCatalogResult> {
+      const url = xtreamPlayerApi(creds, 'get_live_streams');
+      const maxBytes = CONFIG.XTREAM.CATALOG_MAX_BYTES;
+      // A 50k-stream catalog parses for seconds on a TV; keep it off the UI
+      // thread. The worker can't take an AbortSignal, so cancellable calls stay.
+      if (!signal && typeof Worker !== 'undefined') {
+        let result: XtreamLiveStreamsResponse | null = null;
+        try {
+          result = await runAppWorkerTask('xtream.live-streams', {
+            url,
+            timeout: CATALOG_TIMEOUT,
+            maxBytes,
+          });
+        } catch (err) {
+          // The worker itself broke, not the request: retry on this thread.
+          log.warn('Xtream live catalog worker failed', 'event=xtream.live_catalog.worker_failed', err);
+        }
+        if (result) {
+          if (result.failure) {
+            logRequestFailure(
+              url,
+              new XtreamRequestError(result.failure, 'Xtream request failed'),
+              CATALOG_TIMEOUT,
+              maxBytes,
+            );
+          }
+          return { available: result.available, streams: result.streams };
+        }
+      }
       try {
         const value = await fetchJsonStrict(
-          xtreamPlayerApi(creds, 'get_live_streams'),
+          url,
           CATALOG_TIMEOUT,
-          CONFIG.XTREAM.CATALOG_MAX_BYTES,
+          maxBytes,
           signal,
         );
         return {

@@ -377,7 +377,11 @@ function ttlFor(category: CacheCategory): number {
 
 const openDb = openPersistenceDb;
 
+// Printable ASCII other than `"` and `\` serializes one byte per character.
+const JSON_PLAIN_ASCII = /^[\x20\x21\x23-\x5b\x5d-\x7e]*$/;
+
 function jsonStringBytes(value: string): number {
+  if (JSON_PLAIN_ASCII.test(value)) return value.length + 2;
   let bytes = 2;
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);
@@ -404,7 +408,9 @@ function jsonStringBytes(value: string): number {
 }
 
 function serializedBytes(value: unknown): number {
-  const ancestors = new WeakSet<object>();
+  const ancestors: object[] = [];
+  // Records repeat the same few field names across every item.
+  const keyBytes = new Map<string, number>();
 
   const measure = (item: unknown, arrayItem: boolean): number => {
     switch (typeof item) {
@@ -429,8 +435,8 @@ function serializedBytes(value: unknown): number {
         ? jsonStringBytes(item.toISOString())
         : JSON_NULL_BYTES;
     }
-    if (ancestors.has(item)) throw new TypeError('Circular cache value');
-    ancestors.add(item);
+    if (ancestors.indexOf(item) >= 0) throw new TypeError('Circular cache value');
+    ancestors.push(item);
     let bytes = 2;
     let entries = 0;
     if (Array.isArray(item)) {
@@ -440,16 +446,21 @@ function serializedBytes(value: unknown): number {
       }
     } else {
       const record = item as Record<string, unknown>;
-      for (const key in record) {
-        if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-        const field = record[key];
-        const valueBytes = measure(field, false);
+      const keys = Object.keys(record);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const valueBytes = measure(record[key], false);
         if (!valueBytes) continue;
-        bytes += jsonStringBytes(key) + 1 + valueBytes;
+        let nameBytes = keyBytes.get(key);
+        if (nameBytes === undefined) {
+          nameBytes = jsonStringBytes(key);
+          keyBytes.set(key, nameBytes);
+        }
+        bytes += nameBytes + 1 + valueBytes;
         entries++;
       }
     }
-    ancestors.delete(item);
+    ancestors.pop();
     return bytes + Math.max(0, entries - 1);
   };
 

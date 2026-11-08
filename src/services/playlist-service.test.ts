@@ -48,6 +48,7 @@ vi.mock('../parsers/m3u-loader', async (importOriginal) => {
         channelsDropped: number;
       }) => void,
       groupFilter?: { mode: 'include' | 'exclude'; names: string[] },
+      playlistId?: string,
     ) => {
       const text = await fetchTextMock(url, timeout);
       const { parseM3U } = await import('../parsers/m3u-parser');
@@ -63,6 +64,23 @@ vi.mock('../parsers/m3u-loader', async (importOriginal) => {
           ? { channelPostfilter: liveFilters.channelPostfilter }
           : {}),
       });
+      // Like the worker: a playlist id asks for its own copies merged.
+      let duplicates: number | undefined;
+      if (playlistId !== undefined) {
+        const { channelExactStreamIdentity } = await import('../utils/channel-identity');
+        const seen = new Set<string>();
+        duplicates = 0;
+        data.channels = data.channels.filter((ch) => {
+          const identity = channelExactStreamIdentity(ch);
+          if (seen.has(identity)) {
+            duplicates!++;
+            return false;
+          }
+          seen.add(identity);
+          ch.playlistIds = [playlistId];
+          return true;
+        });
+      }
       onProgress?.({
         inputBytes: text.length,
         chunks: 1,
@@ -80,6 +98,7 @@ vi.mock('../parsers/m3u-loader', async (importOriginal) => {
           channelsKept: data.channels.length,
           channelsDropped: liveFilters.getDroppedCount(),
           elapsedMs: 0,
+          ...(duplicates !== undefined ? { duplicates } : {}),
         },
       };
     }),
@@ -481,6 +500,24 @@ describe('PlaylistService.refresh', () => {
     expect(PlaylistService.hasFailedSource(['a'])).toBe(true);
     PlaylistService.reset();
     expect(PlaylistService.hasFailedSource(['a'])).toBe(false);
+  });
+
+  it('counts copies within and across playlists in each source log', async () => {
+    fetchTextMock.mockImplementation((url: string) => Promise.resolve(url.includes('p1')
+      ? '#EXTM3U\n#EXTINF:-1,Alpha\nhttp://stream/u1\n#EXTINF:-1,Alpha Dup\nhttp://stream/u1\n'
+        + '#EXTINF:-1,Bravo\nhttp://stream/u2\n'
+      : '#EXTM3U\n#EXTINF:-1,Bravo Dup\nhttp://stream/u2\n#EXTINF:-1,Charlie\nhttp://stream/u3\n'
+        + '#EXTINF:-1,Charlie Dup\nhttp://stream/u3\n'));
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const channels = await PlaylistService.refresh();
+    const lines = info.mock.calls.map(args => args.join(' '))
+      .filter(line => line.includes('event=playlist.source.load.completed'));
+    info.mockRestore();
+
+    expect(channels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('channels=3 added=2 duplicates=1');
+    expect(lines[1]).toContain('channels=3 added=1 duplicates=2');
   });
 
   it('logs the loaded catalog size for a diagnostics report', async () => {

@@ -52,6 +52,15 @@ describe('channelKey', () => {
   it('handles an empty URL without throwing', () => {
     expect(channelKey(ch(''))).toMatch(/^[0-9a-f]{8}$/);
   });
+
+  it('recomputes the key after the channel URL changes', () => {
+    const channel = ch('http://host/a');
+    const before = channelKey(channel);
+    channel.url = 'http://host/b';
+    expect(channelKey(channel)).toBe(channelKey(ch('http://host/b')));
+    expect(channelKey(channel)).not.toBe(before);
+    expect(legacyChannelKey(channel)).toBe(legacyChannelKey(ch('http://host/b')));
+  });
 });
 
 describe('legacyChannelKey', () => {

@@ -54,6 +54,20 @@ describe('ChannelCustomizationService', () => {
     expect(channels[0].sourceGroup).toBeUndefined();
   });
 
+  it('reports identity source indices and clears a dropped rename without customization', () => {
+    ChannelCustomizationService.rename(KEY_B, 'Renamed');
+    const channels = fixture();
+    expect(names(ChannelCustomizationService.applyTo(channels))).toEqual(['Alpha', 'Renamed', 'Charlie']);
+
+    storageMock.getChannelCustomization.mockReturnValue(null);
+    ChannelCustomizationService.reload();
+    const indices = new Uint32Array(3);
+    expect(names(ChannelCustomizationService.applyTo(channels, false, indices)))
+      .toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect(Array.from(indices)).toEqual([0, 1, 2]);
+    expect('sourceName' in channels[1]).toBe(false);
+  });
+
   it('moves a channel and keeps unlisted channels after the customized block', () => {
     ChannelCustomizationService.moveChannel([KEY_A, KEY_B, KEY_C], KEY_C, KEY_A, false);
     expect(ChannelCustomizationService.customized).toBe(true);
@@ -188,6 +202,21 @@ describe('ChannelCustomizationService', () => {
     expect(channels[0].sourceGroup).toBe('News');
     expect(groupKeyOf(channels[0])).toBe('News');
     expect(ChannelCustomizationService.groupLabel('News')).toBe('Headlines');
+  });
+
+  it('treats a group named like an Object member as a plain group', () => {
+    const named = (): Channel[] => [
+      channel('Alpha', 'http://host/a', 'constructor'),
+      channel('Bravo', 'http://host/b', 'News'),
+    ];
+    expect(ChannelCustomizationService.applyTo(named())[0].group).toBe('constructor');
+
+    ChannelCustomizationService.renameGroup('News', 'Headlines');
+    expect(ChannelCustomizationService.applyTo(named())[0].group).toBe('constructor');
+    expect(ChannelCustomizationService.groupLabel('constructor')).toBe('constructor');
+
+    ChannelCustomizationService.renameGroup('constructor', 'Builders');
+    expect(ChannelCustomizationService.applyTo(named())[0].group).toBe('Builders');
   });
 
   it('renames and hides the ungrouped bucket like any provider group', () => {

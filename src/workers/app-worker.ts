@@ -1,6 +1,7 @@
 import '../polyfills';
 import { fetchAndParseM3UInWorker } from '../parsers/m3u-loader';
 import { fetchAndParseXMLTVInWorker } from '../parsers/xmltv-loader';
+import { loadLiveStreamsCatalog } from '../services/xtream-client';
 import { exposeWorkerTasks, type WorkerTaskHandlers } from './worker-rpc';
 import { SearchWorkerIndex } from './search-index';
 import { IdbSearchCacheReader } from './search-cache-reader';
@@ -14,6 +15,7 @@ const scopedSearchIndex = new ScopedSearchIndex();
 const handlers: WorkerTaskHandlers<AppWorkerTasks> = {
   'm3u.load': (request, emitChunk) => fetchAndParseM3UInWorker(request, emitChunk),
   'xmltv.load': (request, emitChunk) => fetchAndParseXMLTVInWorker(request, emitChunk),
+  'xtream.live-streams': request => loadLiveStreamsCatalog(request),
   'search.index': request => searchIndex.index(request),
   'search.query': request => searchIndex.query(request),
   'search.prewarm': request => searchIndex.prewarm(request),

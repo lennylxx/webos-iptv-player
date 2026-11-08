@@ -8,6 +8,7 @@ import {
   createXtreamLiveMatcher,
 } from '../utils/xtream-live-match';
 import { createLogger } from '../utils/logger';
+import { channelExactStreamIdentity } from '../utils/channel-identity';
 import { createGroupNameMatcher, type XtreamGroupNameFilter } from '../utils/xtream-category-filter';
 import { runAppWorkerTask } from '../workers/app-worker-client';
 import type {
@@ -37,6 +38,7 @@ export async function fetchAndParseM3U(
   xtreamBaseUrl = '',
   onProgress?: (progress: M3ULoadProgress) => void,
   groupFilter?: XtreamGroupNameFilter,
+  playlistId?: string,
 ): Promise<M3ULoadResult> {
   const started = Date.now();
   const filter = liveStreams !== undefined
@@ -62,6 +64,7 @@ export async function fetchAndParseM3U(
       : undefined,
     ...(xtreamBaseUrl ? { xtreamBaseUrl } : {}),
     ...(groupFilter ? { xtreamGroupFilter: groupFilter } : {}),
+    ...(playlistId !== undefined ? { playlistId } : {}),
   };
   const channelBatches: Channel[] = [];
   const handleChunk = (chunk: M3UWorkerChunk): void => {
@@ -176,6 +179,25 @@ export async function fetchAndParseM3UInWorker(
     request.xtreamGroupFilter,
   );
   let emittedChannels = 0;
+  const playlistId = request.playlistId;
+  const seen = playlistId !== undefined ? new Set<string>() : null;
+  let duplicates = 0;
+  // Kept here so the UI thread can merge a single playlist without hashing it.
+  const uniqueStreams = (channels: Channel[]): Channel[] => {
+    if (!seen || playlistId === undefined) return channels;
+    const kept: Channel[] = [];
+    for (const ch of channels) {
+      const identity = channelExactStreamIdentity(ch);
+      if (seen.has(identity)) {
+        duplicates++;
+        continue;
+      }
+      seen.add(identity);
+      ch.playlistIds = [playlistId];
+      kept.push(ch);
+    }
+    return kept;
+  };
   let inputBytes = 0;
   let chunks = 0;
   let nextProgressBytes = PROGRESS_INTERVAL_BYTES;
@@ -196,7 +218,7 @@ export async function fetchAndParseM3UInWorker(
             emittedChannels += channels.length;
             const chunk: M3UWorkerChunk = {
               kind: 'channels',
-              channels,
+              channels: uniqueStreams(channels),
               inputBytes,
               chunks,
               channelsEmitted: emittedChannels,
@@ -254,6 +276,7 @@ export async function fetchAndParseM3UInWorker(
     }
     emitM3UProgress(true);
     const channelsKept = data.channels.length + emittedChannels;
+    data.channels = uniqueStreams(data.channels);
     return {
       data,
       metrics: {
@@ -263,6 +286,7 @@ export async function fetchAndParseM3UInWorker(
         chunks,
         channelsKept,
         channelsDropped: liveFilters.getDroppedCount(),
+        ...(seen ? { duplicates } : {}),
         elapsedMs: Date.now() - started,
       },
     };

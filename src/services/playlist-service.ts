@@ -148,8 +148,9 @@ class PlaylistServiceImpl {
   private groupsByPlaylist = new Map<string, string[]>();
   private groupKeyByDisplay = new Map<string, string>();
   // Channels sharing a key (one URL with other headers or DRM), in order.
-  private channelsByKey = new Map<string, Channel[]>();
-  private channelByLegacyKey = new Map<string, Channel | null>();
+  private channelsByKey: Map<string, Channel[]> | null = null;
+  // Built on the first key miss; most boots never need it.
+  private channelByLegacyKey: Map<string, Channel | null> | null = null;
   private channelSearchIndex: PreparedSearchItem<Channel>[] = [];
   private channelSearchByPlaylist = new Map<string, PreparedSearchItem<Channel>[]>();
   private indexedChannels: Channel[] | null = null;
@@ -261,8 +262,8 @@ class PlaylistServiceImpl {
     this.channelsByPlaylistGroup = new Map();
     this.groupsByPlaylist = new Map();
     this.groupKeyByDisplay = new Map();
-    this.channelsByKey = new Map();
-    this.channelByLegacyKey = new Map();
+    this.channelsByKey = null;
+    this.channelByLegacyKey = null;
     this.channelSearchIndex = [];
     this.channelSearchByPlaylist = new Map();
     this.indexedChannels = null;
@@ -331,8 +332,15 @@ class PlaylistServiceImpl {
       return [];
     }
 
-    const allChannels: Channel[] = [];
-    const byUrl = new Map<string, Channel>();
+    let allChannels: Channel[] = [];
+    let byUrl: Map<string, Channel> | null = null;
+    const streamIndex = (): Map<string, Channel> => {
+      if (!byUrl) {
+        byUrl = new Map();
+        for (const ch of allChannels) byUrl.set(channelExactStreamIdentity(ch), ch);
+      }
+      return byUrl;
+    };
     const epgSources: EpgSource[] = [];
     let failedPlaylists = 0;
     const failedSourceIds = new Set<string>();
@@ -444,6 +452,7 @@ class PlaylistServiceImpl {
       const plDone = log.time(`fetch '${pl.name || pl.url}'`);
       try {
         let parsed: ParsedPlaylist | null = null;
+        let workerDuplicates: number | null = null;
         let playlistError: unknown;
         try {
           const loaded = await fetchAndParseM3U(
@@ -463,8 +472,10 @@ class PlaylistServiceImpl {
               });
             },
             xtreamGroupFilter,
+            plKey,
           );
           parsed = loaded.data;
+          workerDuplicates = loaded.metrics.duplicates ?? null;
         } catch (err) {
           playlistError = err;
           if (!xtreamCredentials) throw err;
@@ -501,6 +512,7 @@ class PlaylistServiceImpl {
             `streams=${String(streams.length)}`,
           );
           if (streams.length) {
+            workerDuplicates = null;
             parsed = xtreamLivePlaylist(
               xtreamCredentials,
               xtreamOutput,
@@ -528,15 +540,20 @@ class PlaylistServiceImpl {
         }
         log.info('Parsed', parsed.channels.length, 'channels,', parsed.groups.length, 'groups',
           parsed.epgUrl ? `| epg: ${parsed.epgUrl}` : '');
-        let added = 0, dupes = 0;
+        // The worker already dropped this playlist's own copies.
+        let added = 0, dupes = workerDuplicates ?? 0;
         // Merging de-duplicates by stream: the same location sent with other
         // headers or options is another channel. channelKey stays URL-only,
         // so a plain channel keeps its favorites and history. The location is
         // compared exactly: entries differing only by a token may come from
         // different accounts, and each must keep its own working token.
-        for (const ch of parsed.channels) {
+        if (workerDuplicates !== null && !allChannels.length) {
+          allChannels = parsed.channels;
+          added = parsed.channels.length;
+        } else for (const ch of parsed.channels) {
           const identity = channelExactStreamIdentity(ch);
-          const existing = byUrl.get(identity);
+          const index = streamIndex();
+          const existing = index.get(identity);
           if (existing) {
             // Same stream in an earlier playlist: keep the one channel object
             // (so "All" stays de-duplicated), but record this playlist too so
@@ -545,7 +562,7 @@ class PlaylistServiceImpl {
             dupes++;
           } else {
             ch.playlistIds = [plKey];
-            byUrl.set(identity, ch);
+            index.set(identity, ch);
             allChannels.push(ch);
             added++;
           }
@@ -575,7 +592,7 @@ class PlaylistServiceImpl {
           'event=playlist.source.load.completed',
           `load=${String(load)}`,
           `source=${source}`,
-          `channels=${String(parsed.channels.length)}`,
+          `channels=${String(parsed.channels.length + (workerDuplicates ?? 0))}`,
           `added=${String(added)}`,
           `duplicates=${String(dupes)}`,
           `epg=${String(epgSources.length - sourceEpgStart)}`,
@@ -809,8 +826,8 @@ class PlaylistServiceImpl {
     this.channelsByPlaylist = new Map();
     this.channelsByPlaylistGroup = new Map();
     this.groupKeyByDisplay = new Map();
-    this.channelsByKey = new Map();
-    this.channelByLegacyKey = new Map();
+    this.channelsByKey = null;
+    this.channelByLegacyKey = null;
     this.channelSearchIndex = [];
     this.channelSearchByPlaylist = new Map();
     this.searchIndexedChannels = null;
@@ -820,17 +837,10 @@ class PlaylistServiceImpl {
       this.groupKeyByDisplay.set(ChannelCustomizationService.groupLabel(key), key);
     }
 
+    const sole = this.solePlaylistId();
     for (let i = 0; i < this.channels.length; i++) {
       const ch = this.channels[i];
       this.indexMap.set(ch, i);
-      const key = channelKey(ch);
-      this.appendIndexed(this.channelsByKey, key, ch);
-      // A legacy key is ambiguous only across different streams, not across
-      // entries that share one channelKey.
-      const legacyKey = legacyChannelKey(ch);
-      const legacy = this.channelByLegacyKey.get(legacyKey);
-      if (legacy === undefined) this.channelByLegacyKey.set(legacyKey, ch);
-      else if (legacy && channelKey(legacy) !== key) this.channelByLegacyKey.set(legacyKey, null);
       if (ch.group) {
         groupSet.add(ch.group);
         if (!this.groupKeyByDisplay.has(ch.group)) {
@@ -838,6 +848,7 @@ class PlaylistServiceImpl {
         }
         this.appendIndexed(this.channelsByGroup, ch.group, ch);
       }
+      if (sole !== null) continue;
       for (const playlistId of ch.playlistIds) {
         this.appendIndexed(this.channelsByPlaylist, playlistId, ch);
         if (!ch.group) continue;
@@ -855,6 +866,12 @@ class PlaylistServiceImpl {
         playlistGroups.add(ch.group);
       }
     }
+    if (sole !== null) {
+      // One playlist owns every channel: its indexes are the global ones.
+      this.channelsByPlaylist.set(sole, this.channels);
+      this.channelsByPlaylistGroup.set(sole, this.channelsByGroup);
+      groupSetsByPlaylist.set(sole, new Set(groupSet));
+    }
     for (const key of ChannelCustomizationService.customGroups) {
       const label = ChannelCustomizationService.groupLabel(key);
       groupSet.add(label);
@@ -868,6 +885,39 @@ class PlaylistServiceImpl {
     this.indexedChannels = this.channels;
     this.indexedChannelCount = this.channels.length;
     this.groupsRevision++;
+  }
+
+  private solePlaylistId(): string | null {
+    const first = this.channels[0]?.playlistIds;
+    if (!first || first.length !== 1) return null;
+    const id = first[0];
+    for (const ch of this.channels) {
+      if (ch.playlistIds.length !== 1 || ch.playlistIds[0] !== id) return null;
+    }
+    return id;
+  }
+
+  private keyIndex(): Map<string, Channel[]> {
+    if (this.channelsByKey) return this.channelsByKey;
+    const index = new Map<string, Channel[]>();
+    for (const ch of this.channels) this.appendIndexed(index, channelKey(ch), ch);
+    this.channelsByKey = index;
+    return index;
+  }
+
+  private legacyKeyIndex(): Map<string, Channel | null> {
+    if (this.channelByLegacyKey) return this.channelByLegacyKey;
+    const index = new Map<string, Channel | null>();
+    for (const ch of this.channels) {
+      // A legacy key is ambiguous only across different streams, not across
+      // entries that share one channelKey.
+      const legacyKey = legacyChannelKey(ch);
+      const legacy = index.get(legacyKey);
+      if (legacy === undefined) index.set(legacyKey, ch);
+      else if (legacy && channelKey(legacy) !== channelKey(ch)) index.set(legacyKey, null);
+    }
+    this.channelByLegacyKey = index;
+    return index;
   }
 
   private appendIndexed<T>(map: Map<string, T[]>, key: string, channel: T): void {
@@ -932,7 +982,7 @@ class PlaylistServiceImpl {
     if (group === 'builtin:all' || group === 'builtin:recently-watched') return all;
     if (group === 'builtin:favorites') {
       const favorites = StorageService.getFavorites()
-        .map(key => this.channelsByKey.get(key)
+        .map(key => this.keyIndex().get(key)
           ?.find(channel => !playlist || channel.playlistIds.includes(playlist)))
         .filter((channel): channel is Channel => !!channel);
       favorites.sort((a, b) => this.indexOf(a) - this.indexOf(b));
@@ -1009,7 +1059,7 @@ class PlaylistServiceImpl {
     exactStream?: string,
   ): { channel: Channel; channelIndex: number } | null {
     this.ensureDerivedIndexes();
-    const shared = this.channelsByKey.get(key) ?? [];
+    const shared = this.keyIndex().get(key) ?? [];
     const same = stream
       ? shared.filter(channel => channelStreamIdentity(channel) === stream)
       : [];
@@ -1018,7 +1068,7 @@ class PlaylistServiceImpl {
       : [];
     const pick = (list: Channel[]) => (prefer && list.find(prefer)) || list[0];
     const channel = pick(exact) ?? pick(same) ?? pick(shared)
-      ?? this.channelByLegacyKey.get(key);
+      ?? this.legacyKeyIndex().get(key);
     if (!channel) return null;
     const channelIndex = this.indexOf(channel);
     return channelIndex < 0 ? null : { channel, channelIndex };

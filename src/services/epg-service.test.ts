@@ -391,6 +391,59 @@ describe('EpgService multi-source matching', () => {
     expect(getCachedEpg).toHaveBeenCalledTimes(1);
   });
 
+  it('lets go of the previous channel list when a reload is skipped', async () => {
+    parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Program'));
+    const channels = [channel({
+      id: 'a', name: 'Alpha', url: 'http://host/a', playlistIds: ['a'],
+    })];
+    await EpgService.load([source('http://a', ['a'])], channels);
+    const refreshed = channels.map(ch => ({ ...ch }));
+
+    await EpgService.load([source('http://a', ['a'])], refreshed);
+
+    const applied = (EpgService as unknown as {
+      applied: { memo: { channels: Channel[] | null } } | null;
+    }).applied;
+    expect(applied?.memo.channels).toBe(refreshed);
+    expect(vi.mocked(parseXMLTVWithStats)).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a reload after a restore that left a source idle', async () => {
+    vi.mocked(getCachedEpg).mockImplementation(async url => (url === 'http://a'
+      ? { url, timestamp: NOON, data: parsed('c0', 'Ch 0', 'Cached') }
+      : null));
+    const channels = Array.from({ length: 5000 }, (_, i) =>
+      channel({ id: `c${String(i)}`, name: `Ch ${String(i)}`, playlistIds: ['a'] }));
+    const sources = [source('http://a', ['a']), source('http://b', ['b'])];
+    await EpgService.restoreCached(sources, channels);
+    expect(getCachedEpg).toHaveBeenCalledTimes(1);
+
+    await EpgService.load(sources, channels.slice());
+
+    expect(getCachedEpg).toHaveBeenCalledTimes(1);
+    expect(fetchAndParseXMLTVMock).not.toHaveBeenCalled();
+  });
+
+  it('reloads a source the restore never filtered after a rename in place', async () => {
+    vi.mocked(getCachedEpg).mockImplementation(async url => (url === 'http://a'
+      ? { url, timestamp: NOON, data: parsed('c0', 'Ch 0', 'Cached') }
+      : null));
+    const channels = Array.from({ length: 5000 }, (_, i) =>
+      channel({ id: `c${String(i)}`, name: `Ch ${String(i)}`, playlistIds: ['a'] }));
+    const renamed = channel({ name: 'Alpha', playlistIds: ['b'] });
+    channels.push(renamed);
+    const sources = [source('http://a', ['a']), source('http://b', ['b'])];
+    await EpgService.restoreCached(sources, channels);
+    expect(fetchAndParseXMLTVMock).not.toHaveBeenCalled();
+
+    renamed.name = 'Bravo';
+    parseXMLTVMock.mockReturnValue(parsed('x', 'Bravo', 'Program'));
+    await EpgService.load(sources, channels.slice());
+
+    expect(fetchAndParseXMLTVMock)
+      .toHaveBeenCalledWith('http://b', expect.any(Number), expect.anything());
+  });
+
   it('never runs two XMLTV loads at once', async () => {
     let resolveFetch: (value: string) => void = () => undefined;
     vi.mocked(fetchMaybeGzipText).mockImplementationOnce(() =>
@@ -804,6 +857,69 @@ describe('EpgService channel pre-filter', () => {
       { channelIds: Set<string>; channelNames: Set<string> };
     expect([...options.channelIds]).toEqual(['a']);
     expect([...options.channelNames].sort()).toEqual(['alpha', 'my alpha']);
+  });
+
+  it('yields between slices while filtering a large playlist', async () => {
+    parseXMLTVMock.mockReturnValue(parsed('c0', 'Alpha', 'Program'));
+    const channels = Array.from({ length: 6000 }, (_, i) =>
+      channel({ id: `c${String(i)}`, name: `Ch ${String(i)}`, playlistIds: ['a'] }));
+    let clock = NOON;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 5));
+    try {
+      const loading = EpgService.load([source('http://a', ['a'])], channels);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fetchAndParseXMLTVMock).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await vi.runAllTimersAsync();
+      await loading;
+    } finally {
+      now.mockRestore();
+    }
+
+    const options = vi.mocked(parseXMLTVWithStats).mock.calls[0][1] as
+      { channelIds: Set<string>; channelNames: Set<string> };
+    expect(options.channelIds.size).toBe(6000);
+    expect(options.channelNames.has('ch 5999')).toBe(true);
+  });
+
+  it('drops a sliced filter build that a reset overtakes', async () => {
+    const channels = Array.from({ length: 6000 }, (_, i) =>
+      channel({ id: `c${String(i)}`, name: `Ch ${String(i)}`, playlistIds: ['a'] }));
+    let clock = NOON;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 5));
+    try {
+      const loading = EpgService.load([source('http://a', ['a'])], channels);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      EpgService.reset();
+      await vi.runAllTimersAsync();
+      await loading;
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(fetchAndParseXMLTVMock).not.toHaveBeenCalled();
+    expect(getCachedEpg).not.toHaveBeenCalled();
+  });
+
+  it('builds no filter on a cold restore without a cached guide', async () => {
+    const channels = Array.from({ length: 6000 }, (_, i) =>
+      channel({ id: `c${String(i)}`, name: `Ch ${String(i)}`, playlistIds: ['a'] }));
+    let clock = NOON;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 5));
+    let done = false;
+    try {
+      void EpgService.restoreCached([source('http://a', ['a'])], channels)
+        .then(() => { done = true; });
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(done).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('passes every channel to a manual feed and skips filtering without a playlist', async () => {
