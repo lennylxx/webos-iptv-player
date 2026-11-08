@@ -54,6 +54,119 @@ with an include Live-category filter keeping 30 of the 605 categories (about
 their RSS and heap measurements remain informational because allocator and
 process lifetime effects vary between runs.
 
+### Cold-launch time to interactive
+
+The `interactive` phase launches the app with an empty profile against a
+local Xtream, M3U, and XMLTV server and measures when the user can first act.
+Each run uses a fresh browser context, so nothing is cached unless the flow
+is a warm one:
+
+| Flow | Measured |
+|---|---|
+| `m3u` | A 200,000-channel M3U with EPG until a D-pad key moves focus in Live |
+| `xtreamMovies` | An Xtream account until Live, then Movies, answer a key |
+| `m3uWarm`, `xtreamMoviesWarm` | The same relaunch after a seed launch filled the caches |
+| `searchCold` | Search opened at once: input ready, then the first candidate for a typed query |
+| `searchSteady` | The same after Live is ready |
+
+The Xtream fixture holds 50,000 Live streams, 200,000 movies, 200,000 series,
+and 5,000 categories per type. Each run also records long tasks, request
+counts per route, and IndexedDB read and commit counts.
+
+Once Live (`m3u`) or Movies (`xtreamMovies`) answers its first key, the
+probe keeps pressing Up and Down every `keyIntervalMs` (500 ms) until no
+background event has fired for 3 s and the main thread had no idle period
+missing for over 1 s in those 3 s, since sliced work such as building the
+EPG filter for 200,000 channels runs short tasks back to back and logs
+nothing. `afterReady` reports these keys'
+latency, each from the moment the key was due to the frame its ring
+moved, so a key queued behind a long task counts its wait, plus the long
+tasks in that window. Background work the app defers past the first key,
+such as the playlist cache write, shows up here. A run that does not go
+quiet before the settle timeout fails, since its `afterReady` window would
+be cut short. A Search flow fails when it misses a needle, except a movie
+or series needle in a run whose catalogs loaded only in part
+(`search.partialCatalogs` counts the `xtream.catalog.partial` events).
+
+A warm flow first launches unthrottled in the same browser context and
+waits until the background settles and the playlist cache was written;
+then it unloads the app to a blank page, still unthrottled, and relaunches
+with the device and network profile, measuring only that launch. After every measured launch the runner forces a GC and
+records the main-thread heap as `heap.retainedMiB`, with `heap.peakMiB`
+sampled every 250 ms; `heap.workerPeakMiB` is the peak sum of the live
+Worker heaps, since the app terminates an idle Worker.
+
+Chromium throttles the page's CPU but not a Worker's
+([crbug.com/383348380](https://crbug.com/383348380)), so the app Worker
+runs at desktop speed and work moved into it would look free. The runner
+attaches to each Worker over CDP, samples its CPU profile, and attributes
+the samples to the app's Worker requests (`m3u.load`, `xmltv.load`,
+`search.prewarm`, …). `work` reports, up to the first key (`readyMs`: Live
+for `m3u`, Movies for `xtreamMovies`, the first candidate for Search) and
+from then until the run ended:
+
+- `main.beforeReadyMs`, `main.afterReadyMs` — main-thread long-task time;
+- `worker.beforeReadyMs`, `worker.afterReadyMs` — Worker CPU, every sample;
+- `worker.criticalMs` — Worker CPU before the first key while the main
+  thread ran no long task, i.e. time the first key waited on the Worker;
+- `worker.projectedDelayMs` — `criticalMs` × (CPU rate − 1), what that wait
+  adds on the device, and `projectedReadyMs` — `readyMs` plus it;
+- `workerTasks` — per request: count, span, CPU, CPU before the first key,
+  and when the last one ended.
+
+`projectedReadyMs` is an estimate: it assumes the Worker's critical-path
+CPU is not hidden behind other waits on the device. The main thread's long
+tasks count only tasks over 50 ms, while Worker CPU counts every sample.
+`BENCHMARK_INTERACTIVE_WORKER_THROTTLE=1` instead throttles the Worker at
+the page's rate by pausing it through the debugger, to show how late
+results reorder the launch; the debugger inflates the Worker's own CPU
+about 1.8x, so this mode reports no projection, and the comparator rejects
+a baseline recorded in the other mode.
+
+The phase emulates a TV, not the development computer. `webos4` (default)
+and `c5` set the CPU throttling rate from an entry-level webOS 4 SoC and the
+OLED77C5 TV baseline, and delay IndexedDB events: each read-only request by
+`idbReadMs`, and each transaction that wrote data by `idbCommitMs` plus a
+5 ms `fsyncMs`. Chromium before M124 syncs every IndexedDB write transaction
+to the TV's eMMC; Playwright's IndexedDB does not. The 5 ms is an estimate,
+not a TV measurement, so test the 2–20 ms range when a result depends on it.
+
+The full benchmark skips this phase. `BENCHMARK_INTERACTIVE_ONLY=1` runs
+only it and writes
+`test-output/benchmarks/interactive-latest.json`, and the `--interactive`
+comparator gates and updates only the interactive part of `baseline.json`:
+
+```bash
+BENCHMARK_INTERACTIVE_ONLY=1 npm run benchmark
+node benchmarks/compare.mjs --interactive            # compare
+node benchmarks/compare.mjs --interactive --update   # replace this part
+```
+
+At full scale one run of the six flows takes several minutes on a
+desktop host, mostly the two Search flows. These variables shrink or change it:
+
+| Variable | Default |
+|---|---|
+| `BENCHMARK_INTERACTIVE_RUNS` | `5` |
+| `BENCHMARK_INTERACTIVE_FLOWS` | `m3u,m3uWarm,xtreamMovies,xtreamMoviesWarm,searchCold,searchSteady` |
+| `BENCHMARK_INTERACTIVE_NETWORKS` | `unthrottled,50mbps` (also `50mbps-rtt50`, `50mbps-rtt150`) |
+| `BENCHMARK_INTERACTIVE_DEVICE` | `webos4` (or `c5`) |
+| `BENCHMARK_INTERACTIVE_CPU_RATE`, `_IDB_READ_MS`, `_IDB_COMMIT_MS`, `_IDB_FSYNC_MS` | From the device |
+| `BENCHMARK_INTERACTIVE_LIVE`, `_MOVIES`, `_SERIES`, `_CATEGORIES`, `_M3U_CHANNELS`, `_EPG_PROGRAMMES` | 50,000, 200,000, 200,000, 5,000, 200,000, 6 |
+| `BENCHMARK_INTERACTIVE_RUN_TIMEOUT_MS` | `600000` |
+| `BENCHMARK_INTERACTIVE_WORKER_THROTTLE` | Unset; `1` throttles the Worker live instead of projecting its CPU |
+| `BENCHMARK_INTERACTIVE_PROFILE_DIR` | Unset; a directory saves a page and a per-Worker `.cpuprofile` per run |
+| `BENCHMARK_INTERACTIVE_ALLOW_INCOMPLETE` | Unset; set to skip the completeness assertions |
+
+The p50 of every interactive timing is gated with a 100 ms floor
+(`BENCHMARK_INTERACTIVE_ABSOLUTE_TOLERANCE_MS`). IndexedDB counts are
+deterministic and gated with a floor of one; Search gates reads and commits
+per catalog request because a faster app fetches more categories within its
+load budget. `heap.retainedMiB` is gated with an 8 MiB floor, and
+`heap.peakMiB` is informational. `work.projectedReadyMs` of `m3u` and
+`xtreamMovies` is gated like a timing; the rest of `work` is informational. The comparator rejects a baseline recorded with a different
+device, Worker throttle mode, fixture, run count, or network list.
+
 ## What is measured
 
 | Suite | Metrics |

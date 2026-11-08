@@ -24,13 +24,6 @@ import {
   installUniqueGroupFixture,
   installM3USearchFixture,
   measureHostedXMLTVPipelineComparison,
-  startLargePlaylistBenchmarkServer,
-  largePlaylistCategoryFilter,
-  largePlaylistFilteredChannels,
-  LARGE_PLAYLIST_CATEGORIES,
-  installLargePlaylistSource,
-  waitForLargePlaylistChannelCount,
-  readLargePlaylistChannelCount,
   startTvRendererRssSampler,
   runM3USearchBenchmark,
   assertM3USearchBenchmark,
@@ -52,6 +45,15 @@ import {
   openParentalControls,
   runParentalBenchmark,
 } from './benchmark-suite.mjs';
+import {
+  installLargePlaylistSource,
+  LARGE_PLAYLIST_CATEGORIES,
+  largePlaylistCategoryFilter,
+  largePlaylistFilteredChannels,
+  readLargePlaylistChannelCount,
+  startLargePlaylistBenchmarkServer,
+  waitForLargePlaylistChannelCount,
+} from './large-playlist-suite.mjs';
 
 const APP_ID = 'com.lennylxx.iptv';
 const ACCOUNT_ID = 'benchmark-x1';
