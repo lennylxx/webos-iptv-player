@@ -35,6 +35,7 @@ import {
 } from '../utils/channel-search';
 import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
+import { releaseHeldRecord } from './held-records';
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
 import {
   createXtreamClient,
@@ -450,6 +451,8 @@ class PlaylistServiceImpl {
         );
       }
       const plDone = log.time(`fetch '${pl.name || pl.url}'`);
+      // Channels the worker keeps to write the cache; any change here drops them.
+      let workerChannels: Channel[] | null = null;
       try {
         let parsed: ParsedPlaylist | null = null;
         let workerDuplicates: number | null = null;
@@ -473,8 +476,10 @@ class PlaylistServiceImpl {
             },
             xtreamGroupFilter,
             plKey,
+            playlists.length === 1,
           );
           parsed = loaded.data;
+          workerChannels = parsed.channels;
           workerDuplicates = loaded.metrics.duplicates ?? null;
         } catch (err) {
           playlistError = err;
@@ -526,13 +531,14 @@ class PlaylistServiceImpl {
         if (!parsed) throw new Error('Xtream source returned no playlist or live catalog');
 
         if (xtreamCredentials) {
-          await this.applyXtreamCatchup(
+          const changed = await this.applyXtreamCatchup(
             parsed.channels,
             xtreamCredentials,
             plKey,
             xtreamOutput,
             fallbackStreams ?? xtreamStreams,
           );
+          if (changed) releaseHeldRecord(parsed.channels);
         }
         if (parsed.issues.length) {
           log.warn('Playlist diagnostics:',
@@ -550,21 +556,26 @@ class PlaylistServiceImpl {
         if (workerDuplicates !== null && !allChannels.length) {
           allChannels = parsed.channels;
           added = parsed.channels.length;
-        } else for (const ch of parsed.channels) {
-          const identity = channelExactStreamIdentity(ch);
-          const index = streamIndex();
-          const existing = index.get(identity);
-          if (existing) {
-            // Same stream in an earlier playlist: keep the one channel object
-            // (so "All" stays de-duplicated), but record this playlist too so
-            // its own tab still appears and shows the channel.
-            if (!existing.playlistIds.includes(plKey)) existing.playlistIds.push(plKey);
-            dupes++;
-          } else {
-            ch.playlistIds = [plKey];
-            index.set(identity, ch);
-            allChannels.push(ch);
-            added++;
+        } else {
+          // A merge changes the channels, so no worker copy matches them now.
+          releaseHeldRecord(allChannels);
+          releaseHeldRecord(parsed.channels);
+          for (const ch of parsed.channels) {
+            const identity = channelExactStreamIdentity(ch);
+            const index = streamIndex();
+            const existing = index.get(identity);
+            if (existing) {
+              // Same stream in an earlier playlist: keep the one channel object
+              // (so "All" stays de-duplicated), but record this playlist too so
+              // its own tab still appears and shows the channel.
+              if (!existing.playlistIds.includes(plKey)) existing.playlistIds.push(plKey);
+              dupes++;
+            } else {
+              ch.playlistIds = [plKey];
+              index.set(identity, ch);
+              allChannels.push(ch);
+              added++;
+            }
           }
         }
         log.debug(`Added ${added} channels (${dupes} duplicates skipped)`);
@@ -599,6 +610,7 @@ class PlaylistServiceImpl {
           `elapsedMs=${String(Date.now() - sourceStarted)}`,
         );
       } catch (err) {
+        releaseHeldRecord(workerChannels);
         failedPlaylists++;
         failedSourceIds.add(plKey);
         log.error(
@@ -633,6 +645,7 @@ class PlaylistServiceImpl {
         'event=playlist.refresh.preserved',
         `failed=${String(failedPlaylists)}`,
       );
+      releaseHeldRecord(allChannels);
       this.logLoadCompleted('network', playlists.length, failedPlaylists);
       done();
       return this.channels;
@@ -653,6 +666,7 @@ class PlaylistServiceImpl {
       );
     } else {
       this.refreshTimestamp = null;
+      releaseHeldRecord(allChannels);
       log.warn('Skipping cache write because one or more playlists failed');
     }
     this.applyCustomization();
@@ -694,13 +708,13 @@ class PlaylistServiceImpl {
     accountId: string,
     output: XtreamLiveOutput,
     knownStreams?: XtreamLiveStream[],
-  ): Promise<void> {
+  ): Promise<number> {
     const client = createXtreamClient(credentials);
     const streams = knownStreams ?? await client.getLiveStreams();
     const archived = new Map(streams
       .filter(stream => stream.archive)
       .map(stream => [stream.streamId, stream]));
-    if (!archived.size) return;
+    if (!archived.size) return 0;
 
     const clock = await client.getServerClock();
     const knownIds = new Set(streams.map(stream => stream.streamId));
@@ -710,6 +724,7 @@ class PlaylistServiceImpl {
     );
     let enabled = 0;
     let unmatched = 0;
+    let changed = 0;
     for (const channel of channels) {
       const streamId = channel.catchupStreamId && knownIds.has(channel.catchupStreamId)
         ? channel.catchupStreamId
@@ -719,6 +734,7 @@ class PlaylistServiceImpl {
         if (!streamId) unmatched++;
         continue;
       }
+      changed++;
       channel.catchupStreamId = streamId;
       channel.catchupAccountId = accountId;
       if (!channel.catchupSource) {
@@ -745,6 +761,7 @@ class PlaylistServiceImpl {
         `channels=${unmatched}`,
       );
     }
+    return changed;
   }
 
   /**

@@ -3,9 +3,9 @@ import { xtreamPlayerApi, type XtreamCredentials } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
 import type { VodCategory, VodItem, VodInfo, SeriesCategory, SeriesItem, SeriesInfo, Episode, SidecarSubtitle } from '../types';
 import { CONFIG } from '../config';
-import { retainAppWorker, runAppWorkerTask } from '../workers/app-worker-client';
+import { runAppWorkerTask } from '../workers/app-worker-client';
 import type { XtreamCatalogStreamResponse } from './xtream-catalog-stream';
-import { holdRecord, releaseHeldRecord } from './held-records';
+import { holdWorkerValue } from './worker-held-records';
 
 const log = createLogger('Xtream');
 
@@ -324,7 +324,7 @@ async function streamCatalogInWorker<T>(
     }
     stream.batches.length = 0;
     // Callers that shared the load share the list, so it is held once.
-    if (response.held) holdWorkerList(items, response.held, false);
+    if (response.held) holdWorkerValue(items, response.held, false);
     stream.items = items;
   }
   return stream.items as T[];
@@ -343,7 +343,7 @@ async function syncCatalogInWorker(
   const { response, stream } = await joinCatalogStream(kind, url, accountId, categoryIds, signal, options, true);
   if (!stream.items) {
     const stand: never[] = [];
-    if (response.held) holdWorkerList(stand, response.held, true);
+    if (response.held) holdWorkerValue(stand, response.held, true);
     stream.items = stand;
   }
   return {
@@ -431,29 +431,6 @@ async function joinCatalogStream(
     throw error;
   }
   return { response, stream: joined };
-}
-
-// The worker keeps the list it sent, so caching it there skips cloning it here.
-function holdWorkerList(items: object, held: { token: string; bytes: number }, detached: boolean): void {
-  const { token } = held;
-  // A worker stopped when idle loses the list, so it runs until the page
-  // caches or drops it, or the worker would have forgotten it anyway.
-  const releaseWorker = retainAppWorker();
-  const expiry = setTimeout(() => releaseHeldRecord(items), CONFIG.XTREAM.HELD_LIST_MS);
-  holdRecord(items, {
-    bytes: held.bytes,
-    ...(detached ? { detached } : {}),
-    write: request => runAppWorkerTask('cache.write-held', {
-      ...request,
-      token,
-      timeoutMs: CONFIG.XTREAM.HELD_WRITE_TIMEOUT_MS,
-    }).catch(() => 'failed' as const),
-    release: () => {
-      clearTimeout(expiry);
-      runAppWorkerTask('cache.release-held', { token }).catch(() => undefined);
-      releaseWorker();
-    },
-  });
 }
 
 export function vodItemFrom(s: Record<string, unknown>, accountId: string): VodItem {

@@ -31,6 +31,8 @@ export interface M3UWorkerRequest {
   xtreamGroupFilter?: XtreamGroupNameFilter;
   /** De-duplicate streams in the worker and stamp each channel with it. */
   playlistId?: string;
+  /** Keep the channels in the worker so it can write the playlist cache. */
+  holdChannels?: boolean;
 }
 
 export interface M3UWorkerResponse {
@@ -46,6 +48,8 @@ export interface M3UWorkerResponse {
     duplicates?: number;
     elapsedMs: number;
   };
+  /** The worker kept every channel it sent, chunks first, for the cache write. */
+  held?: { token: string };
 }
 
 export type M3UWorkerChunk =
@@ -359,6 +363,10 @@ export interface AppWorkerTasks {
   'cache.write-held': {
     request: HeldValueWriteRequest;
     response: HeldWriteResult;
+  };
+  'cache.measure-held': {
+    request: { token: string };
+    response: number | null;
   };
   'cache.release-held': {
     request: { token: string };

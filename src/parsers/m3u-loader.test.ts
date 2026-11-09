@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchAndParseM3U, fetchAndParseM3UInWorker } from './m3u-loader';
+import { serializedBytes } from '../utils/serialized-bytes';
+import { measureHeldValue, writeHeldValue } from '../workers/held-values';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -84,6 +86,48 @@ describe('fetchAndParseM3UInWorker', () => {
     ]);
     expect(channels.every(ch => ch.playlistIds.join() === 'pl1')).toBe(true);
     expect(result.metrics.duplicates).toBe(50);
+  });
+
+  it('holds every channel it sent, measured as the page will store them', async () => {
+    const lines = ['#EXTM3U'];
+    for (let i = 0; i < 600; i++) {
+      lines.push(`#EXTINF:-1,ch\u00e9${String(i)}`, `http://host/s${String(i % 550)}`);
+    }
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      streamResponse([new TextEncoder().encode(lines.join('\n'))])));
+    const batched = [] as Awaited<ReturnType<
+      typeof fetchAndParseM3UInWorker
+    >>['data']['channels'];
+
+    const result = await fetchAndParseM3UInWorker({
+      url: 'http://host/a',
+      timeout: 5000,
+      playlistId: 'pl1',
+      holdChannels: true,
+    }, chunk => {
+      if (chunk.kind === 'channels') batched.push(...chunk.channels);
+    });
+
+    const channels = JSON.parse(JSON.stringify(batched.concat(result.data.channels))) as unknown[];
+    expect(result.held).not.toHaveProperty('bytes');
+    expect(measureHeldValue(result.held!.token)).toBe(serializedBytes(channels));
+    const writes: unknown[] = [];
+    await writeHeldValue(
+      { token: result.held!.token, timeoutMs: 1000, field: 'data', writes: [{ store: 's', value: {} }] },
+      async batch => { writes.push(...batch); },
+    );
+    expect(writes).toEqual([{ store: 's', value: { data: channels } }]);
+  });
+
+  it('holds the channels it returns whole, and nothing unless asked', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      streamResponse([new TextEncoder().encode('#EXTM3U\n#EXTINF:-1,ch1\nhttp://host/a')])));
+
+    const held = await fetchAndParseM3UInWorker({ url: 'http://host/a', timeout: 5000, holdChannels: true });
+    expect(measureHeldValue(held.held!.token)).toBe(serializedBytes(held.data.channels));
+
+    const result = await fetchAndParseM3UInWorker({ url: 'http://host/a', timeout: 5000 });
+    expect(result.held).toBeUndefined();
   });
 
   it('preserves every M3U metadata surface through catalog filtering and batching', async () => {

@@ -18,7 +18,13 @@ import {
   transactionDone,
   type CacheStore,
 } from './idb-database';
-import { heldRecord, isSpentStandIn, type HeldRecord } from './held-records';
+import {
+  heldRecord,
+  isSpentStandIn,
+  releaseHeldRecord,
+  withHeldValue,
+  type HeldRecord,
+} from './held-records';
 import { cacheEntryMetaId, cacheRecordTimestamp, PLAYLIST_CACHE_KEY } from './idb-schema';
 import { JSON_NULL_BYTES, serializedBytes } from '../utils/serialized-bytes';
 
@@ -189,9 +195,13 @@ function cancelPlaylistSchedule(): void {
   playlistTimer = null;
 }
 
-function discardScheduledPlaylist(reason: 'cache_clear' | 'rescheduled'): void {
+function discardScheduledPlaylist(
+  reason: 'cache_clear' | 'rescheduled',
+  next: Channel[] | null = null,
+): void {
   cancelPlaylistSchedule();
   if (scheduledPlaylist) {
+    if (scheduledPlaylist.channels !== next) releaseHeldRecord(scheduledPlaylist.channels);
     log.info(
       'Playlist cache write cancelled',
       'event=playlist.cache.write.cancelled',
@@ -303,6 +313,7 @@ export function scheduleCachedPlaylist(
     token.generation !== playlistGeneration
     || token.signature !== playlistSourceSignature()
   ) {
+    releaseHeldRecord(channels);
     log.info(
       'Playlist cache write skipped',
       'event=playlist.cache.write.skipped',
@@ -312,7 +323,7 @@ export function scheduleCachedPlaylist(
     );
     return;
   }
-  if (scheduledPlaylist) discardScheduledPlaylist('rescheduled');
+  if (scheduledPlaylist) discardScheduledPlaylist('rescheduled', channels);
   const scheduledAt = Date.now();
   scheduledPlaylist = {
     channels,
@@ -433,11 +444,23 @@ function isNormalizedRecord(store: CacheStore, raw: Record<string, unknown>): ra
     && raw.byteSize > 0;
 }
 
+/** A value the app worker holds, and where it goes in the record. */
+interface HeldSlot {
+  record: HeldRecord;
+  field: string;
+}
+
+// Null once the worker lost the value, so only the page's copy is left.
+async function heldBytes(record: HeldRecord): Promise<number | null> {
+  if (record.bytes !== undefined) return record.bytes;
+  return record.measure ? record.measure() : null;
+}
+
 function normalizeRecord(
   store: CacheStore,
   raw: Record<string, unknown>,
   now = Date.now(),
-  held: HeldRecord | null = null,
+  held: { field: string; bytes: number } | null = null,
 ): StoredRecord {
   const category = categoryForStore(store);
   const timestamp = finiteNumber(raw.timestamp, now);
@@ -457,7 +480,7 @@ function normalizeRecord(
   };
   // The worker already measured a held value; walking it here would stall.
   normalized.byteSize = held
-    ? serializedBytes({ ...normalized, data: null }) - JSON_NULL_BYTES + held.bytes
+    ? serializedBytes(withHeldValue(normalized, held.field, null)) - JSON_NULL_BYTES + held.bytes
     : serializedBytes(normalized);
   return normalized;
 }
@@ -975,8 +998,8 @@ async function commitRecord(
   store: CacheStore,
   record: StoredRecord,
   previous: CacheEntryMeta | null,
-  held: HeldRecord | null = null,
-): Promise<void> {
+  slot: HeldSlot | null = null,
+): Promise<boolean> {
   const db = await openDb();
   if (!db) throw new Error('IndexedDB unavailable');
   const metadata = await readMetadata();
@@ -997,20 +1020,21 @@ async function commitRecord(
     entries: Math.max(0, metadata.total.entries + deltaEntries),
     updatedAt: now,
   }];
-  if (held) {
+  if (slot) {
+    const held = slot.record;
     const result = await held.write({
-      field: 'data',
+      field: slot.field,
       writes: [
-        { store, value: { ...record, data: null } },
+        { store, value: withHeldValue(record, slot.field, null) },
         { store: META_STORE, value: { ...entryMeta(store, key, record) } },
         ...meta.map(value => ({ store: META_STORE, value: { ...value } })),
       ],
     });
-    if (result === 'written') return;
+    if (result === 'written') return true;
     if (result === 'quota_exceeded') throw new DOMException('Cache quota exceeded', 'QuotaExceededError');
     if (result === 'failed') throw new Error('Worker cache write failed');
     if (held.detached) throw new Error('Worker lost the value to cache');
-    // A restarted worker lost the value: write the page's copy instead.
+    return false;
   }
   const tx = db.transaction([store, META_STORE], 'readwrite');
   tx.objectStore(store).put(record);
@@ -1027,13 +1051,32 @@ async function commitRecord(
       );
     }
   });
+  return true;
+}
+
+// A restarted worker lost the value, so the page writes its own copy,
+// measured afresh since the page may have changed it after the worker did.
+// The slot is cleared then, so a quota retry skips the worker.
+async function commitWithFallback(
+  store: CacheStore,
+  key: IDBValidKey,
+  record: StoredRecord,
+  target: { held: HeldSlot | null },
+): Promise<void> {
+  if (await commitRecord(store, record, await readEntryMeta(store, key), target.held)) return;
+  target.held = null;
+  const measured = record.byteSize;
+  record.byteSize = 0;
+  record.byteSize = serializedBytes(record);
+  await ensureCapacity(record.byteSize - measured);
+  await commitRecord(store, record, await readEntryMeta(store, key));
 }
 
 async function putRawNow(
   store: CacheStore,
   raw: Record<string, unknown>,
   allowQuotaRetry = true,
-  held: HeldRecord | null = null,
+  slot: HeldSlot | null = null,
 ): Promise<boolean> {
   const key = raw[cacheKeyPath(store)] as IDBValidKey | undefined;
   if (key === undefined || key === null) return false;
@@ -1049,12 +1092,23 @@ async function putRawNow(
     return false;
   }
   await ensureMetadata();
+  let held = slot;
+  const bytes = held ? await heldBytes(held.record) : null;
+  if (held && bytes === null) {
+    if (held.record.detached) return false;
+    held = null;
+  }
   const previous = await readEntryMeta(store, key);
-  const record = normalizeRecord(store, raw, Date.now(), held);
+  const record = normalizeRecord(
+    store,
+    raw,
+    Date.now(),
+    held && bytes !== null ? { field: held.field, bytes } : null,
+  );
   await ensureCapacity(Math.max(0, record.byteSize - (previous?.byteSize ?? 0)));
+  const target = { held };
   try {
-    const latest = await readEntryMeta(store, key);
-    await commitRecord(store, record, latest, held);
+    await commitWithFallback(store, key, record, target);
     return true;
   } catch (err) {
     if (allowQuotaRetry && isQuotaError(err)) {
@@ -1067,8 +1121,7 @@ async function putRawNow(
       );
       await pruneBytes(record.byteSize + CLEANUP_MARGIN_BYTES);
       try {
-        const latest = await readEntryMeta(store, key);
-        await commitRecord(store, record, latest, held);
+        await commitWithFallback(store, key, record, target);
         return true;
       } catch (retryErr) {
         if (store === CATALOG_STORE) {
@@ -1118,7 +1171,7 @@ function putRaw(
   store: CacheStore,
   raw: Record<string, unknown>,
   allowQuotaRetry = true,
-  held: HeldRecord | null = null,
+  held: HeldSlot | null = null,
 ): Promise<boolean> {
   return enqueueMutation(() => putRawNow(store, raw, allowQuotaRetry, held));
 }
@@ -1354,7 +1407,7 @@ export async function setCachedCatalog(
       data,
       ...(state ? { state } : {}),
       expiresAt: ttlMs === null ? null : timestamp + ttlMs,
-    }, true, held);
+    }, true, held && { record: held, field: 'data' });
   } finally {
     held?.release();
   }
@@ -1619,7 +1672,11 @@ function setCachedPlaylistWithSignature(
   sourceSignature: string,
   refreshIntervalMs: number | null,
 ): Promise<boolean> {
-  if (!channels.length) return Promise.resolve(false);
+  const held = heldRecord(channels);
+  if (!channels.length) {
+    held?.release();
+    return Promise.resolve(false);
+  }
   return putRaw(PLAYLIST_STORE, {
     key: PLAYLIST_CACHE_KEY,
     timestamp,
@@ -1630,9 +1687,13 @@ function setCachedPlaylistWithSignature(
       timestamp,
     } satisfies CachedPlaylistPayload,
     expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
-  }).then((stored) => {
+  }, true, held && { record: held, field: 'data.channels' }).then((stored) => {
+    held?.release();
     if (stored) rememberRecord(channels, { store: PLAYLIST_STORE, key: PLAYLIST_CACHE_KEY, timestamp });
     return stored;
+  }, (error: unknown) => {
+    held?.release();
+    throw error;
   });
 }
 

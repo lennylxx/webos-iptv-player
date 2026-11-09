@@ -8,6 +8,7 @@ vi.mock('../utils/fetch-helper', async (importOriginal) => ({
 
 const { runWorkerTaskMock, retained } = vi.hoisted(() => ({ runWorkerTaskMock: vi.fn(), retained: { count: 0 } }));
 vi.mock('../workers/app-worker-client', () => ({
+  appWorkerGeneration: () => 1,
   runAppWorkerTask: runWorkerTaskMock,
   retainAppWorker: () => {
     retained.count++;

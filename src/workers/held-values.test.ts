@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { holdValue, writeHeldValue } from './held-values';
-import type { CacheWrite } from './search-cache-reader';
+import { holdBatches, holdValue, measureHeldValue, writeHeldValue } from './held-values';
+import { SearchCacheError, type CacheWrite } from './search-cache-reader';
 
 const STORE = 'catalog-cache';
 
@@ -34,8 +34,37 @@ describe('held values', () => {
     expect(seen).toEqual([[STORE, { key: 'k', data: ['a'] }]]);
   });
 
+  it('keeps a value whose write ran out of quota for the retry', async () => {
+    const token = holdValue(['a']);
+    const request = { token, timeoutMs: 1000, field: 'data', writes: [{ store: STORE, value: { key: 'k' } }] };
+    expect(await writeHeldValue(request, () => Promise.reject(new SearchCacheError('quota_exceeded'))))
+      .toBe('quota_exceeded');
+    expect((await written(token)).result).toBe('written');
+  });
+
+  it('writes a value into a nested field without touching its siblings', async () => {
+    const token = holdValue(['a']);
+    const writes: CacheWrite[] = [];
+    const record = { key: 'k', data: { channels: null, epgSources: ['e'] } };
+    await writeHeldValue(
+      { token, timeoutMs: 1000, field: 'data.channels', writes: [{ store: STORE, value: record }] },
+      async batch => { writes.push(...batch); },
+    );
+    expect(writes).toEqual([{ store: STORE, value: { key: 'k', data: { channels: ['a'], epgSources: ['e'] } } }]);
+    expect(record.data.channels).toBeNull();
+  });
+
+  it('joins held batches only once asked to measure or write them', async () => {
+    const batches = [['a'], ['b']];
+    const token = holdBatches(batches);
+    batches.push(['c']);
+    expect(measureHeldValue(token)).toBe(13);
+    expect((await written(token)).writes[0]!.value).toEqual({ key: 'k', data: ['a', 'b', 'c'] });
+    expect(measureHeldValue(token)).toBeNull();
+  });
+
   it('drops the oldest value past the limit', async () => {
-    const tokens = [holdValue(1), holdValue(2), holdValue(3), holdValue(4)];
+    const tokens = [holdValue(1), holdValue(2), holdValue(3), holdValue(4), holdValue(5)];
     expect((await written(tokens[0])).result).toBe('missing');
     for (const token of tokens.slice(1)) expect((await written(token)).result).toBe('written');
   });

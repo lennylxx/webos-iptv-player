@@ -18,6 +18,8 @@ import type {
 } from '../workers/tasks';
 import type { XtreamLiveReference } from '../utils/xtream-live-match';
 import type { XtreamLiveStream } from '../services/xtream-client';
+import { holdBatches } from '../workers/held-values';
+import { holdWorkerValue } from '../services/worker-held-records';
 
 export type M3ULoadResult = M3UWorkerResponse;
 export interface M3ULoadProgress {
@@ -39,7 +41,9 @@ export async function fetchAndParseM3U(
   onProgress?: (progress: M3ULoadProgress) => void,
   groupFilter?: XtreamGroupNameFilter,
   playlistId?: string,
+  holdChannels = false,
 ): Promise<M3ULoadResult> {
+  const inWorker = typeof Worker !== 'undefined';
   const started = Date.now();
   const filter = liveStreams !== undefined
     ? 'live_catalog'
@@ -65,6 +69,7 @@ export async function fetchAndParseM3U(
     ...(xtreamBaseUrl ? { xtreamBaseUrl } : {}),
     ...(groupFilter ? { xtreamGroupFilter: groupFilter } : {}),
     ...(playlistId !== undefined ? { playlistId } : {}),
+    ...(holdChannels && inWorker ? { holdChannels } : {}),
   };
   const channelBatches: Channel[] = [];
   const handleChunk = (chunk: M3UWorkerChunk): void => {
@@ -90,9 +95,9 @@ export async function fetchAndParseM3U(
   };
   let result: M3UWorkerResponse;
   try {
-    result = typeof Worker === 'undefined'
-      ? await fetchAndParseM3UInWorker(request, handleChunk)
-      : await runAppWorkerTask('m3u.load', request, handleChunk);
+    result = inWorker
+      ? await runAppWorkerTask('m3u.load', request, handleChunk)
+      : await fetchAndParseM3UInWorker(request, handleChunk);
   } catch (error) {
     const details = m3uWorkerFailureDetails(error);
     log.error(
@@ -111,6 +116,7 @@ export async function fetchAndParseM3U(
   if (channelBatches.length) {
     result.data.channels = channelBatches.concat(result.data.channels);
   }
+  if (result.held) holdWorkerValue(result.data.channels, result.held, false);
   log.info(
     'M3U stream loaded',
     'event=playlist.m3u.load.completed',
@@ -182,6 +188,10 @@ export async function fetchAndParseM3UInWorker(
   const playlistId = request.playlistId;
   const seen = playlistId !== undefined ? new Set<string>() : null;
   let duplicates = 0;
+  const held: Channel[][] | null = request.holdChannels ? [] : null;
+  const holdBatch = (channels: Channel[]): void => {
+    if (held && channels.length) held.push(channels);
+  };
   // Kept here so the UI thread can merge a single playlist without hashing it.
   const uniqueStreams = (channels: Channel[]): Channel[] => {
     if (!seen || playlistId === undefined) return channels;
@@ -216,9 +226,11 @@ export async function fetchAndParseM3UInWorker(
           channelBatchSize: CHANNEL_BATCH_SIZE,
           onChannelBatch: (channels: Channel[]) => {
             emittedChannels += channels.length;
+            const kept = uniqueStreams(channels);
+            holdBatch(kept);
             const chunk: M3UWorkerChunk = {
               kind: 'channels',
-              channels: uniqueStreams(channels),
+              channels: kept,
               inputBytes,
               chunks,
               channelsEmitted: emittedChannels,
@@ -277,8 +289,10 @@ export async function fetchAndParseM3UInWorker(
     emitM3UProgress(true);
     const channelsKept = data.channels.length + emittedChannels;
     data.channels = uniqueStreams(data.channels);
+    holdBatch(data.channels);
     return {
       data,
+      ...(held?.length ? { held: { token: holdBatches(held) } } : {}),
       metrics: {
         transport,
         filter: liveFilters.mode,

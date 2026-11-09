@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Channel, ChannelCustomization } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
 
-const { storageMock, cacheMock, fetchTextMock } = vi.hoisted(() => ({
+const { storageMock, cacheMock, fetchTextMock, heldReleaseMock } = vi.hoisted(() => ({
+  heldReleaseMock: vi.fn(),
   storageMock: {
     getPlaylists: vi.fn(),
     getFavorites: vi.fn(() => [] as string[]),
@@ -49,6 +50,7 @@ vi.mock('../parsers/m3u-loader', async (importOriginal) => {
       }) => void,
       groupFilter?: { mode: 'include' | 'exclude'; names: string[] },
       playlistId?: string,
+      holdChannels?: boolean,
     ) => {
       const text = await fetchTextMock(url, timeout);
       const { parseM3U } = await import('../parsers/m3u-parser');
@@ -80,6 +82,10 @@ vi.mock('../parsers/m3u-loader', async (importOriginal) => {
           ch.playlistIds = [playlistId];
           return true;
         });
+      }
+      if (holdChannels && data.channels.length) {
+        const { holdRecord } = await import('./held-records');
+        holdRecord(data.channels, { bytes: 1, write: vi.fn(), release: heldReleaseMock });
       }
       onProgress?.({
         inputBytes: text.length,
@@ -122,6 +128,7 @@ import {
   legacyChannelKey,
 } from '../utils/channel';
 import { ChannelCustomizationService } from './channel-customization';
+import { heldRecord } from './held-records';
 import { ParentalControlService } from './parental-control';
 import { CONFIG } from '../config';
 
@@ -164,6 +171,19 @@ describe('PlaylistService.refresh', () => {
     fetchTextMock.mockImplementation((url: string) =>
       Promise.resolve(url.includes('p1') ? P1 : P2),
     );
+  });
+
+  it('leaves the cache write to the worker only for a lone playlist', async () => {
+    await PlaylistService.refresh();
+    expect(vi.mocked(fetchAndParseM3U).mock.calls.map(call => call[7])).toEqual([false, false]);
+
+    storageMock.getPlaylists.mockReturnValue([{ id: 'a', name: 'P1', url: 'http://host1/p1.m3u' }]);
+    await PlaylistService.refresh();
+    expect(vi.mocked(fetchAndParseM3U).mock.calls[2][7]).toBe(true);
+    const scheduled = vi.mocked(cacheMock.scheduleCachedPlaylist).mock.calls[1][0] as Channel[];
+    expect(scheduled).toBe(PlaylistService.allChannels);
+    expect(heldRecord(scheduled)).not.toBeNull();
+    expect(heldReleaseMock).not.toHaveBeenCalled();
   });
 
   it('merges playlists and de-duplicates channels by URL', async () => {
@@ -875,6 +895,47 @@ http://host/series/u1/p1/301.mkv`);
     expect(PlaylistService.epgSources.map((source) => source.url)).toContain(
       'http://host:8080/xmltv.php?username=u1&password=p1',
     );
+  });
+
+  it('leaves the cache write of a playlist without catch-up to the worker', async () => {
+    await PlaylistService.refresh();
+    const scheduled = vi.mocked(cacheMock.scheduleCachedPlaylist).mock.calls[0][0] as Channel[];
+    expect(heldRecord(scheduled)).not.toBeNull();
+    expect(heldReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it('writes the cache from the page once catch-up changed the channels', async () => {
+    fetchTextMock.mockImplementation((url: string) => {
+      if (url.includes('action=get_live_streams')) {
+        return Promise.resolve(JSON.stringify([{ stream_id: 101, tv_archive: 1, tv_archive_duration: '7' }]));
+      }
+      if (url.includes('player_api.php')) return Promise.resolve('{}');
+      return Promise.resolve(XT);
+    });
+
+    await PlaylistService.refresh();
+
+    const scheduled = vi.mocked(cacheMock.scheduleCachedPlaylist).mock.calls[0][0] as Channel[];
+    expect(scheduled[0].catchupSource).not.toBe('');
+    expect(heldRecord(scheduled)).toBeNull();
+    expect(heldReleaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the worker drop its channels once catch-up matching fails', async () => {
+    const catchup = vi.spyOn(
+      PlaylistService as unknown as { applyXtreamCatchup(): Promise<number> },
+      'applyXtreamCatchup',
+    ).mockRejectedValue(new Error('offline'));
+
+    try {
+      await PlaylistService.refresh();
+    } finally {
+      catchup.mockRestore();
+    }
+
+    expect(vi.mocked(fetchAndParseM3U).mock.calls[0][7]).toBe(true);
+    expect(cacheMock.scheduleCachedPlaylist).not.toHaveBeenCalled();
+    expect(heldReleaseMock).toHaveBeenCalledTimes(1);
   });
 
   it('enables catch-up only for streams archived by the account', async () => {

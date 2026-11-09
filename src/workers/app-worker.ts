@@ -3,7 +3,7 @@ import { fetchAndParseM3UInWorker } from '../parsers/m3u-loader';
 import { fetchAndParseXMLTVInWorker } from '../parsers/xmltv-loader';
 import { loadLiveStreamsCatalog } from '../services/xtream-client';
 import { cancelXtreamCatalogStream, streamXtreamCatalogInWorker } from '../services/xtream-catalog-stream';
-import { releaseHeldValue, writeHeldValue } from './held-values';
+import { measureHeldValue, releaseHeldValue, writeHeldValue } from './held-values';
 import { exposeWorkerTasks, type WorkerTaskHandlers } from './worker-rpc';
 import { SearchWorkerIndex } from './search-index';
 import { IdbSearchCacheReader } from './search-cache-reader';
@@ -28,6 +28,7 @@ const handlers: WorkerTaskHandlers<AppWorkerTasks> = {
     (writes, timeoutMs) => cacheDb.writeAll(writes, timeoutMs),
     (store, value) => searchIndex.retainCatalogRecord(store, value),
   ),
+  'cache.measure-held': request => Promise.resolve(measureHeldValue(request.token)),
   'cache.release-held': (request) => {
     releaseHeldValue(request.token);
     return Promise.resolve();

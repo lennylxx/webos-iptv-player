@@ -49,7 +49,7 @@ import {
 import { cachedNameDocuments } from '../workers/search-cache-documents';
 import { buildSourceIndex } from '../workers/search-source-index';
 import { IdbSearchCacheReader } from '../workers/search-cache-reader';
-import { holdValue, releaseHeldValue, writeHeldValue } from '../workers/held-values';
+import { holdValue, measureHeldValue, releaseHeldValue, writeHeldValue } from '../workers/held-values';
 import { holdRecord, type HeldWriteRequest, type HeldWriteResult } from './held-records';
 import { serializedBytes } from '../utils/serialized-bytes';
 
@@ -220,6 +220,24 @@ describe('idb-cache', () => {
       expect(await getCachedCatalog('x1|vod_categories')).toBeNull();
       expect(await getCachedCatalog('x1|series_categories')).not.toBeNull();
       expect(await getCachedEpg('http://host/epg')).not.toBeNull();
+    });
+
+    it('makes room for a page copy that grew after the worker measured it', async () => {
+      // A 2 MiB budget.
+      usePrefixedQuota((success) => success(0, 8 * MiB));
+      await setCachedSubtitle('subdl:1', 'x'.repeat(MiB / 2));
+      const channels = [channel('ch1')];
+      holdRecord(channels, {
+        bytes: serializedBytes(channels),
+        write: () => Promise.resolve('missing'),
+        release: () => undefined,
+      });
+      Object.assign(channels[0], { name: 'x'.repeat(1.6 * MiB) });
+
+      await setCachedPlaylist(channels);
+
+      expect(await getCachedPlaylist(null)).not.toBeNull();
+      expect(await getCachedSubtitle('subdl:1')).toBeNull();
     });
 
     it('stretches the budget over a playlist larger than it', async () => {
@@ -943,7 +961,12 @@ describe('idb-cache', () => {
 
   describe('a list the app worker holds', () => {
     // Wires the worker's side straight to the same database.
-    function holdInWorker(items: object[], answer?: () => HeldWriteResult | null, detached = false) {
+    function holdInWorker(
+      items: object[],
+      answer?: () => HeldWriteResult | null,
+      detached = false,
+      measured = false,
+    ) {
       const reader = new IdbSearchCacheReader(indexedDB);
       const token = holdValue(items);
       const write = vi.fn((request: HeldWriteRequest): Promise<HeldWriteResult> => {
@@ -955,15 +978,21 @@ describe('idb-cache', () => {
         );
       });
       const release = vi.fn(() => releaseHeldValue(token));
-      holdRecord(items, { bytes: serializedBytes(items), write, release, ...(detached ? { detached } : {}) });
-      return { token, write, release };
+      const measure = vi.fn(() => Promise.resolve(measureHeldValue(token)));
+      holdRecord(items, {
+        ...(measured ? { measure } : { bytes: serializedBytes(items) }),
+        write,
+        release,
+        ...(detached ? { detached } : {}),
+      });
+      return { token, write, release, measure };
     }
 
-    async function entryBytes(key: string): Promise<number> {
+    async function entryBytes(key: string, store = 'catalog-cache'): Promise<number> {
       const db = await openPersistenceDb();
       const tx = db!.transaction(CACHE_META_STORE, 'readonly');
       const meta = await requestResult(
-        tx.objectStore(CACHE_META_STORE).get(`entry:catalog-cache:${key}`),
+        tx.objectStore(CACHE_META_STORE).get(`entry:${store}:${key}`),
       ) as { byteSize: number };
       return meta.byteSize;
     }
@@ -985,6 +1014,126 @@ describe('idb-cache', () => {
       expect(usage.categories.catalog).toEqual({ bytes: 2 * await entryBytes('x1|page'), entries: 2 });
       expect(held.release).toHaveBeenCalledTimes(1);
       expect(cacheRecordRef(items)).toMatchObject({ store: CATALOG_STORE, key: 'x1|held' });
+    });
+
+    it('writes held playlist channels beside the page\'s EPG sources', async () => {
+      const epg = [{ url: 'http://host/e', playlistIds: ['p1'] }];
+      await setCachedPlaylist([channel('ch1'), channel('ch2')], epg, 1000, null);
+      const pageBytes = await entryBytes('combined-v4', 'playlist-cache');
+      const channels = [channel('ch1'), channel('ch2')];
+      const held = holdInWorker(channels);
+
+      await setCachedPlaylist(channels, epg, 1000, null);
+
+      expect(held.write).toHaveBeenCalledTimes(1);
+      const request = held.write.mock.calls[0][0];
+      expect(request.field).toBe('data.channels');
+      expect(request.writes[0].value.data).toMatchObject({ channels: null, epgSources: epg });
+      expect(await getCachedPlaylist(null)).toEqual({
+        channels: [channel('ch1'), channel('ch2')],
+        epgSources: epg,
+        timestamp: 1000,
+      });
+      expect(await entryBytes('combined-v4', 'playlist-cache')).toBe(pageBytes);
+      expect(held.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets the worker drop held channels whose scheduled write is cancelled', async () => {
+      const channels = [channel('ch1')];
+      const held = holdInWorker(channels);
+      scheduleCachedPlaylist(channels);
+      scheduleCachedPlaylist(channels);
+      expect(held.release).not.toHaveBeenCalled();
+
+      await clearCachedPlaylist();
+
+      expect(held.release).toHaveBeenCalledTimes(1);
+      await flushCacheWrites();
+      expect(held.write).not.toHaveBeenCalled();
+    });
+
+    it('drops held channels whose refresh went stale or was replaced', async () => {
+      const token = playlistCacheToken();
+      await clearCachedPlaylist();
+      const staleChannels = [channel('ch1')];
+      const staleHeld = holdInWorker(staleChannels);
+      scheduleCachedPlaylist(staleChannels, [], Date.now(), null, token);
+      expect(staleHeld.release).toHaveBeenCalledTimes(1);
+
+      const first = [channel('ch1')];
+      const firstHeld = holdInWorker(first);
+      scheduleCachedPlaylist(first);
+      const second = [channel('ch2')];
+      const secondHeld = holdInWorker(second);
+      scheduleCachedPlaylist(second);
+      expect(firstHeld.release).toHaveBeenCalledTimes(1);
+      expect(secondHeld.release).not.toHaveBeenCalled();
+
+      await flushCacheWrites();
+      expect(firstHeld.write).not.toHaveBeenCalled();
+      expect(secondHeld.write).toHaveBeenCalledTimes(1);
+      expect(secondHeld.release).toHaveBeenCalledTimes(1);
+      expect((await getCachedPlaylist(null))?.channels).toEqual([channel('ch2')]);
+    });
+
+    it('drops held channels whose worker write failed', async () => {
+      const channels = [channel('ch1')];
+      const held = holdInWorker(channels, () => 'failed');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      expect(await setCachedPlaylist(channels, [], 1000, null)).toBe(false);
+
+      expect(held.release).toHaveBeenCalledTimes(1);
+      expect(await getCachedPlaylist(null)).toBeNull();
+      warn.mockRestore();
+    });
+
+    it('asks the worker for the size of channels it left unmeasured', async () => {
+      const epg = [{ url: 'http://host/e', playlistIds: ['p1'] }];
+      await setCachedPlaylist([channel('ch1'), channel('ch2')], epg, 1000, null);
+      const pageBytes = await entryBytes('combined-v4', 'playlist-cache');
+      const channels = [channel('ch1'), channel('ch2')];
+      const held = holdInWorker(channels, undefined, false, true);
+
+      await setCachedPlaylist(channels, epg, 1000, null);
+
+      expect(held.measure).toHaveBeenCalledTimes(1);
+      expect(held.write).toHaveBeenCalledTimes(1);
+      expect(await entryBytes('combined-v4', 'playlist-cache')).toBe(pageBytes);
+      expect((await getCacheUsage()).categories.playlist.bytes).toBe(pageBytes);
+    });
+
+    it('writes the page\'s channels when the worker lost them before measuring', async () => {
+      const channels = [channel('ch1'), channel('ch2')];
+      const held = holdInWorker(channels, undefined, false, true);
+      releaseHeldValue(held.token);
+
+      await setCachedPlaylist(channels, [], 1000, null);
+
+      expect(held.write).not.toHaveBeenCalled();
+      expect((await getCachedPlaylist(null))?.channels).toEqual(channels);
+      expect((await getCacheUsage()).categories.playlist.bytes)
+        .toBe(await entryBytes('combined-v4', 'playlist-cache'));
+    });
+
+    it('measures the page\'s own channels when the worker lost them', async () => {
+      const epg = [{ url: 'http://host/e', playlistIds: ['p1'] }];
+      const channels = [channel('ch1'), channel('ch2')];
+      const held = holdInWorker(channels);
+      releaseHeldValue(held.token);
+      // The page renames a channel after the worker measured them.
+      Object.assign(channels[0], { name: 'Renamed channel', sourceName: channels[0].name });
+
+      await setCachedPlaylist(channels, epg, 1000, null);
+
+      const request = held.write.mock.calls[0][0];
+      expect(request.field).toBe('data.channels');
+      expect(channels).toHaveLength(2);
+      expect((await getCachedPlaylist(null))?.channels).toEqual(channels);
+      const heldBytes = await entryBytes('combined-v4', 'playlist-cache');
+      await setCachedPlaylist([...channels], epg, 1000, null);
+      expect(heldBytes).toBe(await entryBytes('combined-v4', 'playlist-cache'));
+      expect((await getCacheUsage()).categories.playlist.bytes).toBe(heldBytes);
     });
 
     it('writes the page copy when the worker no longer holds the list', async () => {
@@ -1029,6 +1178,33 @@ describe('idb-cache', () => {
       expect((await getCachedCatalog('x1|held'))?.data).toEqual(list());
       expect(warn.mock.calls.some(call => call.join(' ').includes('event=persistence.cache.quota.exceeded'))).toBe(true);
       warn.mockRestore();
+    });
+
+    it('retries its own copy after a quota error without asking the worker again', async () => {
+      const channels = [channel('ch1'), channel('ch2')];
+      const held = holdInWorker(channels);
+      releaseHeldValue(held.token);
+      const put = IDBObjectStore.prototype.put;
+      let failed = false;
+      const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (
+        this: IDBObjectStore,
+        ...args: Parameters<IDBObjectStore['put']>
+      ) {
+        if (this.name === 'playlist-cache' && !failed) {
+          failed = true;
+          throw new DOMException('full', 'QuotaExceededError');
+        }
+        return put.apply(this, args);
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await setCachedPlaylist(channels, [], 1000, null);
+      spy.mockRestore();
+      warn.mockRestore();
+
+      expect(failed).toBe(true);
+      expect(held.write).toHaveBeenCalledTimes(1);
+      expect((await getCachedPlaylist(null))?.channels).toEqual(channels);
     });
 
     it('stores nothing when the worker write fails', async () => {
