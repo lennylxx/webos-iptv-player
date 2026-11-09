@@ -18,7 +18,9 @@ import {
   transactionDone,
   type CacheStore,
 } from './idb-database';
+import { heldRecord, isSpentStandIn, type HeldRecord } from './held-records';
 import { cacheEntryMetaId, cacheRecordTimestamp, PLAYLIST_CACHE_KEY } from './idb-schema';
+import { JSON_NULL_BYTES, serializedBytes } from '../utils/serialized-bytes';
 
 const log = createLogger('CacheStorage');
 const CACHE_CATEGORIES = ['playlist', 'epg', 'catalog', 'subtitle', 'health', 'search'] as const;
@@ -41,7 +43,6 @@ const ENTRY_META_INDEX_KEY = 'entry-index';
 const ENTRY_META_VERSION = 1;
 const ACCESS_TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 const STORAGE_ESTIMATE_TTL_MS = 60 * 1000;
-const JSON_NULL_BYTES = 4;
 
 export type CacheCategory = typeof CACHE_CATEGORIES[number];
 
@@ -377,96 +378,6 @@ function ttlFor(category: CacheCategory): number {
 
 const openDb = openPersistenceDb;
 
-// Printable ASCII other than `"` and `\` serializes one byte per character.
-const JSON_PLAIN_ASCII = /^[\x20\x21\x23-\x5b\x5d-\x7e]*$/;
-
-function jsonStringBytes(value: string): number {
-  if (JSON_PLAIN_ASCII.test(value)) return value.length + 2;
-  let bytes = 2;
-  for (let i = 0; i < value.length; i++) {
-    const code = value.charCodeAt(i);
-    if (code === 34 || code === 92 || code === 8 || code === 9
-        || code === 10 || code === 12 || code === 13) {
-      bytes += 2;
-    } else if (code < 32) {
-      bytes += 6;
-    } else if (code < 128) {
-      bytes++;
-    } else if (code < 2048) {
-      bytes += 2;
-    } else if (code >= 0xd800 && code <= 0xdbff
-        && i + 1 < value.length
-        && value.charCodeAt(i + 1) >= 0xdc00
-        && value.charCodeAt(i + 1) <= 0xdfff) {
-      bytes += 4;
-      i++;
-    } else {
-      bytes += 3;
-    }
-  }
-  return bytes;
-}
-
-function serializedBytes(value: unknown): number {
-  const ancestors: object[] = [];
-  // Records repeat the same few field names across every item.
-  const keyBytes = new Map<string, number>();
-
-  const measure = (item: unknown, arrayItem: boolean): number => {
-    switch (typeof item) {
-      case 'string':
-        return jsonStringBytes(item);
-      case 'number':
-        return Number.isFinite(item) ? String(item).length : JSON_NULL_BYTES;
-      case 'boolean':
-        return item ? 4 : 5;
-      case 'bigint':
-        throw new TypeError('BigInt cannot be serialized to JSON');
-      case 'undefined':
-      case 'function':
-      case 'symbol':
-        return arrayItem ? JSON_NULL_BYTES : 0;
-      case 'object':
-        break;
-    }
-    if (item === null) return JSON_NULL_BYTES;
-    if (item instanceof Date) {
-      return Number.isFinite(item.getTime())
-        ? jsonStringBytes(item.toISOString())
-        : JSON_NULL_BYTES;
-    }
-    if (ancestors.indexOf(item) >= 0) throw new TypeError('Circular cache value');
-    ancestors.push(item);
-    let bytes = 2;
-    let entries = 0;
-    if (Array.isArray(item)) {
-      for (let i = 0; i < item.length; i++) {
-        bytes += measure(item[i], true);
-        entries++;
-      }
-    } else {
-      const record = item as Record<string, unknown>;
-      const keys = Object.keys(record);
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
-        const valueBytes = measure(record[key], false);
-        if (!valueBytes) continue;
-        let nameBytes = keyBytes.get(key);
-        if (nameBytes === undefined) {
-          nameBytes = jsonStringBytes(key);
-          keyBytes.set(key, nameBytes);
-        }
-        bytes += nameBytes + 1 + valueBytes;
-        entries++;
-      }
-    }
-    ancestors.pop();
-    return bytes + Math.max(0, entries - 1);
-  };
-
-  return measure(value, false);
-}
-
 function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -526,6 +437,7 @@ function normalizeRecord(
   store: CacheStore,
   raw: Record<string, unknown>,
   now = Date.now(),
+  held: HeldRecord | null = null,
 ): StoredRecord {
   const category = categoryForStore(store);
   const timestamp = finiteNumber(raw.timestamp, now);
@@ -543,7 +455,10 @@ function normalizeRecord(
     expiresAt,
     byteSize: 0,
   };
-  normalized.byteSize = serializedBytes(normalized);
+  // The worker already measured a held value; walking it here would stall.
+  normalized.byteSize = held
+    ? serializedBytes({ ...normalized, data: null }) - JSON_NULL_BYTES + held.bytes
+    : serializedBytes(normalized);
   return normalized;
 }
 
@@ -593,8 +508,18 @@ async function readRaw(store: CacheStore, key: IDBValidKey): Promise<StoredRecor
   }
 }
 
-async function touchRecord(store: CacheStore, record: StoredRecord): Promise<void> {
+function touchRecord(store: CacheStore, record: StoredRecord): Promise<void> {
   const key = record[cacheKeyPath(store)] as IDBValidKey;
+  return touchEntry(store, key, cacheRecordTimestamp(record), now => entryMeta(store, key, record, now));
+}
+
+// Without a record at hand, an entry missing its metadata stays untouched.
+async function touchEntry(
+  store: CacheStore,
+  key: IDBValidKey,
+  timestamp: number | undefined,
+  missing: ((now: number) => CacheEntryMeta) | null,
+): Promise<void> {
   const id = entryMetaId(store, key);
   const now = Date.now();
   const lastTouch = accessTouches.get(id);
@@ -609,11 +534,11 @@ async function touchRecord(store: CacheStore, record: StoredRecord): Promise<voi
     request.onsuccess = () => {
       const current: unknown = request.result;
       if (isCacheEntryMeta(current) && current.timestamp !== undefined) {
-        if (current.timestamp === cacheRecordTimestamp(record)) {
+        if (current.timestamp === timestamp) {
           metadata.put({ ...current, lastAccessedAt: now });
         }
-      } else {
-        metadata.put(entryMeta(store, key, record, now));
+      } else if (missing) {
+        metadata.put(missing(now));
       }
     };
     await transactionDone(tx);
@@ -1050,6 +975,7 @@ async function commitRecord(
   store: CacheStore,
   record: StoredRecord,
   previous: CacheEntryMeta | null,
+  held: HeldRecord | null = null,
 ): Promise<void> {
   const db = await openDb();
   if (!db) throw new Error('IndexedDB unavailable');
@@ -1059,22 +985,37 @@ async function commitRecord(
   const deltaEntries = previous ? 0 : 1;
   const categoryUsage = metadata.categories[category];
   const now = Date.now();
-  const tx = db.transaction([store, META_STORE], 'readwrite');
-  tx.objectStore(store).put(record);
   const key = record[cacheKeyPath(store)] as IDBValidKey;
-  tx.objectStore(META_STORE).put(entryMeta(store, key, record));
-  tx.objectStore(META_STORE).put({
+  const meta: CacheMeta[] = [{
     category,
     bytes: Math.max(0, categoryUsage.bytes + deltaBytes),
     entries: Math.max(0, categoryUsage.entries + deltaEntries),
     updatedAt: now,
-  } satisfies CacheMeta);
-  tx.objectStore(META_STORE).put({
+  }, {
     category: 'total',
     bytes: Math.max(0, metadata.total.bytes + deltaBytes),
     entries: Math.max(0, metadata.total.entries + deltaEntries),
     updatedAt: now,
-  } satisfies CacheMeta);
+  }];
+  if (held) {
+    const result = await held.write({
+      field: 'data',
+      writes: [
+        { store, value: { ...record, data: null } },
+        { store: META_STORE, value: { ...entryMeta(store, key, record) } },
+        ...meta.map(value => ({ store: META_STORE, value: { ...value } })),
+      ],
+    });
+    if (result === 'written') return;
+    if (result === 'quota_exceeded') throw new DOMException('Cache quota exceeded', 'QuotaExceededError');
+    if (result === 'failed') throw new Error('Worker cache write failed');
+    if (held.detached) throw new Error('Worker lost the value to cache');
+    // A restarted worker lost the value: write the page's copy instead.
+  }
+  const tx = db.transaction([store, META_STORE], 'readwrite');
+  tx.objectStore(store).put(record);
+  tx.objectStore(META_STORE).put(entryMeta(store, key, record));
+  for (const value of meta) tx.objectStore(META_STORE).put(value);
   await transactionDone(tx, (error) => {
     if (store === CATALOG_STORE) {
       log.warn(
@@ -1092,6 +1033,7 @@ async function putRawNow(
   store: CacheStore,
   raw: Record<string, unknown>,
   allowQuotaRetry = true,
+  held: HeldRecord | null = null,
 ): Promise<boolean> {
   const key = raw[cacheKeyPath(store)] as IDBValidKey | undefined;
   if (key === undefined || key === null) return false;
@@ -1108,11 +1050,11 @@ async function putRawNow(
   }
   await ensureMetadata();
   const previous = await readEntryMeta(store, key);
-  const record = normalizeRecord(store, raw);
+  const record = normalizeRecord(store, raw, Date.now(), held);
   await ensureCapacity(Math.max(0, record.byteSize - (previous?.byteSize ?? 0)));
   try {
     const latest = await readEntryMeta(store, key);
-    await commitRecord(store, record, latest);
+    await commitRecord(store, record, latest, held);
     return true;
   } catch (err) {
     if (allowQuotaRetry && isQuotaError(err)) {
@@ -1126,7 +1068,7 @@ async function putRawNow(
       await pruneBytes(record.byteSize + CLEANUP_MARGIN_BYTES);
       try {
         const latest = await readEntryMeta(store, key);
-        await commitRecord(store, record, latest);
+        await commitRecord(store, record, latest, held);
         return true;
       } catch (retryErr) {
         if (store === CATALOG_STORE) {
@@ -1176,8 +1118,9 @@ function putRaw(
   store: CacheStore,
   raw: Record<string, unknown>,
   allowQuotaRetry = true,
+  held: HeldRecord | null = null,
 ): Promise<boolean> {
-  return enqueueMutation(() => putRawNow(store, raw, allowQuotaRetry));
+  return enqueueMutation(() => putRawNow(store, raw, allowQuotaRetry, held));
 }
 
 async function readRawWithoutTouch(
@@ -1376,6 +1319,8 @@ export async function getCachedCatalogMetadata(key: string): Promise<CachedCatal
     const cached = await getCachedCatalog(key);
     return cached ? { timestamp: cached.timestamp, ...(cached.state ? { state: cached.state } : {}) } : null;
   }
+  // The worker reads the record by reference, so this read is its use.
+  void touchEntry(CATALOG_STORE, key, metadata.timestamp, null);
   const state = catalogListState(metadata.state);
   return { timestamp: metadata.timestamp, ...(state ? { state } : {}) };
 }
@@ -1397,16 +1342,25 @@ export async function setCachedCatalog(
   data: unknown,
   ttlMs: number | null = CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
   state?: CatalogListState,
-): Promise<void> {
+): Promise<number | null> {
+  if (isSpentStandIn(data)) return null;
   const timestamp = Date.now();
-  const stored = await putRaw(CATALOG_STORE, {
-    key,
-    timestamp,
-    data,
-    ...(state ? { state } : {}),
-    expiresAt: ttlMs === null ? null : timestamp + ttlMs,
-  });
-  if (stored) rememberRecord(data, { store: CATALOG_STORE, key, timestamp });
+  const held = heldRecord(data);
+  let stored = false;
+  try {
+    stored = await putRaw(CATALOG_STORE, {
+      key,
+      timestamp,
+      data,
+      ...(state ? { state } : {}),
+      expiresAt: ttlMs === null ? null : timestamp + ttlMs,
+    }, true, held);
+  } finally {
+    held?.release();
+  }
+  if (!stored) return null;
+  rememberRecord(data, { store: CATALOG_STORE, key, timestamp });
+  return timestamp;
 }
 
 export function setCachedCatalogState(

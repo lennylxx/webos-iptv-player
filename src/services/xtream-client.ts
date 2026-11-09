@@ -3,8 +3,9 @@ import { xtreamPlayerApi, type XtreamCredentials } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
 import type { VodCategory, VodItem, VodInfo, SeriesCategory, SeriesItem, SeriesInfo, Episode, SidecarSubtitle } from '../types';
 import { CONFIG } from '../config';
-import { runAppWorkerTask } from '../workers/app-worker-client';
+import { retainAppWorker, runAppWorkerTask } from '../workers/app-worker-client';
 import type { XtreamCatalogStreamResponse } from './xtream-catalog-stream';
+import { holdRecord, releaseHeldRecord } from './held-records';
 
 const log = createLogger('Xtream');
 
@@ -278,6 +279,7 @@ interface SharedCatalogStream {
   batches: unknown[][];
   waiters: number;
   settled: boolean;
+  items?: unknown[];
 }
 
 // Callers asking for the same catalog at once share one download.
@@ -286,6 +288,22 @@ let nextCatalogStreamToken = 1;
 
 export interface WholeCatalogOptions {
   keepUnknownCategories?: boolean;
+}
+
+export interface SyncCatalogOptions extends WholeCatalogOptions {
+  /** The cached list's version, compared in the worker. */
+  previous?: { key: string; timestamp: number };
+}
+
+/**
+ * A whole catalog the worker kept instead of sending. `data` is an empty
+ * stand-in that writes the worker's list when cached; it is null when the
+ * list matched `previous`.
+ */
+export interface SyncedCatalog {
+  data: never[] | null;
+  count: number;
+  unchanged: boolean;
 }
 
 // One request for a whole catalog, streamed and parsed off the UI thread.
@@ -298,13 +316,60 @@ async function streamCatalogInWorker<T>(
   signal?: AbortSignal,
   options: WholeCatalogOptions = {},
 ): Promise<T[]> {
+  const { response, stream } = await joinCatalogStream(kind, url, accountId, categoryIds, signal, options, false);
+  if (!stream.items) {
+    const items: unknown[] = [];
+    for (const batch of stream.batches) {
+      for (let i = 0; i < batch.length; i++) items.push(batch[i]);
+    }
+    stream.batches.length = 0;
+    // Callers that shared the load share the list, so it is held once.
+    if (response.held) holdWorkerList(items, response.held, false);
+    stream.items = items;
+  }
+  return stream.items as T[];
+}
+
+// The same load, but the list stays in the worker: the page gets only its
+// size, so a 200k-item catalog never crosses to the UI thread.
+async function syncCatalogInWorker(
+  kind: 'vod' | 'series',
+  url: string,
+  accountId: string,
+  categoryIds: string[],
+  signal?: AbortSignal,
+  options: SyncCatalogOptions = {},
+): Promise<SyncedCatalog> {
+  const { response, stream } = await joinCatalogStream(kind, url, accountId, categoryIds, signal, options, true);
+  if (!stream.items) {
+    const stand: never[] = [];
+    if (response.held) holdWorkerList(stand, response.held, true);
+    stream.items = stand;
+  }
+  return {
+    data: response.unchanged ? null : stream.items as never[],
+    count: response.items,
+    unchanged: !!response.unchanged,
+  };
+}
+
+async function joinCatalogStream(
+  kind: 'vod' | 'series',
+  url: string,
+  accountId: string,
+  categoryIds: string[],
+  signal: AbortSignal | undefined,
+  options: SyncCatalogOptions,
+  detached: boolean,
+): Promise<{ response: XtreamCatalogStreamResponse; stream: SharedCatalogStream }> {
   const cancelled = (): XtreamRequestError =>
     new XtreamRequestError('cancelled', 'Xtream request was cancelled');
   if (signal?.aborted) throw cancelled();
   const timeout = CONFIG.XTREAM.WHOLE_CATALOG_TIMEOUT_MS;
   const maxBytes = CONFIG.XTREAM.WHOLE_CATALOG_MAX_BYTES;
   const keepUnknownCategories = !!options.keepUnknownCategories;
-  const key = JSON.stringify([kind, url, accountId, categoryIds, keepUnknownCategories]);
+  const previous = options.previous;
+  const key = JSON.stringify([kind, url, accountId, categoryIds, keepUnknownCategories, detached, previous ?? null]);
   let stream = sharedCatalogStreams.get(key);
   if (!stream) {
     const token = `catalog-${String(nextCatalogStreamToken++)}`;
@@ -313,6 +378,8 @@ async function streamCatalogInWorker<T>(
       url, kind, accountId, categoryIds, keepUnknownCategories, token,
       headersTimeout: CONFIG.XTREAM.WHOLE_CATALOG_HEADERS_TIMEOUT_MS,
       idleTimeout: CATALOG_TIMEOUT, timeout, maxBytes,
+      ...(detached ? { detached } : {}),
+      ...(previous ? { previous } : {}),
     }, chunk => {
       batches.push(chunk.items);
     });
@@ -335,6 +402,10 @@ async function streamCatalogInWorker<T>(
     if (joined.waiters > 0 || joined.settled) return;
     if (sharedCatalogStreams.get(key) === joined) sharedCatalogStreams.delete(key);
     runAppWorkerTask('xtream.catalog-stream.cancel', { token: joined.token }).catch(() => undefined);
+    // A load that finished before the cancel landed holds a list nobody will cache.
+    joined.task.then((late) => {
+      if (late.held) runAppWorkerTask('cache.release-held', { token: late.held.token }).catch(() => undefined);
+    }, () => undefined);
   };
   let onAbort = (): void => undefined;
   const aborted = new Promise<never>((_, reject) => {
@@ -359,11 +430,30 @@ async function streamCatalogInWorker<T>(
     logRequestFailure(url, error, timeout, maxBytes);
     throw error;
   }
-  const items: T[] = [];
-  for (const batch of joined.batches as T[][]) {
-    for (let i = 0; i < batch.length; i++) items.push(batch[i]);
-  }
-  return items;
+  return { response, stream: joined };
+}
+
+// The worker keeps the list it sent, so caching it there skips cloning it here.
+function holdWorkerList(items: object, held: { token: string; bytes: number }, detached: boolean): void {
+  const { token } = held;
+  // A worker stopped when idle loses the list, so it runs until the page
+  // caches or drops it, or the worker would have forgotten it anyway.
+  const releaseWorker = retainAppWorker();
+  const expiry = setTimeout(() => releaseHeldRecord(items), CONFIG.XTREAM.HELD_LIST_MS);
+  holdRecord(items, {
+    bytes: held.bytes,
+    ...(detached ? { detached } : {}),
+    write: request => runAppWorkerTask('cache.write-held', {
+      ...request,
+      token,
+      timeoutMs: CONFIG.XTREAM.HELD_WRITE_TIMEOUT_MS,
+    }).catch(() => 'failed' as const),
+    release: () => {
+      clearTimeout(expiry);
+      runAppWorkerTask('cache.release-held', { token }).catch(() => undefined);
+      releaseWorker();
+    },
+  });
 }
 
 export function vodItemFrom(s: Record<string, unknown>, accountId: string): VodItem {
@@ -645,6 +735,17 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
       );
     },
 
+    /** getAllVodStreams for the cache only: the list stays in the worker. */
+    syncAllVodStreams(
+      categoryIds: string[],
+      signal?: AbortSignal,
+      options?: SyncCatalogOptions,
+    ): Promise<SyncedCatalog> {
+      return syncCatalogInWorker(
+        'vod', xtreamPlayerApi(creds, 'get_vod_streams'), accountId, categoryIds, signal, options,
+      );
+    },
+
     async getVodInfo(vodId: string, signal?: AbortSignal): Promise<VodInfo | null> {
       const data = await fetchJsonStrict(
         xtreamPlayerApi(creds, 'get_vod_info', { vod_id: vodId }),
@@ -703,6 +804,17 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
       options?: WholeCatalogOptions,
     ): Promise<SeriesItem[]> {
       return streamCatalogInWorker<SeriesItem>(
+        'series', xtreamPlayerApi(creds, 'get_series'), accountId, categoryIds, signal, options,
+      );
+    },
+
+    /** getAllSeries for the cache only: the list stays in the worker. */
+    syncAllSeries(
+      categoryIds: string[],
+      signal?: AbortSignal,
+      options?: SyncCatalogOptions,
+    ): Promise<SyncedCatalog> {
+      return syncCatalogInWorker(
         'series', xtreamPlayerApi(creds, 'get_series'), accountId, categoryIds, signal, options,
       );
     },

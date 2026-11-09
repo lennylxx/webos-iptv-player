@@ -628,3 +628,294 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
       .toEqual({ persist: [], skipped: [{ store: 'catalog-cache', reason: 'open_failed' }] });
   });
 });
+
+describe('SearchWorkerIndex with catalog records', () => {
+  const items = [
+    { streamId: 1, name: 'Alpha Movie', categoryId: 'c1' },
+    { streamId: 2, name: 'Hidden Alpha', categoryId: 'c2' },
+    { streamId: 3, name: 'Bravo Alpha', categoryId: 'c1' },
+  ];
+
+  function catalogReader(): MemoryReader {
+    return new MemoryReader(new Map<string, CachedRecord>([
+      ['catalog-cache|a|vod_all', { key: 'a|vod_all', timestamp: 30, data: items }],
+    ]));
+  }
+
+  const concealment = {
+    sourceApproved: true,
+    lockedCategories: ['c2'],
+    allowedItems: [],
+    protectedItems: [],
+    uncategorizedLocked: false,
+  };
+
+  it('ranks the visible record items and sends each one to the page once', async () => {
+    const memory = catalogReader();
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    expect((await index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment } })).unresolved)
+      .toBeUndefined();
+
+    const first = await index.query({ ...query(1, 'alpha'), limit: 1 });
+    expect(first?.movies).toEqual({ indices: [0], hasMore: true });
+    expect(first?.items).toEqual({ epoch: 1, movies: [[0, items[0]]], series: [] });
+
+    const more = await index.query({ ...query(1, 'alpha'), delivered: { epoch: 1, movies: 1, series: 0 } });
+    expect(more?.movies.indices).toEqual([0, 1]);
+    expect(more?.items).toEqual({ epoch: 1, movies: [[1, items[2]]], series: [] });
+  });
+
+  it('answers queries while a catalog record is still being read', async () => {
+    const memory = catalogReader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    const indexing = index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    let answered = false;
+    const early = Promise.resolve(index.query(query(1, 'alpha'))).then((answer) => {
+      answered = true;
+      return answer;
+    });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(answered).toBe(true);
+    expect((await early)?.movies.indices).toEqual([]);
+
+    release();
+    await indexing;
+    expect((await index.query(query(1, 'alpha')))?.movies.indices).toHaveLength(3);
+  });
+
+  it('drops a catalog read that a newer session superseded', async () => {
+    const memory = catalogReader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    const stale = index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    index.index({ sessionId: 2, reset: true });
+    release();
+    await stale;
+    expect((await index.query(query(2, 'alpha')))?.movies.indices).toEqual([]);
+  });
+
+  it('reads a catalog record once when two requests want it at the same time', async () => {
+    const memory = catalogReader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    const first = index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    const second = index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment } });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    release();
+    await Promise.all([first, second]);
+    expect(memory.log.filter(entry => entry === 'read:a|vod_all')).toHaveLength(1);
+    expect((await index.query(query(1, 'alpha')))?.movies.indices).toHaveLength(2);
+  });
+
+  it('keeps a newer written record over an older one read meanwhile, and serves it to older references', async () => {
+    const memory = catalogReader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    const older = index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    const newer = { key: 'a|vod_all', timestamp: 40, data: [...items, { streamId: 4, name: 'Delta Alpha', categoryId: 'c1' }] };
+    index.retainCatalogRecord('catalog-cache', newer);
+    release();
+    await older;
+
+    await index.index({ sessionId: 1, catalogMovies: { record: { ...VOD_REF, timestamp: 40 }, concealment: null } });
+    await index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    expect(memory.log.filter(entry => entry === 'read:a|vod_all')).toHaveLength(1);
+    expect((await index.query(query(1, 'alpha')))?.movies.indices).toHaveLength(4);
+  });
+
+  it('shares a catalog read between Search and a prewarm without keeping it for the prewarm', async () => {
+    const memory = catalogReader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    const indexing = index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    const prewarm = index.prewarm({ sources: [{ ...VOD_REF }] });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    release();
+    await Promise.all([indexing, prewarm]);
+    expect(memory.log.filter(entry => entry === 'read:a|vod_all')).toHaveLength(1);
+
+    const alone = new SearchWorkerIndex(catalogReader());
+    await alone.prewarm({ sources: [{ ...VOD_REF }] });
+    expect((alone as unknown as { catalogRecords: Map<string, unknown> }).catalogRecords.size).toBe(0);
+  });
+
+  it('answers a Search open while a prewarm still reads a catalog record', async () => {
+    const memory = catalogReader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    const prewarm = index.prewarm({ sources: [{ ...VOD_REF }] });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    let answered = false;
+    const early = Promise.resolve(index.index({ sessionId: 1, reset: true }))
+      .then(() => index.query(query(1, 'alpha')))
+      .then((answer) => {
+        answered = true;
+        return answer;
+      });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(answered).toBe(true);
+    expect((await early)?.movies.indices).toEqual([]);
+
+    release();
+    expect((await prewarm).persist.map(candidate => candidate.prefix)).toEqual(['catalog-cache|a|vod_all|']);
+  });
+
+  it('keeps the catalog record written last even when its timestamp is older', async () => {
+    const memory = catalogReader();
+    const index = new SearchWorkerIndex(memory);
+    index.retainCatalogRecord('catalog-cache', { key: 'a|vod_all', timestamp: 40, data: items });
+    const written = { key: 'a|vod_all', timestamp: 35, data: [items[1]] };
+    index.retainCatalogRecord('catalog-cache', written);
+    expect(await index.catalogList({ ...VOD_REF, timestamp: 35 })).toBe(written.data);
+  });
+
+  it('lets a rejected request leave the current session\'s catalog read alone', async () => {
+    const memory = catalogReader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 2, reset: true });
+    const current = index.index({ sessionId: 2, catalogMovies: { record: VOD_REF, concealment: null } });
+    expect((await index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } })).accepted)
+      .toBe(false);
+    release();
+    await current;
+    expect((await index.query(query(2, 'alpha')))?.movies.indices).toHaveLength(3);
+  });
+
+  it('lets posted names supersede a catalog read in flight', async () => {
+    const memory = catalogReader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    const reading = index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    await index.index({ sessionId: 1, chunk: { source: 'movies', start: 0, total: 1, names: ['Zulu Alpha'] } });
+    release();
+    await reading;
+    expect((await index.query(query(1, 'alpha')))?.movies.indices).toEqual([0]);
+    expect((await index.query(query(1, 'alpha')))?.items).toBeUndefined();
+  });
+
+  it('lets stored names supersede a catalog read in flight', async () => {
+    const memory = reader();
+    let release = (): void => {};
+    memory.gate = new Promise<void>(resolve => { release = resolve; });
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    const reading = index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    const names = index.index({ sessionId: 1, cachedMovies: cachedNames(null, vod.map(item => item.name)) });
+    release();
+    await Promise.all([reading, names]);
+    const answer = await index.query(query(1, 'alpha'));
+    expect(answer?.movies.indices).toHaveLength(2);
+    expect(answer?.items).toBeUndefined();
+  });
+
+  it('returns the categories of only the requested catalog items', async () => {
+    const index = new SearchWorkerIndex(catalogReader());
+    expect(await index.catalogMembers({ record: VOD_REF, idField: 'streamId', ids: ['3', '9'] }))
+      .toEqual({ members: [['3', 'c1']] });
+    expect(await index.catalogMembers({
+      record: { ...VOD_REF, key: 'a|series_all' },
+      idField: 'streamId',
+      ids: ['3'],
+    })).toBeNull();
+  });
+
+  it('starts a new epoch when the page lost a delivery', async () => {
+    const index = new SearchWorkerIndex(catalogReader());
+    index.index({ sessionId: 1, reset: true });
+    await index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    await index.query(query(1, 'alpha'));
+
+    const resent = await index.query({ ...query(1, 'alpha'), delivered: { epoch: 1, movies: 1, series: 0 } });
+    expect(resent?.items?.epoch).toBe(2);
+    expect(resent?.items?.movies.map(([position]) => position).sort()).toEqual([0, 1, 2]);
+  });
+
+  it('keeps the read record for a later session and drops items for posted names', async () => {
+    const memory = catalogReader();
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    await index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    const reads = memory.log.filter(entry => entry === 'read:a|vod_all').length;
+
+    index.index({ sessionId: 2, reset: true });
+    await index.index({ sessionId: 2, catalogMovies: { record: VOD_REF, concealment } });
+    expect(memory.log.filter(entry => entry === 'read:a|vod_all')).toHaveLength(reads);
+    expect((await index.query(query(2, 'hidden')))?.movies.indices).toEqual([]);
+
+    index.index({ sessionId: 2, chunk: { source: 'movies', start: 0, total: 1, names: ['Alpha'] } });
+    expect((await index.query(query(2, 'alpha')))?.items).toBeUndefined();
+  });
+
+  it('searches a catalog it just wrote without reading it back', async () => {
+    const memory = catalogReader();
+    const index = new SearchWorkerIndex(memory);
+    const written = { key: 'a|vod_all', timestamp: 40, data: [items[1]] };
+    index.retainCatalogRecord('catalog-cache', written);
+    expect(await index.catalogList({ ...VOD_REF, timestamp: 40 })).toBe(written.data);
+
+    index.index({ sessionId: 1, reset: true });
+    await index.index({ sessionId: 1, catalogMovies: { record: { ...VOD_REF, timestamp: 40 }, concealment: null } });
+    expect(memory.log).not.toContain('read:a|vod_all');
+    expect((await index.query(query(1, 'hidden')))?.movies.indices).toEqual([0]);
+  });
+
+  it('takes names from the stored record\'s version, not the page\'s older one', async () => {
+    const memory = catalogReader();
+    const first = new SearchWorkerIndex(memory);
+    first.index({ sessionId: 1, reset: true });
+    const response = await first.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+    const entries = (response.persist ?? [])
+      .map(candidate => ({ key: candidate.key, prefix: candidate.prefix, fields: {} }));
+    await first.persist({ entries });
+    // A refresh replaces the record with as many, differently named items.
+    const refreshed = [
+      { streamId: 7, name: 'Charlie Movie', categoryId: 'c1' },
+      { streamId: 8, name: 'Delta Movie', categoryId: 'c1' },
+      { streamId: 9, name: 'Echo Alpha', categoryId: 'c1' },
+    ];
+    memory.records.set('catalog-cache|a|vod_all', { key: 'a|vod_all', timestamp: 31, data: refreshed });
+
+    const index = new SearchWorkerIndex(memory);
+    index.index({ sessionId: 1, reset: true });
+    expect((await index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } })).unresolved)
+      .toBeUndefined();
+    const result = await index.query(query(1, 'alpha'));
+    expect(result?.movies.indices).toEqual([2]);
+    expect(result?.items?.movies).toEqual([[2, refreshed[2]]]);
+  });
+
+  it('gives a catalog\'s index read its own budget after a slow record read', async () => {
+    vi.useFakeTimers();
+    try {
+      const memory = catalogReader();
+      const index = new SearchWorkerIndex(memory);
+      memory.delayMs = CONFIG.SEARCH.CACHE_READ_TIMEOUT_MS + 1;
+      index.index({ sessionId: 1, reset: true });
+      expect((await index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } })).unresolved)
+        .toBeUndefined();
+      expect((await index.query(query(1, 'alpha')))?.movies.indices).toEqual([0, 2, 1]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

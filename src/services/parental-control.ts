@@ -20,6 +20,7 @@ import type {
   WatchlistEntry,
 } from '../types';
 import { CONFIG } from '../config';
+import type { CatalogConcealment } from '../utils/catalog-concealment';
 import { StorageService } from './storage-service';
 import { createParentalPin, verifyParentalPin } from './parental-pin';
 import { channelKey } from '../utils/channel';
@@ -370,6 +371,37 @@ class ParentalControlServiceImpl {
     if (!this.concealing) return false;
     const decision = this.decision(request as ParentalAccessRequest);
     return !decision.allowed && decision.concealed;
+  }
+
+  // isConcealed for every item of one catalog, as rules the worker can apply;
+  // null when nothing is concealed.
+  catalogConcealment(kind: 'vod' | 'series', accountId: string): CatalogConcealment | null {
+    if (!this.concealing) return null;
+    const category = kind === 'vod' ? 'vod-category' : 'series-category';
+    const categoryPrefix = `${category}|${part(accountId)}|`;
+    const itemPrefix = `${kind === 'vod' ? 'vod-item' : 'series-item'}|${part(accountId)}|`;
+    const lockedCategories: string[] = [];
+    for (const key of Object.keys(this.config.groupRules)) {
+      if (key.startsWith(categoryPrefix) && this.config.groupRules[key] === 'protect') {
+        lockedCategories.push(decodeURIComponent(key.slice(categoryPrefix.length)));
+      }
+    }
+    const allowedItems: string[] = [];
+    const protectedItems: string[] = [];
+    for (const key of Object.keys(this.config.itemRules)) {
+      if (!key.startsWith(itemPrefix)) continue;
+      const id = decodeURIComponent(key.slice(itemPrefix.length));
+      if (this.config.itemRules[key] === 'allow') allowedItems.push(id);
+      else if (this.config.itemRules[key] === 'protect') protectedItems.push(id);
+    }
+    const parent: CatalogCategoryTarget = { kind: category, accountId, categoryId: '' };
+    return {
+      sourceApproved: this.config.approvedSources.indexOf(parentSourceKey(parent)) >= 0,
+      lockedCategories,
+      allowedItems,
+      protectedItems,
+      uncategorizedLocked: this.protectsAnyCatalogItem(parent),
+    };
   }
 
   // A catalog category disappears as a whole only when the category itself is

@@ -33,7 +33,10 @@ import {
   loadSeriesCategories,
   loadVodCategories,
   loadVodStreams,
+  syncAllSeries,
+  syncAllVodStreams,
 } from '../services/xtream-catalog';
+import { runAppWorkerTask } from '../workers/app-worker-client';
 import { ParentalControlService, liveParentalRequest, parentalTargetKey } from '../services/parental-control';
 import { t, tp } from '../i18n';
 import { createLogger } from '../utils/logger';
@@ -499,23 +502,26 @@ export class ParentalControls {
   }
 
   // Catalog item rules don't record their category, so map them through the
-  // full catalog, which is fetched only when the account has item rules.
+  // catalog, which is read only when the account has item rules: the worker
+  // looks up just the ruled items, or the full list loads here without one.
   private async mapCatalogMembers(source: SourceEntry, signal: AbortSignal): Promise<void> {
-    const prefix = parentalTargetKey({
-      kind: source.kind === 'vod' ? 'vod-item' : 'series-item',
-      accountId: source.account.id,
-      itemId: '',
-    });
-    if (!ParentalControlService.itemRuleEntries().some(([key]) => key.startsWith(prefix))) return;
+    const kind = source.kind === 'vod' ? 'vod-item' : 'series-item';
+    const accountId = source.account.id;
+    const prefix = parentalTargetKey({ kind, accountId, itemId: '' });
+    const ids = ParentalControlService.itemRuleEntries()
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([key]) => decodeURIComponent(key.slice(prefix.length)));
+    if (!ids.length) return;
     try {
-      const items = source.kind === 'vod'
-        ? (await loadAllVodStreams(source.account, signal))
-          .map(item => ({ entry: this.vodItem(item), categoryId: item.categoryId }))
-        : (await loadAllSeries(source.account, signal))
-          .map(item => ({ entry: this.seriesItem(item), categoryId: item.categoryId }));
+      const members = await this.ruledMembers(source, ids, signal)
+        ?? (source.kind === 'vod'
+          ? (await loadAllVodStreams(source.account, signal))
+            .map((item): [string, string] => [item.streamId, item.categoryId])
+          : (await loadAllSeries(source.account, signal))
+            .map((item): [string, string] => [item.seriesId, item.categoryId]));
       if (signal.aborted) return;
-      for (const { entry, categoryId } of items) {
-        const key = ruleKey(entry);
+      for (const [itemId, categoryId] of members) {
+        const key = parentalTargetKey({ kind, accountId, itemId });
         if (!this.memberGroups.has(key)) {
           this.setMemberGroup(key, `${source.kind}:${source.account.id}:${categoryId}`);
         }
@@ -526,6 +532,28 @@ export class ParentalControls {
         log.error('Parental catalog mapping failed', 'event=parental.manager.load.failed',
           'stage=mapping', `source=${source.key}`, err);
       }
+    }
+  }
+
+  // null: no worker holds the catalog record, so the caller loads the list.
+  private async ruledMembers(
+    source: SourceEntry,
+    ids: string[],
+    signal: AbortSignal,
+  ): Promise<Array<[string, string]> | null> {
+    const record = source.kind === 'vod'
+      ? await syncAllVodStreams(source.account, signal)
+      : await syncAllSeries(source.account, signal);
+    if (!record || signal.aborted) return null;
+    try {
+      const response = await runAppWorkerTask('catalog.members', {
+        record,
+        idField: source.kind === 'vod' ? 'streamId' : 'seriesId',
+        ids,
+      });
+      return response ? response.members : null;
+    } catch {
+      return null;
     }
   }
 

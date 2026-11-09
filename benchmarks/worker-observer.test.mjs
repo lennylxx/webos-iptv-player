@@ -109,4 +109,34 @@ describe('worker observer', () => {
     expect(worker.chunks).toHaveLength(1);
     expect(worker.cpuMs).toBe(1);
   });
+  it('collects worker garbage before reading the retained heap', async () => {
+    const listeners = new Map();
+    const emit = (event, params) => { for (const listener of listeners.get(event) ?? []) listener(params); };
+    const inner = [];
+    let garbage = 5;
+    const cdp = {
+      on: (event, listener) => listeners.set(event, [...(listeners.get(event) ?? []), listener]),
+      off: () => {},
+      async send(method, params) {
+        if (method === 'Performance.getMetrics') return { metrics: [{ name: 'Timestamp', value: 0 }] };
+        if (method === 'Target.sendMessageToTarget') {
+          const { id, method: name } = JSON.parse(params.message);
+          inner.push(name);
+          if (name === 'HeapProfiler.collectGarbage') garbage = 0;
+          const result = name === 'Runtime.getHeapUsage' ? { usedSize: 10 + garbage } : {};
+          setTimeout(() => emit('Target.receivedMessageFromTarget', {
+            sessionId: params.sessionId,
+            message: JSON.stringify({ id, result }),
+          }));
+        }
+        return {};
+      },
+    };
+    const observer = await observeWorkers(cdp, { cpuRate: 1 });
+    emit('Target.attachedToTarget', { sessionId: 's1', targetInfo: { type: 'worker', url: 'worker.js' } });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(await observer.sampleHeap()).toBe(15);
+    expect(await observer.sampleHeap({ collect: true })).toBe(10);
+    expect(inner.slice(-2)).toEqual(['HeapProfiler.collectGarbage', 'Runtime.getHeapUsage']);
+  });
 });

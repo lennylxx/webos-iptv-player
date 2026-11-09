@@ -7,6 +7,8 @@ import {
   type PreparedSearchItem,
 } from '../utils/channel-search';
 import { CONFIG } from '../config';
+import { catalogConcealmentTest } from '../utils/catalog-concealment';
+import type { SeriesItem, VodItem } from '../types';
 import {
   cacheEntryMetaId,
   CACHE_META_STORE,
@@ -34,10 +36,15 @@ import {
   sourceIndexKey,
   sourceIndexPrefix,
   sourceIndexRecord,
+  sourceIndexValue,
   type SourceIndex,
 } from './search-source-index';
 import type {
+  CatalogMembersRequest,
+  CatalogMembersResponse,
   SearchCacheRecord,
+  SearchCatalogRecord,
+  SearchDeliveredItems,
   SearchIndexCandidate,
   SearchIndexChunk,
   SearchIndexPersistRequest,
@@ -57,6 +64,24 @@ import type {
 
 type ReadSource = (ref: SearchCacheKey) => Promise<CachedRecord | null>;
 
+interface CatalogRead {
+  source: 'movies' | 'series';
+  record: SearchCatalogRecord;
+  idField: 'streamId' | 'seriesId';
+}
+
+// A posted name index takes precedence over the catalog record of its group.
+function catalogReads(request: SearchIndexRequest): CatalogRead[] {
+  const reads: CatalogRead[] = [];
+  if (request.catalogMovies && !request.cachedMovies) {
+    reads.push({ source: 'movies', record: request.catalogMovies, idField: 'streamId' });
+  }
+  if (request.catalogSeries && !request.cachedSeries) {
+    reads.push({ source: 'series', record: request.catalogSeries, idField: 'seriesId' });
+  }
+  return reads;
+}
+
 export class SearchWorkerIndex {
   private sessionId: number | null = null;
   private channels: PreparedSearchItem<number>[] = [];
@@ -65,7 +90,18 @@ export class SearchWorkerIndex {
   private programmes: PreparedSearchItem<number>[] = [];
   private movies = emptyNames();
   private series = emptyNames();
+  // The record items behind each catalog name when the worker read the
+  // catalog itself; null when the page posted the names.
+  private movieItems: VodItem[] | null = null;
+  private seriesItems: SeriesItem[] | null = null;
+  // Which of those items the page has been sent since the epoch began.
+  private delivery = newDelivery(0);
+  // The latest catalog record read or written, by key prefix, for this worker's life.
+  private readonly catalogRecords = new Map<string, CachedRecord>();
   private pending: Promise<void> | null = null;
+  // Bumped by each reset and catalog request, so an older read never swaps in.
+  private readonly catalogTickets = { movies: 0, series: 0 };
+  private readonly catalogReadsInFlight = new Map<string, Promise<CachedRecord>>();
   private staging: Partial<Record<SearchIndexSource, { documents: string[][]; names: string[] }>> = {};
   // The latest index of each source record, by key prefix, for this worker's life.
   private readonly sources = new Map<string, SourceIndex>();
@@ -75,8 +111,22 @@ export class SearchWorkerIndex {
   constructor(private readonly cache: SearchCacheReader | null = null) {}
 
   // Requests run in arrival order, so a query never sees a half-read cache.
+  // A catalog record is read outside that order, so queries keep ranking the
+  // other sources meanwhile, and only its swap-in waits for its turn.
   index(request: SearchIndexRequest): SearchIndexResponse | Promise<SearchIndexResponse> {
-    return this.serialize(() => this.applyIndex(request));
+    const catalogs = catalogReads(request);
+    if (!catalogs.length) return this.serialize(() => this.applyIndex(request));
+    let tickets: number[] = [];
+    const head = this.serialize(() => {
+      const response = this.applyIndex(request);
+      if (request.sessionId === this.sessionId) {
+        tickets = catalogs.map(catalog => ++this.catalogTickets[catalog.source]);
+      }
+      return response;
+    });
+    return Promise.resolve(head).then(response => (
+      response.accepted ? this.indexCatalogs(request, catalogs, tickets, response) : response
+    ));
   }
 
   query(request: SearchQueryRequest): SearchQueryResponse | null | Promise<SearchQueryResponse | null> {
@@ -88,7 +138,8 @@ export class SearchWorkerIndex {
     const persist: SearchIndexCandidate[] = [];
     const skipped: NonNullable<SearchPrewarmResponse['skipped']> = [];
     for (const source of request.sources) {
-      await this.serialize(() => this.prewarmSource(source, persist, skipped));
+      const record = await this.serialize(() => this.prewarmSource(source, persist, skipped));
+      if (record) await this.prewarmCatalog(record, persist, skipped);
     }
     return skipped.length ? { persist, skipped } : { persist };
   }
@@ -131,19 +182,25 @@ export class SearchWorkerIndex {
   private applyIndex(request: SearchIndexRequest): SearchIndexResponse | Promise<SearchIndexResponse> {
     if (request.reset) {
       this.sessionId = request.sessionId;
+      this.catalogTickets.movies++;
+      this.catalogTickets.series++;
       this.staging = {};
       this.channels = [];
       this.channelDocuments = [];
       this.programmes = [];
-      this.movies = emptyNames();
-      this.series = emptyNames();
+      this.clear('movies');
+      this.clear('series');
     } else if (request.sessionId !== this.sessionId) {
       return { accepted: false };
     }
+    // Names that arrive another way supersede a catalog read in flight.
+    if (request.cachedMovies) this.catalogTickets.movies++;
+    if (request.cachedSeries) this.catalogTickets.series++;
 
     if (request.chunk && !this.applyChunk(request.chunk)) return { accepted: false };
     if (!request.cachedChannels && !request.cachedProgrammes
-        && !request.cachedMovies && !request.cachedSeries) {
+        && !request.cachedMovies && !request.cachedSeries
+        && !request.catalogMovies && !request.catalogSeries) {
       return { accepted: true };
     }
     return this.applyCached(request);
@@ -212,12 +269,16 @@ export class SearchWorkerIndex {
     }
     if (cachedMovies) {
       await resolve('movies', async () => {
-        this.movies = foldedNames(cachedNameDocuments(await load(cachedMovies.record), cachedMovies));
+        const names = foldedNames(cachedNameDocuments(await load(cachedMovies.record), cachedMovies));
+        this.clear('movies');
+        this.movies = names;
       });
     }
     if (cachedSeries) {
       await resolve('series', async () => {
-        this.series = foldedNames(cachedNameDocuments(await load(cachedSeries.record), cachedSeries));
+        const names = foldedNames(cachedNameDocuments(await load(cachedSeries.record), cachedSeries));
+        this.clear('series');
+        this.series = names;
       });
     }
     const response: SearchIndexResponse = { accepted: true, loaded };
@@ -253,17 +314,177 @@ export class SearchWorkerIndex {
     return built;
   }
 
+  private async indexCatalogs(
+    request: SearchIndexRequest,
+    catalogs: CatalogRead[],
+    tickets: number[],
+    head: SearchIndexResponse,
+  ): Promise<SearchIndexResponse> {
+    const persist = head.persist ? head.persist.slice() : [];
+    const loaded = head.loaded ? { ...head.loaded } : { persisted: 0, built: 0 };
+    const unresolved = head.unresolved ? head.unresolved.slice() : [];
+    for (let i = 0; i < catalogs.length; i++) {
+      const { source, record, idField } = catalogs[i];
+      let catalog: { names: PreparedNameSearchIndex<number>; items: unknown[] } | null = null;
+      let reason = '';
+      try {
+        catalog = await this.readCatalog(record, idField, persist, loaded);
+      } catch (error) {
+        reason = failureReason(error);
+      }
+      await this.serialize(() => {
+        if (this.sessionId !== request.sessionId || this.catalogTickets[source] !== tickets[i]) return;
+        if (!catalog) {
+          unresolved.push({ source, reason });
+        } else if (source === 'movies') {
+          this.clear('movies');
+          this.movies = catalog.names;
+          this.movieItems = catalog.items as VodItem[];
+        } else {
+          this.clear('series');
+          this.series = catalog.names;
+          this.seriesItems = catalog.items as SeriesItem[];
+        }
+      });
+    }
+    const response: SearchIndexResponse = { accepted: true, loaded };
+    if (unresolved.length) response.unresolved = unresolved;
+    if (persist.length) response.persist = persist;
+    return response;
+  }
+
+  // The names come from the record's search index and the items from the
+  // record itself, which is read once and kept for later sessions.
+  private async readCatalog(
+    request: SearchCatalogRecord,
+    idField: 'streamId' | 'seriesId',
+    persist: SearchIndexCandidate[],
+    loaded: { persisted: number; built: number },
+  ): Promise<{ names: PreparedNameSearchIndex<number>; items: unknown[] }> {
+    const record = await this.catalogRecord(request.record);
+    // The stored record may be newer than the page's reference; its names
+    // must come from the same version as its items.
+    const ref = { ...request.record, timestamp: cacheRecordTimestamp(record) };
+    // A large record can take the whole cache-read budget, so its index gets
+    // the catalog's own and does not fail the other sources' reads.
+    const read: ReadSource = async (key) => {
+      if (key.store === ref.store && key.key === ref.key) return record;
+      if (!this.cache) throw new SearchCacheError('unavailable');
+      try {
+        return await this.cache.read(key, CONFIG.SEARCH.CATALOG_READ_TIMEOUT_MS);
+      } catch (error) {
+        throw error instanceof SearchCacheError ? error : new SearchCacheError('read_failed');
+      }
+    };
+    const index = await this.loadSource(ref, read, persist, loaded);
+    const list = record.data as Array<Record<string, unknown>>;
+    if (index.length !== list.length) throw new SearchCacheError('record_changed');
+    if (!request.concealment) {
+      const names: string[] = new Array(list.length);
+      for (let i = 0; i < list.length; i++) names[i] = sourceIndexValue(index, i, 0);
+      return { names: foldedNames(names), items: list };
+    }
+    const concealed = catalogConcealmentTest(request.concealment);
+    const names: string[] = [];
+    const items: unknown[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      if (concealed(String(item[idField]), String(item.categoryId ?? ''))) continue;
+      names.push(sourceIndexValue(index, i, 0));
+      items.push(item);
+    }
+    return { names: foldedNames(names), items };
+  }
+
+  /** The catalog list stored under `ref`, or null when it is gone or unreadable. */
+  async catalogList(ref: SearchCacheRecord): Promise<unknown[] | null> {
+    try {
+      return (await this.catalogRecord(ref)).data as unknown[];
+    } catch {
+      return null;
+    }
+  }
+
+  async catalogMembers(request: CatalogMembersRequest): Promise<CatalogMembersResponse | null> {
+    const list = await this.catalogList(request.record);
+    if (!list) return null;
+    const wanted = new Set(request.ids);
+    const members: Array<[string, string]> = [];
+    for (const item of list as Array<Record<string, unknown>>) {
+      const id = String(item[request.idField]);
+      if (wanted.has(id)) members.push([id, String(item.categoryId ?? '')]);
+    }
+    return { members };
+  }
+
+  /** Keeps a catalog record the worker just wrote, so search need not read it back. */
+  // Writes arrive in order, so the one just written wins even if a clock
+  // moved backwards gave it an older timestamp.
+  retainCatalogRecord(store: string, record: CachedRecord): void {
+    if (store !== CATALOG_RECORD_STORE || !Array.isArray(record.data)) return;
+    const prefix = sourceIndexPrefix(store, String(record.key));
+    this.catalogRecords.delete(prefix);
+    this.keepCatalogRecord(prefix, record);
+  }
+
+  // A prewarm reads without keeping, so the record stays only once Search uses it.
+  private async catalogRecord(ref: SearchCacheRecord, keep = true): Promise<CachedRecord> {
+    const prefix = sourceIndexPrefix(ref.store, ref.key);
+    const kept = this.catalogRecords.get(prefix);
+    // A newer kept version serves as well; readCatalog takes its timestamp.
+    if (kept && cacheRecordTimestamp(kept) >= ref.timestamp) return kept;
+    // Two reads of one record at once would hold two copies of it.
+    const id = `${prefix}|${String(ref.timestamp)}`;
+    let read = this.catalogReadsInFlight.get(id);
+    if (!read) {
+      const started = this.readCatalogRecord(ref);
+      read = started;
+      this.catalogReadsInFlight.set(id, started);
+      const done = (): void => { this.catalogReadsInFlight.delete(id); };
+      started.then(done, done);
+    }
+    const record = await read;
+    if (keep) this.keepCatalogRecord(prefix, record);
+    return record;
+  }
+
+  private async readCatalogRecord(ref: SearchCacheRecord): Promise<CachedRecord> {
+    if (!this.cache) throw new SearchCacheError('unavailable');
+    let raw: CachedRecord | null;
+    try {
+      raw = await this.cache.read(ref, CONFIG.SEARCH.CATALOG_READ_TIMEOUT_MS);
+    } catch (error) {
+      throw error instanceof SearchCacheError ? error : new SearchCacheError('read_failed');
+    }
+    if (!raw) throw new SearchCacheError('record_missing');
+    if (!Array.isArray(raw.data)) throw new SearchCacheError('record_invalid');
+    return raw;
+  }
+
+  // One account's movie and series lists; older ones go. A slow read of an
+  // older version never replaces a newer one kept meanwhile.
+  private keepCatalogRecord(prefix: string, record: CachedRecord): void {
+    const kept = this.catalogRecords.get(prefix);
+    if (kept && cacheRecordTimestamp(kept) > cacheRecordTimestamp(record)) return;
+    this.catalogRecords.delete(prefix);
+    this.catalogRecords.set(prefix, record);
+    while (this.catalogRecords.size > CATALOG_RECORD_LIMIT) {
+      this.catalogRecords.delete(this.catalogRecords.keys().next().value as string);
+    }
+  }
+
   private offer(index: SourceIndex, persist: SearchIndexCandidate[]): void {
     if (this.offered.has(index.key)) return;
     this.offered.add(index.key);
     persist.push(sourceIndexCandidate(index));
   }
 
+  // A catalog record it must read comes back, to be read outside the queue.
   private async prewarmSource(
     source: SearchPrewarmSource,
     persist: SearchIndexCandidate[],
     skipped: NonNullable<SearchPrewarmResponse['skipped']>,
-  ): Promise<void> {
+  ): Promise<SearchCacheRecord | undefined> {
     const cache = this.cache;
     if (!cache) return;
     const timeout = CONFIG.SEARCH.PREWARM_READ_TIMEOUT_MS;
@@ -291,10 +512,13 @@ export class SearchWorkerIndex {
           return;
         }
       }
+      if (source.store === CATALOG_RECORD_STORE && timestamp !== undefined) {
+        return { store: source.store, key: source.key, timestamp };
+      }
       const raw = await cache.read(source, timeout);
       if (!raw) {
         skipped.push({ store: source.store, reason: 'missing' });
-        return;
+        return undefined;
       }
       const built = buildSourceIndex({
         store: source.store,
@@ -306,6 +530,35 @@ export class SearchWorkerIndex {
     } catch (error) {
       skipped.push({ store: source.store, reason: failureReason(error) });
     }
+    return undefined;
+  }
+
+  // Through catalogRecord, so a Search open reading the record meanwhile
+  // shares this read; only the build waits in the queue.
+  private async prewarmCatalog(
+    ref: SearchCacheRecord,
+    persist: SearchIndexCandidate[],
+    skipped: NonNullable<SearchPrewarmResponse['skipped']>,
+  ): Promise<void> {
+    let raw: CachedRecord;
+    try {
+      raw = await this.catalogRecord(ref, false);
+    } catch (error) {
+      const missing = error instanceof SearchCacheError && error.reason === 'record_missing';
+      skipped.push({ store: ref.store, reason: missing ? 'missing' : failureReason(error) });
+      return;
+    }
+    await this.serialize(() => {
+      const key = sourceIndexKey({ ...ref, timestamp: cacheRecordTimestamp(raw) });
+      const known = this.sources.get(sourceIndexPrefix(ref.store, ref.key));
+      if (known?.key === key) {
+        this.offer(known, persist);
+        return;
+      }
+      const built = buildSourceIndex({ ...ref, timestamp: cacheRecordTimestamp(raw) }, raw);
+      this.sources.set(built.prefix, built);
+      this.offer(built, persist);
+    });
   }
 
   // Channels and programmes are empty from their first slice until their
@@ -315,6 +568,7 @@ export class SearchWorkerIndex {
     const { source } = chunk;
     if (chunk.start === 0) {
       if (source === 'channels' || source === 'programmes') this.clear(source);
+      else this.catalogTickets[source]++;
       this.staging[source] = { documents: [], names: [] };
     }
     const staged = this.staging[source];
@@ -330,16 +584,28 @@ export class SearchWorkerIndex {
     delete this.staging[source];
     if (source === 'channels') this.setChannels(staged.documents);
     else if (source === 'programmes') this.programmes = prepareFolded(foldDocuments(staged.documents));
-    else if (source === 'movies') this.movies = foldedNames(staged.names.map(foldSearchText));
-    else this.series = foldedNames(staged.names.map(foldSearchText));
+    else if (source === 'movies') {
+      this.clear('movies');
+      this.movies = foldedNames(staged.names.map(foldSearchText));
+    } else {
+      this.clear('series');
+      this.series = foldedNames(staged.names.map(foldSearchText));
+    }
     return true;
   }
 
   private clear(source: SearchIndexSource): void {
     if (source === 'channels') this.setChannels([]);
     else if (source === 'programmes') this.programmes = [];
-    else if (source === 'movies') this.movies = emptyNames();
-    else this.series = emptyNames();
+    else if (source === 'movies') {
+      this.movies = emptyNames();
+      if (this.movieItems) this.delivery = newDelivery(this.delivery.epoch + 1);
+      this.movieItems = null;
+    } else {
+      this.series = emptyNames();
+      if (this.seriesItems) this.delivery = newDelivery(this.delivery.epoch + 1);
+      this.seriesItems = null;
+    }
   }
 
   private setChannels(documents: string[][]): void {
@@ -349,7 +615,7 @@ export class SearchWorkerIndex {
 
   private runQuery(request: SearchQueryRequest): SearchQueryResponse | null {
     if (request.sessionId !== this.sessionId) return null;
-    return {
+    const response: SearchQueryResponse = {
       channels: rankedFields(this.channels, request.query, request.limit),
       programmes: request.includeProgrammes === false
         ? emptyResult()
@@ -361,7 +627,44 @@ export class SearchWorkerIndex {
         ? rankedNames(this.series, request.query, request.limit)
         : emptyResult(),
     };
+    if (this.movieItems || this.seriesItems) response.items = this.deliver(request, response);
+    return response;
   }
+
+  // Sends each ranked record item once per epoch. The page counts what it
+  // kept; a count that differs means an answer went missing, so a new epoch
+  // starts and the page drops its items.
+  private deliver(request: SearchQueryRequest, response: SearchQueryResponse): SearchDeliveredItems {
+    const known = request.delivered;
+    let delivery = this.delivery;
+    if (!known || known.epoch !== delivery.epoch
+        || known.movies !== delivery.movies.size || known.series !== delivery.series.size) {
+      delivery = newDelivery(delivery.epoch + 1);
+      this.delivery = delivery;
+    }
+    return {
+      epoch: delivery.epoch,
+      movies: this.movieItems ? newItems(response.movies.indices, this.movieItems, delivery.movies) : [],
+      series: this.seriesItems ? newItems(response.series.indices, this.seriesItems, delivery.series) : [],
+    };
+  }
+}
+
+const CATALOG_RECORD_STORE = 'catalog-cache';
+const CATALOG_RECORD_LIMIT = 2;
+
+function newDelivery(epoch: number): { epoch: number; movies: Set<number>; series: Set<number> } {
+  return { epoch, movies: new Set(), series: new Set() };
+}
+
+function newItems<T>(indices: number[], items: T[], sent: Set<number>): Array<[number, T]> {
+  const fresh: Array<[number, T]> = [];
+  for (const index of indices) {
+    if (sent.has(index) || index >= items.length) continue;
+    sent.add(index);
+    fresh.push([index, items[index]]);
+  }
+  return fresh;
 }
 
 function failureReason(error: unknown): string {

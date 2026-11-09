@@ -25,6 +25,11 @@ export interface SearchCacheReader {
   write(store: string, value: CachedRecord, timeoutMs: number): Promise<void>;
 }
 
+export interface CacheWrite {
+  store: string;
+  value: CachedRecord;
+}
+
 // Failures that will not clear up while this worker lives.
 const PERMANENT_OPEN_FAILURES = ['open_timeout', 'open_failed', 'version_mismatch'];
 
@@ -37,26 +42,36 @@ export class IdbSearchCacheReader implements SearchCacheReader {
   constructor(private readonly factory: IDBFactory | undefined) {}
 
   read(record: SearchCacheKey, timeoutMs: number): Promise<CachedRecord | null> {
-    return this.run(record.store, 'readonly', timeoutMs, store => store.get(record.key), (result) => {
+    return this.run([record.store], 'readonly', timeoutMs, tx => tx.objectStore(record.store).get(record.key), (result) => {
       return result && typeof result === 'object' ? result as CachedRecord : null;
     });
   }
 
   count(record: SearchCacheKey, timeoutMs: number): Promise<number> {
-    return this.run(record.store, 'readonly', timeoutMs, store => store.count(record.key), (result) => {
+    return this.run([record.store], 'readonly', timeoutMs, tx => tx.objectStore(record.store).count(record.key), (result) => {
       return typeof result === 'number' ? result : 0;
     });
   }
 
   write(store: string, value: CachedRecord, timeoutMs: number): Promise<void> {
-    return this.run(store, 'readwrite', timeoutMs, objectStore => objectStore.put(value), () => undefined);
+    return this.run([store], 'readwrite', timeoutMs, tx => tx.objectStore(store).put(value), () => undefined);
+  }
+
+  /** Puts every value in one transaction, so all of them land or none does. */
+  writeAll(writes: CacheWrite[], timeoutMs: number): Promise<void> {
+    const stores = writes.map(write => write.store).filter((store, i, all) => all.indexOf(store) === i);
+    return this.run(stores, 'readwrite', timeoutMs, (tx) => {
+      let last: IDBRequest | null = null;
+      for (const write of writes) last = tx.objectStore(write.store).put(write.value);
+      return last as IDBRequest;
+    }, () => undefined);
   }
 
   private run<T>(
-    storeName: string,
+    storeNames: string[],
     mode: IDBTransactionMode,
     timeoutMs: number,
-    issue: (store: IDBObjectStore) => IDBRequest,
+    issue: (tx: IDBTransaction) => IDBRequest,
     map: (result: unknown) => T,
   ): Promise<T> {
     if (this.unavailable || !this.factory) {
@@ -89,14 +104,14 @@ export class IdbSearchCacheReader implements SearchCacheReader {
       }, Math.max(0, timeoutMs));
       this.open().then((db) => {
         if (settled) return;
-        if (!db.objectStoreNames.contains(storeName)) {
+        if (!storeNames.length || storeNames.some(name => !db.objectStoreNames.contains(name))) {
           fail('store_missing');
           return;
         }
         let request: IDBRequest;
         try {
-          tx = db.transaction(storeName, mode);
-          request = issue(tx.objectStore(storeName));
+          tx = db.transaction(storeNames.length === 1 ? storeNames[0] : storeNames, mode);
+          request = issue(tx);
         } catch (error) {
           if (!tx) this.forget(db);
           fail(isQuotaError(error) ? 'quota_exceeded' : 'transaction_failed');

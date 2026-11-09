@@ -149,6 +149,10 @@ export const CONFIG = {
     // After a failure that may clear up, or with stale categories, try the
     // whole request again this much later rather than every launch or never.
     WHOLE_CATALOG_RETRY_MS: 30 * 60 * 1000,
+    // The worker's cache write of a whole catalog; a slow TV needs tens of seconds.
+    HELD_WRITE_TIMEOUT_MS: 2 * 60 * 1000,
+    // How long the worker keeps a list it sent, waiting for the page to cache it.
+    HELD_LIST_MS: 2 * 60 * 1000,
     DETAIL_MAX_BYTES: 8 * 1024 * 1024,   // VOD/series detail and episode response budget
     BACKGROUND_REFRESH_CONCURRENCY: 2,   // stale catalog lists re-fetched at once; the rest queue
     RAIL_CATEGORIES: 6,                  // categories preloaded as rails in the browse view
@@ -177,6 +181,8 @@ export const CONFIG = {
   SEARCH: {
     // Budget for the worker's IndexedDB reads before the page posts the index instead.
     CACHE_READ_TIMEOUT_MS: 1200,
+    // A whole catalog record read off the UI thread, while other results already show.
+    CATALOG_READ_TIMEOUT_MS: 60_000,
     // Documents per index message when the page posts a source itself, one per frame.
     INDEX_CHUNK_SIZE: 2000,
     // Largest share of the free cache room one stored index may take.
@@ -193,6 +199,8 @@ export const CONFIG = {
     INITIAL_RESULTS: 200,       // first ranked results published per group
     EXPANSION_FACTOR: 5,        // grow retained results near a virtual window boundary
     RESULT_CAP: 50_000,         // final per-group cap after progressive expansion
+    DELIVERED_KEEP_FACTOR: 4,   // record items kept per shown result before a new epoch
+    DELIVERED_KEEP_MIN: 2_000,  // record items always kept per group
     HISTORY_MAX_ENTRIES: 10,    // recent searches kept
   },
 

@@ -1,4 +1,7 @@
 import { JsonArrayStream, JsonArrayStreamError } from '../parsers/json-array-stream';
+import { holdValue } from '../workers/held-values';
+import { sameCatalogItems } from '../utils/catalog-items';
+import { serializedBytes } from '../utils/serialized-bytes';
 import type { SeriesItem, VodItem } from '../types';
 import {
   seriesItemFrom,
@@ -22,6 +25,10 @@ export interface XtreamCatalogStreamRequest {
   idleTimeout: number;
   timeout: number;
   maxBytes: number;
+  /** Keep the list here for the cache write instead of sending it to the page. */
+  detached?: boolean;
+  /** The cached list to compare with, so an unchanged catalog is not rewritten. */
+  previous?: { key: string; timestamp: number };
 }
 
 export type XtreamCatalogStreamChunk =
@@ -33,6 +40,10 @@ export interface XtreamCatalogStreamResponse {
   items: number;
   inputBytes: number;
   elapsedMs: number;
+  /** The merged list, kept here for the page's cache write. */
+  held?: { token: string; bytes: number };
+  /** The list matches `previous`; nothing is held or sent. */
+  unchanged?: boolean;
 }
 
 const BATCH_SIZE = 4000;
@@ -91,6 +102,8 @@ function itemIdOf(item: VodItem | SeriesItem): string {
 export async function streamXtreamCatalogInWorker(
   request: XtreamCatalogStreamRequest,
   emitChunk: (chunk: XtreamCatalogStreamChunk) => void,
+  previousList: (ref: { key: string; timestamp: number }) => Promise<unknown[] | null>
+    = () => Promise.resolve(null),
 ): Promise<XtreamCatalogStreamResponse> {
   const started = Date.now();
   const controller = new AbortController();
@@ -168,13 +181,23 @@ export async function streamXtreamCatalogInWorker(
     const merged = mergeByCategory(parsed, request.categoryIds, itemIdOf, request.keepUnknownCategories);
     // Every batch is a clone; drop the unordered copy before making them.
     parsed.length = 0;
-    for (let i = 0; i < merged.length; i += BATCH_SIZE) {
-      emitChunk({ kind: request.kind, items: merged.slice(i, i + BATCH_SIZE) } as XtreamCatalogStreamChunk);
+    if (request.previous) {
+      const previous = await previousList(request.previous);
+      if (abortReason) return fail(abortReason);
+      if (previous && sameCatalogItems(previous as object[], merged)) {
+        return { items: merged.length, inputBytes, elapsedMs: Date.now() - started, unchanged: true };
+      }
+    }
+    if (!request.detached) {
+      for (let i = 0; i < merged.length; i += BATCH_SIZE) {
+        emitChunk({ kind: request.kind, items: merged.slice(i, i + BATCH_SIZE) } as XtreamCatalogStreamChunk);
+      }
     }
     return {
       items: merged.length,
       inputBytes,
       elapsedMs: Date.now() - started,
+      held: { token: holdValue(merged), bytes: serializedBytes(merged) },
     };
   } catch (error) {
     if (abortReason) return fail(abortReason);

@@ -134,7 +134,7 @@ test('unified search matches channels, movies, and series; a channel result play
   await expect(page.locator('#view-player')).toBeVisible();
 });
 
-test('a query typed while the index prepares shows a hint, then its results', async ({ page }) => {
+test('a query typed while the catalog indexes shows partial results, then all', async ({ page }) => {
   await seedSearch(page);
   let releaseCatalog!: () => void;
   const catalogHeld = new Promise<void>((resolve) => { releaseCatalog = resolve; });
@@ -147,9 +147,13 @@ test('a query typed while the index prepares shows a hint, then its results', as
   await enterSearch(page);
 
   await page.locator('.tab-bar-search-input').fill('one');
+  // Channels answer while the catalog still indexes, with a loading note.
+  const loadingMore = page.locator('#view-search .search-loading-more');
+  await expect(page.locator('#view-search .catalog-tile[data-channel-index="0"]')).toContainText('Channel One');
+  await expect(loadingMore).toBeVisible();
+  await expect(page.locator('#view-search .catalog-tile[data-stream-id]')).toHaveCount(0);
+  // A query with no partial answer yet says the index is still preparing.
   const hint = page.locator('#view-search .search-results .search-empty');
-  await expect(hint).toHaveText('Preparing search…');
-  await expect(page.locator('#view-search .catalog-tile')).toHaveCount(0);
   await page.locator('.tab-bar-search-input').fill('zzz');
   await expect(hint).toHaveText('Preparing search…');
   await page.locator('.tab-bar-search-input').fill('one');
@@ -158,6 +162,7 @@ test('a query typed while the index prepares shows a hint, then its results', as
   await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toContainText('Movie One');
   await expect(page.locator('#view-search .catalog-tile[data-channel-index="0"]')).toContainText('Channel One');
   await expect(page.locator('#view-search .search-empty')).toHaveCount(0);
+  await expect(loadingMore).toHaveCount(0);
 });
 
 test('a wide virtual search rail keeps its full scrollable width', async ({ page }) => {

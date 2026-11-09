@@ -14,7 +14,7 @@ export interface CpuProfile {
 }
 
 export interface WorkerObserver {
-  sampleHeap(): Promise<number>;
+  sampleHeap(options?: { collect?: boolean }): Promise<number>;
   stop(): Promise<Array<{ url: string; chunks: CpuProfile[]; cpuMs: number; pausedMs: number }>>;
 }
 

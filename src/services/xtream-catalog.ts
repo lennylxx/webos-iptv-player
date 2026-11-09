@@ -3,6 +3,8 @@ import {
   createXtreamClient,
   isXtreamRequestCancelled,
   XtreamRequestError,
+  type SyncCatalogOptions,
+  type SyncedCatalog,
   type WholeCatalogOptions,
 } from './xtream-client';
 import {
@@ -11,11 +13,13 @@ import {
   getCachedCatalogMetadata,
   setCachedCatalog,
   setCachedCatalogState,
-  type CachedCatalogEntry,
   type CachedCatalogMetadata,
   type CatalogListState,
 } from './idb-cache';
-import { SERIES_RESOURCE, VOD_STREAMS_RESOURCE } from './idb-schema';
+import { CATALOG_STORE, SERIES_RESOURCE, VOD_STREAMS_RESOURCE } from './idb-schema';
+import { releaseHeldRecord } from './held-records';
+import type { SearchCacheRecord } from '../workers/tasks';
+import { sameCatalogItems } from '../utils/catalog-items';
 import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
 import { StorageService } from './storage-service';
@@ -77,24 +81,35 @@ function ensureCatalogActive(generation: number, signal?: AbortSignal): void {
 }
 
 interface CatalogListResult<T> {
+  /** For a list kept in the worker, an empty stand-in that caches it. */
   data: T[];
+  /** Item count when `data` is a stand-in. */
+  count?: number;
   state?: CatalogListState;
   unchanged?: boolean;
 }
 
+// A cached list's version; `data` only when the caller loaded the list.
+type CatalogSnapshot<T> = CachedCatalogMetadata & { data?: T[] };
+
 type RefetchList<T> = (
   signal?: AbortSignal,
-  cached?: CachedCatalogEntry<T[]>,
+  cached?: CatalogSnapshot<T>,
 ) => Promise<T[] | CatalogListResult<T>>;
 
 function listResult<T>(result: T[] | CatalogListResult<T>): CatalogListResult<T> {
   return Array.isArray(result) ? { data: result } : result;
 }
 
-async function storeList<T>(key: string, result: CatalogListResult<T>): Promise<void> {
+function listCount(result: CatalogListResult<unknown>): number {
+  return result.count ?? result.data.length;
+}
+
+function storeList<T>(key: string, result: CatalogListResult<T>): Promise<number | null> {
   const ttl = StorageService.getXtreamCatalogRefreshIntervalMs();
-  if (result.state) await setCachedCatalog(key, result.data, ttl, result.state);
-  else await setCachedCatalog(key, result.data, ttl);
+  return result.state
+    ? setCachedCatalog(key, result.data, ttl, result.state)
+    : setCachedCatalog(key, result.data, ttl);
 }
 
 const queuedRefreshKeys = new Set<string>();
@@ -147,7 +162,7 @@ export function onCatalogListRefreshed(listener: (key: string, changed?: boolean
 // preserving the payload version and its prepared worker index.
 function refreshListInBackground<T>(
   key: string,
-  cached: CachedCatalogEntry<T[]>,
+  cached: CatalogSnapshot<T>,
   refetch: RefetchList<T>,
   allowEmpty: boolean,
 ): void {
@@ -158,20 +173,25 @@ function refreshListInBackground<T>(
     try {
       if (generation !== catalogCacheGeneration()) return;
       const result = listResult(await refetch(undefined, cached));
-      const { data } = result;
-      if (generation !== catalogCacheGeneration()) return;
-      if (!data.length && !result.state && !allowEmpty) {
+      if (generation !== catalogCacheGeneration()) {
+        releaseHeldRecord(result.data);
+        return;
+      }
+      const count = listCount(result);
+      if (!count && !result.state && !allowEmpty) {
         log.warn(
           'Catalog refresh was empty; keeping stale data',
           'event=xtream.catalog.stale',
           `resource=${resourceFor(key)}`,
           'reason=empty',
-          `items=${cached.data.length}`,
+          `items=${cached.data?.length ?? 'unloaded'}`,
         );
+        releaseHeldRecord(result.data);
         return;
       }
       // Legacy snapshots need one write to acquire the list-state marker.
       if (result.unchanged && result.state && cached.state) {
+        releaseHeldRecord(result.data);
         const accepted = await setCachedCatalogState(
           key, cached.timestamp, result.state, StorageService.getXtreamCatalogRefreshIntervalMs(),
         );
@@ -184,7 +204,7 @@ function refreshListInBackground<T>(
         return;
       }
       await storeList(key, result);
-      log.debug('refreshed', key, `(${data.length})`);
+      log.debug('refreshed', key, `(${count})`);
       if (generation !== catalogCacheGeneration()) return;
       notifyListWritten(key);
       for (const listener of refreshListeners) listener(key);
@@ -195,7 +215,7 @@ function refreshListInBackground<T>(
         'event=xtream.catalog.stale',
         `resource=${resourceFor(key)}`,
         'reason=request_failed',
-        `items=${cached.data.length}`,
+        `items=${cached.data?.length ?? 'unloaded'}`,
         err,
       );
     } finally {
@@ -237,6 +257,45 @@ async function cachedList<T>(
     `resource=${resourceFor(key)}`,
   );
   return data;
+}
+
+// cachedList for a list the worker keeps: the page gets the cached record's
+// version, never its items. Null when there is no worker or the list could
+// not be cached; the caller then loads the list itself.
+async function syncedList<T>(
+  key: string,
+  signal: AbortSignal | undefined,
+  refetch: RefetchList<T>,
+): Promise<SearchCacheRecord | null> {
+  const generation = catalogCacheGeneration();
+  ensureCatalogActive(generation, signal);
+  const cached = await getCachedCatalogMetadata(key);
+  ensureCatalogActive(generation, signal);
+  if (cached) {
+    if (Date.now() >= listExpiresAt(cached)) refreshListInBackground(key, cached, refetch, false);
+    return { store: CATALOG_STORE, key, timestamp: cached.timestamp };
+  }
+  const result = listResult(await refetch(signal));
+  try {
+    ensureCatalogActive(generation, signal);
+  } catch (error) {
+    releaseHeldRecord(result.data);
+    throw error;
+  }
+  if (!listCount(result) && !result.state) {
+    log.warn(
+      'Catalog returned no items and has no cache',
+      'event=xtream.catalog.empty',
+      `resource=${resourceFor(key)}`,
+    );
+    releaseHeldRecord(result.data);
+    return null;
+  }
+  const timestamp = await storeList(key, result);
+  if (timestamp === null) return null;
+  log.debug('synced', key, `(${listCount(result)})`);
+  notifyListWritten(key);
+  return { store: CATALOG_STORE, key, timestamp };
 }
 
 // Single-object variant of cachedList: caches a truthy result, otherwise serves
@@ -521,7 +580,13 @@ type WholeCatalogFetch<T> = (
   categoryIds: string[],
   signal?: AbortSignal,
   options?: WholeCatalogOptions,
-) => Promise<T[]>;
+) => Promise<T[] | SyncedCatalog>;
+
+interface WholeList<T> {
+  data: T[] | null;
+  count: number;
+  unchanged?: boolean;
+}
 
 async function fetchCatalogInOneRequest<T extends { categoryId: string }>(
   accountId: string,
@@ -563,17 +628,26 @@ async function fetchCatalogInOneRequest<T extends { categoryId: string }>(
     const whole = await fetchAll(categoryIds, controller.signal, {
       keepUnknownCategories: !categories.ok,
     }).then(
-      data => ({ ok: true as const, data }),
+      data => ({
+        ok: true as const,
+        list: Array.isArray(data) ? { data: data as T[] | null, count: data.length } : data as WholeList<T>,
+      }),
       (error: unknown) => ({ ok: false as const, error }),
     );
-    ensureCatalogActive(generation, signal);
+    try {
+      ensureCatalogActive(generation, signal);
+    } catch (error) {
+      if (whole.ok) releaseHeldRecord(whole.list.data);
+      throw error;
+    }
     let code: string | null = null;
     if (!whole.ok) {
       if (isXtreamRequestCancelled(whole.error)) throw whole.error;
       code = whole.error instanceof XtreamRequestError ? whole.error.code : 'request_failed';
-    } else if (!whole.data.length && categoryIds.length) {
+    } else if (!whole.list.count && categoryIds.length) {
       // Some panels answer an unfiltered request with an empty list.
       code = 'empty';
+      releaseHeldRecord(whole.list.data);
     }
     if (code !== null) {
       log.warn(
@@ -590,11 +664,13 @@ async function fetchCatalogInOneRequest<T extends { categoryId: string }>(
       ensureCatalogActive(generation, signal);
       return null;
     }
-    const result = whole.ok ? whole.data : [];
+    const list: WholeList<T> = whole.ok ? whole.list : { data: [], count: 0 };
+    const result = list.data ?? [];
     const now = Date.now();
     return {
       data: result,
-      unchanged: previous !== undefined && sameCatalogItems(previous, result),
+      count: list.count,
+      unchanged: list.unchanged ?? (previous !== undefined && sameCatalogItems(previous, result)),
       // Stale category ids put newer categories' items last; reorder later.
       state: categories.ok
         ? {
@@ -608,20 +684,6 @@ async function fetchCatalogInOneRequest<T extends { categoryId: string }>(
     signal?.removeEventListener('abort', cancel);
     controller.abort();
   }
-}
-
-function sameCatalogItems<T extends object>(left: T[], right: T[]): boolean {
-  if (left.length !== right.length) return false;
-  for (let i = 0; i < left.length; i++) {
-    const keys = Object.keys(left[i]) as Array<keyof T>;
-    if (keys.length !== Object.keys(right[i]).length) return false;
-    for (const key of keys) {
-      if (!Object.prototype.hasOwnProperty.call(right[i], key) || left[i][key] !== right[i][key]) {
-        return false;
-      }
-    }
-  }
-  return true;
 }
 
 async function fetchCatalogPartitions<T extends { categoryId: string }>(
@@ -792,5 +854,68 @@ export function loadAllSeries(
         typeof Worker === 'undefined' ? undefined : client.getAllSeries,
       );
     },
+  );
+}
+
+// The search's whole-catalog load: the list stays in the worker and its
+// cache write happens there. A panel that needs per-category loads gets
+// them through the page, as loadAll* would.
+function syncedRefetch<T extends { categoryId: string }>(
+  account: PlaylistEntry,
+  resource: 'vod_all' | 'series_all',
+  sync: (categoryIds: string[], signal?: AbortSignal, options?: SyncCatalogOptions) => Promise<SyncedCatalog>,
+  fetchCategories: (signal?: AbortSignal) => Promise<Array<{ id: string }>>,
+  listRefetch: RefetchList<T>,
+): RefetchList<T> {
+  const key = `${account.id}|${resource}`;
+  return async (signal, cached) => {
+    // Only a list with a state can renew its freshness without a rewrite.
+    const previous = cached?.state ? { key, timestamp: cached.timestamp } : undefined;
+    const whole = await fetchCatalogInOneRequest<T>(
+      account.id, resource, signal,
+      (categoryIds, requestSignal, options) =>
+        sync(categoryIds, requestSignal, { ...options, ...(previous ? { previous } : {}) }),
+      fetchCategories,
+    );
+    if (whole) return whole;
+    // The whole request just failed, so this loads per category.
+    const loaded = cached ? await getCachedCatalog<T[]>(key) : null;
+    return listRefetch(signal, loaded ?? undefined);
+  };
+}
+
+/** The cached movie catalog's record, synced off the UI thread; null means use loadAllVodStreams. */
+export function syncAllVodStreams(
+  account: PlaylistEntry,
+  signal?: AbortSignal,
+): Promise<SearchCacheRecord | null> {
+  if (typeof Worker === 'undefined') return Promise.resolve(null);
+  const client = clientFor(account);
+  return syncedList<VodItem>(
+    `${account.id}|vod_all`,
+    signal,
+    syncedRefetch<VodItem>(account, 'vod_all', client.syncAllVodStreams, client.getVodCategories,
+      (requestSignal, cached) => fetchWholeCatalog(
+        account.id, 'vod_all', requestSignal, client.getVodStreams, client.getVodCategories,
+        item => item.streamId, cached?.data,
+      )),
+  );
+}
+
+/** The cached series catalog's record, synced off the UI thread; null means use loadAllSeries. */
+export function syncAllSeries(
+  account: PlaylistEntry,
+  signal?: AbortSignal,
+): Promise<SearchCacheRecord | null> {
+  if (typeof Worker === 'undefined') return Promise.resolve(null);
+  const client = clientFor(account);
+  return syncedList<SeriesItem>(
+    `${account.id}|series_all`,
+    signal,
+    syncedRefetch<SeriesItem>(account, 'series_all', client.syncAllSeries, client.getSeriesCategories,
+      (requestSignal, cached) => fetchWholeCatalog(
+        account.id, 'series_all', requestSignal, client.getSeries, client.getSeriesCategories,
+        item => item.seriesId, cached?.data,
+      )),
   );
 }

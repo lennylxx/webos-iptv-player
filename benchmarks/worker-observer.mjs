@@ -168,10 +168,13 @@ export async function observeWorkers(cdp, { cpuRate }) {
 
   return {
     // Sums the heap of every live worker, as the TV holds them all at once.
-    async sampleHeap() {
+    // With `collect`, each worker collects garbage first, so the sum is what
+    // the workers retain.
+    async sampleHeap({ collect = false } = {}) {
       let total = 0;
       for (const worker of workers.values()) {
         if (worker.detached) continue;
+        if (collect) await send(worker, 'HeapProfiler.collectGarbage');
         const usage = await send(worker, 'Runtime.getHeapUsage');
         if (usage) {
           total += usage.usedSize;

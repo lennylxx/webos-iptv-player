@@ -5,6 +5,9 @@ import {
   type XtreamCatalogStreamChunk,
   type XtreamCatalogStreamRequest,
 } from './xtream-catalog-stream';
+import { writeHeldValue } from '../workers/held-values';
+import type { CacheWrite } from '../workers/search-cache-reader';
+import { serializedBytes } from '../utils/serialized-bytes';
 
 const request = (categoryIds: string[]): XtreamCatalogStreamRequest => ({
   url: 'http://host/a',
@@ -114,6 +117,54 @@ describe('streamXtreamCatalogInWorker', () => {
     deliver(new TextEncoder().encode(JSON.stringify([movie(1, '1')])).buffer);
     expect((await load).failure).toBe('cancelled');
     expect(chunks).toEqual([]);
+  });
+
+  it('holds the merged list for the cache write', async () => {
+    serve(JSON.stringify([movie(10, '1'), movie(20, '2'), movie(10, '2')]));
+    const { response, chunks } = await run(['2', '1']);
+    const items = chunks.flatMap(chunk => chunk.items);
+    const writes: CacheWrite[] = [];
+    const result = await writeHeldValue(
+      { token: response.held!.token, timeoutMs: 1000, field: 'data', writes: [{ store: 's', value: {} }] },
+      async batch => { writes.push(...batch); },
+    );
+    expect(result).toBe('written');
+    expect(writes[0].value).toEqual({ data: items });
+    expect(response.held!.bytes).toBe(serializedBytes(items));
+  });
+
+  it('keeps a detached list in the worker and sends no items', async () => {
+    serve(JSON.stringify([movie(10, '1'), movie(20, '1')]));
+    const chunks: XtreamCatalogStreamChunk[] = [];
+    const response = await streamXtreamCatalogInWorker(
+      { ...request(['1']), detached: true }, chunk => chunks.push(chunk),
+    );
+    expect(chunks).toEqual([]);
+    expect(response).toMatchObject({ items: 2, held: { token: expect.any(String) } });
+  });
+
+  it('holds nothing when the list matches the cached one', async () => {
+    serve(JSON.stringify([movie(10, '1'), movie(20, '1')]));
+    const { response: first, chunks } = await run(['1']);
+    const cached = chunks.flatMap(chunk => chunk.items);
+    serve(JSON.stringify([movie(10, '1'), movie(20, '1')]));
+    const previous = { key: 'x1|vod_all', timestamp: 5 };
+    const lookups: unknown[] = [];
+    const same = await streamXtreamCatalogInWorker(
+      { ...request(['1']), detached: true, previous }, () => undefined,
+      async (ref) => { lookups.push(ref); return cached; },
+    );
+    expect(lookups).toEqual([previous]);
+    expect(same).toMatchObject({ items: 2, unchanged: true });
+    expect(same.held).toBeUndefined();
+
+    serve(JSON.stringify([movie(10, '1'), movie(21, '1')]));
+    const changed = await streamXtreamCatalogInWorker(
+      { ...request(['1']), detached: true, previous }, () => undefined, async () => cached,
+    );
+    expect(changed.unchanged).toBeUndefined();
+    expect(changed.held).toBeDefined();
+    expect(first.held).toBeDefined();
   });
 
   it('sends a large catalog in batches', async () => {

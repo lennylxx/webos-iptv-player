@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { PlaylistEntry, Programme } from '../types';
-import type { SearchIndexPersistRequest, SearchIndexRequest, SearchQueryRequest } from '../workers/tasks';
+import type { SearchIndexPersistRequest, SearchIndexRequest, SearchQueryRequest, SearchQueryResponse } from '../workers/tasks';
 
 const {
   catalogMock,
@@ -21,6 +21,8 @@ const {
     loadAllVodStreams: vi.fn(),
     loadAllSeries: vi.fn(),
     onCatalogListRefreshed: vi.fn(),
+    syncAllVodStreams: vi.fn(),
+    syncAllSeries: vi.fn(),
   },
   playlistMock: {
     channels: [] as unknown[],
@@ -110,6 +112,7 @@ vi.mock('../workers/app-worker-client', async () => {
 import { Search } from './search';
 import { CONFIG } from '../config';
 import { Focus } from '../navigation/focus-scope';
+import { ParentalControlService } from '../services/parental-control';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -150,6 +153,9 @@ beforeEach(() => {
   catalogMock.getSearchCatalogExpiresAt.mockResolvedValue(
     Date.now() + CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
   );
+  // No synced record: the lists load on the page, as without a worker.
+  catalogMock.syncAllVodStreams.mockResolvedValue(null);
+  catalogMock.syncAllSeries.mockResolvedValue(null);
   container = document.createElement('div');
   document.body.appendChild(container);
 });
@@ -2002,7 +2008,7 @@ describe('Search', () => {
 
     const { view } = await openWith({ vod: movies });
     expect(diagEvents(info, 'search.index.ready')).toEqual([expect.stringMatching(
-      /mode=cache channels=1 programmes=1 items=2 persisted=0 built=3 posted=0 elapsedMs=\d+ hintMs=0$/,
+      /mode=cache channels=1 programmes=1 items=2 persisted=0 built=3 posted=0 elapsedMs=\d+ hintMs=0 catalog=list$/,
     )]);
     const requests = workerMock.run.mock.calls
       .filter(([task]) => task === 'search.index')
@@ -2555,5 +2561,278 @@ describe('Search (M3U-only, no account)', () => {
     container.dispatchEvent(new MouseEvent('click', { clientX: 100, clientY: 50, bubbles: true }));
     document.elementFromPoint = orig;
     expect(handlers.onPlayChannel).toHaveBeenCalledWith(5);
+  });
+});
+
+describe('Search with worker-held catalog records', () => {
+  const vodRef = { store: 'catalog-cache' as const, key: 'x1|vod_all', timestamp: 3 };
+  const seriesRef = { store: 'catalog-cache' as const, key: 'x1|series_all', timestamp: 4 };
+
+  function syncRecords(movies: unknown[], series: unknown[] = []): void {
+    cacheMock.records.set('catalog-cache|x1|vod_all', { timestamp: 3, data: movies });
+    cacheMock.records.set('catalog-cache|x1|series_all', { timestamp: 4, data: series });
+    catalogMock.syncAllVodStreams.mockResolvedValue(vodRef);
+    catalogMock.syncAllSeries.mockResolvedValue(seriesRef);
+  }
+
+  async function queryAnswers(): Promise<SearchQueryResponse[]> {
+    const answers: SearchQueryResponse[] = [];
+    workerMock.run.mock.calls.forEach(([task], call) => {
+      if (task === 'search.query') answers.push(workerMock.run.mock.results[call].value as SearchQueryResponse);
+    });
+    return Promise.all(answers);
+  }
+
+  it('ranks the record in the worker and receives each shown item once', async () => {
+    syncRecords([vod('10', 'Alpha Movie'), vod('11', 'Bravo Movie')], [ser('s1', 'Alpha Series')]);
+    const { view, handlers } = await openWith();
+
+    await view.setQuery('alpha');
+    expect(container.textContent).toContain('Alpha Movie');
+    expect(container.textContent).toContain('Alpha Series');
+    expect(container.textContent).not.toContain('Bravo Movie');
+    await view.setQuery('movie');
+    expect(container.textContent).toContain('Bravo Movie');
+    await view.setQuery('alpha');
+
+    expect(catalogMock.loadAllVodStreams).not.toHaveBeenCalled();
+    expect(catalogMock.loadAllSeries).not.toHaveBeenCalled();
+    expect(workerMock.run.mock.calls.some(([task, payload]) =>
+      task === 'search.index' && ['movies', 'series']
+        .indexOf((payload as SearchIndexRequest).chunk?.source ?? '') >= 0)).toBe(false);
+    const sent = (await queryAnswers()).map(answer => [
+      answer.items?.movies.map(([index]) => index),
+      answer.items?.series.map(([index]) => index),
+    ]);
+    expect(sent).toEqual([[[0], [0]], [[1], []], [[], []]]);
+
+    const movie = container.querySelector('.catalog-tile[data-stream-id="10"]') as HTMLElement;
+    movie.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(handlers.onOpenMovie).toHaveBeenCalledWith(account, expect.objectContaining({ streamId: '10' }));
+  });
+
+  it('sends the parental rules with the record, so the worker leaves hidden items out', async () => {
+    syncRecords([vod('10', 'Alpha Movie'), vod('11', 'Alpha Sequel')]);
+    vi.spyOn(ParentalControlService, 'catalogConcealment').mockImplementation(kind => kind === 'vod'
+      ? {
+        sourceApproved: true,
+        lockedCategories: [],
+        allowedItems: [],
+        protectedItems: ['11'],
+        uncategorizedLocked: false,
+      }
+      : null);
+    const { view } = await openWith();
+
+    await view.setQuery('alpha');
+    expect(container.textContent).toContain('Alpha Movie');
+    expect(container.textContent).not.toContain('Alpha Sequel');
+    vi.mocked(ParentalControlService.catalogConcealment).mockRestore();
+  });
+
+  it('loads and posts the list when the worker cannot read the record', async () => {
+    syncRecords([]);
+    cacheMock.records.delete('catalog-cache|x1|vod_all');
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { view } = await openWith({ vod: [vod('10', 'Alpha Movie')] });
+
+    await view.setQuery('alpha');
+    expect(catalogMock.loadAllVodStreams).toHaveBeenCalledTimes(1);
+    expect(catalogMock.loadAllSeries).not.toHaveBeenCalled();
+    // Syncing again returned the same reference, so the worker is not asked to read it again.
+    expect(catalogMock.syncAllVodStreams).toHaveBeenCalledTimes(2);
+    expect(workerMock.run.mock.calls.filter(([task, payload]) =>
+      task === 'search.index' && (payload as SearchIndexRequest).catalogMovies)).toHaveLength(1);
+    expect(namePosts('Alpha Movie')).toHaveLength(1);
+    expect(container.textContent).toContain('Alpha Movie');
+  });
+
+  it('syncs an unreadable record again so the worker reads it instead of the page', async () => {
+    syncRecords([]);
+    cacheMock.records.delete('catalog-cache|x1|vod_all');
+    catalogMock.syncAllVodStreams.mockResolvedValueOnce(vodRef).mockImplementation(async () => {
+      cacheMock.records.set('catalog-cache|x1|vod_all', { timestamp: 5, data: [vod('10', 'Alpha Movie')] });
+      return { ...vodRef, timestamp: 5 };
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { view } = await openWith();
+
+    await view.setQuery('alpha');
+    expect(catalogMock.loadAllVodStreams).not.toHaveBeenCalled();
+    expect(namePosts('Alpha Movie')).toHaveLength(0);
+    expect(container.textContent).toContain('Alpha Movie');
+  });
+
+  it('shares one fallback between two indexings that both lost the record', async () => {
+    syncRecords([vod('10', 'Alpha Movie')]);
+    const { view } = await openWith();
+    const internals = view as unknown as {
+      workerSession: number;
+      vodRecord: { record: typeof vodRef } | null;
+      indexCatalog(sessionId: number, movies: boolean, series: boolean): Promise<boolean>;
+    };
+    // A reference the worker has not kept, to a record evicted since.
+    internals.vodRecord!.record = { ...vodRef, timestamp: 4 };
+    cacheMock.records.delete('catalog-cache|x1|vod_all');
+    let release = (): void => {};
+    const synced = new Promise<void>(resolve => { release = resolve; });
+    catalogMock.syncAllVodStreams.mockImplementation(async () => {
+      await synced;
+      cacheMock.records.set('catalog-cache|x1|vod_all', { timestamp: 5, data: [vod('10', 'Alpha Movie')] });
+      return { ...vodRef, timestamp: 5 };
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const session = internals.workerSession;
+    const syncs = catalogMock.syncAllVodStreams.mock.calls.length;
+
+    // The second indexing loses the record while the first one syncs it again.
+    const first = internals.indexCatalog(session, true, false);
+    await vi.waitFor(() => expect(catalogMock.syncAllVodStreams).toHaveBeenCalledTimes(syncs + 1));
+    const reads = workerMock.run.mock.calls.length;
+    const second = internals.indexCatalog(session, true, false);
+    await vi.waitFor(() => expect(workerMock.run.mock.calls.length).toBeGreaterThan(reads));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    release();
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(catalogMock.syncAllVodStreams).toHaveBeenCalledTimes(syncs + 1);
+    expect(catalogMock.loadAllVodStreams).not.toHaveBeenCalled();
+    expect(namePosts('Alpha Movie')).toHaveLength(0);
+  });
+
+  it('stops loading a stand-in list when Search closes', async () => {
+    syncRecords([]);
+    cacheMock.records.delete('catalog-cache|x1|vod_all');
+    let signal: AbortSignal | undefined;
+    catalogMock.loadAllVodStreams.mockImplementation((_account: unknown, given?: AbortSignal) => {
+      signal = given;
+      return new Promise(() => undefined);
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const view = new Search(container, mkHandlers());
+    openViews.push(view);
+    await view.open(account);
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    view.deactivate();
+    expect(signal!.aborted).toBe(true);
+  });
+
+  it('does not adopt a list that a newer refresh replaced while the worker read it', async () => {
+    syncRecords([vod('10', 'Alpha Movie')]);
+    const { view } = await openWith();
+    const internals = view as unknown as {
+      workerSession: number;
+      allVod: unknown[];
+      indexedVod: unknown[];
+      indexCatalog(sessionId: number, movies: boolean, series: boolean): Promise<boolean>;
+    };
+    const originalRun = workerMock.run.getMockImplementation()!;
+    let resume: (() => void) | null = null;
+    workerMock.run.mockImplementation(async (task: string, payload: SearchIndexRequest) => {
+      if (task === 'search.index' && payload.catalogMovies) await new Promise<void>(done => { resume = done; });
+      return originalRun(task, payload);
+    });
+    try {
+      const sentinel: unknown[] = [];
+      internals.indexedVod = sentinel;
+      const pending = internals.indexCatalog(internals.workerSession, true, false);
+      await vi.waitFor(() => expect(resume).not.toBeNull());
+      internals.allVod = [];
+      resume!();
+      await pending;
+      expect(internals.indexedVod).toBe(sentinel);
+    } finally {
+      workerMock.run.mockImplementation(originalRun);
+    }
+  });
+
+  it('keeps the worker\'s catalog answer while the same query falls back to the main thread', async () => {
+    syncRecords([vod('10', 'Alpha Movie'), vod('11', 'Bravo Movie')]);
+    const { view } = await openWith();
+    await view.setQuery('alpha');
+    expect(container.textContent).toContain('Alpha Movie');
+
+    const originalRun = workerMock.run.getMockImplementation()!;
+    workerMock.run.mockImplementation(async (task: string, payload: SearchIndexRequest) => {
+      if (task === 'search.query' || (task === 'search.index' && payload.reset)) throw new Error('App worker failed');
+      return originalRun(task, payload);
+    });
+    Object.assign(playlistMock, { searchLocalRanked: vi.fn(() => ({ items: [], hasMore: false })) });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await view.setQuery('alpha');
+      expect(container.textContent).toContain('Alpha Movie');
+
+      await view.setQuery('bravo');
+      expect(container.textContent).not.toContain('Alpha Movie');
+    } finally {
+      workerMock.run.mockImplementation(originalRun);
+      Reflect.deleteProperty(playlistMock, 'searchLocalRanked');
+    }
+  });
+
+  it('starts a new epoch once superseded queries left many items behind', async () => {
+    const groups = 12;
+    const per = CONFIG.SEARCH.INITIAL_RESULTS;
+    syncRecords(Array.from({ length: groups * per }, (_, i) => (
+      vod(String(i), `Q${String.fromCharCode(97 + Math.floor(i / per))}z ${String(i)}`)
+    )));
+    const { view } = await openWith();
+    for (let group = 0; group < groups; group++) {
+      await view.setQuery(`q${String.fromCharCode(97 + group)}z`);
+    }
+    const reported = workerMock.run.mock.calls
+      .filter(([task]) => task === 'search.query')
+      .map(([, payload]) => (payload as { delivered?: { movies: number } }).delivered?.movies ?? 0);
+    expect(Math.max(...reported)).toBeLessThanOrEqual(CONFIG.SEARCH.DELIVERED_KEEP_MIN);
+    expect(reported).toContain(-1);
+  });
+
+  it('reports no delivered items after Search closes', async () => {
+    syncRecords([vod('10', 'Alpha Movie')]);
+    const { view } = await openWith();
+    await view.setQuery('alpha');
+    view.deactivate();
+    await view.open(account, 'alpha');
+    await view.setQuery('alpha');
+    const queries = workerMock.run.mock.calls
+      .filter(([task]) => task === 'search.query')
+      .map(([, payload]) => (payload as { delivered?: { epoch: number } }).delivered?.epoch);
+    expect(queries[queries.length - 1]).toBe(-1);
+    expect(container.textContent).toContain('Alpha Movie');
+  });
+
+  it('reports no delivered items to a worker that did not send them', async () => {
+    syncRecords([vod('10', 'Alpha Movie')]);
+    const { view } = await openWith();
+    await view.setQuery('alpha');
+    const before = workerMock.run.mock.calls.length;
+
+    workerMock.restart();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    await view.setQuery('alph');
+    const first = workerMock.run.mock.calls.slice(before).find(([task]) => task === 'search.query');
+    expect((first?.[1] as { delivered?: { epoch: number } }).delivered?.epoch).toBe(-1);
+    expect(container.textContent).toContain('Alpha Movie');
+  });
+
+  it('reads the record again when a new worker lost the index', async () => {
+    syncRecords([vod('10', 'Alpha Movie')]);
+    const { view } = await openWith();
+    await view.setQuery('alpha');
+    expect(container.textContent).toContain('Alpha Movie');
+
+    workerMock.restart();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    await view.setQuery('alph');
+
+    expect(container.textContent).toContain('Alpha Movie');
+    expect(catalogMock.loadAllVodStreams).not.toHaveBeenCalled();
+    expect(workerMock.run.mock.calls.filter(([task, payload]) =>
+      task === 'search.index' && (payload as SearchIndexRequest).catalogMovies)).toHaveLength(2);
   });
 });

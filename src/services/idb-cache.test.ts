@@ -49,6 +49,9 @@ import {
 import { cachedNameDocuments } from '../workers/search-cache-documents';
 import { buildSourceIndex } from '../workers/search-source-index';
 import { IdbSearchCacheReader } from '../workers/search-cache-reader';
+import { holdValue, releaseHeldValue, writeHeldValue } from '../workers/held-values';
+import { holdRecord, type HeldWriteRequest, type HeldWriteResult } from './held-records';
+import { serializedBytes } from '../utils/serialized-bytes';
 
 const channel = (id: string): Channel => ({
   id,
@@ -938,6 +941,109 @@ describe('idb-cache', () => {
     expect((await getCacheUsage()).categories.catalog.entries).toBe(1);
   });
 
+  describe('a list the app worker holds', () => {
+    // Wires the worker's side straight to the same database.
+    function holdInWorker(items: object[], answer?: () => HeldWriteResult | null, detached = false) {
+      const reader = new IdbSearchCacheReader(indexedDB);
+      const token = holdValue(items);
+      const write = vi.fn((request: HeldWriteRequest): Promise<HeldWriteResult> => {
+        const answered = answer?.();
+        if (answered) return Promise.resolve(answered);
+        return writeHeldValue(
+          { ...request, token, timeoutMs: 5000 },
+          (writes, timeoutMs) => reader.writeAll(writes, timeoutMs),
+        );
+      });
+      const release = vi.fn(() => releaseHeldValue(token));
+      holdRecord(items, { bytes: serializedBytes(items), write, release, ...(detached ? { detached } : {}) });
+      return { token, write, release };
+    }
+
+    async function entryBytes(key: string): Promise<number> {
+      const db = await openPersistenceDb();
+      const tx = db!.transaction(CACHE_META_STORE, 'readonly');
+      const meta = await requestResult(
+        tx.objectStore(CACHE_META_STORE).get(`entry:catalog-cache:${key}`),
+      ) as { byteSize: number };
+      return meta.byteSize;
+    }
+
+    const list = (): object[] => [{ id: '1', name: 'Alpha' }, { id: '2', name: 'Bravo \u00e9' }];
+
+    it('is written there, with no list sent back and the accounting of a page write', async () => {
+      await setCachedCatalog('x1|page', list(), null);
+      const items = list();
+      const held = holdInWorker(items);
+
+      await setCachedCatalog('x1|held', items, null);
+
+      expect(held.write).toHaveBeenCalledTimes(1);
+      expect(held.write.mock.calls[0][0].writes[0].value.data).toBeNull();
+      expect((await getCachedCatalog('x1|held'))?.data).toEqual(list());
+      expect(await entryBytes('x1|held')).toBe(await entryBytes('x1|page'));
+      const usage = await getCacheUsage();
+      expect(usage.categories.catalog).toEqual({ bytes: 2 * await entryBytes('x1|page'), entries: 2 });
+      expect(held.release).toHaveBeenCalledTimes(1);
+      expect(cacheRecordRef(items)).toMatchObject({ store: CATALOG_STORE, key: 'x1|held' });
+    });
+
+    it('writes the page copy when the worker no longer holds the list', async () => {
+      const items = list();
+      const held = holdInWorker(items);
+      releaseHeldValue(held.token);
+
+      await setCachedCatalog('x1|held', items, null);
+
+      expect(held.write).toHaveBeenCalledTimes(1);
+      expect((await getCachedCatalog('x1|held'))?.data).toEqual(list());
+      expect((await getCacheUsage()).categories.catalog.entries).toBe(1);
+    });
+
+    it('never stores an empty stand-in for a list only the worker had', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const lost: never[] = [];
+      const held = holdInWorker(lost, undefined, true);
+      releaseHeldValue(held.token);
+      expect(await setCachedCatalog('x1|lost', lost, null)).toBeNull();
+      expect(await getCachedCatalog('x1|lost')).toBeNull();
+
+      const stand: never[] = [];
+      holdInWorker(stand, undefined, true);
+      const first = await setCachedCatalog('x1|stand', stand, null);
+      expect(first).toEqual(expect.any(Number));
+      // The worker's list is written, so the stand-in has nothing left to store.
+      expect(await setCachedCatalog('x1|stand', stand, null)).toBeNull();
+      expect((await getCachedCatalog('x1|stand'))?.timestamp).toBe(first);
+      warn.mockRestore();
+    });
+
+    it('prunes and retries when the worker write runs out of quota', async () => {
+      const items = list();
+      let answers = 0;
+      const held = holdInWorker(items, () => (answers++ ? null : 'quota_exceeded'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await setCachedCatalog('x1|held', items, null);
+
+      expect(held.write).toHaveBeenCalledTimes(2);
+      expect((await getCachedCatalog('x1|held'))?.data).toEqual(list());
+      expect(warn.mock.calls.some(call => call.join(' ').includes('event=persistence.cache.quota.exceeded'))).toBe(true);
+      warn.mockRestore();
+    });
+
+    it('stores nothing when the worker write fails', async () => {
+      const items = list();
+      holdInWorker(items, () => 'failed');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await setCachedCatalog('x1|held', items, null);
+
+      expect(await getCachedCatalog('x1|held')).toBeNull();
+      expect((await getCacheUsage()).categories.catalog).toEqual({ bytes: 0, entries: 0 });
+      warn.mockRestore();
+    });
+  });
+
   it('touches access metadata without rewriting a cached payload', async () => {
     await setCachedCatalog('x1|vod_all', Array.from({ length: 100 }, (_, index) => index));
     const db = await openPersistenceDb();
@@ -958,6 +1064,24 @@ describe('idb-cache', () => {
       store: CATALOG_STORE,
       key: 'x1|vod_all',
     });
+  });
+
+  it('counts a catalog metadata read as a use of the catalog', async () => {
+    const key = 'x1|metadata_touch';
+    await setCachedCatalog(key, [{ name: 'Alpha' }]);
+    const db = (await openPersistenceDb())!;
+    const metaId = `entry:catalog-cache:${key}`;
+    const stale = db.transaction(CACHE_META_STORE, 'readwrite');
+    const meta = await requestResult(stale.objectStore(CACHE_META_STORE).get(metaId)) as { lastAccessedAt: number };
+    await requestResult(stale.objectStore(CACHE_META_STORE).put({ ...meta, lastAccessedAt: 1 }));
+
+    expect(await getCachedCatalogMetadata(key)).not.toBeNull();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const after = await requestResult(
+      db.transaction(CACHE_META_STORE, 'readonly').objectStore(CACHE_META_STORE).get(metaId),
+    ) as { lastAccessedAt: number };
+    expect(after.lastAccessedAt).toBeGreaterThan(1);
   });
 
   it('keeps accounting correct when pruning the record being updated', async () => {

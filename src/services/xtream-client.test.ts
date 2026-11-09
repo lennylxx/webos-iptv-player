@@ -6,12 +6,23 @@ vi.mock('../utils/fetch-helper', async (importOriginal) => ({
   fetchLimitedText: fetchTextMock,
 }));
 
-const { runWorkerTaskMock } = vi.hoisted(() => ({ runWorkerTaskMock: vi.fn() }));
-vi.mock('../workers/app-worker-client', () => ({ runAppWorkerTask: runWorkerTaskMock }));
+const { runWorkerTaskMock, retained } = vi.hoisted(() => ({ runWorkerTaskMock: vi.fn(), retained: { count: 0 } }));
+vi.mock('../workers/app-worker-client', () => ({
+  runAppWorkerTask: runWorkerTaskMock,
+  retainAppWorker: () => {
+    retained.count++;
+    let held = true;
+    return () => {
+      if (held) retained.count--;
+      held = false;
+    };
+  },
+}));
 
 import { FetchTextError } from '../utils/fetch-helper';
 import { CONFIG } from '../config';
 import { createXtreamClient, loadLiveStreamsCatalog } from './xtream-client';
+import { heldRecord, releaseHeldRecord } from './held-records';
 
 const creds = { baseUrl: 'http://host:8080', username: 'u1', password: 'p1' };
 
@@ -291,7 +302,9 @@ describe('whole Xtream catalog in the app worker', () => {
         };
       });
     });
-    return { finish: () => finish({ items: 1, inputBytes: 1, elapsedMs: 1 }) };
+    return {
+      finish: () => finish({ items: 1, inputBytes: 1, elapsedMs: 1, held: { token: 'h1', bytes: 10 } }),
+    };
   }
   const tasks = () => runWorkerTaskMock.mock.calls.map(call => call[0] as string);
 
@@ -301,9 +314,47 @@ describe('whole Xtream catalog in the app worker', () => {
     const first = client.getAllVodStreams(['1']);
     const second = client.getAllVodStreams(['1']);
     stream.finish();
-    expect(await first).toEqual([item]);
-    expect(await second).toEqual([item]);
+    const list = await first;
+    expect(list).toEqual([item]);
+    expect(await second).toBe(list);
+    expect(heldRecord(list)?.bytes).toBe(10);
     expect(tasks()).toEqual(['xtream.catalog-stream']);
+  });
+
+  it('keeps the worker running while it holds a list for the page', async () => {
+    vi.useFakeTimers();
+    try {
+      const base = retained.count;
+      const client = createXtreamClient(creds);
+      let stream = holdStream();
+      let load = client.getAllVodStreams(['1']);
+      stream.finish();
+      const cached = await load;
+      expect(retained.count).toBe(base + 1);
+      releaseHeldRecord(cached);
+      expect(retained.count).toBe(base);
+
+      stream = holdStream();
+      load = client.getAllVodStreams(['2']);
+      stream.finish();
+      const forgotten = await load;
+      expect(retained.count).toBe(base + 1);
+      vi.advanceTimersByTime(CONFIG.XTREAM.HELD_LIST_MS);
+      expect(retained.count).toBe(base);
+      expect(heldRecord(forgotten)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases the list a load held when every caller canceled it first', async () => {
+    const stream = holdStream();
+    const a = new AbortController();
+    const load = createXtreamClient(creds).getAllVodStreams(['1'], a.signal);
+    a.abort();
+    await expect(load).rejects.toMatchObject({ code: 'cancelled' });
+    stream.finish();
+    await vi.waitFor(() => expect(runWorkerTaskMock).toHaveBeenLastCalledWith('cache.release-held', { token: 'h1' }));
   });
 
   it('cancels the worker load once every caller has aborted', async () => {

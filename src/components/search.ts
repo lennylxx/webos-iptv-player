@@ -15,7 +15,10 @@ import {
   loadAllSeries,
   loadAllVodStreams,
   onCatalogListRefreshed,
+  syncAllSeries,
+  syncAllVodStreams,
 } from '../services/xtream-catalog';
+import { sameCatalogConcealment } from '../utils/catalog-concealment';
 import {
   prepareNameSearchItems,
   prepareSearchItems,
@@ -46,9 +49,12 @@ import {
 } from '../services/parental-control';
 import type {
   SearchCachedNames,
+  SearchCacheRecord,
+  SearchCatalogRecord,
   SearchIndexChunk,
   SearchIndexRequest,
   SearchIndexSource,
+  SearchQueryRequest,
   SearchQueryResponse,
 } from '../workers/tasks';
 import {
@@ -126,6 +132,56 @@ function captureCatalogLoad<T>(promise: Promise<T>): Promise<CatalogLoadResult<T
   );
 }
 
+// A catalog the worker holds as a record: an empty list stands in for it, so
+// identity checks still see a change, and answers carry the ranked items.
+const recordLists = new WeakSet<unknown[]>();
+
+function recordList<T>(): T[] {
+  const list: T[] = [];
+  recordLists.add(list);
+  return list;
+}
+
+function isRecordList(list: unknown[]): boolean {
+  return recordLists.has(list);
+}
+
+function sameCatalogRecord(left: SearchCatalogRecord | null, right: SearchCatalogRecord): boolean {
+  return !!left && left.record.store === right.record.store && left.record.key === right.record.key
+    && left.record.timestamp === right.record.timestamp
+    && sameCatalogConcealment(left.concealment, right.concealment);
+}
+
+type CatalogSourceLoad<T> = { record: SearchCacheRecord; data: null } | { record: null; data: T[] };
+
+// The synced record when the worker can hold the catalog, else the list.
+async function loadCatalogSource<T>(
+  account: PlaylistEntry,
+  signal: AbortSignal,
+  sync: (account: PlaylistEntry, signal: AbortSignal) => Promise<SearchCacheRecord | null>,
+  load: (account: PlaylistEntry, signal: AbortSignal) => Promise<T[]>,
+): Promise<CatalogSourceLoad<T>> {
+  const record = await sync(account, signal);
+  return record ? { record, data: null } : { record: null, data: await load(account, signal) };
+}
+
+// Record items the worker sent this epoch, by catalog index.
+interface DeliveredItems {
+  epoch: number;
+  movies: Map<number, VodItem>;
+  series: Map<number, SeriesItem>;
+}
+
+function deliveredItems(epoch: number): DeliveredItems {
+  return { epoch, movies: new Map(), series: new Map() };
+}
+
+type RecordFallback = Array<{ name: string }> | 'synced' | 'replaced' | null;
+
+function sameCacheRef(left: SearchCacheRecord, right: SearchCacheRecord): boolean {
+  return left.store === right.store && left.key === right.key && left.timestamp === right.timestamp;
+}
+
 function sameCatalogSource(left: SearchCachedNames | null, right: SearchCachedNames | null): boolean {
   if (!left || !right || left.record.key !== right.record.key
     || left.record.timestamp !== right.record.timestamp || left.length !== right.length) return false;
@@ -155,6 +211,14 @@ export class Search {
   // The catalog-cache selections behind allVod / allSeries, when available.
   private vodCache: SearchCachedNames | null = null;
   private seriesCache: SearchCachedNames | null = null;
+  // The catalog records the worker holds for allVod / allSeries in record mode.
+  private vodRecord: SearchCatalogRecord | null = null;
+  private seriesRecord: SearchCatalogRecord | null = null;
+  private delivered = deliveredItems(-1);
+  // The worker generation that sent the delivered items.
+  private deliveredWorker: number | null = null;
+  // The query whose catalog results are shown; only the worker ranks a record.
+  private catalogQuery: string | null = null;
   // The channel list whose documents the worker holds in this session.
   private workerChannels: Channel[] | null = null;
   private indexedChannels: Channel[] | null = null;
@@ -182,6 +246,15 @@ export class Search {
   private focusPending = false;
   private focusWaitingInBox = false;
   private catalogController: AbortController | null = null;
+  // The load that stands in for a catalog record the worker could not read.
+  private recordFallback: AbortController | null = null;
+  // The session that already synced each record again after a failed read.
+  private readonly resynced = { movies: -1, series: -1 };
+  // A second caller in the same session shares the first one's fallback.
+  private readonly fallbacks: {
+    movies?: { sessionId: number; result: Promise<RecordFallback> };
+    series?: { sessionId: number; result: Promise<RecordFallback> };
+  } = {};
   // Shared by a reopen, so closing Search does not restart the load.
   private catalogLoad: { accountId: string; promise: Promise<CatalogSources> } | null = null;
   private catalogLoading = false;
@@ -285,6 +358,8 @@ export class Search {
       this.allSeries = [];
       this.vodCache = null;
       this.seriesCache = null;
+      this.vodRecord = null;
+      this.seriesRecord = null;
       this.loadedFor = null;
       this.catalogExpiresAt = 0;
     }
@@ -456,6 +531,9 @@ export class Search {
     this.allSeries = [];
     this.vodCache = null;
     this.seriesCache = null;
+    this.vodRecord = null;
+    this.seriesRecord = null;
+    this.delivered = deliveredItems(-1);
     this.loadedFor = null;
     this.nav.resetRecovery();
     this.clearResults();
@@ -466,14 +544,21 @@ export class Search {
     this.resumePrompt.hide();
   }
 
+  private abortRecordFallback(): void {
+    this.recordFallback?.abort();
+    this.recordFallback = null;
+  }
+
   deactivate(): void {
     this.active = false;
+    this.abortRecordFallback();
     this.focusPending = false;
     this.programIndexGeneration++;
     this.recoveryRetry = null;
     this.releaseWorker?.();
     this.releaseWorker = null;
     this.queryPending = false;
+    this.delivered = deliveredItems(-1);
   }
 
   handleAction(action: Action): void {
@@ -527,18 +612,27 @@ export class Search {
 
   private async fetchCatalog(account: PlaylistEntry, signal: AbortSignal): Promise<CatalogSources> {
     const [vod, series] = await Promise.all([
-      captureCatalogLoad(loadAllVodStreams(account, signal)),
-      captureCatalogLoad(loadAllSeries(account, signal)),
+      captureCatalogLoad(loadCatalogSource(account, signal, syncAllVodStreams, loadAllVodStreams)),
+      captureCatalogLoad(loadCatalogSource(account, signal, syncAllSeries, loadAllSeries)),
     ]);
     if (signal.aborted || this.account?.id !== account.id
       || this.catalogController?.signal !== signal) return { movies: false, series: false };
     const concealing = ParentalControlService.concealing;
-    if (vod.ok) {
-      const visible = selectCatalogItems(vod.data, concealing, isVodConcealed);
-      const cache = cachedNamesRequest(vod.data, visible.items, visible.selection);
+    if (vod.ok && vod.data.record) {
+      const record = {
+        record: vod.data.record,
+        concealment: ParentalControlService.catalogConcealment('vod', account.id),
+      };
+      if (!sameCatalogRecord(this.vodRecord, record)) this.allVod = recordList();
+      this.vodRecord = record;
+      this.vodCache = null;
+    } else if (vod.ok && vod.data.data) {
+      const visible = selectCatalogItems(vod.data.data, concealing, isVodConcealed);
+      const cache = cachedNamesRequest(vod.data.data, visible.items, visible.selection);
       if (!sameCatalogSource(this.vodCache, cache)) this.allVod = visible.items;
+      this.vodRecord = null;
       this.vodCache = cache;
-    } else {
+    } else if (!vod.ok) {
       log.error(
         'Movie search catalog load failed',
         'event=xtream.search.load.failed',
@@ -546,12 +640,21 @@ export class Search {
         vod.error,
       );
     }
-    if (series.ok) {
-      const visible = selectCatalogItems(series.data, concealing, isSeriesConcealed);
-      const cache = cachedNamesRequest(series.data, visible.items, visible.selection);
+    if (series.ok && series.data.record) {
+      const record = {
+        record: series.data.record,
+        concealment: ParentalControlService.catalogConcealment('series', account.id),
+      };
+      if (!sameCatalogRecord(this.seriesRecord, record)) this.allSeries = recordList();
+      this.seriesRecord = record;
+      this.seriesCache = null;
+    } else if (series.ok && series.data.data) {
+      const visible = selectCatalogItems(series.data.data, concealing, isSeriesConcealed);
+      const cache = cachedNamesRequest(series.data.data, visible.items, visible.selection);
       if (!sameCatalogSource(this.seriesCache, cache)) this.allSeries = visible.items;
+      this.seriesRecord = null;
       this.seriesCache = cache;
-    } else {
+    } else if (!series.ok) {
       log.error(
         'Series search catalog load failed',
         'event=xtream.search.load.failed',
@@ -567,9 +670,9 @@ export class Search {
       this.catalogExpiresAt = expiresAt;
       log.debug(
         'catalog loaded',
-        vod.data.length,
+        vod.data.data?.length ?? 'record',
         'movies,',
-        series.data.length,
+        series.data.data?.length ?? 'record',
         'series',
       );
     }
@@ -577,6 +680,7 @@ export class Search {
   }
 
   private abortCatalogLoad(): void {
+    this.abortRecordFallback();
     this.catalogController?.abort();
     this.catalogController = null;
     this.catalogLoad = null;
@@ -678,6 +782,7 @@ export class Search {
       `programmes=${String(this.programIndex.length)}`,
       `items=${String(this.allVod.length + this.allSeries.length)}`,
       ...fields,
+      `catalog=${this.vodRecord || this.seriesRecord ? 'record' : 'list'}`,
     );
   }
 
@@ -753,12 +858,12 @@ export class Search {
     } else if (el.dataset.programIndex !== undefined) {
       void this.activateProgram(parseInt(el.dataset.programIndex, 10), query);
     } else if (this.account && el.dataset.streamId !== undefined) {
-      const v = this.allVod.find((x) => x.streamId === el.dataset.streamId);
+      const v = this.visibleMovies.find((x) => x.streamId === el.dataset.streamId);
       if (!v) return;
       rememberQuery(query, catalogParentalRequest('vod', { ...v, id: v.streamId }));
       this.handlers.onOpenMovie(this.account, v);
     } else if (this.account && el.dataset.seriesId !== undefined) {
-      const s = this.allSeries.find((x) => x.seriesId === el.dataset.seriesId);
+      const s = this.visibleSeries.find((x) => x.seriesId === el.dataset.seriesId);
       if (!s) return;
       rememberQuery(query, catalogParentalRequest('series', { ...s, id: s.seriesId }));
       this.handlers.onOpenSeries(this.account, s);
@@ -1002,34 +1107,115 @@ export class Search {
   private async indexCatalog(sessionId: number, movies: boolean, series: boolean): Promise<boolean> {
     const vod = this.allVod;
     const allSeries = this.allSeries;
+    // A newer refresh may have replaced a list; its own index adopts that one.
     const adopt = (sources: SearchIndexSource[]): void => {
       if (sessionId !== this.workerSession) return;
-      if (sources.indexOf('movies') >= 0) this.indexedVod = vod;
-      if (sources.indexOf('series') >= 0) this.indexedSeries = allSeries;
+      if (sources.indexOf('movies') >= 0 && vod === this.allVod) this.indexedVod = vod;
+      if (sources.indexOf('series') >= 0 && allSeries === this.allSeries) this.indexedSeries = allSeries;
     };
     const post = async (sources: SearchIndexSource[]): Promise<boolean> => {
       for (const source of sources) {
-        const items = source === 'movies' ? vod : allSeries;
+        let items: Array<{ name: string }> = source === 'movies' ? vod : allSeries;
         // A newer refresh replaced this list and posts its own; an older post
         // landing after it would leave the worker on the older list.
         if (items !== (source === 'movies' ? this.allVod : this.allSeries)) continue;
-        const result = this.postSource(sessionId, source, items.length, index => items[index].name);
+        if (isRecordList(items)) {
+          const group = source === 'movies' ? 'movies' : 'series';
+          const list = await this.leaveRecordMode(sessionId, group);
+          if (list === 'replaced') continue;
+          if (list === 'synced') {
+            const record = group === 'movies' ? this.vodRecord : this.seriesRecord;
+            if (!record) return false;
+            const retry: SearchIndexRequest = group === 'movies'
+              ? { sessionId, catalogMovies: record }
+              : { sessionId, catalogSeries: record };
+            if (!await this.indexWorkerFromCache(retry, post, adopt)) return false;
+            continue;
+          }
+          if (!list) return false;
+          items = list;
+        }
+        const names = items;
+        const result = this.postSource(sessionId, source, names.length, index => names[index].name);
         const own = this.sourcePosts[source];
         if (!await result) return false;
         // A newer post replaced this one and shares its outcome, not its list.
-        if (this.sourcePosts[source] === own) adopt([source]);
+        if (this.sourcePosts[source] === own && sessionId === this.workerSession) {
+          if (source === 'movies') this.indexedVod = names as VodItem[];
+          else this.indexedSeries = names as SeriesItem[];
+        }
       }
       return true;
     };
     const request: SearchIndexRequest = { sessionId };
     const posted: SearchIndexSource[] = [];
-    if (movies && this.vodCache) request.cachedMovies = this.vodCache;
+    if (movies && this.vodRecord) request.catalogMovies = this.vodRecord;
+    else if (movies && this.vodCache) request.cachedMovies = this.vodCache;
     else if (movies) posted.push('movies');
-    if (series && this.seriesCache) request.cachedSeries = this.seriesCache;
+    if (series && this.seriesRecord) request.catalogSeries = this.seriesRecord;
+    else if (series && this.seriesCache) request.cachedSeries = this.seriesCache;
     else if (series) posted.push('series');
-    if (!request.cachedMovies && !request.cachedSeries) return post(posted);
+    if (!request.cachedMovies && !request.cachedSeries
+      && !request.catalogMovies && !request.catalogSeries) return post(posted);
     const cached = await this.indexWorkerFromCache(request, post, adopt);
     return cached && post(posted);
+  }
+
+  // The worker could not read the catalog record. Syncing it again once lets
+  // the worker read or fetch it; failing that, the list loads here and its
+  // names are posted. 'replaced': a newer load took over the source.
+  private leaveRecordMode(sessionId: number, source: 'movies' | 'series'): Promise<RecordFallback> {
+    const running = this.fallbacks[source];
+    if (running && running.sessionId === sessionId) return running.result;
+    const result = this.fallBack(sessionId, source);
+    const entry = { sessionId, result };
+    this.fallbacks[source] = entry;
+    const done = (): void => { if (this.fallbacks[source] === entry) delete this.fallbacks[source]; };
+    result.then(done, done);
+    return result;
+  }
+
+  private async fallBack(sessionId: number, source: 'movies' | 'series'): Promise<RecordFallback> {
+    const account = this.account;
+    if (!account || !this.active) return null;
+    const standIn = source === 'movies' ? this.allVod : this.allSeries;
+    const current = (): boolean => sessionId === this.workerSession
+      && (source === 'movies' ? this.allVod : this.allSeries) === standIn;
+    const concealing = ParentalControlService.concealing;
+    if (!this.recordFallback) this.recordFallback = new AbortController();
+    const signal = this.recordFallback.signal;
+    try {
+      if (this.resynced[source] !== sessionId) {
+        this.resynced[source] = sessionId;
+        const record = await (source === 'movies' ? syncAllVodStreams : syncAllSeries)(account, signal);
+        if (!current()) return 'replaced';
+        const failed = source === 'movies' ? this.vodRecord : this.seriesRecord;
+        // The same reference would only fail the same way again.
+        if (record && !(failed && sameCacheRef(failed.record, record))) {
+          const kind = source === 'movies' ? 'vod' : 'series';
+          const catalog = { record, concealment: ParentalControlService.catalogConcealment(kind, account.id) };
+          if (source === 'movies') this.vodRecord = catalog;
+          else this.seriesRecord = catalog;
+          return 'synced';
+        }
+      }
+      if (source === 'movies') {
+        const data = await loadAllVodStreams(account, signal);
+        if (!current()) return 'replaced';
+        this.allVod = selectCatalogItems(data, concealing, isVodConcealed).items;
+        this.vodRecord = null;
+        return this.allVod;
+      }
+      const data = await loadAllSeries(account, signal);
+      if (!current()) return 'replaced';
+      this.allSeries = selectCatalogItems(data, concealing, isSeriesConcealed).items;
+      this.seriesRecord = null;
+      return this.allSeries;
+    } catch (error) {
+      if (signal.aborted) return null;
+      log.error('Search catalog load failed', 'event=xtream.search.load.failed', `resource=${source}`, error);
+      return null;
+    }
   }
 
   private async indexWorker(request: SearchIndexRequest): Promise<boolean> {
@@ -1059,8 +1245,8 @@ export class Search {
     if (loaded) {
       const unresolved = (response.unresolved ?? []).map(entry => entry.source);
       const sources: SearchIndexSource[] = [];
-      if (request.cachedMovies && unresolved.indexOf('movies') < 0) sources.push('movies');
-      if (request.cachedSeries && unresolved.indexOf('series') < 0) sources.push('series');
+      if ((request.cachedMovies || request.catalogMovies) && unresolved.indexOf('movies') < 0) sources.push('movies');
+      if ((request.cachedSeries || request.catalogSeries) && unresolved.indexOf('series') < 0) sources.push('series');
       loaded(sources);
     }
     if (response.loaded) {
@@ -1186,13 +1372,16 @@ export class Search {
         retryPending = this.recoveryRetryPending(sessionId);
         if (!retryPending) response = await this.recoverWorkerQuery(sessionId, query, 'lost');
       } else {
-        response = await runAppWorkerTask('search.query', {
+        const pending = runAppWorkerTask('search.query', this.queryRequest({
           sessionId,
           query,
           limit: this.resultLimit,
           includeCatalog: !!this.account && !this.pendingIndex?.catalog && !this.lostSources?.catalog,
           includeProgrammes: !this.pendingIndex?.programmes && !this.lostSources?.programmes,
-        });
+        }));
+        const worker = appWorkerGeneration();
+        response = await pending;
+        this.keepDelivered(response, worker);
       }
     } catch (error) {
       if (generation !== this.queryGeneration || sessionId !== this.workerSession || !this.active) return;
@@ -1233,6 +1422,7 @@ export class Search {
     }
     if (response) {
       this.applyQueryResponse(response, this.indexedVod, this.indexedSeries);
+      this.catalogQuery = query;
     } else {
       if (!retryPending) {
         log.warn(
@@ -1242,7 +1432,16 @@ export class Search {
           `session=${String(sessionId)}`,
         );
       }
+      const movies = this.visibleMovies;
+      const series = this.visibleSeries;
       this.applyQueryResponse(this.queryLocally(query), this.allVod, this.allSeries);
+      // A record cannot rank here, so the worker's last answer to this query stands.
+      if (this.catalogQuery === query) {
+        if (isRecordList(this.allVod)) this.visibleMovies = movies;
+        if (isRecordList(this.allSeries)) this.visibleSeries = series;
+      } else {
+        this.catalogQuery = null;
+      }
     }
     this.queryPending = false;
     if (!preserveOffsets) this.resetVirtualOffsets();
@@ -1283,6 +1482,35 @@ export class Search {
     };
   }
 
+  private queryRequest(request: SearchQueryRequest): SearchQueryRequest {
+    // Every worker numbers its epochs from the start, so another worker's
+    // epoch could match the kept one by chance.
+    if (appWorkerGeneration() !== this.deliveredWorker) this.delivered = deliveredItems(-1);
+    const kept = this.delivered;
+    const { DELIVERED_KEEP_FACTOR, DELIVERED_KEEP_MIN, RESULT_CAP } = CONFIG.SEARCH;
+    const cap = Math.min(RESULT_CAP, Math.max(this.resultLimit * DELIVERED_KEEP_FACTOR, DELIVERED_KEEP_MIN));
+    // -1 past the cap: the worker starts a new epoch, so the page drops the
+    // items that earlier queries left behind.
+    request.delivered = {
+      epoch: kept.epoch,
+      movies: kept.movies.size > cap ? -1 : kept.movies.size,
+      series: kept.series.size > cap ? -1 : kept.series.size,
+    };
+    return request;
+  }
+
+  // Every answer's record items are kept, even one a newer query superseded:
+  // the worker counts them as sent.
+  private keepDelivered(response: SearchQueryResponse | null, worker: number | null): void {
+    const items = response?.items;
+    if (!items) return;
+    this.deliveredWorker = worker;
+    if (items.epoch !== this.delivered.epoch) this.delivered = deliveredItems(items.epoch);
+    const kept = this.delivered;
+    for (const [index, item] of items.movies) kept.movies.set(index, item);
+    for (const [index, item] of items.series) kept.series.set(index, item);
+  }
+
   private indexedLists(): unknown[] {
     return [PlaylistService.channels, this.programIndex, this.indexedVod, this.indexedSeries];
   }
@@ -1310,12 +1538,15 @@ export class Search {
         recovery = current;
       }
       if (!await recovery.done) return null;
-      const response = await runAppWorkerTask('search.query', {
+      const pending = runAppWorkerTask('search.query', this.queryRequest({
         sessionId,
         query,
         limit: this.resultLimit,
         includeCatalog: !!this.account,
-      });
+      }));
+      const worker = appWorkerGeneration();
+      const response = await pending;
+      this.keepDelivered(response, worker);
       if (response && owner) {
         log.info(
           'Search worker recovery completed',
@@ -1397,6 +1628,17 @@ export class Search {
         const last = posted[source];
         if (last && last.list === list && last.post === this.sourcePosts[source]) continue;
         changed = true;
+        if (isRecordList(list)) {
+          // The worker reads the record again, or a fallback posts the loaded
+          // list; either way the list it adopted is what it now holds.
+          if (!await this.indexCatalog(sessionId, source === 'movies', source === 'series')
+            || sessionId !== this.workerSession) return false;
+          posted[source] = {
+            list: source === 'movies' ? this.indexedVod : this.indexedSeries,
+            post: this.sourcePosts[source],
+          };
+          continue;
+        }
         const result = this.postSource(sessionId, source, list.length, documentAt);
         const post = this.sourcePosts[source];
         if (!await result || sessionId !== this.workerSession) return false;
@@ -1421,13 +1663,20 @@ export class Search {
   ): void {
     this.visibleChannels = itemsAt(PlaylistService.channels, response.channels.indices);
     this.visiblePrograms = itemsAt(this.programIndex, response.programmes.indices);
-    this.visibleMovies = itemsAt(vod, response.movies.indices);
-    this.visibleSeries = itemsAt(series, response.series.indices);
+    // An answer from another epoch indexes items this page no longer keeps.
+    const kept = response.items?.epoch === this.delivered.epoch ? this.delivered : null;
+    this.visibleMovies = isRecordList(vod)
+      ? (kept ? keptAt(kept.movies, response.movies.indices) : [])
+      : itemsAt(vod, response.movies.indices);
+    this.visibleSeries = isRecordList(series)
+      ? (kept ? keptAt(kept.series, response.series.indices) : [])
+      : itemsAt(series, response.series.indices);
     this.hasMoreResults = response.channels.hasMore || response.programmes.hasMore
       || response.movies.hasMore || response.series.hasMore;
   }
 
   private clearResults(): void {
+    this.catalogQuery = null;
     this.visibleChannels = [];
     this.visiblePrograms = [];
     this.visibleMovies = [];
@@ -1866,6 +2115,15 @@ function itemsAt<T>(items: T[], indices: number[]): T[] {
   const selected: T[] = [];
   for (const index of indices) {
     const item = items[index];
+    if (item !== undefined) selected.push(item);
+  }
+  return selected;
+}
+
+function keptAt<T>(items: Map<number, T>, indices: number[]): T[] {
+  const selected: T[] = [];
+  for (const index of indices) {
+    const item = items.get(index);
     if (item !== undefined) selected.push(item);
   }
   return selected;

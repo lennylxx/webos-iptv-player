@@ -53,6 +53,7 @@ import {
   parentalTargetKey,
   vodParentalRequest,
 } from './parental-control';
+import { catalogConcealmentTest } from '../utils/catalog-concealment';
 
 const request = (parents: ParentalAccessRequest['parents'] = []): ParentalAccessRequest => ({
   target: { kind: 'live-channel', channelKey: 'ch1' },
@@ -555,6 +556,27 @@ describe('ParentalControlService', () => {
 
     ParentalControlService.disable();
     expect(ParentalControlService.isConcealed(request())).toBe(false);
+  });
+
+  it('exports catalog concealment rules that match isVodConcealed', () => {
+    expect(ParentalControlService.catalogConcealment('vod', 'a1')).toBeNull();
+    ParentalControlService.setConcealMode('hide-locked');
+    ParentalControlService.setGroupProtected({ kind: 'vod-category', accountId: 'a1', categoryId: 'c|1' }, true);
+    ParentalControlService.setGroupProtected({ kind: 'series-category', accountId: 'a1', categoryId: 'c2' }, true);
+    ParentalControlService.setItemRule({ kind: 'vod-item', accountId: 'a1', itemId: 'v/1' }, 'allow');
+    ParentalControlService.setItemRule({ kind: 'vod-item', accountId: 'a1', itemId: 'v2' }, 'protect');
+    ParentalControlService.setItemRule({ kind: 'vod-item', accountId: 'a2', itemId: 'v3' }, 'protect');
+    for (const accountId of ['a1', 'a2', 'unreviewed']) {
+      const concealed = catalogConcealmentTest(ParentalControlService.catalogConcealment('vod', accountId));
+      for (const id of ['v/1', 'v2', 'v3', 'v4']) {
+        for (const categoryId of ['c|1', 'c2', '']) {
+          const item = {
+            accountId, streamId: id, name: 'Alpha', poster: '', rating: '', categoryId, containerExtension: 'mp4',
+          };
+          expect(concealed(id, categoryId), `${accountId} ${id} ${categoryId}`).toBe(isVodConcealed(item));
+        }
+      }
+    }
   });
 
   it('conceals a category only when the category itself is locked', () => {

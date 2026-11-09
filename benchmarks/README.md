@@ -94,7 +94,10 @@ then it unloads the app to a blank page, still unthrottled, and relaunches
 with the device and network profile, measuring only that launch. After every measured launch the runner forces a GC and
 records the main-thread heap as `heap.retainedMiB`, with `heap.peakMiB`
 sampled every 250 ms; `heap.workerPeakMiB` is the peak sum of the live
-Worker heaps, since the app terminates an idle Worker.
+Worker heaps, and `heap.workerRetainedMiB` their sum after a forced GC at
+the end of the run (0 when the app already terminated an idle Worker).
+`heap.totalPeakMiB` is the peak of the main-thread and Worker heaps sampled
+together, and `heap.totalRetainedMiB` their retained sum.
 
 Chromium throttles the page's CPU but not a Worker's
 ([crbug.com/383348380](https://crbug.com/383348380)), so the app Worker

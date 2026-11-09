@@ -577,15 +577,17 @@ async function runInteractiveFlow(
     });
     const cdp = await context.newCDPSession(page);
     let sampleWorkerHeap: (() => Promise<number>) | null = null;
-    const waitForProbe = async (heap?: { peak: number; workerPeak: number }) => {
+    const waitForProbe = async (heap?: { peak: number; workerPeak: number; totalPeak: number }) => {
       const started = Date.now();
       for (;;) {
         await new Promise(resolve => setTimeout(resolve, 250));
         const status = await page.evaluate(readInteractiveProbeStatus);
         if (heap) {
           const { usedSize } = await cdp.send('Runtime.getHeapUsage');
+          const workerUsed = sampleWorkerHeap ? await sampleWorkerHeap() : 0;
           heap.peak = Math.max(heap.peak, usedSize);
-          if (sampleWorkerHeap) heap.workerPeak = Math.max(heap.workerPeak, await sampleWorkerHeap());
+          heap.workerPeak = Math.max(heap.workerPeak, workerUsed);
+          heap.totalPeak = Math.max(heap.totalPeak, usedSize + workerUsed);
         }
         if (status?.done) return (await page.evaluate(readInteractiveProbe))!;
         if (Date.now() - started > INTERACTIVE_RUN_TIMEOUT_MS) {
@@ -619,9 +621,12 @@ async function runInteractiveFlow(
     });
     sampleWorkerHeap = () => workers.sampleHeap();
     await page.goto('/', { waitUntil: 'commit' });
-    const heap = { peak: 0, workerPeak: 0 };
+    const heap = { peak: 0, workerPeak: 0, totalPeak: 0 };
     const raw = await waitForProbe(heap);
     sampleWorkerHeap = null;
+    // Taken before the observer detaches; a worker the app already stopped
+    // when idle retains nothing.
+    const workerRetained = await workers.sampleHeap({ collect: true });
     const workerProfiles = await workers.stop();
     await cdp.send('Performance.enable');
     const { metrics } = await cdp.send('Performance.getMetrics');
@@ -646,8 +651,6 @@ async function runInteractiveFlow(
         );
       }
     }
-    // A worker's heap is gone once the app terminates it when idle, so only
-    // its peak is reported.
     await cdp.send('HeapProfiler.enable');
     await cdp.send('HeapProfiler.collectGarbage');
     const { usedSize } = await cdp.send('Runtime.getHeapUsage');
@@ -656,6 +659,9 @@ async function runInteractiveFlow(
       peakMiB: mib(Math.max(heap.peak, usedSize)),
       retainedMiB: mib(usedSize),
       workerPeakMiB: mib(heap.workerPeak),
+      workerRetainedMiB: mib(workerRetained),
+      totalPeakMiB: mib(heap.totalPeak),
+      totalRetainedMiB: mib(usedSize + workerRetained),
     };
     return { raw, userAgent: await page.evaluate(() => navigator.userAgent) };
   } finally {

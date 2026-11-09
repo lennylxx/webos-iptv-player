@@ -12,6 +12,8 @@ const { clientMock, cacheStore, cacheState } = vi.hoisted(() => ({
     getSeriesInfo: vi.fn(),
     getAllVodStreams: vi.fn(),
     getAllSeries: vi.fn(),
+    syncAllVodStreams: vi.fn(),
+    syncAllSeries: vi.fn(),
   },
   cacheStore: new Map<string, {
     key: string;
@@ -45,7 +47,9 @@ vi.mock('./idb-cache', () => ({
     _ttl?: number | null,
     state?: CatalogListState,
   ) => {
-    cacheStore.set(key, { key, timestamp: Date.now(), data, ...(state ? { state } : {}) });
+    const timestamp = Date.now();
+    cacheStore.set(key, { key, timestamp, data, ...(state ? { state } : {}) });
+    return timestamp;
   }),
   setCachedCatalogState: vi.fn(async (key: string, timestamp: number, state: CatalogListState) => {
     const entry = cacheStore.get(key);
@@ -67,9 +71,11 @@ import {
   onCatalogListRefreshed,
   onCatalogListWritten,
   loadVodStreams,
+  syncAllVodStreams,
 } from './xtream-catalog';
 import { getCachedCatalog, setCachedCatalog, setCachedCatalogState } from './idb-cache';
 import { CONFIG } from '../config';
+import { holdRecord } from './held-records';
 import { XtreamRequestError } from './xtream-client';
 import { StorageService } from './storage-service';
 
@@ -1195,6 +1201,60 @@ describe('xtream-catalog one-request catalog', () => {
     await loadAllVodStreams(account);
     await vi.waitFor(() => expect(clientMock.getVodStreams).toHaveBeenCalledTimes(4));
     expect(clientMock.getAllVodStreams).toHaveBeenCalledTimes(1);
+  });
+
+  it('syncs a cold catalog in the worker and returns only its record', async () => {
+    const stand: never[] = [];
+    clientMock.syncAllVodStreams.mockResolvedValue({ data: stand, count: 2, unchanged: false });
+    const ref = await syncAllVodStreams(account);
+    expect(clientMock.syncAllVodStreams.mock.calls[0][0]).toEqual(['2', '1']);
+    expect(ref).toEqual({ store: 'catalog-cache', key: 'x1|vod_all', timestamp: cacheStore.get('x1|vod_all')!.timestamp });
+    const write = vi.mocked(setCachedCatalog).mock.calls.find(([key]) => key === 'x1|vod_all');
+    expect(write?.[1]).toBe(stand);
+    expect(clientMock.getAllVodStreams).not.toHaveBeenCalled();
+  });
+
+  it('serves a stale synced catalog by version and renews an unchanged one without a rewrite', async () => {
+    const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
+    cacheStore.set('x1|vod_all', {
+      key: 'x1|vod_all', timestamp: stale, data: [movie('20', '2')],
+      state: { complete: true, refreshAfter: stale, freshSince: stale },
+    });
+    clientMock.syncAllVodStreams.mockResolvedValue({ data: null, count: 1, unchanged: true });
+
+    expect(await syncAllVodStreams(account)).toEqual({ store: 'catalog-cache', key: 'x1|vod_all', timestamp: stale });
+    await vi.waitFor(() => expect(setCachedCatalogState).toHaveBeenCalled());
+    expect(clientMock.syncAllVodStreams.mock.calls[0][2])
+      .toEqual({ keepUnknownCategories: false, previous: { key: 'x1|vod_all', timestamp: stale } });
+    expect(getCachedCatalog).not.toHaveBeenCalledWith('x1|vod_all');
+    expect(setCachedCatalog).not.toHaveBeenCalledWith('x1|vod_all', expect.anything(), expect.anything(), expect.anything());
+  });
+
+  it('lets the worker drop a refreshed list that turned out unchanged', async () => {
+    const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
+    cacheStore.set('x1|vod_all', {
+      key: 'x1|vod_all', timestamp: stale, data: [movie('20', '2')],
+      state: { complete: true, refreshAfter: stale, freshSince: stale },
+    });
+    const release = vi.fn();
+    const refreshed = [movie('20', '2')];
+    holdRecord(refreshed, { bytes: 10, write: async () => 'written', release });
+    clientMock.getAllVodStreams.mockResolvedValue(refreshed);
+
+    await loadAllVodStreams(account);
+    await vi.waitFor(() => expect(setCachedCatalogState).toHaveBeenCalled());
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('syncs a panel without whole-catalog support per category', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    clientMock.syncAllVodStreams.mockRejectedValue(new XtreamRequestError('too_large', 'big'));
+    const ref = await syncAllVodStreams(account);
+    warn.mockRestore();
+    expect(ref?.key).toBe('x1|vod_all');
+    expect((cacheStore.get('x1|vod_all')!.data as Array<{ streamId: string }>).map(item => item.streamId))
+      .toEqual(['p2', 'p1']);
+    expect(clientMock.getAllVodStreams).not.toHaveBeenCalled();
   });
 
   it('tries the whole request again soon after a timeout', async () => {

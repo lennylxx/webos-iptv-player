@@ -4,7 +4,10 @@ import type {
   ParsedEpg,
   ParsedPlaylist,
   Programme,
+  SeriesItem,
+  VodItem,
 } from '../types';
+import type { CatalogConcealment } from '../utils/catalog-concealment';
 import type { XMLTVParseStats } from '../parsers/xmltv-parser';
 import type { XtreamLiveReference } from '../utils/xtream-live-match';
 import type { XtreamGroupNameFilter } from '../utils/xtream-category-filter';
@@ -17,6 +20,8 @@ import type {
   XtreamCatalogStreamRequest,
   XtreamCatalogStreamResponse,
 } from '../services/xtream-catalog-stream';
+import type { HeldWriteResult } from '../services/held-records';
+import type { HeldValueWriteRequest } from './held-values';
 
 export interface M3UWorkerRequest {
   url: string;
@@ -146,6 +151,27 @@ export interface SearchCachedNames {
 }
 
 /**
+ * A whole catalog the worker reads, filters, and keeps, so the page holds
+ * none of it: query answers carry the ranked items themselves.
+ */
+/** The categories of the few catalog items that have parental rules. */
+export interface CatalogMembersRequest {
+  record: SearchCacheRecord;
+  idField: 'streamId' | 'seriesId';
+  ids: string[];
+}
+
+/** [itemId, categoryId] for each requested id in the record; null: unreadable. */
+export interface CatalogMembersResponse {
+  members: Array<[string, string]>;
+}
+
+export interface SearchCatalogRecord {
+  record: SearchCacheRecord;
+  concealment: CatalogConcealment | null;
+}
+
+/**
  * One slice of a source posted from the main thread. The worker stages slices
  * in order and swaps the source in once `total` documents have arrived.
  */
@@ -167,6 +193,8 @@ export interface SearchIndexRequest {
   cachedProgrammes?: SearchCachedProgrammes;
   cachedMovies?: SearchCachedNames;
   cachedSeries?: SearchCachedNames;
+  catalogMovies?: SearchCatalogRecord;
+  catalogSeries?: SearchCatalogRecord;
 }
 
 export interface SearchIndexUnresolved {
@@ -232,6 +260,14 @@ export interface SearchQueryRequest {
   includeCatalog: boolean;
   // False while the page still builds its program list.
   includeProgrammes?: boolean;
+  /** The catalog items the page kept from earlier answers. */
+  delivered?: SearchDeliveredCount;
+}
+
+export interface SearchDeliveredCount {
+  epoch: number;
+  movies: number;
+  series: number;
 }
 
 export interface SearchRankedIndices {
@@ -239,11 +275,22 @@ export interface SearchRankedIndices {
   hasMore: boolean;
 }
 
+/**
+ * Catalog record items the page lacks for this answer's indices. A new epoch
+ * means the page drops every item it kept before merging these.
+ */
+export interface SearchDeliveredItems {
+  epoch: number;
+  movies: Array<[number, VodItem]>;
+  series: Array<[number, SeriesItem]>;
+}
+
 export interface SearchQueryResponse {
   channels: SearchRankedIndices;
   programmes: SearchRankedIndices;
   movies: SearchRankedIndices;
   series: SearchRankedIndices;
+  items?: SearchDeliveredItems;
 }
 
 export interface ListSearchIndexRequest {
@@ -309,9 +356,21 @@ export interface AppWorkerTasks {
     request: { token: string };
     response: void;
   };
+  'cache.write-held': {
+    request: HeldValueWriteRequest;
+    response: HeldWriteResult;
+  };
+  'cache.release-held': {
+    request: { token: string };
+    response: void;
+  };
   'search.index': {
     request: SearchIndexRequest;
     response: SearchIndexResponse;
+  };
+  'catalog.members': {
+    request: CatalogMembersRequest;
+    response: CatalogMembersResponse | null;
   };
   'search.query': {
     request: SearchQueryRequest;

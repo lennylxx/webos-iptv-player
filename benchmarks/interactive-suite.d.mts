@@ -105,7 +105,14 @@ export interface InteractiveProbeRaw {
   idb: { reads: number; commits: number } | null;
   channels: number;
   /** Main-thread JS heap, added by the runner. */
-  heap?: { peakMiB: number; retainedMiB: number; workerPeakMiB?: number };
+  heap?: {
+    peakMiB: number;
+    retainedMiB: number;
+    workerPeakMiB?: number;
+    workerRetainedMiB?: number;
+    totalPeakMiB?: number;
+    totalRetainedMiB?: number;
+  };
   /** Worker busy CPU samples as [startMs, durationMs], added by the runner. */
   workerBusy?: Array<[number, number]>;
   workerCpu?: { cpuMs: number; pausedMs: number; rate: number; throttled: boolean };
