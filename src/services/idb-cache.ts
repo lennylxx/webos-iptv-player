@@ -107,6 +107,8 @@ export interface CacheUsageSummary {
 export interface CachedEpgFilter {
   ids: string[];
   names: string[];
+  /** Fingerprint of the inputs the filter was built from. */
+  key?: string;
 }
 
 export interface CachedEpgEntry {

@@ -45,6 +45,8 @@ interface ProgrammeOrigin {
 interface SourceFilter {
   ids: Set<string>;
   names: Set<string>;
+  /** Fingerprint of the inputs it was built from; see `FilterKey`. */
+  key: string;
 }
 
 type CacheRestoreResult = 'missing' | 'fresh' | 'stale';
@@ -55,6 +57,8 @@ interface FilterMemo {
   mapped: string;
   mappedIds: string[];
   bySource: Map<string, SourceFilter>;
+  /** Keys taken without building the filter, by `filterSourceKey`. */
+  keys: Map<string, string>;
 }
 
 // A filter walks every playlist channel; on a TV that is seconds of work, so
@@ -69,7 +73,7 @@ function nextTask(): Promise<void> {
 }
 
 function emptyFilterMemo(): FilterMemo {
-  return { channels: null, mapped: '', mappedIds: [], bySource: new Map() };
+  return { channels: null, mapped: '', mappedIds: [], bySource: new Map(), keys: new Map() };
 }
 
 function filterSourceKey(source: EpgSource): string {
@@ -119,11 +123,78 @@ function addToFilter(filter: SourceFilter, channel: Channel): void {
   if (channel.sourceName) filter.names.add(channel.sourceName.toLowerCase());
 }
 
+/**
+ * Hashes every input a source's filter is built from, so equal keys mean
+ * equal filters. A boot compares it with the key cached beside the guide
+ * instead of building the filter: hashing a channel costs far less than
+ * lowercasing its names into two sets and checking the cache against them.
+ * Channels are summed, so a reorder, which leaves the filter alone, keeps it.
+ */
+class FilterKey {
+  private readonly head: HashPair;
+  private sum: HashPair = [0, 0];
+  private count = 0;
+
+  constructor(source: EpgSource, mappedIds: string[]) {
+    let head = hashString(SEED, filterSourceKey(source));
+    for (const id of mappedIds.slice().sort()) head = hashString(head, id);
+    this.head = head;
+  }
+
+  addChannel(channel: Channel): void {
+    if (!channel.id && !channel.name && !channel.sourceName) return;
+    let hash = hashString(SEED, channel.id || '');
+    hash = hashString(hash, channel.name || '');
+    hash = hashString(hash, channel.sourceName || '');
+    this.sum = [(this.sum[0] + hash[0]) | 0, (this.sum[1] + hash[1]) | 0];
+    this.count++;
+  }
+
+  digest(): string {
+    const hash = hashString(this.head, `${String(this.count)}:${String(this.sum[0])}:${String(this.sum[1])}`);
+    return `2.${(hash[0] >>> 0).toString(36)}.${(hash[1] >>> 0).toString(36)}`;
+  }
+}
+
+type HashPair = [number, number];
+
+const SEED: HashPair = [0x811c9dc5, 0x9747b28c];
+
+// Length-prefixed, so ('ab', 'c') and ('a', 'bc') never hash alike.
+function hashString(start: HashPair, value: string): HashPair {
+  let a = Math.imul(start[0] ^ value.length, 0x01000193);
+  let b = Math.imul(start[1] ^ value.length, 0x5bd1e995);
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    a = Math.imul(a ^ code, 0x01000193);
+    b = Math.imul(b ^ code, 0x5bd1e995);
+    b ^= b >>> 15;
+  }
+  return [a, b];
+}
+
 function buildFilter(source: EpgSource, channels: Channel[], mappedIds: string[]): SourceFilter {
-  const filter: SourceFilter = { ids: new Set(mappedIds), names: new Set() };
+  const filter: SourceFilter = { ids: new Set(mappedIds), names: new Set(), key: '' };
+  const key = new FilterKey(source, mappedIds);
   const serves = filterServes(source);
-  for (const channel of channels) if (serves(channel)) addToFilter(filter, channel);
+  for (const channel of channels) {
+    if (!serves(channel)) continue;
+    addToFilter(filter, channel);
+    key.addChannel(channel);
+  }
+  filter.key = key.digest();
   return filter;
+}
+
+async function forEachSliced(channels: Channel[], visit: (channel: Channel) => void): Promise<void> {
+  let sliceStart = Date.now();
+  for (let i = 0; i < channels.length; i++) {
+    if (i % FILTER_SLICE_CHECK === 0 && Date.now() - sliceStart >= FILTER_SLICE_MS) {
+      await nextTask();
+      sliceStart = Date.now();
+    }
+    visit(channels[i]);
+  }
 }
 
 async function buildFilterSliced(
@@ -131,18 +202,29 @@ async function buildFilterSliced(
   channels: Channel[],
   mappedIds: string[],
 ): Promise<SourceFilter> {
-  const filter: SourceFilter = { ids: new Set(mappedIds), names: new Set() };
+  const filter: SourceFilter = { ids: new Set(mappedIds), names: new Set(), key: '' };
+  const key = new FilterKey(source, mappedIds);
   const serves = filterServes(source);
-  let sliceStart = Date.now();
-  for (let i = 0; i < channels.length; i++) {
-    if (i % FILTER_SLICE_CHECK === 0 && Date.now() - sliceStart >= FILTER_SLICE_MS) {
-      await nextTask();
-      sliceStart = Date.now();
-    }
-    const channel = channels[i];
-    if (serves(channel)) addToFilter(filter, channel);
-  }
+  await forEachSliced(channels, (channel) => {
+    if (!serves(channel)) return;
+    addToFilter(filter, channel);
+    key.addChannel(channel);
+  });
+  filter.key = key.digest();
   return filter;
+}
+
+async function filterKeySliced(
+  source: EpgSource,
+  channels: Channel[],
+  mappedIds: string[],
+): Promise<string> {
+  const key = new FilterKey(source, mappedIds);
+  const serves = filterServes(source);
+  await forEachSliced(channels, (channel) => {
+    if (serves(channel)) key.addChannel(channel);
+  });
+  return key.digest();
 }
 
 function sourceAppliesToChannel(source: EpgSource, channel: Channel): boolean {
@@ -313,11 +395,13 @@ class EpgServiceImpl {
     if (unchanged && applied && applied.memo !== memo) {
       const prior = applied.memo;
       // A filter the last load never built would come from channels renamed
-      // in place since then, so it cannot show what that load used.
-      unchanged = (prior.channels === null || applied.sources.every(source =>
-        prior.bySource.has(filterSourceKey(source))))
-        && sameFilters(new Map(applied.sources.map(source =>
-          [source.url, this.filterIn(prior, source)] as const)), filters);
+      // in place since then, so it cannot show what that load used; a key it
+      // took instead still does.
+      unchanged = prior.channels === null || applied.sources.every(source =>
+        prior.bySource.has(filterSourceKey(source)))
+        ? sameFilters(new Map(applied.sources.map(source =>
+          [source.url, this.filterIn(prior, source)] as const)), filters)
+        : sameKeys(prior, applied.sources, filters);
     }
     if (this.revision !== startRevision) return;
     // Equal filters: keep only the new memo, so the old channel list can go.
@@ -679,26 +763,42 @@ class EpgServiceImpl {
       this.channelIdsByName.delete(source.url);
       // Idle means its filter is empty; record that so a later load can
       // compare against it instead of reloading every source.
-      this.currentFilterMemo().bySource.set(
-        filterSourceKey(source), { ids: new Set(), names: new Set() });
+      const memo = this.currentFilterMemo();
+      memo.bySource.set(filterSourceKey(source), {
+        ids: new Set(),
+        names: new Set(),
+        key: new FilterKey(source, this.mappedIdsFor(memo, source)).digest(),
+      });
       return 'missing';
     }
     const cached = await getCachedEpg(source.url);
     if (revision !== this.revision || !cached) return 'missing';
     const memo = this.currentFilterMemo();
-    const pending = this.prepareFilters(memo, [source]);
-    if (pending) {
-      await pending;
+    // Parsed with the very filter this playlist builds, so it needs no check.
+    let trusted = false;
+    if (cached.filter?.key !== undefined && memo.channels !== null) {
+      const key = await this.filterKeyIn(memo, source);
       if (revision !== this.revision) return 'missing';
+      trusted = key === cached.filter.key;
     }
-    const filter = this.filterIn(memo, source);
+    let filter: SourceFilter | null = null;
+    let covered = true;
+    let filtered = { data: cached.data, changed: false };
+    if (!trusted) {
+      const pending = this.prepareFilters(memo, [source]);
+      if (pending) {
+        await pending;
+        if (revision !== this.revision) return 'missing';
+      }
+      filter = this.filterIn(memo, source);
+      covered = covers(cached.filter, filter);
+      filtered = filterParsedEpg(cached.data, filter);
+    }
     const age = Date.now() - cached.timestamp;
     const refreshIntervalMs = StorageService.getEpgRefreshIntervalMs();
     const hasTzField = 'tzOffsetMinutes' in cached.data;
     const hasChannelCatalog = !cached.filter
       || cached.data.channelCatalogComplete === true;
-    const covered = covers(cached.filter, filter);
-    const filtered = filterParsedEpg(cached.data, filter);
     // A filtered rewrite below keeps the timestamp and the kept id arrays.
     this.setState(source.url, {
       data: filtered.data,
@@ -710,7 +810,7 @@ class EpgServiceImpl {
       && hasTzField
       && hasChannelCatalog
       && covered;
-    if (fresh && (filtered.changed || !filtersEqual(cached.filter, filter))) {
+    if (fresh && !trusted && (filtered.changed || !filtersEqual(cached.filter, filter))) {
       await setCachedEpg(
         source.url,
         filtered.data,
@@ -879,6 +979,15 @@ class EpgServiceImpl {
     return this.filterIn(this.currentFilterMemo(), source);
   }
 
+  private async filterKeyIn(memo: FilterMemo, source: EpgSource): Promise<string> {
+    const sourceKey = filterSourceKey(source);
+    const known = memo.bySource.get(sourceKey)?.key ?? memo.keys.get(sourceKey);
+    if (known !== undefined) return known;
+    const key = await filterKeySliced(source, memo.channels ?? [], this.mappedIdsFor(memo, source));
+    memo.keys.set(sourceKey, key);
+    return key;
+  }
+
   private filterIn(memo: FilterMemo, source: EpgSource): SourceFilter | null {
     if (memo.channels === null) return null;
     const key = filterSourceKey(source);
@@ -901,6 +1010,7 @@ class EpgServiceImpl {
         mapped,
         mappedIds: this.mappedChannelIds.slice(),
         bySource: new Map(),
+        keys: new Map(),
       };
     }
     return this.filterMemo;
@@ -1095,6 +1205,19 @@ function sameFilters(
   return true;
 }
 
+function sameKeys(
+  prior: FilterMemo,
+  priorSources: EpgSource[],
+  next: ReadonlyMap<string, SourceFilter | null>,
+): boolean {
+  if (priorSources.length !== next.size) return false;
+  return priorSources.every((source) => {
+    const sourceKey = filterSourceKey(source);
+    const key = prior.bySource.get(sourceKey)?.key ?? prior.keys.get(sourceKey);
+    return key !== undefined && key === next.get(source.url)?.key;
+  });
+}
+
 function sameFilter(current: SourceFilter | null, next: SourceFilter | null): boolean {
   if (!current || !next) return current === next;
   return sameSet(current.ids, next.ids) && sameSet(current.names, next.names);
@@ -1114,6 +1237,7 @@ function serializeFilter(filter: SourceFilter | null): CachedEpgFilter | null {
   return filter && {
     ids: [...filter.ids],
     names: [...filter.names],
+    key: filter.key,
   };
 }
 

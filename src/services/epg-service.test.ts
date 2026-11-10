@@ -60,6 +60,7 @@ import { holdRecord } from './held-records';
 import { parseXMLTVWithStats } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import type { Channel, EpgSource, ParsedEpg, Programme } from '../types';
+import type { CachedEpgFilter } from './idb-cache';
 import { CONFIG } from '../config';
 import { channelKey } from '../utils/channel';
 
@@ -1260,7 +1261,7 @@ describe('EpgService channel pre-filter', () => {
     parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Fresh'));
     await EpgService.load([source('http://a', ['a'])], channels);
     expect(vi.mocked(setCachedEpg).mock.calls[0][2]).toEqual({
-      ids: ['a', 'b'], names: ['alpha', 'bravo'],
+      ids: ['a', 'b'], names: ['alpha', 'bravo'], key: expect.any(String),
     });
 
     EpgService.reset();
@@ -1285,7 +1286,7 @@ describe('EpgService channel pre-filter', () => {
     expect(setCachedEpg).toHaveBeenCalledWith(
       'http://a',
       expect.anything(),
-      { ids: ['a'], names: ['alpha'] },
+      { ids: ['a'], names: ['alpha'], key: expect.any(String) },
       NOON - CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS + 1000,
       CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS,
     );
@@ -1298,6 +1299,116 @@ describe('EpgService channel pre-filter', () => {
     vi.setSystemTime(NOON + 1001);
     await EpgService.refresh();
     expect(fetchMaybeGzipText).toHaveBeenCalled();
+  });
+
+  describe('a cached guide keyed by the filter it was parsed with', () => {
+    const ZULU = `${encodeURIComponent('http://a')}::zz`;
+    const many = (count: number) => Array.from({ length: count }, (_, i) =>
+      channel({ id: `c${String(i)}`, name: `Ch ${String(i)}`, playlistIds: ['a'] }));
+
+    async function cacheFor(channels: Channel[]): Promise<CachedEpgFilter> {
+      parseXMLTVMock.mockReturnValue(parsed('c0', 'Ch 0', 'Fresh'));
+      await EpgService.load([source('http://a', ['a'])], channels);
+      const filter = vi.mocked(setCachedEpg).mock.calls[0][2]!;
+      EpgService.reset();
+      vi.clearAllMocks();
+      return filter;
+    }
+
+    function cachedWithExtra(filter: CachedEpgFilter): void {
+      const data = parsed('c0', 'Ch 0', 'Cached');
+      data.channels.zz = { name: 'Zulu', icon: '' };
+      data.programmes.zz = [prog({ title: 'Outside', start: h(-1), stop: h(1) })];
+      data.channelCatalogComplete = true;
+      vi.mocked(getCachedEpg).mockResolvedValue({
+        url: 'http://a', timestamp: NOON, data, filter,
+      });
+    }
+
+    it('serves it as parsed when the playlist builds the same filter', async () => {
+      const channels = many(3);
+      cachedWithExtra(await cacheFor(channels));
+
+      await EpgService.restoreCached([source('http://a', ['a'])], channels);
+
+      // Checked against the filter, the cache would lose zz and be rewritten.
+      expect(setCachedEpg).not.toHaveBeenCalled();
+      expect(EpgService.programmes[ZULU]?.[0]?.title).toBe('Outside');
+      expect(EpgService.getNowPlaying(EpgService.findChannelId(channels[0])!)?.title)
+        .toBe('Cached');
+      expect(EpgService.getNextRefreshDelayMs(CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS))
+        .toBeGreaterThan(0);
+    });
+
+    it('checks it against the filter once the playlist changed', async () => {
+      const channels = many(3);
+      cachedWithExtra(await cacheFor(channels));
+      const renamed = channels.map((entry, i) =>
+        (i === 2 ? channel({ ...entry, name: 'Ch two' }) : entry));
+
+      await EpgService.restoreCached([source('http://a', ['a'])], renamed);
+
+      expect(EpgService.programmes[ZULU]).toBeUndefined();
+      expect(EpgService.getNextRefreshDelayMs(CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS)).toBe(0);
+    });
+
+    it('serves it after the playlist only reordered its channels', async () => {
+      const channels = many(3);
+      cachedWithExtra(await cacheFor(channels));
+
+      await EpgService.restoreCached([source('http://a', ['a'])], channels.slice().reverse());
+
+      expect(setCachedEpg).not.toHaveBeenCalled();
+      expect(EpgService.programmes[ZULU]?.[0]?.title).toBe('Outside');
+    });
+
+    it('checks it against the filter once a channel maps to another guide entry', async () => {
+      const channels = many(3);
+      cachedWithExtra(await cacheFor(channels));
+      epgChannelIdsMock.mockReturnValue([ZULU]);
+
+      await EpgService.restoreCached([source('http://a', ['a'])], channels);
+
+      expect(EpgService.getNextRefreshDelayMs(CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS)).toBe(0);
+    });
+
+    it('lets the next load of a reordered playlist keep the trusted guide', async () => {
+      const channels = many(6000);
+      cachedWithExtra(await cacheFor(channels));
+      let clock = NOON;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 5));
+      try {
+        const restoring = EpgService.restoreCached([source('http://a', ['a'])], channels);
+        await vi.runAllTimersAsync();
+        await restoring;
+        const moved = channels.slice(1).concat(channels[0]);
+        const loading = EpgService.load([source('http://a', ['a'])], moved);
+        await vi.runAllTimersAsync();
+        await loading;
+      } finally {
+        now.mockRestore();
+      }
+
+      expect(getCachedEpg).toHaveBeenCalledTimes(1);
+      expect(fetchMaybeGzipText).not.toHaveBeenCalled();
+      expect(EpgService.programmes[ZULU]?.[0]?.title).toBe('Outside');
+    });
+
+    it('reloads after a restore that took no key for the source', async () => {
+      let clock = NOON;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 5));
+      try {
+        await EpgService.restoreCached([source('http://a', ['a'])], many(6000));
+        parseXMLTVMock.mockReturnValue(parsed('c0', 'Ch 0', 'Fresh'));
+        const loading = EpgService.load([source('http://a', ['a'])]);
+        await vi.runAllTimersAsync();
+        await loading;
+      } finally {
+        now.mockRestore();
+      }
+
+      expect(fetchMaybeGzipText).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('serves an unfiltered cache to any filter and keeps data when a refresh comes back empty',
