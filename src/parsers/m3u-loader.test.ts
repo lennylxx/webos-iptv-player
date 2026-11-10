@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchAndParseM3U, fetchAndParseM3UInWorker } from './m3u-loader';
+import { awaitCatchupClock, fetchAndParseM3U, fetchAndParseM3UInWorker } from './m3u-loader';
+import { CONFIG } from '../config';
 import { serializedBytes } from '../utils/serialized-bytes';
 import { measureHeldValue, writeHeldValue } from '../workers/held-values';
 
@@ -8,6 +9,318 @@ afterEach(() => {
 });
 
 describe('fetchAndParseM3UInWorker', () => {
+  const catchupSource = [
+    '#EXTM3U',
+    '#EXTINF:-1,Alpha',
+    'http://host/live/u1/p1/101.ts',
+    '#EXTINF:-1,Bravo',
+    'http://host/live/u1/p1/102.ts',
+  ].join('\n');
+  const catchup = {
+    accountId: 'a1',
+    credentials: { baseUrl: 'http://host', username: 'u1', password: 'p1' },
+    output: 'm3u8' as const,
+  };
+
+  function stubCatchupFetch(): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn(async (url: string) => url.includes('player_api.php')
+      ? new Response(JSON.stringify({
+          server_info: { timezone: 'Etc/GMT-2', timestamp_now: 1784665800, time_now: '2026-07-21 22:30:00' },
+        }))
+      : streamResponse([new TextEncoder().encode(catchupSource)]));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('stamps catch-up on archived streams with the panel clock', async () => {
+    const fetchMock = stubCatchupFetch();
+
+    const result = await fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: [
+        { streamId: '101', directSource: '', archive: true, archiveDurationDays: 5 },
+        { streamId: '102', directSource: '' },
+      ],
+      xtreamCatchup: catchup,
+    });
+
+    // The clock is requested before the playlist is fetched, not after.
+    expect(String(fetchMock.mock.calls[0][0])).toContain('player_api.php');
+    expect(result.data.channels[0]).toMatchObject({
+      catchup: 'xtream',
+      catchupSource: 'http://host/timeshift/u1/p1/{duration}/{start}/101.m3u8',
+      catchupDays: 5,
+      catchupAccountId: 'a1',
+      catchupStreamId: '101',
+      catchupTimeZone: 'Etc/GMT-2',
+      catchupTimeOffsetMinutes: 120,
+    });
+    expect(result.data.channels[1]).toMatchObject({ catchup: '', catchupStreamId: '102' });
+    expect(result.data.channels[1].catchupAccountId).toBeUndefined();
+    expect(result.metrics.catchup).toEqual({ streams: 2, archived: 1, enabled: 1, unmatched: 0, clock: 'ok' });
+  });
+
+  it('passes archived Live catalog streams to the worker for catch-up', async () => {
+    stubCatchupFetch();
+    const stream = (streamId: string, archive: boolean) => ({
+      streamId,
+      name: streamId,
+      icon: '',
+      epgChannelId: '',
+      categoryId: 'c1',
+      categoryIds: ['c1'],
+      directSource: '',
+      archive,
+      archiveDurationDays: archive ? 4 : 0,
+    });
+
+    const result = await fetchAndParseM3U(
+      'http://host/get.php',
+      5000,
+      [stream('101', true), stream('102', false)],
+      'http://host',
+      undefined,
+      undefined,
+      undefined,
+      false,
+      catchup,
+    );
+
+    expect(result.data.channels.map(channel => channel.catchupDays)).toEqual([4, 0]);
+    expect(result.metrics.catchup?.archived).toBe(1);
+  });
+
+  const archivedLive = [
+    { streamId: '101', directSource: '', archive: true, archiveDurationDays: 5 },
+    { streamId: '102', directSource: '' },
+  ];
+
+  function hangingClockFetch(playlist: () => Response): {
+    fetchMock: ReturnType<typeof vi.fn>;
+    clockSignal: () => AbortSignal | undefined;
+  } {
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn((url: string, init?: { signal?: AbortSignal }) => {
+      if (!url.includes('player_api.php')) return Promise.resolve(playlist());
+      signal = init?.signal;
+      return new Promise<Response>((_, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return { fetchMock, clockSignal: () => signal };
+  }
+
+  async function withClockWait<T>(waitMs: number, run: () => Promise<T>): Promise<T> {
+    const xtream = CONFIG.XTREAM as { CATCHUP_CLOCK_WAIT_MS: number };
+    const previous = xtream.CATCHUP_CLOCK_WAIT_MS;
+    xtream.CATCHUP_CLOCK_WAIT_MS = waitMs;
+    try {
+      return await run();
+    } finally {
+      xtream.CATCHUP_CLOCK_WAIT_MS = previous;
+    }
+  }
+
+  it('gives up on a clock that never settles after the wait', async () => {
+    await expect(awaitCatchupClock(new Promise(() => {}), 10)).resolves.toBeNull();
+  });
+
+  it('parses without the time zone when the clock stalls past the wait', async () => {
+    // Like Chromium 53 with a stalled body: the clock ignores the abort.
+    vi.stubGlobal('fetch', vi.fn((url: string) => url.includes('player_api.php')
+      ? new Promise<Response>(() => {})
+      : Promise.resolve(streamResponse([new TextEncoder().encode(catchupSource)]))));
+
+    const result = await withClockWait(10, () => fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: archivedLive,
+      xtreamCatchup: catchup,
+    }));
+
+    expect(result.data.channels[0]).toMatchObject({ catchup: 'xtream', catchupDays: 5 });
+    expect(result.data.channels[0].catchupTimeZone).toBeUndefined();
+    expect(result.metrics.catchup).toMatchObject({ clock: 'missing', clockFailure: 'wait' });
+  });
+
+  it('counts the clock wait from the playlist headers, not the request', async () => {
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('player_api.php')) {
+        await delay(150);
+        return new Response(JSON.stringify({ server_info: { timezone: 'UTC' } }));
+      }
+      await delay(100);
+      return streamResponse([new TextEncoder().encode(catchupSource)]);
+    }));
+
+    // The clock answers 150 ms in: past a 120 ms wait from the request, within
+    // 120 ms of the headers at 100 ms.
+    const result = await withClockWait(120, () => fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: archivedLive,
+      xtreamCatchup: catchup,
+    }));
+
+    expect(result.data.channels[0].catchupTimeZone).toBe('UTC');
+    expect(result.metrics.catchup?.clock).toBe('ok');
+  });
+
+  it('cancels the clock request when the playlist fails', async () => {
+    const { clockSignal } = hangingClockFetch(
+      () => new Response('', { status: 500, statusText: 'Server Error' }),
+    );
+
+    await expect(fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: archivedLive,
+      xtreamCatchup: catchup,
+    })).rejects.toThrow('HTTP 500');
+
+    expect(clockSignal()?.aborted).toBe(true);
+  });
+
+  it('waits for a clock that answers after the playlist headers', async () => {
+    let answerClock: (response: Response) => void = () => {};
+    vi.stubGlobal('fetch', vi.fn((url: string) => url.includes('player_api.php')
+      ? new Promise<Response>(resolve => { answerClock = resolve; })
+      : Promise.resolve(streamResponse([new TextEncoder().encode(catchupSource)]))));
+
+    const loading = fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: archivedLive,
+      xtreamCatchup: { ...catchup, catalogStreams: 9 },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    answerClock(new Response(JSON.stringify({ server_info: { timezone: 'UTC' } })));
+    const result = await loading;
+
+    expect(result.data.channels[0]).toMatchObject({ catchup: 'xtream', catchupTimeZone: 'UTC' });
+    expect(result.metrics.catchup?.streams).toBe(9);
+  });
+
+  it('stamps catch-up without a time zone when the clock fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('player_api.php')) throw new TypeError('offline');
+      return streamResponse([new TextEncoder().encode(catchupSource)]);
+    }));
+
+    const result = await fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: archivedLive,
+      xtreamCatchup: catchup,
+    });
+
+    expect(result.data.channels[0]).toMatchObject({ catchup: 'xtream', catchupDays: 5 });
+    expect(result.data.channels[0].catchupTimeZone).toBeUndefined();
+    expect(result.metrics.catchup).toMatchObject({ clock: 'missing', clockFailure: 'request_failed' });
+  });
+
+  function slowBodyResponse(bodyMs: number, signal?: AbortSignal): Response {
+    let sent = false;
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (sent) return { done: true, value: undefined };
+            await new Promise(resolve => setTimeout(resolve, bodyMs));
+            if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+            sent = true;
+            return { done: false, value: new TextEncoder().encode(catchupSource) };
+          },
+          cancel: async () => {},
+        }),
+      },
+    } as unknown as Response;
+  }
+
+  it('returns a clock that arrives after stamping but before the load ends', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('player_api.php')) {
+        await new Promise(resolve => setTimeout(resolve, 60));
+        return new Response(JSON.stringify({ server_info: { timezone: 'UTC' } }));
+      }
+      return slowBodyResponse(150);
+    }));
+
+    const result = await withClockWait(10, () => fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: archivedLive,
+      xtreamCatchup: catchup,
+    }));
+
+    expect(result.data.channels[0].catchupTimeZone).toBeUndefined();
+    expect(result.metrics.catchup).toMatchObject({
+      clock: 'late',
+      lateClock: { timeZone: 'UTC' },
+    });
+  });
+
+  it('keeps the clock wait out of the playlist timeout', async () => {
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: { signal?: AbortSignal }) =>
+      url.includes('player_api.php')
+        ? new Promise<Response>(() => {})
+        : Promise.resolve(slowBodyResponse(100, init?.signal))));
+
+    // 120 ms of clock wait plus 100 ms of body exceed the 180 ms timeout;
+    // the body alone does not.
+    const result = await withClockWait(120, () => fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 180,
+      xtreamLive: archivedLive,
+      xtreamCatchup: catchup,
+    }));
+
+    expect(result.data.channels).toHaveLength(2);
+  });
+
+  it('counts catch-up enabled once per de-duplicated channel', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.includes('player_api.php')
+      ? new Response('{}')
+      : streamResponse([new TextEncoder().encode(
+          `${catchupSource}\n#EXTINF:-1,Alpha again\nhttp://host/live/u1/p1/101.ts`,
+        )])));
+
+    const result = await fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: archivedLive,
+      xtreamCatchup: catchup,
+      playlistId: 'p1',
+    });
+
+    expect(result.data.channels).toHaveLength(2);
+    expect(result.metrics.catchup).toMatchObject({ enabled: 1, clockFailure: 'no_server_info' });
+  });
+
+  it('skips the clock request when no stream is archived', async () => {
+    const fetchMock = stubCatchupFetch();
+
+    const result = await fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: [
+        { streamId: '101', directSource: '' },
+        { streamId: '102', directSource: '' },
+      ],
+      xtreamCatchup: catchup,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.data.channels.every(channel => channel.catchup === '')).toBe(true);
+    expect(result.metrics.catchup).toEqual({ streams: 2, archived: 0, enabled: 0, unmatched: 0, clock: 'missing' });
+  });
+
   it('streams records and keeps only channels matched by the Live catalog', async () => {
     const source = [
       '#EXTM3U url-tvg="http://host/guide.xml"',

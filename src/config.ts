@@ -140,6 +140,9 @@ export const CONFIG = {
     CATALOG_LOAD_BUDGET_MS: 60 * 1000,
     CATALOG_LOAD_CONCURRENCY: 2,
     ACCOUNT_MAX_BYTES: 1024 * 1024,      // account/server metadata response budget
+    // How long a playlist load, once its headers arrive, still waits for the panel
+    // clock before stamping catch-up without it.
+    CATCHUP_CLOCK_WAIT_MS: 5000,
     CATEGORY_MAX_BYTES: 2 * 1024 * 1024, // category-list response budget
     CATALOG_MAX_BYTES: 32 * 1024 * 1024, // full or per-category stream-list budget
     // One streamed request for a whole catalog; the worker keeps only parsed items.

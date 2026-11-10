@@ -15,9 +15,18 @@ import type {
   M3UWorkerChunk,
   M3UWorkerRequest,
   M3UWorkerResponse,
+  XtreamCatchupCounts,
+  XtreamCatchupRequest,
 } from '../workers/tasks';
 import type { XtreamLiveReference } from '../utils/xtream-live-match';
-import type { XtreamLiveStream } from '../services/xtream-client';
+import {
+  loadServerClockResult,
+  type XtreamLiveStream,
+  type XtreamServerClock,
+  type XtreamServerClockResult,
+} from '../services/xtream-client';
+import { xtreamCatchupSource } from '../utils/xtream-url';
+import { CONFIG } from '../config';
 import { holdBatches } from '../workers/held-values';
 import { holdWorkerValue } from '../services/worker-held-records';
 
@@ -42,6 +51,7 @@ export async function fetchAndParseM3U(
   groupFilter?: XtreamGroupNameFilter,
   playlistId?: string,
   holdChannels = false,
+  xtreamCatchup?: XtreamCatchupRequest,
 ): Promise<M3ULoadResult> {
   const inWorker = typeof Worker !== 'undefined';
   const started = Date.now();
@@ -61,15 +71,23 @@ export async function fetchAndParseM3U(
     url,
     timeout,
     xtreamLive: liveStreams
-      ? liveStreams.map(stream => ({
-          streamId: stream.streamId,
-          directSource: stream.directSource,
-        }))
+      ? liveStreams.map(stream => stream.archive
+        ? {
+            streamId: stream.streamId,
+            directSource: stream.directSource,
+            archive: true,
+            archiveDurationDays: stream.archiveDurationDays,
+          }
+        : {
+            streamId: stream.streamId,
+            directSource: stream.directSource,
+          })
       : undefined,
     ...(xtreamBaseUrl ? { xtreamBaseUrl } : {}),
     ...(groupFilter ? { xtreamGroupFilter: groupFilter } : {}),
     ...(playlistId !== undefined ? { playlistId } : {}),
     ...(holdChannels && inWorker ? { holdChannels } : {}),
+    ...(liveStreams && xtreamCatchup ? { xtreamCatchup } : {}),
   };
   const channelBatches: Channel[] = [];
   const handleChunk = (chunk: M3UWorkerChunk): void => {
@@ -179,10 +197,14 @@ export async function fetchAndParseM3UInWorker(
   emitChunk?: (chunk: M3UWorkerChunk) => void,
 ): Promise<M3UWorkerResponse> {
   const started = Date.now();
+  const catchup: XtreamCatchupStamp | undefined = request.xtreamLive && request.xtreamCatchup
+    ? { ...request.xtreamCatchup, clock: null }
+    : undefined;
   const liveFilters = createXtreamM3ULiveFilters(
     request.xtreamLive,
     request.xtreamBaseUrl,
     request.xtreamGroupFilter,
+    catchup,
   );
   let emittedChannels = 0;
   const playlistId = request.playlistId;
@@ -200,6 +222,7 @@ export async function fetchAndParseM3UInWorker(
       const identity = channelExactStreamIdentity(ch);
       if (seen.has(identity)) {
         duplicates++;
+        liveFilters.dropDuplicate?.(ch);
         continue;
       }
       seen.add(identity);
@@ -243,7 +266,16 @@ export async function fetchAndParseM3UInWorker(
       : {}),
   };
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), request.timeout);
+  const timeoutStarted = Date.now();
+  let timer = setTimeout(() => controller.abort(), request.timeout);
+  // The clock request runs alongside the playlist fetch and stops with it.
+  const clockStop = new AbortController();
+  let clockSettled: XtreamServerClockResult | null = null;
+  const clockReady = loadXtreamCatchupClock(
+    request.xtreamLive,
+    request.xtreamCatchup,
+    clockStop.signal,
+  ).then(result => (clockSettled = result));
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   let complete = false;
   let transport: M3UWorkerResponse['metrics']['transport'] = 'stream';
@@ -251,6 +283,13 @@ export async function fetchAndParseM3UInWorker(
   try {
     const response = await fetch(request.url, { signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    if (catchup) {
+      // The clock wait doesn't count against the playlist's own timeout.
+      clearTimeout(timer);
+      const remaining = Math.max(0, request.timeout - (Date.now() - timeoutStarted));
+      catchup.clock = (await awaitCatchupClock(clockReady))?.clock ?? null;
+      timer = setTimeout(() => controller.abort(), remaining);
+    }
     stage = 'read';
     reader = typeof response.body?.getReader === 'function'
       ? response.body.getReader()
@@ -301,6 +340,9 @@ export async function fetchAndParseM3UInWorker(
         channelsKept,
         channelsDropped: liveFilters.getDroppedCount(),
         ...(seen ? { duplicates } : {}),
+        ...(liveFilters.catchupCounts
+          ? { catchup: liveFilters.catchupCounts(clockSettled) }
+          : {}),
         elapsedMs: Date.now() - started,
       },
     };
@@ -321,6 +363,7 @@ export async function fetchAndParseM3UInWorker(
   } finally {
     if (reader && !complete) void reader.cancel().catch(() => {});
     clearTimeout(timer);
+    clockStop.abort();
   }
 
   function emitM3UProgress(force = false): void {
@@ -355,12 +398,53 @@ interface XtreamM3ULiveFilters {
   streamLocationPrefilter?: (location: string) => boolean;
   channelPostfilter?: (channel: Channel) => boolean;
   getDroppedCount(): number;
+  catchupCounts?: (clock: XtreamServerClockResult | null) => XtreamCatchupCounts;
+  dropDuplicate?: (channel: Channel) => void;
+}
+
+export interface XtreamCatchupStamp extends XtreamCatchupRequest {
+  /** Filled in once the panel answers, before the first channel is parsed. */
+  clock: XtreamServerClock | null;
+}
+
+/** The panel clock for catch-up times; fetched only when a stream is archived. */
+export async function loadXtreamCatchupClock(
+  references?: readonly XtreamLiveReference[],
+  catchup?: XtreamCatchupRequest,
+  signal?: AbortSignal,
+): Promise<XtreamServerClockResult> {
+  if (!references || !catchup || signal?.aborted
+    || !references.some(reference => reference.archive)) {
+    return { clock: null };
+  }
+  try {
+    return await loadServerClockResult(catchup.credentials, signal);
+  } catch {
+    return { clock: null, failure: 'request_failed' };
+  }
+}
+
+/** Waits at most `waitMs` more for the clock, so a slow panel can't hold up the
+ *  playlist. A race, not an abort: Chromium 53 can't abort a stalled body. */
+export function awaitCatchupClock<T>(
+  ready: Promise<T>,
+  waitMs: number = CONFIG.XTREAM.CATCHUP_CLOCK_WAIT_MS,
+): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), waitMs);
+  });
+  return Promise.race([ready, late]).then(clock => {
+    clearTimeout(timer);
+    return clock;
+  });
 }
 
 export function createXtreamM3ULiveFilters(
   references?: XtreamLiveReference[],
   baseUrl = '',
   groupFilter?: XtreamGroupNameFilter,
+  catchup?: XtreamCatchupStamp,
 ): XtreamM3ULiveFilters {
   let droppedChannels = 0;
   if (references === undefined) {
@@ -384,6 +468,7 @@ export function createXtreamM3ULiveFilters(
     references,
     baseUrl,
   );
+  const stampCatchup = catchup ? createXtreamCatchupStamper(references, catchup) : null;
   return {
     mode: 'live_catalog',
     streamLocationPrefilter: location => {
@@ -397,11 +482,83 @@ export function createXtreamM3ULiveFilters(
         droppedChannels++;
         return false;
       }
+      stampCatchup?.stamp(channel, streamId);
       channel.catchupStreamId = channel.catchupStreamId || streamId;
       return true;
     },
     getDroppedCount: () => droppedChannels,
+    ...(stampCatchup
+      ? { catchupCounts: stampCatchup.counts, dropDuplicate: stampCatchup.forget }
+      : {}),
   };
+}
+
+function createXtreamCatchupStamper(
+  references: readonly XtreamLiveReference[],
+  catchup: XtreamCatchupStamp,
+): {
+  stamp(channel: Channel, streamId: string): void;
+  forget(channel: Channel): void;
+  counts(clock: XtreamServerClockResult | null): XtreamCatchupCounts;
+} {
+  const archived = new Map<string, XtreamLiveReference>();
+  for (const reference of references) {
+    if (reference.archive) archived.set(reference.streamId, reference);
+  }
+  const counts: XtreamCatchupCounts = {
+    streams: catchup.catalogStreams ?? references.length,
+    archived: catchup.catalogArchived ?? archived.size,
+    enabled: 0,
+    unmatched: 0,
+    clock: 'missing',
+  };
+  // Counted once de-duplication keeps them, as the page's matching did.
+  const enabled = new WeakSet<Channel>();
+  const knownIds = archived.size
+    ? new Set(references.map(reference => reference.streamId))
+    : null;
+  return {
+    stamp(channel, resolvedId) {
+      if (!knownIds) return;
+      // A provider id from the URL wins when the catalog knows it.
+      const streamId = channel.catchupStreamId && knownIds.has(channel.catchupStreamId)
+        ? channel.catchupStreamId
+        : resolvedId;
+      const stream = archived.get(streamId);
+      if (!stream) {
+        if (!streamId) counts.unmatched++;
+        return;
+      }
+      channel.catchupStreamId = streamId;
+      channel.catchupAccountId = catchup.accountId;
+      if (!channel.catchupSource) {
+        channel.catchup = 'xtream';
+        channel.catchupSource = xtreamCatchupSource(
+          catchup.credentials,
+          streamId,
+          catchup.output,
+        );
+        channel.catchupDays = stream.archiveDurationDays ?? 0;
+        counts.enabled++;
+        enabled.add(channel);
+      }
+      stampCatchupClock(channel, catchup.clock);
+    },
+    forget(channel) {
+      if (enabled.delete(channel)) counts.enabled--;
+    },
+    counts(settled) {
+      if (catchup.clock) return { ...counts, clock: 'ok' };
+      if (settled?.clock) return { ...counts, clock: 'late', lateClock: settled.clock };
+      if (!knownIds) return { ...counts };
+      return { ...counts, clockFailure: settled ? settled.failure ?? 'no_server_info' : 'wait' };
+    },
+  };
+}
+
+export function stampCatchupClock(channel: Channel, clock: XtreamServerClock | null): void {
+  if (clock?.timeZone) channel.catchupTimeZone = clock.timeZone;
+  if (clock?.offsetMinutes != null) channel.catchupTimeOffsetMinutes = clock.offsetMinutes;
 }
 
 class PlaylistStreamDecoder {

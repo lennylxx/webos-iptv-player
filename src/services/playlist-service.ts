@@ -7,7 +7,7 @@ import {
   type ParsedPlaylist,
   type PlaylistTab,
 } from '../types';
-import { fetchAndParseM3U } from '../parsers/m3u-loader';
+import { fetchAndParseM3U, stampCatchupClock } from '../parsers/m3u-loader';
 import type { M3ULoadProgress } from '../parsers/m3u-loader';
 import {
   xtreamPlaylistUrl,
@@ -59,8 +59,30 @@ import {
   type XtreamGroupNameFilter,
 } from '../utils/xtream-category-filter';
 import { liveParentalRequest, ParentalControlService } from './parental-control';
+import type { XtreamCatchupCounts } from '../workers/tasks';
 
 const log = createLogger('Playlist');
+
+function logXtreamCatchup(counts: XtreamCatchupCounts): void {
+  if (!counts.archived) return;
+  log.info(
+    'Xtream catch-up matching completed',
+    'event=xtream.catchup.matched',
+    `streams=${counts.streams}`,
+    `archived=${counts.archived}`,
+    `enabled=${counts.enabled}`,
+    `unmatched=${counts.unmatched}`,
+    `clock=${counts.clock}`,
+    ...(counts.clockFailure ? [`clockFailure=${counts.clockFailure}`] : []),
+  );
+  if (counts.unmatched) {
+    log.warn(
+      'Xtream catch-up streams could not be matched',
+      'event=xtream.catchup.unmatched',
+      `channels=${counts.unmatched}`,
+    );
+  }
+}
 
 export interface PlaylistLoadProgress {
   sourceNumber: number;
@@ -456,6 +478,7 @@ class PlaylistServiceImpl {
       try {
         let parsed: ParsedPlaylist | null = null;
         let workerDuplicates: number | null = null;
+        let workerCatchup: XtreamCatchupCounts | undefined;
         let playlistError: unknown;
         try {
           const loaded = await fetchAndParseM3U(
@@ -477,10 +500,20 @@ class PlaylistServiceImpl {
             xtreamGroupFilter,
             plKey,
             playlists.length === 1,
+            xtreamCredentials && xtreamCatalogAvailable
+              ? {
+                  accountId: plKey,
+                  credentials: xtreamCredentials,
+                  output: xtreamOutput,
+                  catalogStreams: xtreamStreams?.length ?? 0,
+                  catalogArchived: xtreamStreams?.filter(stream => stream.archive).length ?? 0,
+                }
+              : undefined,
           );
           parsed = loaded.data;
           workerChannels = parsed.channels;
           workerDuplicates = loaded.metrics.duplicates ?? null;
+          workerCatchup = loaded.metrics.catchup;
         } catch (err) {
           playlistError = err;
           if (!xtreamCredentials) throw err;
@@ -518,6 +551,7 @@ class PlaylistServiceImpl {
           );
           if (streams.length) {
             workerDuplicates = null;
+            workerCatchup = undefined;
             parsed = xtreamLivePlaylist(
               xtreamCredentials,
               xtreamOutput,
@@ -530,7 +564,18 @@ class PlaylistServiceImpl {
         }
         if (!parsed) throw new Error('Xtream source returned no playlist or live catalog');
 
-        if (xtreamCredentials) {
+        if (workerCatchup) {
+          logXtreamCatchup(workerCatchup);
+          const lateClock = workerCatchup.lateClock;
+          if (lateClock) {
+            // Rare: the panel clock missed the worker's stamping, so the page
+            // adds the time zone and writes the cache itself.
+            for (const channel of parsed.channels) {
+              if (channel.catchupAccountId === plKey) stampCatchupClock(channel, lateClock);
+            }
+            releaseHeldRecord(parsed.channels);
+          }
+        } else if (xtreamCredentials) {
           const changed = await this.applyXtreamCatchup(
             parsed.channels,
             xtreamCredentials,
@@ -746,21 +791,13 @@ class PlaylistServiceImpl {
       if (clock?.timeZone) channel.catchupTimeZone = clock.timeZone;
       if (clock?.offsetMinutes != null) channel.catchupTimeOffsetMinutes = clock.offsetMinutes;
     }
-    log.info(
-      'Xtream catch-up matching completed',
-      'event=xtream.catchup.matched',
-      `streams=${streams.length}`,
-      `archived=${archived.size}`,
-      `enabled=${enabled}`,
-      `unmatched=${unmatched}`,
-    );
-    if (unmatched) {
-      log.warn(
-        'Xtream catch-up streams could not be matched',
-        'event=xtream.catchup.unmatched',
-        `channels=${unmatched}`,
-      );
-    }
+    logXtreamCatchup({
+      streams: streams.length,
+      archived: archived.size,
+      enabled,
+      unmatched,
+      clock: clock ? 'ok' : 'missing',
+    });
     return changed;
   }
 

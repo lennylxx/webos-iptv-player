@@ -7,6 +7,9 @@ import {
 export interface XtreamLiveReference {
   streamId: string;
   directSource: string;
+  /** Set only for a stream the account archives, so catch-up can be stamped. */
+  archive?: boolean;
+  archiveDurationDays?: number;
 }
 
 export interface XtreamLiveMatcher {

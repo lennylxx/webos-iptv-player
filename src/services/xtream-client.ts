@@ -241,6 +241,59 @@ export async function loadLiveStreamsCatalog(
   }
 }
 
+export type XtreamClockFailure = XtreamRequestErrorCode | 'no_server_info';
+
+export interface XtreamServerClockResult {
+  clock: XtreamServerClock | null;
+  failure?: XtreamClockFailure;
+}
+
+/** Worker side of `getServerClock`: never throws or logs, so the page logs why. */
+export async function loadServerClockResult(
+  creds: XtreamCredentials,
+  signal?: AbortSignal,
+): Promise<XtreamServerClockResult> {
+  let data: unknown;
+  try {
+    data = await fetchJsonValue(
+      xtreamPlayerApi(creds),
+      ACCOUNT_INFO_TIMEOUT,
+      CONFIG.XTREAM.ACCOUNT_MAX_BYTES,
+      signal,
+    );
+  } catch (err) {
+    return {
+      clock: null,
+      failure: err instanceof XtreamRequestError ? err.code : 'request_failed',
+    };
+  }
+  const clock = serverClockFrom(data);
+  return clock ? { clock } : { clock: null, failure: 'no_server_info' };
+}
+
+async function loadServerClock(
+  creds: XtreamCredentials,
+  signal?: AbortSignal,
+): Promise<XtreamServerClock | null> {
+  return serverClockFrom(await fetchJson(
+    xtreamPlayerApi(creds),
+    ACCOUNT_INFO_TIMEOUT,
+    CONFIG.XTREAM.ACCOUNT_MAX_BYTES,
+    signal,
+  ));
+}
+
+function serverClockFrom(data: unknown): XtreamServerClock | null {
+  if (!data || typeof data !== 'object') return null;
+  const server = (data as { server_info?: unknown }).server_info;
+  if (!server || typeof server !== 'object') return null;
+  const record = server as Record<string, unknown>;
+  return {
+    timeZone: toStr(record.timezone),
+    offsetMinutes: parseServerOffset(record),
+  };
+}
+
 // Tolerant metadata callers model unsupported endpoints as null/empty.
 // Cancellation still propagates to the request owner.
 async function fetchJson(
@@ -621,21 +674,8 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         .filter(category => category.id !== '');
     },
 
-    async getServerClock(signal?: AbortSignal): Promise<XtreamServerClock | null> {
-      const data = await fetchJson(
-        xtreamPlayerApi(creds),
-        ACCOUNT_INFO_TIMEOUT,
-        CONFIG.XTREAM.ACCOUNT_MAX_BYTES,
-        signal,
-      );
-      if (!data || typeof data !== 'object') return null;
-      const server = (data as { server_info?: unknown }).server_info;
-      if (!server || typeof server !== 'object') return null;
-      const record = server as Record<string, unknown>;
-      return {
-        timeZone: toStr(record.timezone),
-        offsetMinutes: parseServerOffset(record),
-      };
+    getServerClock(signal?: AbortSignal): Promise<XtreamServerClock | null> {
+      return loadServerClock(creds, signal);
     },
 
     async getArchiveListings(

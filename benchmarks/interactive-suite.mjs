@@ -262,7 +262,9 @@ export function generateInteractiveFixture(origin, options) {
       stream_icon: `${origin}/img/l${liveId(index)}.png`,
       epg_channel_id: `ch${String(index)}`,
       category_id: String(category(index)),
-      tv_archive: 0,
+      // A quarter of the channels keep a week of catch-up, as panels often do.
+      tv_archive: index % 4 === 0 ? 1 : 0,
+      tv_archive_duration: index % 4 === 0 ? '7' : '0',
     }));
   }
 

@@ -11,9 +11,12 @@ import type { CatalogConcealment } from '../utils/catalog-concealment';
 import type { XMLTVParseStats } from '../parsers/xmltv-parser';
 import type { XtreamLiveReference } from '../utils/xtream-live-match';
 import type { XtreamGroupNameFilter } from '../utils/xtream-category-filter';
+import type { XtreamCredentials, XtreamLiveOutput } from '../utils/xtream-url';
 import type {
+  XtreamClockFailure,
   XtreamLiveStreamsRequest,
   XtreamLiveStreamsResponse,
+  XtreamServerClock,
 } from '../services/xtream-client';
 import type {
   XtreamCatalogStreamChunk,
@@ -33,6 +36,29 @@ export interface M3UWorkerRequest {
   playlistId?: string;
   /** Keep the channels in the worker so it can write the playlist cache. */
   holdChannels?: boolean;
+  /** Stamp catch-up on channels of archived `xtreamLive` streams. */
+  xtreamCatchup?: XtreamCatchupRequest;
+}
+
+export interface XtreamCatchupRequest {
+  accountId: string;
+  credentials: XtreamCredentials;
+  output: XtreamLiveOutput;
+  /** The whole Live catalog's counts, before any category filter, for the log. */
+  catalogStreams?: number;
+  catalogArchived?: number;
+}
+
+export interface XtreamCatchupCounts {
+  streams: number;
+  archived: number;
+  enabled: number;
+  unmatched: number;
+  /** `late`: the clock missed the stamping but arrived before the load ended. */
+  clock: 'ok' | 'late' | 'missing';
+  lateClock?: XtreamServerClock;
+  /** Why a needed clock is missing; `wait` when it never answered in time. */
+  clockFailure?: XtreamClockFailure | 'wait';
 }
 
 export interface M3UWorkerResponse {
@@ -46,6 +72,8 @@ export interface M3UWorkerResponse {
     channelsDropped: number;
     /** Set when the worker de-duplicated the playlist by stream. */
     duplicates?: number;
+    /** Set when the worker stamped Xtream catch-up on the channels. */
+    catchup?: XtreamCatchupCounts;
     elapsedMs: number;
   };
   /** The worker kept every channel it sent, chunks first, for the cache write. */

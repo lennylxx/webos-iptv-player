@@ -39,7 +39,12 @@ vi.mock('../parsers/m3u-loader', async (importOriginal) => {
     fetchAndParseM3U: vi.fn(async (
       url: string,
       timeout: number,
-      streams?: Array<{ streamId: string; directSource: string }>,
+      streams?: Array<{
+        streamId: string;
+        directSource: string;
+        archive?: boolean;
+        archiveDurationDays?: number;
+      }>,
       baseUrl?: string,
       onProgress?: (progress: {
         inputBytes: number;
@@ -51,10 +56,17 @@ vi.mock('../parsers/m3u-loader', async (importOriginal) => {
       groupFilter?: { mode: 'include' | 'exclude'; names: string[] },
       playlistId?: string,
       holdChannels?: boolean,
+      xtreamCatchup?: import('../workers/tasks').XtreamCatchupRequest,
     ) => {
+      const clock = await actual.loadXtreamCatchupClock(streams, xtreamCatchup);
       const text = await fetchTextMock(url, timeout);
       const { parseM3U } = await import('../parsers/m3u-parser');
-      const liveFilters = actual.createXtreamM3ULiveFilters(streams, baseUrl, groupFilter);
+      const liveFilters = actual.createXtreamM3ULiveFilters(
+        streams,
+        baseUrl,
+        groupFilter,
+        streams && xtreamCatchup ? { ...xtreamCatchup, clock: clock.clock } : undefined,
+      );
       const data = parseM3U(text, url, {
         ...(liveFilters.streamLocationPrefilter
           ? {
@@ -105,6 +117,7 @@ vi.mock('../parsers/m3u-loader', async (importOriginal) => {
           channelsDropped: liveFilters.getDroppedCount(),
           elapsedMs: 0,
           ...(duplicates !== undefined ? { duplicates } : {}),
+          ...(liveFilters.catchupCounts ? { catchup: liveFilters.catchupCounts(clock) } : {}),
         },
       };
     }),
@@ -904,24 +917,105 @@ http://host/series/u1/p1/301.mkv`);
     expect(heldReleaseMock).not.toHaveBeenCalled();
   });
 
-  it('writes the cache from the page once catch-up changed the channels', async () => {
+  it('leaves the cache write to the worker once it stamped catch-up', async () => {
     fetchTextMock.mockImplementation((url: string) => {
       if (url.includes('action=get_live_streams')) {
         return Promise.resolve(JSON.stringify([{ stream_id: 101, tv_archive: 1, tv_archive_duration: '7' }]));
       }
-      if (url.includes('player_api.php')) return Promise.resolve('{}');
+      if (url.includes('player_api.php')) {
+        return Promise.resolve(JSON.stringify({ server_info: { timezone: 'UTC' } }));
+      }
       return Promise.resolve(XT);
     });
+    const pageCatchup = vi.spyOn(
+      PlaylistService as unknown as { applyXtreamCatchup(): Promise<number> },
+      'applyXtreamCatchup',
+    );
 
-    await PlaylistService.refresh();
+    try {
+      await PlaylistService.refresh();
+    } finally {
+      pageCatchup.mockRestore();
+    }
 
     const scheduled = vi.mocked(cacheMock.scheduleCachedPlaylist).mock.calls[0][0] as Channel[];
-    expect(scheduled[0].catchupSource).not.toBe('');
+    expect(scheduled[0]).toMatchObject({
+      catchup: 'xtream',
+      catchupStreamId: '101',
+      catchupAccountId: 'x',
+      catchupTimeZone: 'UTC',
+    });
+    expect(pageCatchup).not.toHaveBeenCalled();
+    expect(heldRecord(scheduled)).not.toBeNull();
+    expect(heldReleaseMock).not.toHaveBeenCalled();
+  });
+
+  function withWorkerCatchup(
+    catchup: Partial<import('../workers/tasks').XtreamCatchupCounts>,
+  ): void {
+    const base = vi.mocked(fetchAndParseM3U).getMockImplementation()!;
+    vi.mocked(fetchAndParseM3U).mockImplementationOnce(async (...args) => {
+      const result = await base(...args);
+      for (const channel of result.data.channels) {
+        delete channel.catchupTimeZone;
+        delete channel.catchupTimeOffsetMinutes;
+      }
+      result.metrics.catchup = { ...result.metrics.catchup!, ...catchup };
+      return result;
+    });
+  }
+
+  function archivedFeed(): void {
+    fetchTextMock.mockImplementation((url: string) => {
+      if (url.includes('action=get_live_streams')) {
+        return Promise.resolve(JSON.stringify([{ stream_id: 101, tv_archive: 1, tv_archive_duration: '7' }]));
+      }
+      if (url.includes('player_api.php')) {
+        return Promise.resolve(JSON.stringify({ server_info: { timezone: 'UTC' } }));
+      }
+      return Promise.resolve(XT);
+    });
+  }
+
+  it('adds a late panel clock on the page and writes the cache itself', async () => {
+    archivedFeed();
+    withWorkerCatchup({ clock: 'late', lateClock: { timeZone: 'Etc/GMT-3', offsetMinutes: 180 } });
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await PlaylistService.refresh();
+      expect(info.mock.calls.map(args => args.join(' ')).join('\n')).toContain('clock=late');
+    } finally {
+      info.mockRestore();
+    }
+
+    const scheduled = vi.mocked(cacheMock.scheduleCachedPlaylist).mock.calls[0][0] as Channel[];
+    expect(scheduled[0]).toMatchObject({ catchupTimeZone: 'Etc/GMT-3', catchupTimeOffsetMinutes: 180 });
     expect(heldRecord(scheduled)).toBeNull();
     expect(heldReleaseMock).toHaveBeenCalledTimes(1);
   });
 
+  it('logs why the panel clock is missing', async () => {
+    archivedFeed();
+    withWorkerCatchup({ clock: 'missing', clockFailure: 'timeout' });
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await PlaylistService.refresh();
+      expect(info.mock.calls.map(args => args.join(' ')).join('\n'))
+        .toContain('event=xtream.catchup.matched streams=1 archived=1 enabled=1 unmatched=0 clock=missing clockFailure=timeout');
+    } finally {
+      info.mockRestore();
+    }
+    expect(heldReleaseMock).not.toHaveBeenCalled();
+  });
+
   it('lets the worker drop its channels once catch-up matching fails', async () => {
+    fetchTextMock.mockImplementation((url: string) => {
+      if (url.includes('action=get_live_streams')) return Promise.reject(new Error('down'));
+      if (url.includes('player_api.php')) return Promise.resolve('{}');
+      return Promise.resolve(XT);
+    });
     const catchup = vi.spyOn(
       PlaylistService as unknown as { applyXtreamCatchup(): Promise<number> },
       'applyXtreamCatchup',
@@ -1104,8 +1198,14 @@ http://host:8080/live/u1/p1/102.ts`;
 
   it('narrows the Live references to included categories and keeps catch-up', async () => {
     account({ mode: 'include', ids: ['c1'] });
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const channels = await PlaylistService.refresh();
+
+    // The log counts the whole catalog, as page-side matching did.
+    expect(info.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toContain('event=xtream.catchup.matched streams=2 archived=2 enabled=1 unmatched=0 clock=ok');
+    info.mockRestore();
 
     expect(referencesPassed()).toEqual(['101']);
     expect(channels.map(channel => channel.name)).toEqual(['Alpha']);
@@ -1116,6 +1216,19 @@ http://host:8080/live/u1/p1/102.ts`;
     });
     expect(fetchTextMock.mock.calls.some(([url]) =>
       url.includes('action=get_live_categories'))).toBe(false);
+  });
+
+  it('logs catch-up matching when the filter keeps no archived stream', async () => {
+    liveStreams[0].tv_archive = 0;
+    account({ mode: 'include', ids: ['c1'] });
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const channels = await PlaylistService.refresh();
+
+    expect(channels[0].catchup).toBe('');
+    expect(info.mock.calls.map(args => args.join(' ')).join('\n'))
+      .toContain('event=xtream.catchup.matched streams=2 archived=1 enabled=0');
+    info.mockRestore();
   });
 
   it('drops excluded categories but keeps a stream listed in another category', async () => {
