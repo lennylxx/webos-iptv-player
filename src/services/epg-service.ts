@@ -11,6 +11,7 @@ import { createLogger } from '../utils/logger';
 import { EpgTimeIndex } from '../utils/epg-time-index';
 import { CONFIG } from '../config';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
+import { releaseHeldRecord } from './held-records';
 import type { CachedEpgFilter } from './idb-cache';
 import { ChannelCustomizationService } from './channel-customization';
 import { channelKey } from '../utils/channel';
@@ -747,15 +748,18 @@ class EpgServiceImpl {
       return true;
     }
     const done = log.time(`fetch '${source.url}'`);
+    let result: ParsedEpg | null = null;
     try {
-      const { data: result, stats } = await fetchAndParseXMLTV(source.url, 120000, filter
+      const loaded = await fetchAndParseXMLTV(source.url, 120000, filter
         ? {
             channelIds: filter.ids,
             channelNames: filter.names,
             retainChannelCatalog: true,
             maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES,
           }
-        : { maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES });
+        : { maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES }, true);
+      result = loaded.data;
+      const { stats } = loaded;
       if (revision !== this.revision) {
         done();
         return false;
@@ -812,6 +816,9 @@ class EpgServiceImpl {
       log.error('Failed to load EPG:', source.url, err);
       done();
       return false;
+    } finally {
+      // Any path that skipped the cache write lets the worker drop its copy.
+      releaseHeldRecord(result);
     }
   }
 

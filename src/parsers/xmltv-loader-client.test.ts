@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchAndParseXMLTV } from './xmltv-loader';
 import { retainAppWorker, terminateAppWorker } from '../workers/app-worker-client';
+import { heldRecord, releaseHeldRecord } from '../services/held-records';
 
 class FakeWorker {
   static url = '';
@@ -9,6 +10,7 @@ class FakeWorker {
   static instances: FakeWorker[] = [];
   static respond = true;
   static chunks: unknown[] = [];
+  static held: { token: string } | null = null;
   private messageListener: ((event: MessageEvent<unknown>) => void) | null = null;
   private errorListener: ((event: ErrorEvent) => void) | null = null;
 
@@ -33,6 +35,7 @@ class FakeWorker {
         result: {
           data: { channels: {}, programmes: {}, tzOffsetMinutes: null },
           stats: { programmesKept: 0, droppedBudget: 0 },
+          ...(FakeWorker.held ? { held: FakeWorker.held } : {}),
           metrics: {
             transport: 'stream',
             encoding: 'gzip',
@@ -75,6 +78,7 @@ afterEach(() => {
   FakeWorker.instances = [];
   FakeWorker.respond = true;
   FakeWorker.chunks = [];
+  FakeWorker.held = null;
   vi.useRealTimers();
 });
 
@@ -191,6 +195,21 @@ describe('fetchAndParseXMLTV worker client', () => {
     expect(result.data.programmes.ch1.map(programme => programme.title))
       .toEqual(['Earlier', 'Later']);
     expect(result.data.programmes.old).toBeUndefined();
+  });
+
+  it('asks for the guide to be held and holds the one it rebuilt', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal('document', { baseURI: 'http://host/app/index.html' });
+    vi.stubGlobal('Worker', FakeWorker);
+    FakeWorker.held = { token: 't1' };
+
+    const result = await fetchAndParseXMLTV('http://host/a', 1000, {}, true);
+
+    expect(FakeWorker.request).toMatchObject({ payload: { holdForCache: true } });
+    expect(result.held).toBeUndefined();
+    expect(heldRecord(result.data)).not.toBeNull();
+    releaseHeldRecord(result.data);
+    expect(heldRecord(result.data)).toBeNull();
   });
 
   it('keeps the shared worker alive while a client retains it', async () => {

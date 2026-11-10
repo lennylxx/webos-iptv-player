@@ -962,7 +962,7 @@ describe('idb-cache', () => {
   describe('a list the app worker holds', () => {
     // Wires the worker's side straight to the same database.
     function holdInWorker(
-      items: object[],
+      items: object,
       answer?: () => HeldWriteResult | null,
       detached = false,
       measured = false,
@@ -1136,7 +1136,49 @@ describe('idb-cache', () => {
       expect((await getCacheUsage()).categories.playlist.bytes).toBe(heldBytes);
     });
 
+    const guide = () => ({
+      channels: { ch1: { name: 'Alpha', icon: '' } },
+      programmes: { ch1: [{
+        start: new Date(1000), stop: new Date(2000), title: 'Bravo', description: '', category: '', icon: '',
+      }] },
+    });
+
+    it('writes a held guide there, under the page\'s filter', async () => {
+      const filter = { ids: ['ch1'], names: [] };
+      await setCachedEpg('http://host/page', guide(), filter, 1000, null);
+      const data = guide();
+      const held = holdInWorker(data);
+
+      await setCachedEpg('http://host/held', data, filter, 1000, null);
+
+      expect(held.write).toHaveBeenCalledTimes(1);
+      const request = held.write.mock.calls[0][0];
+      expect(request.field).toBe('data');
+      expect(request.writes[0].value).toMatchObject({ data: null, filter });
+      expect(await getCachedEpg('http://host/held')).toMatchObject({ data: guide(), filter });
+      expect(await entryBytes('http://host/held', 'epg-cache'))
+        .toBe(await entryBytes('http://host/page', 'epg-cache'));
+      expect(held.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes the page\'s guide when the worker no longer holds it', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const data = guide();
+      const held = holdInWorker(data, undefined, false, true);
+      releaseHeldValue(held.token);
+
+      await setCachedEpg('http://host/held', data, null, 1000, null);
+
+      expect(held.measure).toHaveBeenCalledTimes(1);
+      expect(held.write).not.toHaveBeenCalled();
+      expect((await getCachedEpg('http://host/held'))?.data).toEqual(guide());
+      expect(warn.mock.calls.map(call => call.join(' ')).filter(line => line.includes('held.fallback')))
+        .toEqual([expect.stringContaining('event=persistence.cache.held.fallback stage=measure category=epg outcome=page')]);
+      warn.mockRestore();
+    });
+
     it('writes the page copy when the worker no longer holds the list', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const items = list();
       const held = holdInWorker(items);
       releaseHeldValue(held.token);
@@ -1144,8 +1186,25 @@ describe('idb-cache', () => {
       await setCachedCatalog('x1|held', items, null);
 
       expect(held.write).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.map(call => call.join(' ')).filter(line => line.includes('held.fallback')))
+        .toEqual([expect.stringContaining('event=persistence.cache.held.fallback stage=write category=catalog outcome=page')]);
+      warn.mockRestore();
       expect((await getCachedCatalog('x1|held'))?.data).toEqual(list());
       expect((await getCacheUsage()).categories.catalog.entries).toBe(1);
+    });
+
+    it('skips a list only the worker had once it is gone before its size is known', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const lost: never[] = [];
+      const held = holdInWorker(lost, undefined, true, true);
+      releaseHeldValue(held.token);
+
+      expect(await setCachedCatalog('x1|lost', lost, null)).toBeNull();
+
+      expect(held.write).not.toHaveBeenCalled();
+      expect(warn.mock.calls.map(call => call.join(' ')).filter(line => line.includes('held.fallback')))
+        .toEqual([expect.stringContaining('stage=measure category=catalog outcome=skipped')]);
+      warn.mockRestore();
     });
 
     it('never stores an empty stand-in for a list only the worker had', async () => {

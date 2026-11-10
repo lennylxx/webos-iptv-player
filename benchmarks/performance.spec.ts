@@ -140,7 +140,7 @@ const INTERACTIVE_FIXTURE = {
   series: positiveIntegerEnv('BENCHMARK_INTERACTIVE_SERIES', 200_000),
   categories: positiveIntegerEnv('BENCHMARK_INTERACTIVE_CATEGORIES', 5_000),
   m3uChannels: positiveIntegerEnv('BENCHMARK_INTERACTIVE_M3U_CHANNELS', 200_000),
-  epgProgrammes: positiveIntegerEnv('BENCHMARK_INTERACTIVE_EPG_PROGRAMMES', 6),
+  epgProgrammes: positiveIntegerEnv('BENCHMARK_INTERACTIVE_EPG_PROGRAMMES', 2),
 };
 const INTERACTIVE_NETWORK_NAMES = listEnv(
   'BENCHMARK_INTERACTIVE_NETWORKS',

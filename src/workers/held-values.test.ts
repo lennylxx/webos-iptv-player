@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { holdBatches, holdValue, measureHeldValue, writeHeldValue } from './held-values';
+import { holdBatches, holdEpg, holdValue, measureHeldValue, writeHeldValue } from './held-values';
+import { serializedBytes } from '../utils/serialized-bytes';
 import { SearchCacheError, type CacheWrite } from './search-cache-reader';
 
 const STORE = 'catalog-cache';
@@ -67,6 +68,18 @@ describe('held values', () => {
     const tokens = [holdValue(1), holdValue(2), holdValue(3), holdValue(4), holdValue(5)];
     expect((await written(tokens[0])).result).toBe('missing');
     for (const token of tokens.slice(1)) expect((await written(token)).result).toBe('written');
+  });
+
+  it('keeps every guide apart from the lists, built once on first use', async () => {
+    const lists = [holdValue(1), holdValue(2), holdValue(3), holdValue(4)];
+    const build = vi.fn(() => ({ channels: {} }));
+    const guides = Array.from({ length: 5 }, () => holdEpg(build));
+    expect(build).not.toHaveBeenCalled();
+    expect(measureHeldValue(guides[0])).toBe(serializedBytes({ channels: {} }));
+    expect((await written(guides[0])).writes[0]!.value).toEqual({ key: 'k', data: { channels: {} } });
+    expect(build).toHaveBeenCalledTimes(1);
+    for (const token of guides.slice(1)) expect((await written(token)).result).toBe('written');
+    for (const token of lists) expect((await written(token)).result).toBe('written');
   });
 
   it('lets an unclaimed value go after two minutes', async () => {

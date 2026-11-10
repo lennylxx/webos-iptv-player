@@ -11,21 +11,33 @@ export interface HeldValueWriteRequest extends HeldWriteRequest {
 interface HeldValue {
   read(): unknown;
   timer: ReturnType<typeof setTimeout>;
+  pool: HoldPool;
 }
 
-// Vod and series lists for the active account, one being replaced, and the
-// loaded playlist's channels.
-const HOLD_LIMIT = 4;
+type HoldPool = 'lists' | 'epg';
+
+// lists: vod and series lists for the active account, one being replaced,
+// and the loaded playlist's channels. EPG sources get their own pool, so a
+// guide never evicts a catalog list the page has no copy of. Every source
+// parses at once while writes queue, so a guide is never evicted either:
+// each load releases its own, and the expiry covers the rest.
+const HOLD_LIMITS: Record<HoldPool, number> = { lists: 4, epg: Number.POSITIVE_INFINITY };
 
 const values = new Map<string, HeldValue>();
 let counter = 0;
 // Distinct per worker, so a token from a replaced worker never matches.
 const workerId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-function hold(read: () => unknown): string {
+function hold(read: () => unknown, pool: HoldPool = 'lists'): string {
   const token = `${workerId}-${String(++counter)}`;
-  while (values.size >= HOLD_LIMIT) releaseHeldValue(values.keys().next().value as string);
-  values.set(token, { read, timer: setTimeout(() => releaseHeldValue(token), CONFIG.XTREAM.HELD_LIST_MS) });
+  const pooled: string[] = [];
+  values.forEach((held, key) => { if (held.pool === pool) pooled.push(key); });
+  while (pooled.length >= HOLD_LIMITS[pool]) releaseHeldValue(pooled.shift()!);
+  values.set(token, {
+    read,
+    pool,
+    timer: setTimeout(() => releaseHeldValue(token), CONFIG.XTREAM.HELD_LIST_MS),
+  });
   return token;
 }
 
@@ -44,6 +56,15 @@ export function holdBatches(batches: unknown[][]): string {
     }
     return joined;
   });
+}
+
+// Built only once cached, so the task that kept the parts doesn't wait on it.
+export function holdEpg(build: () => unknown): string {
+  let built: { value: unknown } | null = null;
+  return hold(() => {
+    if (!built) built = { value: build() };
+    return built.value;
+  }, 'epg');
 }
 
 /** `serializedBytes` of the held value, or null once it is gone. */

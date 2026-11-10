@@ -56,6 +56,7 @@ vi.mock('../parsers/xmltv-parser', () => {
 
 import { EpgService, onEpgCacheWritten } from './epg-service';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
+import { holdRecord } from './held-records';
 import { parseXMLTVWithStats } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import type { Channel, EpgSource, ParsedEpg, Programme } from '../types';
@@ -441,7 +442,7 @@ describe('EpgService multi-source matching', () => {
     await EpgService.load(sources, channels.slice());
 
     expect(fetchAndParseXMLTVMock)
-      .toHaveBeenCalledWith('http://b', expect.any(Number), expect.anything());
+      .toHaveBeenCalledWith('http://b', expect.any(Number), expect.anything(), true);
   });
 
   it('never runs two XMLTV loads at once', async () => {
@@ -998,6 +999,29 @@ describe('EpgService channel pre-filter', () => {
     ]);
 
     expect(setCachedEpg).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the worker drop a held guide the cache never took', async () => {
+    const released: string[] = [];
+    fetchAndParseXMLTVMock.mockImplementation(async (url: string) => {
+      const data = parsed('a', 'Alpha', 'Program');
+      holdRecord(data, { bytes: 1, write: async () => 'written', release: () => released.push(url) });
+      return {
+        data,
+        stats: { channelsKept: 1, programmesSeen: 2, programmesMatched: 2, programmesKept: 1,
+          droppedBudget: url === 'http://a' ? 1 : 0 },
+      };
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(setCachedEpg).mockRejectedValueOnce(new Error('x'));
+
+    await EpgService.load([source('http://a', ['a']), source('http://b', ['a'])], [
+      channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }),
+    ]);
+
+    expect(fetchAndParseXMLTVMock.mock.calls.map(call => call[3])).toEqual([true, true]);
+    expect(setCachedEpg).toHaveBeenCalledTimes(1);
+    expect(released.sort()).toEqual(['http://a', 'http://b']);
   });
 
   it('keeps a valid filter when its programmes are outside the time window', async () => {

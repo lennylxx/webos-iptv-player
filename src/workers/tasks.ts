@@ -107,11 +107,15 @@ export interface XMLTVWorkerRequest {
     retainChannelCatalog?: boolean;
     maxProgrammes?: number;
   };
+  /** Keep the parsed guide so its cache write can run in the worker. */
+  holdForCache?: boolean;
 }
 
 export interface XMLTVWorkerResponse {
   data: ParsedEpg;
   stats: XMLTVParseStats;
+  /** Only for a complete guide with programmes, the one the page caches. */
+  held?: { token: string };
   metrics: {
     transport: 'stream' | 'array_buffer';
     encoding: 'gzip' | 'plain';

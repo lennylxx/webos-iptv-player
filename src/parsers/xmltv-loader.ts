@@ -5,6 +5,8 @@ import {
   type XMLTVRecordSink,
 } from './xmltv-parser';
 import { runAppWorkerTask } from '../workers/app-worker-client';
+import { holdEpg } from '../workers/held-values';
+import { holdWorkerValue } from '../services/worker-held-records';
 import type {
   XMLTVWorkerChunk,
   XMLTVWorkerRequest,
@@ -23,6 +25,7 @@ export async function fetchAndParseXMLTV(
   url: string,
   timeout = 30000,
   options: XMLTVParseOptions = {},
+  holdForCache = false,
 ): Promise<XMLTVLoadResult> {
   const started = Date.now();
   log.info(
@@ -44,6 +47,7 @@ export async function fetchAndParseXMLTV(
         retainChannelCatalog: options.retainChannelCatalog,
         maxProgrammes: options.maxProgrammes,
       },
+      ...(holdForCache ? { holdForCache } : {}),
     }, chunk => {
       if (chunk.kind === 'progress') {
         log.info(
@@ -59,6 +63,10 @@ export async function fetchAndParseXMLTV(
       accumulator.accept(chunk);
     });
     result.data = accumulator.complete(result.data);
+    if (result.held) {
+      holdWorkerValue(result.data, result.held, false);
+      delete result.held;
+    }
     if (result.metrics.attempts > 1) logRetry();
     logCompleted(result);
     return result;
@@ -183,25 +191,63 @@ export async function fetchAndParseXMLTVInWorker(
 ): Promise<XMLTVWorkerResponse> {
   const started = Date.now();
   const options = deserializeOptions(request);
+  // The worker keeps every batch it sends, already cloned to the page, so
+  // the page's cache write can rebuild the same guide here.
+  let kept: XMLTVWorkerChunk[] | null = null;
+  const emit = request.holdForCache && emitChunk
+    ? (chunk: XMLTVWorkerChunk): void => {
+        if (chunk.kind === 'reset') kept = [chunk];
+        else if (chunk.kind !== 'progress') kept?.push(chunk);
+        emitChunk(chunk);
+      }
+    : emitChunk;
+  // Past the ceiling the guide is never cached, so its batches can go now.
+  const dropKeptPastBudget = (parser: XMLTVStreamParser): void => {
+    if (parser.stats.droppedBudget) kept = null;
+  };
   const first = await parsePass(
     request.url,
     request.timeout,
     options,
     'initial',
     false,
-    emitChunk,
+    emit,
     1,
+    dropKeptPastBudget,
   );
   if (!first.parser.needsOrderRetry()) {
-    return createResponse(first, 1, Date.now() - started);
+    return withHeldGuide(createResponse(first, 1, Date.now() - started), kept);
   }
   const retry = await parsePass(request.url, request.timeout, {
     ...options,
     channelIds: first.parser.acceptedChannelIds(),
-  }, 'retry', true, emitChunk, 2);
+  }, 'retry', true, emit, 2, dropKeptPastBudget);
   retry.inputBytes += first.inputBytes;
   retry.chunks += first.chunks;
-  return createResponse(retry, 2, Date.now() - started);
+  return withHeldGuide(createResponse(retry, 2, Date.now() - started), kept);
+}
+
+// A truncated or empty guide is never cached, so it is not kept.
+function withHeldGuide(
+  response: XMLTVWorkerResponse,
+  kept: XMLTVWorkerChunk[] | null,
+): XMLTVWorkerResponse {
+  if (!kept || response.stats.droppedBudget > 0 || !response.stats.programmesKept) return response;
+  let chunks: XMLTVWorkerChunk[] | null = kept;
+  const metadata = response.data;
+  return {
+    ...response,
+    held: {
+      token: holdEpg(() => {
+        const accumulator = new XMLTVAccumulator();
+        for (const chunk of chunks!) accumulator.accept(chunk);
+        const guide = accumulator.complete(metadata);
+        // Built once, so the batch arrays can go while the guide waits.
+        chunks = null;
+        return guide;
+      }),
+    },
+  };
 }
 
 async function parsePass(
@@ -212,6 +258,7 @@ async function parsePass(
   retried: boolean,
   emitChunk?: (chunk: XMLTVWorkerChunk) => void,
   attempt = 1,
+  afterInput?: (parser: XMLTVStreamParser) => void,
 ): Promise<{
   data: XMLTVWorkerResponse['data'];
   parser: XMLTVStreamParser;
@@ -266,13 +313,17 @@ async function parsePass(
       const gunzip = encoding === 'gzip'
         ? new Gunzip(chunk => writeDecoded(parser, decoder, chunk))
         : null;
+      const consume = (bytes: Uint8Array): void => {
+        consumeChunk(bytes, parser, decoder, gunzip);
+        afterInput?.(parser);
+      };
       stage = 'decode_parse';
       if (prefix.length) {
         inputBytes += prefix.length;
         chunks++;
         emitProgress();
         stage = 'decode_parse';
-        consumeChunk(prefix, parser, decoder, gunzip);
+        consume(prefix);
       }
       while (!complete) {
         stage = 'read';
@@ -286,7 +337,7 @@ async function parsePass(
           chunks++;
           emitProgress();
           stage = 'decode_parse';
-          consumeChunk(next.value, parser, decoder, gunzip);
+          consume(next.value);
         }
       }
       stage = 'decode_parse';

@@ -1054,6 +1054,17 @@ async function commitRecord(
   return true;
 }
 
+// The page then pays the clone the worker was holding the value to spare it.
+function logHeldFallback(store: CacheStore, stage: 'measure' | 'write', outcome: 'page' | 'skipped'): void {
+  log.warn(
+    'Worker no longer holds the value to cache',
+    'event=persistence.cache.held.fallback',
+    `stage=${stage}`,
+    `category=${categoryForStore(store)}`,
+    `outcome=${outcome}`,
+  );
+}
+
 // A restarted worker lost the value, so the page writes its own copy,
 // measured afresh since the page may have changed it after the worker did.
 // The slot is cleared then, so a quota retry skips the worker.
@@ -1064,6 +1075,7 @@ async function commitWithFallback(
   target: { held: HeldSlot | null },
 ): Promise<void> {
   if (await commitRecord(store, record, await readEntryMeta(store, key), target.held)) return;
+  logHeldFallback(store, 'write', 'page');
   target.held = null;
   const measured = record.byteSize;
   record.byteSize = 0;
@@ -1095,6 +1107,7 @@ async function putRawNow(
   let held = slot;
   const bytes = held ? await heldBytes(held.record) : null;
   if (held && bytes === null) {
+    logHeldFallback(store, 'measure', held.record.detached ? 'skipped' : 'page');
     if (held.record.detached) return false;
     held = null;
   }
@@ -1306,13 +1319,18 @@ export async function setCachedEpg(
   timestamp = Date.now(),
   refreshIntervalMs: number | null = CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS,
 ): Promise<boolean> {
-  return putRaw(EPG_STORE, {
-    url,
-    timestamp,
-    data,
-    filter,
-    expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
-  });
+  const held = heldRecord(data);
+  try {
+    return await putRaw(EPG_STORE, {
+      url,
+      timestamp,
+      data,
+      filter,
+      expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
+    }, true, held && { record: held, field: 'data' });
+  } finally {
+    held?.release();
+  }
 }
 
 export async function clearCachedEpg(): Promise<void> {

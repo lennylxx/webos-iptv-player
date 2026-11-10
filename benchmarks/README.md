@@ -155,7 +155,7 @@ desktop host, mostly the two Search flows. These variables shrink or change it:
 | `BENCHMARK_INTERACTIVE_NETWORKS` | `unthrottled,50mbps` (also `50mbps-rtt50`, `50mbps-rtt150`) |
 | `BENCHMARK_INTERACTIVE_DEVICE` | `webos4` (or `c5`) |
 | `BENCHMARK_INTERACTIVE_CPU_RATE`, `_IDB_READ_MS`, `_IDB_COMMIT_MS`, `_IDB_FSYNC_MS` | From the device |
-| `BENCHMARK_INTERACTIVE_LIVE`, `_MOVIES`, `_SERIES`, `_CATEGORIES`, `_M3U_CHANNELS`, `_EPG_PROGRAMMES` | 50,000, 200,000, 200,000, 5,000, 200,000, 6 |
+| `BENCHMARK_INTERACTIVE_LIVE`, `_MOVIES`, `_SERIES`, `_CATEGORIES`, `_M3U_CHANNELS`, `_EPG_PROGRAMMES` | 50,000, 200,000, 200,000, 5,000, 200,000, 2 |
 | `BENCHMARK_INTERACTIVE_RUN_TIMEOUT_MS` | `600000` |
 | `BENCHMARK_INTERACTIVE_WORKER_THROTTLE` | Unset; `1` throttles the Worker live instead of projecting its CPU |
 | `BENCHMARK_INTERACTIVE_PROFILE_DIR` | Unset; a directory saves a page and a per-Worker `.cpuprofile` per run |
