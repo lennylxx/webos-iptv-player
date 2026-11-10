@@ -229,19 +229,11 @@ export class EpgGrid {
     // Day columns span the earliest..latest program START. Using start (not
     // stop) means a program that merely runs past midnight doesn't add an
     // empty day column for the day it spills into — it belongs to its start day.
-    let minStart = Infinity;
-    let maxStart = -Infinity;
-    for (const progs of Object.values(EpgService.programmes)) {
-      if (!progs.length) continue;
-      const first = progs[0].start.getTime();
-      const last = progs[progs.length - 1].start.getTime();
-      if (first < minStart) minStart = first;
-      if (last > maxStart) maxStart = last;
-    }
-    if (minStart === Infinity) return [];
+    const range = EpgService.getProgrammeStartRange();
+    if (!range) return [];
 
-    const firstDay = startOfDisplayDay(new Date(minStart));
-    const lastDay = startOfDisplayDay(new Date(maxStart));
+    const firstDay = startOfDisplayDay(new Date(range.min));
+    const lastDay = startOfDisplayDay(new Date(range.max));
 
     const opts: Date[] = [];
     let cur = firstDay;
@@ -480,7 +472,7 @@ export class EpgGrid {
     const programmes = this.getCurrentProgrammes();
     this.programmeCount = programmes.length;
     const epgId = channel ? EpgService.findChannelId(channel) : null;
-    const programmeSource = epgId ? EpgService.programmes[epgId] ?? null : null;
+    const programmeSource = epgId ? EpgService.getProgrammes(epgId) : null;
     if (programmeSource !== this.programmeSource) {
       this.programmeSource = programmeSource;
       this.programmeSizeKey = '';

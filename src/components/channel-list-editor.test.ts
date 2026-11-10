@@ -41,6 +41,7 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
     epgMock: {
       mappingRevision: 0,
       programmes: {} as Record<string, unknown[]>,
+      getProgrammes(id: string) { return this.programmes[id] ?? null; },
       findChannelId: vi.fn(() => null as string | null),
       getSourceOffsetMinutes: vi.fn(() => 0),
       getNowPlaying: () => null,

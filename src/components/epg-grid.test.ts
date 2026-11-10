@@ -34,6 +34,13 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
     },
     epgMock: {
       get programmes() { return state.programmes; },
+      getProgrammes: (id: string) => state.programmes[id] ?? null,
+      getProgrammeStartRange() {
+        const starts = Object.values(state.programmes).flatMap(list => list.length
+          ? [list[0].start.getTime(), list[list.length - 1].start.getTime()]
+          : []);
+        return starts.length ? { min: Math.min(...starts), max: Math.max(...starts) } : null;
+      },
       findChannelId: vi.fn((ch: any) => (state.programmes[ch.name] ? ch.name : null)),
       getSourceUrl: vi.fn(() => 'http://host/epg.xml'),
       getProgrammesStartingInRange(id: string, from: number, to: number) {

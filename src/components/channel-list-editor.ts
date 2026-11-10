@@ -1107,7 +1107,7 @@ export class ChannelListEditor {
     }
     const channel = PlaylistService.getByIndex(PlaylistService.indexOfKey(target.key));
     const epgId = channel ? EpgService.findChannelId(channel) : null;
-    if (!channel || !epgId || !EpgService.programmes[epgId]?.length) {
+    if (!channel || !epgId || !EpgService.getProgrammes(epgId)?.length) {
       showToast(t('channel.editEpgOffsetUnavailable'));
       return;
     }

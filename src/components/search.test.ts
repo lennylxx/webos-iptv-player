@@ -32,7 +32,15 @@ const {
     getChannelCacheSource: vi.fn((): unknown => null),
   },
   epgMock: {
-    programmes: {} as Record<string, Programme[]>,
+    guideRevision: 0,
+    published: {} as Record<string, Programme[]>,
+    // Publishing a guide replaces it and bumps the revision, as the service does.
+    get programmes(): Record<string, Programme[]> { return this.published; },
+    set programmes(programmes: Record<string, Programme[]>) {
+      this.published = programmes;
+      this.guideRevision++;
+    },
+    getProgrammes(id: string): Programme[] | null { return this.published[id] ?? null; },
     findChannelId: vi.fn((channel: { id: string }) => channel.id),
     getSourceUrl: vi.fn(() => 'http://host/epg.xml'),
     programmeCacheOrigin: vi.fn((): unknown => null),
@@ -745,6 +753,22 @@ describe('Search', () => {
 
     const rows = Array.from(container.querySelectorAll('.search-program-row'), row => row.textContent);
     expect(rows).toEqual([expect.stringContaining('Late Report')]);
+  });
+
+  it('rebuilds the program index for a guide published while closed', async () => {
+    const later = (offset: number) => [Date.now() + offset * 3600000, Date.now() + (offset + 1) * 3600000] as const;
+    playlistMock.channels = [chan('Alpha')];
+    epgMock.programmes = { Alpha: [prog('Old Report', ...later(1))] };
+    const { view } = await openWith();
+    view.deactivate();
+    epgMock.programmes = { Alpha: [prog('New Report', ...later(1))] };
+
+    await view.open(account);
+    await indexReady(view);
+    await view.setQuery('report');
+
+    expect(container.textContent).toContain('New Report');
+    expect(container.textContent).not.toContain('Old Report');
   });
 
   it('posts the channels a playlist change replaced during a crash rebuild', async () => {

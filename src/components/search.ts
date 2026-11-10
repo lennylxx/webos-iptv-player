@@ -222,7 +222,7 @@ export class Search {
   // The channel list whose documents the worker holds in this session.
   private workerChannels: Channel[] | null = null;
   private indexedChannels: Channel[] | null = null;
-  private indexedProgrammes: Record<string, Programme[]> | null = null;
+  private indexedGuideRevision: number | null = null;
   private loadedFor: string | null = null;
   private catalogExpiresAt = 0;
   private visibleChannels: Channel[] = [];
@@ -294,7 +294,7 @@ export class Search {
   private sourcePosts: Partial<Record<SearchIndexSource, SourcePost>> = {};
   private sourcePostId = 0;
   private workerIndexedChannels: Channel[] | null = null;
-  private workerIndexedProgrammes: Record<string, Programme[]> | null = null;
+  private workerIndexedGuideRevision: number | null = null;
   private workerIndexedAccountId: string | null = null;
   private workerIndexedGeneration: number | null = null;
   private workerResetGeneration: number | null = null;
@@ -492,7 +492,7 @@ export class Search {
   async refreshPrograms(): Promise<void> {
     this.programIndexGeneration++;
     this.indexedChannels = null;
-    this.indexedProgrammes = null;
+    this.indexedGuideRevision = null;
     if (!this.active) return;
     const sessionId = this.workerSession;
     // While sources are pending, the last one to settle runs the query.
@@ -1042,12 +1042,12 @@ export class Search {
   private async buildProgramIndex(force: boolean, sessionId: number): Promise<boolean | null> {
     if (!force
         && this.indexedChannels === PlaylistService.channels
-        && this.indexedProgrammes === EpgService.programmes) {
+        && this.indexedGuideRevision === EpgService.guideRevision) {
       return this.indexProgrammes(sessionId);
     }
     const generation = ++this.programIndexGeneration;
     const channels = PlaylistService.channels;
-    const programmesByChannel = EpgService.programmes;
+    const guideRevision = EpgService.guideRevision;
     const programs: ProgramResult[] = [];
     const runs = new ProgrammeRuns();
     let channelIndex = 0;
@@ -1067,7 +1067,7 @@ export class Search {
       if (channelIndex >= channels.length) return true;
       const channel = channels[channelIndex++];
       const epgId = EpgService.findChannelId(channel);
-      channelPrograms = epgId ? programmesByChannel[epgId] ?? [] : [];
+      channelPrograms = epgId ? EpgService.getProgrammes(epgId) ?? [] : [];
       programmeIndex = 0;
       if (epgId && channelPrograms.length) {
         runs.add(channelIndex - 1, EpgService.programmeCacheOrigin(epgId), channelPrograms.length);
@@ -1079,7 +1079,7 @@ export class Search {
     this.programIndex = programs;
     this.programRuns = runs;
     this.indexedChannels = channels;
-    this.indexedProgrammes = programmesByChannel;
+    this.indexedGuideRevision = guideRevision;
     return this.indexProgrammes(sessionId);
   }
 
@@ -1690,7 +1690,7 @@ export class Search {
     return this.workerIndexReady
       && !this.workerIndexLost
       && this.workerIndexedChannels === PlaylistService.channels
-      && this.workerIndexedProgrammes === EpgService.programmes
+      && this.workerIndexedGuideRevision === EpgService.guideRevision
       && this.workerIndexedAccountId === (account?.id ?? null)
       && (!account
         || (this.loadedFor === account.id
@@ -1703,8 +1703,8 @@ export class Search {
     // What the worker holds: the channels posted and the guide data the
     // posted program index was built from, which can trail the services'.
     this.workerIndexedChannels = this.workerChannels;
-    this.workerIndexedProgrammes = this.indexedChannels === this.workerChannels
-      ? this.indexedProgrammes
+    this.workerIndexedGuideRevision = this.indexedChannels === this.workerChannels
+      ? this.indexedGuideRevision
       : null;
     this.workerIndexedAccountId = account?.id ?? null;
     this.workerIndexedGeneration = this.workerResetGeneration;
@@ -1727,7 +1727,7 @@ export class Search {
     const wasReady = this.workerIndexReady;
     this.workerIndexReady = false;
     this.workerIndexedChannels = null;
-    this.workerIndexedProgrammes = null;
+    this.workerIndexedGuideRevision = null;
     this.workerIndexedAccountId = null;
     this.workerIndexedGeneration = null;
     this.workerIndexedVod = null;
