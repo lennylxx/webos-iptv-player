@@ -1101,6 +1101,13 @@ describe('idb-cache', () => {
       expect((await getCachedPlaylist(null))?.channels).toEqual([channel('ch2')]);
     });
 
+    it('stores the source ids a scheduled write recorded', async () => {
+      scheduleCachedPlaylist([channel('ch1')], [], Date.now(), null, playlistCacheToken(), ['p1']);
+
+      await flushCacheWrites();
+      expect((await getCachedPlaylist(null))?.sourceIds).toEqual(['p1']);
+    });
+
     it('drops held channels whose worker write failed', async () => {
       const channels = [channel('ch1')];
       const held = holdInWorker(channels, () => 'failed');

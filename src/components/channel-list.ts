@@ -317,16 +317,15 @@ export class ChannelList {
     }
     if (previousGroupList) this.groupVirtualizer.setScrollOffset(previousGroupList.scrollTop);
     const viewportHeight = previousMain?.clientHeight || CHANNEL_VIEWPORT_FALLBACK;
-    let wantedPosition = filteredChannels.findIndex(
-      ch => `ch:${String(PlaylistService.indexOf(ch))}` === wantedKey,
-    );
+    const wantedIndex = wantedKey && wantedKey.startsWith('ch:')
+      ? Number(wantedKey.slice(3)) : NaN;
+    let wantedPosition = `ch:${String(wantedIndex)}` === wantedKey
+      ? positionOfGlobal(filteredChannels, wantedIndex) : -1;
     if (!showingRecent && ensureFocus && wantedPosition >= 0) {
       this.channelVirtualizer.ensureVisible(wantedPosition, viewportHeight);
     } else if (!showingRecent && ensureFocus && !wantedKey && !this.detachedKey()
         && this.playingIndex >= 0) {
-      wantedPosition = filteredChannels.findIndex(
-        ch => PlaylistService.indexOf(ch) === this.playingIndex,
-      );
+      wantedPosition = positionOfGlobal(filteredChannels, this.playingIndex);
       if (wantedPosition >= 0) this.channelVirtualizer.centerOn(wantedPosition, viewportHeight);
     }
     const range = this.channelVirtualizer.getRange(filteredChannels.length, viewportHeight);
@@ -847,9 +846,10 @@ export class ChannelList {
   }
 
   private channelPosition(globalIdx: number): number {
-    return PlaylistService
-      .getByGroup(this.currentGroup, this.currentPlaylist || undefined)
-      .findIndex(ch => PlaylistService.indexOf(ch) === globalIdx);
+    return positionOfGlobal(
+      PlaylistService.getByGroup(this.currentGroup, this.currentPlaylist || undefined),
+      globalIdx,
+    );
   }
 
   // A channel named by global index can sit outside the current filter and
@@ -1337,4 +1337,13 @@ export class ChannelList {
 // matter. Avoids relying on `CSS.escape` which jsdom does not implement.
 function attrSelectorEscape(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+// The position in `list` of the channel at a global index, without a lookup
+// per entry of a list that may hold every channel.
+function positionOfGlobal(list: readonly Channel[], globalIdx: number): number {
+  const channel = PlaylistService.getByIndex(globalIdx);
+  return channel && PlaylistService.indexOf(channel) === globalIdx
+    ? list.indexOf(channel)
+    : -1;
 }

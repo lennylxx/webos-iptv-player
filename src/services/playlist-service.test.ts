@@ -436,6 +436,7 @@ describe('PlaylistService.refresh', () => {
       expect.any(Number),
       6 * 60 * 60 * 1000,
       { signature: 's1', generation: 0 },
+      ['a', 'b'],
     );
   });
 
@@ -1500,6 +1501,53 @@ describe('PlaylistService.load', () => {
     expect(PlaylistService.getNextRefreshDelayMs(intervalMs)).toBe(0);
   });
 
+  describe('with a source disabled since a cached channel was stored', () => {
+    const cached = () => [
+      channel({ id: 'a', name: 'Alpha', url: 'http://stream/a', playlistIds: ['P1'] }),
+      channel({ id: 'b', name: 'Bravo', url: 'http://stream/b', playlistIds: ['P1', 'P2'] }),
+      channel({ id: 'c', name: 'Charlie', url: 'http://stream/c', playlistIds: ['P2'] }),
+    ];
+
+    beforeEach(() => {
+      storageMock.getPlaylists.mockReturnValue([
+        { id: 'P1', name: 'P1', url: 'http://host/p1.m3u' },
+        { id: 'P2', name: 'P2', url: 'http://host/p2.m3u', enabled: false },
+      ]);
+    });
+
+    it('drops the disabled source from a cache without recorded source ids', async () => {
+      cacheMock.getCachedPlaylist.mockResolvedValue({ channels: cached(), epgSources: [] });
+
+      const result = await PlaylistService.load();
+
+      expect(result.map(c => [c.name, c.playlistIds])).toEqual([['Alpha', ['P1']], ['Bravo', ['P1']]]);
+    });
+
+    it('drops the disabled source when the cache recorded it', async () => {
+      cacheMock.getCachedPlaylist.mockResolvedValue({
+        channels: cached(), epgSources: [], sourceIds: ['P1', 'P2'],
+      });
+
+      const result = await PlaylistService.load();
+
+      expect(result.map(c => [c.name, c.playlistIds])).toEqual([['Alpha', ['P1']], ['Bravo', ['P1']]]);
+    });
+  });
+
+  it('takes recorded enabled source ids instead of scanning cached channels', async () => {
+    const cached = [channel({ id: 'a', name: 'Alpha', group: 'News', playlistIds: ['P1'] })];
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'P1', name: 'P1', url: 'http://host/p1.m3u' },
+    ]);
+    const some = vi.spyOn(cached, 'some');
+    cacheMock.getCachedPlaylist.mockResolvedValue({ channels: cached, epgSources: [], sourceIds: ['P1'] });
+
+    await PlaylistService.load();
+
+    expect(some).not.toHaveBeenCalled();
+    expect(PlaylistService.allChannels).toBe(cached);
+  });
+
   it('refreshes from the network on a cache miss', async () => {
     cacheMock.getCachedPlaylist.mockResolvedValue(null);
     storageMock.getPlaylists.mockReturnValue([{ name: 'P2', url: 'http://host2/p2.m3u' }]);
@@ -1887,6 +1935,7 @@ describe('PlaylistService customization', () => {
       expect.any(Number),
       6 * 60 * 60 * 1000,
       { signature: 's1', generation: 0 },
+      ['a'],
     );
   });
 

@@ -147,6 +147,8 @@ interface CachedPlaylistPayload {
   channels: Channel[];
   epgSources: EpgSource[];
   timestamp: number;
+  // Every playlist id the channels may carry, so a load can skip scanning them.
+  sourceIds?: string[];
 }
 
 type StoredRecord = Record<string, unknown> & CacheFields;
@@ -177,6 +179,7 @@ let scheduledPlaylist: {
   timestamp: number;
   refreshIntervalMs: number | null;
   sourceSignature: string;
+  sourceIds: string[] | undefined;
   scheduledAt: number;
 } | null = null;
 let playlistFrame: number | null = null;
@@ -236,6 +239,7 @@ function persistScheduledPlaylist(): void {
     pending.timestamp,
     pending.sourceSignature,
     pending.refreshIntervalMs,
+    pending.sourceIds,
   ).then((stored) => {
     if (stored) {
       for (const listener of playlistWriteListeners) listener();
@@ -311,6 +315,7 @@ export function scheduleCachedPlaylist(
   timestamp = Date.now(),
   refreshIntervalMs: number | null = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS,
   token: PlaylistCacheToken = playlistCacheToken(),
+  sourceIds?: string[],
 ): void {
   if (!channels.length) return;
   if (
@@ -335,6 +340,7 @@ export function scheduleCachedPlaylist(
     timestamp,
     refreshIntervalMs,
     sourceSignature: token.signature,
+    sourceIds,
     scheduledAt,
   };
   cancelPlaylistSchedule();
@@ -1653,6 +1659,7 @@ export async function getCachedPlaylist(
   channels: Channel[];
   epgSources: EpgSource[];
   timestamp: number;
+  sourceIds?: string[];
 } | null> {
   const raw = await readRaw(PLAYLIST_STORE, PLAYLIST_CACHE_KEY);
   if (raw) {
@@ -1668,6 +1675,7 @@ export async function getCachedPlaylist(
         channels: payload.channels,
         epgSources: payload.epgSources ?? [],
         timestamp,
+        sourceIds: payload.sourceIds,
       };
     }
   }
@@ -1696,6 +1704,7 @@ function setCachedPlaylistWithSignature(
   timestamp: number,
   sourceSignature: string,
   refreshIntervalMs: number | null,
+  sourceIds?: string[],
 ): Promise<boolean> {
   const held = heldRecord(channels);
   if (!channels.length) {
@@ -1710,6 +1719,7 @@ function setCachedPlaylistWithSignature(
       channels,
       epgSources,
       timestamp,
+      ...(sourceIds ? { sourceIds } : {}),
     } satisfies CachedPlaylistPayload,
     expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
   }, true, held && { record: held, field: 'data.channels' }).then((stored) => {

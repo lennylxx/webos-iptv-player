@@ -413,6 +413,47 @@ describe('ChannelList.render', () => {
       expect(ringedEl(container, '.focused')).toBeNull();
     });
 
+    it('a full render scrolls a partly hidden focused row back into view', () => {
+      scrollTo(200);
+      expect(ringed(main.querySelector('[data-list-position="0"]'))).toBe(true);
+      list.render();
+
+      expect(main.scrollTop).toBe(0);
+    });
+
+    it('a first render centers on the playing channel deep in the list', () => {
+      const fresh = document.createElement('div');
+      document.body.appendChild(fresh);
+      const other = new ChannelList(fresh, { onChannelSelect: vi.fn() });
+      other.setPlaying(250);
+      other.render();
+
+      expect(fresh.querySelector('.channel-main [data-channel-index="250"]')).not.toBeNull();
+      expect(fresh.querySelector('.channel-main [data-channel-index="0"]')).toBeNull();
+      fresh.remove();
+    });
+
+    it('does not center on a playing index whose channel sits earlier too', () => {
+      data.raw[250] = data.raw[200];
+      playlistMock.applyCustomization();
+      const fresh = document.createElement('div');
+      document.body.appendChild(fresh);
+      const other = new ChannelList(fresh, { onChannelSelect: vi.fn() });
+      other.setPlaying(250);
+      other.render();
+
+      expect(fresh.querySelector('.channel-main [data-list-position="200"]')).toBeNull();
+      fresh.remove();
+    });
+
+    it('a render with a group focused does not jump to the playing channel', () => {
+      hover(container.querySelector<HTMLElement>('.group-list [data-key^="g:"]')!);
+      list.setPlaying(250);
+      list.render();
+
+      expect(main.querySelector('[data-list-position="250"]')).toBeNull();
+    });
+
     it('a full render leaves the detached focus for the next key to resume', () => {
       scrollTo(3000);
       expect(main.querySelector('[data-list-position="0"]')).toBeNull();

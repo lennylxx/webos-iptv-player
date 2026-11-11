@@ -309,7 +309,11 @@ class PlaylistServiceImpl {
     if (cached) {
       this.failedSourceIds.clear();
       this.refreshTimestamp = cached.timestamp;
-      const channelsNeedFiltering = cached.channels
+      // The source signature already rules out a disabled source; the ids
+      // guard a hash collision and older records without them.
+      const sourcesStillEnabled = !!cached.sourceIds
+        && cached.sourceIds.every(id => enabledIds.has(id));
+      const channelsNeedFiltering = !sourcesStillEnabled && cached.channels
         .some(channel => channel.playlistIds.some(id => !enabledIds.has(id)));
       this.allChannels = channelsNeedFiltering
         ? cached.channels
@@ -319,7 +323,7 @@ class PlaylistServiceImpl {
             }))
             .filter(channel => channel.playlistIds.length > 0)
         : cached.channels;
-      const epgSourcesNeedFiltering = cached.epgSources
+      const epgSourcesNeedFiltering = !sourcesStillEnabled && cached.epgSources
         .some(source => source.playlistIds.some(id => !enabledIds.has(id)));
       this.epgSources = epgSourcesNeedFiltering
         ? cached.epgSources
@@ -708,6 +712,7 @@ class PlaylistServiceImpl {
         refreshTimestamp,
         StorageService.getPlaylistRefreshIntervalMs(),
         cacheToken,
+        playlists.map(pl => pl.id),
       );
     } else {
       this.refreshTimestamp = null;
@@ -891,18 +896,7 @@ class PlaylistServiceImpl {
       this.groupKeyByDisplay.set(ChannelCustomizationService.groupLabel(key), key);
     }
 
-    const sole = this.solePlaylistId();
-    for (let i = 0; i < this.channels.length; i++) {
-      const ch = this.channels[i];
-      this.indexMap.set(ch, i);
-      if (ch.group) {
-        groupSet.add(ch.group);
-        if (!this.groupKeyByDisplay.has(ch.group)) {
-          this.groupKeyByDisplay.set(ch.group, groupKeyOf(ch));
-        }
-        this.appendIndexed(this.channelsByGroup, ch.group, ch);
-      }
-      if (sole !== null) continue;
+    const indexByPlaylist = (ch: Channel): void => {
       for (const playlistId of ch.playlistIds) {
         this.appendIndexed(this.channelsByPlaylist, playlistId, ch);
         if (!ch.group) continue;
@@ -919,6 +913,27 @@ class PlaylistServiceImpl {
         }
         playlistGroups.add(ch.group);
       }
+    };
+    // Assume one playlist owns every channel, as it usually does, and index
+    // per playlist only from the first channel that proves otherwise.
+    const first = this.channels[0]?.playlistIds;
+    let sole = first && first.length === 1 ? first[0] : null;
+    for (let i = 0; i < this.channels.length; i++) {
+      const ch = this.channels[i];
+      this.indexMap.set(ch, i);
+      if (ch.group) {
+        groupSet.add(ch.group);
+        if (!this.groupKeyByDisplay.has(ch.group)) {
+          this.groupKeyByDisplay.set(ch.group, groupKeyOf(ch));
+        }
+        this.appendIndexed(this.channelsByGroup, ch.group, ch);
+      }
+      if (sole !== null) {
+        if (ch.playlistIds.length === 1 && ch.playlistIds[0] === sole) continue;
+        sole = null;
+        for (let j = 0; j < i; j++) indexByPlaylist(this.channels[j]);
+      }
+      indexByPlaylist(ch);
     }
     if (sole !== null) {
       // One playlist owns every channel: its indexes are the global ones.
@@ -939,16 +954,6 @@ class PlaylistServiceImpl {
     this.indexedChannels = this.channels;
     this.indexedChannelCount = this.channels.length;
     this.groupsRevision++;
-  }
-
-  private solePlaylistId(): string | null {
-    const first = this.channels[0]?.playlistIds;
-    if (!first || first.length !== 1) return null;
-    const id = first[0];
-    for (const ch of this.channels) {
-      if (ch.playlistIds.length !== 1 || ch.playlistIds[0] !== id) return null;
-    }
-    return id;
   }
 
   private keyIndex(): Map<string, Channel[]> {
