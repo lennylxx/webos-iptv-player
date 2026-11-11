@@ -63,7 +63,7 @@ export async function runAppWorkerTask<TaskName extends keyof AppWorkerTasks & s
     ? (chunk: Parameters<NonNullable<typeof onChunk>>[0]) => {
         if (chunk && typeof chunk === 'object' && 'kind' in chunk) {
           const kind = (chunk as { kind?: unknown }).kind;
-          if (kind === 'channels' || kind === 'programmes') batches++;
+          if (kind === 'channels' || kind === 'guide') batches++;
           else if (kind === 'progress') progress++;
         }
         onChunk(chunk);

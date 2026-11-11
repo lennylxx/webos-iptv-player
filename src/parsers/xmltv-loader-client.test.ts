@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchAndParseXMLTV } from './xmltv-loader';
 import { retainAppWorker, terminateAppWorker } from '../workers/app-worker-client';
 import { heldRecord, releaseHeldRecord } from '../services/held-records';
+import { packEpg } from '../services/epg-cache-codec';
+import { yieldToEventLoop } from '../utils/yield';
+import type { Programme } from '../types';
+
+vi.mock('../utils/yield', () => ({ yieldToEventLoop: vi.fn(() => Promise.resolve()) }));
 
 class FakeWorker {
   static url = '';
@@ -11,6 +16,7 @@ class FakeWorker {
   static respond = true;
   static chunks: unknown[] = [];
   static held: { token: string } | null = null;
+  static attempts = 1;
   private messageListener: ((event: MessageEvent<unknown>) => void) | null = null;
   private errorListener: ((event: ErrorEvent) => void) | null = null;
 
@@ -39,7 +45,7 @@ class FakeWorker {
           metrics: {
             transport: 'stream',
             encoding: 'gzip',
-            attempts: 1,
+            attempts: FakeWorker.attempts,
             inputBytes: 10,
             chunks: 1,
             elapsedMs: 2,
@@ -69,6 +75,7 @@ class FakeWorker {
 }
 
 afterEach(() => {
+  vi.mocked(yieldToEventLoop).mockImplementation(() => Promise.resolve());
   terminateAppWorker();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -79,6 +86,7 @@ afterEach(() => {
   FakeWorker.respond = true;
   FakeWorker.chunks = [];
   FakeWorker.held = null;
+  FakeWorker.attempts = 1;
   vi.useRealTimers();
 });
 
@@ -122,6 +130,8 @@ describe('fetchAndParseXMLTV worker client', () => {
       'programmes=0',
       'dropped=0',
       'elapsedMs=2',
+      'decodeMs=0',
+      'totalMs=0',
     );
   });
 
@@ -139,62 +149,95 @@ describe('fetchAndParseXMLTV worker client', () => {
     expect(FakeWorker.terminations).toBe(1);
   });
 
-  it('reconstructs and sorts batched XMLTV results after a reset', async () => {
+  it('decodes the guide blocks the worker sends, yielding between slices', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.stubGlobal('document', { baseURI: 'http://host/app/index.html' });
     vi.stubGlobal('Worker', FakeWorker);
-    const later = new Date('2026-08-14T20:00:00Z');
-    const earlier = new Date('2026-08-14T19:00:00Z');
+    const entry = (title: string, hour: number) => ({
+      start: new Date(Date.UTC(2026, 7, 14, hour)),
+      stop: new Date(Date.UTC(2026, 7, 14, hour + 1)),
+      title,
+      description: '',
+      category: '',
+      icon: '',
+    });
+    const programmes: Record<string, ReturnType<typeof entry>[]> = {};
+    for (let index = 0; index < 3000; index++) programmes[`ch${String(index)}`] = [entry('P', 19)];
+    programmes.ch1 = [entry('Earlier', 19), entry('Later', 20)];
+    const packed = packEpg({ channels: { ch1: { name: 'Alpha', icon: '' } }, programmes });
     FakeWorker.chunks = [
-      { kind: 'reset', attempt: 1 },
-      {
-        kind: 'programmes',
-        attempt: 1,
-        entries: [['old', [{
-          start: earlier,
-          stop: later,
-          title: 'Discarded',
-          description: '',
-          category: '',
-          icon: '',
-        }]]],
-      },
-      { kind: 'reset', attempt: 2 },
-      {
-        kind: 'channels',
-        attempt: 2,
-        entries: [['ch1', { name: 'Alpha', icon: '' }]],
-      },
-      {
-        kind: 'programmes',
-        attempt: 2,
-        entries: [['ch1', [
-          {
-            start: later,
-            stop: new Date('2026-08-14T21:00:00Z'),
-            title: 'Later',
-            description: '',
-            category: '',
-            icon: '',
-          },
-          {
-            start: earlier,
-            stop: later,
-            title: 'Earlier',
-            description: '',
-            category: '',
-            icon: '',
-          },
-        ]]],
-      },
+      { kind: 'guide', part: 'channels', blocks: packed.channels },
+      { kind: 'guide', part: 'programmes', blocks: packed.programmes.slice(0, 1) },
+      { kind: 'guide', part: 'programmes', blocks: packed.programmes.slice(1) },
     ];
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => (clock += 20));
+    const yields = vi.mocked(yieldToEventLoop);
+    yields.mockClear();
 
     const result = await fetchAndParseXMLTV('http://host/a');
 
+    expect(packed.programmes.length).toBeGreaterThan(1);
+    expect(yields).toHaveBeenCalled();
     expect(result.data.channels).toEqual({ ch1: { name: 'Alpha', icon: '' } });
     expect(result.data.programmes.ch1.map(programme => programme.title))
       .toEqual(['Earlier', 'Later']);
-    expect(result.data.programmes.old).toBeUndefined();
+    expect(Object.keys(result.data.programmes)).toHaveLength(3000);
+    expect(result.data.tzOffsetMinutes).toBeNull();
+  });
+
+  it('keeps the worker holding the guide alive while the page decodes it', async () => {
+    vi.useFakeTimers();
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal('document', { baseURI: 'http://host/app/index.html' });
+    vi.stubGlobal('Worker', FakeWorker);
+    const programmes: Record<string, Programme[]> = {};
+    for (let index = 0; index < 3000; index++) {
+      programmes[`ch${String(index)}`] = [{
+        start: new Date(0), stop: new Date(1), title: 'P', description: '', category: '', icon: '',
+      }];
+    }
+    const packed = packEpg({ channels: {}, programmes });
+    FakeWorker.chunks = [{ kind: 'guide', part: 'programmes', blocks: packed.programmes }];
+    FakeWorker.held = { token: 't1' };
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => (clock += 20));
+    // The decode outlasts the worker's idle timeout.
+    vi.mocked(yieldToEventLoop).mockImplementation(() => vi.advanceTimersByTimeAsync(1000));
+
+    const result = await fetchAndParseXMLTV('http://host/a', 1000, {}, true);
+
+    expect(FakeWorker.terminations).toBe(0);
+    expect(heldRecord(result.data)).not.toBeNull();
+    releaseHeldRecord(result.data);
+    // The completed event counts the page's decode, which the worker never sees.
+    const completed = info.mock.calls.map(call => call.join(' '))
+      .find(line => line.includes('event=epg.xmltv.load.completed'));
+    const decodeMs = Number(/decodeMs=(\d+)/.exec(completed ?? '')?.[1]);
+    expect(decodeMs).toBeGreaterThanOrEqual(1000);
+    expect(completed).toContain(`totalMs=${String(decodeMs)}`);
+  });
+
+  it('releases the held guide when its blocks fail to decode', async () => {
+    vi.useFakeTimers();
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.stubGlobal('document', { baseURI: 'http://host/app/index.html' });
+    vi.stubGlobal('Worker', FakeWorker);
+    FakeWorker.chunks = [{ kind: 'guide', part: 'programmes', blocks: ['{'] }];
+    FakeWorker.held = { token: 't1' };
+    FakeWorker.attempts = 2;
+
+    await expect(fetchAndParseXMLTV('http://host/a', 1000, {}, true)).rejects.toThrow(SyntaxError);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(FakeWorker.request).toMatchObject({ task: 'cache.release-held', payload: { token: 't1' } });
+    expect(FakeWorker.terminations).toBe(1);
+    const failures = errors.mock.calls.map(call => call.join(' '))
+      .filter(line => line.includes('event=epg.xmltv.load.failed'));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('stage=decode reason=exception attempts=2');
+    expect(info.mock.calls.some(call => call.includes('event=epg.xmltv.load.retry'))).toBe(true);
   });
 
   it('asks for the guide to be held and holds the one it rebuilt', async () => {

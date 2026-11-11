@@ -1,9 +1,7 @@
 import type {
   Channel,
-  EpgChannel,
   ParsedEpg,
   ParsedPlaylist,
-  Programme,
   SeriesItem,
   VodItem,
 } from '../types';
@@ -127,9 +125,7 @@ export interface XMLTVWorkerResponse {
 }
 
 export type XMLTVWorkerChunk =
-  | { kind: 'reset'; attempt: number }
-  | { kind: 'channels'; attempt: number; entries: Array<[string, EpgChannel]> }
-  | { kind: 'programmes'; attempt: number; entries: Array<[string, Programme[]]> }
+  | { kind: 'guide'; part: 'channels' | 'programmes'; blocks: string[] }
   | {
       kind: 'progress';
       attempt: number;
