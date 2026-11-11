@@ -48,7 +48,7 @@ import { applyAnimationMode } from './services/motion-service';
 import { channelKey } from './utils/channel';
 import { isSourceEnabled } from './utils/playlist';
 import { truncate } from './utils/text';
-import { $, show, hide } from './utils/dom';
+import { $, show, hide, afterNextPaint } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
 import { FocusRing } from './navigation/focus-ring';
 import { Focus, type FocusScope } from './navigation/focus-scope';
@@ -107,6 +107,8 @@ class App {
   private epgRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private epgRefreshIntervalMs: number | null | undefined;
   private epgChannelReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  // Bumped to abandon a startup guide restore still waiting for the first paint.
+  private epgStartGeneration = 0;
   private readonly searchPrewarm = new SearchIndexPrewarmer(() => this.searchPrewarmSources());
 
   async init(): Promise<void> {
@@ -758,6 +760,7 @@ class App {
   }
 
   private stopEpgRefresh(): void {
+    this.epgStartGeneration++;
     if (this.epgChannelReloadTimer !== null) {
       clearTimeout(this.epgChannelReloadTimer);
       this.epgChannelReloadTimer = null;
@@ -943,11 +946,6 @@ class App {
         log.warn('No EPG sources configured');
         EpgService.reset();
       }
-      const epgChannels = PlaylistService.getEpgEligibleChannels();
-      if (epgSources.length) {
-        await EpgService.restoreCached(epgSources, epgChannels);
-      }
-
       const hasXtream = StorageService.getPlaylists()
         .some((p) => p.source === 'xtream' && isSourceEnabled(p));
       this.tabBar.setSections(hasXtream);
@@ -977,29 +975,11 @@ class App {
       }
 
       if (epgSources.length) {
-        if (forceEpgRefresh) {
-          EpgService.refresh(() => this.refreshEpgDependentViews(), true)
-            .then(() => {
-              this.refreshEpgDependentViews();
-              this.scheduleEpgRefresh(
-                true,
-                StorageService.getEpgRefreshIntervalMs() ?? undefined,
-              );
-            }, (err) => {
-              log.error('EPG load failed:', err);
-              this.scheduleEpgRefresh(
-                true,
-                StorageService.getEpgRefreshIntervalMs() ?? undefined,
-              );
-            });
-        } else if (StorageService.getEpgRefreshIntervalMs() === null) {
-          EpgService.refresh(() => this.refreshEpgDependentViews())
-            .then(() => {
-              this.refreshEpgDependentViews();
-            }, err => log.error('Initial EPG load failed:', err));
-        } else {
-          this.scheduleEpgRefresh(true);
-        }
+        this.startEpgAfterPaint(
+          epgSources,
+          PlaylistService.getEpgEligibleChannels(),
+          forceEpgRefresh,
+        );
       }
       this.schedulePlaylistRefresh(true);
       this.searchPrewarm.schedule('startup');
@@ -1012,6 +992,55 @@ class App {
       this.loadingData = false;
       hide(this.views.loading);
       done();
+    }
+  }
+
+  // Reading the cached guide blocks the main thread for seconds on a large
+  // playlist, so the channel list paints first and the guide follows it.
+  private startEpgAfterPaint(
+    sources: EpgSource[],
+    channels: Channel[],
+    forceRefresh: boolean,
+  ): void {
+    const generation = this.epgStartGeneration;
+    // A render error must not skip the refreshes, or the guide stays stale.
+    const start = (): void => {
+      if (generation !== this.epgStartGeneration) return;
+      try {
+        this.refreshEpgDependentViews();
+        // A Guide opened while the cache was read still shows no programmes.
+        if (this.viewStack[this.viewStack.length - 1] === 'epg') this.epgGrid.render();
+      } catch (err) {
+        log.error('Rendering the restored guide failed:', err);
+      }
+      this.startEpgRefresh(forceRefresh);
+    };
+    void EpgService.restoreCached(sources, channels, afterNextPaint()).then(start);
+  }
+
+  private startEpgRefresh(force: boolean): void {
+    if (force) {
+      EpgService.refresh(() => this.refreshEpgDependentViews(), true)
+        .then(() => {
+          this.refreshEpgDependentViews();
+          this.scheduleEpgRefresh(
+            true,
+            StorageService.getEpgRefreshIntervalMs() ?? undefined,
+          );
+        }, (err) => {
+          log.error('EPG load failed:', err);
+          this.scheduleEpgRefresh(
+            true,
+            StorageService.getEpgRefreshIntervalMs() ?? undefined,
+          );
+        });
+    } else if (StorageService.getEpgRefreshIntervalMs() === null) {
+      EpgService.refresh(() => this.refreshEpgDependentViews())
+        .then(() => {
+          this.refreshEpgDependentViews();
+        }, err => log.error('Initial EPG load failed:', err));
+    } else {
+      this.scheduleEpgRefresh(true);
     }
   }
 
@@ -1258,6 +1287,7 @@ class App {
     this.applyDisplayTz();
     this.channelList.render();
     this.livePreview.refresh();
+    this.player.refreshOsd();
     void this.search.refreshPrograms();
     this.searchPrewarm.schedule('epg');
   }

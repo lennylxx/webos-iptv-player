@@ -52,6 +52,7 @@ import { IdbSearchCacheReader } from '../workers/search-cache-reader';
 import { holdValue, measureHeldValue, releaseHeldValue, writeHeldValue } from '../workers/held-values';
 import { holdRecord, type HeldWriteRequest, type HeldWriteResult } from './held-records';
 import { serializedBytes } from '../utils/serialized-bytes';
+import { isPackedEpg, packEpg } from './epg-cache-codec';
 
 const channel = (id: string): Channel => ({
   id,
@@ -479,6 +480,29 @@ describe('idb-cache', () => {
       selection: null,
       samples: { indices: [1], documents: [['Bravo']] },
     })).toEqual(['alpha', 'bravo']);
+  });
+
+  it('packs the guides it writes, and reads packed and earlier guides alike', async () => {
+    const data = {
+      channels: { ch1: { name: 'Alpha', icon: '' } },
+      programmes: { ch1: [{
+        start: new Date(1000), stop: new Date(2000), title: 'Bravo', description: '', category: '', icon: '',
+      }] },
+      tzOffsetMinutes: 0,
+    };
+    await setCachedEpg('http://host/e', data, null, 1000, null);
+    await flushCacheWrites();
+    const record = { store: 'epg-cache', key: 'http://host/e', timestamp: 1000 } as const;
+    const raw = await new IdbSearchCacheReader(indexedDB).read(record, 1200);
+
+    expect(isPackedEpg(raw?.data)).toBe(true);
+    expect((await getCachedEpg('http://host/e'))?.data).toEqual(data);
+    expect(buildSourceIndex(record, raw)).toMatchObject({ length: 1, runIds: ['ch1'] });
+
+    const db = await openPersistenceDb();
+    const tx = db!.transaction('epg-cache', 'readwrite');
+    await requestResult(tx.objectStore('epg-cache').put({ url: 'http://host/earlier', timestamp: 1000, data }));
+    expect((await getCachedEpg('http://host/earlier'))?.data).toEqual(data);
   });
 
   it('keeps partial catalog freshness separate from the worker record timestamp', async () => {
@@ -966,9 +990,10 @@ describe('idb-cache', () => {
       answer?: () => HeldWriteResult | null,
       detached = false,
       measured = false,
+      workerValue: object = items,
     ) {
       const reader = new IdbSearchCacheReader(indexedDB);
-      const token = holdValue(items);
+      const token = holdValue(workerValue);
       const write = vi.fn((request: HeldWriteRequest): Promise<HeldWriteResult> => {
         const answered = answer?.();
         if (answered) return Promise.resolve(answered);
@@ -980,7 +1005,7 @@ describe('idb-cache', () => {
       const release = vi.fn(() => releaseHeldValue(token));
       const measure = vi.fn(() => Promise.resolve(measureHeldValue(token)));
       holdRecord(items, {
-        ...(measured ? { measure } : { bytes: serializedBytes(items) }),
+        ...(measured ? { measure } : { bytes: serializedBytes(workerValue) }),
         write,
         release,
         ...(detached ? { detached } : {}),
@@ -1147,7 +1172,7 @@ describe('idb-cache', () => {
       const filter = { ids: ['ch1'], names: [] };
       await setCachedEpg('http://host/page', guide(), filter, 1000, null);
       const data = guide();
-      const held = holdInWorker(data);
+      const held = holdInWorker(data, undefined, false, false, packEpg(data));
 
       await setCachedEpg('http://host/held', data, filter, 1000, null);
 

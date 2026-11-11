@@ -1097,6 +1097,11 @@ export class Player {
     }
   }
 
+  // The info bar shows now/next, which a guide restored after it opened adds.
+  refreshOsd(): void {
+    if (this.osd.isVisible() && !this.osd.showsMessage()) this.osd.render();
+  }
+
   stop(): void {
     if (this.liveSessionActive) this.rememberLiveAudio();
     this.liveSessionActive = false;

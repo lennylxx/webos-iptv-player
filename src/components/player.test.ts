@@ -570,6 +570,13 @@ describe('Player catch-up pause/play', () => {
     expect(osd.textContent).not.toContain('Resyncing');
   });
 
+  it('keeps a status message up when a guide refresh lands', () => {
+    const osd = container.querySelector('#player-osd')!;
+    player.resyncAV();
+    player.refreshOsd();
+    expect(osd.textContent).toContain('Resyncing');
+  });
+
   it('a pointer click on the resync control seeks backward', () => {
     player.handleAction('right'); // → 30
     player.handleAction('right'); // → 60

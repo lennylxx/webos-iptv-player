@@ -131,6 +131,8 @@ export const CONFIG = {
     MAX_RETAINED_PROGRAMMES: 120_000,
     // Visibility and mapping edits arrive one per keypress; coalesce them.
     CHANNEL_CHANGE_RELOAD_DELAY: 2000,
+    // Longest stretch of reading the cached guide before input gets a turn.
+    CACHE_DECODE_SLICE_MS: 16,
   },
 
   // Xtream Movies/Series catalog + resume tuning.

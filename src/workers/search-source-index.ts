@@ -5,6 +5,7 @@ import {
   PLAYLIST_STORE,
 } from '../services/idb-schema';
 import { foldSearchText } from '../utils/channel-search';
+import { isPackedEpg, unpackEpg } from '../services/epg-cache-codec';
 import { SearchCacheError, type CachedRecord } from './search-cache-reader';
 import type { SearchCacheRecord, SearchIndexCandidate } from './tasks';
 
@@ -66,7 +67,8 @@ function listOf(value: unknown): unknown[] {
 export function buildSourceIndex(ref: SearchCacheRecord, raw: CachedRecord | null): SourceIndex {
   if (!raw) throw new SearchCacheError('record_missing');
   if (cacheRecordTimestamp(raw) !== ref.timestamp) throw new SearchCacheError('record_changed');
-  const data: unknown = raw.data;
+  const stored: unknown = raw.data;
+  const data: unknown = isPackedEpg(stored) ? unpackEpg(stored) : stored;
   const values: string[] = [];
   let length = 0;
   let runIds: string[] | undefined;

@@ -27,6 +27,8 @@ import {
 } from './held-records';
 import { cacheEntryMetaId, cacheRecordTimestamp, PLAYLIST_CACHE_KEY } from './idb-schema';
 import { JSON_NULL_BYTES, serializedBytes } from '../utils/serialized-bytes';
+import { yieldToEventLoop } from '../utils/yield';
+import { isPackedEpg, packEpg, unpackEpgSliced } from './epg-cache-codec';
 
 const log = createLogger('CacheStorage');
 const CACHE_CATEGORIES = ['playlist', 'epg', 'catalog', 'subtitle', 'health', 'search'] as const;
@@ -1309,7 +1311,9 @@ export async function getCachedEpg(url: string): Promise<CachedEpgEntry | null> 
   return {
     url,
     timestamp: cacheRecordTimestamp(raw),
-    data: raw.data as ParsedEpg,
+    data: isPackedEpg(raw.data)
+      ? await unpackEpgSliced(raw.data, yieldToEventLoop, CONFIG.EPG.CACHE_DECODE_SLICE_MS)
+      : raw.data as ParsedEpg,
     filter: raw.filter as CachedEpgFilter | null | undefined,
   };
 }
@@ -1326,7 +1330,8 @@ export async function setCachedEpg(
     return await putRaw(EPG_STORE, {
       url,
       timestamp,
-      data,
+      // The worker packs its own copy; a page fallback writes this one as is.
+      data: held ? data : packEpg(data),
       filter,
       expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
     }, true, held && { record: held, field: 'data' });

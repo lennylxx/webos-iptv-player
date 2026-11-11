@@ -653,6 +653,33 @@ describe('EpgService guide lookups', () => {
 });
 
 describe('EpgService cache and refresh', () => {
+  it('drops a queued restore that a reset overtook while it waited', async () => {
+    vi.mocked(getCachedEpg).mockResolvedValue({
+      url: 'http://a',
+      timestamp: NOON,
+      data: parsed('a', 'Alpha', 'Cached'),
+    });
+    let paint: () => void = () => undefined;
+    const restored = EpgService.restoreCached(
+      [source('http://a', ['a'])],
+      undefined,
+      new Promise<void>((resolve) => { paint = resolve; }),
+    );
+    EpgService.reset();
+    paint();
+    await restored;
+
+    expect(getCachedEpg).not.toHaveBeenCalled();
+    expect(EpgService.findChannelId(channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] })))
+      .toBeNull();
+  });
+
+  it('settles a failed restore, so its caller still starts refreshes', async () => {
+    epgChannelIdsMock.mockImplementationOnce(() => { throw new Error('broken'); });
+
+    await expect(EpgService.restoreCached([source('http://a', ['a'])])).resolves.toBeUndefined();
+  });
+
   it('restores cached data without starting a network refresh', async () => {
     vi.mocked(getCachedEpg).mockResolvedValue({
       url: 'http://a',

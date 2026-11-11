@@ -6,6 +6,7 @@ import {
 } from './xmltv-parser';
 import { runAppWorkerTask } from '../workers/app-worker-client';
 import { holdEpg } from '../workers/held-values';
+import { packEpg } from '../services/epg-cache-codec';
 import { holdWorkerValue } from '../services/worker-held-records';
 import type {
   XMLTVWorkerChunk,
@@ -241,7 +242,7 @@ function withHeldGuide(
       token: holdEpg(() => {
         const accumulator = new XMLTVAccumulator();
         for (const chunk of chunks!) accumulator.accept(chunk);
-        const guide = accumulator.complete(metadata);
+        const guide = packEpg(accumulator.complete(metadata));
         // Built once, so the batch arrays can go while the guide waits.
         chunks = null;
         return guide;

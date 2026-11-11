@@ -13,6 +13,58 @@ import {
 // clock and a UTC device zone so wall-clock == absolute time.
 test.use({ timezoneId: 'UTC' });
 
+async function ageCachedGuide(page: Page, url: string, timestamp: number): Promise<void> {
+  await page.evaluate(({ url, timestamp }) => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('iptv');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction('epg-cache', 'readwrite');
+      const store = tx.objectStore('epg-cache');
+      const read = store.get(url);
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        if (!read.result) {
+          reject(new Error('EPG cache entry was not stored'));
+          return;
+        }
+        store.put({ ...read.result, timestamp });
+      };
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    };
+  }), { url, timestamp });
+}
+
+// The next launch's cached-guide read waits for `releaseGuideRead(page)`.
+async function holdGuideRead(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { releaseGuide: () => void };
+    const released = new Promise<void>((resolve) => { w.releaseGuide = resolve; });
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (this: IDBObjectStore, query: IDBValidKey | IDBKeyRange) {
+      const request = get.call(this, query);
+      if (this.name !== 'epg-cache') return request;
+      Object.defineProperty(request, 'onsuccess', {
+        set(listener: (event: Event) => void) {
+          IDBRequest.prototype.addEventListener.call(request, 'success', (event: Event) => {
+            void released.then(() => listener.call(request, event));
+          });
+        },
+      });
+      return request;
+    };
+  });
+}
+
+async function releaseGuideRead(page: Page): Promise<void> {
+  await page.evaluate(() => (window as unknown as { releaseGuide: () => void }).releaseGuide());
+}
+
 test('stale cached EPG stays visible while a refresh is in flight', async ({ page }) => {
   const now = new Date('2024-03-09T12:00:00Z');
   const epgUrl = 'http://epg.example.com/guide.xml';
@@ -42,33 +94,7 @@ test('stale cached EPG stays visible while a refresh is in flight', async ({ pag
     const nowPlaying = page.locator('.channel-main .channel-item').first().locator('.channel-now');
     await expect(nowPlaying).toHaveText('Cached Show');
 
-    await page.evaluate(({ url, timestamp }) => new Promise<void>((resolve, reject) => {
-      const open = indexedDB.open('iptv');
-      open.onerror = () => reject(open.error);
-      open.onsuccess = () => {
-        const db = open.result;
-        const tx = db.transaction('epg-cache', 'readwrite');
-        const store = tx.objectStore('epg-cache');
-        const read = store.get(url);
-        read.onerror = () => reject(read.error);
-        read.onsuccess = () => {
-          if (!read.result) {
-            reject(new Error('EPG cache entry was not stored'));
-            return;
-          }
-          store.put({ ...read.result, timestamp });
-        };
-        tx.oncomplete = () => {
-          db.close();
-          resolve();
-        };
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error);
-      };
-    }), {
-      url: epgUrl,
-      timestamp: now.getTime() - 24 * 60 * 60 * 1000,
-    });
+    await ageCachedGuide(page, epgUrl, now.getTime() - 24 * 60 * 60 * 1000);
 
     await page.reload();
     await expect.poll(() => epgRequests).toBe(2);
@@ -79,6 +105,98 @@ test('stale cached EPG stays visible while a refresh is in flight', async ({ pag
   } finally {
     releaseRefresh();
   }
+});
+
+test('the channel list opens before the cached guide is read', async ({ page }) => {
+  await routePlaylist(page);
+  await seedPlaylist(page);
+  await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
+  await page.route('**/guide.xml', route => route.fulfill({
+    status: 200,
+    contentType: 'application/xml',
+    body: `<?xml version="1.0" encoding="UTF-8"?><tv>
+<channel id="one"><display-name>Channel One</display-name></channel>
+<programme channel="one" start="20240309110000 +0000" stop="20240309130000 +0000"><title>Cached Show</title></programme>
+</tv>`,
+  }));
+  await page.goto('/');
+  const firstRow = page.locator('.channel-main .channel-item').first();
+  await expect(firstRow.locator('.channel-now')).toHaveText('Cached Show');
+
+  // The next launch's guide read never completes.
+  await page.addInitScript(() => {
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (this: IDBObjectStore, query: IDBValidKey | IDBKeyRange) {
+      if (this.name === 'epg-cache') return {} as IDBRequest;
+      return get.call(this, query);
+    };
+  });
+  await page.reload();
+  await expect(page.locator('#view-loading')).toBeHidden();
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await expect(firstRow).toBeVisible();
+});
+
+test('the auto-played channel shows its programme once the cached guide is read', async ({ page }) => {
+  await routePlaylist(page);
+  await routeLiveManifest(page);
+  await seedPlaylist(page);
+  await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
+  await page.route('**/guide.xml', route => route.fulfill({
+    status: 200,
+    contentType: 'application/xml',
+    body: `<?xml version="1.0" encoding="UTF-8"?><tv>
+<channel id="one"><display-name>Channel One</display-name></channel>
+<programme channel="one" start="20240309110000 +0000" stop="20240309130000 +0000"><title>Cached Show</title></programme>
+</tv>`,
+  }));
+  await page.goto('/');
+  await expect(page.locator('.channel-main .channel-item').first().locator('.channel-now'))
+    .toHaveText('Cached Show');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Channel One');
+  await page.evaluate(() => localStorage.setItem('iptv_auto_play', 'true'));
+
+  await holdGuideRead(page);
+  await page.reload();
+  await expect(page.locator('.osd-channel-name')).toHaveText('Channel One');
+  await expect(page.locator('.osd-programme-title')).toHaveCount(0);
+
+  await releaseGuideRead(page);
+  await expect(page.locator('.osd-programme-title')).toHaveText('Cached Show');
+});
+
+test('a Guide opened while the cached guide is read shows it once read', async ({ page }) => {
+  const now = new Date('2024-03-09T12:00:00Z');
+  let guideRequests = 0;
+  await routePlaylist(page);
+  await seedPlaylist(page);
+  await page.clock.setFixedTime(now);
+  await page.route('**/guide.xml', async (route) => {
+    // Only the first launch downloads; the refresh of the aged copy hangs.
+    if (++guideRequests > 1) return;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/xml',
+      body: `<?xml version="1.0" encoding="UTF-8"?><tv>
+<channel id="one"><display-name>Channel One</display-name></channel>
+<programme channel="one" start="20240309110000 +0000" stop="20240309130000 +0000"><title>Cached Show</title></programme>
+</tv>`,
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('.channel-main .channel-item').first().locator('.channel-now'))
+    .toHaveText('Cached Show');
+  await ageCachedGuide(page, 'http://epg.example.com/guide.xml', now.getTime() - 24 * 60 * 60 * 1000);
+
+  await holdGuideRead(page);
+  await page.reload();
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterTab(page, 'epg');
+  await expect(page.locator('#view-epg')).toBeVisible();
+  await releaseGuideRead(page);
+  await expect(page.locator('#epg-programmes .epg-programme-item', { hasText: 'Cached Show' }))
+    .toBeVisible();
 });
 
 test.describe('EPG live badge', () => {

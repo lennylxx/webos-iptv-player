@@ -111,6 +111,22 @@ const ESC: Record<string, string> = {
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 };
 
+// A frame callback runs before its paint, so the task queued from it runs
+// after. A hidden page gets no frames; the timeout stands in for one.
+export function afterNextPaint(fallbackMs = 500): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(fallback);
+      resolve();
+    };
+    const fallback = setTimeout(settle, fallbackMs);
+    requestAnimationFrame(() => setTimeout(settle, 0));
+  });
+}
+
 /** A string that is already trusted HTML and must not be re-escaped. */
 export class Safe {
   constructor(readonly value: string) {}

@@ -4,6 +4,7 @@ import { gzipSync, strToU8 } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchAndParseXMLTVInWorker } from './xmltv-loader';
 import { measureHeldValue, writeHeldValue } from '../workers/held-values';
+import { isPackedEpg, unpackEpg, type PackedEpg } from '../services/epg-cache-codec';
 
 const start = '20260814190000 +0000';
 const stop = '20260814200000 +0000';
@@ -138,7 +139,9 @@ describe('fetchAndParseXMLTV', () => {
         { token, timeoutMs: 1000, field: 'data', writes: [{ store: 's', value: { key: 'k' } }] },
         async writes => { value = writes[0].value.data; },
       );
-      return value;
+      // The worker caches the guide packed, which the page reads back sliced.
+      expect(isPackedEpg(value)).toBe(true);
+      return unpackEpg(value as PackedEpg);
     }
 
     it('holds the guide the page rebuilds, after an order retry', async () => {

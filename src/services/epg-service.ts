@@ -281,6 +281,7 @@ class EpgServiceImpl {
   private filterMemo: FilterMemo = emptyFilterMemo();
   private pendingWork: Promise<unknown> | null = null;
   private revision = 0;
+  private resetEpoch = 0;
   private mappingRevisionValue = 0;
   private guideRevisionValue = 0;
   private lastIdleKey = '';
@@ -336,6 +337,7 @@ class EpgServiceImpl {
    * playlist so stale programme data does not survive a reload.
    */
   reset(): void {
+    this.resetEpoch++;
     this.revision++;
     this.guideRevisionValue++;
     this.indexedSources = new Map();
@@ -364,8 +366,25 @@ class EpgServiceImpl {
     return this.enqueue(() => this.runLoad(sources, channels, onDataPublished));
   }
 
-  restoreCached(sources: EpgSource[], channels?: Channel[]): Promise<void> {
-    return this.enqueue(() => this.runRestoreCached(sources, channels));
+  // `ready` holds the restore at the head of the queue, so work queued after
+  // it still waits for the cached guide.
+  restoreCached(
+    sources: EpgSource[],
+    channels?: Channel[],
+    ready?: Promise<unknown>,
+  ): Promise<void> {
+    const epoch = this.resetEpoch;
+    return this.enqueue(async () => {
+      if (ready) await ready;
+      // A reset while this waited means its sources were removed.
+      if (epoch !== this.resetEpoch) return;
+      // Resolves even when it fails, so the caller still starts refreshes.
+      try {
+        await this.runRestoreCached(sources, channels);
+      } catch (err) {
+        log.error('Cached guide restore failed:', err);
+      }
+    });
   }
 
   private async runRestoreCached(
