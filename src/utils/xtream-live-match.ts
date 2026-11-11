@@ -88,8 +88,11 @@ function createStreamLocationPrefilter(
   resolveDirectSourceStreamId: DirectSourceStreamIdResolver,
 ): (location: string) => boolean {
   const basePathPrefix = xtreamBasePathPrefix(baseUrl);
+  const basePathHasKind = /\/(?:movie|series|vod)\//.test(`${basePathPrefix}/`);
   return location => {
-    if (!isCanonicalXtreamNonLiveUrl(location, basePathPrefix)) return true;
+    if (!isCanonicalXtreamNonLiveUrl(location, basePathPrefix, basePathHasKind)) {
+      return true;
+    }
     return typeof resolveDirectSourceStreamId(location) === 'string';
   };
 }
@@ -106,6 +109,7 @@ function createDirectSourceStreamIdResolver(
     addDirectSource(stableSources, stable, reference.streamId);
   }
 
+  if (!exactSources.size) return () => undefined;
   return url => {
     const exact = exactSources.get(url);
     if (exact !== undefined) return exact;
@@ -163,26 +167,26 @@ function xtreamBasePathPrefix(baseUrl: string): string {
 }
 
 // Avoid allocating a URL object for every rejected entry on large playlists.
-function isCanonicalXtreamNonLiveUrl(value: string, basePathPrefix: string): boolean {
-  const movieStart = value.indexOf('/movie/');
-  const seriesStart = value.indexOf('/series/');
-  const vodStart = value.indexOf('/vod/');
-  let kindStart = movieStart;
-  if (kindStart < 0 || (seriesStart >= 0 && seriesStart < kindStart)) kindStart = seriesStart;
-  if (kindStart < 0 || (vodStart >= 0 && vodStart < kindStart)) kindStart = vodStart;
-  if (kindStart < 0) return false;
-
-  const schemeEnd = value.indexOf('://');
-  if ((value.indexOf('http://') !== 0 && value.indexOf('https://') !== 0)
-      || schemeEnd < 0) return false;
-  const authorityStart = schemeEnd + 3;
+function isCanonicalXtreamNonLiveUrl(
+  value: string,
+  basePathPrefix: string,
+  basePathHasKind: boolean,
+): boolean {
+  let authorityStart: number;
+  if (value.startsWith('http://')) authorityStart = 7;
+  else if (value.startsWith('https://')) authorityStart = 8;
+  else return false;
+  // A host named like a kind segment holds the first one, so the entry is kept.
+  if (startsWithKind(value, authorityStart - 1)) return false;
   let pathStart = value.indexOf('/', authorityStart);
   if (pathStart < 0) return false;
-  if (basePathPrefix && value.indexOf(basePathPrefix) === 0
+  if (basePathPrefix && value.startsWith(basePathPrefix)
       && value.charCodeAt(basePathPrefix.length) === 47) {
+    // A kind segment inside the base path comes first, so the entry is kept.
+    if (basePathHasKind) return false;
     pathStart = basePathPrefix.length;
   }
-  if (pathStart !== kindStart) return false;
+  if (!startsWithKind(value, pathStart)) return false;
   let pathEnd = value.indexOf('?', pathStart);
   const hash = value.indexOf('#', pathStart);
   if (pathEnd < 0 || (hash >= 0 && hash < pathEnd)) pathEnd = hash;
@@ -198,6 +202,12 @@ function isCanonicalXtreamNonLiveUrl(value: string, basePathPrefix: string): boo
   if (extraSlash >= 0 && extraSlash < pathEnd) return false;
   const dot = value.lastIndexOf('.', pathEnd - 1);
   return dot > passwordEnd + 1 && dot < pathEnd - 1;
+}
+
+function startsWithKind(value: string, position: number): boolean {
+  return value.startsWith('/movie/', position)
+    || value.startsWith('/series/', position)
+    || value.startsWith('/vod/', position);
 }
 
 function isHttpUrl(value: string): boolean {

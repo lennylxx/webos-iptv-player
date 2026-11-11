@@ -209,30 +209,32 @@ export class M3UStreamParser {
     );
   }
 
+  // Native indexOf finds line ends far faster than a per-character loop.
   private drainLines(final: boolean): void {
+    const buffer = this.lineBuffer;
+    const length = buffer.length;
     let start = 0;
-    let index = 0;
-    while (index < this.lineBuffer.length) {
-      const code = this.lineBuffer.charCodeAt(index);
-      if (code === 10) {
-        this.queueLine(this.lineBuffer.slice(start, index));
-        start = ++index;
-        continue;
+    let lineFeed = buffer.indexOf('\n');
+    let carriageReturn = buffer.indexOf('\r');
+    while (lineFeed >= 0 || carriageReturn >= 0) {
+      if (carriageReturn < 0 || (lineFeed >= 0 && lineFeed < carriageReturn)) {
+        this.queueLine(buffer.slice(start, lineFeed));
+        start = lineFeed + 1;
+      } else {
+        if (carriageReturn + 1 === length && !final) break;
+        this.queueLine(buffer.slice(start, carriageReturn));
+        start = carriageReturn + (buffer.charCodeAt(carriageReturn + 1) === 10 ? 2 : 1);
       }
-      if (code === 13) {
-        if (index + 1 === this.lineBuffer.length && !final) break;
-        this.queueLine(this.lineBuffer.slice(start, index));
-        index += this.lineBuffer.charCodeAt(index + 1) === 10 ? 2 : 1;
-        start = index;
-        continue;
+      if (lineFeed >= 0 && lineFeed < start) lineFeed = buffer.indexOf('\n', start);
+      if (carriageReturn >= 0 && carriageReturn < start) {
+        carriageReturn = buffer.indexOf('\r', start);
       }
-      index++;
     }
-    if (final && start < this.lineBuffer.length) {
-      this.queueLine(this.lineBuffer.slice(start));
-      start = this.lineBuffer.length;
+    if (final && start < length) {
+      this.queueLine(buffer.slice(start));
+      start = length;
     }
-    this.lineBuffer = this.lineBuffer.slice(start);
+    this.lineBuffer = buffer.slice(start);
   }
 
   private queueLine(rawLine: string): void {

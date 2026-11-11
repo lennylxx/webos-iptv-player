@@ -85,6 +85,22 @@ describe('createXtreamStreamLocationPrefilter', () => {
     expect(shouldParse('not a url')).toBe(true);
   });
 
+  it('keeps entries whose base path already holds a kind segment', () => {
+    const shouldParse = createXtreamStreamLocationPrefilter([], 'host/movie');
+
+    expect(shouldParse('http://host/movie/series/u1/p1/301.mkv')).toBe(true);
+    expect(shouldParse('http://host/other/series/u1/p1/301.mkv')).toBe(true);
+    expect(shouldParse('http://host/series/u1/p1/301.mkv')).toBe(false);
+  });
+
+  it('keeps entries whose host is named like a kind segment', () => {
+    const shouldParse = createXtreamStreamLocationPrefilter([]);
+
+    expect(shouldParse('http://movie/movie/u1/p1/201.mp4')).toBe(true);
+    expect(shouldParse('https://vod/series/u1/p1/301.mkv')).toBe(true);
+    expect(shouldParse('http://host/series/u1/p1/301.mkv')).toBe(false);
+  });
+
   it('keeps authoritative direct sources for the post filter', () => {
     const shouldParse = createXtreamStreamLocationPrefilter([{
       streamId: '201',

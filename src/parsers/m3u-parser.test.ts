@@ -387,6 +387,26 @@ describe('parseM3U', () => {
     expect(parser.finish()).toEqual(parseM3U(m3u));
   });
 
+  it('splits mixed line endings the same way for any chunk size', () => {
+    const m3u = '#EXTM3U\n#EXTINF:-1,A\r\nhttp://host/a\r#EXTINF:-1,B\r\r\n'
+      + 'http://host/b\n\n#EXTINF:-1,C\rhttp://host/c\r\n#EXTINF:-1,D\r\n'
+      + '#EXTINF:-1,E\r\nhttp://host/e';
+    const expected = parseM3U(m3u);
+    expect(expected.channels.map(channel => channel.url))
+      .toEqual(['http://host/a', 'http://host/b', 'http://host/c', 'http://host/e']);
+    // The orphan's line number shows every CRLF counted as one line end.
+    expect(expected.issues).toContainEqual(
+      expect.objectContaining({ code: 'orphan-extinf', line: 10 }),
+    );
+    for (const size of [2, 3, 5, 8, m3u.length]) {
+      const parser = new M3UStreamParser();
+      for (let index = 0; index < m3u.length; index += size) {
+        parser.write(m3u.slice(index, index + size));
+      }
+      expect(parser.finish()).toEqual(expected);
+    }
+  });
+
   it('filters a completed entry before retaining its groups', () => {
     const parser = new M3UStreamParser('', {
       channelPostfilter: channel => channel.url.endsWith('/keep'),
