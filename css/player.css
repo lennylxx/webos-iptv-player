@@ -634,6 +634,13 @@
   object-fit: contain;
 }
 
+.player-sidebar .sidebar-group-icon .group-fallback-icon {
+  width: 1.25em;
+  height: 1.25em;
+  display: block;
+  transform: translate(-0.09em, -0.07em);
+}
+
 .player-sidebar .sidebar-group-name {
   flex: 1;
   min-width: 0;

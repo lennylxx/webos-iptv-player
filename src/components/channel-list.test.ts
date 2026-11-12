@@ -1165,6 +1165,28 @@ describe('ChannelList interaction', () => {
     expect(channelItems()[2].classList.contains('playing')).toBe(true);
   });
 
+  // A U+25B6 glyph here stalled the first layout after leaving the player
+  // on a fallback-font lookup.
+  it('draws the playing marker as an SVG, not a font glyph', () => {
+    recentMock.items = [{
+      kind: 'live',
+      channel: data.channels[2],
+      channelIndex: 2,
+      updatedAt: 1000,
+    }];
+    list.setPlaying(2);
+    list.render();
+    const expectSvgMarker = (row: HTMLElement) => {
+      const marker = row.querySelector('.playing-indicator')!;
+      expect(marker.querySelector('svg.playing-indicator-icon')).not.toBeNull();
+      expect(marker.textContent).toBe('');
+    };
+    expectSvgMarker(channelItems()[2]);
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
+    list.handleAction('select');
+    expectSvgMarker(channelItems()[0]);
+  });
+
   it('highlightEntryPoint focuses the first channel without taking the caret', () => {
     list.highlightEntryPoint();
     expect(ringed(channelItems()[0])).toBe(true);

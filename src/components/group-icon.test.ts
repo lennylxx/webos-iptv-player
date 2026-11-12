@@ -143,8 +143,10 @@ describe('groupIcon (rendered HTML)', () => {
     );
   });
 
-  it('falls back to the play-triangle glyph for unmatched groups', () => {
-    expect(groupIcon('Uncategorized')).toBe('&#9654;');
+  it('falls back to a play-triangle SVG, not a font glyph, for unmatched groups', () => {
+    const icon = groupIcon('Uncategorized');
+    expect(icon).toMatch(/^<svg class="group-fallback-icon"[^>]*>.*<\/svg>$/);
+    expect(icon).not.toMatch(/&#|[^\x20-\x7e]/);
   });
 });
 

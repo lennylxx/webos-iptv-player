@@ -22,7 +22,7 @@ import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { ChannelHealthService } from '../services/channel-health';
 import { groupIcon } from './group-icon';
-import { NAV_HORIZONTAL_ICON, favoriteIcon } from './icons';
+import { NAV_HORIZONTAL_ICON, PLAYING_ICON, favoriteIcon } from './icons';
 import { backKey, okHint } from './key-hints';
 import { channelLockBadge, liveGroupLockBadge } from './parental-badge';
 import { showToast } from './toast';
@@ -38,6 +38,7 @@ const CHANNEL_ROW_STRIDE = 88;
 const GROUP_ROW_STRIDE = 68;
 const CHANNEL_OVERSCAN = 12;
 const CHANNEL_VIEWPORT_FALLBACK = 900;
+const PLAYING_INDICATOR = `<div class="playing-indicator">${PLAYING_ICON}</div>`;
 
 type PreviewHintState = 'off' | 'ready' | 'active';
 type RowList = 'group' | 'channel';
@@ -1004,7 +1005,7 @@ export class ChannelList {
         </div>
         ${this.editor.renderChannelEditStatus(ch)}
         ${this.renderHealth(ch)}
-        ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
+        ${isPlaying ? raw(PLAYING_INDICATOR) : ''}
       </div>
     `;
   }
@@ -1034,7 +1035,7 @@ export class ChannelList {
           </div>
           ${this.renderHealth(item.channel)}
           <div class="recent-kind-badge live">${t('common.live')}</div>
-          ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
+          ${isPlaying ? raw(PLAYING_INDICATOR) : ''}
         </div>
       `;
     }
@@ -1063,7 +1064,7 @@ export class ChannelList {
           <div class="recent-progress"><div class="recent-progress-fill" style="width:${percent}%"></div></div>
         </div>
         <div class="recent-kind-badge catchup">${t('common.catchup')}</div>
-        ${isPlaying ? raw('<div class="playing-indicator">&#9654;</div>') : ''}
+        ${isPlaying ? raw(PLAYING_INDICATOR) : ''}
       </div>
     `;
   }

@@ -19,6 +19,7 @@ import {
   splitLetterNumberPlusTokens,
   stripDiacritics,
 } from '../utils/unicode-text';
+import { TRIANGLE_ICON } from './icons';
 
 const GROUP_ICON_DIR = 'assets/group-icons';
 
@@ -167,5 +168,5 @@ export function groupIcon(group: string, builtin?: 'all' | 'favorites' | 'recent
   if (builtin === 'favorites') return iconImg('star');
   if (builtin === 'recently-watched') return iconImg('three_oclock');
   const icon = matchGroupIcon(group);
-  return icon ? iconImg(icon) : '&#9654;'; // fallback for unmatched groups
+  return icon ? iconImg(icon) : TRIANGLE_ICON;
 }
