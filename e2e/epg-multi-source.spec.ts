@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './helpers';
+import { test, expect, type Page, liveLoaded } from './helpers';
 
 test.use({ timezoneId: 'UTC' });
 
@@ -84,7 +84,7 @@ async function setup(page: Page): Promise<void> {
 test('each playlist channel uses its own EPG when XMLTV ids collide', async ({ page }) => {
   await setup(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
@@ -111,7 +111,7 @@ test('applies the saved time correction only to its EPG source', async ({ page }
     }));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
@@ -128,7 +128,7 @@ test('applies the saved time correction only to its EPG source', async ({ page }
 test('filters EPG channels by source, group, and channel name', async ({ page }) => {
   await setup(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
@@ -154,7 +154,7 @@ test('filters EPG channels by source, group, and channel name', async ({ page })
 test('Back closes EPG filters before leaving the guide', async ({ page }) => {
   await setup(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
@@ -168,13 +168,13 @@ test('Back closes EPG filters before leaving the guide', async ({ page }) => {
   await expect(page.locator('#view-epg')).toBeVisible();
 
   await page.keyboard.press('Escape');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 });
 
 test('an open groups menu holds the only ring, which returns to its button on Back', async ({ page }) => {
   await setup(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
   await expect(page.locator('#view-epg')).toBeVisible();
@@ -196,7 +196,7 @@ test('an open groups menu holds the only ring, which returns to its button on Ba
 test('Blue leaves EPG search without stale keyboard focus', async ({ page }) => {
   await setup(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));

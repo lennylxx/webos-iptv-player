@@ -329,3 +329,9 @@ function installRingAudit(recordNone: boolean): void {
 // cannot run there; the behavior they observe is covered by the `chromium`
 // project.
 export const isChromium53 = (): boolean => test.info().project.name === 'chromium-53-simulation';
+
+// Live shows at once; its playlist has loaded when the progress bar ends.
+export async function liveLoaded(page: Page): Promise<void> {
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
+}

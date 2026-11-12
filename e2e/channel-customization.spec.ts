@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   routePlaylist,
@@ -45,7 +46,7 @@ async function boot(page: Page): Promise<void> {
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(4);
   // Seed the pointer: before its first move, a mouseover can't be told
   // from content sliding under it, so it is ignored after a key.
@@ -77,7 +78,7 @@ test('the edit toolbar fits every locale with both EPG actions', async ({ page }
       localStorage.setItem('iptv_locale', JSON.stringify(value));
     }, locale);
     await page.reload();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await key(page, YELLOW);
 
     const layout = await page.locator('.edit-hints').evaluate((toolbar) => {
@@ -102,7 +103,7 @@ test('back leaves edit mode instead of leaving the channel list', async ({ page 
 
   await key(page, BACK);
   await expect(page.locator('.edit-hints')).toHaveCount(0);
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 });
 
 test('grab and move reorders a channel, and the order survives a reload', async ({ page }) => {
@@ -124,7 +125,7 @@ test('grab and move reorders a channel, and the order survives a reload', async 
   await expect(page.locator('.grabbed')).toHaveCount(0);
 
   await page.reload();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   expect(await names(page)).toEqual(['Delta Sports', 'Alpha News', 'Beta News', 'Alpha Movies']);
   // Channel numbers follow the custom order.
   await expect(page.locator('.channel-main .channel-item').first()).toContainText('1');
@@ -152,7 +153,7 @@ test('green hides a channel in edit mode and toggles a favorite outside it', asy
   await expect(page.locator('.channel-count')).toHaveText('3 channels');
 
   await page.reload();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(3);
 });
 
@@ -297,7 +298,7 @@ test('blue renames a channel, and an empty rename restores the source name', asy
   }).toBe(true);
 
   await page.reload();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-name').first()).toHaveText('My Channel');
 
   await key(page, YELLOW);
@@ -369,7 +370,7 @@ ${guideChannels}
   const guideResponse = page.waitForResponse('**/guide.xml');
   await page.goto('/');
   await guideResponse;
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(4);
 
   await key(page, YELLOW);
@@ -447,7 +448,7 @@ ${guideChannels}
   await key(page, BACK);
 
   await page.reload();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await key(page, YELLOW);
   await focusChannel(page, 0);
   await key(page, ENTER);
@@ -467,7 +468,7 @@ ${guideChannels}
       localStorage.setItem('iptv_locale', JSON.stringify(value));
     }, locale);
     await page.reload();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await key(page, YELLOW);
     await focusChannel(page, 0);
     await key(page, ENTER);
@@ -589,7 +590,7 @@ test('Settings enters edit mode, reveals hidden channels, and resets everything'
   // Show hidden reveals the hidden channel in the normal list, marked.
   await page.locator('#show-hidden [data-value="on"]').click();
   await page.locator('#save-settings').click();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(4);
   await expect(page.locator('.channel-main .hidden-entry')).toHaveCount(1);
 
@@ -600,7 +601,7 @@ test('Settings enters edit mode, reveals hidden channels, and resets everything'
   await expect(page.locator('.confirmation-prompt')).toBeVisible();
   await page.locator('.confirmation-btn').first().click();
   await page.locator('#save-settings').click();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .hidden-entry')).toHaveCount(0);
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(4);
 });
@@ -611,7 +612,7 @@ test('the Settings edit-channel-list button jumps to the Live list in edit mode'
   await page.locator('[data-settings-target="sources"]').click();
   await page.locator('#edit-channel-list').click();
 
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.edit-hints')).toBeVisible();
 });
 
@@ -628,7 +629,7 @@ test('playback follows a channel reordered while it is playing', async ({ page }
   await key(page, ENTER);
   await expect(page.locator('#view-player')).toBeVisible();
   await key(page, BACK);
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Move the playing channel to the end; it stays marked as playing.
   await key(page, YELLOW);

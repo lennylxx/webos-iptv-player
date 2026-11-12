@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page, pressStepsAndReadPlayer, seedPointer } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page, pressStepsAndReadPlayer, seedPointer, liveLoaded } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // A minimal ASS body with one dialogue active from t=0, so assjs renders it as
@@ -85,7 +85,7 @@ async function claimScrollEndQuirk(page: Page): Promise<void> {
 test('keeps the focus ring clear of the rail edge at See all', async ({ page }) => {
   await seedMovies(page, { streams: 30 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await claimScrollEndQuirk(page);
   await enterTab(page, 'movies');
   await page.locator('.catalog-tile[data-item-id="100"]')
@@ -116,7 +116,7 @@ test('Back to See all jumps straight to it under full animation', async ({ page 
   await page.addInitScript(() => localStorage.setItem('iptv_animation_mode', JSON.stringify('full')));
   await seedXtream(page, { catalog: 'large' });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   await expect(page.locator('html')).toHaveAttribute('data-animation', 'full');
   // Walk the rail with the remote, as a viewer would, so See all is scrolled
@@ -170,7 +170,7 @@ test('loads browse rails only as the remote walks down to them', async ({ page }
     return route.fallback();
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const movies = page.locator('#view-movies');
   await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id="10"]')).toBeVisible();
@@ -202,7 +202,7 @@ test('holds the rails on screen still when the rail at the top fails', async ({ 
     });
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const movies = page.locator('#view-movies');
   const fifth = movies.locator('[data-rail-key="cat:5"] .catalog-tile[data-item-id]').first();
@@ -238,7 +238,7 @@ test('Down from mid-rail steps onto a loading rail and keeps its column', async 
     return new Promise<void>((done) => { releaseRail = () => { void route.fallback().then(done); }; });
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const movies = page.locator('#view-movies');
   await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id]').first()).toBeVisible();
@@ -264,7 +264,7 @@ test('Back holds the rails still when a rail above failed while a detail was ope
     });
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const movies = page.locator('#view-movies');
   const fifth = movies.locator('[data-rail-key="cat:5"] .catalog-tile[data-item-id]').first();
@@ -289,7 +289,7 @@ test('Back holds the rails still when a rail above failed while a detail was ope
 test('Back holds the rails still when the detail added the Watchlist rail above', async ({ page }) => {
   await seedXtream(page, { catalog: 'large' });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const movies = page.locator('#view-movies');
   const fourth = movies.locator('[data-rail-key="cat:4"] .catalog-tile[data-item-id]').first();
@@ -304,6 +304,8 @@ test('Back holds the rails still when the detail added the Watchlist rail above'
   const before = await topOf();
   await page.keyboard.press('Enter');
   const watchlist = movies.locator('.catalog-layer-detail .detail-btn[data-key="watchlist"]');
+  // The detail re-renders once its info arrives; hover the final button.
+  await expect(movies.locator('.detail-plot')).toContainText('A plot.');
   await expect(watchlist).toBeVisible();
   const label = await watchlist.textContent();
   await watchlist.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -326,7 +328,7 @@ test('a rail that lands under the open sort menu shows once a click closes it', 
     return new Promise<void>((done) => { releaseRail = () => { void route.fallback().then(done); }; });
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const movies = page.locator('#view-movies');
   await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id]').first()).toBeVisible();
@@ -348,7 +350,7 @@ test('a rail that lands under the open sort menu shows once a click closes it', 
 test('Left and Right stop at the ends of All categories', async ({ page }) => {
   await seedXtream(page, { catalog: 'large' });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const cats = page.locator('#view-movies .catalog-category-rail .catalog-cat');
   await expect(cats).toHaveCount(8);
@@ -377,7 +379,7 @@ test('Left and Right stop at the ends of All categories', async ({ page }) => {
 test('gives a scroll-end spacer only to flex containers', async ({ page }) => {
   await seedXtream(page, { catalog: 'large' });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await claimScrollEndQuirk(page);
   // Outside a flex container the spacer is an inline box with margins, which
   // Chromium 53 lays out as an extra line that overflows a fixed-height rail.
@@ -403,7 +405,7 @@ test('browse Movies, open a detail, and start playback', async ({ page }) => {
   // auto-eject the player, which would race this test's own Back navigation.
   await neuterVideo(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Enter Movies via the docked tab bar.
   await enterTab(page, 'movies');
@@ -436,7 +438,7 @@ test('Back walks Movies detail -> browse -> Live instead of ejecting', async ({ 
   await seedMovies(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Enter Movies via the docked tab bar.
   await enterTab(page, 'movies');
@@ -458,14 +460,14 @@ test('Back walks Movies detail -> browse -> Live instead of ejecting', async ({ 
 
   // Second Back from the browse top level returns to Live.
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 });
 
 test('Back from a detail finds browse scrolled and focused as it was left', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('iptv_animation_mode', JSON.stringify('full')));
   await seedMovies(page, { streams: 20 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   await expect(page.locator('html')).toHaveAttribute('data-animation', 'full');
   await page.locator('.catalog-tile[data-item-id="100"]')
@@ -504,7 +506,7 @@ test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu
   // file doesn't fire `error` and eject back to Movies before we probe the edges.
   await neuterVideo(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Enter Movies, open a detail, and start playback (VOD mode).
   await enterTab(page, 'movies');
@@ -551,7 +553,7 @@ test('VOD Right opens the menu while the OSD is hidden and seeks while it shows'
   await routeLiveManifest(page);
   await neuterVideo(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'movies');
   await page.locator('.catalog-tile[data-item-id="10"]')
@@ -605,7 +607,7 @@ async function startFakeVod(page: Page): Promise<void> {
   await routeLiveManifest(page);
   await neuterVideo(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'movies');
   await page.locator('.catalog-tile[data-item-id="10"]')
@@ -666,7 +668,7 @@ test('a VOD sidecar subtitle creates its application track when selected', async
   // Keep VOD alive so the neutered <video> doesn't eject before we probe tracks.
   await neuterVideo(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'movies');
   await page.locator('.catalog-tile[data-item-id="10"]')
@@ -719,7 +721,7 @@ test('a VOD ASS sidecar renders through the assjs overlay when selected', async 
     Object.defineProperty(P, 'src', { configurable: true, set() { /* no-op */ }, get() { return ''; } });
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'movies');
   await page.locator('.catalog-tile[data-item-id="10"]')
@@ -756,7 +758,7 @@ test('a VOD ASS sidecar renders through the assjs overlay when selected', async 
 test('a detail whose first control is hidden focuses the next visible one', async ({ page }) => {
   await seedMovies(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   await expect(page.locator('#view-movies')).toBeVisible();
 
@@ -785,7 +787,7 @@ async function hoverThenLeave(el: import('@playwright/test').Locator): Promise<v
 test('after the pointer leaves a grid tile, the first key shows it and the next one moves', async ({ page }) => {
   await seedMovies(page, { streams: 30 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   await page.locator('.catalog-tile[data-item-id="100"]')
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -806,7 +808,7 @@ test('after the pointer leaves a grid tile, the first key shows it and the next 
 test('CH+/CH- leave a pointer-hidden tile hidden in the catalog', async ({ page }) => {
   await seedMovies(page, { streams: 30 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   await page.locator('.catalog-tile[data-item-id="100"]')
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -829,7 +831,7 @@ test('CH+/CH- leave a pointer-hidden tile hidden in the catalog', async ({ page 
 test('a revealed grid tile keeps its ring after the reveal scrolls the grid', async ({ page }) => {
   await seedMovies(page, { streams: 60 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   await page.locator('.catalog-tile[data-item-id="100"]')
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -861,7 +863,7 @@ test('a revealed grid tile keeps its ring after the reveal scrolls the grid', as
 test('Up into the tab bar takes the ring off the catalog tile', async ({ page }) => {
   await seedMovies(page, { streams: 30 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const tile = page.locator('#view-movies .catalog-tile[data-item-id="100"]');
   await tile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -877,7 +879,7 @@ test('Up into the tab bar takes the ring off the catalog tile', async ({ page })
 test('Down from the tab bar rings the remembered control, and one Down reaches a tile', async ({ page }) => {
   await seedMovies(page, { streams: 30 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const tile = page.locator('#view-movies .catalog-tile[data-item-id="100"]');
   await tile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -907,7 +909,7 @@ async function upToTabBar(page: Page): Promise<void> {
 async function openCategoryGrid(page: Page): Promise<void> {
   await seedMovies(page, { streams: 30 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const seeAll = page.locator('#view-movies .catalog-see-all');
   await seeAll.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -934,7 +936,7 @@ test.describe('Down from the tab bar resumes Movies as Up left it', () => {
   test('with the tile it left scrolled half out of view', async ({ page }) => {
     await seedXtream(page, { catalog: 'large' });
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await enterTab(page, 'movies');
     const tile = page.locator('#view-movies .catalog-tile').first();
     await tile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -980,7 +982,7 @@ async function openAccountMenuOverMovies(page: Page): Promise<void> {
   await seedXtream(page, { catalog: 'large' });
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   // Reach Movies from the tab bar with keys alone.
   await page.keyboard.press('ArrowLeft');
   for (let i = 0; i < 8 && !(await page.locator('.tab-bar-item.focused').count()); i++) {

@@ -1,10 +1,12 @@
 import {
+  liveLoaded,
   test,
   expect,
   enterTab,
   seedPlaylist,
   routePlaylist,
   routeLiveManifest,
+  SAMPLE_M3U,
   type Page,
 } from './helpers';
 
@@ -52,7 +54,7 @@ test('Cancel dismisses the prompt and stays on the channel list', async ({ page 
   await expect(page.locator('.reminder-prompt:not(.hidden)')).toBeVisible();
   await page.locator('.reminder-btn[data-reminder-action="cancel"]').click();
   await expect(page.locator('.reminder-prompt.hidden')).toHaveCount(1);
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.locator('.tab-bar-item[data-section="settings"]').click();
   await expect(page.locator('#manage-reminders')).toContainText('(0)');
@@ -218,4 +220,30 @@ test('the empty-state hint wraps to a readable width at text size 150', async ({
   expect(box.width).toBeLessThanOrEqual(1100);
   expect(box.lines).toBe(2);
   expect(Math.abs((box.left + box.right) / 2 - 960)).toBeLessThan(2);
+});
+
+test('reminders opened while the playlist loads survive and list once it arrives', async ({ page }) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/playlist.m3u', async (route) => {
+    await held;
+    await route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U });
+  });
+  await seedPlaylist(page);
+  await page.addInitScript((k) => {
+    if (localStorage.getItem('iptv_reminders')) return;
+    const now = Date.now();
+    localStorage.setItem('iptv_reminders', JSON.stringify([
+      { channelKey: k, channelName: 'Channel One', title: 'Alpha', startMs: now + 3600000, stopMs: now + 7200000 },
+    ]));
+  }, channelKey(CHAN_ONE));
+
+  await page.goto('/');
+  await page.locator('.tab-bar-item[data-section="settings"]').click();
+  await page.locator('#manage-reminders').click();
+  await expect(page.locator('.reminder-manager-view')).toBeVisible();
+  await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
+
+  release();
+  await expect(page.locator('.reminder-manager-row')).toHaveCount(1);
 });

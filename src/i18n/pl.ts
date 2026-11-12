@@ -528,7 +528,6 @@ export const PL_MESSAGES = {
   'parental.askAfterLeaving': 'Po wyjściu z aplikacji',
   'app.welcome': 'Dodaj URL playlisty, aby rozpocząć.',
   'app.loadingChannels': 'Wczytywanie kanałów…',
-  'app.loadingChannelsProgress': 'Wczytywanie kanałów… Przetworzono: {processed}; dodano: {kept}',
   'app.channelsLoaded': {
     one: 'Wczytano {count} kanał',
     few: 'Wczytano {count} kanały',

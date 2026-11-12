@@ -224,7 +224,7 @@ performance setting, not a no-animation preference.
   sidebar channel rows), the recent-searches fade (a full-screen scrim),
   and the playing pulse — on the webOS 4 emulator even one small
   infinite loop keeps the compositor drawing every frame.
-  Other status loops — live pulse, marquee, spinner — stay in every
+  Other status loops — live pulse, marquee — stay in every
   mode until measured. Don't use
   `prefers-reduced-motion`: webOS never reports it, so the animation
   mode is the only motion control.

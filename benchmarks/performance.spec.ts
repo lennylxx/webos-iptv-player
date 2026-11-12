@@ -494,21 +494,23 @@ async function runDesktopInteractiveBenchmark(browser: Browser) {
       for (const flow of INTERACTIVE_FLOW_NAMES) {
         const runs = [];
         for (let run = 0; run < INTERACTIVE_RUNS; run++) {
-          const result = await runInteractiveFlow(
-            browser, server, flow, network, `${network}-${flow}-${String(run + 1)}`,
-          );
+          const label = `${network}-${flow}-${String(run + 1)}`;
+          const result = await runInteractiveFlow(browser, server, flow, network, label);
+          // The app-only launch below resets the request stats.
+          const { byRoute, timeline } = server.stats;
+          const app = await runInteractiveFlow(browser, server, flow, network, label, true);
           userAgent = result.userAgent;
           runs.push(withCatalogRequestRates(
-            summarizeInteractiveRun(result.raw),
-            server.stats.byRoute,
+            summarizeInteractiveRun(result.raw, app.raw),
+            byRoute,
           ));
           console.log(
             `Interactive ${network} ${flow} run ${String(run + 1)}/${String(INTERACTIVE_RUNS)}: `
               + JSON.stringify(runs[runs.length - 1]),
           );
-          console.log(`Interactive requests: ${JSON.stringify(server.stats.byRoute)}`);
+          console.log(`Interactive requests: ${JSON.stringify(byRoute)}`);
           if (INTERACTIVE_PROFILE_DIR) {
-            console.log(`Interactive request timeline: ${JSON.stringify(server.stats.timeline)}`);
+            console.log(`Interactive request timeline: ${JSON.stringify(timeline)}`);
           }
         }
         const report = aggregateInteractiveRuns(runs);
@@ -551,6 +553,7 @@ async function runInteractiveFlow(
   flow: InteractiveFlow,
   network: string,
   label: string,
+  appOnly = false,
 ) {
   const context = await browser.newContext({
     baseURL: `http://localhost:${process.env.PREVIEW_PORT || 3000}`,
@@ -569,7 +572,7 @@ async function runInteractiveFlow(
       localStorage.setItem('iptv_playlists', JSON.stringify(playlists));
     }, interactivePlaylists(server.origin, flow));
     await page.addInitScript(installIdbLatency, INTERACTIVE_DEVICE);
-    await page.addInitScript(installInteractiveProbe, { ...INTERACTIVE_PROBE, flow });
+    await page.addInitScript(installInteractiveProbe, { ...INTERACTIVE_PROBE, flow, appOnly });
     await page.addInitScript(() => {
       const media = HTMLMediaElement.prototype;
       media.load = function () { /* no-op */ };
@@ -624,6 +627,11 @@ async function runInteractiveFlow(
     const heap = { peak: 0, workerPeak: 0, totalPeak: 0 };
     const raw = await waitForProbe(heap);
     sampleWorkerHeap = null;
+    if (appOnly) {
+      await workers.stop();
+      if (INTERACTIVE_PROFILE_DIR) await cdp.send('Profiler.stop');
+      return { raw, userAgent: '' };
+    }
     // Taken before the observer detaches; a worker the app already stopped
     // when idle retains nothing.
     const workerRetained = await workers.sampleHeap({ collect: true });

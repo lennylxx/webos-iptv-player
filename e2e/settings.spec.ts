@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test, expect, type Page, routePlaylist, routeLiveManifest, seedPlaylist, PLAYLIST_URL, enterTab, readUserDataStore,
 } from './helpers';
 import type { Locator } from '@playwright/test';
@@ -12,7 +13,7 @@ test.describe('Settings navigation', () => {
     await seedPlaylist(page);
 
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     await enterTab(page, 'settings');
 
@@ -285,8 +286,6 @@ test.describe('Settings navigation', () => {
         programmeMarquee: getComputedStyle(
           motionFixtures.querySelector('.ch-now-text')!,
         ).animationName,
-        spinner: seconds(getComputedStyle(document.querySelector('.loading-spinner')!)
-          .animationDuration),
       };
       liveBadge.remove();
       motionFixtures.remove();
@@ -304,7 +303,6 @@ test.describe('Settings navigation', () => {
     expect(durations.groupPicker).toBe('group-picker-nudge');
     expect(durations.channelMarquee).toBe('marquee-bounce');
     expect(durations.programmeMarquee).toBe('marquee-bounce');
-    expect(durations.spinner).toContain(0.8);
 
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-animation', 'essential');
@@ -477,7 +475,7 @@ test.describe('Settings navigation', () => {
     await routePlaylist(page);
     await seedPlaylist(page);
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     // Open settings via the tab bar, then dismiss with Cancel.
     await enterTab(page, 'settings');
@@ -489,7 +487,7 @@ test.describe('Settings navigation', () => {
     // Before the fix, that second select fired on the channels view and played
     // the focused channel.
     await page.waitForTimeout(50);
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('#view-player')).toBeHidden();
     await expect(page.locator('#view-settings')).toBeHidden();
   });
@@ -745,7 +743,7 @@ test.describe('Settings navigation', () => {
     await proxy.click();
     await expect(proxy).toHaveClass(/active/);
     await page.locator('#save-settings').click();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     expect(await page.evaluate(() => localStorage.getItem('iptv_header_playback'))).toBe('"proxy"');
 
     await page.reload();
@@ -774,12 +772,12 @@ test.describe('Settings navigation', () => {
     expect(await fontSize()).toBeCloseTo(base * 1.3, 1);
 
     await page.locator('#save-settings').click();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     // Persisted across a relaunch and applied outside Settings, without
     // changing the dimensions of controls.
     await page.reload();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     const row = page.locator('.channel-item').first();
     const metrics = () => row.evaluate((el) => {
       const cs = getComputedStyle(el);
@@ -794,7 +792,7 @@ test.describe('Settings navigation', () => {
     // Same measurements at the default size, from a clean load.
     await page.evaluate(() => localStorage.removeItem('iptv_text_size'));
     await page.reload();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     const unscaled = await metrics();
     expect(scaled.font).toBeCloseTo(unscaled.font * 1.3, 1);
     for (const key of ['height', 'padding', 'logo'] as const)
@@ -965,7 +963,7 @@ test.describe('Settings re-entry', () => {
     await expect(add).toHaveClass(/\bfocused\b/);
 
     await enterTab(page, 'live');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await enterTab(page, 'settings');
     await expect(page.locator('#view-settings')).toBeVisible();
     await page.keyboard.press('ArrowDown');
@@ -1007,7 +1005,7 @@ test.describe('Settings re-entry', () => {
     const name = await control.evaluate(el => el.id || el.className);
 
     await enterTab(page, 'live');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await enterTab(page, 'settings');
     await expect(page.locator('#view-settings')).toBeVisible();
     await page.keyboard.press('ArrowDown');
@@ -1030,7 +1028,7 @@ test.describe('Settings re-entry', () => {
     await expect(add).toHaveClass(/\bfocused\b/);
 
     await enterTab(page, 'live');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await enterTab(page, 'settings');
     await expect(page.locator('#view-settings')).toBeVisible();
     await page.keyboard.press('ArrowDown');
@@ -1116,7 +1114,7 @@ test.describe('Settings re-entry', () => {
     await enterTab(page, 'settings');
     await page.locator('[data-settings-target="sources"]').click();
     await page.locator('#edit-channel-list').click();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('.edit-hints')).toBeVisible();
 
     await enterTab(page, 'settings');
@@ -1165,7 +1163,7 @@ test.describe('Settings playlists', () => {
     });
     await page.keyboard.press('Enter');
 
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('.channel-main .channel-name').filter({ hasText: 'Channel One' })).toBeVisible();
     await expect(page.locator('.channel-main .channel-name').filter({ hasText: 'Channel Two' })).toBeVisible();
   });
@@ -1176,7 +1174,7 @@ test.describe('Settings playlists', () => {
     await page.goto('/');
 
     // Channels render from the configured playlist.
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('.channel-main .channel-item')).toHaveCount(2);
 
     // Open settings, remove the only playlist, and save.
@@ -1210,7 +1208,7 @@ test.describe('Settings playlists', () => {
     await page.evaluate(() => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
     });
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('.channel-main .channel-item')).toHaveCount(0);
     await expect(page.locator('.empty-state')).toContainText('No channels found');
   });
@@ -1314,7 +1312,7 @@ test.describe('Settings Xtream: add -> cancel -> re-enter', () => {
 
     // 3) Cancel.
     await page.click('#cancel-settings');
-    await expect(page.locator('#view-channels')).toBeVisible(); // back on channels
+    await liveLoaded(page); // back on channels
 
     // 4) Re-enter Settings.
     await openSettings(page);
@@ -1423,7 +1421,7 @@ test.describe('Settings Xtream live output', () => {
     await page.locator('#save-settings').click();
     await hlsRequest;
 
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('.channel-main .channel-item')).toContainText('HLS Channel');
     await expect.poll(() => page.evaluate(() => {
       const playlists = JSON.parse(localStorage.getItem('iptv_playlists') || '[]');
@@ -1501,7 +1499,7 @@ test.describe('Settings Xtream live categories', () => {
     await expect(button).toContainText('2 of 3');
 
     await page.locator('#save-settings').click();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(channels(page)).toHaveCount(2);
     await expect(channels(page)).not.toContainText(['Bravo']);
     expect(await page.evaluate(() =>
@@ -1768,7 +1766,7 @@ test.describe('Settings upload', () => {
     await page.goto('/');
 
     // Boots into channels from the seeded URL playlist.
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     // Open settings via the tab bar; the upload list starts empty.
     await enterTab(page, 'settings');

@@ -202,10 +202,22 @@ class PlaylistServiceImpl {
   // A load showing channels as they arrive; null once it ends.
   private progressive: { generation: number } | null = null;
   private progressiveGeneration = 0;
+  // Only the latest load counts: one it replaced may run on until its
+  // source times out, but no longer changes `channels`.
+  private loadCount = 0;
+  private latestLoadSettled = true;
+  private loadedOnce = false;
+  // A progressive load cleared the list and has not put a whole one back.
+  private listPartial = false;
 
   /** True while a load is still adding channels to `channels`. */
   get loading(): boolean {
     return this.progressive !== null;
+  }
+
+  /** True once `channels` holds a whole playlist that no load is replacing. */
+  get complete(): boolean {
+    return this.loadedOnce && !this.listPartial && this.latestLoadSettled && !this.loading;
   }
 
   hasLiveCategoryNotices(): boolean {
@@ -292,6 +304,9 @@ class PlaylistServiceImpl {
    * list view.
    */
   reset(): void {
+    // No playlist is a whole list too: its reminders' channels are gone.
+    this.loadedOnce = true;
+    this.listPartial = false;
     this.failedSourceIds.clear();
     this.refreshTimestamp = null;
     this.progressive = null;
@@ -323,6 +338,21 @@ class PlaylistServiceImpl {
     onProgress?: (progress: PlaylistLoadProgress) => void,
     options: PlaylistLoadOptions = {},
   ): Promise<Channel[]> {
+    const load = ++this.loadCount;
+    this.latestLoadSettled = false;
+    try {
+      const channels = await this.loadChannels(onProgress, options);
+      if (load === this.loadCount) this.loadedOnce = true;
+      return channels;
+    } finally {
+      if (load === this.loadCount) this.latestLoadSettled = true;
+    }
+  }
+
+  private async loadChannels(
+    onProgress: ((progress: PlaylistLoadProgress) => void) | undefined,
+    options: PlaylistLoadOptions,
+  ): Promise<Channel[]> {
     const enabledSources = StorageService.getPlaylists().filter(isSourceEnabled);
     const enabledIds = new Set(enabledSources.map(source => source.id));
     if (!enabledIds.size) {
@@ -336,6 +366,7 @@ class PlaylistServiceImpl {
     if (cached) {
       // A progressive load still running must not add to the cached list.
       this.progressive = null;
+      this.listPartial = false;
       this.failedSourceIds.clear();
       this.refreshTimestamp = cached.timestamp;
       // The source signature already rules out a disabled source; the ids
@@ -408,6 +439,8 @@ class PlaylistServiceImpl {
     const progressive = options.onChannels && !options.preserveOnFailure
       ? this.beginProgressive()
       : null;
+    // The list the load replaces is gone now.
+    if (progressive) options.onChannels?.();
     let allChannels: Channel[] = [];
     let byUrl: Map<string, Channel> | null = null;
     const streamIndex = (): Map<string, Channel> => {
@@ -433,6 +466,8 @@ class PlaylistServiceImpl {
     };
 
     for (let playlistIndex = 0; playlistIndex < playlists.length; playlistIndex++) {
+      // A newer load took over: the rest of this one would be thrown away.
+      if (progressive && this.progressive !== progressive) break;
       const pl = playlists[playlistIndex];
       const load = playlistIndex + 1;
       const source = pl.source === 'xtream' ? 'xtream' : 'm3u';
@@ -778,6 +813,8 @@ class PlaylistServiceImpl {
       ? this.endProgressive(progressive, allChannels, loadedSources <= 1)
       : false;
     this.allChannels = allChannels;
+    // A newer load still streaming keeps the list partial.
+    if (!this.progressive) this.listPartial = false;
     this.epgSources = epgSources;
     // Customization preserves source names/groups on each channel, so cached
     // channels can be re-customized after an edit without another network load.
@@ -886,6 +923,7 @@ class PlaylistServiceImpl {
   private beginProgressive(): { generation: number } {
     const progressive = { generation: ++this.progressiveGeneration };
     this.progressive = progressive;
+    this.listPartial = true;
     this.clearProgressive();
     return progressive;
   }

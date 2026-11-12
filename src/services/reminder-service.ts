@@ -171,12 +171,14 @@ class ReminderServiceImpl {
     return named.length === 1 && named[0] === target;
   }
 
-  private unavailableBecauseDisabled(reminder: Reminder): boolean {
+  // A disabled source, or one whose last load failed, may bring it back.
+  private unavailableForNow(reminder: Reminder): boolean {
     const ids = reminder.playlistIds;
     if (!ids?.length) return false;
     const matching = StorageService.getPlaylists()
       .filter(source => ids.includes(source.id));
-    return matching.length > 0 && !matching.some(isSourceEnabled);
+    return matching.length > 0 && matching.every(source =>
+      !isSourceEnabled(source) || PlaylistService.hasFailedSource([source.id]));
   }
 
   backfillSourceIds(): void {
@@ -271,9 +273,11 @@ class ReminderServiceImpl {
   }
 
   prune(now = Date.now()): void {
+    // A channel still loading is not gone: keep its reminder and schedule.
+    const complete = PlaylistService.complete;
     const list = this.list();
     const kept = list.filter(r => now < r.stopMs
-      && (this.channelExists(r.channelKey) || this.unavailableBecauseDisabled(r)));
+      && (!complete || this.channelExists(r.channelKey) || this.unavailableForNow(r)));
     if (kept.length !== list.length) {
       StorageService.setReminders(kept);
       for (const r of list) {
@@ -281,7 +285,7 @@ class ReminderServiceImpl {
       }
     }
     for (const r of kept) {
-      if (!this.channelExists(r.channelKey)) {
+      if (complete && !this.channelExists(r.channelKey)) {
         this.cancelSchedule(r.channelKey, r.startMs);
       }
     }

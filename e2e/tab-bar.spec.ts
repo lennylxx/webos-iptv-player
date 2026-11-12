@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab } from './helpers';
+import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, liveLoaded } from './helpers';
 
 // Seed one Xtream account so the tab bar is enabled; its get.php serves the
 // sample M3U so the channels view loads normally.
@@ -19,7 +19,7 @@ test('the tab bar is docked (always visible) and offsets the content below it', 
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Always visible on the channels view — no pointer reveal needed.
   await expect(page.locator('.tab-bar')).toBeVisible();
@@ -34,7 +34,7 @@ test('clicking the Movies tab enters the Movies view', async ({ page }) => {
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'movies');
   await expect(page.locator('#view-movies')).toBeVisible();
@@ -44,7 +44,7 @@ test('the Guide tab opens the EPG below the docked bar, and Back returns to Live
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'epg');
   await expect(page.locator('#view-epg')).toBeVisible();
@@ -56,7 +56,7 @@ test('the Guide tab opens the EPG below the docked bar, and Back returns to Live
   expect(epg.y).toBeGreaterThanOrEqual(bar.y + bar.height - 1);
 
   await page.keyboard.press('Escape');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.tab-bar-item[data-section="live"].active')).toHaveCount(1);
 });
 
@@ -64,7 +64,7 @@ test('the Settings tab (after Series) opens the settings view', async ({ page })
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'settings');
   await expect(page.locator('#view-settings')).toBeVisible();
@@ -74,7 +74,7 @@ test('the tab bar is hidden during full-screen playback', async ({ page }) => {
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.tab-bar')).toBeVisible();
 
   // Play the focused channel; the player takes over full-screen and the bar hides.
@@ -88,7 +88,7 @@ test('the search box keeps the current view until a query is typed, then covers 
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Open the search box from the channels view.
   await enterTab(page, 'search');
@@ -96,7 +96,7 @@ test('the search box keeps the current view until a query is typed, then covers 
 
   // No results view yet (no "Type to search" hint covering the content).
   await expect(page.locator('#view-search')).toBeHidden();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Typing shows the results view over the current one.
   await page.locator('.tab-bar-search-input').fill('Channel');
@@ -105,7 +105,7 @@ test('the search box keeps the current view until a query is typed, then covers 
   // Clearing the box restores the underlying view.
   await page.locator('.tab-bar-search-input').fill('');
   await expect(page.locator('#view-search')).toBeHidden();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 });
 
 test('opening Search does not cancel the catalog loading underneath it', async ({ page }) => {
@@ -147,7 +147,7 @@ test('opening Search does not cancel the catalog loading underneath it', async (
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'movies');
   await categoriesRequested;
@@ -167,7 +167,7 @@ test('M3U-only shows a docked bar with Live/Guide/Settings/Search only (no Movie
     ]));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // The bar is docked, but with the reduced M3U section set.
   await expect(page.locator('.tab-bar')).toBeVisible();
@@ -202,7 +202,7 @@ test('leaving Settings (Cancel) moves the active tab back to Live', async ({ pag
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'settings');
   await expect(page.locator('#view-settings')).toBeVisible();
@@ -210,7 +210,7 @@ test('leaving Settings (Cancel) moves the active tab back to Live', async ({ pag
 
   // Cancel returns to the channel list — and the active tab follows.
   await page.locator('#cancel-settings').click();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.tab-bar-item.active')).toHaveText('Live');
 });
 
@@ -230,7 +230,7 @@ test('the Search magnifier rests bare and draws the focus circle on hover and D-
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const icon = page.locator('.tab-bar-search .search-icon');
   const look = () => icon.evaluate((el) => {
@@ -269,7 +269,7 @@ test('a hovered text tab brightens to the active tab color', async ({ page }) =>
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const color = (section: string) => page.locator(`.tab-bar-item[data-section="${section}"]`)
     .evaluate((el) => getComputedStyle(el).color);
@@ -284,7 +284,7 @@ test('the open Search shows the text tabs\' accent underline under the magnifier
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const icon = page.locator('.tab-bar-search .search-icon');
   const underline = () => icon.evaluate((el) => getComputedStyle(el, '::after').content);
@@ -308,7 +308,7 @@ test('switching to the D-pad drops a resting pointer\'s hover circle on the magn
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const icon = page.locator('.tab-bar-search .search-icon');
   const look = () => icon.evaluate((el) => {
@@ -371,7 +371,7 @@ test.describe('a pointer click on a section tab', () => {
     await expect(item).toHaveClass(/\bfocused\b/);
 
     await enterTab(page, 'live');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('#view-channels')).toHaveAttribute('data-ring-owner', 'deferred');
     await expect(page.locator('#view-channels .focused')).toHaveCount(0);
     await expect(rows.first()).toHaveClass(/\bfocused-parked\b/);
@@ -460,7 +460,7 @@ test('a clicked tab draws no native focus ring', async ({ page }) => {
   await seedXtream(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // After a key press the engine draws a ring for any focused button.
   await page.keyboard.press('Shift');
@@ -491,7 +491,7 @@ test.describe('hovering content after D-pad Up onto the tab bar', () => {
 
     // Right acts in the list instead of switching the bar to Guide.
     await page.keyboard.press('ArrowRight');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('#view-epg')).toBeHidden();
     await expect(page.locator('.tab-bar-item[data-section="live"].active')).toHaveCount(1);
     await expect(page.locator('.tab-bar .focused')).toHaveCount(0);
@@ -697,7 +697,7 @@ test.describe('switching sections from the bar with the D-pad', () => {
       await expect(page.locator(`.tab-bar-item[data-section="${section}"]`)).toHaveClass(/\bfocused\b/);
       await expect(page.locator('.focused:visible')).toHaveCount(1);
     }
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     await page.keyboard.press('ArrowDown');
     await expect(rows.first()).toHaveClass(/\bfocused\b/);
@@ -766,7 +766,7 @@ test('a hover on the Guide under its open group menu hands the bar\'s keys back 
     route.fulfill({ status: 200, contentType: 'application/xml', body: xmltv }));
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'epg');
   await expect(page.locator('#view-epg')).toBeVisible();
   const cell = page.locator('#epg-programmes [data-prog-idx="1"]');
@@ -810,7 +810,7 @@ test('a hover under the account menu stays out of the Guide while its group menu
     route.fulfill({ status: 200, contentType: 'application/xml', body: xmltv }));
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'epg');
   await expect(page.locator('#view-epg')).toBeVisible();
   const cell = page.locator('#epg-programmes [data-prog-idx="1"]');

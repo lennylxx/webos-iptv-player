@@ -432,6 +432,12 @@ export class ParentalControls {
     if (index >= 0 && index !== this.sourceIndex) void this.selectSource(index);
   }
 
+  // A load that finished while this view was open brings the groups it lacked.
+  refreshChannels(): void {
+    if (this.sources[this.sourceIndex]?.kind !== 'live') return;
+    void this.selectSource(this.sourceIndex);
+  }
+
   private async selectSource(index: number, focusGroups = false): Promise<void> {
     const source = this.sources[index];
     if (!source) return;

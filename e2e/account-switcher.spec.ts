@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page } from './helpers';
+import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page, liveLoaded } from './helpers';
 
 // Two Xtream accounts on distinct hosts so player_api.php can serve a different
 // catalog per account: Alpha (a1) -> "Alpha Movie" under "Cat Alpha"; Bravo (a2)
@@ -63,7 +63,7 @@ test('the account avatar shows the active account initial, to the right of Searc
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Default active account is the first (Alpha) -> initial "A".
   const avatar = page.locator('.account-avatar');
@@ -89,7 +89,7 @@ test('no account avatar for an M3U-only setup', async ({ page }) => {
     ]));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.tab-bar')).toBeVisible();
   await expect(page.locator('.account-avatar')).toHaveCount(0);
 });
@@ -98,7 +98,7 @@ test('the dropdown lists every account with the active one marked', async ({ pag
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await openAccountMenu(page);
   await expect(page.locator('.account-menu-item .account-menu-name')).toHaveText(['Alpha', 'Bravo']);
@@ -110,7 +110,7 @@ test('an open account menu holds the only ring, which returns to the avatar on c
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await openAccountMenu(page);
   await expect(page.locator('.account-menu-item.focused')).toHaveCount(1);
@@ -129,7 +129,7 @@ test('a menu opened with the remote holds the only ring, which returns to the av
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const avatar = page.locator('.account-avatar');
   for (let i = 0; i < 4 && !(await page.locator('.tab-bar-item.focused').count()); i++) {
@@ -154,7 +154,7 @@ test('switching account in the dropdown reloads Movies and updates the avatar', 
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Enter Movies for the default (Alpha) account.
   await enterTab(page, 'movies');
@@ -177,7 +177,7 @@ test('the selected account persists across a reload', async ({ page }) => {
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Switch to Bravo, then reload the app.
   await openAccountMenu(page);
@@ -185,7 +185,7 @@ test('the selected account persists across a reload', async ({ page }) => {
   await expect(page.locator('.account-avatar')).toHaveText('B');
 
   await page.reload();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   // The stored choice is restored: avatar is still Bravo and Movies serves Bravo.
   await expect(page.locator('.account-avatar')).toHaveText('B');
   await enterTab(page, 'movies');
@@ -196,13 +196,13 @@ test('switching on Live only persists, then applies when Movies is next opened',
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Switch to Bravo while on the Live view (no Movies loaded yet).
   await openAccountMenu(page);
   await pickAccount(page, 'a2');
   await expect(page.locator('.account-avatar')).toHaveText('B');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Entering Movies now uses the selected (Bravo) account.
   await enterTab(page, 'movies');
@@ -221,7 +221,7 @@ test('an account menu opened while the search box slides out keeps recent search
     localStorage.setItem('iptv_search_history', JSON.stringify(['movie']));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'search');
   await openAccountMenu(page);
   await expect(page.locator('.search-history-panel')).toBeHidden();
@@ -239,7 +239,7 @@ test('closing an account menu over the search box hands the remote back to it', 
     localStorage.setItem('iptv_search_history', JSON.stringify(['movie']));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'search');
   await expect(page.locator('.search-history-panel')).toBeVisible();
 
@@ -261,7 +261,7 @@ test('a click past an account menu over recent searches leaves search, not into 
     localStorage.setItem('iptv_search_history', JSON.stringify(['movie']));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'search');
   await expect(page.locator('.search-history-panel')).toBeVisible();
 
@@ -272,7 +272,7 @@ test('a click past an account menu over recent searches leaves search, not into 
   await expect(page.locator('.account-menu')).toHaveCount(0);
   await expect(page.locator('.tab-bar-search.expanded')).toHaveCount(0);
   await expect(page.locator('.search-history-dropdown')).toBeHidden();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('#view-player')).toBeHidden();
 });
 
@@ -283,7 +283,7 @@ test('switching account while recent searches are open moves Search to the new a
     localStorage.setItem('iptv_search_history', JSON.stringify(['movie']));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'search');
   await expect(page.locator('.search-history-panel')).toBeVisible();
 
@@ -304,7 +304,7 @@ test('a channel-list click that dismisses a pointer-opened menu hands the remote
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await openAccountMenu(page);
   await expect(page.locator('.account-menu-item.focused')).toHaveCount(1);
@@ -322,7 +322,7 @@ test('the pointer moves the account menu ring, and Back from a remote-opened men
   await seedTwoAccounts(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await openAccountMenu(page);
   const bravo = page.locator('.account-menu-item[data-account-id="a2"]');

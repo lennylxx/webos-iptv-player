@@ -1,4 +1,4 @@
-import { test, expect, routePlaylist, seedPlaylist } from './helpers';
+import { test, expect, routePlaylist, seedPlaylist, liveLoaded } from './helpers';
 
 // App bootstrap / first run.
 
@@ -14,7 +14,7 @@ test('loads and renders channels from a configured playlist', async ({ page }) =
 
   await page.goto('/');
 
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.getByText('Channel One')).toBeVisible();
   await expect(page.getByText('Channel Two')).toBeVisible();
 });

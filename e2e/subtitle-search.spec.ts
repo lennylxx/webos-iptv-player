@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page, pressAndReadPlayer } from './helpers';
+import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page, pressAndReadPlayer, liveLoaded } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // Online-subtitle search for Xtream VOD. The player's "Search online…" subtitle
@@ -87,7 +87,7 @@ async function routeAssrtSearch(page: Page, forQuery: (q: string) => unknown[]):
 // Browse Movies, open the one movie's detail, and start VOD playback.
 async function startVodPlayback(page: Page): Promise<void> {
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   await page.locator(`.catalog-tile[data-item-id="${MOVIE_ID}"]`)
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));

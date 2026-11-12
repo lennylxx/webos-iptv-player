@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   routePlaylist,
@@ -10,7 +11,7 @@ import {
 
 interface StartupProbe {
   starts: number;
-  loadingAtStart: boolean[];
+  channelsAtStart: boolean[];
   subscriptions: number;
   subscriptionCancellations: number;
   activities: Array<{ name: string; method: string; replace: boolean }>;
@@ -30,7 +31,7 @@ async function installStartupHarness(
     };
     const probe: StartupProbe = {
       starts: 0,
-      loadingAtStart: [],
+      channelsAtStart: [],
       subscriptions: 0,
       subscriptionCancellations: 0,
       activities: [],
@@ -80,10 +81,8 @@ async function installStartupHarness(
         this.subscription = method === 'serviceEvents';
         if (method === 'start') {
           probe.starts++;
-          const loading = document.querySelector<HTMLElement>('#view-loading');
-          probe.loadingAtStart.push(loading !== null
-            && loading.style.display !== 'none'
-            && !loading.classList.contains('hidden'));
+          probe.channelsAtStart.push(
+            document.querySelector('#view-channels .channel-item') !== null);
           pendingStarts.push((response) => this.respond(response));
         } else if (method === 'serviceEvents') {
           probe.subscriptions++;
@@ -143,10 +142,10 @@ test('channels render while service startup is pending without duplicate work', 
   await installStartupHarness(page, { visibility: 'hidden' });
 
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   expect(await startupProbe(page)).toMatchObject({
     starts: 1,
-    loadingAtStart: [false],
+    channelsAtStart: [true],
     subscriptions: 0,
   });
 
@@ -217,7 +216,7 @@ test('uploaded-only startup enters channels after background reconciliation', as
   await expect(page.locator('#view-settings')).toBeVisible();
   await releaseServiceStart(page);
 
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-item')).toHaveCount(2);
 });
 
@@ -252,6 +251,34 @@ test('dev-mode query replaces the reminder fallback activity', async ({ page }) 
   expect(devAlert.method).toBe('luna://com.lennylxx.iptv.service/fireReminderAlert');
 });
 
+// The parsed-playlist write is deferred, so wait for it before ageing it.
+async function ageCachedPlaylist(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(() => new Promise<boolean>((resolve, reject) => {
+    const open = indexedDB.open('iptv');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction('playlist-cache', 'readwrite');
+      const store = tx.objectStore('playlist-cache');
+      let aged = false;
+      const cursor = store.openCursor();
+      cursor.onsuccess = () => {
+        const entry = cursor.result;
+        if (!entry) return;
+        const value = entry.value as { timestamp: number };
+        entry.update({ ...value, timestamp: value.timestamp - 7 * 24 * 60 * 60 * 1000 });
+        aged = true;
+        entry.continue();
+      };
+      tx.oncomplete = () => {
+        db.close();
+        resolve(aged);
+      };
+      tx.onerror = () => reject(tx.error);
+    };
+  }))).toBe(true);
+}
+
 test('an expired playlist cache boots at once and refreshes in the background', async ({ page }) => {
   const freshM3U = SAMPLE_M3U.replace('Channel Two', 'Channel Three');
   let playlistRequests = 0;
@@ -279,31 +306,7 @@ test('an expired playlist cache boots at once and refreshes in the background', 
     const names = page.locator('.channel-main .channel-name');
     await expect(names).toHaveText(['Channel One', 'Channel Two']);
 
-    // The parsed-playlist write is deferred, so wait for it before ageing it.
-    await expect.poll(() => page.evaluate(() => new Promise<boolean>((resolve, reject) => {
-      const open = indexedDB.open('iptv');
-      open.onerror = () => reject(open.error);
-      open.onsuccess = () => {
-        const db = open.result;
-        const tx = db.transaction('playlist-cache', 'readwrite');
-        const store = tx.objectStore('playlist-cache');
-        let aged = false;
-        const cursor = store.openCursor();
-        cursor.onsuccess = () => {
-          const entry = cursor.result;
-          if (!entry) return;
-          const value = entry.value as { timestamp: number };
-          entry.update({ ...value, timestamp: value.timestamp - 7 * 24 * 60 * 60 * 1000 });
-          aged = true;
-          entry.continue();
-        };
-        tx.oncomplete = () => {
-          db.close();
-          resolve(aged);
-        };
-        tx.onerror = () => reject(tx.error);
-      };
-    }))).toBe(true);
+    await ageCachedPlaylist(page);
 
     await page.reload();
     await expect(names).toHaveText(['Channel One', 'Channel Two']);
@@ -311,6 +314,39 @@ test('an expired playlist cache boots at once and refreshes in the background', 
 
     releaseRefresh();
     await expect(names).toHaveText(['Channel One', 'Channel Three']);
+  } finally {
+    releaseRefresh();
+  }
+});
+
+test('a reload asked for during a background refresh shows its progress at once', async ({ page }) => {
+  let playlistRequests = 0;
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+  await page.addInitScript((url) => {
+    if (!localStorage.getItem('iptv_playlists')) {
+      localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'Test', url }]));
+    }
+  }, PLAYLIST_URL);
+  await page.route('**/playlist.m3u', async (route) => {
+    playlistRequests++;
+    if (playlistRequests === 2) await refreshGate;
+    await route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U });
+  });
+
+  try {
+    await page.goto('/');
+    const names = page.locator('.channel-main .channel-name');
+    await expect(names).toHaveText(['Channel One', 'Channel Two']);
+    await ageCachedPlaylist(page);
+    await page.reload();
+    await expect(names).toHaveText(['Channel One', 'Channel Two']);
+    await expect.poll(() => playlistRequests).toBe(2);
+    await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
+
+    await page.locator('.tab-bar-item[data-section="settings"]').click();
+    await page.locator('#refresh-data').click();
+    await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
   } finally {
     releaseRefresh();
   }

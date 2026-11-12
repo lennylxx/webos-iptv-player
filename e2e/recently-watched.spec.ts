@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   type Page,
@@ -93,7 +94,7 @@ async function setup(page: Page, seedHistory = true): Promise<void> {
 
 async function openRecentlyWatched(page: Page): Promise<void> {
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.locator('[data-group="builtin:recently-watched"]').click();
 }
 
@@ -113,7 +114,7 @@ test('mixes live and resumable Catch-up rows in recency order', async ({ page })
 test('adds a live channel only after confirmed playback', async ({ page }) => {
   await setup(page, false);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const manifestResponse = page.waitForResponse(response => response.url().includes('/b.m3u8'));
   await page.locator('.channel-item').filter({ hasText: 'Channel Bravo' }).click();
@@ -146,7 +147,7 @@ test('starts live and resumes Catch-up directly from Recently Watched', async ({
   await liveRequest;
 
   await page.keyboard.press('Escape');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   const catchupRequest = page.waitForRequest(request =>
     request.url().includes('/catchup.m3u8') &&
     request.url().includes(`start=${String(PROGRAM_START / 1000)}`));
@@ -160,7 +161,7 @@ test('starts live and resumes Catch-up directly from Recently Watched', async ({
 test('clears Recently Watched without clearing VOD resume', async ({ page }) => {
   await setup(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'settings');
 
   await page.locator('#clear-recently-watched').click();
@@ -202,7 +203,7 @@ test('filters Recently Watched by the selected playlist', async ({ page }) => {
   });
 
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.locator('[data-playlist="p1"]').click();
   await page.locator('[data-group="builtin:recently-watched"]').click();
 

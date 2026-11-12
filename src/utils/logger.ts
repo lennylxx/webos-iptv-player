@@ -67,7 +67,7 @@ export const Logger = {
  * Install global handlers so any uncaught error or unhandled promise
  * rejection lands in ares-inspect with full context. Without these,
  * a parse-time SyntaxError (like the one that hung the app on webOS 5
- * before #1 was fixed) leaves no trace beyond a blank loading screen.
+ * before #1 was fixed) leaves no trace beyond a blank screen.
  */
 export function installGlobalErrorHandlers(): void {
   const log = createLogger('GlobalError');

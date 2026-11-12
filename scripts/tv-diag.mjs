@@ -816,10 +816,8 @@ export const activeProbeExpression = `(${function activeProbe(
       app: { id: app.id || '', version: app.version || '' },
       state: {
         view: visible ? visible.id : '',
-        loading: (() => {
-          const loading = document.querySelector('#view-loading');
-          return loading ? !loading.classList.contains('hidden') : false;
-        })(),
+        // A playlist load shows its progress along the tab bar.
+        loading: !!document.querySelector('.tab-bar-progress.active'),
         // Rendered rows only — the channel list is virtualized, so the loaded
         // catalog size comes from the playlist.load.completed event instead.
         channelsRendered: document.querySelectorAll('.channel-item').length,
@@ -882,10 +880,7 @@ export const snapshotProbeExpression = `(${function snapshotProbe() {
     app: {},
     state: {
       view: visible ? visible.id : '',
-      loading: (() => {
-        const loading = document.querySelector('#view-loading');
-        return loading ? !loading.classList.contains('hidden') : false;
-      })(),
+      loading: !!document.querySelector('.tab-bar-progress.active'),
       channelsRendered: document.querySelectorAll('.channel-item').length,
       media: video ? {
         src: video.currentSrc || video.src || '',
@@ -1588,8 +1583,9 @@ async function waitForSettle(client, timeoutMs, delayFn) {
       settled = await evaluate(
         client,
         `(() => {
-          var loading = document.querySelector('#view-loading');
-          return Boolean(loading && loading.classList.contains('hidden'));
+          var shown = Array.prototype.some.call(document.querySelectorAll('.view'),
+            function (view) { return !view.classList.contains('hidden'); });
+          return shown && !document.querySelector('.tab-bar-progress.active');
         })()`,
       );
     } catch (error) {

@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   enterTab,
@@ -276,7 +277,7 @@ for (const section of ['movies', 'series'] as const) {
       });
     }
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await enterTab(page, section);
     const view = page.locator(`#view-${section}`);
     const resume = view.locator('[data-rail-key="continue"] .catalog-rail-track');
@@ -333,7 +334,7 @@ test('a category rail cancels before the dwell, stops on a key or a window blur,
   test.setTimeout(60_000);
   await seedCatalog(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const track = page.locator('#view-movies [data-rail-key="cat:1"] .catalog-rail-track');
   const next = page.locator('#view-movies [data-rail-key="cat:2"] .catalog-rail-track');
@@ -372,7 +373,7 @@ test('All categories scrolls through its virtual window without opening a catego
   test.setTimeout(60_000);
   await seedCatalog(page, { categories: 40, perCategory: 4 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const track = page.locator('#view-movies .catalog-category-rail');
   await expect(track.locator('.catalog-cat').first()).toBeAttached();
@@ -443,7 +444,7 @@ test('after a long edge scroll, a key or a hidden cursor then a key continues fr
   test.setTimeout(90_000);
   await seedCatalog(page, { perCategory: 60 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'movies');
   const rail = (n: number) => page.locator(`#view-movies [data-rail-key="cat:${String(n)}"] .catalog-rail-track`);
   await expect(rail(1).locator('.catalog-tile').first()).toBeVisible();
@@ -459,7 +460,7 @@ test('after a long edge scroll, the remote continues from the pointed result of 
   test.setTimeout(90_000);
   await seedCatalog(page, { categories: 2, perCategory: 150 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'search');
   const input = page.locator('.tab-bar-search-input');
   await expect(page.locator('.tab-bar-search.expanded')).toBeVisible();
@@ -480,7 +481,7 @@ test('Search: a virtual results rail scrolls far and keeps a usable ring; a hidd
   test.setTimeout(90_000);
   await seedCatalog(page, { categories: 2, perCategory: 150, channels: 60 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'search');
   const input = page.locator('.tab-bar-search-input');
   await expect(page.locator('.tab-bar-search.expanded')).toBeVisible();
@@ -649,7 +650,7 @@ test('Guide dates scroll to their end and back without selecting a day', async (
   await seedPlaylist(page);
   await page.addInitScript(() => localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml')));
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
   await expect(page.locator('#view-epg')).toBeVisible();
   const dates = page.locator('#view-epg .epg-date-list');
@@ -709,7 +710,7 @@ test('a prompt that takes the keys stops the scroll, and the pointer cannot scro
   await page.locator('[data-parental-back]').click();
   await enterTab(page, 'live');
   const tabs = page.locator('#view-channels .playlist-tabs');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expectEdgeTrack(tabs);
 
   await pointAt(page, tabs, 'center');

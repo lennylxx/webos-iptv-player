@@ -50,7 +50,7 @@ describe('engine quirks', () => {
     expect(root.classList.contains('q-scroll-end-padding')).toBe(true);
     expect(root.classList.contains('q-no-flex-gap')).toBe(false);
     applyEngineQuirks({ scrollEndPadding: false, noFlexGap: true }, root);
-    expect(root.className.split(' ').sort()).toEqual(['keep', 'q-no-flex-gap', 'quirks-measured']);
+    expect(root.className.split(' ').sort()).toEqual(['keep', 'q-no-flex-gap']);
   });
 
   it('logs the measured quirks for tv.sh diag', () => {

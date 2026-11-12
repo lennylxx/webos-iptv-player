@@ -1,6 +1,6 @@
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { test, expect, routePlaylist, seedPlaylist, type Page } from './helpers';
+import { test, expect, routePlaylist, seedPlaylist, type Page, liveLoaded } from './helpers';
 import { createStreamProxy, type StreamProxy } from '../bundled-service/src/proxy/server';
 import { DEFAULT_STANDALONE_PROXY_PORT } from '../bundled-service/src/proxy/service';
 
@@ -90,7 +90,7 @@ async function playThroughProxy(page: Page, streamPath: string): Promise<void> {
   await seedPlaylist(page);
   await page.addInitScript(() => localStorage.setItem('iptv_header_playback', JSON.stringify('proxy')));
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
 }

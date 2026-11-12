@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   enterTab,
@@ -190,7 +191,7 @@ test('default Off retains full-screen playback and stop-on-Back', async ({ page 
   await page.locator(ROW).first().click();
   await expect(page.locator('#view-player')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator(PANEL)).toBeHidden();
   expect((await snapshot(page)).pauses).toBeGreaterThan(0);
 });
@@ -344,7 +345,7 @@ test('Back stops the active preview from the list and preview controls', async (
   await expect(page.locator('[data-preview-list-close]')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator(PANEL)).toBeHidden();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('#view-channels')).not.toHaveClass(/has-live-preview/);
 });
 
@@ -853,7 +854,7 @@ test('Stop removes preview and section returns do not restart it', async ({ page
   await selectFirst(page);
   await enterTab(page, 'settings');
   await page.locator('#cancel-settings').click();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator(PANEL)).toBeHidden();
 });
 
@@ -904,7 +905,7 @@ test('disabling the playing source in Settings leaves no preview or stale contro
   await enterTab(page, 'settings');
   await page.locator('#playlist-entries .source-toggle').click();
   await page.locator('#save-settings').click();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator(PANEL)).toBeHidden();
   await expect(page.locator(ROW)).toHaveCount(0);
   await expect(page.locator('#view-channels')).not.toHaveClass(/has-live-preview/);

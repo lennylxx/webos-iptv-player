@@ -57,6 +57,14 @@ export class ReminderManager {
     this.focusFirst();
   }
 
+  // Reminders whose channels a finished load brought in or dropped.
+  refresh(now = Date.now()): void {
+    this.now = now;
+    this.render();
+    const focused = this.nav.focused;
+    if (!focused || !this.container.contains(focused)) this.focusFirst();
+  }
+
   dismissPrompt(): void {
     this.confirmationPrompt.hide();
   }

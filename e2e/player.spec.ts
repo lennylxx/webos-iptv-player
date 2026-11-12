@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   type Page,
@@ -19,7 +20,7 @@ async function gotoGroupedPlayer(page: Page): Promise<void> {
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-item.focused')).toContainText('Alpha News');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter'); // Beta News
@@ -38,7 +39,7 @@ test('remote arrow keys move focus and Enter starts playback', async ({ page }) 
   await seedPlaylist(page);
   await page.goto('/');
 
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Initial focus is the first channel (search + settings now live in the tab bar).
   const focused = page.locator('.channel-main .channel-item.focused');
@@ -61,14 +62,14 @@ test('live playback retries the current channel before switching', async ({ page
   await routePlaylist(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'settings');
   await page.locator('[data-settings-target="advanced"]').click();
   const attempts = page.locator('#live-reconnect-attempts');
   await attempts.locator('.dropdown-trigger').click();
   await attempts.locator('[data-dropdown-value="1"]').click();
   await page.locator('#save-settings').click();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('.osd-channel-name')).toHaveText('Channel One');
 
@@ -90,7 +91,7 @@ test('player sidebar focuses the playing channel; search still filters', async (
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Search box holds initial focus; Arrow Down enters the list, then Enter plays.
   await page.keyboard.press('ArrowDown');
@@ -168,7 +169,7 @@ test('large sidebar decodes visible logos before revealing one per frame', async
   });
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
   await page.keyboard.press('ArrowLeft');
@@ -237,7 +238,7 @@ test('player sidebar channel rows fit both text lines in their fixed box', async
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
@@ -260,7 +261,7 @@ test('dark player overlay keeps sidebar scrollbar dark on a light theme', async 
     localStorage.setItem('iptv_overlay_style', JSON.stringify('dark'));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
@@ -280,7 +281,7 @@ test('player sidebar expands groups and retains a selected group after tuning', 
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-item.focused')).toContainText('Alpha News');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter'); // Beta News
@@ -443,7 +444,7 @@ async function gotoLongSidebar(page: Page): Promise<void> {
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
   // The pointer rests over the video before the keys take over.
@@ -559,7 +560,7 @@ test('the right-edge player menu opens and lists its color actions', async ({ pa
   await routePlaylist(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Enter the list and start playback, then ArrowRight opens the action menu.
   await page.keyboard.press('ArrowDown');
@@ -600,7 +601,7 @@ async function gotoLivePlayer(page: Page): Promise<void> {
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
 }
@@ -720,7 +721,7 @@ test('the channel panel lights the channel it slides out under', async ({ page }
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
   const sidebar = page.locator('#player-sidebar');
@@ -827,7 +828,7 @@ test('the live subtitle sync adjuster keeps the channel panel shut at the screen
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
   const menu = page.locator('#player-menu');
@@ -859,7 +860,7 @@ test('the OSD band keeps its edge controls ahead of pointer-triggered panels', a
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
 
   const osd = page.locator('#player-osd');
@@ -880,7 +881,7 @@ test('pointer-opened player panels do not reveal or hide the OSD', async ({ page
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
 
   const osd = page.locator('#player-osd');
@@ -921,7 +922,7 @@ test('keeps pseudo-localized player menu labels within the panel', async ({ page
   await seedPlaylist(page);
   await page.goto('/?pseudo=1');
 
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
   await page.keyboard.press('ArrowLeft');
@@ -959,7 +960,7 @@ test('a long player-menu list scrolls with the Magic-Remote wheel, not the chann
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
@@ -1000,7 +1001,7 @@ test('starting playback shows the OSD with channel info; the yellow key re-opens
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
@@ -1071,7 +1072,7 @@ test.describe('DVR', () => {
     await routeLiveManifest(page);
     await seedPlaylist(page);
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
     await expect(page.locator('#view-player')).toBeVisible();
@@ -1107,7 +1108,7 @@ test.describe('DVR', () => {
     const [shown, left] = await pressStepsAndReadPlayer(page, [[YELLOW], [BACK]]);
     expect(shown).toMatchObject({ osd: true, paused: false });
     expect(left).toMatchObject({ osdBefore: true, player: false });
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
   });
 
   test('Back hides a paused DVR OSD, so Right reaches the menu, then leaves', async ({ page }) => {
@@ -1120,7 +1121,7 @@ test.describe('DVR', () => {
     expect(menu).toMatchObject({ osd: false, menu: true, paused: true, currentTime: paused.currentTime });
     expect(closed).toMatchObject({ menu: false, player: true });
     expect(left.player).toBe(false);
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
   });
 });
 
@@ -1140,7 +1141,7 @@ async function playFirstChannel(page: Page, body: string): Promise<void> {
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
   await expect(page.locator('.osd-channel-number')).toHaveText('1');
@@ -1274,7 +1275,7 @@ test('a press swallowed by the search box is still logged, without its code',
     await playFirstChannel(page, SEARCH_M3U);
 
     await pressRemoteBack(page);
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await enterTab(page, 'search');
     await page.locator('.tab-bar-search-input').press('7');
 
@@ -1293,7 +1294,7 @@ async function playFarChannel(page: Page): Promise<void> {
   await neuterVideo(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('1');
   await page.keyboard.press('5');
   await page.keyboard.press('0');

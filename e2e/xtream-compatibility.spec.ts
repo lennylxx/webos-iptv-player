@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './helpers';
+import { test, expect, type Page, liveLoaded } from './helpers';
 import {
   XtreamReferenceServer,
   type XtreamReferenceProfile,
@@ -99,7 +99,7 @@ test('supports XC M3U catch-up and the legacy action spelling', async ({ page })
   await page.clock.setFixedTime(NOW);
 
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const legacyAction = server.waitForRequest(
     request => request.searchParams.get('action') === 'get_simple_date_table',
@@ -124,7 +124,7 @@ test('falls through failed timeshift path variants in order', async ({ page }) =
   await page.clock.setFixedTime(NOW);
 
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await openEarlierProgramme(page);
   const candidates = [

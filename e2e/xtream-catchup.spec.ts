@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './helpers';
+import { test, expect, type Page, liveLoaded } from './helpers';
 
 test.use({ timezoneId: 'UTC' });
 
@@ -79,7 +79,7 @@ async function setup(page: Page, hasArchive = true): Promise<void> {
 test('plays an archived Xtream program through the provider timeshift endpoint', async ({ page }) => {
   await setup(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const archiveRequest = page.waitForRequest(request =>
     request.url().includes('action=get_simple_data_table'));
@@ -101,7 +101,7 @@ test('plays an archived Xtream program through the provider timeshift endpoint',
 test('blocks an Xtream program whose archive recording is unavailable', async ({ page }) => {
   await setup(page, false);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const archiveResponse = page.waitForResponse(response =>
     response.url().includes('action=get_simple_data_table'));
@@ -142,7 +142,7 @@ test('resumes Xtream Catch-up directly from Recently Watched', async ({ page }) 
     now: NOW.getTime(),
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.locator('[data-group="builtin:recently-watched"]').click();
   await expect(page.locator('.recent-catchup')).toContainText('Earlier Show');
 

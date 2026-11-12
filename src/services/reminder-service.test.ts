@@ -5,9 +5,13 @@ const { state, playlistMock } = vi.hoisted(() => {
   const state = {
     channels: [] as Array<{ url: string; name: string }>,
     concealed: [] as Array<{ url: string; name: string }>,
+    complete: true,
+    failed: [] as string[],
   };
   return { state, playlistMock: {
     get channels() { return state.channels; },
+    get complete() { return state.complete; },
+    hasFailedSource: (ids: readonly string[]) => ids.some(id => state.failed.includes(id)),
     getUnconcealedChannels: () => [...state.channels, ...state.concealed],
   } };
 });
@@ -35,6 +39,8 @@ beforeEach(() => {
   localStorage.clear();
   state.channels = [chan('http://host/a', 'A'), chan('http://host/b', 'B')] as never[];
   state.concealed = [];
+  state.complete = true;
+  state.failed = [];
 });
 
 const rem = (over = {}) => ({ channelKey: keyA, channelName: 'A', title: 'Alpha', startMs: 1000, stopMs: 2000, ...over });
@@ -107,6 +113,16 @@ describe('ReminderService store', () => {
     expect(ReminderService.list()).toHaveLength(0);
   });
 
+  it('keeps a reminder whose channel has not loaded yet', () => {
+    ReminderService.add(rem({ startMs: 6000, stopMs: 9000 }));
+    state.channels = [];
+    state.complete = false;
+
+    ReminderService.prune(5000);
+
+    expect(ReminderService.list()).toHaveLength(1);
+  });
+
   it('keeps reminders for channels concealed by parental controls', () => {
     ReminderService.add(rem({ startMs: 6000, stopMs: 9000 }));
     state.concealed = state.channels.filter(ch => ch.name === 'A');
@@ -161,6 +177,25 @@ describe('ReminderService store', () => {
     expect(ReminderService.list()).toHaveLength(1);
 
     StorageService.setPlaylists([{ id: 'p1', name: 'P1', url: 'http://host/p1' }]);
+    ReminderService.prune(5000);
+    expect(ReminderService.list()).toHaveLength(0);
+  });
+
+  it('keeps a reminder while all of its sources failed to load', () => {
+    StorageService.setPlaylists([{ id: 'p1', name: 'P1', url: 'http://host/p1' }]);
+    ReminderService.add(rem({
+      channelKey: 'gone',
+      playlistIds: ['p1'],
+      startMs: 6000,
+      stopMs: 9000,
+    }));
+    state.channels = [];
+    state.failed = ['p1'];
+
+    ReminderService.prune(5000);
+    expect(ReminderService.list()).toHaveLength(1);
+
+    state.failed = [];
     ReminderService.prune(5000);
     expect(ReminderService.list()).toHaveLength(0);
   });

@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, liveLoaded } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // Seed one Xtream account (enables the tab bar) and stub the player_api.php
@@ -85,7 +85,7 @@ test('browse Series, open a detail, and play an episode', async ({ page }) => {
   // auto-eject the player, which would race this test's own Back navigation.
   await neuterVideo(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Enter Series via the docked tab bar.
   await enterTab(page, 'series');
@@ -119,7 +119,7 @@ test('Back walks Series detail -> browse -> Live instead of ejecting', async ({ 
   await seedSeries(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Enter Series via the docked tab bar.
   await enterTab(page, 'series');
@@ -141,7 +141,7 @@ test('Back walks Series detail -> browse -> Live instead of ejecting', async ({ 
 
   // Second Back from the browse top level returns to Live.
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 });
 
 test('episode playback suppresses the live channel sidebar and shows a VOD-only menu at the pointer edges', async ({ page }) => {
@@ -156,7 +156,7 @@ test('episode playback suppresses the live channel sidebar and shows a VOD-only 
     Object.defineProperty(P, 'src', { configurable: true, set() { /* no-op */ }, get() { return ''; } });
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Enter Series, open a detail, and play an episode (VOD mode).
   await enterTab(page, 'series');
@@ -195,7 +195,7 @@ test('Down from the tab bar resumes the Series detail Up left', async ({ page })
   await seedSeries(page);
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'series');
   await page.locator('.catalog-tile[data-item-id="1"]')
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -233,7 +233,7 @@ test('a key that only shows the ring brings a clipped tile into view', async ({ 
     localStorage.setItem('iptv_text_size', JSON.stringify('150'));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'series');
   const tile = page.locator('#view-series .catalog-tile').first();
   await expect(tile).toBeVisible();
@@ -266,7 +266,7 @@ test('opening the section with the pointer leaves the catalog where it loads', a
   await seedXtream(page, { catalog: 'large' });
   await routeLiveManifest(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'series');
   const first = page.locator('#view-series .catalog-tile').first();
   await expect(first).toBeVisible();

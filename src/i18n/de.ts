@@ -504,7 +504,6 @@ export const DE_MESSAGES = {
   'parental.askAfterLeaving': 'Nach Verlassen der App',
   'app.welcome': 'Willkommen! Fügen Sie zum Starten die URL einer Wiedergabeliste hinzu.',
   'app.loadingChannels': 'Sender werden geladen…',
-  'app.loadingChannelsProgress': 'Sender werden geladen… Verarbeitet: {processed}, übernommen: {kept}',
   'app.channelsLoaded': {
     one: '{count} Sender geladen',
     other: '{count} Sender geladen',

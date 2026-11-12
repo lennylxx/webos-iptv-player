@@ -69,6 +69,13 @@ is a warm one:
 | `searchCold` | Search opened at once: input ready, the first candidate for a typed query, then all results once movies and series are indexed (`allResultsMs`) |
 | `searchSteady` | The same after Live is ready |
 
+`live.appVisibleMs` records when the app's own UI (the docked tab bar over
+a view) first shows, with or without channel rows; `live.visibleMs` waits
+for the first channel row. `live.appInteractiveMs` records when the app
+answers its first key, an Up press as soon as the UI shows, and
+`live.appKeyLatencyMs` times that press; `live.interactiveMs` presses Down
+after the first row. The app metrics come from a second launch of each
+run, so the early Up press changes nothing the other metrics time.
 Live shows its first channels while the rest of a playlist arrives, so
 `live.loadedMs` records when the whole playlist finished loading, which can
 come after the first key.

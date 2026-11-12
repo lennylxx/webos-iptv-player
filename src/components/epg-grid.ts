@@ -82,6 +82,7 @@ export class EpgGrid {
   private focusProg = 0;
   private resumePrompt = new CatchupResumePrompt('prompt.epg');
   private archiveLoadingKey = '';
+  private loadingChannels = false;
   private readonly channelVirtualizer = new VirtualList({
     itemSize: CHANNEL_ROW_SIZE,
     overscan: VIRTUAL_OVERSCAN,
@@ -172,6 +173,11 @@ export class EpgGrid {
     });
     this.bindEvents();
   }
+  // While a load has shown nothing yet, the empty guide says so.
+  setLoading(loading: boolean): void {
+    this.loadingChannels = loading;
+  }
+
 
   private currentScope(): ChannelScope {
     return { group: this.selectedGroup, playlist: this.selectedPlaylist || undefined };
@@ -626,7 +632,9 @@ export class EpgGrid {
               `;
             })}
               </div>
-            ` : html`<div class="epg-no-channels">${t('channel.empty')}</div>`}
+            ` : html`<div class="epg-no-channels">${
+              t(this.loadingChannels ? 'app.loadingChannels' : 'channel.empty')
+            }</div>`}
             </div>
           </div>
           <div class="epg-right-pane">

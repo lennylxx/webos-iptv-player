@@ -60,17 +60,6 @@ html.q-no-flex-gap .tab-bar-search { margin-left: auto; }
  */
 html.q-scroll-end-padding .catalog-category-rail::after { content: none; }
 
-/*
- * The loading view is on screen before app.js measures the quirks, so its
- * generated gap margin cannot land on the first paint. `inset` arrived after
- * flex gap and before webOS 22, so on every webOS TV it proxies exactly the
- * engines without flex gap. Once measured, the quirk class takes over, so
- * desktop Chromium 84-86 (flex gap, no `inset`) doubles it for a frame at most.
- */
-@supports not (inset: 0) {
-  html:not(.quirks-measured) .loading-container > * + * { margin-top: 24px; }
-}
-
 @supports not (backdrop-filter: blur(1px)) {
   .player-sidebar { background: rgb(20, 20, 35); }
   .player-menu,

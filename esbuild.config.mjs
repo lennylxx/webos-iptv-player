@@ -74,7 +74,7 @@ const define = {
 };
 // Target Chromium 53 — the engine on webOS 4. This down-levels newer
 // syntax (`?.`, `??`, etc.) which would otherwise fail to parse on
-// older TVs and leave the app stuck on the loading screen.
+// older TVs and leave the app on a blank screen.
 const TARGET = ['chrome53'];
 
 // Shared config for the main app bundle (src/app.ts). The shipped build and

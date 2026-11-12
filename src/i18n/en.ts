@@ -506,7 +506,6 @@ export const EN_MESSAGES = {
   'parental.askAfterLeaving': 'After leaving the app',
   'app.welcome': 'Welcome! Add a playlist URL to get started.',
   'app.loadingChannels': 'Loading channels…',
-  'app.loadingChannelsProgress': 'Loading channels… {processed} processed, {kept} kept',
   'app.channelsLoaded': {
     one: '{count} channel loaded',
     other: '{count} channels loaded',

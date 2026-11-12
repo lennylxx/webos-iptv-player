@@ -26,7 +26,7 @@ const {
   },
   playlistMock: {
     channels: [] as unknown[],
-    loading: false,
+    complete: true,
     search: vi.fn(() => [] as unknown[]),
     searchRanked: vi.fn(),
     indexOf: vi.fn(() => 0),
@@ -144,7 +144,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   workerMock.terminate();
   playlistMock.channels = [];
-  playlistMock.loading = false;
+  playlistMock.complete = true;
   playlistMock.search.mockReturnValue([]);
   playlistMock.searchRanked.mockImplementation((query: string, limit: number) => {
     const items = playlistMock.search(query);
@@ -520,7 +520,7 @@ describe('Search', () => {
   it('does not reuse an index while the channel list is still growing in place', async () => {
     const channels = [chan('Alpha')];
     playlistMock.channels = channels;
-    playlistMock.loading = true;
+    playlistMock.complete = false;
     const { view } = await openWith({ vod: [vod('10', 'Alpha Movie')] });
 
     const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -534,6 +534,319 @@ describe('Search', () => {
       .toEqual([expect.not.stringContaining('mode=reused')]);
     info.mockRestore();
     expect(container.textContent).toContain('Bravo');
+  });
+
+  it('finds the channels a load finished while Search was open', async () => {
+    const channels = [chan('Alpha')];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    const { view } = await openWith({ vod: [] });
+    await view.setQuery('bravo');
+    expect(container.textContent).not.toContain('Bravo');
+
+    channels.push(chan('Bravo'));
+    playlistMock.complete = true;
+    await view.refreshChannels();
+    await indexReady(view);
+    await view.setQuery('bravo');
+    expect(container.textContent).toContain('Bravo');
+  });
+
+  it('keeps the results on screen while it indexes a finished load, then reruns the query', async () => {
+    const channels = [chan('Alpha One')];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    const { view } = await openWith({ vod: [] });
+    await view.setQuery('alpha');
+    expect(container.textContent).toContain('Alpha One');
+
+    channels.push(chan('Alpha Two'));
+    playlistMock.complete = true;
+    const refreshing = view.refreshChannels();
+    expect(container.textContent).toContain('Alpha One');
+    await refreshing;
+    await vi.waitFor(() => expect(container.textContent).toContain('Alpha Two'));
+    expect(container.textContent).toContain('Alpha One');
+  });
+
+  it('says more channels may come until a finished load has rerun the query', async () => {
+    const hint = () => container.querySelector('.search-loading-more');
+    const fillers = Array.from({ length: CONFIG.SEARCH.INDEX_CHUNK_SIZE }, (_, i) => chan(`Filler ${i}`));
+    const channels = [chan('Alpha One'), ...fillers];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    const { view } = await openWith({ vod: [] });
+    view.beginChannelLoad();
+    await view.setQuery('alpha');
+    expect(container.textContent).toContain('Alpha One');
+    expect(hint()).not.toBeNull();
+
+    const originalRun = workerMock.run.getMockImplementation()!;
+    let releaseTail!: () => void;
+    const tailHeld = new Promise<void>(resolve => { releaseTail = resolve; });
+    let held = false;
+    workerMock.run.mockImplementation(async (task: string, payload: SearchIndexRequest) => {
+      const chunk = payload.chunk;
+      if (task === 'search.index' && chunk?.source === 'channels' && chunk.start > 0 && !held) {
+        held = true;
+        await tailHeld;
+      }
+      return originalRun(task, payload);
+    });
+    try {
+      channels.push(chan('Alpha Two'));
+      playlistMock.complete = true;
+      // The load is done but its channels are not indexed yet.
+      view.refreshLocks();
+      expect(hint()).not.toBeNull();
+      const refreshing = view.refreshChannels();
+      await vi.waitFor(() => expect(held).toBe(true));
+      // A render while the full list indexes still says the results may change.
+      view.refreshLocks();
+      expect(hint()).not.toBeNull();
+      expect(container.querySelector('[data-search-partial="true"]')).not.toBeNull();
+      releaseTail();
+      await refreshing;
+      await vi.waitFor(() => expect(container.textContent).toContain('Alpha Two'));
+      expect(hint()).toBeNull();
+      expect(container.querySelector('[data-search-partial="false"]')).not.toBeNull();
+    } finally {
+      releaseTail();
+      workerMock.run.mockImplementation(originalRun);
+    }
+  });
+
+  it('says a query with no match yet may still find channels while they arrive', async () => {
+    const channels = [chan('Alpha')];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    const { view } = await openWith({ vod: [] });
+    view.beginChannelLoad();
+    await view.setQuery('zulu');
+    expect(container.querySelector('.search-loading-more')).not.toBeNull();
+    expect(container.textContent).not.toContain('No results');
+
+    playlistMock.complete = true;
+    await view.refreshChannels();
+    await vi.waitFor(() => expect(container.textContent).toContain('No results'));
+    expect(container.querySelector('.search-loading-more')).toBeNull();
+  });
+
+  it('drops the loading hint when a load leaves the indexed list as it was', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    const { view } = await openWith({ vod: [] });
+    view.beginChannelLoad();
+    await view.setQuery('alpha');
+    expect(container.querySelector('.search-loading-more')).not.toBeNull();
+
+    await view.refreshChannels();
+    expect(container.querySelector('.search-loading-more')).toBeNull();
+    expect(container.querySelector('[data-search-partial="false"]')).not.toBeNull();
+  });
+
+  it('hands focus to a match that arrives after the loading hint', async () => {
+    const channels = [chan('Alpha')];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    const box = document.createElement('input');
+    box.className = 'tab-bar-search-input';
+    document.body.appendChild(box);
+    try {
+      const { view, handlers } = await openWith({ vod: [] });
+      handlers.onRevealTabBar.mockImplementation(() => box.focus());
+      handlers.onReleaseTabBar.mockImplementation(() => box.blur());
+      Focus.setBase(() => view.focusScope);
+      view.beginChannelLoad();
+      await view.setQuery('zulu');
+      view.focusFirstResult();
+      expect(handlers.onRevealTabBar).toHaveBeenCalledTimes(1);
+
+      channels.push(chan('Zulu'));
+      playlistMock.complete = true;
+      await view.refreshChannels();
+      await vi.waitFor(() => expect(container.textContent).toContain('Zulu'));
+      await vi.waitFor(() => expect(handlers.onReleaseTabBar).toHaveBeenCalledTimes(1));
+    } finally {
+      box.remove();
+    }
+  });
+
+  it('clears the arriving state of an empty query once a finished load is indexed', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    playlistMock.complete = false;
+    const { view } = await openWith({ vod: [] });
+    view.beginChannelLoad();
+    view.refreshLocks();
+    expect(container.querySelector('[data-search-partial="true"]')).not.toBeNull();
+
+    playlistMock.complete = true;
+    await view.refreshChannels();
+    expect(container.querySelector('[data-search-partial="false"]')).not.toBeNull();
+  });
+
+  it('holds a query typed while a finished load\'s channels post until they all land', async () => {
+    const fillers = Array.from({ length: CONFIG.SEARCH.INDEX_CHUNK_SIZE }, (_, i) => chan(`Filler ${i}`));
+    const channels = [chan('Alpha One'), ...fillers];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    const { view } = await openWith({ vod: [] });
+    await view.setQuery('alpha');
+    expect(container.textContent).toContain('Alpha One');
+
+    const originalRun = workerMock.run.getMockImplementation()!;
+    let releaseTail!: () => void;
+    const tailHeld = new Promise<void>(resolve => { releaseTail = resolve; });
+    let held = false;
+    workerMock.run.mockImplementation(async (task: string, payload: SearchIndexRequest) => {
+      const chunk = payload.chunk;
+      if (task === 'search.index' && chunk?.source === 'channels' && chunk.start > 0 && !held) {
+        held = true;
+        await tailHeld;
+      }
+      return originalRun(task, payload);
+    });
+    try {
+      channels.push(chan('Alpha Two'));
+      playlistMock.complete = true;
+      const refreshing = view.refreshChannels();
+      await vi.waitFor(() => expect(held).toBe(true));
+      const query = view.setQuery('alpha o');
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(container.textContent).not.toContain('No results');
+      expect(container.querySelector('[data-search-pending="true"]')).not.toBeNull();
+      expect(container.textContent).not.toContain('Alpha One');
+      releaseTail();
+      await refreshing;
+      await query;
+      await vi.waitFor(() => expect(container.textContent).toContain('Alpha One'));
+    } finally {
+      releaseTail();
+      workerMock.run.mockImplementation(originalRun);
+    }
+  });
+
+  it('reuses the index a finished load reposted even when a guide landed during the repost', async () => {
+    const later = (offset: number) => [Date.now() + offset * 3600000, Date.now() + (offset + 1) * 3600000] as const;
+    const channels = [chan('Alpha')];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    const { view } = await openWith({ vod: [] });
+    await view.setQuery('alpha');
+
+    channels.push(chan('Bravo'));
+    playlistMock.complete = true;
+    let guide: Promise<void> | null = null;
+    epgMock.findChannelId.mockImplementation((channel: { id: string }) => {
+      if (!guide) {
+        epgMock.programmes = { Alpha: [prog('Late Report', ...later(1))] };
+        guide = view.refreshPrograms();
+      }
+      return channel.id;
+    });
+    await view.refreshChannels();
+    await guide;
+    expect(guide).not.toBeNull();
+
+    const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    view.deactivate();
+    await view.open(account);
+    await view.setQuery('report');
+    expect(diagEvents(info, 'search.index.ready')).toEqual([expect.stringContaining('mode=reused')]);
+    info.mockRestore();
+    expect(container.textContent).toContain('Late Report');
+  });
+
+  it('settles the first program index when a finished load\'s repost replaces it mid-build', async () => {
+    const channels = ['Alpha', 'Bravo', 'Charlie', 'Delta'].map(name => chan(name));
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    catalogMock.loadAllVodStreams.mockResolvedValue([]);
+    catalogMock.loadAllSeries.mockResolvedValue([]);
+    const view = new Search(container, mkHandlers());
+    openViews.push(view);
+    let refreshing: Promise<void> | null = null;
+    // Each channel outlasts a frame's budget, so the first build spans frames.
+    epgMock.findChannelId.mockImplementation((channel: { id: string }) => {
+      const until = performance.now() + 8;
+      while (performance.now() < until) { /* hold the slice */ }
+      if (!refreshing) {
+        channels.push(chan('Echo'));
+        playlistMock.complete = true;
+        refreshing = view.refreshChannels();
+      }
+      return channel.id;
+    });
+    await view.open(account);
+    await vi.waitFor(() => expect(refreshing).not.toBeNull());
+    await refreshing;
+    await indexReady(view);
+    await view.setQuery('echo');
+    expect(container.textContent).toContain('Echo');
+  });
+
+  it('keeps the results while the catalog still indexes when a load finishes', async () => {
+    const channels = [chan('Alpha One')];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    let releaseVod!: (movies: unknown[]) => void;
+    catalogMock.loadAllVodStreams.mockReturnValue(new Promise(resolve => { releaseVod = resolve; }));
+    catalogMock.loadAllSeries.mockResolvedValue([]);
+    const view = new Search(container, mkHandlers());
+    openViews.push(view);
+    await view.open(account);
+    await view.setQuery('alpha');
+    await vi.waitFor(() => expect(container.textContent).toContain('Alpha One'));
+    const resets = () => workerMock.run.mock.calls.filter(
+      ([task, payload]) => task === 'search.index' && (payload as SearchIndexRequest).reset,
+    ).length;
+    const before = resets();
+
+    channels.push(chan('Alpha Two'));
+    playlistMock.complete = true;
+    const refreshing = view.refreshChannels();
+    expect(container.textContent).toContain('Alpha One');
+    await refreshing;
+    await vi.waitFor(() => expect(container.textContent).toContain('Alpha Two'));
+    expect(resets()).toBe(before);
+
+    releaseVod([vod('10', 'Alpha Movie')]);
+    await indexReady(view);
+    await vi.waitFor(() => expect(container.textContent).toContain('Alpha Movie'));
+    const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    view.deactivate();
+    await view.open(account);
+    await view.setQuery('alpha');
+    expect(diagEvents(info, 'search.index.ready')).toEqual([expect.stringContaining('mode=reused')]);
+    info.mockRestore();
+  });
+
+  it('does not hold a new session\'s query behind the last session\'s channel repost', async () => {
+    const fillers = Array.from({ length: CONFIG.SEARCH.INDEX_CHUNK_SIZE }, (_, i) => chan(`Filler ${i}`));
+    const channels = [chan('Alpha One'), ...fillers];
+    playlistMock.channels = channels;
+    playlistMock.complete = false;
+    const { view } = await openWith({ vod: [] });
+    await view.setQuery('alpha');
+
+    channels.push(chan('Alpha Two'));
+    playlistMock.complete = true;
+    const hold = holdWorkerTask((task, payload) => task === 'search.index'
+      && payload.chunk?.source === 'channels' && payload.chunk.start > 0);
+    try {
+      const refreshing = view.refreshChannels();
+      await vi.waitFor(() => expect(hold.held).toBe(true));
+      view.deactivate();
+      hold.restore();
+      await view.open(account);
+      await indexReady(view);
+      await view.setQuery('alpha two');
+      expect(container.textContent).toContain('Alpha Two');
+      hold.release();
+      await refreshing;
+    } finally {
+      hold.release();
+      hold.restore();
+    }
   });
 
   it('recovers from a worker crash while open and reuses the rebuilt index on reopen', async () => {

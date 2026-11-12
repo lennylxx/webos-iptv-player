@@ -7,7 +7,7 @@ description: Keep the app working on webOS 4's Chromium 53 — the compat gates,
 
 esbuild builds with `target: ['chrome53']`. Modern *syntax* is down-leveled;
 modern *APIs* are not, and they fail silently on a TV — often as a blank
-loading screen. **Don't change the target without reason.**
+screen. **Don't change the target without reason.**
 
 ## The two static gates
 
@@ -89,9 +89,8 @@ needs the spacers adds `q-scroll-end-padding` itself. Neither quirk names a
 grid: a single-row grid's generated margins sit under
 `@supports not (display: grid)`, since Chromium 66–83 has grid gap without
 flex gap. `scripts/css-transforms.test.mjs` rejects any `html.q-*` class
-missing from `QUIRK_CLASSES`. The classes land when `app.js` runs, after
-the first paint, so the static loading view also keeps an
-`@supports not (inset: 0)` copy of its gap margin in the overrides.
+missing from `QUIRK_CLASSES`. The classes land when `app.js` runs, before
+it shows any view, so no static markup may rely on a generated margin.
 `e2e/legacy-layout-parity.spec.ts` unscopes
 every quirk rule in place and fails on any element whose margins move, which
 is how an out-specified component rule surfaces.

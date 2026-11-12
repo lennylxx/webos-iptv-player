@@ -2280,8 +2280,9 @@ describe('PlaylistService progressive load', () => {
     const whole = snapshot();
 
     const seen = await loadInBatches();
-    expect(seen.map(s => s.loading)).toEqual([true, true, true, true]);
-    expect(seen.map(s => s.count)).toEqual([2, 4, 7, 9]);
+    // The list being replaced empties before the first batch.
+    expect(seen.map(s => s.loading)).toEqual([true, true, true, true, true]);
+    expect(seen.map(s => s.count)).toEqual([0, 2, 4, 7, 9]);
     expect(PlaylistService.loading).toBe(false);
     expect(snapshot()).toEqual(whole);
     concealing.mockReturnValue(false);
@@ -2307,7 +2308,7 @@ describe('PlaylistService progressive load', () => {
     await PlaylistService.refresh(undefined, {
       onChannels: () => seen.push(PlaylistService.channels.map(c => c.name)),
     });
-    expect(seen[0]).toEqual(['ch0', 'ch1', 'ch2', 'ch3']);
+    expect(seen[1]).toEqual(['ch0', 'ch1', 'ch2', 'ch3']);
     expect(PlaylistService.channels.slice(0, 3).map(c => c.name)).toEqual(['ch10', 'ch2', 'ch0']);
   });
 
@@ -2398,6 +2399,49 @@ describe('PlaylistService progressive load', () => {
     expect(cached).toHaveLength(1);
   });
 
+  it('is complete only once a load has the whole list', async () => {
+    PlaylistService.reset();
+    expect(PlaylistService.complete).toBe(true);
+    streamInBatches(3);
+    const seen: boolean[] = [];
+    const loading = PlaylistService.load(undefined, {
+      onChannels: () => seen.push(PlaylistService.complete),
+    });
+    expect(PlaylistService.complete).toBe(false);
+    await loading;
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen).not.toContain(true);
+    expect(PlaylistService.complete).toBe(true);
+  });
+
+  it('is complete once the latest load is, while a load it replaced still waits', async () => {
+    streamInBatches(4);
+    const held = holdFirstFetch();
+    const first = PlaylistService.load(undefined, { onChannels: () => {} });
+    await vi.waitFor(() => expect(held.started()).toBe(true));
+    await PlaylistService.load(undefined, { onChannels: () => {} });
+    expect(PlaylistService.complete).toBe(true);
+    held.release();
+    await first;
+    expect(PlaylistService.complete).toBe(true);
+  });
+
+  it('stops a load a newer one replaced before its next source', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' },
+      { id: 'p2', name: 'P2', url: 'http://host2/p2.m3u' },
+    ]);
+    streamInBatches(4);
+    const held = holdFirstFetch();
+    const first = PlaylistService.load(undefined, { onChannels: () => {} });
+    await vi.waitFor(() => expect(held.started()).toBe(true));
+    await PlaylistService.load(undefined, { onChannels: () => {} });
+    const fetches = fetchTextMock.mock.calls.length;
+    held.release();
+    await first;
+    expect(fetchTextMock.mock.calls.length).toBe(fetches);
+  });
+
   it('ends the progressive load when a source throws outside its own recovery', async () => {
     storageMock.getPlaylists.mockReturnValue([
       { id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' },
@@ -2413,6 +2457,29 @@ describe('PlaylistService progressive load', () => {
     });
     await expect(PlaylistService.refresh(undefined, { onChannels: () => {} })).rejects.toThrow('boom');
     expect(PlaylistService.loading).toBe(false);
+  });
+
+  it('is not complete after a reload that failed partway through its sources', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' },
+      { id: 'p2', name: 'P2', url: 'http://host2/p2.m3u' },
+    ]);
+    streamInBatches(4);
+    await PlaylistService.load(undefined, { onChannels: () => {} });
+    expect(PlaylistService.complete).toBe(true);
+    const log = console.log;
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      if (args.includes('event=playlist.source.load.started') && args.includes('load=2')) {
+        throw new Error('boom');
+      }
+      log(...args);
+    });
+    await expect(PlaylistService.load(undefined, { onChannels: () => {} })).rejects.toThrow('boom');
+    expect(PlaylistService.channels.length).toBeGreaterThan(0);
+    expect(PlaylistService.complete).toBe(false);
+    vi.mocked(console.log).mockImplementation(log);
+    await PlaylistService.load(undefined, { onChannels: () => {} });
+    expect(PlaylistService.complete).toBe(true);
   });
 
   it('drops the result of a load a newer one replaced', async () => {

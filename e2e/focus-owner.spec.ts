@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   enterTab,
@@ -39,7 +40,7 @@ async function setup(page: Page): Promise<void> {
   await seedPlaylist(page, PLAYLIST_URL);
   await seedLaterReminder(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 }
 
 const owner = (page: Page) => page.locator('[data-ring-owner]');

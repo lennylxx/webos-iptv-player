@@ -25,6 +25,7 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
     customization,
     playlistMock: {
       channels,
+      complete: true,
       groupsRevision: 0,
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
@@ -251,13 +252,13 @@ describe('ChannelList edit mode', () => {
   }
 
   it('waits for the whole channel list before editing it', () => {
-    Object.assign(playlistMock, { loading: true });
+    Object.assign(playlistMock, { complete: false });
     try {
       enterEdit();
       expect(list.isEditing).toBe(false);
       expect(toastMock.showToast).toHaveBeenLastCalledWith('Loading channels…');
     } finally {
-      Object.assign(playlistMock, { loading: false });
+      Object.assign(playlistMock, { complete: true });
     }
     enterEdit();
     expect(list.isEditing).toBe(true);
@@ -273,13 +274,13 @@ describe('ChannelList edit mode', () => {
       authorizeEdit: next => { proceed = next; },
     });
     enterEdit();
-    Object.assign(playlistMock, { loading: true });
+    Object.assign(playlistMock, { complete: false });
     try {
       proceed!();
       expect(list.isEditing).toBe(false);
       expect(toastMock.showToast).toHaveBeenLastCalledWith('Loading channels…');
     } finally {
-      Object.assign(playlistMock, { loading: false });
+      Object.assign(playlistMock, { complete: true });
     }
   });
 

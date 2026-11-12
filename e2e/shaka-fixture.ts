@@ -1,4 +1,4 @@
-import { expect, routePlaylist, seedPlaylist, type Page } from './helpers';
+import { expect, routePlaylist, seedPlaylist, type Page, liveLoaded } from './helpers';
 
 export const DASH_URL = 'http://host/a.mpd';
 
@@ -229,7 +229,7 @@ export async function startDash(page: Page, playlist: string, manifest = DASH_MP
   }));
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
 }

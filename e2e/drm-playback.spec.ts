@@ -1,4 +1,4 @@
-import { test, expect, routePlaylist, seedPlaylist, type Page } from './helpers';
+import { test, expect, routePlaylist, seedPlaylist, type Page, liveLoaded } from './helpers';
 import { DASH_URL, DASH_M3U, DASH_MPD, installShakaStub, startDash, expectDrmPills } from './shaka-fixture';
 
 async function captureDiagnostics(page: Page) {
@@ -50,7 +50,7 @@ for (const mode of ['inline keys', 'HTTP license']) {
       __shaka?: { Player?: unknown };
     }).__shaka?.Player === 'function');
     await page.keyboard.press('Escape');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     const state = await page.evaluate(async ({ mode, license }) => {
       interface LicenseRequest {
@@ -155,7 +155,7 @@ for (const mode of ['inline keys', 'HTTP license']) {
     } else {
       expect(licenseRequests).toEqual([]);
     }
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
   });
 }
 
@@ -200,7 +200,7 @@ for (const drm of [
       expect(licenses).toEqual(['v']);
       await expect(page.locator('#video-player source')).toHaveCount(0);
       await page.keyboard.press('Escape');
-      await expect(page.locator('#view-channels')).toBeVisible();
+      await liveLoaded(page);
       await page.waitForFunction(() => (window as unknown as {
         __shakaE2E: { destroyed: boolean };
       }).__shakaE2E.destroyed);
@@ -268,7 +268,7 @@ for (const drm of [
     await page.waitForFunction(() => (window as unknown as {
       __shakaE2E: { loadSettled: boolean };
     }).__shakaE2E.loadSettled);
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await expect(page.locator('#view-player')).not.toBeVisible();
   });
 
@@ -376,7 +376,7 @@ test('configures Widevine and forwards license headers to Shaka', async ({ page 
   }));
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.keyboard.press('Enter');
   await page.waitForFunction(() =>
@@ -569,7 +569,7 @@ test.describe('PlayReady native webOS contract (no browser decryption)', () => {
           document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 405, bubbles: true })));
         await expect(page.locator('#player-osd .osd-stream-info')).toContainText('PlayReady');
         await page.keyboard.press('Escape');
-        await expect(page.locator('#view-channels')).toBeVisible();
+        await liveLoaded(page);
         await expect.poll(async () => (await playReadyProbe(page)).cancelledRights).toBe(1);
         expect((await playReadyProbe(page)).calls.filter(call => call.method === 'unload')
           .map(call => call.parameters)).toEqual([{ clientId: 'client-1' }]);
@@ -595,7 +595,7 @@ test.describe('PlayReady native webOS contract (no browser decryption)', () => {
       expect(probe.cancelledRights).toBe(phase === 'load' ? 0 : 1);
       await expect(page.locator('#video-player source')).toHaveCount(0);
       await page.keyboard.press('Escape');
-      await expect(page.locator('#view-channels')).toBeVisible();
+      await liveLoaded(page);
       expect((await playReadyProbe(page)).calls.map(call => call.method)).toEqual(methods);
     });
   }
@@ -639,7 +639,7 @@ test.describe('PlayReady native webOS contract (no browser decryption)', () => {
       await expect.poll(async () => (await playReadyProbe(page)).pending).toBe(1);
       await expect(page.locator('#video-player source')).toHaveCount(0);
       await page.keyboard.press('Escape');
-      await expect(page.locator('#view-channels')).toBeVisible();
+      await liveLoaded(page);
       await finishPlayReadyRequest(page);
       await expect.poll(async () => (await playReadyProbe(page)).calls
         .filter(call => call.method === 'unload').length).toBe(1);

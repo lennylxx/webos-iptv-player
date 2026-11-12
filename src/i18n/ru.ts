@@ -528,7 +528,6 @@ export const RU_MESSAGES = {
   'parental.askAfterLeaving': 'После выхода из приложения',
   'app.welcome': 'Добро пожаловать! Добавьте URL плейлиста, чтобы начать.',
   'app.loadingChannels': 'Загрузка каналов…',
-  'app.loadingChannelsProgress': 'Загрузка каналов… Обработано: {processed}, оставлено: {kept}',
   'app.channelsLoaded': {
     one: 'Загружен {count} канал',
     few: 'Загружено {count} канала',

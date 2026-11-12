@@ -1,4 +1,4 @@
-import { enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page } from './helpers';
+import { enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page, liveLoaded } from './helpers';
 import { type Browser } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { findGappedLooseText, measureLooseText, newLegacyPage, pixelDiff } from './pixel-parity';
@@ -138,7 +138,7 @@ async function prepareM3U(page: Page): Promise<void> {
     }));
   }, channelKey({ url: 'http://streams.example.com/one.m3u8' } as Channel));
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-item')).toHaveCount(2);
 }
 
@@ -146,7 +146,7 @@ async function prepareXtream(page: Page): Promise<void> {
   await page.clock.setFixedTime(NOW);
   await seedXtream(page, { catalog: 'large' });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 }
 
 // Wait out a smooth scroll so both engines are sampled at rest.
@@ -523,7 +523,7 @@ const M3U_SCREENS: Screen[] = [
     go: async (p) => {
       await p.route('**/playlist.m3u', (r) => new Promise(() => { void r; }));
       await p.reload();
-      await expect(p.locator('#view-loading')).toBeVisible();
+      await expect(p.locator('#view-channels .empty-state')).toHaveText('Loading channels…');
     },
   },
   {

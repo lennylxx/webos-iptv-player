@@ -528,7 +528,6 @@ export const UK_MESSAGES = {
   'parental.askAfterLeaving': 'Після виходу із застосунку',
   'app.welcome': 'Вітаємо! Додайте URL плейлиста, щоб почати.',
   'app.loadingChannels': 'Завантаження каналів…',
-  'app.loadingChannelsProgress': 'Завантаження каналів… Оброблено: {processed}, залишено: {kept}',
   'app.channelsLoaded': {
     one: 'Завантажено {count} канал',
     few: 'Завантажено {count} канали',

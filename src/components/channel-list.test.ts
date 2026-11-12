@@ -31,7 +31,7 @@ const {
     customization,
     playlistMock: {
       channels,
-      loading: false,
+      complete: true,
       groupsRevision: 0,
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
@@ -168,7 +168,7 @@ beforeEach(() => {
   toastMock.showToast.mockClear();
   healthMock.records = {};
   playlistMock.playlistTabs = [];
-  playlistMock.loading = false;
+  playlistMock.complete = true;
   storageMock.toggleFavorite.mockClear();
   storageMock.setFavorites.mockClear();
   storageMock.setChannelCustomization.mockClear();
@@ -737,6 +737,14 @@ describe('ChannelList.render', () => {
     expect(container.querySelector('.empty-state')?.textContent).toBe('Nothing watched yet');
   });
 
+  it('says Recently Watched is still loading rather than empty during a load', () => {
+    list.setLoading(true);
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
+    list.handleAction('select');
+    expect(container.querySelector('.empty-state')?.textContent).toBe('Loading channels…');
+  });
+
   it('disables channel editing in Recently Watched', () => {
     list.render();
     hover(container.querySelector<HTMLElement>('[data-group="builtin:recently-watched"]')!);
@@ -1097,7 +1105,7 @@ describe('ChannelList interaction', () => {
   describe('while a reload brings the channels back', () => {
     const activeGroup = () => container.querySelector<HTMLElement>('.group-item.active')?.dataset.group;
     const reloadWithoutBravo = (): Channel[] => {
-      playlistMock.loading = true;
+      playlistMock.complete = false;
       const removed = data.channels.splice(1, 1);
       playlistMock.groupsRevision++;
       list.render();
@@ -1132,7 +1140,7 @@ describe('ChannelList interaction', () => {
 
     it('forgets the group once the load ends without it', () => {
       const removed = reloadWithoutBravo();
-      playlistMock.loading = false;
+      playlistMock.complete = true;
       list.render();
       arrive(removed);
       expect(activeGroup()).toBe('builtin:all');

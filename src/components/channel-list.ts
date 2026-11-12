@@ -82,6 +82,7 @@ export class ChannelList {
   private currentGroup: ChannelGroupId = 'builtin:all';
   // The selected group a load still arriving has not reached yet.
   private awaitedGroup: ChannelGroupId | null = null;
+  private loadingChannels = false;
   private currentPlaylist = '';  // '' = All playlists
   private playingIndex = -1;
   private previewFocused = false;
@@ -297,10 +298,10 @@ export class ChannelList {
       this.awaitedGroup = null;
     }
     if (!groups.some(group => group.id === this.currentGroup)) {
-      if (PlaylistService.loading) this.awaitedGroup = this.currentGroup;
+      if (!PlaylistService.complete) this.awaitedGroup = this.currentGroup;
       this.currentGroup = 'builtin:all';
     }
-    if (!PlaylistService.loading) this.awaitedGroup = null;
+    if (PlaylistService.complete) this.awaitedGroup = null;
     if (ensureFocus || this.recentItems.length === 0) {
       this.recentItems = RecentlyWatchedService.getItems(this.currentPlaylist || undefined);
     }
@@ -367,7 +368,8 @@ export class ChannelList {
           : ''}">
         <div class="sidebar" data-nav-container>
           <div class="sidebar-header">
-            <div class="channel-count">${tp('channel.count', totalChannels)}</div>
+            <div class="channel-count">${
+              this.loadingChannels && !totalChannels ? '' : tp('channel.count', totalChannels)}</div>
             ${editing || showingRecent
               ? html`<div class="channel-edit-btn-spacer" aria-hidden="true"></div>`
               : html`
@@ -408,7 +410,8 @@ export class ChannelList {
               ? (this.recentItems.length
                   ? this.recentItems.map((item, index) =>
                     this.renderRecentItem(item, index, favs))
-                  : html`<div class="empty-state">${t('channel.recentEmpty')}</div>`)
+                  : html`<div class="empty-state">${
+                    t(this.loadingChannels ? 'app.loadingChannels' : 'channel.recentEmpty')}</div>`)
               : (filteredChannels.length
                   ? html`
                     <div class="channel-list-spacer" data-key="channel-list-spacer"
@@ -423,7 +426,8 @@ export class ChannelList {
                     </div>
                   `
                   : html`<div class="empty-state">${
-                    t(allSourcesDisabled ? 'channel.noEnabledSources' : 'channel.empty')
+                    t(this.loadingChannels ? 'app.loadingChannels'
+                      : allSourcesDisabled ? 'channel.noEnabledSources' : 'channel.empty')
                   }</div>`)}
           </div>
         </div>
@@ -604,8 +608,8 @@ export class ChannelList {
   enterEditMode(group: ChannelGroupId = this.currentGroup): void {
     // A move made on a partial list would save an order missing the rest.
     const partial = (): boolean => {
-      if (PlaylistService.loading) showToast(t('app.loadingChannels'));
-      return PlaylistService.loading;
+      if (!PlaylistService.complete) showToast(t('app.loadingChannels'));
+      return !PlaylistService.complete;
     };
     if (partial()) return;
     // A PIN prompt can outlast the check, so it runs again once the PIN is in.
@@ -854,6 +858,11 @@ export class ChannelList {
         <span class="group-count">${count}</span>
       </div>
     `;
+  }
+
+  // While a load has shown nothing yet, the empty list says so.
+  setLoading(loading: boolean): void {
+    this.loadingChannels = loading;
   }
 
   setPlaying(idx: number, catchupStart?: number | null): void {

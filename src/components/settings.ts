@@ -1472,12 +1472,17 @@ export class Settings {
   }
 
   focusReminderEntry(): void {
+    const entry = this.refreshReminderCount();
+    if (entry) this.nav.focus(entry);
+  }
+
+  refreshReminderCount(): HTMLElement | null {
     const entry = $('#manage-reminders', this.container);
-    if (!entry) return;
+    if (!entry) return null;
     entry.textContent = t('settings.manageReminders', {
       count: ReminderService.listManageable().length,
     });
-    this.nav.focus(entry);
+    return entry;
   }
 
   private activate(el: HTMLElement): void {

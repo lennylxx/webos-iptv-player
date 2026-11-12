@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test, expect, type Page, routePlaylist, routeLiveManifest, LIVE_MANIFEST, enterTab, neuterVideo,
   pressStepsAndReadPlayer,
 } from './helpers';
@@ -63,7 +64,7 @@ async function setup(page: Page, seed?: Seed): Promise<void> {
 
 async function openEpg(page: Page): Promise<void> {
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
   await expect(page.locator('#view-epg')).toBeVisible();
   await page.locator('#epg-programmes .epg-programme-item').first().waitFor();
@@ -189,7 +190,7 @@ test.describe('EPG catch-up resume prompt', () => {
 test('a partial program opened from Search shows its resume prompt with the ring inside', async ({ page }) => {
   await setup(page, partial);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'search');
   await page.locator('.tab-bar-search-input').fill('earlier');
   const result = page.locator('#view-search .search-program-row').filter({ hasText: 'Earlier Show' });
@@ -239,7 +240,7 @@ test('catch-up Back leaves playback even with the OSD up', async ({ page }) => {
   const [shown, left] = await pressStepsAndReadPlayer(page, [[YELLOW], [BACK]]);
   expect(shown).toMatchObject({ osd: true, paused: false });
   expect(left).toMatchObject({ osdBefore: true, player: false });
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 });
 
 test('catch-up Back hides a paused OSD, so Right reaches the menu, then leaves', async ({ page }) => {
@@ -254,5 +255,5 @@ test('catch-up Back hides a paused OSD, so Right reaches the menu, then leaves',
   expect(menu).toMatchObject({ osd: false, menu: true, paused: true, currentTime: seeked.currentTime });
   expect(closed).toMatchObject({ osd: false, menu: false, player: true });
   expect(left.player).toBe(false);
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 });

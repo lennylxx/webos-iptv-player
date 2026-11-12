@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { test, expect, isChromium53, routePlaylist, seedPlaylist } from './helpers';
+import { test, expect, isChromium53, routePlaylist, seedPlaylist, liveLoaded } from './helpers';
 import { DASH_URL, DASH_M3U, DASH_MPD, installShakaStub } from './shaka-fixture';
 
 const shakaVersion = JSON.parse(readFileSync('package.json', 'utf8')).devDependencies['shaka-player'];
@@ -14,7 +14,7 @@ test('routes an MPD through Shaka and renders its stream info', async ({ page })
   }));
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
@@ -61,7 +61,7 @@ test('loads the real Shaka engine in the desktop preview', async ({ page }) => {
   });
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   const beforeShaka = await page.evaluate(() => ({
     promiseFinally: typeof Promise.prototype.finally,
     trimStart: typeof String.prototype.trimStart,

@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist,
   seedPlaylist, type Page, SAMPLE_M3U,
 } from './helpers';
@@ -33,7 +34,7 @@ test('a modern engine keeps every polyfilled API native', async ({ page }) => {
   await routePlaylist(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const apis = await nativeApis(page, POLYFILLED_APIS);
   for (const name of POLYFILLED_APIS) expect(apis[name], name).toBe('native');
@@ -44,7 +45,7 @@ test('the simulated engine really falls back to the polyfills', async ({ page })
   await routePlaylist(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const apis = await nativeApis(page, POLYFILLED_APIS);
   // Not merely present — present *and* ours, which is what a webOS 4 TV gets.
@@ -88,7 +89,7 @@ test('a modern engine activates none of the legacy CSS fallbacks', async ({ page
   await routePlaylist(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const guards = await page.evaluate(() => {
     const legacy = [...document.styleSheets]
@@ -130,44 +131,9 @@ test('the simulated engine measures both engine quirks', async ({ page }) => {
   await routePlaylist(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   expect(await page.evaluate(() => [...document.documentElement.classList]
     .filter((name) => /^q-/.test(name)).sort())).toEqual(['q-no-flex-gap', 'q-scroll-end-padding']);
-});
-
-test('the loading view keeps its spacing before the quirks are measured', async ({ page }) => {
-  // The paint before app.js runs: no script, so no q-* class yet.
-  await page.route('**/js/app.js', (route) => route.abort());
-  await page.goto('/');
-  // Layout offsets, since the spinning spinner's bounding box grows. A
-  // string, because without app.js the simulation lacks the polyfills
-  // Playwright needs to return an object.
-  const spacing = JSON.parse(await page.evaluate(() => {
-    const spinner = document.querySelector<HTMLElement>('.loading-spinner')!;
-    const text = document.querySelector<HTMLElement>('.loading-text')!;
-    return JSON.stringify({
-      quirks: document.documentElement.className,
-      gap: text.offsetTop - spinner.offsetTop - spinner.offsetHeight,
-    });
-  }));
-  expect(spacing).toEqual({ quirks: '', gap: 24 });
-});
-
-test('the loading view stopgap steps aside once the quirks are measured', async ({ page }) => {
-  test.skip(!isChromium53(), 'only the simulation activates the stopgap');
-  await routePlaylist(page);
-  await seedPlaylist(page);
-  await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
-  // Without the quirk class only the stopgap could space the loading view,
-  // as it would on an engine with flex gap but no `inset`.
-  const margins = await page.evaluate(() => {
-    const text = document.querySelector('.loading-text')!;
-    const before = getComputedStyle(text).marginTop;
-    document.documentElement.classList.remove('q-no-flex-gap');
-    return [before, getComputedStyle(text).marginTop];
-  });
-  expect(margins).toEqual(['24px', '0px']);
 });
 
 // addInitScript reaches page realms only, so the worker is degraded by a
@@ -179,7 +145,7 @@ test('the simulation reaches the worker realm too', async ({ page }) => {
   await seedPlaylist(page);
   const workerPromise = page.waitForEvent('worker');
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const worker = await workerPromise;
   const surface = await worker.evaluate(() => ({
@@ -259,7 +225,7 @@ test('no flex-gap container separates an element from loose text', async ({ page
       JSON.stringify([(h >>> 0).toString(16).padStart(8, '0')]));
   });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const offenders = new Set<string>();
   const collect = async () => {
@@ -324,7 +290,7 @@ test('no flex-gap container separates an element from loose text in the catalog'
   await seedXtream(page);
 
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const offenders = new Set<string>();
   const collect = async () => {

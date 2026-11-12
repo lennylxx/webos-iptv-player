@@ -1,4 +1,4 @@
-import { test, expect, routePlaylist, seedPlaylist, seedPointer, type Page } from './helpers';
+import { test, expect, routePlaylist, seedPlaylist, seedPointer, type Page, liveLoaded } from './helpers';
 
 // A channel that declares HTTP headers plays on webOS through
 // luna://com.webos.media/load, borrowing the placeholder <video>'s window.
@@ -259,7 +259,7 @@ async function startFirstChannel(page: Page, playlist: string): Promise<void> {
   await routePlaylist(page, playlist);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
 }

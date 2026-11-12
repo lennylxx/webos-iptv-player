@@ -504,7 +504,6 @@ export const FR_MESSAGES = {
   'parental.askAfterLeaving': 'Après avoir quitté l’app',
   'app.welcome': 'Bienvenue ! Ajoutez l’URL d’une liste de lecture pour commencer.',
   'app.loadingChannels': 'Chargement des chaînes…',
-  'app.loadingChannelsProgress': 'Chargement des chaînes… Entrées traitées : {processed} ; conservées : {kept}',
   'app.channelsLoaded': {
     one: '{count} chaîne chargée',
     other: '{count} chaînes chargées',

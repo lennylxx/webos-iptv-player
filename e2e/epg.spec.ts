@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   enterTab,
@@ -132,8 +133,7 @@ test('the channel list opens before the cached guide is read', async ({ page }) 
     };
   });
   await page.reload();
-  await expect(page.locator('#view-loading')).toBeHidden();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(firstRow).toBeVisible();
 });
 
@@ -191,7 +191,7 @@ test('a Guide opened while the cached guide is read shows it once read', async (
 
   await holdGuideRead(page);
   await page.reload();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await enterTab(page, 'epg');
   await expect(page.locator('#view-epg')).toBeVisible();
   await releaseGuideRead(page);
@@ -234,7 +234,7 @@ test.describe('EPG live badge', () => {
   test('the EPG marks the currently-airing program with a pulsing LIVE badge', async ({ page }) => {
     await setup(page);
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     // Open the guide (Red / Programme Guide remote key).
     await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
@@ -288,7 +288,7 @@ test.describe('EPG live badge', () => {
   test('the EPG search box keeps its focus styling without :focus-within', async ({ page }) => {
     await setup(page);
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
     await expect(page.locator('#view-epg')).toBeVisible();
 
@@ -316,7 +316,7 @@ test.describe('EPG live badge', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await setup(page);
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
     await expect(page.locator('#view-epg')).toBeVisible();
@@ -373,7 +373,7 @@ test.describe('EPG time zone', () => {
   test('feed mode: today is the feed day, selected, and its schedule starts after midnight', async ({ page }) => {
     await setup(page, 'feed');
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await openEpg(page);
 
     // Today in the feed zone is Sun 03/10 — highlighted and selected.
@@ -388,19 +388,19 @@ test.describe('EPG time zone', () => {
   test('switching device → feed re-snaps the selected day to today', async ({ page }) => {
     await setup(page, 'device');
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     await openEpg(page);
     await expect(selectedDay(page)).toHaveText(/Sat\s+03\/09/); // device-local today
 
     // Back to channels, open settings, switch to Feed, save.
     await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 406, bubbles: true })));
     await expect(page.locator('#view-settings')).toBeVisible();
     await page.locator('#tz-mode [data-value="feed"]').click();
     await page.locator('#save-settings').click();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     await openEpg(page);
     // Selection must follow "today" into the new timezone, not stick on 03/09.
@@ -712,7 +712,7 @@ test.describe('Guide pointer and keys', () => {
     await expect(page.locator('#view-epg .epg-group-option.focused')).toHaveCount(1);
 
     await page.locator('.tab-bar-item[data-section="live"]').click();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
     await page.locator('.tab-bar-item[data-section="epg"]').click();
     await expect(page.locator('#view-epg')).toBeVisible();
     await page.keyboard.press('ArrowDown');
@@ -752,7 +752,7 @@ test.describe('Guide pointer and keys', () => {
     await page.keyboard.press('0');
     await expect(page.locator('.osd-channel-name')).toHaveText('Channel 150');
     await page.keyboard.press('Escape');
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await liveLoaded(page);
 
     if (via === 'pointer') {
       await enterTab(page, 'epg');

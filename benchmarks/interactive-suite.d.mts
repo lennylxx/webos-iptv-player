@@ -83,6 +83,8 @@ export interface InteractiveProbeConfig {
   quietMaxBusyMs: number;
   minSettleMs: number;
   settleTimeoutMs: number;
+  /** Measure only when the app shows and answers its first key, then stop. */
+  appOnly?: boolean;
 }
 
 export function installInteractiveProbe(config: InteractiveProbeConfig): void;
@@ -124,6 +126,7 @@ export function readInteractiveProbe(): InteractiveProbeRaw | null;
 
 export function summarizeInteractiveRun(
   raw: InteractiveProbeRaw,
+  appRaw?: InteractiveProbeRaw,
 ): Record<string, any>;
 
 export function aggregateInteractiveRuns(runs: Record<string, any>[]): Record<string, any>;

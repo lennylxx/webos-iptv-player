@@ -24,10 +24,6 @@ export const QUIRK_CLASSES: Record<keyof EngineQuirks, string> = {
   noFlexGap: 'q-no-flex-gap',
 };
 
-// Set once the probes have run, so a stopgap for the first paint (before any
-// q-* class can exist) steps aside afterwards.
-export const MEASURED_CLASS = 'quirks-measured';
-
 const PROBE_STYLE = 'position:absolute;left:-9999px;top:0;visibility:hidden;'
   + 'box-sizing:content-box;';
 const ITEM_STYLE = 'flex:0 0 auto;box-sizing:content-box;height:1px;margin:0;padding:0;';
@@ -78,7 +74,6 @@ export function applyEngineQuirks(quirks: EngineQuirks, root: Element): void {
     if (quirks[name]) root.classList.add(QUIRK_CLASSES[name]);
     else root.classList.remove(QUIRK_CLASSES[name]);
   });
-  root.classList.add(MEASURED_CLASS);
   log.info(
     'Engine quirks measured',
     'event=engine.quirks.measured',

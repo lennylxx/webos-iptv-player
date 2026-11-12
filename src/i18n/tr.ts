@@ -492,7 +492,6 @@ export const TR_MESSAGES = {
   'parental.askAfterLeaving': 'Uygulamadan çıktıktan sonra',
   'app.welcome': 'Başlamak için bir oynatma listesi URL’si ekleyin.',
   'app.loadingChannels': 'Kanallar yükleniyor…',
-  'app.loadingChannelsProgress': 'Kanallar yükleniyor… {processed} işlendi, {kept} tutuldu',
   'app.channelsLoaded': {
     other: '{count} kanal yüklendi',
   },

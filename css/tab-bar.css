@@ -45,7 +45,7 @@
 }
 
 /* When the bar is docked, the section views sit below it (never overlapping);
-   the full-screen player / loading views keep top:0 / full height. */
+   the full-screen player keeps top:0 / full height. */
 body.tabbar-docked #view-channels,
 body.tabbar-docked #view-epg,
 body.tabbar-docked #view-movies,

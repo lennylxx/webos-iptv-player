@@ -669,8 +669,11 @@ export function installInteractiveProbe(config) {
       && !!probe.events['playlist.cache.write.completed'];
   };
 
+  // The app's own UI is up: the docked tab bar over a real view, rows or not.
+  const appReady = () => document.body.classList.contains('tabbar-docked')
+    && Array.from(document.querySelectorAll('.view')).some(visible);
+
   const liveReady = () => visible(document.getElementById('view-channels'))
-    && !visible(document.getElementById('view-loading'))
     && !!document.querySelector('#view-channels .channel-item');
 
   const moviesReady = () => {
@@ -683,6 +686,13 @@ export function installInteractiveProbe(config) {
   const run = async () => {
     if (probe.phase === 'seed') {
       await seed();
+      return;
+    }
+    // A launch of its own: the key would change what the other metrics time.
+    if (config.appOnly) {
+      await watch('appVisible', appReady);
+      // The first key the app answers, rows or not: Up reaches the tab bar.
+      await pressKey('appInteractive', 'ArrowUp', 38);
       return;
     }
     await watch('liveVisible', liveReady);
@@ -853,10 +863,13 @@ export function readInteractiveProbe() {
 }
 
 // Turns one run's raw marks into the metrics it reports, all in milliseconds
-// from navigation start unless named as a latency.
-export function summarizeInteractiveRun(raw) {
+// from navigation start unless named as a latency. The app metrics come from
+// a separate launch, `appRaw`.
+export function summarizeInteractiveRun(raw, appRaw) {
   if (raw.error) throw new Error(`Interactive ${raw.flow} run failed: ${raw.error}`);
+  if (appRaw?.error) throw new Error(`Interactive ${raw.flow} app run failed: ${appRaw.error}`);
   const m = raw.marks;
+  const a = appRaw?.marks;
   const flow = interactiveBaseFlow(raw.flow);
   const round = value => Math.round(value * 10) / 10;
   const within = (from, to) => {
@@ -888,6 +901,11 @@ export function summarizeInteractiveRun(raw) {
     };
   };
   const live = {
+    ...(a ? {
+      appVisibleMs: round(a.appVisible),
+      appInteractiveMs: round(a.appInteractive),
+      appKeyLatencyMs: round(a.appInteractive - a.appInteractiveKeyAt),
+    } : {}),
     visibleMs: round(m.liveVisible),
     interactiveMs: round(m.liveInteractive),
     keyLatencyMs: round(m.liveInteractive - m.liveInteractiveKeyAt),

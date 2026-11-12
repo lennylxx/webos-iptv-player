@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   routePlaylist,
@@ -26,7 +27,7 @@ test('a malicious channel name from the playlist is escaped, not executed', asyn
   await seedPlaylist(page);
   await page.goto('/');
 
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(1);
 
   // The name is rendered as literal text, escaped...
@@ -40,7 +41,7 @@ test('the sidebar has no inline search magnifier or settings gear (moved to the 
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('#view-channels .search-icon')).toHaveCount(0);
   await expect(page.locator('#view-channels .channel-search')).toHaveCount(0);
   await expect(page.locator('#view-channels .settings-btn')).toHaveCount(0);
@@ -53,7 +54,7 @@ test('selecting a group filters the channel list', async ({ page }) => {
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-main .channel-item')).toHaveCount(4);
 
   await page.locator('[data-group="source:News"]').click();
@@ -66,7 +67,7 @@ test('M3U-only Search (via the tab bar) filters channels into a vertical list', 
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'search');
   await expect(page.locator('.tab-bar-search.expanded')).toBeVisible();
@@ -83,7 +84,7 @@ test('M3U-only Search: a pointer click plays the channel', async ({ page }) => {
   await routeLiveManifest(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'search');
   await expect(page.locator('.tab-bar-search.expanded')).toBeVisible();
@@ -107,7 +108,7 @@ test('channel rows fit both text lines in their fixed box', async ({ page }) => 
   await routePlaylist(page, SEARCH_M3U);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const fit = await measureRowTextFit(
     page,
@@ -128,7 +129,7 @@ test('M3U-only Search fills the view when Channels is the only section', async (
   await routePlaylist(page, many.join('\n'));
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'search');
   await page.locator('.tab-bar-search-input').fill('alpha');
@@ -154,7 +155,7 @@ test('the list follows the playing channel however it was tuned', async ({ page 
   await routeLiveManifest(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // Tune far down the list, so the virtualized window is centered on 123...
   await page.keyboard.press('1');
@@ -177,7 +178,7 @@ test('the list follows the playing channel however it was tuned', async ({ page 
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // And so does the list — not the row it was parked on before.
   const focused = page.locator('.channel-main .channel-item.focused');
@@ -295,7 +296,7 @@ test('direct channel entry scrolls the list to the tuned channel and keeps it on
   await routeLiveManifest(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   // Channel 215 is far outside the virtualized window rendered at startup.
   await expect(page.locator('.channel-main .channel-item')).not.toHaveCount(300);
 
@@ -309,7 +310,7 @@ test('direct channel entry scrolls the list to the tuned channel and keeps it on
   // Back to the list: the tuned row is focused, marked playing, and on screen.
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const focused = page.locator('.channel-main .channel-item.focused');
   await expect(focused).toContainText('Channel 215');
@@ -333,7 +334,7 @@ test('returning to a far playing channel keeps it focused under full animation',
   await seedPlaylist(page);
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-animation', 'full');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await page.keyboard.press('2');
   await page.keyboard.press('1');
@@ -342,7 +343,7 @@ test('returning to a far playing channel keeps it focused under full animation',
 
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   // A smooth far jump would pass through windows that drop the focused row.
   await page.waitForTimeout(1000);
@@ -366,7 +367,7 @@ test('returning from the sidebar restores the channel you left', async ({ page }
   await routePlaylist(page, lines.join('\n'));
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
   for (let i = 0; i < 14; i++) await page.keyboard.press('ArrowDown');
@@ -595,7 +596,7 @@ test('Down and CH- at the last Recently Watched item and CH+ at the first stay i
   await routePlaylist(page, manyGroupsPlaylist());
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await openGroupByPointer(page, 'builtin:recently-watched');
   const main = page.locator('#view-channels .channel-main');
   const focused = page.locator('#view-channels .focused');
@@ -619,7 +620,7 @@ test('Down from the last Favorites row reaches Manage favorites', async ({ page 
   await routePlaylist(page, manyGroupsPlaylist());
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await openGroupByPointer(page, 'builtin:favorites');
   const main = page.locator('#view-channels .channel-main');
 
@@ -667,7 +668,7 @@ test('Favorite management keeps Up, Down, and CH+/CH- inside the list', async ({
   await routePlaylist(page, manyGroupsPlaylist());
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await openGroupByPointer(page, 'builtin:favorites');
   const main = page.locator('#view-channels .channel-main');
   await page.keyboard.press('ArrowDown');
@@ -721,7 +722,7 @@ test('Up from the edit actions forgets a row left before switching groups', asyn
   await routePlaylist(page, lines.join('\n'));
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await openGroupByPointer(page, 'source:A');
   await pressKeyCode(page, 405);
   for (let i = 0; i < 11; i++) await page.keyboard.press('ArrowDown');
@@ -1219,19 +1220,19 @@ test('the Live tab clicked from another section shows the far channel that is pl
   await routeLiveManifest(page);
   await seedPlaylist(page);
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await page.keyboard.press('1');
   await page.keyboard.press('5');
   await page.keyboard.press('0');
   await expect(page.locator('.osd-channel-number')).toHaveText('150');
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   await enterTab(page, 'settings');
   await expect(page.locator('#view-settings')).toBeVisible();
   await enterTab(page, 'live');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const playing = page.locator('.channel-main .channel-item.playing');
   await expect(playing).toContainText('Channel 150');
@@ -1268,7 +1269,7 @@ test('Back from the Guide resumes the row you left, brought into view', async ({
   await expect(page.locator('#view-epg')).toBeVisible();
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const focused = main.locator('.focused');
   await expect(focused).toHaveCount(1);
@@ -1306,7 +1307,7 @@ test('Back from the Guide resumes a group scrolled out of view, brought into vie
   await expect(page.locator('#view-epg')).toBeVisible();
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const focused = page.locator('#view-channels .focused');
   await expect(focused).toHaveCount(1);
@@ -1375,7 +1376,7 @@ test('Back from the Guide lands on a channel tuned elsewhere, not the row you le
   await expect(page.locator('#view-epg')).toBeVisible();
   await page.evaluate(() =>
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
 
   const focused = main.locator('.focused');
   await expect(focused).toHaveCount(1);

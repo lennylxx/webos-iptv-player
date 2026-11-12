@@ -1,4 +1,5 @@
 import {
+  liveLoaded,
   test,
   expect,
   enterTab,
@@ -150,7 +151,7 @@ test('protects a live group and unlocks deferred playback with the PIN', async (
   await page.locator('.channel-main .channel-item').first().click();
 
   await expect(prompt).toBeVisible();
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await prompt.locator('.parental-pin-input').fill('0000');
   await expect(prompt.locator('.parental-pin-error')).toContainText('Incorrect');
 
@@ -630,7 +631,7 @@ test('auto-play skips a locked last channel at startup', async ({ page }) => {
   await page.addInitScript(value => localStorage.setItem('iptv_playlists', value!), saved);
   await page.reload();
 
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   await expect(page.locator('.channel-item').first()).toBeVisible();
   await expect(page.locator('.parental-pin-prompt')).toBeHidden();
   await expect(page.locator('#view-player')).toBeHidden();
@@ -1119,7 +1120,7 @@ test('relocking while recent searches are open keeps movies in the next search',
 
   await enterTab(page, 'live');
   await enterTab(page, 'search');
-  await expect(page.locator('#view-channels')).toBeVisible();
+  await liveLoaded(page);
   const tile = page.locator('.search-history-dropdown .search-history-tile');
   await expect(tile).toHaveText(['Movie']);
   await page.locator('.tab-bar [data-lock-now]').click();

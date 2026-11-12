@@ -72,6 +72,23 @@ afterEach(() => {
 });
 
 describe('ReminderManager', () => {
+  it('refreshes against the current time and refocuses when the focused row is gone', () => {
+    state.reminders = [reminder(), reminder({ channelKey: 'ch2', startMs: 3000 })];
+    manager.open(2000);
+    expect(ringed('.reminder-manager-remove')?.dataset.key).toBe('remove:ch1|2000');
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2500);
+      state.reminders = state.reminders.filter(r => r.channelKey !== 'ch1');
+      manager.refresh();
+      expect(reminderMock.listManageable).toHaveBeenLastCalledWith(2500);
+      expect(ringed('.reminder-manager-remove')?.dataset.key).toBe('remove:ch2|3000');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders sorted upcoming reminders with escaped provider text', () => {
     state.reminders = [
       reminder({

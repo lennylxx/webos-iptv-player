@@ -260,8 +260,12 @@ export class Search {
   private catalogLoading = false;
   // The generation of the full query that replaces partial results, while in flight.
   private completingPartial: number | null = null;
+  // A playlist load is running; refreshChannels() ends it once the load is done.
+  private channelLoad = false;
   // Until every source is indexed, queries wait and the results show a hint.
   private pendingIndex: PendingIndex | null = null;
+  // The worker's channels are empty until a channels-only repost lands.
+  private channelRepost: { sessionId: number; done: Promise<void> } | null = null;
   private active = false;
   private programIndexGeneration = 0;
   private resultLimit: number = CONFIG.SEARCH.INITIAL_RESULTS;
@@ -294,6 +298,10 @@ export class Search {
   private sourcePosts: Partial<Record<SearchIndexSource, SourcePost>> = {};
   private sourcePostId = 0;
   private workerIndexedChannels: Channel[] | null = null;
+  // Whether the posted channels were the whole list: a running load grows it
+  // in place, so the same array may hold more by now.
+  private workerChannelsComplete = false;
+  private workerIndexedChannelsComplete = false;
   private workerIndexedGuideRevision: number | null = null;
   private workerIndexedAccountId: string | null = null;
   private workerIndexedGeneration: number | null = null;
@@ -436,6 +444,7 @@ export class Search {
     const reset = await workerReset;
     if (!reset || !this.active || sessionId !== this.workerSession) return;
     const channels = PlaylistService.channels;
+    const complete = PlaylistService.complete;
     const postChannels = (): Promise<boolean> => this.postSource(
       sessionId,
       'channels',
@@ -452,6 +461,7 @@ export class Search {
     }
     if (!this.active || sessionId !== this.workerSession) return;
     this.workerChannels = channels;
+    this.workerChannelsComplete = complete;
     this.indexSettled(sessionId, 'channels');
     this.programIndexDone(sessionId, await this.buildProgramIndex(false, sessionId));
   }
@@ -506,6 +516,81 @@ export class Search {
     if (!wasPending && this.active && !this.pendingIndex && this.query.trim()) {
       await this.startQuery(++this.queryGeneration);
     }
+  }
+
+  beginChannelLoad(): void {
+    this.channelLoad = true;
+  }
+
+  // Indexes the channels a load finished while Search was open. The results
+  // on screen, their focus, and how many are shown stay until the query
+  // reruns on the new list.
+  async refreshChannels(): Promise<void> {
+    this.channelLoad = false;
+    if (!this.active) return;
+    if (this.canReuseWorkerIndex(this.account)) {
+      // The load left the list as it was; only the loading hint goes.
+      this.render();
+      return;
+    }
+    // A channel build in flight or a lost index starts over; a catalog or
+    // guide still indexing carries on and settles the index itself.
+    if (this.pendingIndex?.channels || this.workerIndexLost
+      || (!this.pendingIndex && !this.workerIndexReady)) {
+      this.queryPending = !!this.query.trim();
+      await this.open(this.account, this.query);
+      return;
+    }
+    const sessionId = this.workerSession;
+    const repost = { sessionId, done: this.repostChannels(sessionId) };
+    this.channelRepost = repost;
+    try {
+      await repost.done;
+    } finally {
+      if (this.channelRepost === repost) this.channelRepost = null;
+    }
+    if (!this.active || sessionId !== this.workerSession) return;
+    if (!this.query.trim()) {
+      this.render();
+      return;
+    }
+    this.requery(true);
+  }
+
+  private async repostChannels(sessionId: number): Promise<void> {
+    const channels = PlaylistService.channels;
+    const complete = PlaylistService.complete;
+    this.invalidateWorkerIndex();
+    const posted = await this.postSource(
+      sessionId,
+      'channels',
+      channels.length,
+      index => channelDocument(channels[index]),
+    );
+    if (sessionId !== this.workerSession) return;
+    if (!posted) {
+      this.workerIndexLost = true;
+      return;
+    }
+    this.workerChannels = channels;
+    this.workerChannelsComplete = complete;
+    // Program results point at channel indexes, so they follow the new list.
+    let programs = await this.buildProgramIndex(true, sessionId);
+    // A guide that landed meanwhile restarted the build; the repost still
+    // owns marking the index ready, so it builds again.
+    while (programs === null && this.active && sessionId === this.workerSession) {
+      programs = await this.buildProgramIndex(true, sessionId);
+    }
+    if (sessionId !== this.workerSession || programs === null) return;
+    if (this.pendingIndex) {
+      this.programIndexDone(sessionId, programs);
+      return;
+    }
+    if (!programs) {
+      this.workerIndexLost = true;
+      return;
+    }
+    this.markWorkerIndexReady(this.account);
   }
 
   refreshLocks(): void {
@@ -831,6 +916,14 @@ export class Search {
     });
   }
 
+  // The playlist is still loading, or its full list is being indexed and
+  // searched again: channel results may still change.
+  private channelsArriving(): boolean {
+    return this.channelLoad
+      || this.channelRepost?.sessionId === this.workerSession
+      || this.completingPartial !== null;
+  }
+
   // Channels are searchable while programs or the catalog still load.
   private partialIndex(): boolean {
     const pending = this.pendingIndex;
@@ -888,8 +981,8 @@ export class Search {
   private applyPendingFocus(): void {
     if (!this.focusPending || !this.active || this.queryPending) return;
     const first = this.container.querySelector<HTMLElement>('.search-results [data-focusable]');
-    if (!first && (this.catalogLoading || this.pendingIndex || this.completingPartial !== null)) {
-      // Wait in the search box, not on a blank screen, for the catalog.
+    if (!first && (this.catalogLoading || this.pendingIndex || this.channelsArriving())) {
+      // Wait in the search box, not on a blank screen, for the catalog or channels.
       if (!this.focusWaitingInBox) {
         this.focusWaitingInBox = true;
         this.handlers.onRevealTabBar();
@@ -1346,6 +1439,16 @@ export class Search {
   }
 
   private async runWorkerQuery(generation: number, preserveOffsets: boolean): Promise<void> {
+    const repost = this.channelRepost;
+    if (repost && repost.sessionId === this.workerSession) {
+      // A new query must not leave the last one's results up to be picked.
+      if (!preserveOffsets && this.query.trim()) {
+        this.queryPending = true;
+        this.render();
+      }
+      await repost.done;
+      if (generation !== this.queryGeneration) return;
+    }
     const query = this.query;
     const sessionId = this.workerSession;
     if (!query.trim()) return;
@@ -1444,6 +1547,8 @@ export class Search {
       }
     }
     this.queryPending = false;
+    // The latest query's results are the fullest; no older partial one is pending.
+    if (generation === this.queryGeneration) this.completingPartial = null;
     if (!preserveOffsets) this.resetVirtualOffsets();
     this.render();
     this.applyPendingFocus();
@@ -1610,6 +1715,7 @@ export class Search {
     // each from this rebuild's own post.
     const posted: Partial<Record<SearchIndexSource, { list: unknown[]; post?: SourcePost }>> = {};
     let channels: Channel[];
+    let channelsComplete = false;
     let changed: boolean;
     do {
       changed = false;
@@ -1618,6 +1724,7 @@ export class Search {
       const movies = this.allVod;
       const series = this.allSeries;
       channels = current;
+      channelsComplete = PlaylistService.complete;
       const sources: Array<[SearchIndexSource, unknown[], (index: number) => string[] | string]> = [
         ['channels', current, index => channelDocument(current[index])],
         ['programmes', programs, index => programDocument(programs[index])],
@@ -1652,6 +1759,7 @@ export class Search {
     this.workerIndexLost = false;
     this.recoveryRetry = null;
     this.workerChannels = channels;
+    this.workerChannelsComplete = channelsComplete;
     this.markWorkerIndexReady(this.account);
     return true;
   }
@@ -1690,8 +1798,8 @@ export class Search {
     return this.workerIndexReady
       && !this.workerIndexLost
       && this.workerIndexedChannels === PlaylistService.channels
-      // A load still running grows the channel list in place.
-      && !PlaylistService.loading
+      && this.workerIndexedChannelsComplete
+      && PlaylistService.complete
       && this.workerIndexedGuideRevision === EpgService.guideRevision
       && this.workerIndexedAccountId === (account?.id ?? null)
       && (!account
@@ -1705,6 +1813,7 @@ export class Search {
     // What the worker holds: the channels posted and the guide data the
     // posted program index was built from, which can trail the services'.
     this.workerIndexedChannels = this.workerChannels;
+    this.workerIndexedChannelsComplete = this.workerChannelsComplete;
     this.workerIndexedGuideRevision = this.indexedChannels === this.workerChannels
       ? this.indexedGuideRevision
       : null;
@@ -1729,6 +1838,7 @@ export class Search {
     const wasReady = this.workerIndexReady;
     this.workerIndexReady = false;
     this.workerIndexedChannels = null;
+    this.workerIndexedChannelsComplete = false;
     this.workerIndexedGuideRevision = null;
     this.workerIndexedAccountId = null;
     this.workerIndexedGeneration = null;
@@ -1879,12 +1989,15 @@ export class Search {
     // Xtream: horizontal poster rails for catalog results. M3U-only channels and
     // EPG programs use compact rows so their metadata remains readable.
     const partial = this.partialIndex();
+    const moreComing = partial || this.channelsArriving();
     const resultsBody = !q
       ? html``
       : this.pendingIndex && (!partial || (!hasResults && !this.queryPending))
         ? html`<p class="catalog-hint search-empty">${t('search.preparing')}</p>`
       : this.queryPending
         ? html``
+        : !hasResults && this.channelsArriving()
+        ? html`<p class="catalog-hint search-loading-more">${t('common.loading')}</p>`
         : !hasResults
         ? html`<p class="catalog-hint search-empty">${t('search.empty')}</p>`
         : isXtream
@@ -1929,8 +2042,8 @@ export class Search {
         hasMixedLists ? 'search-lists-mixed' : ''
       }" data-nav-container data-search-query="${q}"
            data-search-pending="${this.queryPending ? 'true' : 'false'}"
-           data-search-partial="${partial ? 'true' : 'false'}">
-        <div class="search-results">${resultsBody}${partial && q && hasResults && !this.queryPending
+           data-search-partial="${moreComing ? 'true' : 'false'}">
+        <div class="search-results">${resultsBody}${moreComing && q && hasResults && !this.queryPending
           ? html`<p class="catalog-hint search-loading-more">${t('common.loading')}</p>`
           : ''}</div>
       </div>

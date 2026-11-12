@@ -502,7 +502,6 @@ export const IT_MESSAGES = {
   'parental.askAfterLeaving': 'Dopo l’uscita dall’app',
   'app.welcome': 'Benvenuto! Aggiungi l’URL di una playlist per iniziare.',
   'app.loadingChannels': 'Caricamento canali…',
-  'app.loadingChannelsProgress': 'Caricamento canali… Voci elaborate: {processed}; mantenute: {kept}',
   'app.channelsLoaded': {
     one: '{count} canale caricato',
     other: '{count} canali caricati',
