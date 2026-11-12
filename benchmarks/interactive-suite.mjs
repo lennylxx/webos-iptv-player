@@ -892,6 +892,9 @@ export function summarizeInteractiveRun(raw) {
     interactiveMs: round(m.liveInteractive),
     keyLatencyMs: round(m.liveInteractive - m.liveInteractiveKeyAt),
     loading: within(0, m.liveVisible),
+    loadedMs: raw.events?.['playlist.load.completed']
+      ? round(raw.events['playlist.load.completed'].first)
+      : null,
     channels: raw.channels,
   };
   const run = { flow: raw.flow, live };

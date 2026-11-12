@@ -250,6 +250,39 @@ describe('ChannelList edit mode', () => {
     list.handleAction('yellow');
   }
 
+  it('waits for the whole channel list before editing it', () => {
+    Object.assign(playlistMock, { loading: true });
+    try {
+      enterEdit();
+      expect(list.isEditing).toBe(false);
+      expect(toastMock.showToast).toHaveBeenLastCalledWith('Loading channels…');
+    } finally {
+      Object.assign(playlistMock, { loading: false });
+    }
+    enterEdit();
+    expect(list.isEditing).toBe(true);
+  });
+
+  it('still waits for the whole list when a PIN entered during the load lets editing in', () => {
+    let proceed: (() => void) | null = null;
+    list = new ChannelList(container, {
+      onChannelSelect: onSelect,
+      onChannelsChanged: vi.fn(),
+      onEpgMappingChanged,
+      onEpgOffsetChanged,
+      authorizeEdit: next => { proceed = next; },
+    });
+    enterEdit();
+    Object.assign(playlistMock, { loading: true });
+    try {
+      proceed!();
+      expect(list.isEditing).toBe(false);
+      expect(toastMock.showToast).toHaveBeenLastCalledWith('Loading channels…');
+    } finally {
+      Object.assign(playlistMock, { loading: false });
+    }
+  });
+
   it('yellow enters edit mode and yellow again leaves it', () => {
     enterEdit();
     expect(list.isEditing).toBe(true);

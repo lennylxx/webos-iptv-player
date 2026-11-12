@@ -180,6 +180,10 @@ class ChannelCustomizationServiceImpl {
     });
   }
 
+  get hasCustomOrder(): boolean {
+    return this.record.order.length > 0;
+  }
+
   get customGroups(): string[] {
     return this.record.customGroups.slice();
   }
@@ -222,10 +226,17 @@ class ChannelCustomizationServiceImpl {
    * the source values on `sourceName` / `sourceGroup`, so repeated calls are
    * idempotent and clearing an override restores the source value. When given,
    * `sourceIndices` (at least `channels.length` long) receives each returned
-   * channel's index in `channels`.
+   * channel's index in `channels`. `keepSourceOrder` skips the custom order,
+   * for a batch of a list still arriving.
    */
-  applyTo(channels: Channel[], includeHidden = false, sourceIndices?: Uint32Array): Channel[] {
+  applyTo(
+    channels: Channel[],
+    includeHidden = false,
+    sourceIndices?: Uint32Array,
+    keepSourceOrder = false,
+  ): Channel[] {
     const d = this.record;
+    const sorted = d.order.length > 0 && !keepSourceOrder;
     const rank = new Map<string, number>();
     for (let i = 0; i < d.order.length; i++) rank.set(d.order[i], i);
 
@@ -258,14 +269,14 @@ class ChannelCustomizationServiceImpl {
 
       const hidden = ov?.hidden === true || gov?.hidden === true;
       if (hidden && !includeHidden) continue;
-      if (!d.order.length) {
+      if (!sorted) {
         if (sourceIndices) sourceIndices[visible.length] = i;
         visible.push(ch);
         continue;
       }
       kept.push({ ch, rank: rank.get(key) ?? d.order.length + i, index: i });
     }
-    if (!d.order.length) return visible;
+    if (!sorted) return visible;
 
     // Legacy Chromium sort is not stable — the index tiebreak keeps it deterministic.
     kept.sort((a, b) => a.rank - b.rank || a.index - b.index);

@@ -46,7 +46,7 @@ import { setDisplayTz } from './utils/time';
 import { initTheme, applyTheme, applyOverlayStyle, applyTextSize } from './services/theme-service';
 import { applyAnimationMode } from './services/motion-service';
 import { channelKey } from './utils/channel';
-import { isSourceEnabled } from './utils/playlist';
+import { isSourceEnabled, playlistLoadFraction } from './utils/playlist';
 import { truncate } from './utils/text';
 import { $, show, hide, afterNextPaint } from './utils/dom';
 import { createLogger, installGlobalErrorHandlers, logEnvironment } from './utils/logger';
@@ -104,6 +104,9 @@ class App {
   private playlistRefreshPromise: Promise<void> | null = null;
   // The load confirmation toast owns the screen until loadData() settles.
   private loadingData = false;
+  // A newer loadData() supersedes an older one still running.
+  private loadGeneration = 0;
+  private userActions = 0;
   private epgRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private epgRefreshIntervalMs: number | null | undefined;
   private epgChannelReloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -237,6 +240,10 @@ class App {
       toggleFavorite: channel => this.toggleChannelFavorite(channel),
     });
     window.addEventListener('resize', () => this.livePreview.refreshLayout());
+    // Pointer clicks and wheel scrolls never reach handleKey.
+    const countAction = (): void => { this.userActions++; };
+    document.addEventListener('mousedown', countAction, true);
+    document.addEventListener('nav:wheel', countAction, true);
     ParentalControlService.subscribe(concealmentChanged =>
       this.onParentalLocksChanged(concealmentChanged));
     document.addEventListener('visibilitychange', () => {
@@ -831,6 +838,8 @@ class App {
     const delayMs = delayOverride ?? PlaylistService.getNextRefreshDelayMs(intervalMs);
     this.playlistRefreshTimer = setTimeout(() => {
       this.playlistRefreshTimer = null;
+      // A running loadData() replaces the channels and reschedules when done.
+      if (this.loadingData) return;
       void this.queuePlaylistRefresh();
     }, delayMs);
   }
@@ -893,11 +902,19 @@ class App {
 
   private async loadData(forceEpgRefresh = false): Promise<void> {
     const done = log.time('loadData');
+    const generation = ++this.loadGeneration;
+    const superseded = (): boolean => generation !== this.loadGeneration;
+    // A load this one replaced leaves its progress behind.
+    this.tabBar.endLoadProgress();
     this.loadingData = true;
     show(this.views.loading);
     this.stopEpgRefresh();
     this.stopPlaylistRefresh();
     if (this.playlistRefreshPromise) await this.playlistRefreshPromise;
+    if (superseded()) {
+      done();
+      return;
+    }
 
     this.applyDisplayTz();
     this.epgGrid.resetDay(); // re-pick today; a tz change invalidates the remembered day index
@@ -922,21 +939,71 @@ class App {
         return;
       }
 
+      const dockTabs = (): void => {
+        const enabled = StorageService.getPlaylists().filter(isSourceEnabled);
+        const xtreamAccounts = enabled.filter((p) => p.source === 'xtream' && p.xtream);
+        this.tabBar.setSections(enabled.some((p) => p.source === 'xtream'));
+        this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
+      };
       const loadingText = $('#loading-text');
       if (loadingText) loadingText.textContent = t('app.loadingChannels');
       let lastProgressAt = 0;
-      await PlaylistService.load(progress => {
-        if (!loadingText) return;
-        const now = Date.now();
-        if (now - lastProgressAt < 250) return;
-        lastProgressAt = now;
-        loadingText.textContent = t('app.loadingChannelsProgress', {
-          processed: progress.channelsProcessed,
-          kept: progress.channelsKept,
-        });
-      });
+      let loadFraction = 0;
+      // A large playlist shows its first channels while the rest arrive, and
+      // the keys work throughout.
+      let revealed = false;
+      let actionsAtReveal = 0;
+      let arrivalTimer: number | null = null;
+      const renderArrivals = (): void => {
+        arrivalTimer = null;
+        if (this.isCurrentView('channels')) this.channelList.render();
+        else if (this.isCurrentView('epg')) this.epgGrid.render();
+      };
+      const onChannels = (): void => {
+        if (superseded()) return;
+        if (!revealed) {
+          if (!PlaylistService.channels.length) return;
+          revealed = true;
+          actionsAtReveal = this.userActions;
+          hide(this.views.loading);
+          dockTabs();
+          this.tabBar.setLoadProgress(loadFraction);
+          this.showView('channels');
+          this.channelList.render();
+          return;
+        }
+        if (arrivalTimer === null) {
+          arrivalTimer = window.setTimeout(renderArrivals, CONFIG.PLAYLIST_ARRIVAL_RENDER_MS);
+        }
+      };
+      try {
+        await PlaylistService.load(progress => {
+          if (superseded()) return;
+          const now = Date.now();
+          if (now - lastProgressAt < CONFIG.PLAYLIST_PROGRESS_UPDATE_MS) return;
+          lastProgressAt = now;
+          loadFraction = playlistLoadFraction(progress, CONFIG.PLAYLIST_PROGRESS_SCALE_BYTES);
+          if (revealed) {
+            this.tabBar.setLoadProgress(loadFraction);
+            return;
+          }
+          if (!loadingText) return;
+          loadingText.textContent = t('app.loadingChannelsProgress', {
+            processed: progress.channelsProcessed,
+            kept: progress.channelsKept,
+          });
+        }, { onChannels });
+      } finally {
+        if (arrivalTimer !== null) clearTimeout(arrivalTimer);
+      }
+      if (superseded()) return;
+      if (revealed) {
+        this.tabBar.setLoadProgress(1);
+        this.tabBar.endLoadProgress();
+      }
       this.player.syncCurrentIndex();
       await ChannelHealthService.initialize();
+      if (superseded()) return;
       log.info('Channels loaded:', PlaylistService.channels.length,
         '| groups:', PlaylistService.groups.length,
         '| epgSources:', PlaylistService.epgSources);
@@ -946,15 +1013,14 @@ class App {
         log.warn('No EPG sources configured');
         EpgService.reset();
       }
-      const hasXtream = StorageService.getPlaylists()
-        .some((p) => p.source === 'xtream' && isSourceEnabled(p));
-      this.tabBar.setSections(hasXtream);
-      const xtreamAccounts = StorageService.getPlaylists()
-        .filter((p) => p.source === 'xtream' && p.xtream && isSourceEnabled(p));
-      this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
-
-      this.showView('channels');
-      this.channelList.render();
+      dockTabs();
+      if (!revealed) {
+        this.showView('channels');
+        this.channelList.render();
+      } else {
+        renderArrivals();
+        this.sidebar.refresh();
+      }
 
       showToast(tp('app.channelsLoaded', PlaylistService.channels.length));
       // Let the load confirmation finish before a new-category notice replaces it.
@@ -963,7 +1029,8 @@ class App {
       this.scanReminders();
       ReminderService.reschedulePending();
 
-      if (StorageService.getAutoPlay()) {
+      // Someone who started browsing the arriving list keeps their place.
+      if (StorageService.getAutoPlay() && (!revealed || this.userActions === actionsAtReveal)) {
         // The per-stream key survives customization and provider reshuffles.
         const lastCh = PlaylistService.resolveLastChannelIndex(StorageService.getLastChannel());
         const last = PlaylistService.channels[lastCh];
@@ -984,13 +1051,17 @@ class App {
       this.schedulePlaylistRefresh(true);
       this.searchPrewarm.schedule('startup');
     } catch (err) {
+      if (superseded()) return;
       log.error('loadData failed:', err);
       this.showView('settings');
       this.settings.render();
       showToast(t('app.loadFailed'));
     } finally {
-      this.loadingData = false;
-      hide(this.views.loading);
+      if (!superseded()) {
+        this.loadingData = false;
+        this.tabBar.endLoadProgress();
+        hide(this.views.loading);
+      }
       done();
     }
   }
@@ -1008,8 +1079,6 @@ class App {
       if (generation !== this.epgStartGeneration) return;
       try {
         this.refreshEpgDependentViews();
-        // A Guide opened while the cache was read still shows no programmes.
-        if (this.viewStack[this.viewStack.length - 1] === 'epg') this.epgGrid.render();
       } catch (err) {
         log.error('Rendering the restored guide failed:', err);
       }
@@ -1274,18 +1343,15 @@ class App {
     this.epgGrid.focusChannel(this.player.getCurrentIndex());
     this.showView('epg');
     this.epgGrid.render(true);
-    const renderEpg = () => {
-      this.refreshEpgDependentViews();
-      this.epgGrid.render();
-    };
-    EpgService.refresh(renderEpg).then(() => {
-      renderEpg();
-    });
+    const renderEpg = () => this.refreshEpgDependentViews();
+    EpgService.refresh(renderEpg).then(renderEpg);
   }
 
   private refreshEpgDependentViews(): void {
     this.applyDisplayTz();
     this.channelList.render();
+    // A Guide opened before its programs arrived shows none until redrawn.
+    if (this.isCurrentView('epg')) this.epgGrid.render();
     this.livePreview.refresh();
     this.player.refreshOsd();
     void this.search.refreshPrograms();
@@ -1598,6 +1664,7 @@ class App {
   }
 
   private handleKey(action: Action, event?: NumberEvent): void {
+    this.userActions++;
     const currentView = this.viewStack[this.viewStack.length - 1];
     const owner = Focus.owner();
 

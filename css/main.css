@@ -107,7 +107,8 @@ html[data-animation="essential"] .tab-bar-search-input,
 html[data-animation="essential"] .channel-scroll-thumb,
 html[data-animation="essential"] .epg-mapping-list,
 html[data-animation="essential"] .channel-health-progress-fill,
-html[data-animation="essential"] .osd-progress-bar {
+html[data-animation="essential"] .osd-progress-bar,
+html[data-animation="essential"] .tab-bar-progress-fill {
   transition-duration: 0.001ms !important;
 }
 

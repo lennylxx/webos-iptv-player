@@ -15,6 +15,16 @@ interface WorkerRequest {
   payload: unknown;
 }
 
+// The client's receipt of one progress message.
+interface WorkerAck {
+  kind: 'ack';
+  id: number;
+}
+
+// Progress messages a task may have in flight: a worker outpacing the page
+// would otherwise queue every chunk ahead of its timers and input.
+export const PROGRESS_WINDOW = 2;
+
 interface WorkerSuccess {
   kind: 'success';
   id: number;
@@ -140,11 +150,15 @@ export class WorkerRpcClient<Tasks extends WorkerTaskMap<Tasks>> {
       return;
     }
     const pending = this.pending.get(value.id);
-    if (!pending) return;
     if (value.kind === 'progress') {
-      pending.onChunk?.(value.chunk);
+      try {
+        pending?.onChunk?.(value.chunk);
+      } finally {
+        this.acknowledge(value.id);
+      }
       return;
     }
+    if (!pending) return;
     this.pending.delete(value.id);
     if (value.kind === 'success') {
       pending.resolve(value.result);
@@ -157,6 +171,16 @@ export class WorkerRpcClient<Tasks extends WorkerTaskMap<Tasks>> {
       Object.assign(error, { details: value.error.details });
     }
     pending.reject(error);
+  }
+
+  private acknowledge(id: number): void {
+    if (this.closed) return;
+    const ack: WorkerAck = { kind: 'ack', id };
+    try {
+      this.worker.postMessage(ack);
+    } catch {
+      // A closing worker has no stream left to pace.
+    }
   }
 
   private failAll(error: Error): void {
@@ -178,8 +202,38 @@ export function exposeWorkerTasks<Tasks extends WorkerTaskMap<Tasks>>(
   endpoint: WorkerEndpoint,
   handlers: WorkerTaskHandlers<Tasks>,
 ): void {
+  // Per request: progress waiting for a free slot, and the result held
+  // until every progress message ahead of it has been posted.
+  const streams = new Map<number, {
+    inFlight: number;
+    queued: WorkerProgress[];
+    result: WorkerSuccess | null;
+  }>();
+  const pump = (id: number): void => {
+    const stream = streams.get(id);
+    if (!stream) return;
+    while (stream.inFlight < PROGRESS_WINDOW && stream.queued.length) {
+      stream.inFlight++;
+      endpoint.postMessage(stream.queued.shift());
+    }
+    if (stream.queued.length || !stream.result) return;
+    streams.delete(id);
+    endpoint.postMessage(stream.result);
+  };
   endpoint.addEventListener('message', event => {
     const request = event.data;
+    if (isWorkerAck(request)) {
+      const stream = streams.get(request.id);
+      if (!stream) return;
+      stream.inFlight = Math.max(0, stream.inFlight - 1);
+      try {
+        pump(request.id);
+      } catch (error) {
+        streams.delete(request.id);
+        postFailure(endpoint, request.id, asError(error));
+      }
+      return;
+    }
     if (!isWorkerRequest(request)) return;
     const handler = handlers[request.task as keyof Tasks] as
       | ((payload: unknown, emitChunk: (chunk: unknown) => void) => unknown)
@@ -188,6 +242,8 @@ export function exposeWorkerTasks<Tasks extends WorkerTaskMap<Tasks>>(
       postFailure(endpoint, request.id, new Error(`Unknown worker task: ${request.task}`));
       return;
     }
+    const stream = { inFlight: 0, queued: [] as WorkerProgress[], result: null as WorkerSuccess | null };
+    streams.set(request.id, stream);
     let result: unknown;
     try {
       result = handler(request.payload, chunk => {
@@ -196,26 +252,36 @@ export function exposeWorkerTasks<Tasks extends WorkerTaskMap<Tasks>>(
           id: request.id,
           chunk,
         };
-        endpoint.postMessage(response);
+        if (stream.inFlight < PROGRESS_WINDOW && !stream.queued.length) {
+          endpoint.postMessage(response);
+          stream.inFlight++;
+        } else {
+          stream.queued.push(response);
+        }
       });
     } catch (error) {
+      streams.delete(request.id);
       postFailure(endpoint, request.id, asError(error));
       return;
     }
     void Promise.resolve(result).then(
       result => {
-        const response: WorkerSuccess = {
+        stream.result = {
           kind: 'success',
           id: request.id,
           result,
         };
         try {
-          endpoint.postMessage(response);
+          pump(request.id);
         } catch (error) {
+          streams.delete(request.id);
           postFailure(endpoint, request.id, asError(error));
         }
       },
-      error => postFailure(endpoint, request.id, asError(error)),
+      error => {
+        streams.delete(request.id);
+        postFailure(endpoint, request.id, asError(error));
+      },
     );
   });
 }
@@ -240,6 +306,12 @@ function isWorkerRequest(value: unknown): value is WorkerRequest {
   return request.kind === 'request'
     && typeof request.id === 'number'
     && typeof request.task === 'string';
+}
+
+function isWorkerAck(value: unknown): value is WorkerAck {
+  return !!value && typeof value === 'object'
+    && (value as Partial<WorkerAck>).kind === 'ack'
+    && typeof (value as Partial<WorkerAck>).id === 'number';
 }
 
 function isWorkerResponse(value: unknown): value is WorkerResponse {

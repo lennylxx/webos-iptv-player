@@ -31,6 +31,7 @@ const {
     customization,
     playlistMock: {
       channels,
+      loading: false,
       groupsRevision: 0,
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
@@ -167,6 +168,7 @@ beforeEach(() => {
   toastMock.showToast.mockClear();
   healthMock.records = {};
   playlistMock.playlistTabs = [];
+  playlistMock.loading = false;
   storageMock.toggleFavorite.mockClear();
   storageMock.setFavorites.mockClear();
   storageMock.setChannelCustomization.mockClear();
@@ -1090,6 +1092,51 @@ describe('ChannelList interaction', () => {
     expect(channelItems()).toHaveLength(1);
     expect(container.textContent).toContain('Bravo');
     expect(container.textContent).not.toContain('Alpha');
+  });
+
+  describe('while a reload brings the channels back', () => {
+    const activeGroup = () => container.querySelector<HTMLElement>('.group-item.active')?.dataset.group;
+    const reloadWithoutBravo = (): Channel[] => {
+      playlistMock.loading = true;
+      const removed = data.channels.splice(1, 1);
+      playlistMock.groupsRevision++;
+      list.render();
+      return removed;
+    };
+    const arrive = (removed: Channel[]): void => {
+      data.channels.splice(1, 0, ...removed);
+      playlistMock.groupsRevision++;
+      list.render();
+    };
+
+    beforeEach(() => {
+      hover(container.querySelector<HTMLElement>('[data-group="source:Sports"]')!);
+      list.handleAction('select');
+    });
+
+    it('returns to the selected group once it arrives', () => {
+      const removed = reloadWithoutBravo();
+      expect(activeGroup()).toBe('builtin:all');
+      arrive(removed);
+      expect(activeGroup()).toBe('source:Sports');
+      expect(channelItems().map(item => item.textContent)).toEqual([expect.stringContaining('Bravo')]);
+    });
+
+    it('keeps a group picked meanwhile over the one it waited for', () => {
+      const removed = reloadWithoutBravo();
+      hover(container.querySelector<HTMLElement>('[data-group="source:News"]')!);
+      list.handleAction('select');
+      arrive(removed);
+      expect(activeGroup()).toBe('source:News');
+    });
+
+    it('forgets the group once the load ends without it', () => {
+      const removed = reloadWithoutBravo();
+      playlistMock.loading = false;
+      list.render();
+      arrive(removed);
+      expect(activeGroup()).toBe('builtin:all');
+    });
   });
 
   it('clears the focused channel when the cursor leaves the view', () => {

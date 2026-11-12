@@ -26,6 +26,7 @@ const {
   },
   playlistMock: {
     channels: [] as unknown[],
+    loading: false,
     search: vi.fn(() => [] as unknown[]),
     searchRanked: vi.fn(),
     indexOf: vi.fn(() => 0),
@@ -143,6 +144,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   workerMock.terminate();
   playlistMock.channels = [];
+  playlistMock.loading = false;
   playlistMock.search.mockReturnValue([]);
   playlistMock.searchRanked.mockImplementation((query: string, limit: number) => {
     const items = playlistMock.search(query);
@@ -513,6 +515,25 @@ describe('Search', () => {
     warn.mockRestore();
     info.mockRestore();
     expect(container.textContent).toContain('Alpha Movie');
+  });
+
+  it('does not reuse an index while the channel list is still growing in place', async () => {
+    const channels = [chan('Alpha')];
+    playlistMock.channels = channels;
+    playlistMock.loading = true;
+    const { view } = await openWith({ vod: [vod('10', 'Alpha Movie')] });
+
+    const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    view.deactivate();
+    channels.push(chan('Bravo'));
+    await view.open(account);
+    await indexReady(view);
+    await view.setQuery('bravo');
+
+    expect(diagEvents(info, 'search.index.ready'))
+      .toEqual([expect.not.stringContaining('mode=reused')]);
+    info.mockRestore();
+    expect(container.textContent).toContain('Bravo');
   });
 
   it('recovers from a worker crash while open and reuses the rebuilt index on reopen', async () => {

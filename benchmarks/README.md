@@ -69,6 +69,10 @@ is a warm one:
 | `searchCold` | Search opened at once: input ready, the first candidate for a typed query, then all results once movies and series are indexed (`allResultsMs`) |
 | `searchSteady` | The same after Live is ready |
 
+Live shows its first channels while the rest of a playlist arrives, so
+`live.loadedMs` records when the whole playlist finished loading, which can
+come after the first key.
+
 The Xtream fixture holds 50,000 Live streams, 200,000 movies, 200,000 series,
 and 5,000 categories per type. Each run also records long tasks, request
 counts per route, and IndexedDB read and commit counts.

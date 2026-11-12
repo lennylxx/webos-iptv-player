@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Channel, ChannelCustomization } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
 
@@ -2178,5 +2178,254 @@ describe('PlaylistService customization', () => {
 http://stream/u4`);
     await PlaylistService.refresh();
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo', 'Alpha', 'Delta']);
+  });
+});
+
+describe('PlaylistService progressive load', () => {
+  const BIG = ['#EXTM3U'];
+  const GROUPS = ['News', 'Sports', '', 'Kids'];
+  for (let i = 0; i < 11; i++) {
+    const group = GROUPS[i % GROUPS.length];
+    BIG.push(`#EXTINF:-1 tvg-id="ch${String(i)}"${group ? ` group-title="${group}"` : ''},ch${String(i)}`);
+    BIG.push(`http://stream/s${String(i)}`);
+  }
+  const keyOf = (i: number) => channelKey({ url: `http://stream/s${String(i)}` } as Channel);
+
+  // Like the real loader: the parsed channels arrive in batches, tail included.
+  function streamInBatches(size: number): void {
+    const base = vi.mocked(fetchAndParseM3U).getMockImplementation()!;
+    vi.mocked(fetchAndParseM3U).mockImplementation(async (...args) => {
+      const result = await base(...args);
+      const onChannels = args[9];
+      const all = result.data.channels;
+      for (let i = 0; onChannels && i < all.length; i += size) onChannels(all.slice(i, i + size));
+      return result;
+    });
+  }
+
+  function useRecord(over: Partial<ChannelCustomization>): void {
+    storageMock.getChannelCustomization.mockReturnValue({
+      version: CONFIG.CHANNEL_CUSTOMIZATION_VERSION,
+      overrides: {}, order: [], groupOrder: [], groupOverrides: {}, customGroups: [], ...over,
+    });
+    ChannelCustomizationService.reload();
+  }
+
+  function snapshot() {
+    const names = (list: Channel[]) => list.map(c => c.name);
+    const groups = PlaylistService.getGroupsForPlaylist();
+    return {
+      all: names(PlaylistService.allChannels),
+      channels: names(PlaylistService.channels),
+      unconcealed: names(PlaylistService.getUnconcealedChannels()),
+      groups,
+      byGroup: groups.map(g => names(PlaylistService.getByGroup(`source:${g}`))),
+      byPlaylist: names(PlaylistService.getByGroup('builtin:all', 'p1')),
+      indexes: PlaylistService.channels.map(c => PlaylistService.indexOf(c)),
+      keys: [0, 1, 2, 3].map(i => PlaylistService.indexOfKey(keyOf(i))),
+      sources: Array.from((PlaylistService as unknown as {
+        channelSourceIndices: Uint32Array;
+      }).channelSourceIndices),
+      search: names(PlaylistService.searchLocalRanked('ch1', 10).items),
+    };
+  }
+
+  const loadInBatches = async (seen: Array<{ loading: boolean; count: number }> = []) => {
+    streamInBatches(3);
+    await PlaylistService.refresh(undefined, {
+      onChannels: () => seen.push({
+        loading: PlaylistService.loading,
+        count: PlaylistService.channels.length,
+      }),
+    });
+    return seen;
+  };
+
+  beforeEach(() => {
+    storageMock.getPlaylists.mockReturnValue([{ id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' }]);
+    fetchTextMock.mockResolvedValue(BIG.join('\n'));
+    useRecord({});
+  });
+
+  afterEach(() => {
+    vi.mocked(fetchAndParseM3U).mockRestore?.();
+    storageMock.getChannelCustomization.mockReturnValue(null);
+    ChannelCustomizationService.reload();
+    vi.restoreAllMocks();
+  });
+
+  it('lists every source tab from the first batch', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' },
+      { id: 'p2', name: 'P2', url: 'http://host1/p2.m3u' },
+    ]);
+    PlaylistService.reset();
+    const tabs: string[][] = [];
+    streamInBatches(3);
+    await PlaylistService.refresh(undefined, {
+      onChannels: () => tabs.push(PlaylistService.playlistTabs.map(tab => tab.id)),
+    });
+    expect(tabs[0]).toEqual(['p1', 'p2']);
+  });
+
+  it('shows the channels batch by batch, then matches a whole load', async () => {
+    useRecord({
+      overrides: { [keyOf(1)]: { hidden: true }, [keyOf(4)]: { name: 'renamed', group: 'custom:mine' } },
+      customGroups: ['custom:mine'],
+    });
+    const concealing = vi.spyOn(ParentalControlService, 'concealing', 'get').mockReturnValue(true);
+    vi.spyOn(ParentalControlService, 'isConcealed').mockImplementation(request =>
+      request.target.kind === 'live-channel' && request.target.channelKey === keyOf(5));
+    await PlaylistService.refresh();
+    const whole = snapshot();
+
+    const seen = await loadInBatches();
+    expect(seen.map(s => s.loading)).toEqual([true, true, true, true]);
+    expect(seen.map(s => s.count)).toEqual([2, 4, 7, 9]);
+    expect(PlaylistService.loading).toBe(false);
+    expect(snapshot()).toEqual(whole);
+    concealing.mockReturnValue(false);
+  });
+
+  it('adopts the arrived channels under new list identities', async () => {
+    let during: Channel[] | null = null;
+    const apply = vi.spyOn(PlaylistService, 'applyCustomization');
+    streamInBatches(4);
+    await PlaylistService.refresh(undefined, {
+      onChannels: () => { during = PlaylistService.channels; },
+    });
+    expect(apply).not.toHaveBeenCalled();
+    expect(PlaylistService.channels).toHaveLength(11);
+    expect(PlaylistService.channels).not.toBe(during);
+    expect(PlaylistService.channels).toEqual(during);
+  });
+
+  it('applies a custom channel order once the whole list is in', async () => {
+    useRecord({ order: [keyOf(10), keyOf(2)] });
+    const seen: string[][] = [];
+    streamInBatches(4);
+    await PlaylistService.refresh(undefined, {
+      onChannels: () => seen.push(PlaylistService.channels.map(c => c.name)),
+    });
+    expect(seen[0]).toEqual(['ch0', 'ch1', 'ch2', 'ch3']);
+    expect(PlaylistService.channels.slice(0, 3).map(c => c.name)).toEqual(['ch10', 'ch2', 'ch0']);
+  });
+
+  it('merges a second playlist in a whole pass at the end', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' },
+      { id: 'p2', name: 'P2', url: 'http://host2/p2.m3u' },
+    ]);
+    fetchTextMock.mockImplementation((url: string) =>
+      Promise.resolve(url.includes('p1') ? BIG.join('\n') : P2));
+    await PlaylistService.refresh();
+    const whole = snapshot();
+    const seen = await loadInBatches();
+    expect(seen.at(-1)!.count).toBe(11);
+    expect(snapshot()).toEqual(whole);
+  });
+
+  it('lists the channels under a second playlist that only repeats the first', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' },
+      { id: 'p2', name: 'P2', url: 'http://host2/p1-copy.m3u' },
+    ]);
+    await PlaylistService.refresh();
+    const whole = PlaylistService.getByGroup('builtin:all', 'p2').map(c => c.name);
+    const groups = PlaylistService.getGroupsForPlaylist('p2');
+    expect(whole).toHaveLength(11);
+    expect(groups).toHaveLength(4);
+    await loadInBatches();
+    expect(PlaylistService.getByGroup('builtin:all', 'p2').map(c => c.name)).toEqual(whole);
+    expect(PlaylistService.getGroupsForPlaylist('p2')).toEqual(groups);
+  });
+
+  it('drops a failed source\'s arrived channels before the next source streams in', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' },
+      { id: 'p2', name: 'P2', url: 'http://host2/p2.m3u' },
+    ]);
+    fetchTextMock.mockImplementation((url: string) =>
+      Promise.resolve(url.includes('p1') ? BIG.join('\n') : P2));
+    const base = vi.mocked(fetchAndParseM3U).getMockImplementation()!;
+    vi.mocked(fetchAndParseM3U).mockImplementation(async (...args) => {
+      const result = await base(...args);
+      const onChannels = args[9];
+      if (args[0].includes('p1')) {
+        onChannels?.(result.data.channels.slice(0, 3));
+        throw new Error('connection reset');
+      }
+      onChannels?.(result.data.channels);
+      return result;
+    });
+    const seen: string[][] = [];
+    await PlaylistService.refresh(undefined, {
+      onChannels: () => seen.push(PlaylistService.channels.map(c => c.name)),
+    });
+    expect(seen.at(-1)).toEqual(['Bravo Dup', 'Charlie']);
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
+  });
+
+  function holdFirstFetch(): { started: () => boolean; release: () => void } {
+    let releaseFirst: ((text: string) => void) | null = null;
+    fetchTextMock.mockImplementationOnce(() => new Promise<string>(resolve => (releaseFirst = resolve)));
+    return { started: () => releaseFirst !== null, release: () => releaseFirst!(BIG.join('\n')) };
+  }
+
+  it('keeps a load cleared by reset() from bringing its channels back', async () => {
+    streamInBatches(4);
+    const held = holdFirstFetch();
+    const first = PlaylistService.refresh(undefined, { onChannels: () => {} });
+    await vi.waitFor(() => expect(held.started()).toBe(true));
+    PlaylistService.reset();
+    held.release();
+    await first;
+    expect(PlaylistService.channels).toEqual([]);
+    expect(PlaylistService.allChannels).toEqual([]);
+  });
+
+  it('keeps a load a cache hit replaced from adding to the cached list', async () => {
+    streamInBatches(4);
+    const held = holdFirstFetch();
+    const first = PlaylistService.refresh(undefined, { onChannels: () => {} });
+    await vi.waitFor(() => expect(held.started()).toBe(true));
+    const cached = [channel({ id: 'a', name: 'Alpha', url: 'http://stream/a', playlistIds: ['p1'] })];
+    cacheMock.getCachedPlaylist.mockResolvedValueOnce({ channels: cached, epgSources: [], timestamp: Date.now() });
+    await PlaylistService.load();
+    held.release();
+    await first;
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha']);
+    expect(cached).toHaveLength(1);
+  });
+
+  it('ends the progressive load when a source throws outside its own recovery', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'p1', name: 'P1', url: 'http://host1/p1.m3u' },
+      { id: 'p2', name: 'P2', url: 'http://host2/p2.m3u' },
+    ]);
+    streamInBatches(4);
+    const log = console.log;
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      if (args.includes('event=playlist.source.load.started') && args.includes('load=2')) {
+        throw new Error('boom');
+      }
+      log(...args);
+    });
+    await expect(PlaylistService.refresh(undefined, { onChannels: () => {} })).rejects.toThrow('boom');
+    expect(PlaylistService.loading).toBe(false);
+  });
+
+  it('drops the result of a load a newer one replaced', async () => {
+    streamInBatches(4);
+    let releaseFirst!: (text: string) => void;
+    fetchTextMock.mockImplementationOnce(() => new Promise<string>(resolve => (releaseFirst = resolve)));
+    const first = PlaylistService.refresh(undefined, { onChannels: () => {} });
+    await vi.waitFor(() => expect(releaseFirst).toBeTypeOf('function'));
+    fetchTextMock.mockResolvedValue(P1);
+    await PlaylistService.refresh(undefined, { onChannels: () => {} });
+    releaseFirst(BIG.join('\n'));
+    await first;
+    expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
+    expect(PlaylistService.loading).toBe(false);
   });
 });

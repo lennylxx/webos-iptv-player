@@ -95,6 +95,8 @@ export class TabBar {
   private accounts: PlaylistEntry[] = [];
   private selectedAccountId = '';
   private lockShown = false;
+  // Playlist load progress, 0..1; null when no load is under way.
+  private loadFraction: number | null = null;
   private readonly scope: FocusScope;
 
   constructor(handlers: TabBarHandlers) {
@@ -173,6 +175,20 @@ export class TabBar {
     }
     this.switcher?.setAccounts(accounts, selectedId);
     if (this._shown) this.render();
+  }
+
+  // A playlist still arriving shows its progress along the bar's lower edge.
+  setLoadProgress(fraction: number): void {
+    const starting = this.loadFraction === null;
+    this.loadFraction = Math.max(starting ? 0 : this.loadFraction!, Math.min(1, fraction));
+    if (starting) this.render();
+    this.paintLoadProgress(starting);
+  }
+
+  endLoadProgress(): void {
+    if (this.loadFraction === null) return;
+    this.loadFraction = null;
+    this.render();
   }
 
   setShown(v: boolean): void {
@@ -522,9 +538,12 @@ export class TabBar {
         ` : ''}
         <div class="tab-bar-account" data-key="account-slot" data-morph-preserve></div>
       </div>
+      <div class="tab-bar-progress ${this.loadFraction === null ? '' : 'active'}"
+           data-key="load-progress" data-morph-preserve></div>
     `);
     this.mountSearch();
     this.mountAccount();
+    this.paintLoadProgress(false);
     if (!this._focused) return;
     this.scope.focus(this.focusKey(), 'key');
     // The box's caret marks where the keys go.
@@ -555,6 +574,27 @@ export class TabBar {
     input.placeholder = this.searchPlaceholder();
     const btn = wrap.querySelector<HTMLElement>('.search-icon')!;
     btn.classList.toggle('active', this.active === 'search');
+  }
+
+  // The fill keeps its last width while the bar fades out; a new load jumps
+  // it back to the start instead of sliding there.
+  private paintLoadProgress(jump: boolean): void {
+    const track = this.el?.querySelector<HTMLElement>('.tab-bar-progress');
+    if (!track || this.loadFraction === null) return;
+    let fill = track.firstElementChild as HTMLElement | null;
+    if (!fill) {
+      fill = document.createElement('div');
+      fill.className = 'tab-bar-progress-fill';
+      track.appendChild(fill);
+    }
+    if (jump) {
+      fill.style.transition = 'none';
+      fill.style.transform = `scaleX(${this.loadFraction})`;
+      void fill.offsetWidth;
+      fill.style.transition = '';
+      return;
+    }
+    fill.style.transform = `scaleX(${this.loadFraction})`;
   }
 
   // Release DOM focus so d-pad/OK reach what is below; stay in the box when

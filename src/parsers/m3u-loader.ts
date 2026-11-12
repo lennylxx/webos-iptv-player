@@ -33,6 +33,7 @@ import { holdWorkerValue } from '../services/worker-held-records';
 export type M3ULoadResult = M3UWorkerResponse;
 export interface M3ULoadProgress {
   inputBytes: number;
+  totalBytes?: number;
   chunks: number;
   channelsProcessed: number;
   channelsKept: number;
@@ -52,6 +53,7 @@ export async function fetchAndParseM3U(
   playlistId?: string,
   holdChannels = false,
   xtreamCatchup?: XtreamCatchupRequest,
+  onChannels?: (channels: Channel[]) => void,
 ): Promise<M3ULoadResult> {
   const inWorker = typeof Worker !== 'undefined';
   const started = Date.now();
@@ -93,6 +95,7 @@ export async function fetchAndParseM3U(
   const handleChunk = (chunk: M3UWorkerChunk): void => {
     if (chunk.kind === 'channels') {
       channelBatches.push(...chunk.channels);
+      onChannels?.(chunk.channels);
     } else {
       log.info(
         'M3U stream load progress',
@@ -105,6 +108,7 @@ export async function fetchAndParseM3U(
     }
     onProgress?.({
       inputBytes: chunk.inputBytes,
+      ...(chunk.totalBytes ? { totalBytes: chunk.totalBytes } : {}),
       chunks: chunk.chunks,
       channelsProcessed: chunk.channelsEmitted + chunk.channelsDropped,
       channelsKept: chunk.channelsEmitted,
@@ -131,6 +135,7 @@ export async function fetchAndParseM3U(
     );
     throw error;
   }
+  onChannels?.(result.data.channels);
   if (channelBatches.length) {
     result.data.channels = channelBatches.concat(result.data.channels);
   }
@@ -232,6 +237,7 @@ export async function fetchAndParseM3UInWorker(
     return kept;
   };
   let inputBytes = 0;
+  let totalBytes = 0;
   let chunks = 0;
   let nextProgressBytes = PROGRESS_INTERVAL_BYTES;
   let reportedInputBytes = -1;
@@ -255,6 +261,7 @@ export async function fetchAndParseM3UInWorker(
               kind: 'channels',
               channels: kept,
               inputBytes,
+              ...(totalBytes ? { totalBytes } : {}),
               chunks,
               channelsEmitted: emittedChannels,
               channelsDropped: liveFilters.getDroppedCount(),
@@ -290,6 +297,7 @@ export async function fetchAndParseM3UInWorker(
       catchup.clock = (await awaitCatchupClock(clockReady))?.clock ?? null;
       timer = setTimeout(() => controller.abort(), remaining);
     }
+    totalBytes = decodedResponseLength(response.headers);
     stage = 'read';
     reader = typeof response.body?.getReader === 'function'
       ? response.body.getReader()
@@ -371,6 +379,7 @@ export async function fetchAndParseM3UInWorker(
     const progress: M3UWorkerChunk = {
       kind: 'progress',
       inputBytes,
+      ...(totalBytes ? { totalBytes } : {}),
       chunks,
       channelsEmitted: emittedChannels,
       channelsDropped: liveFilters.getDroppedCount(),
@@ -621,4 +630,14 @@ function appendBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
   joined.set(left);
   joined.set(right, left.length);
   return joined;
+}
+
+// A compressed body's Content-Length counts the wire bytes, not the decoded
+// bytes the reader yields, so only an uncompressed length is a total.
+export function decodedResponseLength(headers: Headers | undefined): number {
+  if (!headers) return 0;
+  const encoding = (headers.get('content-encoding') || 'identity').trim().toLowerCase();
+  if (encoding !== 'identity') return 0;
+  const length = Number(headers.get('content-length'));
+  return Number.isFinite(length) && length > 0 ? Math.floor(length) : 0;
 }

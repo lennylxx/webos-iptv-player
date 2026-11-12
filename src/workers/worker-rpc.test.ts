@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exposeWorkerTasks, WorkerRpcClient } from './worker-rpc';
+import { exposeWorkerTasks, PROGRESS_WINDOW, WorkerRpcClient } from './worker-rpc';
 
 interface TestTasks {
   add: {
@@ -111,6 +111,58 @@ describe('WorkerRpcClient', () => {
 
     await expect(result).resolves.toBe(5);
     expect(chunks).toEqual([2, 3]);
+  });
+
+  it('paces progress by acknowledgement and completes after the last chunk', async () => {
+    const [clientEndpoint, workerEndpoint] = linkedEndpoints();
+    const heldAcks: unknown[] = [];
+    const send = clientEndpoint.postMessage.bind(clientEndpoint);
+    clientEndpoint.postMessage = (message: unknown) => {
+      if ((message as { kind?: string }).kind === 'ack') heldAcks.push(message);
+      else send(message);
+    };
+    const releaseAck = (): void => send(heldAcks.shift());
+    exposeWorkerTasks<TestTasks>(workerEndpoint, {
+      add: ({ left, right }, emitChunk) => {
+        for (let i = 0; i < 5; i++) emitChunk(i);
+        return left + right;
+      },
+      fail: () => {
+        throw new Error('failed task');
+      },
+    });
+    const client = new WorkerRpcClient<TestTasks>(clientEndpoint);
+    const chunks: number[] = [];
+    let settled = false;
+    const result = client.request('add', { left: 2, right: 3 }, chunk => {
+      chunks.push(chunk);
+    }).finally(() => (settled = true));
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    await flush();
+    expect(chunks).toEqual([0, 1]);
+    expect(heldAcks).toHaveLength(PROGRESS_WINDOW);
+    expect(settled).toBe(false);
+    releaseAck();
+    await flush();
+    expect(chunks).toEqual([0, 1, 2]);
+    while (heldAcks.length && chunks.length < 5) {
+      releaseAck();
+      await flush();
+    }
+    expect(chunks).toEqual([0, 1, 2, 3, 4]);
+    expect(settled).toBe(true);
+    await expect(result).resolves.toBe(5);
+  });
+
+  it('acknowledges progress for a request it no longer waits on', async () => {
+    const [clientEndpoint] = linkedEndpoints();
+    const posted: unknown[] = [];
+    clientEndpoint.postMessage = (message: unknown) => posted.push(message);
+    new WorkerRpcClient<TestTasks>(clientEndpoint);
+    clientEndpoint.peer!.postMessage({ kind: 'progress', id: 41, chunk: 1 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(posted).toEqual([{ kind: 'ack', id: 41 }]);
   });
 
   it('rejects pending work and terminates explicitly', async () => {

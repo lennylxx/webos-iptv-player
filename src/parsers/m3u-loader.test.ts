@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { awaitCatchupClock, fetchAndParseM3U, fetchAndParseM3UInWorker } from './m3u-loader';
+import {
+  awaitCatchupClock,
+  decodedResponseLength,
+  fetchAndParseM3U,
+  fetchAndParseM3UInWorker,
+} from './m3u-loader';
 import { CONFIG } from '../config';
 import { serializedBytes } from '../utils/serialized-bytes';
 import { measureHeldValue, writeHeldValue } from '../workers/held-values';
@@ -399,6 +404,23 @@ describe('fetchAndParseM3UInWorker', () => {
     ]);
     expect(channels.every(ch => ch.playlistIds.join() === 'pl1')).toBe(true);
     expect(result.metrics.duplicates).toBe(50);
+  });
+
+  it('reports the response size with every chunk when the server sends it', async () => {
+    const lines = ['#EXTM3U'];
+    for (let i = 0; i < 600; i++) lines.push(`#EXTINF:-1,ch${String(i)}`, `http://host/s${String(i)}`);
+    const bytes = new TextEncoder().encode(lines.join('\n'));
+    const response = streamResponse([bytes]);
+    Object.assign(response, { headers: new Headers({ 'content-length': String(bytes.length) }) });
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+    const totals: Array<number | undefined> = [];
+
+    await fetchAndParseM3UInWorker({ url: 'http://host/a', timeout: 5000 }, chunk => {
+      totals.push(chunk.totalBytes);
+    });
+
+    expect(totals.length).toBeGreaterThan(1);
+    expect(totals.every(total => total === bytes.length)).toBe(true);
   });
 
   it('holds every channel it sent, measured as the page will store them', async () => {
@@ -880,5 +902,20 @@ describe('Xtream Live category name-match fallback', () => {
 
     expect(result.data.channels.map(channel => channel.name)).toEqual(['ch1', 'ch2', 'ch3']);
     expect(result.metrics).toMatchObject({ filter: 'unavailable', channelsDropped: 0 });
+  });
+});
+
+describe('decodedResponseLength', () => {
+  it('counts only an uncompressed Content-Length as the total', () => {
+    expect(decodedResponseLength(new Headers({ 'content-length': '1200' }))).toBe(1200);
+    expect(decodedResponseLength(new Headers({
+      'content-length': '1200',
+      'content-encoding': 'identity',
+    }))).toBe(1200);
+    expect(decodedResponseLength(new Headers({
+      'content-length': '1200',
+      'content-encoding': 'gzip',
+    }))).toBe(0);
+    expect(decodedResponseLength(new Headers())).toBe(0);
   });
 });

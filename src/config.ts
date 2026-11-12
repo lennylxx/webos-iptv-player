@@ -22,6 +22,13 @@ export const CONFIG = {
   DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
   WORKER_IDLE_TERMINATION_MS: 1000,
   PLAYLIST_CACHE_WRITE_DELAY_MS: 1200,
+  // Channels still arriving re-render the list at most this often; each
+  // render competes with the arriving batches for the main thread.
+  PLAYLIST_ARRIVAL_RENDER_MS: 1000,
+  // The load progress text and bar update at most this often.
+  PLAYLIST_PROGRESS_UPDATE_MS: 250,
+  // Without a known size, the load bar covers 63% of the way per this many bytes.
+  PLAYLIST_PROGRESS_SCALE_BYTES: 32 * 1024 * 1024,
   DEFAULT_EPG_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
   REMINDER_SCAN_INTERVAL: 30 * 1000,
   CHANNEL_SCROLLBAR_HIDE_MS: 900,

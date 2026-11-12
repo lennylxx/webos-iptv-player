@@ -26,6 +26,7 @@ class FakeWorker {
   }
 
   postMessage(message: unknown): void {
+    if ((message as { kind?: string }).kind === 'ack') return;
     FakeWorker.request = message;
     if (!FakeWorker.respond) return;
     const id = (message as { id: number }).id;

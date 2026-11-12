@@ -13,3 +13,20 @@ export function genPlaylistId(): string {
 export function isSourceEnabled(source: Pick<PlaylistEntry, 'enabled'>): boolean {
   return source.enabled !== false;
 }
+
+// How far a playlist load has come, 0..1. A source of unknown size eases
+// toward the end and never claims to be done.
+export function playlistLoadFraction(progress: {
+  sourceNumber: number;
+  sourceCount: number;
+  inputBytes: number;
+  totalBytes?: number;
+}, unknownScaleBytes: number): number {
+  const { inputBytes, totalBytes } = progress;
+  const source = totalBytes && inputBytes <= totalBytes
+    ? inputBytes / totalBytes
+    : Math.min(0.95, 1 - Math.exp(-inputBytes / unknownScaleBytes));
+  const count = Math.max(1, progress.sourceCount);
+  const done = Math.min(count, Math.max(1, progress.sourceNumber)) - 1;
+  return Math.min(1, (done + source) / count);
+}

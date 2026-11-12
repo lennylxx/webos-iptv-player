@@ -13,6 +13,32 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* A playlist still loading fills this strip along the bar's lower edge. */
+.tab-bar-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  overflow: hidden;
+  background: var(--border);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.tab-bar-progress.active {
+  opacity: 1;
+}
+
+.tab-bar-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform 0.25s linear;
+}
+
 /* Hidden on the full-screen player. */
 .tab-bar--hidden {
   display: none;

@@ -1690,6 +1690,8 @@ export class Search {
     return this.workerIndexReady
       && !this.workerIndexLost
       && this.workerIndexedChannels === PlaylistService.channels
+      // A load still running grows the channel list in place.
+      && !PlaylistService.loading
       && this.workerIndexedGuideRevision === EpgService.guideRevision
       && this.workerIndexedAccountId === (account?.id ?? null)
       && (!account

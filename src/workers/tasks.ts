@@ -83,6 +83,8 @@ export type M3UWorkerChunk =
       kind: 'channels';
       channels: Channel[];
       inputBytes: number;
+      /** The response's decoded size, when its headers reveal it. */
+      totalBytes?: number;
       chunks: number;
       channelsEmitted: number;
       channelsDropped: number;
@@ -90,6 +92,7 @@ export type M3UWorkerChunk =
   | {
       kind: 'progress';
       inputBytes: number;
+      totalBytes?: number;
       chunks: number;
       channelsEmitted: number;
       channelsDropped: number;
