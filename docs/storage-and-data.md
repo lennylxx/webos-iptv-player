@@ -156,7 +156,7 @@ eviction algorithm.
 
 | Object store | Key path | Indexes | Contents |
 | --- | --- | --- | --- |
-| `playlist-cache` | `key` | `expiresAt`, `lastAccessedAt` | Key `combined`; payload version, playlist-source signature, full parsed `Channel[]` including playback URLs/headers/catch-up metadata, derived EPG sources, and timestamp |
+| `playlist-cache` | `key` | `expiresAt`, `lastAccessedAt` | Key `combined`: payload version, playlist-source signature, derived EPG sources, timestamp, and chunk and channel counts. The parsed `Channel[]` (playback URLs/headers/catch-up metadata included) sits in chunk records `<key>#000000`, … with the same timestamp, a small first chunk and larger ones after, so a launch shows the first channels while the rest are read; eviction and clearing remove the chunks with the head, which alone holds the entry's accounting. |
 | `epg-cache` | `url` | `expiresAt`, `lastAccessedAt` | Parsed XMLTV channels, aliases/icons, program start/stop/title/description/category/icon, feed offset, optional channel filter, and timestamp |
 | `catalog-cache` | `key` | `expiresAt`, `lastAccessedAt` | Xtream categories, VOD/series lists and details, and media-container probes |
 | `stream-mime-cache` | `key` | `expiresAt`, `lastAccessedAt` | Normalized provider route mapped to detected MIME and probe time; accounted and evicted in the `catalog` category |

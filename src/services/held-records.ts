@@ -11,6 +11,8 @@ export interface HeldWriteRequest {
   writes: HeldWrite[];
   /** Dotted path in `writes[0].value`, e.g. `data` or `data.channels`. */
   field: string;
+  /** `writes[0]` is a playlist stored as chunks; its key sits at this path. */
+  chunkKeyPath?: string;
 }
 
 export type HeldWriteResult = 'written' | 'missing' | 'quota_exceeded' | 'failed';

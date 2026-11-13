@@ -29,6 +29,8 @@ const handlers: WorkerTaskHandlers<AppWorkerTasks> = {
     (store, value) => searchIndex.retainCatalogRecord(store, value),
   ),
   'cache.measure-held': request => Promise.resolve(measureHeldValue(request.token)),
+  // TODO(cleanup, post-1.18.0): remove with migrateLegacyPlaylistCache.
+  'cache.migrate-playlist': request => cacheDb.migratePlaylist(request.key, request.keyPath, request.timeoutMs),
   'cache.release-held': (request) => {
     releaseHeldValue(request.token);
     return Promise.resolve();

@@ -399,6 +399,11 @@ export interface AppWorkerTasks {
     request: { token: string };
     response: number | null;
   };
+  // TODO(cleanup, post-1.18.0): remove with migrateLegacyPlaylistCache.
+  'cache.migrate-playlist': {
+    request: { key: string; keyPath: string; timeoutMs: number };
+    response: number | null;
+  };
   'cache.release-held': {
     request: { token: string };
     response: void;

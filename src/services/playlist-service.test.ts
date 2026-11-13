@@ -23,6 +23,24 @@ const { storageMock, cacheMock, fetchTextMock, heldReleaseMock } = vi.hoisted(()
   },
   cacheMock: {
     getCachedPlaylist: vi.fn(),
+    // Serves `getCachedPlaylist`'s record as one chunk.
+    openCachedPlaylist: vi.fn(async (maxAgeMs: number | null) => {
+      const cached = await cacheMock.getCachedPlaylist(maxAgeMs) as {
+        channels: unknown[];
+        epgSources?: unknown[];
+        timestamp?: number;
+        sourceIds?: string[];
+      } | null;
+      if (!cached) return null;
+      return {
+        epgSources: cached.epgSources ?? [],
+        timestamp: cached.timestamp,
+        sourceIds: cached.sourceIds,
+        channelCount: cached.channels.length,
+        readChannels: (onChunk?: (chunk: unknown[]) => boolean | void) =>
+          Promise.resolve(onChunk?.(cached.channels) === false ? null : cached.channels),
+      };
+    }),
     scheduleCachedPlaylist: vi.fn(),
     playlistCacheToken: vi.fn(() => ({ signature: 's1', generation: 0 })),
     cacheRecordRef: vi.fn((_value: unknown): unknown => null),
@@ -1546,6 +1564,144 @@ describe('PlaylistService.load', () => {
 
     expect(some).not.toHaveBeenCalled();
     expect(PlaylistService.allChannels).toBe(cached);
+  });
+
+  describe('from a cache in chunks', () => {
+    const chunks = () => [
+      [
+        channel({ id: 'a', name: 'Alpha', group: 'News', url: 'http://stream/a', playlistIds: ['P1'] }),
+        channel({ id: 'b', name: 'Bravo', group: 'News', url: 'http://stream/b', playlistIds: ['P1'] }),
+      ],
+      [channel({ id: 'c', name: 'Charlie', group: 'Sports', url: 'http://stream/c', playlistIds: ['P1'] })],
+    ];
+
+    // Hands over each chunk in its own task, like the IndexedDB reads.
+    function cacheInChunks(parts: Channel[][], readable = true): void {
+      const all = parts.flat();
+      cacheMock.openCachedPlaylist.mockResolvedValue({
+        epgSources: [],
+        timestamp: 1000,
+        sourceIds: ['P1'],
+        channelCount: all.length,
+        readChannels: async (onChunk?: (chunk: Channel[]) => boolean | void) => {
+          for (let i = 0; i < parts.length; i++) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+            if (!readable && i === parts.length - 1) return null;
+            if (onChunk?.(parts[i]) === false) return null;
+          }
+          return all;
+        },
+      });
+    }
+
+    const wholeRecord = cacheMock.openCachedPlaylist.getMockImplementation()!;
+
+    beforeEach(() => {
+      storageMock.getPlaylists.mockReturnValue([{ id: 'P1', name: 'P1', url: 'http://host/p1.m3u' }]);
+    });
+
+    afterEach(() => {
+      cacheMock.openCachedPlaylist.mockImplementation(wholeRecord);
+    });
+
+    it('shows each chunk as it is read, then the whole list', async () => {
+      const parts = chunks();
+      cacheInChunks(parts);
+      const seen: Array<[string[], boolean]> = [];
+      const progress: number[] = [];
+
+      await PlaylistService.load(p => progress.push(p.inputBytes / p.totalBytes!), {
+        onChannels: () => seen.push([PlaylistService.channels.map(c => c.name), PlaylistService.complete]),
+      });
+
+      expect(seen).toEqual([
+        [[], false],
+        [['Alpha', 'Bravo'], false],
+        [['Alpha', 'Bravo', 'Charlie'], false],
+      ]);
+      expect(progress).toEqual([2 / 3, 1]);
+      expect(PlaylistService.complete).toBe(true);
+      expect(PlaylistService.allChannels).toEqual(parts.flat());
+      expect(PlaylistService.groups).toEqual(['News', 'Sports']);
+      expect(fetchTextMock).not.toHaveBeenCalled();
+    });
+
+    it('stops reading once a newer load replaced it', async () => {
+      cacheInChunks(chunks());
+      let callsAfterReplaced = 0;
+      let newer: Promise<Channel[]> | null = null;
+      const first = PlaylistService.load(undefined, {
+        onChannels: () => {
+          if (newer) callsAfterReplaced++;
+          if (!PlaylistService.channels.length || newer) return;
+          cacheMock.openCachedPlaylist.mockResolvedValue(null);
+          cacheMock.getCachedPlaylist.mockResolvedValue(null);
+          fetchTextMock.mockResolvedValue(P2);
+          newer = PlaylistService.load(undefined, { onChannels: () => {} });
+        },
+      });
+      await first;
+      await newer;
+
+      expect(callsAfterReplaced).toBe(0);
+      // Only the newer load went to the network.
+      expect(fetchTextMock).toHaveBeenCalledTimes(1);
+      expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
+    });
+
+    it('leaves the network to a newer load when a chunk goes missing under it', async () => {
+      cacheInChunks(chunks(), false);
+      let releaseNewer!: (value: null) => void;
+      let newer: Promise<Channel[]> | null = null;
+      fetchTextMock.mockResolvedValue(P2);
+      const first = PlaylistService.load(undefined, {
+        onChannels: () => {
+          if (!PlaylistService.channels.length || newer) return;
+          // The newer load is still clearing the cache when the chunk goes missing.
+          cacheMock.openCachedPlaylist.mockReturnValue(new Promise(resolve => { releaseNewer = resolve; }));
+          newer = PlaylistService.load(undefined, { onChannels: () => {} });
+        },
+      });
+      await first;
+      releaseNewer(null);
+      await newer;
+
+      expect(fetchTextMock).toHaveBeenCalledTimes(1);
+      expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
+    });
+
+    it('drops a disabled source from only the chunks that carry it', async () => {
+      storageMock.getPlaylists.mockReturnValue([
+        { id: 'P1', name: 'P1', url: 'http://host/p1.m3u' },
+        { id: 'P2', name: 'P2', url: 'http://host/p2.m3u', enabled: false },
+      ]);
+      const parts = chunks();
+      parts[1].push(channel({ id: 'd', name: 'Delta', url: 'http://stream/d', playlistIds: ['P2'] }));
+      cacheInChunks(parts);
+      cacheMock.openCachedPlaylist.mockResolvedValue({
+        ...(await cacheMock.openCachedPlaylist(null))!,
+        sourceIds: undefined,
+      });
+
+      await PlaylistService.load(undefined, { onChannels: () => {} });
+
+      expect(PlaylistService.allChannels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+      expect(PlaylistService.allChannels[0]).toBe(parts[0][0]);
+      expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+      expect(PlaylistService.complete).toBe(true);
+    });
+
+    it('refreshes from the network when a chunk is unreadable', async () => {
+      cacheInChunks(chunks(), false);
+      fetchTextMock.mockResolvedValue(P2);
+      const seen: string[][] = [];
+
+      await PlaylistService.load(undefined, { onChannels: () => seen.push(PlaylistService.channels.map(c => c.name)) });
+
+      expect(seen[1]).toEqual(['Alpha', 'Bravo']);
+      expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo Dup', 'Charlie']);
+      expect(PlaylistService.complete).toBe(true);
+    });
   });
 
   it('refreshes from the network on a cache miss', async () => {

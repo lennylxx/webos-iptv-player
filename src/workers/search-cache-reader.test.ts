@@ -85,7 +85,7 @@ function stalledFactory(options: { throwOnOpen?: boolean } = {}): StalledOpen {
           (tx.oncomplete as (() => void) | undefined)?.();
         },
       };
-      tx.objectStore = () => ({ get: () => get });
+      tx.objectStore = () => ({ get: () => get, getAll: () => ({ result: [] }) });
       tx.abort = () => { entry.aborts++; };
       transactions.push(entry);
       return tx;

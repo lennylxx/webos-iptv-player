@@ -44,7 +44,8 @@ import {
 } from './xtream-client';
 import {
   cacheRecordRef,
-  getCachedPlaylist,
+  openCachedPlaylist,
+  type CachedPlaylist,
   playlistCacheToken,
   scheduleCachedPlaylist,
   type CacheRecordRef,
@@ -362,46 +363,106 @@ class PlaylistServiceImpl {
     }
     // Boot from an expired cache too; App schedules the overdue refresh in the
     // background instead of blocking startup on a full download.
-    const cached = await getCachedPlaylist(null);
+    const load = this.loadCount;
+    const cached = await openCachedPlaylist(null);
     if (cached) {
-      // A progressive load still running must not add to the cached list.
-      this.progressive = null;
-      this.listPartial = false;
-      this.failedSourceIds.clear();
-      this.refreshTimestamp = cached.timestamp;
-      // The source signature already rules out a disabled source; the ids
-      // guard a hash collision and older records without them.
-      const sourcesStillEnabled = !!cached.sourceIds
-        && cached.sourceIds.every(id => enabledIds.has(id));
-      const channelsNeedFiltering = !sourcesStillEnabled && cached.channels
-        .some(channel => channel.playlistIds.some(id => !enabledIds.has(id)));
-      this.allChannels = channelsNeedFiltering
-        ? cached.channels
-            .map(channel => ({
-              ...channel,
-              playlistIds: channel.playlistIds.filter(id => enabledIds.has(id)),
-            }))
-            .filter(channel => channel.playlistIds.length > 0)
-        : cached.channels;
-      const epgSourcesNeedFiltering = !sourcesStillEnabled && cached.epgSources
-        .some(source => source.playlistIds.some(id => !enabledIds.has(id)));
-      this.epgSources = epgSourcesNeedFiltering
-        ? cached.epgSources
-            .map(source => ({
-              ...source,
-              playlistIds: source.playlistIds.filter(id => enabledIds.has(id)),
-            }))
-            .filter(source => source.playlistIds.length > 0)
-        : cached.epgSources;
-      log.info('Cache hit:', this.allChannels.length, 'channels,', this.epgSources.length, 'epg sources');
-      this.applyCustomization();
-      this.buildPlaylistTabs();
-      StorageService.migrateFavoriteKeys(this.channels);
-      this.logLoadCompleted('cache', enabledIds.size, 0);
-      return this.channels;
+      const fromCache = await this.loadCached(cached, enabledIds, onProgress, options);
+      if (fromCache) return fromCache;
+      // A newer load took over, perhaps after clearing the cache under this one.
+      if (load !== this.loadCount) return this.channels;
+      log.info('Cached playlist unreadable — refreshing from network');
+      return this.refresh(onProgress, { onChannels: options.onChannels });
     }
     log.info('Cache miss — refreshing from network');
     return this.refresh(onProgress, { onChannels: options.onChannels });
+  }
+
+  // Shows the cached channels a chunk at a time when asked to. Null when a
+  // chunk was unreadable; the cache then counts as missing.
+  private async loadCached(
+    cached: CachedPlaylist,
+    enabledIds: Set<string>,
+    onProgress: ((progress: PlaylistLoadProgress) => void) | undefined,
+    options: PlaylistLoadOptions,
+  ): Promise<Channel[] | null> {
+    // The source signature already rules out a disabled source; the ids
+    // guard a hash collision and older records without them.
+    const sourcesStillEnabled = !!cached.sourceIds
+      && cached.sourceIds.every(id => enabledIds.has(id));
+    const enabledOnly = (chunk: Channel[]): Channel[] => {
+      if (sourcesStillEnabled
+        || !chunk.some(channel => channel.playlistIds.some(id => !enabledIds.has(id)))) {
+        return chunk;
+      }
+      return chunk
+        .map(channel => ({
+          ...channel,
+          playlistIds: channel.playlistIds.filter(id => enabledIds.has(id)),
+        }))
+        .filter(channel => channel.playlistIds.length > 0);
+    };
+    // A progressive load still running must not add to the cached list.
+    this.progressive = null;
+    const progressive = options.onChannels ? this.beginProgressive() : null;
+    if (progressive) options.onChannels?.();
+    const parts: Channel[][] = [];
+    let filtered = false;
+    let read = 0;
+    let kept = 0;
+    let all: Channel[] | null;
+    try {
+      all = await cached.readChannels((chunk) => {
+        const part = enabledOnly(chunk);
+        if (part !== chunk) filtered = true;
+        parts.push(part);
+        read += chunk.length;
+        kept += part.length;
+        if (!progressive) return true;
+        if (this.progressive !== progressive) return false;
+        this.appendProgressive(progressive, part);
+        onProgress?.({
+          sourceNumber: 1,
+          sourceCount: 1,
+          inputBytes: read,
+          totalBytes: cached.channelCount,
+          channelsProcessed: read,
+          channelsKept: kept,
+        });
+        options.onChannels?.();
+        return true;
+      });
+    } catch (err) {
+      if (progressive && this.progressive === progressive) this.progressive = null;
+      throw err;
+    }
+    // reset(), another cache hit, or a newer load took over while this one read.
+    if (progressive && this.progressive !== progressive) return this.channels;
+    if (!all) {
+      if (progressive) this.progressive = null;
+      return null;
+    }
+    this.listPartial = false;
+    this.failedSourceIds.clear();
+    this.refreshTimestamp = cached.timestamp;
+    const final = filtered ? ([] as Channel[]).concat(...parts) : all;
+    const adopted = progressive ? this.endProgressive(progressive, final, true) : false;
+    this.allChannels = final;
+    const epgSourcesNeedFiltering = !sourcesStillEnabled && cached.epgSources
+      .some(source => source.playlistIds.some(id => !enabledIds.has(id)));
+    this.epgSources = epgSourcesNeedFiltering
+      ? cached.epgSources
+          .map(source => ({
+            ...source,
+            playlistIds: source.playlistIds.filter(id => enabledIds.has(id)),
+          }))
+          .filter(source => source.playlistIds.length > 0)
+      : cached.epgSources;
+    log.info('Cache hit:', this.allChannels.length, 'channels,', this.epgSources.length, 'epg sources');
+    if (!adopted) this.applyCustomization();
+    this.buildPlaylistTabs();
+    StorageService.migrateFavoriteKeys(this.channels);
+    this.logLoadCompleted('cache', enabledIds.size, 0);
+    return this.channels;
   }
 
   async refresh(

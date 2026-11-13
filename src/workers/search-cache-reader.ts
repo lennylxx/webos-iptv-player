@@ -1,4 +1,10 @@
-import { DB_NAME, DB_VERSION } from '../services/idb-schema';
+import { DB_NAME, DB_VERSION, PLAYLIST_STORE } from '../services/idb-schema';
+import {
+  chunkedPlaylistWrites,
+  joinPlaylistRecord,
+  playlistChunkInfo,
+  playlistChunkRange,
+} from '../services/playlist-chunks';
 
 const OPEN_TIMEOUT_MS = 5000;
 
@@ -27,7 +33,9 @@ export interface SearchCacheReader {
 
 export interface CacheWrite {
   store: string;
-  value: CachedRecord;
+  value?: CachedRecord;
+  /** Deletes the keys in [lower, upper] before the puts after it. */
+  deleteRange?: [string, string];
 }
 
 // Failures that will not clear up while this worker lives.
@@ -39,11 +47,30 @@ export class IdbSearchCacheReader implements SearchCacheReader {
   private connection: Promise<IDBDatabase> | null = null;
   private unavailable = false;
 
-  constructor(private readonly factory: IDBFactory | undefined) {}
+  constructor(
+    private readonly factory: IDBFactory | undefined,
+    private readonly keyRange: typeof IDBKeyRange | undefined =
+      typeof IDBKeyRange === 'undefined' ? undefined : IDBKeyRange,
+  ) {}
 
   read(record: SearchCacheKey, timeoutMs: number): Promise<CachedRecord | null> {
-    return this.run([record.store], 'readonly', timeoutMs, tx => tx.objectStore(record.store).get(record.key), (result) => {
-      return result && typeof result === 'object' ? result as CachedRecord : null;
+    const chunked = record.store === PLAYLIST_STORE && !!this.keyRange;
+    let chunks: IDBRequest | null = null;
+    return this.run([record.store], 'readonly', timeoutMs, (tx) => {
+      const store = tx.objectStore(record.store);
+      const head = store.get(record.key);
+      // A chunked playlist comes back whole, as the readers expect it.
+      if (chunked) {
+        const [lower, upper] = playlistChunkRange(record.key);
+        chunks = store.getAll(this.keyRange!.bound(lower, upper));
+      }
+      return head;
+    }, (result) => {
+      if (!result || typeof result !== 'object') return null;
+      const head = result as CachedRecord;
+      if (!chunked || !playlistChunkInfo(head.data)) return head;
+      const parts = chunks as IDBRequest | null;
+      return parts && !parts.error ? joinPlaylistRecord(head, parts.result as unknown[]) : null;
     });
   }
 
@@ -57,12 +84,47 @@ export class IdbSearchCacheReader implements SearchCacheReader {
     return this.run([store], 'readwrite', timeoutMs, tx => tx.objectStore(store).put(value), () => undefined);
   }
 
+  // TODO(cleanup, post-1.18.0): remove with migrateLegacyPlaylistCache.
+  /**
+   * Rewrites a playlist cached as one record as a head and chunks, in one
+   * transaction so a newer write is never overwritten. The chunk count, or
+   * null when the record is already chunked or gone.
+   */
+  migratePlaylist(key: string, keyPath: string, timeoutMs: number): Promise<number | null> {
+    const keyRange = this.keyRange;
+    if (!keyRange) return Promise.reject(new SearchCacheError('unavailable'));
+    let chunks: number | null = null;
+    return this.run([PLAYLIST_STORE], 'readwrite', timeoutMs, (tx) => {
+      const store = tx.objectStore(PLAYLIST_STORE);
+      const request = store.get(key);
+      request.addEventListener('success', () => {
+        const record = request.result as CachedRecord | undefined;
+        const data = record?.data as { channels?: unknown } | undefined;
+        if (!record || !Array.isArray(data?.channels) || playlistChunkInfo(data)) return;
+        const writes = chunkedPlaylistWrites(PLAYLIST_STORE, record, keyPath);
+        for (const write of writes) {
+          if (write.deleteRange) store.delete(keyRange.bound(write.deleteRange[0], write.deleteRange[1]));
+          if (write.value) store.put(write.value);
+        }
+        chunks = writes.length - 2;
+      });
+      return request;
+    }, () => chunks);
+  }
+
   /** Puts every value in one transaction, so all of them land or none does. */
   writeAll(writes: CacheWrite[], timeoutMs: number): Promise<void> {
     const stores = writes.map(write => write.store).filter((store, i, all) => all.indexOf(store) === i);
     return this.run(stores, 'readwrite', timeoutMs, (tx) => {
       let last: IDBRequest | null = null;
-      for (const write of writes) last = tx.objectStore(write.store).put(write.value);
+      for (const write of writes) {
+        const store = tx.objectStore(write.store);
+        if (write.deleteRange) {
+          if (!this.keyRange) throw new Error('IDBKeyRange is unavailable');
+          last = store.delete(this.keyRange.bound(write.deleteRange[0], write.deleteRange[1]));
+        }
+        if (write.value) last = store.put(write.value);
+      }
       return last as IDBRequest;
     }, () => undefined);
   }
@@ -117,12 +179,18 @@ export class IdbSearchCacheReader implements SearchCacheReader {
           fail(isQuotaError(error) ? 'quota_exceeded' : 'transaction_failed');
           return;
         }
-        let value: T;
+        let succeeded = false;
         request.onsuccess = () => {
-          value = map(request.result);
+          succeeded = true;
         };
+        // Mapped once every request in the transaction has its result.
         tx.oncomplete = () => {
-          if (settle()) resolve(value);
+          if (!settle()) return;
+          try {
+            resolve(succeeded ? map(request.result) : undefined as T);
+          } catch {
+            reject(new SearchCacheError('record_invalid'));
+          }
         };
         // A failed write aborts its transaction; a failed read only reports.
         if (mode !== 'readwrite') tx.onerror = (event) => event.preventDefault();

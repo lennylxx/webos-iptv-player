@@ -1,6 +1,7 @@
 import { CONFIG } from '../config';
 import { withHeldValue, type HeldWriteRequest, type HeldWriteResult } from '../services/held-records';
 import { serializedBytes } from '../utils/serialized-bytes';
+import { chunkedPlaylistWrites } from '../services/playlist-chunks';
 import { SearchCacheError, type CacheWrite } from './search-cache-reader';
 
 export interface HeldValueWriteRequest extends HeldWriteRequest {
@@ -89,8 +90,11 @@ export async function writeHeldValue(
   const [first, ...rest] = request.writes;
   if (!held || !first) return 'missing';
   const value = withHeldValue(first.value, request.field, held.read());
+  const writes: CacheWrite[] = request.chunkKeyPath
+    ? chunkedPlaylistWrites(first.store, value, request.chunkKeyPath)
+    : [{ store: first.store, value }];
   try {
-    await writeAll([{ store: first.store, value }, ...rest], request.timeoutMs);
+    await writeAll([...writes, ...rest], request.timeoutMs);
   } catch (error) {
     return error instanceof SearchCacheError && error.reason === 'quota_exceeded'
       ? 'quota_exceeded'

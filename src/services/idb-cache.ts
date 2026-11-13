@@ -1,6 +1,7 @@
 import { CONFIG } from '../config';
 import type { Channel, EpgSource, ParsedEpg } from '../types';
 import { createLogger } from '../utils/logger';
+import { runAppWorkerTask } from '../workers/app-worker-client';
 import type { SearchIndexCandidate } from '../workers/tasks';
 import {
   CACHE_META_STORE as META_STORE,
@@ -29,6 +30,14 @@ import { cacheEntryMetaId, cacheRecordTimestamp, PLAYLIST_CACHE_KEY } from './id
 import { JSON_NULL_BYTES, serializedBytes } from '../utils/serialized-bytes';
 import { yieldToEventLoop } from '../utils/yield';
 import { isPackedEpg, packEpg, unpackEpgSliced } from './epg-cache-codec';
+import {
+  chunkedPlaylistWrites,
+  isPlaylistChunkKey,
+  playlistChunkChannels,
+  playlistChunkInfo,
+  playlistChunkKey,
+  playlistChunkRange,
+} from './playlist-chunks';
 
 const log = createLogger('CacheStorage');
 const CACHE_CATEGORIES = ['playlist', 'epg', 'catalog', 'subtitle', 'health', 'search'] as const;
@@ -144,7 +153,10 @@ interface StreamMimeEntry {
 
 interface CachedPlaylistPayload {
   sourceSignature: string;
-  channels: Channel[];
+  // Absent once the channels moved to chunk records (`chunkCount`).
+  channels?: Channel[];
+  chunkCount?: number;
+  channelCount?: number;
   epgSources: EpgSource[];
   timestamp: number;
   // Every playlist id the channels may carry, so a load can skip scanning them.
@@ -604,6 +616,8 @@ async function rebuildMetadata(): Promise<void> {
   if (!db) return;
   const categories = emptyUsage();
   const entries: CacheEntryMeta[] = [];
+  // A playlist's chunks count toward its head entry, not as entries of their own.
+  const chunkBytes = new Map<string, number>();
   // Search indexes are disposable and too large to re-measure here, so a
   // rebuild drops them instead.
   const scanned = CACHE_STORES.filter(store => store !== SEARCH_INDEX_STORE);
@@ -619,6 +633,15 @@ async function rebuildMetadata(): Promise<void> {
           resolve();
           return;
         }
+        if (storeName === PLAYLIST_STORE && isPlaylistChunkKey(cursor.primaryKey)) {
+          const key = String(cursor.primaryKey);
+          const head = key.slice(0, key.indexOf('#'));
+          const bytes = serializedBytes(cursor.value);
+          categories[category].bytes += bytes;
+          chunkBytes.set(head, (chunkBytes.get(head) ?? 0) + bytes);
+          cursor.continue();
+          return;
+        }
         const record = normalizeRecord(storeName, cursor.value as Record<string, unknown>);
         categories[category].bytes += record.byteSize;
         categories[category].entries++;
@@ -628,6 +651,9 @@ async function rebuildMetadata(): Promise<void> {
       req.onerror = () => reject(req.error ?? new Error('Cache scan failed'));
     })));
     await done;
+    for (const entry of entries) {
+      if (entry.store === PLAYLIST_STORE) entry.byteSize += chunkBytes.get(String(entry.key)) ?? 0;
+    }
 
     const now = Date.now();
     const total = CACHE_CATEGORIES.reduce((sum, category) => ({
@@ -881,6 +907,10 @@ async function deleteCandidates(candidates: CacheCandidate[]): Promise<number> {
     const tx = db.transaction([...CACHE_STORES, META_STORE], 'readwrite');
     for (const candidate of candidates) {
       tx.objectStore(candidate.store).delete(candidate.key);
+      if (candidate.store === PLAYLIST_STORE && typeof candidate.key === 'string') {
+        const [lower, upper] = playlistChunkRange(candidate.key);
+        tx.objectStore(candidate.store).delete(IDBKeyRange.bound(lower, upper));
+      }
       tx.objectStore(META_STORE).delete(entryMetaId(candidate.store, candidate.key));
       accessTouches.delete(entryMetaId(candidate.store, candidate.key));
     }
@@ -1030,10 +1060,12 @@ async function commitRecord(
     entries: Math.max(0, metadata.total.entries + deltaEntries),
     updatedAt: now,
   }];
+  const chunked = isChunkedWrite(store, record, slot);
   if (slot) {
     const held = slot.record;
     const result = await held.write({
       field: slot.field,
+      ...(chunked ? { chunkKeyPath: cacheKeyPath(store) } : {}),
       writes: [
         { store, value: withHeldValue(record, slot.field, null) },
         { store: META_STORE, value: { ...entryMeta(store, key, record) } },
@@ -1047,7 +1079,16 @@ async function commitRecord(
     return false;
   }
   const tx = db.transaction([store, META_STORE], 'readwrite');
-  tx.objectStore(store).put(record);
+  if (chunked) {
+    for (const write of chunkedPlaylistWrites(store, record, cacheKeyPath(store))) {
+      if (write.deleteRange) {
+        tx.objectStore(store).delete(IDBKeyRange.bound(write.deleteRange[0], write.deleteRange[1]));
+      }
+      if (write.value) tx.objectStore(store).put(write.value);
+    }
+  } else {
+    tx.objectStore(store).put(record);
+  }
   tx.objectStore(META_STORE).put(entryMeta(store, key, record));
   for (const value of meta) tx.objectStore(META_STORE).put(value);
   await transactionDone(tx, (error) => {
@@ -1062,6 +1103,14 @@ async function commitRecord(
     }
   });
   return true;
+}
+
+// A playlist write that carries its channels stores them as chunk records.
+function isChunkedWrite(store: CacheStore, record: StoredRecord, slot: HeldSlot | null): boolean {
+  if (store !== PLAYLIST_STORE) return false;
+  if (slot) return slot.field === 'data.channels';
+  const data = record.data as { channels?: unknown } | undefined;
+  return Array.isArray(data?.channels);
 }
 
 // The page then pays the clone the worker was holding the value to spare it.
@@ -1653,6 +1702,154 @@ export async function clearCachedChannelHealth(): Promise<void> {
   await clearStore(CHANNEL_HEALTH_STORE);
 }
 
+export interface CachedPlaylist {
+  epgSources: EpgSource[];
+  timestamp: number;
+  sourceIds?: string[];
+  channelCount: number;
+  /**
+   * Reads the channels a chunk at a time, each in its own task, handing each
+   * to `onChunk`; one returning false stops the read. Null when it stopped,
+   * or a chunk is missing or from another write.
+   */
+  readChannels(onChunk?: (chunk: Channel[]) => boolean | void): Promise<Channel[] | null>;
+}
+
+export async function openCachedPlaylist(
+  refreshIntervalMs: number | null = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS,
+): Promise<CachedPlaylist | null> {
+  const generation = playlistGeneration;
+  const raw = await readRaw(PLAYLIST_STORE, PLAYLIST_CACHE_KEY);
+  if (!raw) return null;
+  const payload = raw.data as CachedPlaylistPayload | undefined;
+  const timestamp = cacheRecordTimestamp(raw);
+  if (
+    payload?.sourceSignature !== playlistSourceSignature()
+    || (refreshIntervalMs !== null && Date.now() - timestamp >= refreshIntervalMs)
+  ) {
+    return null;
+  }
+  const ref: CacheRecordRef = { store: PLAYLIST_STORE, key: PLAYLIST_CACHE_KEY, timestamp };
+  const info = playlistChunkInfo(payload);
+  const legacy = payload.channels;
+  if (!info && !legacy?.length) return null;
+  if (info && !info.channelCount) return null;
+  const head = {
+    epgSources: payload.epgSources ?? [],
+    timestamp,
+    sourceIds: payload.sourceIds,
+  };
+  // TODO(cleanup, post-1.18.0): remove this legacy read with migrateLegacyPlaylistCache.
+  if (!info) {
+    const legacyChannels = legacy as Channel[];
+    return {
+      ...head,
+      channelCount: legacyChannels.length,
+      readChannels: (onChunk) => {
+        if (onChunk?.(legacyChannels) === false) return Promise.resolve(null);
+        rememberRecord(legacyChannels, ref);
+        // An expired cache is about to be replaced by the overdue refresh.
+        if (raw.expiresAt === null || raw.expiresAt > Date.now()) scheduleLegacyPlaylistMigration();
+        return Promise.resolve(legacyChannels);
+      },
+    };
+  }
+  return {
+    ...head,
+    channelCount: info.channelCount,
+    readChannels: async (onChunk) => {
+      const channels: Channel[] = [];
+      let next = readPlaylistChunk(0, raw.timestamp);
+      for (let index = 0; index < info.chunkCount; index++) {
+        const chunk = await next;
+        // The next read runs while this chunk is handed over.
+        if (index + 1 < info.chunkCount) next = readPlaylistChunk(index + 1, raw.timestamp);
+        if (!chunk) {
+          logChunkMissing(generation === playlistGeneration ? 'chunk_missing' : 'cleared', index, info.chunkCount);
+          return null;
+        }
+        for (const channel of chunk) channels.push(channel);
+        if (onChunk?.(chunk) === false) return null;
+      }
+      if (channels.length !== info.channelCount) {
+        logChunkMissing('chunk_missing', info.chunkCount, info.chunkCount);
+        return null;
+      }
+      rememberRecord(channels, ref);
+      return channels;
+    },
+  };
+}
+
+let legacyPlaylistMigration: ReturnType<typeof setTimeout> | null = null;
+
+// After the launch it slowed, so the worker's rewrite doesn't hold up the next.
+function scheduleLegacyPlaylistMigration(): void {
+  if (legacyPlaylistMigration !== null) return;
+  legacyPlaylistMigration = setTimeout(() => {
+    void migrateLegacyPlaylistCache().then(() => { legacyPlaylistMigration = null; });
+  }, CONFIG.PLAYLIST_CACHE_WRITE_DELAY_MS);
+}
+
+// TODO(cleanup, post-1.18.0): once releases before chunked playlist caches
+// are gone, remove this migration, scheduleLegacyPlaylistMigration, the
+// legacy read in openCachedPlaylist, the worker's `cache.migrate-playlist`
+// task and `migratePlaylist`, and their tests.
+// The worker reads and rewrites the record itself, keeping its timestamp,
+// expiry, and accounting, so the page pays no clone for it.
+export function migrateLegacyPlaylistCache(): Promise<void> {
+  return enqueueMutation(async () => {
+    try {
+      const chunks = await runAppWorkerTask('cache.migrate-playlist', {
+        key: PLAYLIST_CACHE_KEY,
+        keyPath: cacheKeyPath(PLAYLIST_STORE),
+        timeoutMs: CONFIG.XTREAM.HELD_WRITE_TIMEOUT_MS,
+      });
+      if (chunks === null) return;
+      log.info(
+        'Legacy playlist cache migration completed',
+        'event=persistence.cache.migration.completed',
+        'operation=migrate',
+        'category=playlist',
+        `records=${String(chunks)}`,
+      );
+    } catch (err) {
+      log.warn(
+        'Legacy playlist cache migration failed',
+        'event=persistence.cache.migration.failed',
+        'operation=migrate',
+        'category=playlist',
+        err,
+      );
+    }
+  });
+}
+
+async function readPlaylistChunk(index: number, timestamp: unknown): Promise<Channel[] | null> {
+  const db = await openDb();
+  if (!db) return null;
+  try {
+    const tx = db.transaction(PLAYLIST_STORE, 'readonly');
+    const chunk = await requestResult(
+      tx.objectStore(PLAYLIST_STORE).get(playlistChunkKey(PLAYLIST_CACHE_KEY, index)),
+    );
+    return playlistChunkChannels(chunk, timestamp) as Channel[] | null;
+  } catch {
+    return null;
+  }
+}
+
+// `cleared`: the cache was cleared while it was read.
+function logChunkMissing(reason: 'chunk_missing' | 'cleared', index: number, chunks: number): void {
+  log.warn(
+    'Cached playlist chunk is missing',
+    'event=playlist.cache.read.failed',
+    `reason=${reason}`,
+    `chunk=${String(index)}`,
+    `chunks=${String(chunks)}`,
+  );
+}
+
 export async function getCachedPlaylist(
   refreshIntervalMs: number | null = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS,
 ): Promise<{
@@ -1661,26 +1858,15 @@ export async function getCachedPlaylist(
   timestamp: number;
   sourceIds?: string[];
 } | null> {
-  const raw = await readRaw(PLAYLIST_STORE, PLAYLIST_CACHE_KEY);
-  if (raw) {
-    const payload = raw.data as CachedPlaylistPayload | undefined;
-    const timestamp = cacheRecordTimestamp(raw);
-    if (
-      payload?.sourceSignature === playlistSourceSignature()
-      && payload.channels?.length
-      && (refreshIntervalMs === null || Date.now() - timestamp < refreshIntervalMs)
-    ) {
-      rememberRecord(payload.channels, { store: PLAYLIST_STORE, key: PLAYLIST_CACHE_KEY, timestamp });
-      return {
-        channels: payload.channels,
-        epgSources: payload.epgSources ?? [],
-        timestamp,
-        sourceIds: payload.sourceIds,
-      };
-    }
-  }
-
-  return null;
+  const cached = await openCachedPlaylist(refreshIntervalMs);
+  const channels = cached && await cached.readChannels();
+  if (!cached || !channels) return null;
+  return {
+    channels,
+    epgSources: cached.epgSources,
+    timestamp: cached.timestamp,
+    sourceIds: cached.sourceIds,
+  };
 }
 
 export async function setCachedPlaylist(
