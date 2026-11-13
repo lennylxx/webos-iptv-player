@@ -1885,6 +1885,26 @@ describe('PlaylistService.resolveChannelKey', () => {
     })).toBe(1);
   });
 
+  it('finds an arrived last channel by its exact stream alone', () => {
+    const copyA = channel({ group: 'g1', url: 'http://host/c?token=A' });
+    const copyB = channel({ group: 'g1', url: 'http://host/c?token=B' });
+    PlaylistService.channels = [copyA, copyB];
+    const saved = (playing: Channel) => ({
+      index: 0,
+      key: channelKey(playing),
+      stream: channelStreamKey(playing),
+      exact: channelExactStreamKey(playing),
+    });
+
+    expect(PlaylistService.findArrivedLastChannel(saved(copyB), 0)).toBe(1);
+    // Only what arrived since the last look counts.
+    expect(PlaylistService.findArrivedLastChannel(saved(copyA), 1)).toBe(-1);
+    // A rotated token may still arrive, so a stream match alone waits.
+    const rotated = channel({ group: 'g1', url: 'http://host/c?token=C' });
+    expect(PlaylistService.findArrivedLastChannel(saved(rotated), 0)).toBe(-1);
+    expect(PlaylistService.findArrivedLastChannel({ ...saved(copyB), exact: undefined }, 0)).toBe(-1);
+  });
+
   it('tells apart copies that differ only by a token', () => {
     const copyA = channel({ group: 'g1', url: 'http://host/c?token=A' });
     const copyB = channel({ group: 'g1', url: 'http://host/c?token=B' });

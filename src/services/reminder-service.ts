@@ -244,6 +244,11 @@ class ReminderServiceImpl {
     }
   }
 
+  /** The launch param names a reminder's channel to tune. */
+  launchesChannel(rawLaunchParams: unknown): boolean {
+    return parseReminderChannelKey(rawLaunchParams) !== null;
+  }
+
   // Parse a reminderChannelKey out of a launch param (JSON string on cold
   // launch, object on webOSRelaunch) and resolve it to a channel index (-1 if
   // absent, malformed, or the channel is gone).

@@ -220,6 +220,22 @@ describe('Player live preview', () => {
     expect(player.getCurrentIndex()).toBe(0);
   });
 
+  it('moves the saved last channel\'s index with its reordered channel', () => {
+    player.enterLivePreview();
+    player.play(0);
+    const calls = vi.mocked(StorageService.setLastChannel).mock.calls;
+    const saved = calls[calls.length - 1][0];
+    vi.mocked(StorageService.getLastChannel).mockReturnValue(saved);
+    playlist.channels = [channels[1], channels[0]];
+    vi.mocked(StorageService.setLastChannel).mockClear();
+
+    player.syncCurrentIndex();
+
+    expect(player.getCurrentIndex()).toBe(1);
+    expect(StorageService.setLastChannel).toHaveBeenCalledWith({ ...saved, index: 1 });
+    vi.mocked(StorageService.getLastChannel).mockReturnValue(null);
+  });
+
   it('retunes a replacement channel when its signed URL was refreshed', () => {
     const oldChannel = { ...channels[0], url: `${channels[0].url}?token=old` };
     playlist.channels = [oldChannel];

@@ -1447,6 +1447,20 @@ class PlaylistServiceImpl {
     return -1;
   }
 
+  /**
+   * The last channel's index among `channels[from..]` while they still
+   * arrive, or -1. Only its exact stream counts: a later batch may hold a
+   * better match for anything less, which the whole list resolves.
+   */
+  findArrivedLastChannel(last: LastChannel, from: number): number {
+    if (!last.key || !last.exact) return -1;
+    for (let i = Math.max(0, from); i < this.channels.length; i++) {
+      const channel = this.channels[i];
+      if (channelKey(channel) === last.key && channelExactStreamKey(channel) === last.exact) return i;
+    }
+    return -1;
+  }
+
   /** The saved stream (a channelStreamKey) picks its entry among channels
    *  sharing the key, and the saved exact stream (a channelExactStreamKey),
    *  else the saved index, picks among copies that differ only by a token;

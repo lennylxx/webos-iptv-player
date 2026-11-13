@@ -406,7 +406,9 @@ class App {
     // Register a retail-safe callback immediately. If Developer Mode is
     // detected below, the same named activities are replaced with alerts.
     ReminderService.reschedulePending();
-    await this.loadData();
+    // A "Watch now" launch tunes its own channel, so the last one must not
+    // start first, early or once the list is in.
+    await this.loadData(false, !ReminderService.launchesChannel(this.coldLaunchParams()));
     // Cold launch from a "Watch now" alert: channels are loaded now, so tune.
     this.handleLaunchParams(this.coldLaunchParams());
     // Spawning the service process can synchronously stall Luna on a cold TV.
@@ -897,7 +899,7 @@ class App {
     }
   }
 
-  private async loadData(forceEpgRefresh = false): Promise<void> {
+  private async loadData(forceEpgRefresh = false, autoPlay = true): Promise<void> {
     const done = log.time('loadData');
     const generation = ++this.loadGeneration;
     const superseded = (): boolean => generation !== this.loadGeneration;
@@ -976,6 +978,29 @@ class App {
         }
         return true;
       };
+      // Auto-play resumes the last channel once, as soon as it is known.
+      let autoPlayDecided = false;
+      const playLastChannel = (index: number): void => {
+        autoPlayDecided = true;
+        const last = PlaylistService.channels[index];
+        // A locked channel must not open a PIN prompt over a cold start.
+        if (last && ParentalControlService.decision(liveParentalRequest(last)).allowed) {
+          log.info('Auto-play resuming last channel index', index);
+          this.playChannel(index);
+        }
+      };
+      // Its exact stream plays as soon as it arrives; anything less waits
+      // for the whole list.
+      const arrivingLast = autoPlay && StorageService.getAutoPlay()
+        ? StorageService.getLastChannel()
+        : null;
+      let scannedForLast = 0;
+      const playArrivedLastChannel = (): void => {
+        if (!arrivingLast || autoPlayDecided || this.userActions !== actionsAtStart) return;
+        const index = PlaylistService.findArrivedLastChannel(arrivingLast, scannedForLast);
+        scannedForLast = PlaylistService.channels.length;
+        if (index >= 0) playLastChannel(index);
+      };
       const onChannels = (): void => {
         if (superseded()) return;
         // An emptied list (a reload starting, a source failing) clears at once.
@@ -984,9 +1009,14 @@ class App {
           renderArrivals();
           // The next source's first channels show and take focus at once.
           shownChannels = false;
+          scannedForLast = 0;
+          // A channel playing from the old list no longer sits at its index.
+          this.player.syncCurrentIndex();
           return;
         }
-        if (showFirstChannels()) return;
+        const first = showFirstChannels();
+        playArrivedLastChannel();
+        if (first) return;
         if (arrivalTimer === null) {
           arrivalTimer = window.setTimeout(renderArrivals, CONFIG.PLAYLIST_ARRIVAL_RENDER_MS);
         }
@@ -1035,15 +1065,10 @@ class App {
       else if (this.isCurrentView('parental-controls')) this.parentalControls.refreshChannels();
 
       // Someone who started browsing during the load keeps their place.
-      if (StorageService.getAutoPlay() && this.userActions === actionsAtStart) {
+      if (autoPlay && !autoPlayDecided && StorageService.getAutoPlay()
+        && this.userActions === actionsAtStart) {
         // The per-stream key survives customization and provider reshuffles.
-        const lastCh = PlaylistService.resolveLastChannelIndex(StorageService.getLastChannel());
-        const last = PlaylistService.channels[lastCh];
-        // A locked channel must not open a PIN prompt over a cold start.
-        if (last && ParentalControlService.decision(liveParentalRequest(last)).allowed) {
-          log.info('Auto-play resuming last channel index', lastCh);
-          this.playChannel(lastCh);
-        }
+        playLastChannel(PlaylistService.resolveLastChannelIndex(StorageService.getLastChannel()));
       }
 
       if (epgSources.length) {

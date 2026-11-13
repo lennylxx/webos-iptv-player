@@ -1914,6 +1914,13 @@ export class Player {
     this.currentChannel = resolved.channel;
     this.currentIndex = resolved.channelIndex;
     this.currentIndexAnchor = resolved.channelIndex;
+    // The saved index follows its channel when the list reorders, since it
+    // picks among copies that differ only by a token.
+    const saved = StorageService.getLastChannel();
+    if (saved && saved.index !== resolved.channelIndex
+        && saved.exact === channelExactStreamKey(resolved.channel)) {
+      StorageService.setLastChannel({ ...saved, index: resolved.channelIndex });
+    }
     this.onTvPlaybackChanged(
       resolved.channelIndex,
       this.catchupInfo ? this.catchupInfo.start * 1000 : null,

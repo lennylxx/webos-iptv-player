@@ -145,6 +145,160 @@ test('an arriving channel list still auto-plays when nobody pressed a key', asyn
   }
 });
 
+// A first launch loads the whole list and plays Channel 5, so auto-play has a
+// saved last channel to resume. Later launches keep the stored playlists.
+async function playChannelFive(page: Page, playlist: HeldPlaylist): Promise<void> {
+  await routeLiveManifest(page);
+  await page.addInitScript((url) => {
+    if (localStorage.getItem('iptv_playlists')) return;
+    localStorage.setItem('iptv_auto_play', 'true');
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'Test', url }]));
+  }, playlist.url);
+  await page.goto('/');
+  await headShown(page);
+  playlist.releaseRequest(0);
+  await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
+  await expect(page.locator('#view-player')).toBeVisible();
+  await page.keyboard.press('Escape');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
+  await expect(page.locator('.channel-main .channel-item.focused')).toContainText('Channel 5');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
+}
+
+// A new playlist address misses the cache, so the next launch downloads it.
+async function setPlaylists(page: Page, urls: string[]): Promise<void> {
+  await page.evaluate((list) => {
+    localStorage.setItem('iptv_playlists', JSON.stringify(
+      list.map((url, i) => ({ name: `Source ${String(i + 1)}`, url }))));
+  }, urls);
+}
+
+test('auto-play resumes the last channel as soon as it arrives', async ({ page }) => {
+  const playlist = await serveHeldPlaylist();
+  try {
+    await playChannelFive(page, playlist);
+    await setPlaylists(page, [`${playlist.url}?v=2`]);
+    await page.reload();
+    await expect.poll(() => playlist.requests()).toBe(2);
+    await expect(page.locator('#view-player')).toBeVisible();
+    await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
+    // It plays while the rest of the playlist is still on its way.
+    await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
+    playlist.releaseRequest(1);
+    await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
+    await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
+  } finally {
+    await playlist.close();
+  }
+});
+
+test('auto-play resumes the last channel from the first cached chunk', async ({ page }) => {
+  const playlist = await serveHeldPlaylist();
+  try {
+    // Holds the read of the cached playlist's second chunk until released.
+    await page.addInitScript(() => {
+      if (!sessionStorage.getItem('holdChunk')) return;
+      let release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      (window as unknown as { releaseChunk: () => void }).releaseChunk = release;
+      const get = IDBObjectStore.prototype.get;
+      IDBObjectStore.prototype.get = function (this: IDBObjectStore, key: IDBValidKey | IDBKeyRange) {
+        const request = get.call(this, key);
+        if (typeof key !== 'string' || !key.endsWith('#000001')) return request;
+        const setter = Object.getOwnPropertyDescriptor(IDBRequest.prototype, 'onsuccess')!.set!;
+        Object.defineProperty(request, 'onsuccess', {
+          configurable: true,
+          set(listener: (event: Event) => void) {
+            setter.call(request, (event: Event) => { void released.then(() => listener.call(request, event)); });
+          },
+        });
+        return request;
+      };
+    });
+    await playChannelFive(page, playlist);
+    await expect.poll(() => page.evaluate(() => new Promise<number>((resolve) => {
+      const open = indexedDB.open('iptv');
+      open.onsuccess = () => {
+        const keys = open.result.transaction('playlist-cache', 'readonly')
+          .objectStore('playlist-cache').getAllKeys();
+        keys.onsuccess = () => { resolve(keys.result.length); open.result.close(); };
+      };
+    })), { timeout: 10_000 }).toBeGreaterThan(1);
+    await page.evaluate(() => sessionStorage.setItem('holdChunk', '1'));
+    await page.reload();
+
+    await expect(page.locator('#view-player')).toBeVisible();
+    await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
+    await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
+    await page.evaluate(() => (window as unknown as { releaseChunk: () => void }).releaseChunk());
+    await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
+    await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
+    expect(playlist.requests()).toBe(1);
+  } finally {
+    await playlist.close();
+  }
+});
+
+test('a list that starts over under an early auto-play marks nothing as playing', async ({ page }) => {
+  const playlist = await serveHeldPlaylist();
+  const next = await serveHeldPlaylist('#EXTM3U', 'Other');
+  try {
+    await playChannelFive(page, playlist);
+    await setPlaylists(page, [`${playlist.url}?v=2`, next.url]);
+    await page.reload();
+    await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
+
+    playlist.failRequest(1);
+    await expect.poll(() => next.requests()).toBe(1);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.channel-main .channel-item').first()).toContainText('Other 0');
+    // Channel 5 is gone; Other 5, now at its index, must not show as playing.
+    await expect(page.locator('.channel-main .channel-item.playing')).toHaveCount(0);
+  } finally {
+    await playlist.close();
+    await next.close();
+  }
+});
+
+test('a reminder launch tunes its channel instead of an early auto-play', async ({ page }) => {
+  const playlist = await serveHeldPlaylist();
+  try {
+    await playChannelFive(page, playlist);
+    await page.addInitScript(() => {
+      const params = sessionStorage.getItem('launchParams');
+      if (params) (window as unknown as { PalmSystem: object }).PalmSystem = { launchParams: params };
+    });
+    const reminderKey = await page.evaluate(() =>
+      (JSON.parse(localStorage.getItem('iptv_last_channel')!) as { key: string }).key);
+    await page.keyboard.press('ArrowUp');
+    await expect(page.locator('.osd-channel-name')).not.toHaveText('Channel 5');
+    await setPlaylists(page, [`${playlist.url}?v=2`]);
+    await page.evaluate((key) =>
+      sessionStorage.setItem('launchParams', JSON.stringify({ reminderChannelKey: key })), reminderKey);
+    // Only what the relaunched page tunes; the old one refreshes its stream until it goes.
+    const tuned: string[] = [];
+    let relaunched = false;
+    page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) relaunched = true; });
+    page.on('request', (request) => {
+      if (relaunched && request.url().endsWith('.m3u8')) tuned.push(request.url());
+    });
+    await page.reload();
+
+    await expect.poll(() => playlist.requests()).toBe(2);
+    await headShown(page);
+    await page.waitForTimeout(500);
+    await expect(page.locator('#view-player')).toBeHidden();
+    playlist.releaseRequest(1);
+    await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
+    // The last channel never started ahead of the reminder's.
+    expect(tuned.length).toBeGreaterThan(0);
+    expect(tuned.filter(url => !url.endsWith('/Channel5.m3u8'))).toEqual([]);
+  } finally {
+    await playlist.close();
+  }
+});
+
 test('Parental Controls opened before the channels arrive lists their groups once they do', async ({ page }) => {
   const playlist = await serveHeldPlaylist();
   try {
