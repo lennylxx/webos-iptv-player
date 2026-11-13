@@ -29,7 +29,14 @@ import {
 import { cacheEntryMetaId, cacheRecordTimestamp, PLAYLIST_CACHE_KEY } from './idb-schema';
 import { JSON_NULL_BYTES, serializedBytes } from '../utils/serialized-bytes';
 import { yieldToEventLoop } from '../utils/yield';
-import { isPackedEpg, packEpg, unpackEpgSliced } from './epg-cache-codec';
+import {
+  type EpgFilterLists,
+  isPackedEpg,
+  packEpg,
+  packEpgFilter,
+  unpackEpgFilter,
+  unpackEpgSliced,
+} from './epg-cache-codec';
 import {
   chunkedPlaylistWrites,
   isPlaylistChunkKey,
@@ -115,9 +122,7 @@ export interface CacheUsageSummary {
   quotaBytes: number | null;
 }
 
-export interface CachedEpgFilter {
-  ids: string[];
-  names: string[];
+export interface CachedEpgFilter extends EpgFilterLists {
   /** Fingerprint of the inputs the filter was built from. */
   key?: string;
 }
@@ -1369,7 +1374,7 @@ export async function getCachedEpg(url: string): Promise<CachedEpgEntry | null> 
     data: isPackedEpg(raw.data)
       ? await unpackEpgSliced(raw.data, yieldToEventLoop, CONFIG.EPG.CACHE_DECODE_SLICE_MS)
       : raw.data as ParsedEpg,
-    filter: raw.filter as CachedEpgFilter | null | undefined,
+    filter: unpackEpgFilter(raw.filter),
   };
 }
 
@@ -1387,7 +1392,7 @@ export async function setCachedEpg(
       timestamp,
       // The worker packs its own copy; a page fallback writes this one as is.
       data: held ? data : packEpg(data),
-      filter,
+      filter: filter ? packEpgFilter(filter) : filter,
       expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
     }, true, held && { record: held, field: 'data' });
   } finally {

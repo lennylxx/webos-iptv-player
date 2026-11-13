@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ParsedEpg, Programme } from '../types';
-import { isPackedEpg, packEpg, unpackEpg, unpackEpgSliced } from './epg-cache-codec';
+import {
+  isPackedEpg,
+  packEpg,
+  packEpgFilter,
+  unpackEpg,
+  unpackEpgFilter,
+  unpackEpgSliced,
+} from './epg-cache-codec';
 
 function programme(start: number, title: string): Programme {
   return {
@@ -81,5 +88,22 @@ describe('epg cache codec', () => {
     expect(restored).toEqual(data);
     const blocks = packed.channels.length + packed.programmes.length;
     expect(pauses).toBeGreaterThanOrEqual(Math.floor(blocks / 2) - 1);
+  });
+
+  it('parses a packed filter\'s lists only once they are read', () => {
+    const packed = packEpgFilter({ ids: ['ch1'], names: ['alpha'], key: 'k1' });
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      const filter = unpackEpgFilter(packed)!;
+      expect(filter.key).toBe('k1');
+      expect(parse).not.toHaveBeenCalled();
+      expect(filter.ids).toEqual(['ch1']);
+      expect(filter.names).toEqual(['alpha']);
+      expect(parse).toHaveBeenCalledTimes(1);
+    } finally {
+      parse.mockRestore();
+    }
+    expect(unpackEpgFilter(null)).toBeNull();
+    expect(unpackEpgFilter(undefined)).toBeUndefined();
   });
 });

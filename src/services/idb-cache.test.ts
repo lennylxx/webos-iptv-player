@@ -54,7 +54,7 @@ import { IdbSearchCacheReader } from '../workers/search-cache-reader';
 import { holdValue, measureHeldValue, releaseHeldValue, writeHeldValue } from '../workers/held-values';
 import { holdRecord, type HeldWriteRequest, type HeldWriteResult } from './held-records';
 import { serializedBytes } from '../utils/serialized-bytes';
-import { isPackedEpg, packEpg } from './epg-cache-codec';
+import { isPackedEpg, packEpg, packEpgFilter } from './epg-cache-codec';
 import { PLAYLIST_CHUNK_SIZE, PLAYLIST_FIRST_CHUNK_SIZE, playlistChunkKey } from './playlist-chunks';
 
 // The app worker's cache tasks run here against the same fake IndexedDB.
@@ -1466,6 +1466,32 @@ describe('idb-cache', () => {
       }] },
     });
 
+    it('stores a guide\'s filter lists as one string and reads them back', async () => {
+      const filter = { ids: ['ch1', 'ch2'], names: ['alpha', 'bravo'], key: 'k1' };
+      await setCachedEpg('http://host/f', guide(), filter, 1000, null);
+
+      const db = await openPersistenceDb();
+      const raw = await requestResult(
+        db!.transaction('epg-cache', 'readonly').objectStore('epg-cache').get('http://host/f'),
+      ) as { filter: Record<string, unknown> };
+      expect(raw.filter).toEqual({ lists: expect.any(String), key: 'k1' });
+      const read = (await getCachedEpg('http://host/f'))!.filter!;
+      expect({ ids: read.ids, names: read.names, key: read.key }).toEqual(filter);
+    });
+
+    it('still reads a guide\'s filter stored as lists', async () => {
+      await setCachedEpg('http://host/f', guide(), null, 1000, null);
+      const db = await openPersistenceDb();
+      const tx = db!.transaction('epg-cache', 'readwrite');
+      const store = tx.objectStore('epg-cache');
+      const raw = await requestResult(store.get('http://host/f')) as Record<string, unknown>;
+      store.put({ ...raw, filter: { ids: ['ch1'], names: ['alpha'], key: 'k1' } });
+      await transactionDone(tx);
+
+      expect((await getCachedEpg('http://host/f'))?.filter)
+        .toEqual({ ids: ['ch1'], names: ['alpha'], key: 'k1' });
+    });
+
     it('writes a held guide there, under the page\'s filter', async () => {
       const filter = { ids: ['ch1'], names: [] };
       await setCachedEpg('http://host/page', guide(), filter, 1000, null);
@@ -1477,7 +1503,7 @@ describe('idb-cache', () => {
       expect(held.write).toHaveBeenCalledTimes(1);
       const request = held.write.mock.calls[0][0];
       expect(request.field).toBe('data');
-      expect(request.writes[0].value).toMatchObject({ data: null, filter });
+      expect(request.writes[0].value).toMatchObject({ data: null, filter: packEpgFilter(filter) });
       expect(await getCachedEpg('http://host/held')).toMatchObject({ data: guide(), filter });
       expect(await entryBytes('http://host/held', 'epg-cache'))
         .toBe(await entryBytes('http://host/page', 'epg-cache'));

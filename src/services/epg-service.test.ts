@@ -63,6 +63,7 @@ import type { Channel, EpgSource, ParsedEpg, Programme } from '../types';
 import type { CachedEpgFilter } from './idb-cache';
 import { CONFIG } from '../config';
 import { channelKey } from '../utils/channel';
+import { packEpgFilter, unpackEpgFilter } from './epg-cache-codec';
 
 function prog(over: Partial<Programme>): Programme {
   return {
@@ -1537,6 +1538,20 @@ describe('EpgService channel pre-filter', () => {
 
       expect(EpgService.getProgrammes(ZULU)).toBeNull();
       expect(EpgService.getNextRefreshDelayMs(CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS)).toBe(0);
+    });
+
+    it('checks a cache by its stored lists once its key no longer matches', async () => {
+      const channels = many(3);
+      const filter = await cacheFor(channels);
+      cachedWithExtra(unpackEpgFilter(packEpgFilter({ ...filter, key: 'stale' }))!);
+
+      await EpgService.restoreCached([source('http://a', ['a'])], channels);
+
+      // The lists still cover the playlist, so the cache serves without a refresh.
+      expect(EpgService.getProgrammes(ZULU)).toBeNull();
+      expect(EpgService.getNowPlaying(EpgService.findChannelId(channels[0])!)?.title).toBe('Cached');
+      expect(EpgService.getNextRefreshDelayMs(CONFIG.DEFAULT_EPG_REFRESH_INTERVAL_MS))
+        .toBeGreaterThan(0);
     });
 
     it('serves it after the playlist only reordered its channels', async () => {

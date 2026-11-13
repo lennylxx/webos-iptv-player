@@ -139,3 +139,39 @@ export async function unpackEpgSliced(
   }
   return data;
 }
+
+export interface EpgFilterLists {
+  ids: string[];
+  names: string[];
+  key?: string;
+}
+
+// A filter holds a name per playlist channel, hundreds of thousands of short
+// strings that made reading the guide's record one long task. One string
+// reads fast, and a launch that trusts the cache by its key never parses it.
+export interface PackedEpgFilter {
+  lists: string;
+  key?: string;
+}
+
+export function packEpgFilter(filter: EpgFilterLists): PackedEpgFilter {
+  return {
+    lists: JSON.stringify([filter.ids, filter.names]),
+    ...(filter.key !== undefined ? { key: filter.key } : {}),
+  };
+}
+
+/** The stored filter, its lists parsed on first use; older records stored them as arrays. */
+export function unpackEpgFilter(stored: unknown): EpgFilterLists | null | undefined {
+  if (stored === null || stored === undefined) return stored;
+  const value = stored as Partial<PackedEpgFilter> & Partial<EpgFilterLists>;
+  if (typeof value.lists !== 'string') return value as EpgFilterLists;
+  const text = value.lists;
+  let parsed: [string[], string[]] | null = null;
+  const lists = (): [string[], string[]] => (parsed ??= JSON.parse(text) as [string[], string[]]);
+  return {
+    get ids() { return lists()[0]; },
+    get names() { return lists()[1]; },
+    ...(value.key !== undefined ? { key: value.key } : {}),
+  };
+}
