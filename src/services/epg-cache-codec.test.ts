@@ -57,6 +57,20 @@ describe('epg cache codec', () => {
     expect(unpackEpg(packed)).toEqual(data);
   });
 
+  it('keeps each block small enough to decode in a short task', () => {
+    const packed = packEpg(guide(3000, 3));
+    for (const text of packed.channels) {
+      expect((JSON.parse(text) as unknown[]).length / 4).toBeLessThanOrEqual(500);
+    }
+    for (const text of packed.programmes) {
+      const block = JSON.parse(text) as unknown[];
+      let programmes = 0;
+      for (let i = 1; i < block.length; i += 2) programmes += (block[i] as unknown[]).length / 6;
+      // A channel's list stays whole, so a block may run past by one channel's list.
+      expect(programmes).toBeLessThan(500 + 3);
+    }
+  });
+
   it('pauses between blocks once a slice runs out, and decodes the same guide', async () => {
     const data = guide(3000, 3);
     const packed = packEpg(data);

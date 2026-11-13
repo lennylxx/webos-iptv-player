@@ -5,8 +5,9 @@ import type { EpgChannel, ParsedEpg, Programme } from '../types';
 // the blocks then parse a few at a time between other work.
 export const PACKED_EPG_FORMAT = 'epg-packed-1';
 
-const CHANNELS_PER_BLOCK = 2000;
-const PROGRAMMES_PER_BLOCK = 2000;
+// Small enough that one block decodes well inside a frame on a TV.
+const CHANNELS_PER_BLOCK = 500;
+const PROGRAMMES_PER_BLOCK = 500;
 const PROGRAMME_FIELDS = 6;
 const META_KEYS = ['channelCatalogComplete', 'sourceName', 'tzOffsetMinutes'] as const;
 

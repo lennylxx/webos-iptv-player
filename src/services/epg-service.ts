@@ -9,6 +9,7 @@ import type {
 import { fetchAndParseXMLTV } from '../parsers/xmltv-loader';
 import { createLogger } from '../utils/logger';
 import { EpgTimeIndex } from '../utils/epg-time-index';
+import { yieldToEventLoop } from '../utils/yield';
 import { CONFIG } from '../config';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
 import { releaseHeldRecord } from './held-records';
@@ -131,6 +132,27 @@ function indexChannelName(index: Map<string, string[]>, name: string, id: string
   const ids = index.get(normalized);
   if (!ids) index.set(normalized, [id]);
   else if (!ids.includes(id)) ids.push(id);
+}
+
+// A large guide's names and aliases took the longest task of a warm launch
+// to index at once, so they are indexed a slice at a time. A message task
+// yields without the timer clamp that tens of slices would add up.
+async function buildNameIndexSliced(channels: ParsedEpg['channels']): Promise<Map<string, string[]>> {
+  const index = new Map<string, string[]>();
+  const ids = Object.keys(channels);
+  let sliceStart = Date.now();
+  for (let i = 0; i < ids.length; i++) {
+    if (i % FILTER_SLICE_CHECK === 0 && Date.now() - sliceStart >= FILTER_SLICE_MS) {
+      await yieldToEventLoop();
+      sliceStart = Date.now();
+    }
+    const id = ids[i];
+    const channel = channels[id];
+    indexChannelName(index, channel.name, id);
+    const aliases = channel.aliases;
+    if (aliases) for (const alias of aliases) indexChannelName(index, alias, id);
+  }
+  return index;
 }
 
 function servedBy(playlistIds: Set<string>, channel: Channel): boolean {
@@ -868,12 +890,13 @@ class EpgServiceImpl {
     const hasChannelCatalog = !cached.filter
       || cached.data.channelCatalogComplete === true;
     // A filtered rewrite below keeps the timestamp and the kept id arrays.
-    this.setState(source.url, {
+    const stored = await this.setState(source.url, {
       data: filtered.data,
       timestamp: cached.timestamp,
       needsRefresh: !hasTzField || !hasChannelCatalog || !covered,
       cacheTimestamp: cached.timestamp,
-    });
+    }, revision);
+    if (!stored) return 'missing';
     const fresh = (refreshIntervalMs === null || age < refreshIntervalMs)
       && hasTzField
       && hasChannelCatalog
@@ -948,7 +971,10 @@ class EpgServiceImpl {
         timestamp: Date.now(),
         needsRefresh: truncated,
       };
-      this.setState(source.url, state);
+      if (!await this.setState(source.url, state, revision)) {
+        done();
+        return false;
+      }
       if (onDataPublished) this.publish(revision, onDataPublished);
       log.info('Loaded', source.url, '|', Object.keys(result.channels).length, 'channels,',
         programmeCount, 'programmes', filter ? `(of ${String(stats.programmesSeen)} seen)` : '');
@@ -999,17 +1025,15 @@ class EpgServiceImpl {
     return false;
   }
 
-  private setState(url: string, state: SourceState): void {
+  // The state lands with its name index, so a lookup never sees one without
+  // the other. False when a newer load or a reset took over meanwhile.
+  private async setState(url: string, state: SourceState, revision: number): Promise<boolean> {
+    const index = await buildNameIndexSliced(state.data.channels);
+    if (revision !== this.revision) return false;
     this.states.set(url, state);
     this.indexRevision++;
-    const index = new Map<string, string[]>();
-    for (const id in state.data.channels) {
-      const channel = state.data.channels[id];
-      indexChannelName(index, channel.name, id);
-      const aliases = channel.aliases;
-      if (aliases) for (const alias of aliases) indexChannelName(index, alias, id);
-    }
     this.channelIdsByName.set(url, index);
+    return true;
   }
 
   /**

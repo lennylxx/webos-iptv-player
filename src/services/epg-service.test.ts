@@ -88,6 +88,11 @@ const parsed = (id: string, name: string, title: string, tzOffsetMinutes: number
   tzOffsetMinutes,
 });
 
+// Settles every promise chain that waits on no timer.
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOON);
@@ -856,8 +861,7 @@ describe('EpgService cache and refresh', () => {
       undefined,
       onDataPublished,
     );
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushMicrotasks();
 
     expect(fetchMaybeGzipText).toHaveBeenCalled();
     expect(onDataPublished).toHaveBeenCalledTimes(1);
@@ -1030,6 +1034,63 @@ describe('EpgService channel pre-filter', () => {
 
     expect(fetchAndParseXMLTVMock).not.toHaveBeenCalled();
     expect(getCachedEpg).not.toHaveBeenCalled();
+  });
+
+  describe('with a large cached guide', () => {
+    const guide = (): ParsedEpg => {
+      const data: ParsedEpg = { channels: {}, programmes: {}, tzOffsetMinutes: null, sourceName: 'Guide A' };
+      for (let i = 0; i < 6000; i++) {
+        data.channels[`g${String(i)}`] = { name: `Guide ${String(i)}`, icon: '', aliases: [`Alias ${String(i)}`] };
+        data.programmes[`g${String(i)}`] = [prog({ title: `Show ${String(i)}`, start: h(-1), stop: h(1) })];
+      }
+      return data;
+    };
+    // Named like a guide channel but without its tvg-id, so only the name index finds it.
+    const byName = channel({ id: '', name: 'Alias 5999', playlistIds: ['a'] });
+
+    beforeEach(() => {
+      vi.mocked(getCachedEpg).mockResolvedValue({ url: 'http://a', timestamp: NOON, data: guide() });
+    });
+
+    it('indexes the channel names a slice at a time', async () => {
+      let clock = NOON;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 1));
+      let done = false;
+      try {
+        const restoring = EpgService.restoreCached([source('http://a', ['a'])], null)
+          .then(() => { done = true; });
+        await flushMicrotasks();
+        expect(done).toBe(false);
+        // It yields through message tasks, which no timer clamp slows.
+        expect(vi.getTimerCount()).toBe(0);
+        await restoring;
+      } finally {
+        now.mockRestore();
+      }
+
+      const id = EpgService.findChannelId(byName);
+      expect(id).not.toBeNull();
+      expect(EpgService.getNowPlaying(id!)?.title).toBe('Show 5999');
+    });
+
+    it('drops a name index a reset overtakes', async () => {
+      let clock = NOON;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 1));
+      try {
+        let done = false;
+        const restoring = EpgService.restoreCached([source('http://a', ['a'])], null)
+          .then(() => { done = true; });
+        await flushMicrotasks();
+        expect(done).toBe(false);
+        EpgService.reset();
+        await restoring;
+      } finally {
+        now.mockRestore();
+      }
+
+      expect(EpgService.loaded).toBe(false);
+      expect(EpgService.getSourceName('http://a')).toBeNull();
+    });
   });
 
   it('builds no filter on a cold restore without a cached guide', async () => {
