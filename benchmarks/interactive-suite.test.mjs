@@ -28,6 +28,20 @@ describe('assertInteractiveFlow', () => {
     }), fixture)).toThrow('searchSteady never went quiet');
   });
 
+  it('checks the channel count only of runs that report one', () => {
+    const report = channels => ({
+      live: {
+        interactiveMs: { p50: 1 },
+        channels,
+        afterReady: { keys: { min: 5 }, settled: [true, true] },
+      },
+    });
+    expect(() => assertInteractiveFlow('m3u', report({ samples: [10, null] }), fixture)).not.toThrow();
+    expect(() => assertInteractiveFlow('m3u', report([null, null]), fixture)).not.toThrow();
+    expect(() => assertInteractiveFlow('m3u', report({ samples: [null, 7] }), fixture))
+      .toThrow('m3u showed 7 of 10 channels');
+  });
+
   it('requires movie and series needles only from complete catalogs', () => {
     expect(() => assertInteractiveFlow('searchCold', searchReport({
       hits: [0, 1], partialCatalogs: [2, 0],

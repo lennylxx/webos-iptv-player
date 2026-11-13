@@ -439,6 +439,7 @@ export function installInteractiveProbe(config) {
     longTaskSupported: false,
     workerTasks: [],
     workers: 0,
+    loadedChannels: null,
     done: false,
     error: null,
     result: null,
@@ -452,6 +453,10 @@ export function installInteractiveProbe(config) {
       const entry = probe.events[name] || (probe.events[name] = { first: now(), last: 0, count: 0 });
       entry.count++;
       entry.last = now();
+      if (name === 'playlist.load.completed') {
+        const field = args.find(value => typeof value === 'string' && value.indexOf('channels=') === 0);
+        if (field) probe.loadedChannels = Number(field.slice(9));
+      }
       if (name === 'worker.lifecycle.created') probe.workers++;
       if (name === 'worker.lifecycle.terminated' || name === 'worker.lifecycle.failed') {
         probe.workers = Math.max(0, probe.workers - 1);
@@ -841,6 +846,10 @@ export function readInteractiveProbeStatus() {
 export function readInteractiveProbe() {
   const probe = window.__interactiveProbe;
   if (!probe) return null;
+  // The app renders only the current view, so a Live list hidden behind
+  // another view may still hold the rows it had when it was left; the
+  // count the playlist load reported stands in for it then.
+  const live = document.getElementById('view-channels');
   return {
     done: probe.done,
     error: probe.error,
@@ -856,9 +865,11 @@ export function readInteractiveProbe() {
     workerTasks: probe.workerTasks,
     hits: probe.hits || null,
     idb: window.__idbLatency || null,
-    channels: Math.round(Number.parseFloat(
-      document.querySelector('.channel-list-spacer')?.style.height || '0',
-    ) / 88),
+    channels: live && !live.classList.contains('hidden')
+      ? Math.round(Number.parseFloat(
+        live.querySelector('.channel-list-spacer')?.style.height || '0',
+      ) / 88)
+      : probe.loadedChannels ?? null,
   };
 }
 
@@ -1032,8 +1043,11 @@ export function assertInteractiveFlow(name, report, fixture) {
   if (!live.interactiveMs || !(live.interactiveMs.p50 > 0)) {
     throw new Error(`Interactive ${name} recorded no Live time`);
   }
-  for (const count of live.channels.samples) {
-    if (count !== expectedChannels) {
+  // A run that ended away from Live reports no count; aggregating only such
+  // runs leaves a plain array instead of a distribution.
+  const counts = Array.isArray(live.channels) ? live.channels : live.channels?.samples ?? [];
+  for (const count of counts) {
+    if (count !== null && count !== expectedChannels) {
       throw new Error(`Interactive ${name} showed ${String(count)} of ${String(expectedChannels)} channels`);
     }
   }

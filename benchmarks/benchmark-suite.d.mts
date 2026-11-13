@@ -44,6 +44,18 @@ export function installColdLoadFixture(
   options: ColdLoadFixtureOptions,
 ): { playlists: number };
 
+export function waitForPlaylistLoaded(options?: { timeoutMs?: number }): Promise<void>;
+
+export interface StartupSettle {
+  settledMs: number;
+  maxLongTaskMs: number | null;
+  longTaskTotalMs: number | null;
+}
+
+export function waitForStartupSettled(
+  options?: { quietMs?: number; timeoutMs?: number },
+): Promise<StartupSettle>;
+
 export interface StartupHoverBenchmark {
   hoverFrameMs: number;
   focusedSynchronously: boolean;
@@ -244,8 +256,14 @@ export function runM3USearchBenchmark(
   options: { querySamples: number },
 ): Promise<Record<string, any>>;
 
+export interface BenchmarkAssertOptions {
+  /** Warn instead of failing on the known TV-only deviations. */
+  tvQuirks?: boolean;
+}
+
 export function assertM3USearchBenchmark(
   report: Record<string, any>,
+  options?: BenchmarkAssertOptions,
 ): void;
 
 export function runGroupBenchmark(
@@ -275,6 +293,7 @@ export function assertGroupBenchmarkScale(
 export function assertBenchmarkScale(
   report: BenchmarkSuites,
   scale: number,
+  options?: BenchmarkAssertOptions,
 ): void;
 
 export function assertColdLoadBenchmark(

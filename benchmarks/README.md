@@ -84,6 +84,11 @@ The Xtream fixture holds 50,000 Live streams, 200,000 movies, 200,000 series,
 and 5,000 categories per type. Each run also records long tasks, request
 counts per route, and IndexedDB read and commit counts.
 
+Each run also reports the Live list's channel count, which must match the
+fixture. The app renders only the current view, so a run that ended away
+from Live, in Movies or Search, reports the count the playlist load logged
+instead, or none if the load had not finished.
+
 Once Live (`m3u`) or Movies (`xtreamMovies`) answers its first key, the
 probe keeps pressing Up and Down every `keyIntervalMs` (500 ms) until no
 background event has fired for 3 s and the main thread had no idle period
@@ -185,8 +190,8 @@ device, Worker throttle mode, fixture, run count, or network list.
 
 | Suite | Metrics |
 |---|---|
-| Startup | Cached playlist, indexes, and EPG restoration until Channels is visible; hover-to-next-frame latency is regression-gated |
-| Cold load | Uncached 50,000-channel M3U fetch, production parse, index build, and first useful render |
+| Startup | Cached playlist, indexes, and EPG restoration until Live shows the whole list; then `settle` waits until no Long Task for 1 s and gates the longest one (the deferred guide restore), and hover-to-next-frame latency, measured after it, is regression-gated |
+| Cold load | Uncached 50,000-channel M3U fetch, production parse, index build, and render of the whole list |
 | Raw parsing | Production M3U and XMLTV parsers plus the production playlist derived-index builder over generated 50,000-item data, and a provider-shaped guide parsed twice — whole feed vs. programmes pre-filtered to the 15% of channels a playlist keeps while retaining the lightweight XMLTV channel catalog for manual mapping, each bracketed by a forced GC so `parsers.xmltvCatalog` reports both duration and retained heap; `parsers.xmltvPipelineBuffered` and `parsers.xmltvPipeline` fetch the same gzip guide through the legacy buffered and production worker-streaming paths, with end-to-end timing, maximum animation-frame gap, and separate forced-GC CDP page-heap sampling; derived-index duration, production XMLTV duration, and frame gap are regression-gated |
 | Channel List | Bounded DOM size and D-pad handler p50/p95/max |
 | Recently Watched | Full rendering at the 50-entry product maximum, alternating 88px Live and 100px Catch-up rows |
@@ -313,6 +318,18 @@ orchestration for the desktop benchmark, while `tv-runner.mjs` owns Node/CDP
 orchestration for the TV benchmark — connecting to the device, reloading the
 app, injecting the shared functions via `Runtime.evaluate`, and writing the
 report.
+
+Live shows its first channels while the rest of a playlist arrives, under a
+progress bar along the tab bar. Every reload that times or counts channels
+(`waitForPlaylistLoaded`) waits for a Live row and for that bar to end, so
+startup, cold-load, group, and large-playlist times still mean the whole list
+is ready; an older build without the bar shows Live only once its list has
+loaded, so the same wait measures it alike.
+
+The TV run warns instead of failing on two known device deviations: a warm
+Search open that rebuilt an index the TV's small storage quota left unstored,
+and a Movies category rail that also lists the fixture's six empty categories,
+as an older build does.
 
 The desktop XMLTV pipeline uses Playwright's immediate route fulfillment to
 isolate CPU and memory cost. The TV run starts temporary LAN HTTP servers for

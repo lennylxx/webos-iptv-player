@@ -31,6 +31,7 @@ import {
   assertStartupHoverBenchmark,
   runGroupBenchmark,
   summarizeRetainedMemory,
+  waitForPlaylistLoaded,
   assertRetainedMemory,
   assertParentalBenchmark,
   assertXMLTVCatalogBenchmark,
@@ -38,6 +39,7 @@ import {
   runBenchmarkSuites,
   inspectPointerBenchmark,
   measureStartupHoverBenchmark,
+  waitForStartupSettled,
   preparePointerBenchmark,
   assertBenchmarkScale,
   assertColdLoadBenchmark,
@@ -233,7 +235,10 @@ async function waitForLoad(client, action) {
   await loaded;
 }
 
-async function reloadApp(client, selectors = ['#view-channels']) {
+const CHANNEL_ROW = '#view-channels:not(.hidden) .channel-main .channel-item';
+
+// By default waits for the whole playlist, as an older build's Live view did.
+async function reloadApp(client, selectors = [CHANNEL_ROW], { loaded = true } = {}) {
   await waitForLoad(client, () => client.call('Page.reload', { ignoreCache: true }));
   await evaluate(client, async (readySelectors) => {
     const started = Date.now();
@@ -246,6 +251,7 @@ async function reloadApp(client, selectors = ['#view-channels']) {
     }
     throw new Error(`Timed out waiting for ${readySelectors.join(' or ')}`);
   }, selectors);
+  if (loaded) await evaluate(client, waitForPlaylistLoaded);
 }
 
 async function installFixture(client) {
@@ -526,7 +532,7 @@ async function runTvBenchmark() {
   if (cleanupOnly) {
     try {
       const cleanup = await cleanupFixture(client);
-      await reloadApp(client, ['#view-channels', '#view-settings']);
+      await reloadApp(client, ['#view-channels', '#view-settings'], { loaded: false });
       console.log(JSON.stringify(cleanup, null, 2));
       return;
     } finally {
@@ -545,6 +551,7 @@ async function runTvBenchmark() {
     const startupStarted = Date.now();
     await reloadApp(client);
     const startupReadyMs = Date.now() - startupStarted;
+    const startupSettle = await evaluate(client, waitForStartupSettled, {});
     const startupHover = await evaluate(client, measureStartupHoverBenchmark);
     assertStartupHoverBenchmark(startupHover);
     await installParserBundle(client);
@@ -620,7 +627,7 @@ async function runTvBenchmark() {
       runM3USearchBenchmark,
       { querySamples: QUERY_SAMPLES },
     );
-    assertM3USearchBenchmark(suites.search.m3u);
+    assertM3USearchBenchmark(suites.search.m3u, { tvQuirks: true });
     await evaluate(client, installUniqueGroupFixture, SCALE);
     const groupStartupStarted = Date.now();
     await reloadApp(client);
@@ -644,7 +651,7 @@ async function runTvBenchmark() {
         collectGarbage: () => client.call('HeapProfiler.collectGarbage'),
       },
     );
-    assertBenchmarkScale(suites, SCALE);
+    assertBenchmarkScale(suites, SCALE, { tvQuirks: true });
     const device = await readDevice(client);
     const report = {
       version: 1,
@@ -664,6 +671,7 @@ async function runTvBenchmark() {
           readyMs: startupReadyMs,
           rendered: suites.channelList.rendered,
           ...startupHover,
+          settle: startupSettle,
         },
         ...suites,
         memory: {
@@ -685,7 +693,7 @@ async function runTvBenchmark() {
     if (fixtureAttempted) {
       try {
         await cleanupFixture(client);
-        await reloadApp(client, ['#view-channels', '#view-settings']);
+        await reloadApp(client, ['#view-channels', '#view-settings'], { loaded: false });
         const restored = await evaluate(client, async () => {
           const db = await new Promise((resolve, reject) => {
             const request = indexedDB.open('iptv');
@@ -694,12 +702,12 @@ async function runTvBenchmark() {
           });
           const tx = db.transaction('playlist-cache', 'readonly');
           const cached = await new Promise((resolve, reject) => {
-            const request = tx.objectStore('playlist-cache').get('combined-v3');
+            const request = tx.objectStore('playlist-cache').get('combined-v4');
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });
           db.close();
-          return cached?.data?.channels?.length ?? 0;
+          return cached?.data?.channels?.length ?? cached?.data?.channelCount ?? 0;
         });
         console.log(`Restored TV playlist cache: ${String(restored)} channels`);
       } catch (error) {

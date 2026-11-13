@@ -23,6 +23,7 @@ import {
   inspectPointerBenchmark,
   measureDerivedIndexBenchmark,
   measureStartupHoverBenchmark,
+  waitForStartupSettled,
   preparePointerBenchmark,
   rebuildBenchmarkDatabase,
   runGroupBenchmark,
@@ -34,6 +35,7 @@ import {
   runBenchmarkSuites,
   runViewReopenCycle,
   summarizeRetainedMemory,
+  waitForPlaylistLoaded,
 } from './benchmark-suite.mjs';
 import {
   largePlaylistCategoryFilter,
@@ -85,6 +87,7 @@ const FIXTURE = {
 };
 const COLD_PLAYLIST_URL = 'http://host/cold-list.m3u';
 const XMLTV_PIPELINE_URL = 'http://host/benchmark-guide.xml.gz';
+const PLAYLIST_LOADED = { timeoutMs: 120_000 };
 const LARGE_PLAYLIST_ENTRIES = positiveIntegerEnv(
   'BENCHMARK_LARGE_PLAYLIST_ENTRIES',
   400_000,
@@ -267,9 +270,9 @@ test('records 50,000-item application benchmarks', async ({
   try {
     const startupStarted = Date.now();
     await page.goto('/');
-    await expect(page.locator('#view-channels')).toBeVisible();
-    await expect(page.locator('.channel-item').first()).toBeVisible();
+    await page.evaluate(waitForPlaylistLoaded, PLAYLIST_LOADED);
     const startupReadyMs = Date.now() - startupStarted;
+    const startupSettle = await page.evaluate(waitForStartupSettled, {});
     const startupHover = await page.evaluate(measureStartupHoverBenchmark);
     assertStartupHoverBenchmark(startupHover);
     await page.addScriptTag({
@@ -335,7 +338,7 @@ test('records 50,000-item application benchmarks', async ({
     suites.parental = parental;
     await page.evaluate(installM3USearchFixture);
     await page.reload();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await page.evaluate(waitForPlaylistLoaded, PLAYLIST_LOADED);
     suites.search.m3u = await page.evaluate(
       runM3USearchBenchmark,
       { querySamples: QUERY_SAMPLES },
@@ -344,7 +347,7 @@ test('records 50,000-item application benchmarks', async ({
     await page.evaluate(installUniqueGroupFixture, SCALE);
     const groupStartupStarted = Date.now();
     await page.reload();
-    await expect(page.locator('#view-channels')).toBeVisible();
+    await page.evaluate(waitForPlaylistLoaded, PLAYLIST_LOADED);
     const groups = await page.evaluate(runGroupBenchmark, { keySamples: KEY_SAMPLES });
     groups.startupMs = Date.now() - groupStartupStarted;
     assertGroupBenchmarkScale(groups, SCALE);
@@ -355,8 +358,7 @@ test('records 50,000-item application benchmarks', async ({
     });
     const coldStarted = performance.now();
     await page.reload();
-    await expect(page.locator('#view-channels')).toBeVisible();
-    await expect(page.locator('.channel-item').first()).toBeVisible();
+    await page.evaluate(waitForPlaylistLoaded, PLAYLIST_LOADED);
     const coldResult = await page.evaluate(() => {
       const totalSize = parseFloat(
         document.querySelector<HTMLElement>('.channel-list-spacer')?.style.height || '0',
@@ -403,6 +405,7 @@ test('records 50,000-item application benchmarks', async ({
           readyMs: startupReadyMs,
           rendered: suites.channelList.rendered,
           ...startupHover,
+          settle: startupSettle,
         },
         ...suites,
         memory: {

@@ -78,6 +78,7 @@ const allowance = metricPath => {
 
 const performanceMetricPaths = [
   'startup.hoverFrameMs',
+  'startup.settle.maxLongTaskMs',
   'memory.largePlaylist.readyMs',
   'memory.largePlaylistFiltered.readyMs',
   'parsers.derivedIndexes.durationMs',

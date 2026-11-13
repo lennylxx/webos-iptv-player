@@ -105,7 +105,8 @@ export interface InteractiveProbeRaw {
   workerTasks: Array<[string, number, number, number]>;
   hits: Record<string, number> | null;
   idb: { reads: number; commits: number } | null;
-  channels: number;
+  /** Null when the run ended away from the Live view. */
+  channels: number | null;
   /** Main-thread JS heap, added by the runner. */
   heap?: {
     peakMiB: number;

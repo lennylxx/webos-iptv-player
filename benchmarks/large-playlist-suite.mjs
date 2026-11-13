@@ -292,7 +292,9 @@ export async function waitForLargePlaylistChannelCount(options) {
   while (Date.now() - started < options.timeoutMs) {
     const spacer = document.querySelector('.channel-list-spacer');
     const height = Number.parseFloat(spacer?.style.height || '0');
-    if (Math.round(height / 88) === options.expected) return;
+    // A newer app reaches the count before its load ends; an older one has no progress bar.
+    if (Math.round(height / 88) === options.expected
+        && !document.querySelector('.tab-bar-progress.active')) return;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   throw new Error(`Timed out waiting for ${String(options.expected)} channels`);
