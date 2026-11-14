@@ -70,6 +70,7 @@
 - **Continue Watching & Watchlist management** — remove individual titles, clear a whole list, or clear a movie's saved progress from its details page
 - **Automatic VOD queues** — continue through series episodes or remaining Watchlist movies, removing completed titles from the Watchlist
 - **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams
+- **Seek-bar previews** — press or hold Left/Right to move a seek target in steps that grow while held, then seek once; the bubble shows a preview frame when the server publishes thumbnails (OTT Navigator `seek_preview`, Flussonic, Nimble, HLS/DASH image tracks) ([details](docs/seek-preview.md))
 - **Parental controls** — lock Live TV groups, movie and series categories, or individual titles with a PIN, with adult groups suggested for locking; locked content can stay listed with a lock or be hidden, and you choose when the PIN is asked again
 
 **Playback**
@@ -282,8 +283,8 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 | Key | Player | Channel List | EPG |
 |-----|--------|-------------|-----|
 | Up/Down | Channel +/- | Navigate | Navigate within pane |
-| Left | Open sidebar, then groups; seek −30s when available | Move toward groups | Previous pane or day |
-| Right | Open menu; seek +30s while the OSD shows on seekable playback (press OK to show it) | Move toward channels | Next pane, day, or Reminder Manager |
+| Left | Open sidebar, then groups; move the seek target back when available | Move toward groups | Previous pane or day |
+| Right | Open menu; move the seek target forward while the OSD shows on seekable playback (press OK to show it) | Move toward channels | Next pane, day, or Reminder Manager |
 | OK/Enter | Toggle OSD; pause/resume; activate overlay | Select channel | Play channel/program or open Reminder Manager |
 | Back | Back out of sidebar/menu, then hide a paused OSD; stop & return | Exit app (press twice) | Close guide |
 | Red | Open EPG | Open EPG | — |
@@ -308,6 +309,7 @@ some of the features above:
 - [`docs/hls-subtitles.md`](docs/hls-subtitles.md) — how live HLS subtitles are handled on webOS (in-manifest types and their render paths)
 - [`docs/mpeg-dash.md`](docs/mpeg-dash.md) — how DASH detection, native playback, subtitles, and live DVR work
 - [`docs/http-header-playback.md`](docs/http-header-playback.md) — how channels that need a Referer, User-Agent, Cookie, or Authorization play through the TV's media service or the local proxy
+- [`docs/seek-preview.md`](docs/seek-preview.md) — how the seek target and its acceleration work, and which servers' preview thumbnails are supported
 - [`docs/vod-subtitles.md`](docs/vod-subtitles.md) — how VOD (Xtream movies & episodes) subtitles work: in-container tracks plus sidecar SRT/WebVTT/ASS, and online subtitle search (SubDL, OpenSubtitles, Assrt)
 - [`docs/storage-and-data.md`](docs/storage-and-data.md) — what the app stores, where it lives, and how user data is separated from disposable caches
 - [`docs/lan-service.md`](docs/lan-service.md) — phone setup and M3U uploads over the bundled LAN service

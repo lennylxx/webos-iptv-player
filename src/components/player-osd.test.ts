@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { notifyPointerGone } from '../navigation/input-mode';
 import { CONFIG } from '../config';
 import { StorageService } from '../services/storage-service';
 import type { Channel, Programme, VodQueueItem } from '../types';
@@ -47,6 +48,7 @@ function snapshot(overrides: Partial<PlayerOsdSnapshot> = {}): PlayerOsdSnapshot
     nowPlaying: null,
     upcoming: null,
     streamInfo: null,
+    scrub: null,
     ...overrides,
   };
 }
@@ -80,6 +82,7 @@ describe('PlayerOsd', () => {
       canAutoReveal: () => true,
       canSeek: () => true,
       onSeekFraction: vi.fn(),
+      onHoverFraction: vi.fn(),
       onPauseToggle: vi.fn(),
       onGoLive: vi.fn(),
       onResync: vi.fn(),
@@ -228,6 +231,155 @@ describe('PlayerOsd', () => {
     osd.refreshProgress();
     expect(container.querySelector<HTMLElement>('.osd-progress-bar')?.style.width).toBe('75%');
     expect(container.querySelector('.osd-dvr-behind')?.textContent).toBe('-0:15');
+  });
+
+  it('marks a pending seek target with its time, jump, and preview tile', () => {
+    state = snapshot({ playback: playback(600, 60), vodTitle: 'Video 1' });
+    osd.show();
+    expect(container.querySelector('[data-scrub]')).toBeNull();
+
+    state = snapshot({
+      playback: playback(600, 60),
+      vodTitle: 'Video 1',
+      scrub: {
+        fraction: 0.25,
+        target: 150,
+        delta: 90,
+        behindLive: null,
+        thumbnail: {
+          url: 'http://host/sheet.jpg',
+          tile: { x: 160, y: 90, w: 160, h: 90 },
+          width: 800,
+          height: 180,
+        },
+      },
+    });
+    osd.refreshProgress();
+    const marker = container.querySelector<HTMLElement>('[data-scrub]')!;
+    expect(marker.style.left).toBe('25%');
+    expect(marker.querySelector('.osd-scrub-time')?.textContent).toBe('2:30');
+    expect(marker.querySelector('.osd-scrub-delta')?.textContent).toBe('+1:30');
+    const image = marker.querySelector<HTMLImageElement>('.osd-scrub-image')!;
+    // A 160px tile scaled to the 320px frame: the 800x180 sheet doubles and
+    // shifts so tile (160, 90) sits in the window.
+    expect(image.getAttribute('src')).toBe('http://host/sheet.jpg');
+    expect(image.style.width).toBe('1600px');
+    expect(image.style.left).toBe('-320px');
+    expect(image.style.top).toBe('-180px');
+
+    state = snapshot({
+      playback: playback(600, 60),
+      dvr: { fraction: 0.5, behindLive: 0, atLiveEdge: true } as DvrState,
+      scrub: { fraction: 0.4, target: 40, delta: -20, behindLive: 45, thumbnail: null },
+    });
+    osd.render();
+    expect(container.querySelector('.osd-scrub-time')?.textContent).toBe('-0:45');
+    expect(container.querySelector('.osd-scrub-delta')?.textContent).toBe('-0:20');
+    expect(container.querySelector('.osd-scrub-image')).toBeNull();
+
+    state = snapshot({ playback: playback(600, 60), dvr: state.dvr });
+    osd.refreshProgress();
+    expect(container.querySelector('[data-scrub]')).toBeNull();
+  });
+
+  it('centers the bubble on the knob, pushed inward only at the ends', () => {
+    const host = 1000;
+    const bubble = 200;
+    const restore = [
+      // A hidden OSD lays out nothing, as in a browser.
+      ['offsetWidth', function (this: HTMLElement) {
+        return !this.closest('.hidden') && this.classList.contains('osd-scrub-bubble') ? bubble : 0;
+      }],
+      ['offsetLeft', function (this: HTMLElement) {
+        return !this.closest('.hidden') && this.hasAttribute('data-scrub')
+          ? parseFloat(this.style.left) / 100 * host : 0;
+      }],
+      ['clientWidth', function (this: HTMLElement) {
+        return !this.closest('.hidden') && this.hasAttribute('data-scrub-host') ? host : 0;
+      }],
+    ].map(([name, get]) => {
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, name as string);
+      Object.defineProperty(HTMLElement.prototype, name as string, { configurable: true, get: get as () => number });
+      return () => {
+        if (original) Object.defineProperty(HTMLElement.prototype, name as string, original);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name as string];
+      };
+    });
+    try {
+      const shift = (fraction: number): string => {
+        state = snapshot({
+          playback: playback(600, 60),
+          vodTitle: 'Video 1',
+          scrub: { fraction, target: fraction * 600, delta: 0, behindLive: null, thumbnail: null },
+        });
+        osd.refreshProgress();
+        return container.querySelector<HTMLElement>('.osd-scrub-bubble')!.style.transform;
+      };
+      state = snapshot({ playback: playback(600, 60), vodTitle: 'Video 1' });
+      osd.show();
+      expect(shift(0.3)).toBe('translateX(-100px)');
+      expect(shift(0.5)).toBe('translateX(-100px)');
+      expect(shift(0.02)).toBe('translateX(-20px)');
+      expect(shift(0.98)).toBe('translateX(-180px)');
+      osd.render();
+      expect(container.querySelector<HTMLElement>('.osd-scrub-bubble')!.style.transform)
+        .toBe('translateX(-180px)');
+
+      // Shown with a pending target: placed once the OSD can be measured.
+      osd.hide();
+      state = { ...state, scrub: { ...state.scrub!, fraction: 0.5, target: 300 } };
+      osd.show();
+      expect(container.querySelector<HTMLElement>('.osd-scrub-bubble')!.style.transform)
+        .toBe('translateX(-100px)');
+    } finally {
+      restore.forEach(undo => undo());
+    }
+  });
+
+  describe('seek-bar hover', () => {
+    let frames: Map<number, FrameRequestCallback>;
+    const flushFrame = () => {
+      const pending = Array.from(frames.values());
+      frames.clear();
+      for (const fn of pending) fn(0);
+    };
+    const move = (clientX: number, clientY: number) =>
+      container.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX, clientY }));
+
+    beforeEach(() => {
+      frames = new Map();
+      let id = 0;
+      vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { frames.set(++id, fn); return id; });
+      vi.stubGlobal('cancelAnimationFrame', (handle: number) => { frames.delete(handle); });
+      state = snapshot({ playback: playback(120), vodTitle: 'Video 1' });
+      osd.show();
+      const seekbar = container.querySelector('[data-seekbar]') as HTMLElement;
+      seekbar.getBoundingClientRect = () => rect(100, 50, 400, 20);
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('reports the hovered fraction once per frame and clears it on hide', () => {
+      const report = vi.mocked(callbacks.onHoverFraction);
+      move(150, 60);
+      move(200, 60);
+      expect(report).not.toHaveBeenCalled();
+      flushFrame();
+      expect(report.mock.calls).toEqual([[0.25]]);
+      move(200, 300);
+      flushFrame();
+      expect(report).toHaveBeenLastCalledWith(null);
+      move(300, 60);
+      osd.hide();
+      flushFrame();
+      expect(report).toHaveBeenLastCalledWith(null);
+    });
+
+    it('clears the hover when the pointer leaves the window', () => {
+      move(200, 60);
+      flushFrame();
+      notifyPointerGone();
+      expect(callbacks.onHoverFraction).toHaveBeenLastCalledWith(null);
+    });
   });
 
   it('routes pointer seeks and control clicks through callbacks', () => {

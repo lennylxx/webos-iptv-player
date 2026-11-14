@@ -6,6 +6,7 @@ export type Mode = 'keys' | 'pointer';
 
 const CLASS = 'keyboard-nav';
 const listeners = new Set<(mode: Mode) => void>();
+const goneListeners = new Set<() => void>();
 let keyAfterPointer = false;
 let cursorHidden = false;
 
@@ -29,6 +30,12 @@ export const InputMode = {
     listeners.add(fn);
     return () => { listeners.delete(fn); };
   },
+
+  /** Call `fn` when the pointer leaves the window or webOS hides its cursor. */
+  onPointerGone(fn: () => void): () => void {
+    goneListeners.add(fn);
+    return () => { goneListeners.delete(fn); };
+  },
 };
 
 /** KeyHandler only: switch the mode and tell subscribers when it changed. */
@@ -38,6 +45,11 @@ export function setInputMode(mode: Mode): void {
   if (read() === mode) return;
   document.documentElement.classList.toggle(CLASS, mode === 'keys');
   for (const fn of Array.from(listeners)) fn(mode);
+}
+
+/** KeyHandler only: the pointer left the window or its cursor hid. */
+export function notifyPointerGone(): void {
+  for (const fn of Array.from(goneListeners)) fn();
 }
 
 /** KeyHandler only: webOS hid or showed its cursor; the mode stays as it is. */

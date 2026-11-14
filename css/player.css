@@ -256,6 +256,7 @@
   padding: 15px 0;
   background-clip: content-box;
   overflow: visible;
+  position: relative;
 }
 
 .osd-progress[data-seekbar] .osd-progress-bar {
@@ -275,6 +276,89 @@
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* Seek preview: a hollow knob at the pending target (held Left/Right or the
+   pointer over the bar) and a bubble above it with the server's preview frame,
+   the target time, and the jump size. */
+.osd-scrub-host {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.osd-scrub {
+  position: absolute;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+
+.osd-scrub::before {
+  content: '';
+  position: absolute;
+  left: -11px;
+  top: -11px;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border: 4px solid var(--accent);
+  border-radius: 50%;
+  background: var(--bg-secondary);
+}
+
+.osd-scrub-bubble {
+  position: absolute;
+  left: 0;
+  bottom: 26px;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.osd-scrub-thumb {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: #000;
+}
+
+.osd-scrub-image {
+  position: absolute;
+  max-width: none;
+}
+
+.osd-scrub-image--fit {
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.osd-scrub-label {
+  padding: 0 8px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.osd-scrub-time {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.osd-scrub-delta {
+  margin-left: 12px;
+  font-size: 22px;
+  color: var(--text-secondary);
 }
 
 /* Live DVR (timeshift) row: play/pause + "behind live" offset + Go-to-Live. The

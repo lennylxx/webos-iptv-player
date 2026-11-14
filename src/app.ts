@@ -1773,7 +1773,8 @@ class App {
         } else if (this.menu.visible) {
           // Let the menu step out of its audio sub-menu before closing.
           if (!this.menu.handleBack()) this.menu.hide();
-        } else if (!this.player.hideOsdForBack() && !this.livePreview.returnFromFullscreen(true)) {
+        } else if (!this.player.cancelScrub() && !this.player.hideOsdForBack()
+            && !this.livePreview.returnFromFullscreen(true)) {
           this.player.handleAction('back');
         }
         return;

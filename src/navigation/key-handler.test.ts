@@ -122,6 +122,18 @@ describe('KeyHandler', () => {
       expect(seen).toEqual([true]);
     });
 
+    it.each(['cursor-hide key', 'hidden cursor event', 'window leave'])('tells pointer-gone listeners on a %s', cause => {
+      const gone = vi.fn();
+      const off = InputMode.onPointerGone(gone);
+      move(134, 100);
+      if (cause === 'cursor-hide key') press(K.CURSOR_HIDE);
+      else if (cause === 'hidden cursor event') {
+        document.dispatchEvent(new CustomEvent('cursorStateChange', { detail: { visibility: false } }));
+      } else document.documentElement.dispatchEvent(new MouseEvent('mouseleave'));
+      off();
+      expect(gone).toHaveBeenCalledTimes(1);
+    });
+
     it('stops counting a key as after the pointer once cursorStateChange hides the cursor', () => {
       const seen: boolean[] = [];
       KeyHandler.setHandler(() => { seen.push(InputMode.keyAfterPointer); });

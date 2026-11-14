@@ -84,7 +84,18 @@ export const CONFIG = {
     // full-width number does not feel stalled once it can no longer grow.
     DEFAULT_NUMBER_ENTRY_OSD_TIMEOUT_MS: 1200,
     CHANNEL_NUMBER_MAX_DIGITS: 4,  // fallback cap until the channel count is known
-    SEEK_STEP: 30,              // seconds per Left/Right press while seeking catch-up or live DVR
+    // Seconds per consecutive Left/Right press while seeking VOD, catch-up, or
+    // live DVR; the step grows the longer the user keeps pressing one way.
+    SEEK_STEPS: [10, 30, 60, 120, 300] as readonly number[], // seconds; one tier per SEEK_STEP_HOLD held
+    SEEK_STEP_HOLD: 500, // ms of one direction held before the step grows a tier
+    SEEK_MAX_STEP_FRACTION: 0.05, // a step never exceeds this share of the seekable span
+    SEEK_COMMIT_DELAY: 800, // ms after the last press before the accumulated seek is applied
+    // Keys stop a seek target short of the end, so a held Right never
+    // finishes a movie or drops a catch-up back to live.
+    SEEK_END_PAD: 2, // seconds
+    SEEK_PREVIEW_WIDTH: 320,    // px; the seek-bar preview frame (and the thumbnail size we ask servers for)
+    SEEK_PREVIEW_DEBOUNCE: 150, // ms between preview image requests while the target moves
+    SEEK_PREVIEW_FETCH_TIMEOUT: 8000, // ms for a thumbnail manifest or sidecar
     HLS_MAX_RECOVERIES: 3,      // bounded hls.js fatal-error retries before giving up → next channel
     STALL_POLL_MS: 2000,        // native stall watchdog: currentTime poll interval
     STALL_FREEZE_TICKS: 5,      // ~10s frozen before the first in-place reload

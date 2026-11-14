@@ -594,11 +594,13 @@ test('VOD Right opens the menu while the OSD is hidden and seeks while it shows'
 
   // OK with the OSD hidden reveals it: canSeek() is false while the OSD is
   // hidden, so OK runs osd.toggle() rather than pausing. With the OSD up,
-  // Right seeks forward and leaves the menu shut.
+  // Right marks a seek target, leaves the menu shut, and seeks once the
+  // presses settle.
   await page.keyboard.press('Enter');
   await expect(osd).not.toHaveClass(/hidden/);
   await page.keyboard.press('ArrowRight');
-  await expect.poll(seeks).toEqual([30]);
+  await expect(osd.locator('.osd-scrub-time')).toHaveText('0:10');
+  await expect.poll(seeks).toEqual([10]);
   await expect(menu).toBeHidden();
 });
 
@@ -647,6 +649,17 @@ test('VOD Back leaves playback even with the OSD up', async ({ page }) => {
   expect(shown).toMatchObject({ osd: true, paused: false });
   expect(left).toMatchObject({ osdBefore: true, player: false });
   await expect(page.locator('#view-movies')).toBeVisible();
+});
+
+test('VOD Back drops a pending seek and keeps playing in place', async ({ page }) => {
+  await startFakeVod(page);
+  const [, marked, dropped] = await pressStepsAndReadPlayer(page, [[YELLOW], [RIGHT, RIGHT], [BACK]]);
+  expect(marked).toMatchObject({ osd: true, menu: false, currentTime: 0 });
+  expect(dropped).toMatchObject({ osd: true, player: true, currentTime: 0 });
+  const osd = page.locator('#player-osd');
+  await expect(osd.locator('.osd-scrub')).toHaveCount(0);
+  await page.waitForTimeout(1000); // past the commit delay
+  expect(await page.locator('#video-player').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
 });
 
 test('VOD Back hides a paused OSD, so Right reaches the menu, then leaves', async ({ page }) => {

@@ -183,6 +183,17 @@ describe('parseM3U', () => {
     });
   });
 
+  it('reads the seek_preview template as a channel field', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 tvg-id="ch1" seek_preview="http://host/p/{utc}.jpg",Channel',
+      'http://host/a',
+    ].join('\n');
+    const ch = parseM3U(m3u).channels[0];
+    expect(ch.seekPreview).toBe('http://host/p/{utc}.jpg');
+    expect(ch.sourceAttributes).toBeUndefined();
+  });
+
   it('preserves unknown attributes and extended channel metadata', () => {
     const m3u = [
       '#EXTM3U',

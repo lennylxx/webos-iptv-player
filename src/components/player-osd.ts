@@ -6,6 +6,12 @@ import { morph } from '../utils/morph';
 import { formatDuration, formatPosition, formatTime, getProgress } from '../utils/time';
 import { t, tp } from '../i18n';
 import { NEXT_EPISODE_ICON, PAUSE_ICON, PLAY_ICON, PREVIOUS_EPISODE_ICON, RESYNC_ICON } from './icons';
+import type { SeekThumbnail } from '../services/seek-preview';
+import { CONFIG } from '../config';
+import { InputMode } from '../navigation/input-mode';
+
+const THUMB_WIDTH = CONFIG.PLAYER.SEEK_PREVIEW_WIDTH;
+const THUMB_HEIGHT = Math.round(THUMB_WIDTH * 9 / 16);
 
 export interface PlayerOsdSnapshot {
   playback: {
@@ -27,6 +33,17 @@ export interface PlayerOsdSnapshot {
   nowPlaying: Programme | null;
   upcoming: Programme | null;
   streamInfo: PlayerOsdStreamInfo | null;
+  scrub: PlayerOsdScrub | null;
+}
+
+/** A seek target that has not been applied yet: pending Left/Right presses,
+ *  or the pointer hovering over the seek bar. */
+export interface PlayerOsdScrub {
+  fraction: number;
+  target: number;
+  delta: number | null;     // seconds from the playback position (key scrubbing only)
+  behindLive: number | null; // live DVR: the target's offset from the live edge
+  thumbnail: SeekThumbnail | null;
 }
 
 export interface PlayerOsdUpNext {
@@ -79,6 +96,7 @@ export interface PlayerOsdOptions {
   canAutoReveal: () => boolean;
   canSeek: () => boolean;
   onSeekFraction: (fraction: number) => void;
+  onHoverFraction: (fraction: number | null) => void;
   onPauseToggle: () => void;
   onGoLive: () => void;
   onResync: () => void;
@@ -101,6 +119,7 @@ export class PlayerOsd {
   // Programme-icon URLs that failed to load, so a re-render omits them instead of
   // re-requesting a broken image (which would thrash the OSD layout).
   private failedIcons = new Set<string>();
+  private hoverFrame = 0;
 
   constructor(private container: HTMLElement, private callbacks: PlayerOsdOptions) {
     // Activate OSD controls on click by coordinate hit-test (vs e.target) since
@@ -111,12 +130,20 @@ export class PlayerOsd {
     container.addEventListener('mousemove', (e: MouseEvent) => {
       this.pointerX = e.clientX;
       this.pointerY = e.clientY;
+      // One hit-test and repaint per frame, however fast the pointer moves.
+      if (!this.hoverFrame) {
+        this.hoverFrame = requestAnimationFrame(() => {
+          this.hoverFrame = 0;
+          this.callbacks.onHoverFraction(this.seekbarFraction(this.pointerX, this.pointerY));
+        });
+      }
       // An active cursor reveals the OSD (and its controls) so there's
       // something to aim at; keep it up while the cursor keeps moving.
       if (this.visible) this.resetTimer();
       else if (this.callbacks.canAutoReveal()) this.show();
     });
     container.addEventListener('click', (e: MouseEvent) => this.onPointerRelease(e.clientX, e.clientY));
+    InputMode.onPointerGone(() => this.clearPointer());
     // A broken programme icon: record its URL (capture — `error` doesn't bubble)
     // and re-render so morph drops it and never re-requests it.
     container.addEventListener('error', (e: Event) => {
@@ -145,6 +172,8 @@ export class PlayerOsd {
   }
 
   clearPointer(): void {
+    this.cancelHoverFrame();
+    if (this.pointerX !== null) this.callbacks.onHoverFraction(null);
     this.pointerX = null;
     this.pointerY = null;
   }
@@ -158,15 +187,24 @@ export class PlayerOsd {
     this.render();
     const osd = $('#player-osd', this.container);
     if (osd) show(osd);
+    // Rendered while hidden, the bubble measured nothing.
+    this.placeBubble();
     this.resetTimer();
   }
 
   hide(): void {
     this.visible = false;
+    this.cancelHoverFrame();
+    this.callbacks.onHoverFraction(null);
     const osd = $('#player-osd', this.container);
     if (osd) hide(osd);
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  private cancelHoverFrame(): void {
+    if (this.hoverFrame) cancelAnimationFrame(this.hoverFrame);
+    this.hoverFrame = 0;
   }
 
   toggle(): void {
@@ -182,6 +220,11 @@ export class PlayerOsd {
   }
 
   render(): void {
+    this.renderOsd();
+    this.placeBubble();
+  }
+
+  private renderOsd(): void {
     const osd = $('#player-osd', this.container);
     if (!osd) return;
     this.message = false;
@@ -204,7 +247,6 @@ export class PlayerOsd {
         ? playback.duration
         : catchup.end - catchup.start;
       const pos = playback ? Math.min(playback.position, dur) : 0;
-      const progress = dur > 0 ? pos / dur : 0;
       programmeHtml = html`
         <div class="osd-programme">
           <div class="osd-now-label">${t('common.catchup')}</div>
@@ -218,15 +260,7 @@ export class PlayerOsd {
               </div>
             </div>
           </div>
-          <div class="osd-progress-row">
-            ${this.playPauseButton(state.playback?.paused ?? false)}
-            <span class="osd-time-current">${formatPosition(pos)}</span>
-            <div class="osd-progress" data-seekbar>
-              <div class="osd-progress-bar" style="width: ${progress * 100}%"></div>
-            </div>
-            <span class="osd-time-end">${formatPosition(dur)}</span>
-            ${this.resyncButton()}
-          </div>
+          ${this.positionRow(pos, dur, state.playback?.paused ?? false, state.scrub)}
           ${catchup.description ? html`<div class="osd-description">${catchup.description}</div>` : ''}
         </div>
       `;
@@ -257,7 +291,7 @@ export class PlayerOsd {
         </div>
       ` : '';
       const progressRow = state.dvr
-        ? this.dvrProgressRow(state.dvr, state.playback?.paused ?? false)
+        ? this.dvrProgressRow(state.dvr, state.playback?.paused ?? false, state.scrub)
         : nowPlaying ? html`
           <div class="osd-progress-row">
             <span class="osd-time-current">${formatTime(new Date())}</span>
@@ -318,6 +352,7 @@ export class PlayerOsd {
       this.setProgress(dur > 0 ? Math.min(playback.position, dur) / dur : 0);
       const current = $('.osd-time-current', this.container);
       if (current) current.textContent = formatPosition(playback.position);
+      this.updateScrub(state.scrub);
       return;
     }
     const hasDvrBar = !!$('[data-golive]', this.container);
@@ -338,9 +373,12 @@ export class PlayerOsd {
       }
       const live = $('.osd-dvr-live', this.container) as HTMLElement | null;
       if (live) live.classList.toggle('is-live', state.dvr.atLiveEdge);
+      this.updateScrub(state.scrub);
       return;
     }
-    if (!state.catchup || !Number.isFinite(playback.duration) || playback.duration <= 0) return;
+    if (!state.catchup) return;
+    this.updateScrub(state.scrub);
+    if (!Number.isFinite(playback.duration) || playback.duration <= 0) return;
     this.setProgress(Math.min(playback.position, playback.duration) / playback.duration);
     const current = $('.osd-time-current', this.container);
     if (current) current.textContent = formatPosition(playback.position);
@@ -349,16 +387,92 @@ export class PlayerOsd {
   /** Seek to the bar position under (x, y) when it's over the seek bar; returns
    *  whether it seeked. Used by both pointer clicks and OK over the bar. */
   seekAtPointer(x: number | null, y: number | null): boolean {
-    if (x === null || y === null || !this.callbacks.canSeek()) return false;
+    const fraction = this.seekbarFraction(x, y);
+    if (fraction === null) return false;
+    this.callbacks.onSeekFraction(fraction);
+    return true;
+  }
+
+  /** The seek-bar fraction under (x, y), or null when off the bar. */
+  private seekbarFraction(x: number | null, y: number | null): number | null {
+    if (x === null || y === null || !this.visible || !this.callbacks.canSeek()) return null;
     const bar = $('[data-seekbar]', this.container) as HTMLElement | null;
-    if (!bar) return false;
+    if (!bar) return null;
     const rect = bar.getBoundingClientRect();
     const margin = 20;
     const hit = rect.width > 0 && x >= rect.left && x <= rect.right &&
       y >= rect.top - margin && y <= rect.bottom + margin;
-    if (!hit) return false;
-    this.callbacks.onSeekFraction((x - rect.left) / rect.width);
-    return true;
+    return hit ? (x - rect.left) / rect.width : null;
+  }
+
+  private scrubHost(scrub: PlayerOsdScrub | null): Safe {
+    return html`<div class="osd-scrub-host" data-scrub-host>${this.scrubMarker(scrub)}</div>`;
+  }
+
+  private updateScrub(scrub: PlayerOsdScrub | null): void {
+    const host = $('[data-scrub-host]', this.container) as HTMLElement | null;
+    if (host) morph(host, this.scrubMarker(scrub));
+    this.placeBubble();
+  }
+
+  // Center the bubble on the knob, pushed inward only where it would overhang
+  // either end of the bar.
+  private placeBubble(): void {
+    const marker = $('[data-scrub]', this.container) as HTMLElement | null;
+    const host = marker?.parentElement;
+    const bubble = marker && $('.osd-scrub-bubble', marker) as HTMLElement | null;
+    if (!marker || !host || !bubble) return;
+    const width = bubble.offsetWidth;
+    const knob = marker.offsetLeft;
+    const left = Math.max(0, Math.min(host.clientWidth - width, knob - width / 2));
+    bubble.style.transform = `translateX(${Math.round(left - knob)}px)`;
+  }
+
+  // A ghost knob at the pending target with a bubble above it: the server's
+  // preview frame when one is available, the target time, and how far it is
+  // from the playback position.
+  private scrubMarker(scrub: PlayerOsdScrub | null): Safe {
+    if (!scrub) return html``;
+    const pct = Math.max(0, Math.min(1, scrub.fraction)) * 100;
+    const time = scrub.behindLive === null
+      ? formatPosition(scrub.target)
+      : scrub.behindLive < 1 ? t('common.live') : `-${formatPosition(scrub.behindLive)}`;
+    const delta = scrub.delta === null || Math.abs(scrub.delta) < 1 ? ''
+      : `${scrub.delta > 0 ? '+' : '-'}${formatPosition(Math.abs(scrub.delta))}`;
+    return html`
+      <div class="osd-scrub" data-scrub style="left: ${pct}%">
+        <div class="osd-scrub-bubble">
+          ${this.scrubThumbnail(scrub.thumbnail)}
+          <div class="osd-scrub-label">
+            <span class="osd-scrub-time">${time}</span>
+            ${delta ? html`<span class="osd-scrub-delta">${delta}</span>` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private scrubThumbnail(thumb: SeekThumbnail | null): Safe | string {
+    if (!thumb) return '';
+    const tile = thumb.tile;
+    if (!tile) {
+      return html`
+        <div class="osd-scrub-thumb" style="width: ${THUMB_WIDTH}px; height: ${THUMB_HEIGHT}px">
+          <img class="osd-scrub-image osd-scrub-image--fit" data-key="thumb:${thumb.url}"
+            src="${thumb.url}" alt="">
+        </div>
+      `;
+    }
+    // A sprite sheet: scale the sheet so one tile fills the frame, and shift it
+    // so that tile shows through the frame's clipped window.
+    const scale = THUMB_WIDTH / tile.w;
+    const height = Math.round(tile.h * scale);
+    return html`
+      <div class="osd-scrub-thumb" style="width: ${THUMB_WIDTH}px; height: ${height}px">
+        <img class="osd-scrub-image" data-key="thumb:${thumb.url}" src="${thumb.url}" alt=""
+          style="width: ${Math.round(thumb.width * scale)}px; height: ${Math.round(thumb.height * scale)}px; left: ${-Math.round(tile.x * scale)}px; top: ${-Math.round(tile.y * scale)}px">
+      </div>
+    `;
   }
 
   // The VOD OSD reuses the Live markup: an `.osd-channel` header (movie/episode
@@ -401,6 +515,7 @@ export class PlayerOsd {
         <span class="osd-time-current">${formatPosition(pos)}</span>
         <div class="osd-progress" data-seekbar>
           <div class="osd-progress-bar" style="width: ${dur > 0 ? (pos / dur) * 100 : 0}%"></div>
+          ${this.scrubHost(state.scrub)}
         </div>
         <span class="osd-time-end">${dur > 0 ? formatPosition(dur) : ''}</span>
         ${this.resyncButton()}
@@ -447,7 +562,23 @@ export class PlayerOsd {
     `;
   }
 
-  private dvrProgressRow(state: DvrState, paused: boolean): Safe {
+  // A catch-up seek bar: position, the bar, and the duration.
+  private positionRow(pos: number, dur: number, paused: boolean, scrub: PlayerOsdScrub | null): Safe {
+    return html`
+      <div class="osd-progress-row">
+        ${this.playPauseButton(paused)}
+        <span class="osd-time-current">${formatPosition(pos)}</span>
+        <div class="osd-progress" data-seekbar>
+          <div class="osd-progress-bar" style="width: ${dur > 0 ? pos / dur * 100 : 0}%"></div>
+          ${this.scrubHost(scrub)}
+        </div>
+        <span class="osd-time-end">${formatPosition(dur)}</span>
+        ${this.resyncButton()}
+      </div>
+    `;
+  }
+
+  private dvrProgressRow(state: DvrState, paused: boolean, scrub: PlayerOsdScrub | null): Safe {
     return html`
       <div class="osd-progress-row osd-dvr-row">
         ${this.playPauseButton(paused)}
@@ -456,6 +587,7 @@ export class PlayerOsd {
           : `-${formatPosition(state.behindLive)}`}</span>
         <div class="osd-progress" data-seekbar>
           <div class="osd-progress-bar" style="width: ${state.fraction * 100}%"></div>
+          ${this.scrubHost(scrub)}
         </div>
         <button class="osd-time-end osd-dvr-live ${state.atLiveEdge ? 'is-live' : ''}"
           data-golive aria-label="${t('player.goLive')}">${t('common.live')}</button>

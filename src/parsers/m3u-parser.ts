@@ -556,6 +556,7 @@ const OPTIONAL_CHANNEL_STRING_KEYS = [
   'catchupStreamId',
   'catchupTimeZone',
   'urlSuffix',
+  'seekPreview',
 ] as const;
 
 function detachChannelStrings(channels: readonly Channel[]): void {
@@ -732,6 +733,8 @@ function parseExtInf(body: string): Channel {
   channel.logo = attrs['tvg-logo'] || attrs.logo || '';
   channel.catchup = attrs.catchup || attrs['catchup-type'] || '';
   channel.catchupSource = attrs['catchup-source'] || '';
+  const seekPreview = attrs.seek_preview || attrs['seek-preview'];
+  if (seekPreview) channel.seekPreview = seekPreview;
   channel.catchupDays = parseInt(
     attrs['catchup-days'] || attrs['tvg-rec'] || '0',
     10,
@@ -865,6 +868,8 @@ function isKnownAttribute(key: string): boolean {
     case 'catchup-type':
     case 'catchup-source':
     case 'catchup-days':
+    case 'seek_preview':
+    case 'seek-preview':
     case 'tvg-rec':
     case 'tvg-chno':
     case 'channel-number':

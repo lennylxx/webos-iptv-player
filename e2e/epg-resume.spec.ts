@@ -246,7 +246,8 @@ test('catch-up Back leaves playback even with the OSD up', async ({ page }) => {
 test('catch-up Back hides a paused OSD, so Right reaches the menu, then leaves', async ({ page }) => {
   await startFakeCatchup(page);
   const [paused, seeked, hidden, menu, closed, left] = await pressStepsAndReadPlayer(page, [
-    [YELLOW, ENTER], [RIGHT], [BACK], [RIGHT], [BACK], [BACK],
+    // OK applies the pending seek target without unpausing.
+    [YELLOW, ENTER], [RIGHT, ENTER], [BACK], [RIGHT], [BACK], [BACK],
   ]);
   expect(paused).toMatchObject({ osd: true, message: false, paused: true, currentTime: 0 });
   expect(seeked).toMatchObject({ osd: true, menu: false, paused: true });

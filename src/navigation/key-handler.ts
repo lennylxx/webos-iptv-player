@@ -2,7 +2,7 @@ import { CONFIG } from '../config';
 import { StorageService } from '../services/storage-service';
 import { createLogger } from '../utils/logger';
 import { Focus, type FocusScope } from './focus-scope';
-import { InputMode, setCursorHidden, setInputMode } from './input-mode';
+import { InputMode, notifyPointerGone, setCursorHidden, setInputMode } from './input-mode';
 import { edgeScrollTrackAt, installEdgeScroll } from './edge-scroll';
 import type { Action, NumberEvent } from '../types';
 
@@ -267,6 +267,7 @@ export const KeyHandler = {
       if (e.keyCode === K.CURSOR_HIDE) {
         settleEdgeFocus();
         Focus.pointerGone();
+        notifyPointerGone();
       }
       if (e.keyCode === K.CURSOR_SHOW || e.keyCode === K.CURSOR_HIDE) {
         setCursorHidden(e.keyCode === K.CURSOR_HIDE);
@@ -421,6 +422,7 @@ export const KeyHandler = {
     document.documentElement.addEventListener('mouseleave', () => {
       settleEdgeFocus();
       Focus.pointerGone();
+      notifyPointerGone();
       setHoverTarget(null);
     });
     document.addEventListener('cursorStateChange', (e: Event) => {
@@ -429,6 +431,7 @@ export const KeyHandler = {
       if (detail && detail.visibility === false) {
         settleEdgeFocus();
         Focus.pointerGone();
+        notifyPointerGone();
       }
     });
 

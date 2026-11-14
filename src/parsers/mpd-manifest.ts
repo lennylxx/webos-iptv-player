@@ -384,14 +384,35 @@ function dashSubtitleSource(
   const mime = attr(set, rep, 'mimeType').toLowerCase();
   const kind = WEBVTT_MIMES.indexOf(mime) >= 0 ? 'webvtt' : 'native';
   if (kind === 'native') return { kind };
+  const addressed = addressedSegments(root, period, set, rep, manifestUrl, presentationTime);
+  if (addressed) {
+    return {
+      kind,
+      segments: addressed.segments,
+      ...(addressed.refresh ? { needsManifestRefresh: true } : {}),
+    };
+  }
+  const base = resolvedBaseUrl(manifestUrl, root, period, set, rep);
+  return { kind, url: base.explicit ? base.url : undefined };
+}
 
+// The segments a SegmentList or SegmentTemplate addresses (from about
+// `presentationTime` on, when given), or null when the set has neither.
+function addressedSegments(
+  root: Element,
+  period: Element,
+  set: Element,
+  rep: Element | null,
+  manifestUrl: string,
+  presentationTime: number | undefined,
+): { segments: DashSubtitleSegment[]; refresh: boolean } | null {
   const base = resolvedBaseUrl(manifestUrl, root, period, set, rep);
   const scopes = [period, set].concat(rep ? [rep] : []);
   const periodStart = isoDurationSeconds(period.getAttribute('start') || '');
   const periodDuration = isoDurationSeconds(period.getAttribute('duration') || '');
   const dynamic = root.getAttribute('type') === 'dynamic';
   const listed = segmentListSegments(scopes, base.url, periodStart);
-  if (listed.length) return { kind, segments: listed, ...(dynamic ? { needsManifestRefresh: true } : {}) };
+  if (listed.length) return { segments: listed, refresh: dynamic };
   const media = templateAttr(scopes, 'media');
   if (media) {
     const timescale = parseInt(templateAttr(scopes, 'timescale') || '1', 10) || 1;
@@ -439,7 +460,7 @@ function dashSubtitleSource(
       const last = timelineElement ? children(timelineElement, 'S').pop() : undefined;
       const openEnded = presentationEnd !== null
         && (parseInt(last?.getAttribute('r') || '0', 10) || 0) < 0;
-      return { kind, segments: timeline, ...(dynamic && !openEnded ? { needsManifestRefresh: true } : {}) };
+      return { segments: timeline, refresh: dynamic && !openEnded };
     }
     const segments = durationSegments(
       root,
@@ -455,9 +476,9 @@ function dashSubtitleSource(
       presentationTimeOffset,
       presentationTime,
     );
-    return { kind, segments };
+    return { segments, refresh: false };
   }
-  return { kind, url: base.explicit ? base.url : undefined };
+  return null;
 }
 
 // "30000/1001" → 29.97; "25" → 25; absent/zero denominator → 0.
@@ -643,4 +664,73 @@ function isAtmos(set: Element, rep: Element | null): boolean {
     }
   }
   return false;
+}
+
+const THUMBNAIL_TILE_SCHEMES = [
+  'http://dashif.org/guidelines/thumbnail_tile',
+  'http://dashif.org/thumbnail_tile', // the short form some packagers emit
+];
+const thumbnailTile = (el: Element): string => {
+  for (const scheme of THUMBNAIL_TILE_SCHEMES) {
+    const value = descriptorValue(el, ['EssentialProperty', 'SupplementalProperty'], scheme);
+    if (value) return value;
+  }
+  return '';
+};
+
+/** A DASH-IF thumbnail track: an image AdaptationSet whose segments are sprite
+ *  sheets of `cols`×`rows` equal tiles, laid out row-major. */
+export interface MpdImageTrack {
+  cols: number;
+  rows: number;
+  width: number;   // the whole sheet, in pixels
+  height: number;
+  /** Sheets from just before `time` (media seconds) on. */
+  sheetsAt(time: number): DashSubtitleSegment[];
+}
+
+// Picks the representation whose single tile is closest to `tileWidth`.
+export function parseMpdImageTrack(
+  xml: string,
+  manifestUrl: string,
+  tileWidth: number,
+): MpdImageTrack | null {
+  if (!xml) return null;
+  let doc: Document;
+  try {
+    doc = new DOMParser().parseFromString(xml, 'application/xml');
+  } catch {
+    return null;
+  }
+  const root = doc.documentElement;
+  if (!root || root.localName !== 'MPD' || descendants(doc, 'parsererror').length) return null;
+  const period = descendants(root, 'Period')[0];
+  if (!period) return null;
+  let best: { set: Element; rep: Element; cols: number; rows: number;
+    width: number; height: number; score: number } | null = null;
+  for (const set of children(period, 'AdaptationSet')) {
+    const setImage = set.getAttribute('contentType') === 'image'
+      || (set.getAttribute('mimeType') || '').toLowerCase().indexOf('image/') === 0;
+    for (const rep of children(set, 'Representation')) {
+      const mime = attr(set, rep, 'mimeType').toLowerCase();
+      if (!setImage && mime.indexOf('image/') !== 0) continue;
+      const tile = (thumbnailTile(rep) || thumbnailTile(set) || '1x1').match(/^(\d+)x(\d+)$/i);
+      const cols = tile ? parseInt(tile[1], 10) : 0;
+      const rows = tile ? parseInt(tile[2], 10) : 0;
+      const width = parseInt(attr(set, rep, 'width'), 10) || 0;
+      const height = parseInt(attr(set, rep, 'height'), 10) || 0;
+      if (!cols || !rows || !width || !height) continue;
+      const score = Math.abs(width / cols - tileWidth);
+      if (!best || score < best.score) best = { set, rep, cols, rows, width, height, score };
+    }
+  }
+  if (!best) return null;
+  const pick = best;
+  return {
+    cols: pick.cols,
+    rows: pick.rows,
+    width: pick.width,
+    height: pick.height,
+    sheetsAt: time => addressedSegments(root, period, pick.set, pick.rep, manifestUrl, time)?.segments ?? [],
+  };
 }

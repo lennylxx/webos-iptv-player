@@ -55,6 +55,8 @@ export interface Channel {
   catchupTimeZone?: string;
   /** Fixed fallback when the provider timezone is absent or unsupported. */
   catchupTimeOffsetMinutes?: number;
+  /** OTT Navigator `seek_preview` template for seek-bar preview frames. */
+  seekPreview?: string;
 }
 
 /** The last played live channel, for autoplay: the identities resolve it

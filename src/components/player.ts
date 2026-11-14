@@ -28,6 +28,8 @@ import {
   channelStreamKey,
 } from '../utils/channel';
 import { dvrWindow, dvrState, type DvrWindow } from '../utils/dvr';
+import { scrubStep } from '../utils/seek-scrub';
+import { SeekPreview } from '../services/seek-preview';
 import { PlaylistService } from '../services/playlist-service';
 import {
   ParentalControlService,
@@ -60,6 +62,7 @@ import {
   PlayerOsd,
   upNextCard,
   vodHeading,
+  type PlayerOsdScrub,
   type PlayerOsdSnapshot,
   type PlayerOsdStreamInfo,
 } from './player-osd';
@@ -110,6 +113,15 @@ export class Player {
   private vodTracksLatePending = false;
   private pendingResumeSecs = 0;
   private pendingSeekTarget: number | null = null;
+  // Left/Right presses move this target; the seek itself is applied once the
+  // presses stop (or on OK), so a long jump costs one native seek, not many.
+  private scrub: { target: number; dir: 1 | -1; since: number } | null = null;
+  private scrubTimer: ReturnType<typeof setTimeout> | null = null;
+  // The Magic Remote pointer over the seek bar previews that spot.
+  private hoverFraction: number | null = null;
+  private streamUrl = '';
+  private previewUrl: string | null = null;
+  private preview = new SeekPreview(() => this.osd.refreshProgress());
   private wasPlayingBeforeHide = false;
   private hidden = false;
   private syncOnResume = false;
@@ -249,6 +261,7 @@ export class Player {
       canAutoReveal: () => this.canAutoRevealOsd(),
       canSeek: () => this.canSeek(),
       onSeekFraction: fraction => this.seekToFraction(fraction),
+      onHoverFraction: fraction => this.onHoverFraction(fraction),
       onPauseToggle: () => this.pauseToggle(),
       onGoLive: () => this.goToLive(),
       onResync: () => this.resyncAV(),
@@ -609,6 +622,8 @@ export class Player {
   private recreateVideoEl(): void {
     const old = this.videoEl;
     if (!old) return;
+    // The new element has no duration yet, so a pending target would be lost.
+    this.dropScrub();
     this.userPaused = false;
     old.pause();
     old.removeAttribute('src');
@@ -624,6 +639,7 @@ export class Player {
     old.parentNode!.replaceChild(fresh, old);
     this.videoEl = fresh;
     this.pipeline.setVideoElement(fresh);
+    this.osd.refreshProgress();
     this.onPlaybackStateChanged();
   }
 
@@ -734,6 +750,8 @@ export class Player {
   }
 
   private startPlaybackGeneration(): void {
+    this.dropScrub();
+    this.hoverFraction = null;
     this.cancelLiveHistoryTimer();
     this.cancelErrorAdvance();
     this.playbackGeneration++;
@@ -1025,6 +1043,7 @@ export class Player {
         break;
       }
       case 'select':
+        if (this.commitScrub()) break;
         {
           const pointer = this.osd.pointerPosition();
           if (this.osd.seekAtPointer(pointer.x, pointer.y)) break;
@@ -1033,10 +1052,10 @@ export class Player {
         else this.osd.toggle();
         break;
       case 'left':
-        this.seekBy(-CONFIG.PLAYER.SEEK_STEP);
+        this.scrubBy(-1);
         break;
       case 'right':
-        this.seekBy(CONFIG.PLAYER.SEEK_STEP);
+        this.scrubBy(1);
         break;
       case 'play':
         if (this.videoEl?.paused) this.pauseToggle();
@@ -1163,6 +1182,8 @@ export class Player {
     }
     this.hideOSD();
     hide(this.container);
+    this.preview.stop();
+    this.previewUrl = null;
     this.vod = null;
     this.pendingResumeSecs = 0;
     this.reopenResume = false;
@@ -1355,6 +1376,9 @@ export class Player {
     this.userPaused = false;
     this.startupPending = true;
     this.startupWatchdog.stop();
+    this.streamUrl = url;
+    this.preview.stop();
+    this.previewUrl = null;
     this.pipeline.load(url, extras, opts);
     // Only the live preview reports a rect; every other entry is full screen,
     // and a rect left from an earlier preview would shrink the Luna picture.
@@ -1582,6 +1606,7 @@ export class Player {
     if (this.liveSessionActive) this.rememberLiveAudio();
     this.previewMuteOverride = null;
     this.livePreviewMode = true;
+    this.dropScrub();
     this.hideOSD();
     hide(this.container);
     const win = this.liveDvrWindow();
@@ -1668,8 +1693,71 @@ export class Player {
     return this.isLiveDvr();
   }
 
-  seekBy(seconds: number): void {
-    this.seekTo((this.pendingSeekTarget ?? this.videoEl?.currentTime ?? 0) + seconds);
+  /** The [min, max] media time a seek may land on: the DVR window's playable
+   *  span, or the whole VOD/catch-up duration. */
+  private seekRange(): { min: number; max: number } | null {
+    const v = this.videoEl;
+    if (!v) return null;
+    const win = this.liveDvrWindow();
+    if (win) return { min: this.oldestDvrTarget(win), max: win.end - CONFIG.PLAYER.DVR_GO_LIVE_PAD };
+    if (Number.isFinite(v.duration) && v.duration > 0) {
+      return { min: 0, max: Math.max(0, v.duration - CONFIG.PLAYER.SEEK_END_PAD) };
+    }
+    return null;
+  }
+
+  /** One Left/Right press: move the pending scrub target by a step that grows
+   *  while the direction is held, and (re)arm the commit timer. Reversing
+   *  direction restarts the acceleration so the user can fine-tune an overshoot. */
+  private scrubBy(dir: 1 | -1): void {
+    const range = this.seekRange();
+    if (!range) return;
+    const prev = this.scrub;
+    const from = prev?.target ?? this.pendingSeekTarget ?? this.videoEl?.currentTime ?? 0;
+    // Already at (or past) the bound: a clamp would move the target the
+    // opposite way, e.g. Right a few seconds behind the live edge.
+    if (dir > 0 ? from >= range.max : from <= range.min) {
+      if (this.osd.isVisible()) this.osd.resetTimer();
+      return;
+    }
+    const now = Date.now();
+    const since = prev && prev.dir === dir ? prev.since : now;
+    const step = scrubStep(now - since, range.max - range.min);
+    const target = Math.max(range.min, Math.min(range.max, from + dir * step));
+    this.scrub = { target, dir, since };
+    if (this.scrubTimer) clearTimeout(this.scrubTimer);
+    // A panel opened meanwhile keeps the OSD down.
+    this.scrubTimer = setTimeout(() => this.commitScrub(this.osd.isVisible(), 'timer'), CONFIG.PLAYER.SEEK_COMMIT_DELAY);
+    if (this.osd.isVisible()) this.osd.resetTimer(); else this.showOSD();
+    this.refreshProgress();
+  }
+
+  /** Apply a pending scrub now; returns whether there was one. */
+  commitScrub(showControls = true, via: 'ok' | 'timer' = 'ok'): boolean {
+    const scrub = this.scrub;
+    if (!scrub) return false;
+    const before = this.seekLogContext();
+    this.dropScrub();
+    const landed = this.seekTo(scrub.target, showControls);
+    if (landed !== null) this.logSeek('commit', via, before, landed);
+    return true;
+  }
+
+  /** Back while scrubbing: drop the pending target and keep playing where we
+   *  were. Returns whether there was a scrub to cancel. */
+  cancelScrub(): boolean {
+    if (!this.scrub) return false;
+    this.logSeek('cancel', 'back', this.seekLogContext(), this.scrub.target);
+    this.dropScrub();
+    if (this.osd.isVisible()) this.osd.resetTimer();
+    this.refreshProgress();
+    return true;
+  }
+
+  private dropScrub(): void {
+    if (this.scrubTimer) clearTimeout(this.scrubTimer);
+    this.scrubTimer = null;
+    this.scrub = null;
   }
 
   /** Seek to a fraction (0..1) of the seekable range (DVR window or VOD duration). */
@@ -1678,13 +1766,38 @@ export class Player {
     if (!v) return;
     const f = Math.max(0, Math.min(1, fraction));
     const win = this.liveDvrWindow();
-    if (win) this.seekTo(win.start + f * win.length);
-    else if (Number.isFinite(v.duration)) this.seekTo(f * v.duration);
+    const target = win ? win.start + f * win.length : Number.isFinite(v.duration) ? f * v.duration : null;
+    if (target === null) return;
+    const before = this.seekLogContext();
+    const landed = this.seekTo(target);
+    if (landed !== null) this.logSeek('commit', 'pointer', before, landed);
   }
 
-  private seekTo(time: number, showControls = true): void {
+  private seekLogContext(): { kind: string; from: number; win: DvrWindow | null } {
+    const win = this.liveDvrWindow();
+    const kind = win ? 'dvr' : this.vod ? 'vod' : this.catchupInfo ? 'catchup' : 'live';
+    return { kind, from: this.videoEl?.currentTime ?? 0, win };
+  }
+
+  // A DVR window's media times are opaque, so its seeks also say how far
+  // behind live they land.
+  private logSeek(
+    what: 'commit' | 'cancel',
+    via: string,
+    { kind, from, win }: { kind: string; from: number; win: DvrWindow | null },
+    to: number,
+  ): void {
+    log.info(what === 'commit' ? 'Seek' : 'Seek canceled', `event=seek.${what}`, `via=${via}`, `kind=${kind}`,
+      `from=${Math.round(from)}`, `to=${Math.round(to)}`,
+      ...(win ? [`behind=${Math.round(Math.max(0, win.end - to))}`] : []));
+  }
+
+  /** Seek the element; returns the media time it was sent to, or null when
+   *  the element has no seekable range yet. */
+  private seekTo(time: number, showControls = true): number | null {
     const v = this.videoEl;
-    if (!v) return;
+    if (!v) return null;
+    this.dropScrub();
     const win = this.liveDvrWindow();
     if (win) {
       // Live DVR: seeking near the end snaps to the live edge (a small pad back
@@ -1696,13 +1809,15 @@ export class Player {
     } else if (Number.isFinite(v.duration) && v.duration > 0) {
       this.pendingSeekTarget = Math.max(0, Math.min(v.duration, time));
     } else {
-      return;
+      return null;
     }
-    v.currentTime = this.pendingSeekTarget;
+    const target = this.pendingSeekTarget;
+    v.currentTime = target;
     if (showControls) {
       if (this.osd.isVisible()) this.osd.resetTimer(); else this.showOSD();
     }
     this.refreshProgress();
+    return target;
   }
 
   private reconcilePendingSeek(el: HTMLVideoElement, retry = false): void {
@@ -1897,7 +2012,69 @@ export class Player {
       nowPlaying: epgId ? EpgService.getNowPlaying(epgId) : null,
       upcoming: upcoming[0] ?? null,
       streamInfo: this.streamInfo(),
+      scrub: this.scrubSnapshot(position, win),
     };
+  }
+
+  private onHoverFraction(fraction: number | null): void {
+    if (fraction === this.hoverFraction) return;
+    this.hoverFraction = fraction;
+    if (this.scrub) return;
+    // A hidden OSD skips its refresh, so drop the frame here, or it would
+    // flash back stale on the next scrub.
+    if (fraction === null) this.preview.thumbnailAt(null);
+    this.osd.refreshProgress();
+  }
+
+  // The pending key target wins over the pointer hover.
+  private scrubSnapshot(position: number, win: DvrWindow | null): PlayerOsdScrub | null {
+    const v = this.videoEl;
+    const hover = this.hoverFraction;
+    let target: number | null = this.scrub?.target ?? null;
+    if (target === null && hover !== null && v) {
+      if (win) target = win.start + hover * win.length;
+      // A live stream between DVR windows (mid-reload) has nothing to preview.
+      else if ((this.vod || this.catchupInfo) && Number.isFinite(v.duration) && v.duration > 0) {
+        target = hover * v.duration;
+      }
+    }
+    if (target === null || !v) {
+      this.preview.thumbnailAt(null);
+      return null;
+    }
+    const dvr = win ? dvrState(win, target, CONFIG.PLAYER.DVR_LIVE_EDGE) : null;
+    const fraction = dvr ? dvr.fraction
+      : Number.isFinite(v.duration) && v.duration > 0 ? target / v.duration : 0;
+    this.ensurePreview(win);
+    return {
+      fraction,
+      target,
+      delta: this.scrub ? target - position : null,
+      behindLive: dvr ? (dvr.atLiveEdge ? 0 : dvr.behindLive) : null,
+      thumbnail: this.preview.thumbnailAt(Math.round(target)),
+    };
+  }
+
+  // The preview source is built on the first scrub of each stream, once the
+  // element knows whether it is a live window.
+  private ensurePreview(win: DvrWindow | null): void {
+    if (this.previewUrl === this.streamUrl || !this.streamUrl) return;
+    // A live stream whose DVR window has not filled in yet (e.g. right after a
+    // reload) must not pin a source built without one.
+    if (!this.vod && !this.catchupInfo && !win) return;
+    this.previewUrl = this.streamUrl;
+    const catchup = this.catchupInfo;
+    this.preview.start({
+      streamUrl: this.streamUrl,
+      mime: streamUrlMime(this.streamUrl),
+      template: this.vod ? '' : this.currentChannel?.seekPreview ?? '',
+      catchupType: this.vod ? '' : this.currentChannel?.catchup ?? '',
+      utcAt: this.vod ? null : catchup ? t => catchup.start + t : win ? t => {
+        const live = this.liveDvrWindow();
+        return Date.now() / 1000 - (live ? live.end - t : 0);
+      } : null,
+      live: !!win,
+    });
   }
 
   channelUp(): void {
@@ -2179,6 +2356,7 @@ export class Player {
         this.onBack();
         break;
       case 'select':
+        if (this.commitScrub()) break;
         {
           const pointer = this.osd.pointerPosition();
           if (this.osd.seekAtPointer(pointer.x, pointer.y)) break;
@@ -2188,10 +2366,10 @@ export class Player {
         else this.osd.toggle();
         break;
       case 'left':
-        this.seekBy(-CONFIG.PLAYER.SEEK_STEP);
+        this.scrubBy(-1);
         break;
       case 'right':
-        this.seekBy(CONFIG.PLAYER.SEEK_STEP);
+        this.scrubBy(1);
         break;
       case 'up':
       case 'channel_up':

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
-import { parseMpd } from './mpd-manifest';
+import { parseMpd, parseMpdImageTrack } from './mpd-manifest';
 
 const ROLE = 'urn:mpeg:dash:role:2011';
 const CICP = 'urn:mpeg:mpegB:cicp:TransferCharacteristics';
@@ -451,5 +451,37 @@ describe('parseMpd', () => {
     expect(parseMpd('')).toEqual(empty);
     expect(parseMpd('<html><body>error</body></html>')).toEqual(empty);
     expect(parseMpd('#EXTM3U\n#EXT-X-VERSION:3')).toEqual(empty);
+  });
+});
+
+describe('parseMpdImageTrack', () => {
+  const mpd = `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10M">
+    <Period start="PT30S">
+      <AdaptationSet contentType="video" mimeType="video/mp4">
+        <Representation id="v1" bandwidth="1000"/>
+      </AdaptationSet>
+      <AdaptationSet contentType="image" mimeType="image/jpeg">
+        <SegmentTemplate media="thumbs/$RepresentationID$/$Number$.jpg" timescale="1000" duration="60000" startNumber="1"/>
+        <Representation id="small" bandwidth="1" width="400" height="90">
+          <EssentialProperty schemeIdUri="http://dashif.org/guidelines/thumbnail_tile" value="5x2"/>
+        </Representation>
+        <Representation id="big" bandwidth="2" width="800" height="180">
+          <EssentialProperty schemeIdUri="http://dashif.org/thumbnail_tile" value="5x2"/>
+        </Representation>
+      </AdaptationSet>
+    </Period>
+  </MPD>`;
+
+  it('picks the tile size nearest the preview under either tile scheme', () => {
+    const track = parseMpdImageTrack(mpd, 'http://host/v1/index.mpd', 160)!;
+    expect(track).toMatchObject({ cols: 5, rows: 2, width: 800, height: 180 });
+    const sheets = track.sheetsAt(100);
+    expect(sheets[0]).toEqual({ url: 'http://host/v1/thumbs/big/2.jpg', start: 90, duration: 60 });
+  });
+
+  it('finds nothing in a manifest without an image set', () => {
+    expect(parseMpdImageTrack(
+      '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period/></MPD>', 'http://host/v1/index.mpd', 160,
+    )).toBeNull();
   });
 });

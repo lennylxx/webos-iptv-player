@@ -278,6 +278,10 @@ const bar = () => container.querySelector('.osd-progress-bar') as HTMLElement;
 // follows another key.
 const remoteKeys = () => { setInputMode('keys'); setInputMode('keys'); };
 const elapsed = () => container.querySelector('.osd-time-current')!.textContent;
+const commitSeek = () => vi.advanceTimersByTime(CONFIG.PLAYER.SEEK_COMMIT_DELAY);
+const press = (action: 'left' | 'right', times: number) => {
+  for (let i = 0; i < times; i++) player.handleAction(action);
+};
 
 describe('Player authorization gates', () => {
   it('defers live playback until the authorizer runs the action', () => {
@@ -370,18 +374,36 @@ describe('Player catch-up seeking', () => {
     expect(player.canSeek()).toBe(true);
   });
 
-  it('Right seeks forward by the step, Left back; the bar + label follow', () => {
-    player.handleAction('right');
+  it('Left/Right move a pending target that is applied once the presses stop', () => {
+    press('right', 3); // a 2-minute programme caps each step at 10s
+    expect(video.currentTime).toBe(0);
+    expect(elapsed()).toBe('0:00');
+    expect(container.querySelector('.osd-scrub-time')!.textContent).toBe('0:30');
+    expect(container.querySelector('.osd-scrub-delta')!.textContent).toBe('+0:30');
+
+    commitSeek();
     expect(video.currentTime).toBe(30);
     expect(bar().style.width).toBe('25%');
     expect(elapsed()).toBe('0:30');
-
-    player.handleAction('right');
-    expect(video.currentTime).toBe(60);
-    expect(bar().style.width).toBe('50%');
+    expect(container.querySelector('[data-scrub]')).toBeNull();
 
     player.handleAction('left');
-    expect(video.currentTime).toBe(30);
+    commitSeek();
+    expect(video.currentTime).toBe(20);
+  });
+
+  it('OK applies a pending target at once; Back drops it', () => {
+    press('right', 2);
+    player.handleAction('select');
+    expect(video.currentTime).toBe(20);
+    expect(video.paused).toBe(false);
+
+    press('right', 2);
+    expect(player.cancelScrub()).toBe(true);
+    commitSeek();
+    expect(video.currentTime).toBe(20);
+    expect(container.querySelector('[data-scrub]')).toBeNull();
+    expect(player.cancelScrub()).toBe(false);
   });
 
   it('accumulates repeated seeks while the native position is still stale', () => {
@@ -390,14 +412,16 @@ describe('Player catch-up seeking', () => {
     player.init(video);
     player.play(0, CATCHUP);
 
-    player.handleAction('right');
+    press('right', 3);
+    commitSeek();
     expect(asyncVideo.requestedTime()).toBe(30);
     expect(elapsed()).toBe('0:30');
 
     video.dispatchEvent(new Event('timeupdate'));
     expect(elapsed()).toBe('0:30');
 
-    player.handleAction('right');
+    press('right', 3);
+    commitSeek();
     expect(asyncVideo.requestedTime()).toBe(60);
     expect(bar().style.width).toBe('50%');
     expect(elapsed()).toBe('1:00');
@@ -413,10 +437,12 @@ describe('Player catch-up seeking', () => {
   });
 
   it('clamps seeks to [0, duration]', () => {
-    player.handleAction('left'); // 0 - 30 → 0
+    player.handleAction('left'); // 0 - 10 → 0
+    commitSeek();
     expect(video.currentTime).toBe(0);
-    for (let i = 0; i < 5; i++) player.handleAction('right'); // 150 → clamp 120
-    expect(video.currentTime).toBe(120);
+    press('right', 15); // 150 → stops short of the end
+    commitSeek();
+    expect(video.currentTime).toBe(120 - CONFIG.PLAYER.SEEK_END_PAD);
   });
 
   const stubBar = () => {
@@ -449,7 +475,8 @@ describe('Player catch-up seeking', () => {
     stubBar();
     container.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 250, clientY: 18 }));
     player.handleAction('right'); // d-pad seek clears the tracked cursor
-    expect(video.currentTime).toBe(30);
+    commitSeek();
+    expect(video.currentTime).toBe(10);
     player.handleAction('select');
     expect(video.paused).toBe(true); // paused (cursor cleared), not seeked to the stale pointer
   });
@@ -470,6 +497,122 @@ describe('Player catch-up seeking', () => {
   it('is no longer seekable once the OSD hides', () => {
     player.hideOSD();
     expect(player.canSeek()).toBe(false);
+  });
+});
+
+describe('Player scrubbing', () => {
+  const FLUSSONIC_CHANNEL = {
+    ...CHANNEL,
+    catchup: 'flussonic',
+    catchupSource: 'http://host/g1/c1/archive-{utc}-3600.m3u8?token=t1',
+  };
+  const HOUR_CATCHUP = { ...CATCHUP, end: CATCHUP.start + 3600 };
+
+  it('steps grow while one direction is held and restart on reversal', () => {
+    video = fakeVideo(3600);
+    player.init(video);
+    player.play(0, HOUR_CATCHUP);
+    press('right', 4); // key repeat within one hold tier: 4 × 10
+    expect(container.querySelector('.osd-scrub-time')!.textContent).toBe('0:40');
+    vi.advanceTimersByTime(CONFIG.PLAYER.SEEK_STEP_HOLD);
+    player.handleAction('right'); // +30
+    vi.advanceTimersByTime(CONFIG.PLAYER.SEEK_STEP_HOLD);
+    player.handleAction('right'); // +60
+    expect(container.querySelector('.osd-scrub-time')!.textContent).toBe('2:10');
+    player.handleAction('left'); // reversal: back to the 10s step
+    commitSeek();
+    expect(video.currentTime).toBe(120);
+  });
+
+  it('requests the Flussonic frame for the target wall-clock time', () => {
+    const srcs: string[] = [];
+    vi.stubGlobal('Image', class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(value: string) { srcs.push(value); }
+    });
+    playlistMock.getByIndex.mockReturnValue(FLUSSONIC_CHANNEL);
+    video = fakeVideo(3600);
+    player.init(video);
+    player.play(0, HOUR_CATCHUP);
+    press('right', 4);
+    vi.advanceTimersByTime(CONFIG.PLAYER.SEEK_PREVIEW_DEBOUNCE);
+    expect(srcs).toEqual([`http://host/g1/c1/${HOUR_CATCHUP.start + 40}-preview.jpg?token=t1`]);
+  });
+
+  it('logs where each seek came from and where it landed', () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const seeks = () => info.mock.calls.map(call => call.join(' ')).filter(line => /event=seek\.(commit|cancel)/.test(line));
+    video = fakeVideo(3600);
+    player.init(video);
+    player.play(0, HOUR_CATCHUP);
+    press('right', 2);
+    vi.advanceTimersByTime(CONFIG.PLAYER.SEEK_COMMIT_DELAY);
+    press('right', 1);
+    player.handleAction('select');
+    press('left', 1);
+    expect(player.cancelScrub()).toBe(true);
+    const seekbar = container.querySelector('[data-seekbar]') as HTMLElement;
+    seekbar.getBoundingClientRect = () => ({ left: 0, right: 1000, width: 1000, top: 0, bottom: 36 }) as DOMRect;
+    expect(player['osd'].seekAtPointer(250, 18)).toBe(true);
+    expect(seeks()).toEqual([
+      '[Player] Seek event=seek.commit via=timer kind=catchup from=0 to=20',
+      '[Player] Seek event=seek.commit via=ok kind=catchup from=20 to=30',
+      '[Player] Seek canceled event=seek.cancel via=back kind=catchup from=30 to=20',
+      '[Player] Seek event=seek.commit via=pointer kind=catchup from=30 to=900',
+    ]);
+    info.mockRestore();
+  });
+
+  it('previews the hovered seek-bar spot without seeking', () => {
+    vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { fn(0); return 1; });
+    player.play(0, CATCHUP);
+    const seekbar = container.querySelector('[data-seekbar]') as HTMLElement;
+    seekbar.getBoundingClientRect = () => ({ left: 0, right: 1000, width: 1000, top: 0, bottom: 36 }) as DOMRect;
+    container.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 500, clientY: 18 }));
+    expect(container.querySelector('.osd-scrub-time')!.textContent).toBe('1:00');
+    expect(container.querySelector('.osd-scrub-delta')).toBeNull();
+    expect(video.currentTime).toBe(0);
+    player.handleAction('right'); // keys drop the pointer's preview
+    expect(container.querySelector('.osd-scrub-time')!.textContent).toBe('0:10');
+  });
+
+  it('drops the hovered preview frame when the OSD hides', () => {
+    vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { fn(0); return 1; });
+    player.play(0, CATCHUP);
+    const preview = (player as unknown as { preview: { thumbnailAt(t: number | null): unknown } }).preview;
+    const lookup = vi.spyOn(preview, 'thumbnailAt');
+    const seekbar = container.querySelector('[data-seekbar]') as HTMLElement;
+    seekbar.getBoundingClientRect = () => ({ left: 0, right: 1000, width: 1000, top: 0, bottom: 36 }) as DOMRect;
+    container.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 500, clientY: 18 }));
+    expect(lookup).toHaveBeenLastCalledWith(60);
+    player.hideOSD();
+    expect(lookup).toHaveBeenLastCalledWith(null);
+  });
+
+  it('applies a pending target without re-showing an OSD hidden meanwhile', () => {
+    player.play(0, CATCHUP);
+    press('right', 3);
+    player.hideOSD();
+    commitSeek();
+    expect(video.currentTime).toBe(30);
+    expect(container.querySelector('#player-osd')!.classList.contains('hidden')).toBe(true);
+  });
+
+  it('drops a pending target when playback shrinks into the live preview', () => {
+    player.play(0, CATCHUP);
+    press('right', 3);
+    player.enterLivePreview();
+    commitSeek();
+    expect(video.currentTime).toBe(0);
+  });
+
+  it('drops a pending target when suspend swaps the video element', () => {
+    player.play(0, CATCHUP);
+    Object.defineProperty(video, 'parentNode', { value: { replaceChild() {} } });
+    press('right', 3);
+    player.suspend();
+    expect(container.querySelector('.osd-scrub-time')).toBeNull();
   });
 });
 
@@ -541,8 +684,7 @@ describe('Player catch-up pause/play', () => {
   });
 
   it('resyncAV seeks backward by RESYNC_SEEK_BACK to force a pipeline re-lock', () => {
-    player.handleAction('right'); // → 30
-    player.handleAction('right'); // → 60
+    video.currentTime = 60;
     player.resyncAV();
     expect(video.currentTime).toBe(60 - CONFIG.PLAYER.RESYNC_SEEK_BACK);
   });
@@ -554,8 +696,7 @@ describe('Player catch-up pause/play', () => {
   });
 
   it('resyncAV debounces while a resync is already in flight', () => {
-    player.handleAction('right'); // → 30
-    player.handleAction('right'); // → 60
+    video.currentTime = 60;
     player.resyncAV();            // → 59.5, now resyncing
     expect(video.currentTime).toBe(60 - CONFIG.PLAYER.RESYNC_SEEK_BACK);
     video.currentTime = 100;      // pretend playback advanced
@@ -579,8 +720,7 @@ describe('Player catch-up pause/play', () => {
   });
 
   it('a pointer click on the resync control seeks backward', () => {
-    player.handleAction('right'); // → 30
-    player.handleAction('right'); // → 60
+    video.currentTime = 60;
     const btn = container.querySelector('[data-resync]') as HTMLElement;
     btn.getBoundingClientRect = () => ({ left: 900, right: 932, width: 32, top: 0, bottom: 32 }) as DOMRect;
     container.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 916, clientY: 16 }));
@@ -1622,14 +1762,57 @@ describe('Player live DVR', () => {
   });
 
   it('Left rewinds by the step, moving the bar', () => {
-    player.handleAction('left'); // 60 - 30 = 30
+    press('left', 3); // a 60s window caps each step at 10s
+    commitSeek();
     expect(live.currentTime).toBe(30);
     expect((container.querySelector('.osd-progress-bar') as HTMLElement).style.width).toBe('50%');
   });
 
-  it('Right near the live edge snaps to the edge (end - pad)', () => {
-    player.handleAction('right'); // 60 + 30 → clamp 60 → snap 60 - PAD
-    expect(live.currentTime).toBe(60 - PAD);
+  it('logs where a seek landed and how far behind live', () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    press('left', 3);
+    commitSeek();
+    const seekbar = container.querySelector('[data-seekbar]') as HTMLElement;
+    seekbar.getBoundingClientRect = () => ({ left: 0, right: 1000, width: 1000, top: 0, bottom: 36 }) as DOMRect;
+    expect(player['osd'].seekAtPointer(1000, 18)).toBe(true);
+    expect(info.mock.calls.map(call => call.join(' ')).filter(line => line.includes('event=seek.commit'))).toEqual([
+      '[Player] Seek event=seek.commit via=timer kind=dvr from=60 to=30 behind=30',
+      `[Player] Seek event=seek.commit via=pointer kind=dvr from=30 to=${60 - PAD} behind=${PAD}`,
+    ]);
+    info.mockRestore();
+  });
+
+  it('looks up no preview for a stale hover while the DVR window is gone', () => {
+    press('left', 1); // pins the DVR preview source
+    player.cancelScrub();
+    const preview = player['preview'] as unknown as { thumbnailAt(t: number | null): unknown };
+    const lookup = vi.spyOn(preview, 'thumbnailAt');
+    (live as { duration: number }).duration = 120; // mid-reload: no window yet
+    (player as unknown as { hoverFraction: number | null }).hoverFraction = 0.5;
+    player['refreshProgress']();
+    expect(lookup.mock.calls.filter(([t]) => t !== null)).toEqual([]);
+  });
+
+  it('builds the preview source once the DVR window is back after a reload', () => {
+    const preview = player['preview'] as unknown as { start(source: unknown): void };
+    const start = vi.spyOn(preview, 'start');
+    // Reloaded: the window has not filled in and the pipeline reports a
+    // finite duration, while the pointer still rests on the bar.
+    (live as { duration: number }).duration = 120;
+    (player as unknown as { hoverFraction: number | null }).hoverFraction = 0.5;
+    player['refreshProgress']();
+    (live as { duration: number }).duration = Infinity;
+    (player as unknown as { hoverFraction: number | null }).hoverFraction = null;
+    press('left', 1);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0][0]).toMatchObject({ live: true });
+  });
+
+  it('Right at the live edge stays put instead of stepping back to end - pad', () => {
+    player.handleAction('right');
+    expect(container.querySelector('.osd-scrub')).toBeNull();
+    commitSeek();
+    expect(live.currentTime).toBe(60);
   });
 
   it('rewind jumps to the oldest point, fast_forward to live', () => {
