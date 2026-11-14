@@ -272,7 +272,7 @@ test('auto-plays the next episode and removes a series only after its final epis
   await enterTab(page, 'series');
   await focusAndSelect(page, '#view-series .catalog-tile[data-item-id="1"]');
   await focusAndSelect(page, '#view-series .episode-row[data-episode-id="101"]');
-  await expect(page.locator('#player-osd .osd-channel-name')).toContainText('Episode One');
+  await expect(page.locator('#player-osd .osd-vod-detail')).toContainText('Episode One');
 
   await finishCurrentVideo(page);
   await expect.poll(async () =>
@@ -280,7 +280,7 @@ test('auto-plays the next episode and removes a series only after its final epis
     .toEqual(['1']);
   await expect(page.locator('#player-osd .osd-next-episode')).toContainText('Episode Two');
   await expect(page.locator('#player-osd .osd-next-episode')).toHaveCount(0);
-  await expect(page.locator('#player-osd .osd-channel-name')).toContainText('Episode Two');
+  await expect(page.locator('#player-osd .osd-vod-detail')).toContainText('Episode Two');
 
   await finishCurrentVideo(page);
   await expect(page.locator('#view-series')).toBeVisible();

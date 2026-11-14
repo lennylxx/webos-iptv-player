@@ -191,6 +191,8 @@ export const FR_MESSAGES = {
     other: 'Début dans {count} secondes',
   },
   'player.playNow': 'Lire maintenant',
+  'player.previousEpisode': 'Épisode précédent',
+  'player.nextEpisode': 'Épisode suivant',
   'player.unableToPlay': 'Impossible de lire cette vidéo.',
   'player.reconnecting': 'Reconnexion…',
   'player.retryingCatchup': 'Nouvelle tentative de lecture du replay…',

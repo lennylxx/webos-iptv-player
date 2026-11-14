@@ -191,6 +191,8 @@ export const DE_MESSAGES = {
     other: 'Beginnt in {count} Sekunden',
   },
   'player.playNow': 'Jetzt abspielen',
+  'player.previousEpisode': 'Vorherige Folge',
+  'player.nextEpisode': 'Nächste Folge',
   'player.unableToPlay': 'Dieses Video kann nicht abgespielt werden.',
   'player.reconnecting': 'Verbindung wird wiederhergestellt…',
   'player.retryingCatchup': 'Replay wird erneut geladen…',

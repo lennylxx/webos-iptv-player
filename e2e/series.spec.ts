@@ -144,6 +144,45 @@ test('stepping right along Continue Watching keeps a series\' stacked cards in v
   })).toBeGreaterThanOrEqual(0);
 });
 
+test('CH+ and CH- step through a series\' episodes, as the OSD skips do', async ({ page }) => {
+  await seedSeries(page);
+  await neuterVideo(page);
+  await page.route('**/player_api.php*action=get_series_info*', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({
+      episodes: { '1': [1, 2, 3].map((n) => ({
+        id: 10 + n, title: `Episode ${n}`, season: 1, episode_num: n, container_extension: 'mp4',
+        info: { plot: '', duration_secs: 1500, movie_image: '' },
+      })) },
+    }),
+  }));
+  await page.goto('/');
+  await enterTab(page, 'series');
+  await page.locator('.catalog-tile[data-item-id="1"]')
+    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await page.locator('.episode-row[data-episode-id="12"]')
+    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+
+  const osd = page.locator('#player-osd');
+  const title = osd.locator('.osd-vod-detail');
+  const previous = osd.locator('[data-skip-episode="-1"]');
+  const next = osd.locator('[data-skip-episode="1"]');
+  await expect(title).toContainText('S1 E2');
+  await expect(previous).toBeEnabled();
+  await expect(next).toBeEnabled();
+
+  await page.keyboard.press('PageUp');
+  await expect(title).toContainText('S1 E3');
+  await expect(next).toBeDisabled();
+  await page.keyboard.press('PageDown');
+  await page.keyboard.press('PageDown');
+  await expect(title).toContainText('S1 E1');
+  await expect(previous).toBeDisabled();
+  await next.click();
+  await expect(title).toContainText('S1 E2');
+});
+
 test('browse Series, open a detail, and play an episode', async ({ page }) => {
   await seedSeries(page);
   await routeLiveManifest(page);

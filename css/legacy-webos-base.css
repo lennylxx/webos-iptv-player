@@ -53,7 +53,9 @@ html.q-no-flex-gap .osd-programme-time > * + * { margin-left: 16px; }
 html.q-no-flex-gap .osd-progress-row > * + * { margin-left: 12px; }
 html.q-no-flex-gap .osd-dvr-live > * + * { margin-left: 8px; }
 html.q-no-flex-gap .osd-next > * + * { margin-left: 12px; }
-html.q-no-flex-gap .osd-next-episode-actions > * + * { margin-left: 16px; }
+html.q-no-flex-gap .osd-next-episode > * + * { margin-left: 24px; }
+html.q-no-flex-gap .osd-next-episode-actions > * + * { margin-left: 12px; }
+html.q-no-flex-gap .osd-next-episode-actions button > * + * { margin-left: 8px; }
 html.q-no-flex-gap .player-sidebar .sidebar-group-width-probe > * + * { margin-left: 10px; }
 html.q-no-flex-gap .player-sidebar .sidebar-channel-title > * + * { margin-left: 12px; }
 html.q-no-flex-gap .player-sidebar .sidebar-group-item > * + * { margin-left: 10px; }

@@ -107,6 +107,7 @@ export const CONFIG = {
     SUBTITLE_OFFSET_MAX: 60,    // max |offset| the adjuster allows (seconds)
     SUBTITLE_SEARCH_TIMEOUT: 8000, // ms one online provider may take before the merged search gives up on it
     UP_NEXT_COUNTDOWN: 10,      // seconds before the queued episode/movie starts automatically
+    EPISODE_SKIP_SETTLE_MS: 600, // CH presses within this land on one episode before its stream starts
     LUNA_MEDIA_PLACEHOLDER: 'resources/black.mp4',
     LUNA_MEDIA_WINDOW_TIMEOUT_MS: 3000, // placeholder clip load + getForegroundAppInfo budget
     LUNA_MEDIA_WINDOW_POLL_MS: 100,     // video.mediaId / window ID poll cadence

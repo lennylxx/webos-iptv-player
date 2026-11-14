@@ -679,6 +679,8 @@ export interface VodQueueItem {
   parentalItemId?: string;
   subtitles: SidecarSubtitle[];
   searchMeta?: SearchMeta;
+  /** An episode's own title, shown apart from its series name. */
+  episodeTitle?: string;
   watchlistOwner?: WatchlistOwner;
 }
 
@@ -695,6 +697,8 @@ export interface WatchlistOwner {
 export interface VodPlayback extends VodQueueItem {
   resumeSecs: number;
   episodeQueue?: VodQueueItem[];
+  /** Episodes before this one, oldest first, for the previous-episode control. */
+  previousEpisodes?: VodQueueItem[];
   /** Transient movie queue created only when playback starts from Watchlist. */
   watchlistQueue?: VodQueueItem[];
   /** The episode is where its series stands (auto-advanced or resumed), so it keeps a point from 0s. */

@@ -597,6 +597,7 @@ describe('Series detail', () => {
       itemId: 'e1', accountId: 'x1', kind: 'episode', resumeSecs: 0,
       url: 'http://host:8080/series/u/p/e1.mp4',
       title: expect.stringContaining('S1E1'),
+      episodeTitle: 'Episode One',
       watchlistOwner: {
         kind: 'series', itemId: 's1', name: 'Series One', poster: 'http://host/series.jpg',
       },
@@ -640,6 +641,8 @@ describe('Series detail', () => {
     view.handleAction('select');
     expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({
       itemId: 'e2', kind: 'episode', url: 'http://host:8080/series/u/p/e2.mkv',
+      previousEpisodes: [expect.objectContaining({ itemId: 'e1' })],
+      episodeQueue: [],
     }));
   });
 

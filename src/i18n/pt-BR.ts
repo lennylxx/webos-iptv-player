@@ -191,6 +191,8 @@ export const PT_BR_MESSAGES = {
     other: 'Começa em {count} segundos',
   },
   'player.playNow': 'Assistir agora',
+  'player.previousEpisode': 'Episódio anterior',
+  'player.nextEpisode': 'Próximo episódio',
   'player.unableToPlay': 'Não foi possível reproduzir este vídeo.',
   'player.reconnecting': 'Reconectando…',
   'player.retryingCatchup': 'Tentando reproduzir o replay novamente…',

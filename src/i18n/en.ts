@@ -193,6 +193,8 @@ export const EN_MESSAGES = {
     other: 'Starts in {count} seconds',
   },
   'player.playNow': 'Play now',
+  'player.previousEpisode': 'Previous episode',
+  'player.nextEpisode': 'Next episode',
   'player.unableToPlay': 'Unable to play this video.',
   'player.reconnecting': 'Reconnecting…',
   'player.retryingCatchup': 'Retrying catch-up…',

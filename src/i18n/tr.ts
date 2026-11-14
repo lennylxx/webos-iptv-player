@@ -186,6 +186,8 @@ export const TR_MESSAGES = {
     other: '{count} saniye içinde başlıyor',
   },
   'player.playNow': 'Şimdi oynat',
+  'player.previousEpisode': 'Önceki bölüm',
+  'player.nextEpisode': 'Sonraki bölüm',
   'player.unableToPlay': 'Bu video oynatılamıyor.',
   'player.reconnecting': 'Yeniden bağlanıyor…',
   'player.retryingCatchup': 'Geri İzle yeniden deneniyor…',

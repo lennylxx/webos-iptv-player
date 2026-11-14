@@ -186,6 +186,8 @@ export const ZH_CN_MESSAGES = {
     other: '{count} 秒后开始播放',
   },
   'player.playNow': '立即播放',
+  'player.previousEpisode': '上一集',
+  'player.nextEpisode': '下一集',
   'player.unableToPlay': '无法播放此视频。',
   'player.reconnecting': '正在重新连接…',
   'player.retryingCatchup': '正在重试回看…',

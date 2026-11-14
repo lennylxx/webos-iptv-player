@@ -201,6 +201,8 @@ export const PL_MESSAGES = {
     other: 'Start za {count} sekundy',
   },
   'player.playNow': 'Odtwórz teraz',
+  'player.previousEpisode': 'Poprzedni odcinek',
+  'player.nextEpisode': 'Następny odcinek',
   'player.unableToPlay': 'Nie można odtworzyć tego materiału.',
   'player.reconnecting': 'Ponowne łączenie…',
   'player.retryingCatchup': 'Ponawianie odtwarzania programu…',

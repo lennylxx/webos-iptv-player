@@ -201,6 +201,8 @@ export const UK_MESSAGES = {
     other: 'Початок через {count} секунди',
   },
   'player.playNow': 'Дивитися зараз',
+  'player.previousEpisode': 'Попередній епізод',
+  'player.nextEpisode': 'Наступний епізод',
   'player.unableToPlay': 'Не вдалося відтворити це відео.',
   'player.reconnecting': 'Повторне підключення…',
   'player.retryingCatchup': 'Повторне завантаження з ТВ-архіву…',

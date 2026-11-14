@@ -2,9 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG } from '../config';
 import { StorageService } from '../services/storage-service';
-import type { Channel, Programme } from '../types';
+import type { Channel, Programme, VodQueueItem } from '../types';
 import type { DvrState } from '../utils/dvr';
-import { PlayerOsd, type PlayerOsdOptions, type PlayerOsdSnapshot } from './player-osd';
+import { PlayerOsd, upNextCard, vodHeading, type PlayerOsdOptions, type PlayerOsdSnapshot } from './player-osd';
 
 const CHANNEL: Channel = {
   id: 'ch1',
@@ -39,7 +39,10 @@ function snapshot(overrides: Partial<PlayerOsdSnapshot> = {}): PlayerOsdSnapshot
     channelNumber: 1,
     catchup: null,
     vodTitle: null,
+    vodDetail: '',
     upNextSeconds: 0,
+    upNext: null,
+    episodeNav: null,
     dvr: null,
     nowPlaying: null,
     upcoming: null,
@@ -175,7 +178,7 @@ describe('PlayerOsd', () => {
     expect(container.querySelector('.osd-channel-name')?.textContent).toContain('Video 1');
     expect(container.querySelector<HTMLElement>('.osd-progress-bar')?.style.width).toBe('25%');
 
-    state = { ...state, vodTitle: 'Video 2', upNextSeconds: 5 };
+    state = { ...state, upNextSeconds: 5, upNext: { title: 'Video 2', detail: '', image: '', poster: true } };
     osd.render();
     expect(container.textContent).toContain('Video 2');
     expect(container.querySelector('[data-next-play]')).not.toBeNull();
@@ -272,6 +275,7 @@ describe('PlayerOsd', () => {
       channel: null,
       vodTitle: 'Video 2',
       upNextSeconds: 5,
+      upNext: { title: 'Video 2', detail: '', image: '', poster: true },
     });
     osd.render();
     const playNext = container.querySelector('[data-next-play]') as HTMLElement;
@@ -309,5 +313,129 @@ describe('PlayerOsd', () => {
     osd.clearFailedIcons();
     osd.render();
     expect(container.querySelector('.osd-programme-icon')).not.toBeNull();
+  });
+
+  it('shows Up next with its still, and starts the text at the edge without one', () => {
+    const upNext = { title: 'Series One', detail: 'S1 E2 · Episode Two', image: 'http://host/still', poster: false };
+    state = snapshot({ playback: playback(120, 30), channel: null, vodTitle: 'Series One — S1E2', upNextSeconds: 5, upNext });
+    osd.show();
+    const thumb = container.querySelector('.osd-next-episode-thumb');
+    expect(thumb?.getAttribute('src')).toBe('http://host/still');
+    expect(container.querySelector('.osd-next-episode-title')?.textContent).toBe('Series One');
+    expect(container.querySelector('.osd-vod-detail')?.textContent).toBe('S1 E2 · Episode Two');
+    expect(container.querySelector('.osd-next-episode')?.firstElementChild).toBe(thumb);
+
+    thumb?.dispatchEvent(new Event('error'));
+    expect(container.querySelector('.osd-next-episode-thumb')).toBeNull();
+    expect(container.querySelector('.osd-next-episode')?.firstElementChild?.className)
+      .toBe('osd-next-episode-body');
+
+    state = { ...state, upNext: { title: 'Movie Two', detail: '', image: '', poster: true } };
+    osd.render();
+    expect(container.querySelector('.osd-next-episode-thumb')).toBeNull();
+    expect(container.querySelector('.osd-vod-detail')).toBeNull();
+  });
+});
+
+describe('PlayerOsd episode skips', () => {
+  it('flanks play/pause with skips for an episode, disabled at the series\' ends', () => {
+    const container = document.createElement('div');
+    container.innerHTML = '<div id="player-osd"></div>';
+    document.body.appendChild(container);
+    let state = snapshot({ playback: playback(120, 30), channel: null, vodTitle: 'Video 1',
+      episodeNav: { previous: false, next: true } });
+    const onSkipEpisode = vi.fn();
+    const osd = new PlayerOsd(container, {
+      getSnapshot: () => state, canAutoReveal: () => true, canSeek: () => true,
+      onSeekFraction: vi.fn(), onPauseToggle: vi.fn(), onGoLive: vi.fn(), onResync: vi.fn(),
+      onPlayNext: vi.fn(), onCancelNext: vi.fn(), onSkipEpisode,
+    });
+    osd.show();
+    const row = Array.from(container.querySelectorAll('.osd-progress-row > button'))
+      .map((b) => b.getAttribute('data-skip-episode') ?? (b.hasAttribute('data-playpause') ? 'play' : 'other'));
+    expect(row.slice(0, 3)).toEqual(['-1', 'play', '1']);
+    const previous = container.querySelector<HTMLElement>('[data-skip-episode="-1"]')!;
+    const next = container.querySelector<HTMLElement>('[data-skip-episode="1"]')!;
+    expect(previous.hasAttribute('disabled')).toBe(true);
+    expect(next.getAttribute('aria-label')).toBe('Next episode');
+
+    previous.getBoundingClientRect = () => rect(10, 10, 30, 30);
+    next.getBoundingClientRect = () => rect(90, 10, 30, 30);
+    container.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 20, clientY: 20 }));
+    expect(onSkipEpisode).not.toHaveBeenCalled();
+    container.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 100, clientY: 20 }));
+    expect(onSkipEpisode).toHaveBeenCalledWith(1);
+
+    state = { ...state, episodeNav: null };
+    osd.render();
+    expect(container.querySelector('[data-skip-episode]')).toBeNull();
+    container.remove();
+  });
+});
+
+describe('PlayerOsd VOD heading', () => {
+  it('puts an episode\'s "S1 E2 · Title" under its series, and a movie on one line', () => {
+    const container = document.createElement('div');
+    container.innerHTML = '<div id="player-osd"></div>';
+    document.body.appendChild(container);
+    let state = snapshot({ playback: playback(120, 30), channel: null,
+      vodTitle: 'Series One', vodDetail: 'S1 E2 · Episode Two' });
+    const osd = new PlayerOsd(container, {
+      getSnapshot: () => state, canAutoReveal: () => true, canSeek: () => true,
+      onSeekFraction: vi.fn(), onPauseToggle: vi.fn(), onGoLive: vi.fn(), onResync: vi.fn(),
+      onPlayNext: vi.fn(), onCancelNext: vi.fn(), onSkipEpisode: vi.fn(),
+    });
+    osd.show();
+    expect(container.querySelector('.osd-channel-name')?.textContent).toBe('Series One');
+    expect(container.querySelector('.osd-channel + .osd-vod-detail')?.textContent).toBe('S1 E2 · Episode Two');
+    state = { ...state, vodTitle: 'Movie One', vodDetail: '' };
+    osd.render();
+    expect(container.querySelector('.osd-vod-detail')).toBeNull();
+    container.remove();
+  });
+});
+
+describe('upNextCard', () => {
+  const item = (over: Partial<VodQueueItem> = {}): VodQueueItem => ({
+    url: 'http://host/e2.mp4', title: 'Series One — S1E2 — Episode Two', poster: 'http://host/still',
+    accountId: 'x1', itemId: 'e2', kind: 'episode', subtitles: [], ...over,
+  });
+
+  it('heads a playing episode the way its up-next card does', () => {
+    const episode = item({
+      searchMeta: { season: 1, episode: 2 }, episodeTitle: 'Episode Two',
+      watchlistOwner: { kind: 'series', itemId: 's1', name: 'Series One' },
+    });
+    expect(vodHeading(episode)).toEqual({ title: 'Series One', detail: 'S1 E2 · Episode Two' });
+    expect(vodHeading(item({ kind: 'vod', title: 'Movie Two' }))).toEqual({ title: 'Movie Two', detail: '' });
+  });
+
+  it('recovers the episode title from the label of an item saved without it', () => {
+    const owner = { kind: 'series' as const, itemId: 's1', name: 'Series One' };
+    expect(vodHeading(item({ searchMeta: { season: 1, episode: 2 }, watchlistOwner: owner })).detail)
+      .toBe('S1 E2 · Episode Two');
+    expect(vodHeading(item({ title: 'Series One — S1E2', searchMeta: { season: 1, episode: 2 }, watchlistOwner: owner })).detail)
+      .toBe('S1 E2');
+  });
+
+  it('splits an episode into its series and "S1 E2 · Title"', () => {
+    expect(upNextCard(item({
+      searchMeta: { season: 1, episode: 2 }, episodeTitle: 'Episode Two',
+      watchlistOwner: { kind: 'series', itemId: 's1', name: 'Series One' },
+    }))).toEqual({ title: 'Series One', detail: 'S1 E2 · Episode Two', image: 'http://host/still', poster: false });
+    expect(upNextCard(item({
+      title: 'Series One — S1E2',
+      searchMeta: { season: 1, episode: 2 },
+      watchlistOwner: { kind: 'series', itemId: 's1', name: 'Series One' },
+    })).detail).toBe('S1 E2');
+  });
+
+  it('keeps the whole label of an item saved without its series name, and a movie\'s poster', () => {
+    expect(upNextCard(item({ watchlistOwner: { kind: 'series', itemId: 's1' } })))
+      .toEqual({ title: 'Series One — S1E2 — Episode Two', detail: '', image: 'http://host/still', poster: false });
+    expect(upNextCard(item({ kind: 'vod', title: 'Movie Two' })).poster).toBe(true);
+    expect(upNextCard(item({
+      poster: 'http://host/series', watchlistOwner: { kind: 'series', itemId: 's1', poster: 'http://host/series' },
+    })).poster).toBe(true);
   });
 });

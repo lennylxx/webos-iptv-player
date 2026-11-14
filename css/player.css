@@ -298,6 +298,13 @@
   display: block;
 }
 
+/* Episode skips flank play/pause; at either end of the series one stays,
+   disabled, so play/pause doesn't move. */
+.osd-episode-btn:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
 /* Resync A/V button — reuses the play/pause icon-button sizing. */
 .osd-resync-btn {
   display: inline-flex;
@@ -395,16 +402,56 @@
 }
 
 .osd-next-episode {
-  padding: 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+/* The episode still, as tall as the text beside it; without one the text
+   starts at the panel's edge. */
+.osd-next-episode .osd-next-episode-thumb {
+  width: 384px;
+  height: 216px;
+  border-radius: 8px;
+  background: var(--overlay-chip);
+}
+
+.osd-next-episode .osd-next-episode-thumb.is-poster {
+  width: 144px;
+}
+
+.osd-next-episode-body {
+  flex: 1;
+  min-width: 0;
 }
 
 .osd-next-episode-label {
-  margin-bottom: 4px;
-  color: var(--accent);
+  color: var(--text-secondary);
   font-size: 20px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 2px;
   text-transform: uppercase;
+}
+
+.osd-next-episode-title,
+.osd-vod-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.osd-next-episode-title {
+  margin-top: 4px;
+}
+
+/* An episode's "S1 E2 · Title" under its series name, playing or up next. */
+.osd-vod-detail {
+  color: var(--text-secondary);
+  font-size: 28px;
+}
+
+.osd-channel + .osd-vod-detail {
+  margin: -6px 0 10px;
 }
 
 .osd-next-episode-time {
@@ -415,18 +462,34 @@
 
 .osd-next-episode-actions {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   margin-top: 16px;
 }
 
 .osd-next-episode-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: 10px 20px;
   border: 1px solid var(--overlay-chip);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--overlay-chip);
   color: var(--text-primary);
+  font-family: inherit;
   font-size: 22px;
+  font-weight: 600;
   cursor: pointer;
+}
+
+.osd-next-episode-icon {
+  display: inline-flex;
+  width: calc(22px * var(--font-scale));
+  height: calc(22px * var(--font-scale));
+}
+
+.osd-next-episode-icon svg {
+  width: 100%;
+  height: 100%;
 }
 
 .osd-next-episode-actions button:first-child {

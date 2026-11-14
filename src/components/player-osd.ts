@@ -1,11 +1,11 @@
-import type { CatchupInfo, Channel, Programme } from '../types';
+import type { CatchupInfo, Channel, Programme, VodQueueItem } from '../types';
 import { StorageService } from '../services/storage-service';
 import { $, hide, html, raw, type Safe, show } from '../utils/dom';
 import { type DvrState } from '../utils/dvr';
 import { morph } from '../utils/morph';
 import { formatDuration, formatPosition, formatTime, getProgress } from '../utils/time';
 import { t, tp } from '../i18n';
-import { PAUSE_ICON, PLAY_ICON, RESYNC_ICON } from './icons';
+import { NEXT_EPISODE_ICON, PAUSE_ICON, PLAY_ICON, PREVIOUS_EPISODE_ICON, RESYNC_ICON } from './icons';
 
 export interface PlayerOsdSnapshot {
   playback: {
@@ -17,11 +17,47 @@ export interface PlayerOsdSnapshot {
   channelNumber: number;
   catchup: CatchupInfo | null;
   vodTitle: string | null;
+  /** An episode's "S1 E2 · Title" under its series name in vodTitle. */
+  vodDetail: string;
   upNextSeconds: number;
+  upNext: PlayerOsdUpNext | null;
+  /** Which episode skips are open; null when the VOD isn't an episode. */
+  episodeNav: { previous: boolean; next: boolean } | null;
   dvr: DvrState | null;
   nowPlaying: Programme | null;
   upcoming: Programme | null;
   streamInfo: PlayerOsdStreamInfo | null;
+}
+
+export interface PlayerOsdUpNext {
+  title: string;
+  detail: string;
+  image: string;
+  /** A movie's portrait poster rather than an episode still. */
+  poster: boolean;
+}
+
+// An episode reads as its series over "S1 E2 · Title"; anything saved without
+// its series name or number keeps its whole label.
+// An item saved before it carried its episode title still has it at the end of
+// its label, `Series — S1E2 — Title`.
+const LABEL_EPISODE_TITLE = / — S\d+E\d+ — (.+)$/;
+
+export function vodHeading(item: VodQueueItem): { title: string; detail: string } {
+  const series = item.watchlistOwner?.name;
+  const meta = item.searchMeta;
+  if (series && meta?.season !== undefined && meta.episode !== undefined) {
+    const code = `S${meta.season} E${meta.episode}`;
+    const episodeTitle = item.episodeTitle ?? LABEL_EPISODE_TITLE.exec(item.title)?.[1];
+    return { title: series, detail: episodeTitle ? `${code} · ${episodeTitle}` : code };
+  }
+  return { title: item.title, detail: '' };
+}
+
+export function upNextCard(item: VodQueueItem): PlayerOsdUpNext {
+  // A movie, or an episode without a still of its own, shows a portrait poster.
+  const poster = item.kind === 'vod' || (!!item.watchlistOwner?.poster && item.poster === item.watchlistOwner.poster);
+  return { ...vodHeading(item), image: item.poster, poster };
 }
 
 export interface PlayerOsdStreamInfo {
@@ -48,6 +84,7 @@ export interface PlayerOsdOptions {
   onResync: () => void;
   onPlayNext: () => void;
   onCancelNext: () => void;
+  onSkipEpisode: (step: 1 | -1) => void;
 }
 
 function audioTrackText(name: string): string {
@@ -327,15 +364,22 @@ export class PlayerOsd {
   // The VOD OSD reuses the Live markup: an `.osd-channel` header (movie/episode
   // title + shared stream-info) over the shared seekable `.osd-progress-row`.
   private renderVod(osd: HTMLElement, state: PlayerOsdSnapshot): void {
-    if (state.upNextSeconds > 0) {
+    if (state.upNextSeconds > 0 && state.upNext) {
+      const next = state.upNext;
+      const image = next.image && !this.failedIcons.has(next.image) ? next.image : '';
       morph(osd, html`
         <div class="osd-next-episode">
-          <div class="osd-next-episode-label">${t('player.upNext')}</div>
-          <div class="osd-channel-name">${state.vodTitle ?? ''}</div>
-          <div class="osd-next-episode-time">${tp('player.playingIn', state.upNextSeconds)}</div>
-          <div class="osd-next-episode-actions">
-            <button data-next-play>${t('player.playNow')}</button>
-            <button data-next-cancel>${t('common.cancel')}</button>
+          ${image ? html`<img class="osd-programme-icon osd-next-episode-thumb${next.poster ? ' is-poster' : ''}"
+            data-key="next-thumb:${image}" src="${image}" alt="">` : ''}
+          <div class="osd-next-episode-body">
+            <div class="osd-next-episode-label">${t('player.upNext')}</div>
+            <div class="osd-channel-name osd-next-episode-title">${next.title}</div>
+            ${next.detail ? html`<div class="osd-vod-detail">${next.detail}</div>` : ''}
+            <div class="osd-next-episode-time">${tp('player.playingIn', state.upNextSeconds)}</div>
+            <div class="osd-next-episode-actions">
+              <button data-next-play><span class="osd-next-episode-icon">${raw(PLAY_ICON)}</span><span>${t('player.playNow')}</span></button>
+              <button data-next-cancel>${t('common.cancel')}</button>
+            </div>
           </div>
         </div>
       `);
@@ -349,8 +393,11 @@ export class PlayerOsd {
         <div class="osd-channel-name">${state.vodTitle ?? ''}</div>
         ${this.renderStreamInfo(state.streamInfo)}
       </div>
+      ${state.vodDetail ? html`<div class="osd-vod-detail">${state.vodDetail}</div>` : ''}
       <div class="osd-progress-row">
+        ${state.episodeNav ? this.episodeButton(-1, state.episodeNav.previous) : ''}
         ${this.playPauseButton(playback?.paused ?? false)}
+        ${state.episodeNav ? this.episodeButton(1, state.episodeNav.next) : ''}
         <span class="osd-time-current">${formatPosition(pos)}</span>
         <div class="osd-progress" data-seekbar>
           <div class="osd-progress-bar" style="width: ${dur > 0 ? (pos / dur) * 100 : 0}%"></div>
@@ -376,6 +423,16 @@ export class PlayerOsd {
       <button class="osd-dvr-btn" data-playpause
         aria-label="${t(paused ? 'player.play' : 'player.pause')}">
         ${paused ? raw(PLAY_ICON) : raw(PAUSE_ICON)}
+      </button>
+    `;
+  }
+
+  // Kept, disabled, at either end of the season list so play/pause never moves.
+  private episodeButton(step: 1 | -1, enabled: boolean): Safe {
+    return html`
+      <button class="osd-dvr-btn osd-episode-btn" data-skip-episode="${step}" ${raw(enabled ? '' : 'disabled')}
+        aria-label="${t(step > 0 ? 'player.nextEpisode' : 'player.previousEpisode')}">
+        ${raw(step > 0 ? NEXT_EPISODE_ICON : PREVIOUS_EPISODE_ICON)}
       </button>
     `;
   }
@@ -445,6 +502,8 @@ export class PlayerOsd {
     }
     if (this.seekAtPointer(x, y)) return;
     if (this.hitsControl('[data-playpause]', x, y)) this.callbacks.onPauseToggle();
+    else if (this.hitsControl('[data-skip-episode="-1"]:not([disabled])', x, y)) this.callbacks.onSkipEpisode(-1);
+    else if (this.hitsControl('[data-skip-episode="1"]:not([disabled])', x, y)) this.callbacks.onSkipEpisode(1);
     else if (this.hitsControl('[data-golive]', x, y)) this.callbacks.onGoLive();
     else if (this.hitsControl('[data-resync]', x, y)) this.callbacks.onResync();
   }

@@ -189,6 +189,8 @@ export const IT_MESSAGES = {
     other: 'Inizia tra {count} secondi',
   },
   'player.playNow': 'Riproduci ora',
+  'player.previousEpisode': 'Episodio precedente',
+  'player.nextEpisode': 'Episodio successivo',
   'player.unableToPlay': 'Impossibile riprodurre questo video.',
   'player.reconnecting': 'Riconnessione…',
   'player.retryingCatchup': 'Nuovo tentativo di replay…',

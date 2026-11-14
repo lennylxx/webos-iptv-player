@@ -307,6 +307,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       parentalItemId: series.seriesId,
       subtitles: ep.subtitles,
       searchMeta: { season: ep.season, episode: ep.episode },
+      episodeTitle: ep.title || undefined,
       watchlistOwner: {
         kind: 'series', itemId: series.seriesId, name: series.name,
         poster: this.currentInfo?.poster || series.poster,
@@ -323,6 +324,15 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     return index < 0 ? [] : episodes.slice(index + 1).map((ep) => this.episodePlayback(series, ep));
   }
 
+  private episodesBefore(episodeId: string, series: SeriesItem): VodQueueItem[] {
+    const info = this.currentInfo;
+    if (!info) return [];
+    const episodes = info.seasons.reduce<Episode[]>(
+      (all, season) => all.concat(info.episodesBySeason[season] ?? []), []);
+    const index = episodes.findIndex((ep) => ep.id === episodeId);
+    return index < 0 ? [] : episodes.slice(0, index).map((ep) => this.episodePlayback(series, ep));
+  }
+
   private playEpisode(episodeId: string): void {
     const ep = this.findEpisode(episodeId);
     const series = this.currentSeries;
@@ -334,6 +344,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       resumeSecs: saved ? saved.position : 0,
       holdsSeriesPlace: !!saved,
       episodeQueue: this.episodesAfter(ep.id, series),
+      previousEpisodes: this.episodesBefore(ep.id, series),
     });
   }
 

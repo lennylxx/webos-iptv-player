@@ -201,6 +201,8 @@ export const RU_MESSAGES = {
     other: 'Начало через {count} секунды',
   },
   'player.playNow': 'Смотреть сейчас',
+  'player.previousEpisode': 'Предыдущая серия',
+  'player.nextEpisode': 'Следующая серия',
   'player.unableToPlay': 'Не удалось воспроизвести это видео.',
   'player.reconnecting': 'Повторное подключение…',
   'player.retryingCatchup': 'Повторная загрузка из архива…',

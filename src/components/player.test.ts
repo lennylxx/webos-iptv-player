@@ -25,7 +25,7 @@ vi.mock('../services/storage-service', () => ({
     getLastChannel: vi.fn(() => null), setLastChannel: vi.fn(),
     getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
     getAudioPref: vi.fn(), setAudioPref: vi.fn(),
-    setResume: vi.fn(), clearResume: vi.fn(), getResumeList: vi.fn(() => []),
+    setResume: vi.fn(), clearResume: vi.fn(), getResumeList: vi.fn(() => []), getResume: vi.fn(() => null),
     removeWatchlist: vi.fn(),
     getPickedOnlineSub: vi.fn(), setPickedOnlineSub: vi.fn(),
     setCatchupProgress: vi.fn(), getCatchupProgress: vi.fn(), clearCatchupProgress: vi.fn(),
@@ -66,6 +66,7 @@ import { StorageService } from '../services/storage-service';
 import { showToast } from './toast';
 import { probeMedia } from '../services/media-probe';
 import { CONFIG } from '../config';
+import { KeyHandler } from '../navigation/key-handler';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { ParentalControlService } from '../services/parental-control';
 import { VodSubtitles } from '../services/vod-subtitles';
@@ -2523,6 +2524,154 @@ describe('Player VOD mode', () => {
     player.handleAction('back');
     expect(StorageService.setResume).toHaveBeenLastCalledWith(
       expect.objectContaining({ itemId: 'e1', position: 5 }), { keepStart: true });
+  });
+
+  describe('episode skips', () => {
+    const owner = { kind: 'series' as const, itemId: 's1' };
+    const ep = (n: number) => ({
+      url: `http://host:8080/series/u/p/e${n}.mp4`, title: `Series One — S1E${n}`, poster: '',
+      accountId: 'x1', itemId: `e${n}`, kind: 'episode' as const, subtitles: [],
+      categoryId: 'c1', parentalItemId: 's1', watchlistOwner: owner,
+    });
+    const playing = () => (player as unknown as { vod: {
+      itemId: string; resumeSecs: number; holdsSeriesPlace?: boolean;
+      episodeQueue?: { itemId: string }[]; previousEpisodes?: { itemId: string }[];
+    } | null }).vod;
+    const ids = (items?: { itemId: string }[]) => (items ?? []).map((item) => item.itemId);
+
+    beforeEach(() => {
+      HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+      HTMLMediaElement.prototype.pause = vi.fn();
+      HTMLMediaElement.prototype.load = vi.fn();
+      const video = document.createElement('video');
+      Object.defineProperty(video, 'duration', { value: 1800, configurable: true });
+      container.appendChild(video);
+      player.init(video);
+      vi.mocked(StorageService.setResume).mockClear();
+    });
+
+    it('steps CH+ and CH- through the series, keeping each episode\'s point', () => {
+      player.playVod(req({ ...ep(2), resumeSecs: 0, previousEpisodes: [ep(1)], episodeQueue: [ep(3), ep(4)] }));
+      vi.mocked(StorageService.getResume).mockImplementation((_a, _k, id) => id === 'e3'
+        ? { accountId: 'x1', kind: 'episode', itemId: 'e3', name: '', poster: '', ext: 'mp4',
+            position: 300, duration: 1800, updatedAt: 1 }
+        : null);
+      document.querySelector<HTMLVideoElement>('video')!.currentTime = 600;
+
+      player.handleAction('channel_up');
+      expect(StorageService.setResume).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId: 'e2', position: 600 }), { keepStart: false });
+      expect(playing()).toMatchObject({ itemId: 'e3', resumeSecs: 300, holdsSeriesPlace: true });
+      expect(ids(playing()?.previousEpisodes)).toEqual(['e1', 'e2']);
+      expect(ids(playing()?.episodeQueue)).toEqual(['e4']);
+
+      player.handleAction('channel_down');
+      expect(playing()).toMatchObject({ itemId: 'e2', resumeSecs: 0 });
+      expect(ids(playing()?.previousEpisodes)).toEqual(['e1']);
+      expect(ids(playing()?.episodeQueue)).toEqual(['e3', 'e4']);
+      vi.mocked(StorageService.getResume).mockReturnValue(null);
+    });
+
+    it('opens one stream for a run of presses, once they settle', async () => {
+      vi.useFakeTimers();
+      try {
+        player.playVod(req({ ...ep(1), resumeSecs: 0, episodeQueue: [ep(2), ep(3), ep(4)] }));
+        vi.mocked(probeMedia).mockClear();
+        player.handleAction('channel_up');
+        player.handleAction('channel_up');
+        expect(playing()?.itemId).toBe('e3');
+        expect(container.querySelector('.osd-channel-name')?.textContent).toContain('S1E3');
+        expect(probeMedia).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.EPISODE_SKIP_SETTLE_MS);
+        expect(vi.mocked(probeMedia).mock.calls.map((call) => call[1])).toEqual(['x1|media_probe|episode|e3']);
+        expect(ids(playing()?.previousEpisodes)).toEqual(['e1', 'e2']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ignores the wheel', () => {
+      player.playVod(req({ ...ep(2), resumeSecs: 0, previousEpisodes: [ep(1)], episodeQueue: [ep(3)] }));
+      const wheel = vi.spyOn(KeyHandler, 'isWheelAction').mockReturnValue(true);
+      player.handleAction('channel_up');
+      expect(playing()?.itemId).toBe('e2');
+      expect(StorageService.setResume).not.toHaveBeenCalled();
+      wheel.mockRestore();
+      player.handleAction('channel_up');
+      expect(playing()?.itemId).toBe('e3');
+    });
+
+    it('leaves an episode still starting without its startup timeout closing the player', async () => {
+      const r = req({ ...ep(1), resumeSecs: 0, episodeQueue: [ep(2)] });
+      player.playVod(r);
+      document.querySelector<HTMLVideoElement>('video')!.dispatchEvent(new Event('loadstart'));
+      vi.mocked(showToast).mockClear();
+      vi.mocked(probeMedia).mockClear();
+      await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.STARTUP_TIMEOUT - 100);
+      player.handleAction('channel_up');
+      await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.EPISODE_SKIP_SETTLE_MS);
+      expect(showToast).not.toHaveBeenCalled();
+      expect(r.onBack).not.toHaveBeenCalled();
+      expect(playing()?.itemId).toBe('e2');
+      expect(vi.mocked(probeMedia).mock.calls.map((call) => call[1])).toEqual(['x1|media_probe|episode|e2']);
+    });
+
+    it('drops the episode left\'s stream info, subtitles and menu while a skip is pending', async () => {
+      vi.mocked(probeMedia).mockResolvedValue({ videoCodec: 'hvc1', audioCodec: 'ec-3', width: 3840, height: 2160, fps: 24 });
+      player.playVod(req({ ...ep(1), resumeSecs: 0, episodeQueue: [ep(2)] }));
+      await flush();
+      const info = () => container.querySelector('.osd-stream-info')?.textContent ?? '';
+      expect(info()).toContain('HEVC');
+      const tracks = (player as unknown as { tracks: { stop(): void } }).tracks;
+      const stopTracks = vi.spyOn(tracks, 'stop');
+      player.handleAction('channel_up');
+      expect(info()).not.toContain('HEVC');
+      expect(stopTracks).toHaveBeenCalled();
+      expect(player.vodRightOpensMenu()).toBe(false);
+    });
+
+    it('starts a skip pending when the app hides only once it is back', async () => {
+      player.playVod(req({ ...ep(1), resumeSecs: 0, episodeQueue: [ep(2)] }));
+      vi.mocked(probeMedia).mockClear();
+      player.handleAction('channel_up');
+      player.suspend();
+      await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.EPISODE_SKIP_SETTLE_MS);
+      expect(probeMedia).not.toHaveBeenCalled();
+      player.resume();
+      expect(playing()?.itemId).toBe('e2');
+      expect(vi.mocked(probeMedia).mock.calls.map((call) => call[1])).toEqual(['x1|media_probe|episode|e2']);
+    });
+
+    it('steps back from the credits without finishing the series', () => {
+      vi.mocked(StorageService.removeWatchlist).mockClear();
+      player.playVod(req({ ...ep(3), resumeSecs: 0, previousEpisodes: [ep(1), ep(2)], episodeQueue: [] }));
+      document.querySelector<HTMLVideoElement>('video')!.currentTime = 1790;
+      player.handleAction('channel_down');
+      expect(playing()?.itemId).toBe('e2');
+      expect(StorageService.removeWatchlist).not.toHaveBeenCalled();
+      expect(StorageService.setResume).toHaveBeenCalledTimes(1);
+      expect(StorageService.setResume).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId: 'e3', position: 1790 }), { keepStart: false });
+    });
+
+    it('stays put at the series\' ends, on a movie, and during the up-next countdown', () => {
+      player.playVod(req({ ...ep(1), resumeSecs: 0, episodeQueue: [] }));
+      player.handleAction('channel_down');
+      player.handleAction('channel_up');
+      expect(playing()?.itemId).toBe('e1');
+
+      player.playVod(req({ previousEpisodes: [ep(1)], episodeQueue: [ep(2)] }));
+      player.handleAction('channel_up');
+      expect(playing()?.itemId).toBe('10');
+
+      player.playVod(req({ ...ep(1), resumeSecs: 0, episodeQueue: [ep(2), ep(3)] }));
+      document.querySelector<HTMLVideoElement>('video')!.dispatchEvent(new Event('ended'));
+      expect(playing()?.itemId).toBe('e2');
+      expect(ids(playing()?.previousEpisodes)).toEqual(['e1']);
+      player.handleAction('channel_up');
+      expect(playing()?.itemId).toBe('e2');
+      expect(container.textContent).toContain('Starts in 10 seconds');
+    });
   });
 
   it('removes a series from Watchlist only after its final episode', () => {
