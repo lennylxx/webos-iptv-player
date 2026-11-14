@@ -30,6 +30,10 @@
   --catalog-focus-rgb: 91 140 255;
   --catalog-hero-scrim-rgb: 10 10 15;
   --catalog-sort-selected-bg: #007e9e;
+  /* The cards fanned behind a Continue Watching series tile. */
+  --catalog-stack: var(--text-muted);
+  --catalog-stack-near-opacity: 0.7;
+  --catalog-stack-far-opacity: 0.4;
   --focus-ring: var(--accent);
   --radius: 8px;
   --transition: 0.2s ease;

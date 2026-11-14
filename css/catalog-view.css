@@ -118,6 +118,7 @@
 .catalog-sort-direction-icon svg { width: 100%; height: 100%; }
 .catalog-grid-track { position: relative; width: 100%; }
 .catalog-grid-cell { position: absolute; width: 220px; height: 371px; }
+.catalog-grid-captioned .catalog-grid-cell { height: 395px; }
 
 .catalog-tile { width: 220px; flex: 0 0 auto; cursor: pointer; }
 .catalog-tile-placeholder { cursor: default; }
@@ -133,6 +134,21 @@
   margin-top: 10px; font-size: 22px; color: var(--text-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* A Continue Watching series: two cards fan out to its right. The cards sit
+   on the tile, not the poster wrap, whose overflow would clip them. */
+.catalog-tile-stack { position: relative; z-index: 0; }
+.catalog-tile-stack::before,
+.catalog-tile-stack::after {
+  content: '';
+  position: absolute; left: 0; z-index: -1;
+  border-radius: 12px;
+  background: var(--catalog-stack);
+}
+.catalog-tile-stack::before { top: 12px; width: 228px; height: 306px; opacity: var(--catalog-stack-near-opacity); }
+.catalog-tile-stack::after { top: 24px; width: 236px; height: 282px; opacity: var(--catalog-stack-far-opacity); }
+/* Room for the fanned cards beside the next tile's focus ring. */
+#view-series [data-rail-key="continue"] .catalog-rail-track { gap: 32px; }
+.catalog-tile-sub { font-size: 18px; line-height: 24px; color: var(--text-muted); }
 .catalog-tile.focused,
 .catalog-cat.focused {
   box-shadow: none;
@@ -188,6 +204,7 @@
 .detail-btn.focused { border-color: var(--text-primary); }
 .detail-btn-icon { display: inline-flex; width: 28px; height: 28px; flex: 0 0 auto; }
 .detail-btn-icon svg { width: 100%; height: 100%; }
+.detail-btn-code { font-weight: 400; }
 .watchlist-glyph.set { fill: currentColor; }
 .watchlist-glyph.unset {
   fill: none;

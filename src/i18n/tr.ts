@@ -125,9 +125,6 @@ export const TR_MESSAGES = {
   'catalog.seriesCount': {
     other: '{count} dizi',
   },
-  'catalog.episodeCount': {
-    other: '{count} bölüm',
-  },
   'catalog.noMovies': 'Bu hesapta film yok.',
   'catalog.noMoviesCategory': 'Bu kategoride film yok.',
   'catalog.noSeries': 'Bu hesapta dizi yok.',

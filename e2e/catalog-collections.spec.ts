@@ -55,7 +55,7 @@ for (const section of ['movies', 'series'] as const) {
       const grid = layer(page, section);
       await expect(grid.locator('.catalog-grid-title')).toContainText('30');
       if (section === 'series' && collection === 'continue') {
-        await expect(grid.locator('.catalog-grid-count')).toHaveText('30 episodes');
+        await expect(grid.locator('.catalog-grid-count')).toHaveText('30 series');
       }
       await expect(grid.locator('.catalog-sort')).toHaveCount(0);
       await grid.locator('[data-collection-action="manage"]').click();
@@ -292,7 +292,9 @@ test('leaves a managed collection where each spaced wheel step stops it', async 
   const scrollTop = () => view.evaluate(el => el.scrollTop);
   const max = await view.evaluate(el => el.scrollHeight - el.clientHeight);
   let expected = 0;
-  for (const step of [80, 80, 80, 80, -80, 80, -80, -80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80]) {
+  const steps = [80, 80, 80, 80, -80, 80, -80, -80];
+  for (let i = 0; i < steps.length || expected < max; i++) {
+    const step = steps[i] ?? 80;
     expected = Math.max(0, Math.min(max, expected + step));
     await page.mouse.wheel(0, step);
     await expect.poll(scrollTop).toBe(expected);

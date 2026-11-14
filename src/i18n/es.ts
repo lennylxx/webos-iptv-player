@@ -129,10 +129,6 @@ export const ES_MESSAGES = {
     one: '{count} serie',
     other: '{count} series',
   },
-  'catalog.episodeCount': {
-    one: '{count} episodio',
-    other: '{count} episodios',
-  },
   'catalog.noMovies': 'No hay películas disponibles para esta cuenta.',
   'catalog.noMoviesCategory': 'No hay películas en esta categoría.',
   'catalog.noSeries': 'No hay series disponibles para esta cuenta.',

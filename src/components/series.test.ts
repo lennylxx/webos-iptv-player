@@ -13,6 +13,7 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
       setCatalogSort: vi.fn((_kind: 'vod' | 'series', _sort: CatalogSortPreference) => true),
       getResumeList: vi.fn(() => [] as unknown[]),
       getResume: vi.fn(() => null),
+      clearResume: vi.fn(),
       getWatchlist: vi.fn(() => watchlistState.entries),
       isWatchlisted: vi.fn((_accountId: string, _kind: WatchlistKind, itemId: string) =>
         watchlistState.entries.some((entry) => entry.itemId === itemId)),
@@ -596,13 +597,15 @@ describe('Series detail', () => {
       itemId: 'e1', accountId: 'x1', kind: 'episode', resumeSecs: 0,
       url: 'http://host:8080/series/u/p/e1.mp4',
       title: expect.stringContaining('S1E1'),
-      watchlistOwner: { kind: 'series', itemId: 's1' },
+      watchlistOwner: {
+        kind: 'series', itemId: 's1', name: 'Series One', poster: 'http://host/series.jpg',
+      },
       episodeQueue: [
         expect.objectContaining({
           itemId: 'e2',
           url: 'http://host:8080/series/u/p/e2.mkv',
           title: expect.stringContaining('S2E1'),
-          watchlistOwner: { kind: 'series', itemId: 's1' },
+          watchlistOwner: expect.objectContaining({ kind: 'series', itemId: 's1' }),
         }),
       ],
     }));
@@ -654,27 +657,177 @@ describe('Series detail', () => {
     expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({ itemId: 'e1', resumeSecs: 450 }));
   });
 
-  it('restores the remaining episode queue from Continue Watching', async () => {
-    const next = {
-      url: 'http://host:8080/series/u/p/e2.mkv', title: 'Series One — S2E1 — Episode Two',
-      poster: '', accountId: 'x1', itemId: 'e2', kind: 'episode', subtitles: [],
-    };
+  const ownedResume = (itemId: string, name: string, updatedAt: number, extra = {}) => ({
+    accountId: 'x1', kind: 'episode', itemId, name, poster: 'http://host/ep.jpg', ext: 'mp4',
+    position: 450, duration: 1500, updatedAt, categoryId: '1',
+    watchlistOwner: { kind: 'series', itemId: 's1' }, ...extra,
+  });
+
+  it('shows one stacked Continue Watching tile per series, for its latest episode', async () => {
     storageMock.getResumeList.mockReturnValue([
-      {
-        accountId: 'x1', kind: 'episode', itemId: 'e1', name: 'Series One — S1E1',
-        poster: '', ext: 'mp4', position: 450, duration: 1500, updatedAt: 1,
-        episodeQueue: [next],
-        watchlistOwner: { kind: 'series', itemId: 's1' },
-      },
+      ownedResume('e2', 'Series One — S2E1 — Episode Two', 2),
+      ownedResume('e1', 'Series One — S1E1', 1),
     ]);
-    const { view, handlers } = await openWith();
-    const tile = container.querySelector('.catalog-tile[data-resume-episode="e1"]') as HTMLElement;
+    await openWith();
+    const tiles = container.querySelectorAll<HTMLElement>('[data-rail-key="continue"] .catalog-tile');
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0].classList.contains('catalog-tile-stack')).toBe(true);
+    expect(tiles[0].dataset.itemId).toBe('s1');
+    expect(tiles[0].querySelector('.catalog-tile-name')?.textContent).toBe('Series One');
+    expect(tiles[0].querySelector('.catalog-tile-sub')?.textContent).toBe('S2 E1');
+  });
+
+  it('opens the series on the resumed season, focused on Resume, which keeps the episode queue', async () => {
+    const next = {
+      url: 'http://host:8080/series/u/p/e3.mkv', title: 'Series One — S2E2',
+      poster: '', accountId: 'x1', itemId: 'e3', kind: 'episode', subtitles: [],
+    };
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    storageMock.getResumeList.mockReturnValue([ownedResume('e2', 'Series One — S2E1 — Episode Two', 2, {
+      episodeQueue: [next],
+      watchlistOwner: { kind: 'series', itemId: 's1', name: 'Series One', poster: 'http://host/series.jpg' },
+    })]);
+    storageMock.getResume.mockImplementation((_a: string, _k: string, id: string) =>
+      id === 'e2' ? ownedResume('e2', '', 2) : null);
+    const { view, handlers } = await openWith([{ id: '1', name: 'Cat A' }], []);
+    const tile = container.querySelector('[data-rail-key="continue"] .catalog-tile') as HTMLElement;
     tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     view.handleAction('select');
+    await Promise.resolve(); await Promise.resolve();
+
+    expect(container.querySelector('.detail-title')?.textContent).toBe('Series One');
+    expect(container.querySelector('.series-season-btn.active')?.getAttribute('data-season')).toBe('2');
+    const resume = container.querySelector('.catalog-layer-detail .focused');
+    expect(resume?.getAttribute('data-action')).toBe('resume');
+    expect(resume?.textContent).toContain('S2 E1');
+    view.handleAction('select');
     expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({
-      episodeQueue: [next],
-      watchlistOwner: { kind: 'series', itemId: 's1' },
+      itemId: 'e2', resumeSecs: 450, url: 'http://host:8080/series/u/p/e2.mkv',
     }));
+  });
+
+  it('removes every episode of the series from Continue Watching', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    storageMock.getResumeList.mockReturnValue([
+      ownedResume('e2', 'Series One — S2E1 — Episode Two', 2),
+      ownedResume('e1', 'Series One — S1E1', 1),
+    ]);
+    const { view } = await openWith();
+    await openDetail(view);
+    storageMock.getResumeList.mockReturnValue([]);
+    const remove = container.querySelector('[data-action="remove-resume"]') as HTMLElement;
+    remove.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+
+    expect(storageMock.clearResume.mock.calls).toEqual([['x1', 'episode', 'e2'], ['x1', 'episode', 'e1']]);
+    expect(toastMock.showToast).toHaveBeenLastCalledWith('Removed from Continue Watching');
+    expect(container.querySelector('[data-action="resume"]')).toBeNull();
+    expect(container.querySelector('[data-action="remove-resume"]')).toBeNull();
+  });
+
+  it('reads the episode code from the entry, not a title that looks like one', async () => {
+    storageMock.getResumeList.mockReturnValue([
+      ownedResume('e2', 'Series One — S2E1 — Recap — S9E9', 2, { season: 2, episode: 1 }),
+      { ...ownedResume('e7', 'Series Two — S1E3 — Recap — S9E9', 1),
+        watchlistOwner: { kind: 'series', itemId: 's2' } },
+    ]);
+    await openWith();
+    const tiles = container.querySelectorAll('[data-rail-key="continue"] .catalog-tile');
+    expect(Array.from(tiles, tile => [
+      tile.querySelector('.catalog-tile-name')?.textContent,
+      tile.querySelector('.catalog-tile-sub')?.textContent,
+    ])).toEqual([['Series One', 'S2 E1'], ['Series Two', 'S1 E3']]);
+  });
+
+  it('follows playback into the next season when it returns to the detail', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    storageMock.getResumeList.mockReturnValue([ownedResume('e1', 'Series One — S1E1', 1)]);
+    const { view } = await openWith();
+    await openDetail(view);
+    expect(container.querySelector('.series-season-btn.active')?.getAttribute('data-season')).toBe('1');
+    storageMock.getResumeList.mockReturnValue([ownedResume('e2', 'Series One — S2E1', 2)]);
+    view.refreshPlaybackState();
+    expect(container.querySelector('.series-season-btn.active')?.getAttribute('data-season')).toBe('2');
+    expect(container.querySelector('.episode-row[data-episode-id="e2"]')).not.toBeNull();
+  });
+
+  it('stays on the browsed season when playback leaves the series\' place unchanged', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    storageMock.getResumeList.mockReturnValue([ownedResume('e1', 'Series One — S1E1', 1)]);
+    const { view, handlers } = await openWith();
+    await openDetail(view);
+    const season2 = container.querySelector('.series-season-btn[data-season="2"]') as HTMLElement;
+    season2.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    const row = container.querySelector('.episode-row[data-episode-id="e2"]') as HTMLElement;
+    row.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({ itemId: 'e2' }));
+    view.refreshPlaybackState();
+    expect(container.querySelector('.series-season-btn.active')?.getAttribute('data-season')).toBe('2');
+    expect(container.querySelector('.catalog-layer-detail .focused')?.getAttribute('data-episode-id')).toBe('e2');
+  });
+
+  it('keeps the episode code when Resume plays before the series info arrives', async () => {
+    catalogMock.loadSeriesInfo.mockReturnValue(new Promise(() => undefined));
+    storageMock.getResumeList.mockReturnValue([
+      ownedResume('e2', 'Series One — S2E1', 2, { season: 2, episode: 1 }),
+      ownedResume('e7', 'Series One — S1E3', 1),
+    ]);
+    const { view, handlers } = await openWith();
+    const tile = container.querySelector('[data-rail-key="continue"] .catalog-tile') as HTMLElement;
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve();
+    expect(container.querySelector('.catalog-layer-detail .focused')?.getAttribute('data-action')).toBe('resume');
+    view.handleAction('select');
+    expect(handlers.onPlayVod).toHaveBeenLastCalledWith(expect.objectContaining({
+      itemId: 'e2', searchMeta: { season: 2, episode: 1 },
+    }));
+  });
+
+  it('offers Play, not Resume, for a queued episode not yet started', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    const queued = { ...ownedResume('e1', 'Series One — S1E1', 1), position: 0, duration: 0 };
+    storageMock.getResumeList.mockReturnValue([queued]);
+    storageMock.getResume.mockImplementation((_a: string, _k: string, id: string) => id === 'e1' ? queued : null);
+    const { view } = await openWith();
+    await openDetail(view);
+    expect(container.querySelector('[data-action="resume"]')?.textContent).toContain('Play');
+    expect(container.querySelector('[data-action="resume"]')?.textContent).not.toContain('Resume');
+    expect(container.querySelector('.episode-row[data-episode-id="e1"] .episode-resume')).toBeNull();
+  });
+
+  it('shows a loaded series\' poster for an entry saved without one', async () => {
+    storageMock.getResumeList.mockReturnValue([ownedResume('e1', 'Series One — S1E1', 1)]);
+    await openWith(undefined, [{ ...series('s1', 'Series One'), poster: 'http://host/series.jpg' }]);
+    const tile = container.querySelector('[data-rail-key="continue"] .catalog-tile')!;
+    expect(tile.querySelector('img')?.getAttribute('src')).toBe('http://host/series.jpg');
+  });
+
+  it('spaces the Continue grid for the episode-code line', async () => {
+    storageMock.getResumeList.mockReturnValue(Array.from({ length: 12 }, (_, i) =>
+      ({ ...ownedResume(`e${i}`, `Series ${i} — S1E1`, 12 - i), watchlistOwner: { kind: 'series', itemId: `s${i}` } })));
+    await openWith();
+    container.querySelector<HTMLElement>('[data-collection-manage="continue"]')!.click();
+    const grid = container.querySelector('.catalog-layer-grid .catalog-grid')!;
+    expect(grid.classList.contains('catalog-grid-captioned')).toBe(true);
+    const tops = Array.from(grid.querySelectorAll<HTMLElement>('.catalog-grid-cell'), cell => cell.style.top);
+    expect(tops).toContain('419px');
+    expect(tops).not.toContain('395px');
+  });
+
+  it('removes a grouped series tile from the managed collection as a whole', async () => {
+    storageMock.getResumeList.mockReturnValue([
+      ownedResume('e2', 'Series One — S2E1 — Episode Two', 2),
+      ownedResume('e1', 'Series One — S1E1', 1),
+    ]);
+    const { view } = await openWith();
+    container.querySelector<HTMLElement>('[data-collection-manage="continue"]')!.click();
+    const mark = container.querySelector('.catalog-layer-grid .catalog-remove-mark') as HTMLElement;
+    mark.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(storageMock.clearResume.mock.calls).toEqual([['x1', 'episode', 'e2'], ['x1', 'episode', 'e1']]);
   });
 
   it('shows an empty state when the series has no seasons', async () => {

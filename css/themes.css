@@ -380,6 +380,15 @@
   --scrollbar-thumb: #b0b3a9;
 }
 
+/* Muted text is too faint on light surfaces for the stacked series cards. */
+[data-theme="daylight"],
+[data-theme="pastel-latte"],
+[data-theme="paper-light"] {
+  --catalog-stack: var(--text-secondary);
+  --catalog-stack-near-opacity: 0.45;
+  --catalog-stack-far-opacity: 0.22;
+}
+
 /* Non-default themes map catalog chrome onto their own palette. Midnight keeps
    the original catalog colors declared in main.css. */
 [data-theme="ember"],

@@ -806,6 +806,13 @@ describe('StorageService resume store', () => {
     expect(StorageService.getResume('x1', 'vod', '10')).toBeNull();
   });
 
+  it('keeps a series\' place at 0s below RESUME_MIN_SECS when asked, but still clears a finished one', () => {
+    StorageService.setResume(resume({ position: 5 }), { keepStart: true });
+    expect(StorageService.getResume('x1', 'vod', '10')?.position).toBe(0);
+    StorageService.setResume(resume({ position: 5990, duration: 6000 }), { keepStart: true });
+    expect(StorageService.getResume('x1', 'vod', '10')).toBeNull();
+  });
+
   it('lists an account\'s entries newest first and clears on demand', () => {
     StorageService.setResume(resume({ itemId: '10', updatedAt: 1000 }));
     StorageService.setResume(resume({ itemId: '11', updatedAt: 2000 }));

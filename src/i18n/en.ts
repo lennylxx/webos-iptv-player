@@ -131,10 +131,6 @@ export const EN_MESSAGES = {
   'catalog.seriesCount': {
     other: '{count} series',
   },
-  'catalog.episodeCount': {
-    one: '{count} episode',
-    other: '{count} episodes',
-  },
   'catalog.noMovies': 'No movies are available for this account.',
   'catalog.noMoviesCategory': 'No movies in this category.',
   'catalog.noSeries': 'No series are available for this account.',

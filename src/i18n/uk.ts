@@ -137,12 +137,6 @@ export const UK_MESSAGES = {
     many: '{count} серіалів',
     other: '{count} серіалу',
   },
-  'catalog.episodeCount': {
-    one: '{count} епізод',
-    few: '{count} епізоди',
-    many: '{count} епізодів',
-    other: '{count} епізоду',
-  },
   'catalog.noMovies': 'Для цього облікового запису немає доступних фільмів.',
   'catalog.noMoviesCategory': 'У цій категорії немає фільмів.',
   'catalog.noSeries': 'Для цього облікового запису немає доступних серіалів.',

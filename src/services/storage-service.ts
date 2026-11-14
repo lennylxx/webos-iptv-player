@@ -1240,11 +1240,17 @@ export const StorageService = {
     const entry = all[`${accountId}|${kind}|${itemId}`] ?? null;
     return entry ? cloneValue(entry) : null;
   },
-  setResume(entry: ResumeEntry): void {
+  // `keepStart` keeps a point below RESUME_MIN_SECS at 0 instead of dropping
+  // it: an episode that auto-advance started is where its series stands.
+  setResume(entry: ResumeEntry, opts: { keepStart?: boolean } = {}): void {
     const key = `${entry.accountId}|${entry.kind}|${entry.itemId}`;
     const finished = entry.duration > 0 && entry.position >= entry.duration - CONFIG.XTREAM.RESUME_FINISH_PAD;
+    if (!finished && opts.keepStart && entry.position < CONFIG.XTREAM.RESUME_MIN_SECS) {
+      entry = { ...entry, position: 0 };
+    }
+    const tooEarly = !opts.keepStart && entry.position < CONFIG.XTREAM.RESUME_MIN_SECS;
     if (userData) {
-      if (finished || entry.position < CONFIG.XTREAM.RESUME_MIN_SECS) {
+      if (finished || tooEarly) {
         delete userData.resume[key];
         persistUserChanges('playback-progress', [], [resumeKey(entry)]);
       } else {
@@ -1257,7 +1263,7 @@ export const StorageService = {
       return;
     }
     const all = fallbackResume();
-    if (finished || entry.position < CONFIG.XTREAM.RESUME_MIN_SECS) {
+    if (finished || tooEarly) {
       delete all[key];
     } else {
       all[key] = cloneValue(entry);

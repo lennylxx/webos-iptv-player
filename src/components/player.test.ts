@@ -25,7 +25,7 @@ vi.mock('../services/storage-service', () => ({
     getLastChannel: vi.fn(() => null), setLastChannel: vi.fn(),
     getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
     getAudioPref: vi.fn(), setAudioPref: vi.fn(),
-    setResume: vi.fn(), clearResume: vi.fn(),
+    setResume: vi.fn(), clearResume: vi.fn(), getResumeList: vi.fn(() => []),
     removeWatchlist: vi.fn(),
     getPickedOnlineSub: vi.fn(), setPickedOnlineSub: vi.fn(),
     setCatchupProgress: vi.fn(), getCatchupProgress: vi.fn(), clearCatchupProgress: vi.fn(),
@@ -2205,7 +2205,8 @@ describe('Player VOD mode', () => {
     video.dispatchEvent(new Event('loadedmetadata'));
     video.currentTime = 1200;
     player.handleAction('back');
-    expect(StorageService.setResume).toHaveBeenCalledWith(expect.objectContaining({ itemId: '10', position: 1200, duration: 3600, ext: 'mp4' }));
+    expect(StorageService.setResume).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: '10', position: 1200, duration: 3600, ext: 'mp4' }), { keepStart: false });
     expect(r.onBack).toHaveBeenCalled();
     expect(player.isVod()).toBe(false); // stop() cleared VOD state
   });
@@ -2229,7 +2230,7 @@ describe('Player VOD mode', () => {
       itemId: 'e1',
       episodeQueue: [next],
       watchlistOwner: { kind: 'series', itemId: 's1' },
-    }));
+    }), { keepStart: false });
   });
 
   it('clears resume and Watchlist state when a movie ends', () => {
@@ -2398,6 +2399,130 @@ describe('Player VOD mode', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(probeMedia).toHaveBeenCalledWith(next.url, 'x1|media_probe|episode|e2');
     expect(player.isVod()).toBe(true);
+  });
+
+  it('moves a series\' place to its next episode when one ends', () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'duration', { value: 1800, configurable: true });
+    container.appendChild(video);
+    player.init(video);
+    const owner = { kind: 'series' as const, itemId: 's1' };
+    const next = {
+      url: 'http://host:8080/series/u/p/e3.mkv', title: 'Series One — S1E3',
+      poster: '', accountId: 'x1', itemId: 'e3', kind: 'episode' as const, subtitles: [],
+      searchMeta: { season: 1, episode: 3 }, watchlistOwner: owner,
+    };
+    const later = { ...next, itemId: 'e4', title: 'Series One — S1E4' };
+    vi.mocked(StorageService.getResumeList).mockReturnValueOnce([
+      { accountId: 'x1', kind: 'episode', itemId: 'e1', name: '', poster: '', ext: 'mp4',
+        position: 600, duration: 1800, updatedAt: 1, watchlistOwner: owner },
+      { accountId: 'x1', kind: 'episode', itemId: 'e9', name: '', poster: '', ext: 'mp4',
+        position: 600, duration: 1800, updatedAt: 1, watchlistOwner: { kind: 'series', itemId: 's2' } },
+    ]);
+    vi.mocked(StorageService.clearResume).mockClear();
+    vi.mocked(StorageService.setResume).mockClear();
+    player.playVod(req({ itemId: 'e2', kind: 'episode', episodeQueue: [next, later], watchlistOwner: owner }));
+    video.dispatchEvent(new Event('ended'));
+
+    expect(vi.mocked(StorageService.clearResume).mock.calls).toEqual([
+      ['x1', 'episode', 'e1'], ['x1', 'episode', 'e2'],
+    ]);
+    expect(StorageService.setResume).toHaveBeenCalledWith(expect.objectContaining({
+      itemId: 'e3', position: 0, ext: 'mkv', season: 1, episode: 3,
+      episodeQueue: [later], watchlistOwner: owner,
+    }), { keepStart: true });
+    // Leaving during the countdown keeps that place rather than clearing it.
+    vi.mocked(StorageService.setResume).mockClear();
+    player.handleAction('back');
+    expect(StorageService.setResume).not.toHaveBeenCalled();
+  });
+
+  it('keeps later episodes\' progress when an earlier one ends', () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'duration', { value: 1800, configurable: true });
+    container.appendChild(video);
+    player.init(video);
+    const owner = { kind: 'series' as const, itemId: 's1' };
+    const point = (itemId: string, episode: number, position: number) => ({
+      accountId: 'x1', kind: 'episode' as const, itemId, name: '', poster: '', ext: 'mp4',
+      position, duration: 1800, updatedAt: 1, watchlistOwner: owner, season: 1, episode,
+    });
+    const next = {
+      url: 'http://host:8080/series/u/p/e5.mp4', title: 'Series One — S1E5',
+      poster: '', accountId: 'x1', itemId: 'e5', kind: 'episode' as const, subtitles: [],
+      searchMeta: { season: 1, episode: 5 }, watchlistOwner: owner,
+    };
+    vi.mocked(StorageService.getResumeList).mockReturnValueOnce([
+      point('e3', 3, 300), point('e5', 5, 1200), point('e6', 6, 600),
+    ]);
+    vi.mocked(StorageService.clearResume).mockClear();
+    vi.mocked(StorageService.setResume).mockClear();
+    player.playVod(req({
+      itemId: 'e4', kind: 'episode', episodeQueue: [next], watchlistOwner: owner,
+      searchMeta: { season: 1, episode: 4 },
+    }));
+    video.dispatchEvent(new Event('ended'));
+
+    expect(vi.mocked(StorageService.clearResume).mock.calls).toEqual([
+      ['x1', 'episode', 'e3'], ['x1', 'episode', 'e4'],
+    ]);
+    expect(StorageService.setResume).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: 'e5', position: 1200, duration: 1800 }), { keepStart: true });
+  });
+
+  it('moves a series\' place on when Back leaves an episode in its credits', () => {
+    const video = fakeVideo(1800);
+    player.init(video);
+    const owner = { kind: 'series' as const, itemId: 's1' };
+    const next = {
+      url: 'http://host:8080/series/u/p/e2.mp4', title: 'Series One — S1E2',
+      poster: '', accountId: 'x1', itemId: 'e2', kind: 'episode' as const, subtitles: [],
+      watchlistOwner: owner,
+    };
+    vi.mocked(StorageService.clearResume).mockClear();
+    vi.mocked(StorageService.setResume).mockClear();
+    player.playVod(req({ itemId: 'e1', kind: 'episode', episodeQueue: [next], watchlistOwner: owner }));
+    video.dispatchEvent(new Event('loadedmetadata'));
+    video.currentTime = 1780;
+    player.handleAction('back');
+    expect(StorageService.clearResume).toHaveBeenCalledWith('x1', 'episode', 'e1');
+    expect(StorageService.setResume).toHaveBeenCalledTimes(1);
+    expect(StorageService.setResume).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: 'e2', position: 0 }), { keepStart: true });
+  });
+
+  it('finishes a series when Back leaves its final episode in the credits', () => {
+    const video = fakeVideo(1800);
+    player.init(video);
+    const owner = { kind: 'series' as const, itemId: 's1' };
+    vi.mocked(StorageService.getResumeList).mockReturnValueOnce([
+      { accountId: 'x1', kind: 'episode', itemId: 'e9', name: '', poster: '', ext: 'mp4',
+        position: 600, duration: 1800, updatedAt: 1, watchlistOwner: owner },
+    ]);
+    vi.mocked(StorageService.clearResume).mockClear();
+    vi.mocked(StorageService.removeWatchlist).mockClear();
+    player.playVod(req({ itemId: 'e9', kind: 'episode', episodeQueue: [], watchlistOwner: owner }));
+    video.dispatchEvent(new Event('loadedmetadata'));
+    video.currentTime = 1790;
+    player.handleAction('back');
+    expect(vi.mocked(StorageService.clearResume).mock.calls).toEqual([['x1', 'episode', 'e9']]);
+    expect(StorageService.removeWatchlist).toHaveBeenCalledWith('x1', 'series', 's1');
+  });
+
+  it('keeps a resumed episode\'s place when it is left near its start', () => {
+    const video = fakeVideo(1800);
+    player.init(video);
+    player.playVod(req({ itemId: 'e1', kind: 'episode', holdsSeriesPlace: true }));
+    video.currentTime = 5;
+    player.handleAction('back');
+    expect(StorageService.setResume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ itemId: 'e1', position: 5 }), { keepStart: true });
   });
 
   it('removes a series from Watchlist only after its final episode', () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createKeepAlive, type ActivityManagerLike } from './keep-alive';
 import { registerLanService } from './lan/service';
 
@@ -32,7 +32,11 @@ function fakeManager(): ActivityManagerLike & { live: Set<number> } {
 }
 
 const log = { info: () => undefined, warn: () => undefined, error: () => undefined };
-const tick = () => new Promise(resolve => setTimeout(resolve, 5));
+// Fake timers: a real 5ms wait lost the race to the 1ms create on a loaded CI runner.
+const tick = () => vi.advanceTimersByTimeAsync(5);
+
+beforeEach(() => { vi.useFakeTimers(); });
+afterEach(() => { vi.useRealTimers(); });
 
 describe('createKeepAlive', () => {
   it('completes each activity it created across hold/release cycles', async () => {

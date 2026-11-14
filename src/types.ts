@@ -629,6 +629,9 @@ export interface ResumeEntry {
   updatedAt: number;  // epoch ms, for recency ordering
   episodeQueue?: VodQueueItem[];
   watchlistOwner?: WatchlistOwner;
+  /** An episode's own season and number; absent on legacy entries. */
+  season?: number;
+  episode?: number;
   /** Catalog category at save time, so parental rules apply from the Continue rail. */
   categoryId?: string;
 }
@@ -682,6 +685,9 @@ export interface VodQueueItem {
 export interface WatchlistOwner {
   kind: 'series';
   itemId: string;
+  /** The series' own name and poster, so Continue Watching shows the series; absent on legacy entries. */
+  name?: string;
+  poster?: string;
 }
 
 // A VOD playback request handed to the player's VOD mode. The player derives no
@@ -691,5 +697,7 @@ export interface VodPlayback extends VodQueueItem {
   episodeQueue?: VodQueueItem[];
   /** Transient movie queue created only when playback starts from Watchlist. */
   watchlistQueue?: VodQueueItem[];
+  /** The episode is where its series stands (auto-advanced or resumed), so it keeps a point from 0s. */
+  holdsSeriesPlace?: boolean;
   onBack: () => void;
 }

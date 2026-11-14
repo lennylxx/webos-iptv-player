@@ -27,7 +27,7 @@ import {
   ParentalControlService,
 } from '../services/parental-control';
 import { CONFIG } from '../config';
-import { getLocale, t, tp } from '../i18n';
+import { getLocale, t } from '../i18n';
 import { VirtualGrid } from '../utils/virtual-grid';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
@@ -58,6 +58,8 @@ function sortDirections(by: CatalogSort): CatalogSortDirection[] {
 const CATALOG_GRID_COLUMN_STRIDE = 244;
 const CATALOG_GRID_POSTER_WIDTH = 220;
 const CATALOG_GRID_ROW_STRIDE = 395;
+// A tile with a second caption line (a series' episode code) is one line taller.
+const CATALOG_GRID_CAPTION_LINE = 24;
 const CATALOG_GRID_OVERSCAN_ROWS = 2;
 const CATALOG_GRID_VIEWPORT_WIDTH = 1760;
 const CATALOG_GRID_VIEWPORT_HEIGHT = 900;
@@ -68,6 +70,8 @@ const RAIL_PLACEHOLDER_TILES = 8;
 
 // Matches the rail track's padding and its end spacer in catalog-view.css.
 const RAIL_EDGE_GUTTER = 12;
+// How far a stacked series tile's back cards reach past it (css/catalog-view.css).
+const STACK_OVERHANG = 16;
 
 export interface CatalogHandlers {
   onRevealTabBar: () => void;
@@ -169,13 +173,21 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private gridFocusIndex = 0;
   private gridReturnKey: string | null = null;
   // The browse tile that opened a grid or detail, refocused on Back.
-  private readonly gridVirtualizer = new VirtualGrid({
+  private readonly gridVirtualizers = [0, CATALOG_GRID_CAPTION_LINE].map(extra => new VirtualGrid({
     columnStride: CATALOG_GRID_COLUMN_STRIDE,
-    rowStride: CATALOG_GRID_ROW_STRIDE,
+    rowStride: CATALOG_GRID_ROW_STRIDE + extra,
     overscanRows: CATALOG_GRID_OVERSCAN_ROWS,
     fallbackViewportWidth: CATALOG_GRID_VIEWPORT_WIDTH,
     fallbackViewportHeight: CATALOG_GRID_VIEWPORT_HEIGHT,
-  });
+  }));
+  private get gridVirtualizer(): VirtualGrid {
+    return this.gridVirtualizers[this.hasCaptionLine() ? 1 : 0];
+  }
+  private hasCaptionLine(): boolean {
+    return this.collection === 'continue' && this.continueCaptionLine;
+  }
+  // Continue tiles carry a second caption line.
+  protected readonly continueCaptionLine: boolean = false;
   private gridScrollFrame: number | null = null;
   private readonly categoryVirtualizer = new VirtualList({
     itemSize: CATEGORY_RAIL_STRIDE,
@@ -677,8 +689,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   }
 
   refreshPlaybackState(): void {
-    if (this.mode === 'detail') this.renderDetail();
-    else if (this.mode === 'grid') this.renderGrid();
+    if (this.mode === 'detail') {
+      this.refreshResume();
+      this.renderDetail();
+    } else if (this.mode === 'grid') this.renderGrid();
     else {
       this.leaveBrowse();
       this.renderBrowseHeld();
@@ -1048,11 +1062,16 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const account = this.account;
     if (!account) return;
     if (kind === 'continue') {
-      StorageService.clearResume(account.id, this.resumeKind, id);
+      this.clearContinueEntry(account.id, id);
       this.resume = this.visibleResume(account.id);
     } else {
       StorageService.removeWatchlist(account.id, this.parentalKind, id);
     }
+  }
+
+  // A Continue entry's id is its resume item, unless a subclass groups several under one tile.
+  protected clearContinueEntry(accountId: string, id: string): void {
+    StorageService.clearResume(accountId, this.resumeKind, id);
   }
 
   private setManaging(managing: boolean): void {
@@ -1100,11 +1119,6 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     return t(kind === 'continue' ? 'catalog.continueWatching' : 'common.watchlist');
   }
 
-  private collectionCount(kind: CollectionKind, count: number): string {
-    return kind === 'continue' && this.resumeKind === 'episode'
-      ? tp('catalog.episodeCount', count) : this.itemCount(count);
-  }
-
   private collectionRail(kind: CollectionKind): Safe | '' {
     const entries = this.collectionEntries(kind);
     if (!entries.length) return '';
@@ -1126,7 +1140,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
               <div class="catalog-poster-wrap catalog-see-all-card">
                 ${raw(SEE_ALL_ICON)}
                 <div class="catalog-see-all-label">${t('catalog.seeAll')}</div>
-                <div class="catalog-see-all-count">${this.collectionCount(kind, entries.length)}</div>
+                <div class="catalog-see-all-count">${this.itemCount(entries.length)}</div>
               </div>
             </div>
           ` : ''}
@@ -1185,7 +1199,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     if (!track || !track.classList.contains('catalog-rail-track')) return false;
     const start = el.getBoundingClientRect().left - track.getBoundingClientRect().left
       - track.clientLeft + track.scrollLeft;
-    const end = start + el.offsetWidth;
+    const end = start + el.offsetWidth
+      + (el.classList.contains('catalog-tile-stack') ? STACK_OVERHANG : 0);
     const current = track.scrollLeft;
     // A tile leaving on the left lines up with the rail's keyline, not the
     // screen edge the track bleeds to.
@@ -1278,6 +1293,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     else this.renderBrowse(false);
     this.place(this.layer().querySelector<HTMLElement>(direction
       ? `[data-sort-direction="${direction}"]` : '.catalog-sort .dropdown-trigger'), this.placementVia());
+  }
+
+  protected refreshResume(): void {
+    if (this.account) this.resume = this.visibleResume(this.account.id);
   }
 
   private visibleResume(accountId: string): ResumeEntry[] {
@@ -1863,9 +1882,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     }
     const managing = !!kind && this.managing;
     morph(gridLayer, html`
-      <div class="catalog-view catalog-grid${managing ? ' catalog-managing' : ''}" data-nav-container>
+      <div class="catalog-view catalog-grid${managing ? ' catalog-managing' : ''}${
+        this.hasCaptionLine() ? ' catalog-grid-captioned' : ''}" data-nav-container>
         <h1 class="catalog-grid-title">${kind ? html`
-          ${this.collectionTitle(kind)} <span class="catalog-grid-count">${this.collectionCount(kind, count)}</span>
+          ${this.collectionTitle(kind)} <span class="catalog-grid-count">${this.itemCount(count)}</span>
         ` : cat ? cat.name : this.kicker}</h1>
         ${kind ? this.collectionActions(actionWidth) : this.sortControls()}
         ${count === 0
