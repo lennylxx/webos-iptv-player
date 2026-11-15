@@ -53,7 +53,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.clearAllMocks();
   getCache.mockResolvedValue(null);
-  setCache.mockResolvedValue(undefined);
+  setCache.mockResolvedValue(1);
   fetchMock = vi.fn();
   global.fetch = fetchMock as unknown as typeof fetch;
 });

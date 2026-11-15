@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { PlaylistEntry, WatchlistEntry, WatchlistKind } from '../types';
+import type {
+  PlaylistEntry, ResumeEntry, ResumeKind, VodQueueItem, WatchlistEntry, WatchlistKind,
+} from '../types';
 import type { CatalogSortPreference } from '../utils/catalog-sort';
 
 const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() => {
@@ -12,7 +14,7 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
       setCatalogSort: vi.fn((_kind: 'vod' | 'series', _sort: CatalogSortPreference) => true),
       getResumeList: vi.fn(() => [] as unknown[]),
-      getResume: vi.fn(() => null),
+      getResume: vi.fn((_accountId: string, _kind: ResumeKind, _itemId: string): ResumeEntry | null => null),
       clearResume: vi.fn(),
       getWatchlist: vi.fn(() => watchlistState.entries),
       isWatchlisted: vi.fn((_accountId: string, _kind: WatchlistKind, itemId: string) =>
@@ -649,7 +651,7 @@ describe('Series detail', () => {
   it('marks an episode with a resume point and passes its saved position', async () => {
     catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
     storageMock.getResume.mockImplementation((_a: string, _k: string, id: string) =>
-      id === 'e1' ? { accountId: 'x1', kind: 'episode', itemId: 'e1', name: '', poster: '', position: 450, duration: 1500, updatedAt: 1 } : null);
+      id === 'e1' ? { accountId: 'x1', kind: 'episode', itemId: 'e1', name: '', poster: '', ext: 'mp4', position: 450, duration: 1500, updatedAt: 1 } : null);
     const { view, handlers } = await openWith();
     await openDetail(view);
 
@@ -660,7 +662,9 @@ describe('Series detail', () => {
     expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({ itemId: 'e1', resumeSecs: 450 }));
   });
 
-  const ownedResume = (itemId: string, name: string, updatedAt: number, extra = {}) => ({
+  const ownedResume = (
+    itemId: string, name: string, updatedAt: number, extra: Partial<ResumeEntry> = {},
+  ): ResumeEntry => ({
     accountId: 'x1', kind: 'episode', itemId, name, poster: 'http://host/ep.jpg', ext: 'mp4',
     position: 450, duration: 1500, updatedAt, categoryId: '1',
     watchlistOwner: { kind: 'series', itemId: 's1' }, ...extra,
@@ -681,7 +685,7 @@ describe('Series detail', () => {
   });
 
   it('opens the series on the resumed season, focused on Resume, which keeps the episode queue', async () => {
-    const next = {
+    const next: VodQueueItem = {
       url: 'http://host:8080/series/u/p/e3.mkv', title: 'Series One — S2E2',
       poster: '', accountId: 'x1', itemId: 'e3', kind: 'episode', subtitles: [],
     };

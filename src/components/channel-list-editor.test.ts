@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import type { Channel } from '../types';
 import type { RecentlyWatchedItem } from '../services/recently-watched';
 
@@ -33,7 +33,7 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
       getByGroup: (_group: string, _playlist?: string): Channel[] => channels,
       getGroupCount: (_group: string, _playlist?: string): number => channels.length,
       indexOf: (ch: Channel) => channels.indexOf(ch),
-      indexOfKey: (_key: string) => -1,
+      indexOfKey: (_key: string): number => -1,
       getByIndex: (i: number) => channels[i] ?? null,
       getUnconcealedChannels: () => data.unconcealed ?? channels,
       applyCustomization: vi.fn(),
@@ -46,7 +46,7 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
       findChannelId: vi.fn(() => null as string | null),
       getSourceOffsetMinutes: vi.fn(() => 0),
       getNowPlaying: () => null,
-      getLocalMappingCandidates: vi.fn(() => [] as Array<{
+      getLocalMappingCandidates: vi.fn((_channel: Channel, _query: string) => [] as Array<{
         id: string;
         channelId: string;
         name: string;
@@ -110,13 +110,13 @@ vi.mock('../workers/app-worker-client', async () => {
   };
 });
 
-import { ChannelList } from './channel-list';
+import { ChannelList, type ChannelListOptions } from './channel-list';
 import { channelKey } from '../utils/channel';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
 import { Focus } from '../navigation/focus-scope';
 import { CONFIG } from '../config';
 
-playlistMock.indexOfKey = (key: string) => data.channels
+playlistMock.indexOfKey = (key: string): number => data.channels
   .findIndex(ch => channelKey(ch) === key);
 playlistMock.getGroupKeyForDisplay = (display: string): string => {
   for (const key of ChannelCustomizationService.customGroups) {
@@ -170,9 +170,9 @@ playlistMock.getGroupsForPlaylist = (playlist?: string) => {
 };
 
 let container: HTMLElement;
-let onSelect: ReturnType<typeof vi.fn>;
-let onEpgMappingChanged: ReturnType<typeof vi.fn>;
-let onEpgOffsetChanged: ReturnType<typeof vi.fn>;
+let onSelect: Mock<ChannelListOptions['onChannelSelect']>;
+let onEpgMappingChanged: Mock<NonNullable<ChannelListOptions['onEpgMappingChanged']>>;
+let onEpgOffsetChanged: Mock<NonNullable<ChannelListOptions['onEpgOffsetChanged']>>;
 let list: ChannelList;
 
 beforeEach(() => {
@@ -213,9 +213,9 @@ beforeEach(() => {
     })));
   container = document.createElement('div');
   document.body.appendChild(container);
-  onSelect = vi.fn();
-  onEpgMappingChanged = vi.fn();
-  onEpgOffsetChanged = vi.fn();
+  onSelect = vi.fn<ChannelListOptions['onChannelSelect']>();
+  onEpgMappingChanged = vi.fn<NonNullable<ChannelListOptions['onEpgMappingChanged']>>();
+  onEpgOffsetChanged = vi.fn<NonNullable<ChannelListOptions['onEpgOffsetChanged']>>();
   list = new ChannelList(container, {
     onChannelSelect: onSelect,
     onChannelsChanged: vi.fn(),

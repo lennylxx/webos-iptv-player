@@ -1,7 +1,7 @@
 import {
   liveLoaded,
   enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist,
-  seedPlaylist, type Page, SAMPLE_M3U,
+  seedPlaylist, type Page,
 } from './helpers';
 import { POLYFILLED_APIS } from '../scripts/polyfilled-apis.mjs';
 import { seedXtream } from './fixtures/xtream';

@@ -49,7 +49,7 @@ async function reason(promise: Promise<unknown>): Promise<string> {
 }
 
 const TIMEOUT = 1200;
-const REF = { store: PLAYLIST_STORE, key: 'k', timestamp: 1 };
+const REF = { store: PLAYLIST_STORE, key: 'k' };
 
 interface StalledOpen {
   factory: IDBFactory;
@@ -124,9 +124,9 @@ describe('IdbSearchCacheReader', () => {
     const transaction = vi.spyOn(FakeIDBDatabase.prototype, 'transaction');
     const reader = new IdbSearchCacheReader(factory);
 
-    const catalog = await reader.read({ store: CATALOG_STORE, key: 'a|vod_all', timestamp: 5 }, TIMEOUT);
-    const epg = await reader.read({ store: EPG_STORE, key: 'http://host/a', timestamp: 6 }, TIMEOUT);
-    const missing = await reader.read({ store: PLAYLIST_STORE, key: 'missing', timestamp: 1 }, TIMEOUT);
+    const catalog = await reader.read({ store: CATALOG_STORE, key: 'a|vod_all' }, TIMEOUT);
+    const epg = await reader.read({ store: EPG_STORE, key: 'http://host/a' }, TIMEOUT);
+    const missing = await reader.read({ store: PLAYLIST_STORE, key: 'missing' }, TIMEOUT);
 
     expect(catalog?.data).toEqual([{ name: 'Alpha' }]);
     expect(epg?.timestamp).toBe(6);
@@ -221,7 +221,7 @@ describe('IdbSearchCacheReader', () => {
     const db = await openDb(factory, DB_VERSION, [PLAYLIST_STORE]);
     const reader = new IdbSearchCacheReader(factory);
 
-    expect(await reason(reader.read({ store: EPG_STORE, key: 'k', timestamp: 1 }, TIMEOUT)))
+    expect(await reason(reader.read({ store: EPG_STORE, key: 'k' }, TIMEOUT)))
       .toBe('store_missing');
     db.close();
   });

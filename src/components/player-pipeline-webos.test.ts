@@ -29,7 +29,7 @@ const luna = vi.hoisted(() => ({
   sessions: [] as Array<{
     uri: string;
     headers: Record<string, string>;
-    onFallback: (reason: string, code: number, stage?: string) => void;
+    onFallback: (reason: string, code: number, stage?: string, unsupported?: boolean) => void;
     playReadyClientId?: string;
     onStarted?: () => void;
     onPlaybackError?: (code: number) => boolean;
@@ -557,8 +557,10 @@ describe('PlayerPipeline webOS DASH', () => {
   it('omits the type attribute when the bare source spelling is selected', async () => {
     vi.stubGlobal('fetch', vi.fn());
     const { CONFIG } = await import('../config');
-    const previous = CONFIG.PLAYER.DASH_SOURCE;
-    CONFIG.PLAYER.DASH_SOURCE = 'bare';
+    // CONFIG is deeply readonly; this test flips the source spelling it reads.
+    const player: { DASH_SOURCE: typeof CONFIG.PLAYER.DASH_SOURCE } = CONFIG.PLAYER;
+    const previous = player.DASH_SOURCE;
+    player.DASH_SOURCE = 'bare';
     try {
       const video = videoElement();
       const pipeline = await pipelineFor(video);
@@ -568,7 +570,7 @@ describe('PlayerPipeline webOS DASH', () => {
       await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
       expect(video.querySelector('source')?.getAttribute('type')).toBeNull();
     } finally {
-      CONFIG.PLAYER.DASH_SOURCE = previous;
+      player.DASH_SOURCE = previous;
     }
   });
 });

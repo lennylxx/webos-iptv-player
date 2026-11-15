@@ -71,7 +71,8 @@ Procedural workflows live in `.agents/skills/` (open Agent Skills format;
 ```bash
 npm install                    # setup
 npm run typecheck              # tsc --noEmit (strict)
-npm run typecheck:all          # app + service + benchmarks typecheck
+npm run typecheck:tests        # unit, service, E2E tests (tsconfig.test.json)
+npm run typecheck:all          # app + tests + service + benchmarks typecheck
 npm run lint                   # stylelint + eslint Chromium 53 compat gate
 npm run build                  # typecheck + esbuild bundle into dist/
 npm run preview                # build + serve dist/ at http://localhost:3000
@@ -98,9 +99,9 @@ and `tsc` strictness are real gates.
 ## CI
 
 `.github/workflows/build.yml` runs a `check` job (`typecheck:all` —
-app, `service`, **and** `benchmarks`; `npm run lint` and the compat gate;
-`vitest run`) in parallel with Playwright E2E split across four `e2e`
-shards; once both pass, `package` runs the esbuild bundle,
+app, `tests`, `service`, **and** `benchmarks`; `npm run lint` and the
+compat gate; `vitest run`) in parallel with Playwright E2E split across
+four `e2e` shards; once both pass, `package` runs the esbuild bundle,
 `service:smoke:matrix`, and packages the IPK. Pushes/PRs to `main`
 build; tagged `v*` pushes publish a GitHub release with the `.ipk`.
 
@@ -186,6 +187,7 @@ build constant; `scripts/sync-version.mjs` runs on `npm version`.
   `noImplicitReturns` are on — unused symbols fail `typecheck`/CI.
 - **Tests** are colocated as `*.test.ts`. Vitest defaults to `node`;
   DOM tests opt in with `// @vitest-environment jsdom` as the **first line**.
+  Type a bare `vi.fn()` with its signature (`vi.fn<Options['onSelect']>()`).
 - **Synthetic identifiers only — in tests _and_ `docs/`.** No real channel
   names, brands, domains, URLs, audio-track names, or locale-specific
   language codes, in fixtures, log samples, or doc examples. Use
@@ -250,7 +252,8 @@ build constant; `scripts/sync-version.mjs` runs on `npm version`.
   or per interaction. Use `createLogger` with `event=<area>.<what>` plus
   `key=value` fields (never URLs, credentials, or M3U/XMLTV text), and
   assert each event in a test.
-- **Done** means `npm run typecheck`, `npm run lint`, and the relevant tests
-  pass. Then run the `feature-review` skill for any finished feature.
+- **Done** means `npm run typecheck`, `npm run typecheck:tests`,
+  `npm run lint`, and the relevant tests pass. Then run the
+  `feature-review` skill for any finished feature.
 - **Git:** commit directly to `main`, only when asked, via the `commit`
   skill — scoped tests first, user-approved message, lines ≤ 72, no trailers.

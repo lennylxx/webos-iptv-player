@@ -1,32 +1,34 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import type { Action, PlaylistEntry } from '../types';
 import { TabBar, SEARCH_INPUT_MAX_WIDTH } from './tab-bar';
 import { Focus, Tier } from '../navigation/focus-scope';
 
-let onSwitch: ReturnType<typeof vi.fn>;
-let onEnter: ReturnType<typeof vi.fn>;
-let onSearchQuery: ReturnType<typeof vi.fn>;
-let onSearchLeave: ReturnType<typeof vi.fn>;
-let onSearchClose: ReturnType<typeof vi.fn>;
-let onSelectAccount: ReturnType<typeof vi.fn>;
-let onAccountMenuOpen: ReturnType<typeof vi.fn>;
-let onAccountMenuClose: ReturnType<typeof vi.fn>;
-let onLockNow: ReturnType<typeof vi.fn>;
+type Handlers = ConstructorParameters<typeof TabBar>[0];
+
+let onSwitch: Mock<Handlers['onSwitch']>;
+let onEnter: Mock<Handlers['onEnter']>;
+let onSearchQuery: Mock<Handlers['onSearchQuery']>;
+let onSearchLeave: Mock<Handlers['onSearchLeave']>;
+let onSearchClose: Mock<Handlers['onSearchClose']>;
+let onSelectAccount: Mock<Handlers['onSelectAccount']>;
+let onAccountMenuOpen: Mock<Handlers['onAccountMenuOpen']>;
+let onAccountMenuClose: Mock<Handlers['onAccountMenuClose']>;
+let onLockNow: Mock<Handlers['onLockNow']>;
 let bar: TabBar;
 
 beforeEach(() => {
   document.body.innerHTML = '';
   document.body.className = '';
-  onSwitch = vi.fn();
-  onEnter = vi.fn();
-  onSearchQuery = vi.fn();
-  onSearchLeave = vi.fn(() => true);
-  onSearchClose = vi.fn();
-  onSelectAccount = vi.fn();
-  onAccountMenuOpen = vi.fn();
-  onAccountMenuClose = vi.fn();
-  onLockNow = vi.fn();
+  onSwitch = vi.fn<Handlers['onSwitch']>();
+  onEnter = vi.fn<Handlers['onEnter']>();
+  onSearchQuery = vi.fn<Handlers['onSearchQuery']>();
+  onSearchLeave = vi.fn<Handlers['onSearchLeave']>(() => true);
+  onSearchClose = vi.fn<Handlers['onSearchClose']>();
+  onSelectAccount = vi.fn<Handlers['onSelectAccount']>();
+  onAccountMenuOpen = vi.fn<Handlers['onAccountMenuOpen']>();
+  onAccountMenuClose = vi.fn<Handlers['onAccountMenuClose']>();
+  onLockNow = vi.fn<Handlers['onLockNow']>();
   bar = new TabBar({
     onSwitch, onEnter, onSearchQuery, onSearchLeave, onSearchClose, onSelectAccount, onAccountMenuOpen, onAccountMenuClose,
     onLockNow,
@@ -194,7 +196,7 @@ describe('TabBar', () => {
   describe('pointer hover on content', () => {
     const hover = (el: Element) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     let row: HTMLElement;
-    let contentHover: ReturnType<typeof vi.fn>;
+    let contentHover: Mock<(e: Event) => void>;
     beforeEach(() => {
       bar.init();
       const view = document.createElement('div');
@@ -202,7 +204,7 @@ describe('TabBar', () => {
       row.setAttribute('data-focusable', '');
       view.appendChild(row);
       document.body.appendChild(view);
-      contentHover = vi.fn();
+      contentHover = vi.fn<(e: Event) => void>();
       view.addEventListener('nav:hover', contentHover);
       const content = Focus.register({ id: 'view.test', root: view });
       Focus.setBase(() => content);

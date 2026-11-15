@@ -1017,7 +1017,9 @@ describe('Movies browse + grid', () => {
 
   it('opens the full grid of every category from browse', async () => {
     const view = await eightFullCategories();
-    const fullHeight = new VirtualGrid({ columnStride: 244, rowStride: 395, overscanRows: 0 })
+    const fullHeight = new VirtualGrid({
+      columnStride: 244, rowStride: 395, overscanRows: 0, fallbackViewportWidth: 1760, fallbackViewportHeight: 900,
+    })
       .getTotalSize(50, 1760);
 
     for (let id = 1; id <= 6; id++) {

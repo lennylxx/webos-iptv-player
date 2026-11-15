@@ -1461,8 +1461,8 @@ test.describe('Settings Xtream live categories', () => {
     });
   }
 
-  function seedAccount(page: Page, liveCategories?: unknown): Promise<void> {
-    return page.addInitScript((filter) => {
+  async function seedAccount(page: Page, liveCategories?: unknown): Promise<void> {
+    await page.addInitScript((filter) => {
       if (localStorage.getItem('iptv_playlists')) return;
       localStorage.setItem('iptv_playlists', JSON.stringify([{
         id: 'x1',

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import type { CatchupProgressEntry } from '../types';
 
 const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
   const state = {
@@ -69,7 +70,7 @@ vi.mock('./toast', () => ({ showToast: toastMock }));
 
 const { storageMock } = vi.hoisted(() => ({
   storageMock: {
-    getCatchupProgressList: vi.fn(() => []),
+    getCatchupProgressList: vi.fn((): CatchupProgressEntry[] => []),
     clearCatchupProgress: vi.fn(),
   },
 }));
@@ -112,8 +113,9 @@ function prog(h1: number, m1: number, h2: number, m2: number, title: string) {
 }
 
 let container: HTMLElement;
-let onSelect: ReturnType<typeof vi.fn>;
-let onManageReminders: ReturnType<typeof vi.fn>;
+type EpgGridArgs = ConstructorParameters<typeof EpgGrid>;
+let onSelect: Mock<EpgGridArgs[1]>;
+let onManageReminders: Mock<NonNullable<EpgGridArgs[3]>>;
 let grid: EpgGrid;
 
 beforeEach(() => {
@@ -148,8 +150,8 @@ beforeEach(() => {
   document.body.innerHTML = '';
   container = document.createElement('div');
   document.body.appendChild(container);
-  onSelect = vi.fn();
-  onManageReminders = vi.fn();
+  onSelect = vi.fn<EpgGridArgs[1]>();
+  onManageReminders = vi.fn<NonNullable<EpgGridArgs[3]>>();
   grid = new EpgGrid(container, onSelect, undefined, onManageReminders);
   Focus.setBase(() => grid.focusScope);
 });
@@ -397,7 +399,7 @@ describe('EpgGrid mouse interaction', () => {
     const [idx, catchup] = onSelect.mock.calls[0];
     expect(idx).toBe(0);
     expect(catchup).toMatchObject({ title: 'Morning' });
-    expect(catchup.start).toBeLessThan(catchup.end);
+    expect(catchup?.start).toBeLessThan(catchup?.end ?? 0);
   });
 
   it('clicking a future program sets a reminder instead of tuning', () => {
@@ -1062,7 +1064,7 @@ describe('EpgGrid catch-up selection behavior', () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
     const [idx, catchup] = onSelect.mock.calls[0];
     expect(idx).toBe(0);
-    expect(catchup.resumeSecs).toBe(300);
+    expect(catchup).toMatchObject({ resumeSecs: 300 });
   });
 
   it('Start Over clears the entry and starts from zero', () => {
@@ -1079,7 +1081,8 @@ describe('EpgGrid catch-up selection behavior', () => {
     expect(storageMock.clearCatchupProgress).toHaveBeenCalled();
     expect(onSelect).toHaveBeenCalledTimes(1);
     const [, catchup] = onSelect.mock.calls[0];
-    expect(catchup.resumeSecs).toBeUndefined();
+    expect(catchup).toBeDefined();
+    expect(catchup?.resumeSecs).toBeUndefined();
   });
 
   it('Cancel leaves EPG unchanged and does not call onChannelSelect', () => {
@@ -1121,7 +1124,8 @@ describe('EpgGrid catch-up selection behavior', () => {
     grid.handleAction('select');
     expect(onSelect).toHaveBeenCalledTimes(1);
     const [, catchup] = onSelect.mock.calls[0];
-    expect(catchup.resumeSecs).toBeUndefined();
+    expect(catchup).toBeDefined();
+    expect(catchup?.resumeSecs).toBeUndefined();
     // No prompt opened
     expect(document.querySelector('.catchup-resume-prompt:not(.hidden)')).toBeNull();
   });
@@ -1133,7 +1137,8 @@ describe('EpgGrid catch-up selection behavior', () => {
     grid.handleAction('select'); // Morning, past, no progress
     expect(onSelect).toHaveBeenCalledTimes(1);
     const [, catchup] = onSelect.mock.calls[0];
-    expect(catchup.resumeSecs).toBeUndefined();
+    expect(catchup).toBeDefined();
+    expect(catchup?.resumeSecs).toBeUndefined();
   });
 
   it('programme title remains XSS-safe in the resume prompt', () => {

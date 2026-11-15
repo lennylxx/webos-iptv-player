@@ -214,7 +214,8 @@ describe('StorageService IndexedDB migration', () => {
       pin: null,
       concealMode: 'show-locked',
       unlockDuration: 'once',
-      groupRules: { g1: true },
+      groupRules: { g1: 'protect' },
+      approvedSources: [],
       itemRules: {},
     });
     vi.resetModules();

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { CONFIG } from '../config';
 import { StorageService } from '../services/storage-service';
 import type { Action, NumberEvent } from '../types';
@@ -933,7 +933,7 @@ describe('KeyHandler', () => {
     let first: HTMLElement;
     let next: HTMLElement;
     let hit: HTMLElement;
-    let onNext: ReturnType<typeof vi.fn>;
+    let onNext: Mock<(event: Event) => void>;
     let root: HTMLElement;
     let screen = 10000;
 
@@ -956,7 +956,7 @@ describe('KeyHandler', () => {
       track.getBoundingClientRect = () => new DOMRect(0, 100, 500, 200);
       const scope = Focus.register({ id: 'edge-hover', root });
       Focus.setBase(() => scope);
-      onNext = vi.fn();
+      onNext = vi.fn<(event: Event) => void>();
       next.addEventListener('nav:hover', onNext);
       for (const clientX of [200, 490]) {
         screen++;

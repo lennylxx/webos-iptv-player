@@ -153,7 +153,7 @@ describe('groupIcon (rendered HTML)', () => {
 describe('Chrome 53 fallback', () => {
   it('matches with explicit ranges when Unicode properties are unavailable', async () => {
     const NativeRegExp = RegExp;
-    const LegacyRegExp = function (pattern?: string | RegExp, flags?: string): RegExp {
+    const LegacyRegExp = function (pattern: string | RegExp, flags?: string): RegExp {
       if (typeof pattern === 'string' && pattern.includes('\\p{')) {
         throw new SyntaxError('Unsupported Unicode property escape');
       }

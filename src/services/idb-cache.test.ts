@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import type { Channel } from '../types';
+import type { Channel, EpgSource } from '../types';
 import { CONFIG } from '../config';
 import {
   cacheRecordRef,
@@ -119,7 +119,7 @@ describe('idb-cache', () => {
   });
 
   afterEach(() => {
-    delete (navigator as Navigator & { storage?: unknown }).storage;
+    Reflect.deleteProperty(navigator, 'storage');
     delete (navigator as Navigator & { webkitTemporaryStorage?: unknown }).webkitTemporaryStorage;
   });
 
@@ -319,11 +319,12 @@ describe('idb-cache', () => {
     const transaction = IDBDatabase.prototype.transaction;
     const transactionSpy = vi.spyOn(IDBDatabase.prototype, 'transaction').mockImplementation(function (
       this: IDBDatabase,
-      storeNames: string | string[],
+      storeNames: string | Iterable<string>,
       mode?: IDBTransactionMode,
+      options?: IDBTransactionOptions,
     ) {
       if (storeNames === CHANNEL_HEALTH_STORE) throw new Error('read failed');
-      return transaction.call(this, storeNames, mode);
+      return transaction.call(this, storeNames, mode, options);
     });
 
     try {
@@ -725,7 +726,7 @@ describe('idb-cache', () => {
     });
     const read = await getCachedPlaylist(null);
     expect(read?.channels).not.toBe(channels);
-    expect(cacheRecordRef(read?.channels)).toEqual({
+    expect(cacheRecordRef(read?.channels ?? [])).toEqual({
       store: 'playlist-cache',
       key: 'combined-v4',
       timestamp: 1234,
@@ -735,8 +736,8 @@ describe('idb-cache', () => {
     await setCachedCatalog('x1|vod_all', items);
     const stored = cacheRecordRef(items);
     expect(stored).toMatchObject({ store: 'catalog-cache', key: 'x1|vod_all' });
-    const catalog = await getCachedCatalog('x1|vod_all');
-    expect(cacheRecordRef(catalog?.data)).toEqual({ ...stored, timestamp: catalog?.timestamp });
+    const catalog = await getCachedCatalog<typeof items>('x1|vod_all');
+    expect(cacheRecordRef(catalog?.data ?? [])).toEqual({ ...stored, timestamp: catalog?.timestamp });
   });
 
   it('lets the search worker read the catalog records written here', async () => {
@@ -811,7 +812,7 @@ describe('idb-cache', () => {
         timestamp: ref.timestamp, data: items, state,
       });
       expect(put.mock.calls.filter(([record], index) =>
-        put.mock.contexts[index]?.name === CATALOG_STORE
+        (put.mock.contexts[index] as IDBObjectStore | undefined)?.name === CATALOG_STORE
         && (record as { key?: unknown }).key === 'x1|vod_all')).toHaveLength(0);
       expect(cacheRecordRef(items)).toEqual(ref);
     } finally {
@@ -831,7 +832,8 @@ describe('idb-cache', () => {
       expect(await setCachedCatalogState('x1|vod_all', timestamp, renewed, null)).toBe(true);
       expect(await getCachedCatalogMetadata('x1|vod_all')).toEqual({ timestamp, state: renewed });
       expect(await getCachedCatalogMetadata('x1|missing')).toBeNull();
-      expect(get.mock.calls.filter((_, index) => get.mock.contexts[index]?.name === CATALOG_STORE))
+      expect(get.mock.calls.filter((_, index) =>
+        (get.mock.contexts[index] as IDBObjectStore | undefined)?.name === CATALOG_STORE))
         .toHaveLength(0);
     } finally {
       get.mockRestore();
@@ -889,7 +891,8 @@ describe('idb-cache', () => {
     const get = vi.spyOn(IDBObjectStore.prototype, 'get');
     try {
       expect(await getCachedCatalogMetadata('x1|vod_all')).toEqual({ timestamp });
-      expect(get.mock.calls.filter((_, index) => get.mock.contexts[index]?.name === CATALOG_STORE))
+      expect(get.mock.calls.filter((_, index) =>
+        (get.mock.contexts[index] as IDBObjectStore | undefined)?.name === CATALOG_STORE))
         .toHaveLength(0);
     } finally {
       get.mockRestore();
@@ -904,11 +907,12 @@ describe('idb-cache', () => {
     const transaction = IDBDatabase.prototype.transaction;
     const transactionSpy = vi.spyOn(IDBDatabase.prototype, 'transaction').mockImplementation(function (
       this: IDBDatabase,
-      storeNames: string | string[],
+      storeNames: string | Iterable<string>,
       mode?: IDBTransactionMode,
+      options?: IDBTransactionOptions,
     ) {
       if (storeNames === CACHE_META_STORE && mode === 'readwrite') throw new Error('write failed');
-      return transaction.call(this, storeNames, mode);
+      return transaction.call(this, storeNames, mode, options);
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
@@ -994,7 +998,7 @@ describe('idb-cache', () => {
     } finally {
       clock.mockRestore();
       if (storageDescriptor) Object.defineProperty(navigator, 'storage', storageDescriptor);
-      else delete (navigator as Navigator & { storage?: StorageManager }).storage;
+      else Reflect.deleteProperty(navigator, 'storage');
     }
   });
 
@@ -1013,7 +1017,7 @@ describe('idb-cache', () => {
 
   it('defers playlist persistence until after worker idle termination', async () => {
     const frames: FrameRequestCallback[] = [];
-    let delayedWrite: (() => void) | null = null;
+    let delayedWrite = null as (() => void) | null;
     const originalRequest = globalThis.requestAnimationFrame;
     const originalCancel = globalThis.cancelAnimationFrame;
     const originalSetTimeout = globalThis.setTimeout;
@@ -1072,7 +1076,7 @@ describe('idb-cache', () => {
 
   it('binds a delayed playlist write to the configuration that produced it', async () => {
     const frames: FrameRequestCallback[] = [];
-    let delayedWrite: (() => void) | null = null;
+    let delayedWrite = null as (() => void) | null;
     const originalRequest = globalThis.requestAnimationFrame;
     const originalCancel = globalThis.cancelAnimationFrame;
     const originalSetTimeout = globalThis.setTimeout;
@@ -1147,7 +1151,7 @@ describe('idb-cache', () => {
     ['all caches', clearAllCachedData],
   ])('does not restore a scheduled playlist after clearing %s', async (_label, clear) => {
     const frames: FrameRequestCallback[] = [];
-    let delayedWrite: (() => void) | null = null;
+    let delayedWrite = null as (() => void) | null;
     const originalRequest = globalThis.requestAnimationFrame;
     const originalCancel = globalThis.cancelAnimationFrame;
     const originalSetTimeout = globalThis.setTimeout;
@@ -1229,19 +1233,20 @@ describe('idb-cache', () => {
   it('updates cache accounting without reading the previous payload', async () => {
     await setCachedCatalog('x1|vod_all', Array.from({ length: 100 }, (_, index) => index));
     const transaction = IDBDatabase.prototype.transaction;
-    const payloadReads: Array<{ stores: string | string[]; mode?: IDBTransactionMode }> = [];
+    const payloadReads: Array<{ stores: string | Iterable<string>; mode?: IDBTransactionMode }> = [];
     const transactionSpy = vi.spyOn(IDBDatabase.prototype, 'transaction').mockImplementation(
       function (
         this: IDBDatabase,
-        storeNames: string | string[],
+        storeNames: string | Iterable<string>,
         mode?: IDBTransactionMode,
+        options?: IDBTransactionOptions,
       ) {
         if (mode === 'readonly'
             && (storeNames === CATALOG_STORE
               || (Array.isArray(storeNames) && storeNames.includes(CATALOG_STORE)))) {
           payloadReads.push({ stores: storeNames, mode });
         }
-        return transaction.call(this, storeNames, mode);
+        return transaction.call(this, storeNames, mode, options);
       },
     );
 
@@ -1314,7 +1319,7 @@ describe('idb-cache', () => {
     });
 
     it('writes held playlist channels beside the page\'s EPG sources', async () => {
-      const epg = [{ url: 'http://host/e', playlistIds: ['p1'] }];
+      const epg: EpgSource[] = [{ url: 'http://host/e', playlistIds: ['p1'], kind: 'm3u' }];
       await setCachedPlaylist([channel('ch1'), channel('ch2')], epg, 1000, null);
       const pageBytes = await entryBytes('combined-v4', 'playlist-cache');
       const channels = [channel('ch1'), channel('ch2')];
@@ -1412,7 +1417,7 @@ describe('idb-cache', () => {
     });
 
     it('asks the worker for the size of channels it left unmeasured', async () => {
-      const epg = [{ url: 'http://host/e', playlistIds: ['p1'] }];
+      const epg: EpgSource[] = [{ url: 'http://host/e', playlistIds: ['p1'], kind: 'm3u' }];
       await setCachedPlaylist([channel('ch1'), channel('ch2')], epg, 1000, null);
       const pageBytes = await entryBytes('combined-v4', 'playlist-cache');
       const channels = [channel('ch1'), channel('ch2')];
@@ -1440,7 +1445,7 @@ describe('idb-cache', () => {
     });
 
     it('measures the page\'s own channels when the worker lost them', async () => {
-      const epg = [{ url: 'http://host/e', playlistIds: ['p1'] }];
+      const epg: EpgSource[] = [{ url: 'http://host/e', playlistIds: ['p1'], kind: 'm3u' }];
       const channels = [channel('ch1'), channel('ch2')];
       const held = holdInWorker(channels);
       releaseHeldValue(held.token);
@@ -1703,7 +1708,7 @@ describe('idb-cache', () => {
       sourceBytes = (await getCacheUsage()).total.bytes;
     });
 
-    async function writeIndex(key: string, extra: Record<string, unknown> = {}): Promise<void> {
+    async function writeIndex(key: string, extra: object = {}): Promise<void> {
       const db = (await openPersistenceDb())!;
       const tx = db.transaction(SEARCH_INDEX_STORE, 'readwrite');
       tx.objectStore(SEARCH_INDEX_STORE).put({ key, text: 'alpha', ...extra });

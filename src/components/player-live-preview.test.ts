@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
 import type { Channel, VodPlayback } from '../types';
 
 const { pipeline, tracks, osd, playlist, health } = vi.hoisted(() => ({
@@ -79,15 +79,16 @@ const channels: Channel[] = [1, 2].map((index) => ({
 const catchup = { start: 1_000_000, end: 1_000_120, title: 'Program 1', description: '', icon: '' };
 const vod: VodPlayback = {
   url: 'http://host/movie', title: 'Movie 1', poster: '', accountId: 'a1',
-  itemId: 'm1', kind: 'movie', subtitles: [], resumeSecs: 0, onBack: () => {},
+  itemId: 'm1', kind: 'vod', subtitles: [], resumeSecs: 0, onBack: () => {},
 };
 
 let player: Player;
 let video: HTMLVideoElement;
 let container: HTMLElement;
-let onStateChanged: ReturnType<typeof vi.fn>;
-let canResume: ReturnType<typeof vi.fn>;
-let listenerRegistrations: ReturnType<typeof vi.spyOn<typeof document, 'addEventListener'>>;
+type PlayerArgs = ConstructorParameters<typeof Player>;
+let onStateChanged: Mock<NonNullable<PlayerArgs[5]>>;
+let canResume: Mock<NonNullable<PlayerArgs[6]>>;
+let listenerRegistrations: MockInstance<Document['addEventListener']>;
 
 function currentVideo(): HTMLVideoElement {
   return player.getVideoElement()!;
@@ -142,8 +143,8 @@ beforeEach(() => {
   });
   playlist.getByGroup.mockReturnValue(playlist.channels);
   vi.mocked(StorageService.getChannelCycleMode).mockReturnValue('global');
-  onStateChanged = vi.fn();
-  canResume = vi.fn(() => true);
+  onStateChanged = vi.fn<NonNullable<PlayerArgs[5]>>();
+  canResume = vi.fn<NonNullable<PlayerArgs[6]>>(() => true);
   player = new Player(container, vi.fn(), vi.fn(), () => true, vi.fn(), onStateChanged, canResume);
   listenerRegistrations = vi.spyOn(document, 'addEventListener');
   player.init(video);

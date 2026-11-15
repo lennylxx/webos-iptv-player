@@ -88,6 +88,7 @@ describe('PlayerOsd', () => {
       onResync: vi.fn(),
       onPlayNext: vi.fn(),
       onCancelNext: vi.fn(),
+      onSkipEpisode: vi.fn(),
     };
     osd = new PlayerOsd(container, callbacks);
   });
@@ -499,7 +500,7 @@ describe('PlayerOsd episode skips', () => {
     const onSkipEpisode = vi.fn();
     const osd = new PlayerOsd(container, {
       getSnapshot: () => state, canAutoReveal: () => true, canSeek: () => true,
-      onSeekFraction: vi.fn(), onPauseToggle: vi.fn(), onGoLive: vi.fn(), onResync: vi.fn(),
+      onSeekFraction: vi.fn(), onHoverFraction: vi.fn(), onPauseToggle: vi.fn(), onGoLive: vi.fn(), onResync: vi.fn(),
       onPlayNext: vi.fn(), onCancelNext: vi.fn(), onSkipEpisode,
     });
     osd.show();
@@ -534,7 +535,7 @@ describe('PlayerOsd VOD heading', () => {
       vodTitle: 'Series One', vodDetail: 'S1 E2 · Episode Two' });
     const osd = new PlayerOsd(container, {
       getSnapshot: () => state, canAutoReveal: () => true, canSeek: () => true,
-      onSeekFraction: vi.fn(), onPauseToggle: vi.fn(), onGoLive: vi.fn(), onResync: vi.fn(),
+      onSeekFraction: vi.fn(), onHoverFraction: vi.fn(), onPauseToggle: vi.fn(), onGoLive: vi.fn(), onResync: vi.fn(),
       onPlayNext: vi.fn(), onCancelNext: vi.fn(), onSkipEpisode: vi.fn(),
     });
     osd.show();

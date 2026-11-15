@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { Reminder } from '../types';
 
 const { state, reminderMock, toastMock } = vi.hoisted(() => {
@@ -37,7 +37,7 @@ const reminder = (over: Partial<Reminder> = {}): Reminder => ({
 });
 
 let container: HTMLElement;
-let onBack: ReturnType<typeof vi.fn>;
+let onBack: Mock<() => void>;
 let manager: ReminderManager;
 
 beforeEach(() => {
@@ -49,7 +49,7 @@ beforeEach(() => {
   document.body.innerHTML = '';
   container = document.createElement('div');
   document.body.appendChild(container);
-  onBack = vi.fn();
+  onBack = vi.fn<() => void>();
   manager = new ReminderManager(container, onBack);
   // The manager's scope owns the keys, as on the Reminders view.
   Focus.setBase(() => manager.focusScope);

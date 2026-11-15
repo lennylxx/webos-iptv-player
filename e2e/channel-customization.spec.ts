@@ -25,7 +25,7 @@ const BACK = 461;
 
 function key(page: Page, keyCode: number): Promise<void> {
   return page.evaluate(
-    (k) => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: k, bubbles: true })),
+    (k) => { document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: k, bubbles: true })); },
     keyCode,
   );
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import type { Channel, AudioTrackOption, SubtitleTrackOption } from '../types';
 
 const { channels } = vi.hoisted(() => {
@@ -27,22 +27,24 @@ import type { PlaybackRateState } from '../services/playback-rate';
 // Number of colour actions before the "Audio Track" row in the main menu.
 const MENU_ACTIONS = 4;
 
+type MenuArgs = ConstructorParameters<typeof PlayerMenu>;
+
 let container: HTMLElement;
 let el: HTMLElement;
-let getCurrentChannel: ReturnType<typeof vi.fn>;
-let onAction: ReturnType<typeof vi.fn>;
-let getAudioTracks: ReturnType<typeof vi.fn>;
-let selectAudioTrack: ReturnType<typeof vi.fn>;
+let getCurrentChannel: Mock<MenuArgs[1]>;
+let onAction: Mock<MenuArgs[2]>;
+let getAudioTracks: Mock<MenuArgs[3]>;
+let selectAudioTrack: Mock<MenuArgs[4]>;
 let audioTracks: AudioTrackOption[];
-let getSubtitleTracks: ReturnType<typeof vi.fn>;
-let selectSubtitleTrack: ReturnType<typeof vi.fn>;
+let getSubtitleTracks: Mock<MenuArgs[5]>;
+let selectSubtitleTrack: Mock<MenuArgs[6]>;
 let subtitleTracks: SubtitleTrackOption[];
-let getSubtitleOffsetState: ReturnType<typeof vi.fn>;
-let openSubtitleOffset: ReturnType<typeof vi.fn>;
-let getPlaybackRateState: ReturnType<typeof vi.fn>;
-let selectPlaybackRate: ReturnType<typeof vi.fn>;
-let subtitleSearchAvailable: ReturnType<typeof vi.fn>;
-let openSubtitleSearch: ReturnType<typeof vi.fn>;
+let getSubtitleOffsetState: Mock<MenuArgs[7]>;
+let openSubtitleOffset: Mock<MenuArgs[8]>;
+let getPlaybackRateState: Mock<MenuArgs[9]>;
+let selectPlaybackRate: Mock<MenuArgs[10]>;
+let subtitleSearchAvailable: Mock<MenuArgs[11]>;
+let openSubtitleSearch: Mock<MenuArgs[12]>;
 let menu: PlayerMenu;
 
 beforeEach(() => {
@@ -54,20 +56,20 @@ beforeEach(() => {
   container.appendChild(el);
   document.body.appendChild(container);
 
-  getCurrentChannel = vi.fn(() => channels[0] ?? null);
-  onAction = vi.fn();
+  getCurrentChannel = vi.fn<MenuArgs[1]>(() => channels[0] ?? null);
+  onAction = vi.fn<MenuArgs[2]>();
   audioTracks = [];
-  getAudioTracks = vi.fn(() => audioTracks);
-  selectAudioTrack = vi.fn();
+  getAudioTracks = vi.fn<MenuArgs[3]>(() => audioTracks);
+  selectAudioTrack = vi.fn<MenuArgs[4]>();
   subtitleTracks = [];
-  getSubtitleTracks = vi.fn(() => subtitleTracks);
-  selectSubtitleTrack = vi.fn();
-  getSubtitleOffsetState = vi.fn(() => ({ available: false, label: '0.00 s' }));
-  openSubtitleOffset = vi.fn();
-  getPlaybackRateState = vi.fn((): PlaybackRateState => ({ available: false, rate: 1 }));
-  selectPlaybackRate = vi.fn().mockResolvedValue(true);
-  subtitleSearchAvailable = vi.fn(() => false);
-  openSubtitleSearch = vi.fn();
+  getSubtitleTracks = vi.fn<MenuArgs[5]>(() => subtitleTracks);
+  selectSubtitleTrack = vi.fn<MenuArgs[6]>();
+  getSubtitleOffsetState = vi.fn<MenuArgs[7]>(() => ({ available: false, label: '0.00 s' }));
+  openSubtitleOffset = vi.fn<MenuArgs[8]>();
+  getPlaybackRateState = vi.fn<MenuArgs[9]>((): PlaybackRateState => ({ available: false, rate: 1 }));
+  selectPlaybackRate = vi.fn<MenuArgs[10]>().mockResolvedValue(true);
+  subtitleSearchAvailable = vi.fn<MenuArgs[11]>(() => false);
+  openSubtitleSearch = vi.fn<MenuArgs[12]>();
   menu = new PlayerMenu(
     container, getCurrentChannel, onAction,
     getAudioTracks, selectAudioTrack,
@@ -273,14 +275,14 @@ describe('PlayerMenu', () => {
       const listeners = new Set<EventListenerOrEventListenerObject>();
       const add = el.addEventListener.bind(el);
       const remove = el.removeEventListener.bind(el);
-      el.addEventListener = (type: string, fn: EventListenerOrEventListenerObject | null,
+      el.addEventListener = (type: string, fn: EventListenerOrEventListenerObject,
         options?: boolean | AddEventListenerOptions) => {
-        if (type === 'transitionend' && fn) listeners.add(fn);
+        if (type === 'transitionend') listeners.add(fn);
         add(type, fn, typeof options === 'object' ? !!options.capture : options);
       };
-      el.removeEventListener = (type: string, fn: EventListenerOrEventListenerObject | null,
+      el.removeEventListener = (type: string, fn: EventListenerOrEventListenerObject,
         options?: boolean | EventListenerOptions) => {
-        if (type === 'transitionend' && fn) listeners.delete(fn);
+        if (type === 'transitionend') listeners.delete(fn);
         remove(type, fn, options);
       };
       return { attached: () => listeners.size };

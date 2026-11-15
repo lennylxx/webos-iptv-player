@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SearchWorkerIndex } from './search-index';
+import type { SearchQueryRequest, SearchQueryResponse } from './tasks';
 
 interface PostedSources {
   channels?: string[][];
@@ -29,6 +30,13 @@ function post(index: SearchWorkerIndex, sessionId: number, sources: PostedSource
   return accepted;
 }
 
+// With no index work pending, a query answers in the same turn.
+function query(index: SearchWorkerIndex, request: SearchQueryRequest): SearchQueryResponse | null {
+  const response = index.query(request);
+  if (response instanceof Promise) throw new Error('expected a synchronous query');
+  return response;
+}
+
 describe('SearchWorkerIndex', () => {
   it('indexes and ranks every search collection', () => {
     const index = new SearchWorkerIndex();
@@ -39,7 +47,7 @@ describe('SearchWorkerIndex', () => {
       series: ['XAlpha Series', 'Alpha Series'],
     })).toBe(true);
 
-    expect(index.query({
+    expect(query(index, {
       sessionId: 1,
       query: 'alpha',
       limit: 10,
@@ -57,13 +65,13 @@ describe('SearchWorkerIndex', () => {
     post(index, 2, { channels: [['Alpha']] });
 
     expect(post(index, 1, { channels: [['Bravo']] }, false)).toBe(false);
-    expect(index.query({
+    expect(query(index, {
       sessionId: 1,
       query: 'alpha',
       limit: 10,
       includeCatalog: false,
     })).toBeNull();
-    expect(index.query({
+    expect(query(index, {
       sessionId: 2,
       query: 'alpha',
       limit: 10,
@@ -75,7 +83,7 @@ describe('SearchWorkerIndex', () => {
     const index = new SearchWorkerIndex();
     post(index, 1, { movies: ['Alpha 1', 'Alpha 2', 'Alpha 3'] });
 
-    expect(index.query({
+    expect(query(index, {
       sessionId: 1,
       query: 'alpha',
       limit: 2,
@@ -86,7 +94,7 @@ describe('SearchWorkerIndex', () => {
   it('assembles a source from ordered chunks and serves it only once complete', () => {
     const index = new SearchWorkerIndex();
     post(index, 1, { channels: [['Old Alpha']] });
-    const ask = () => index.query({ sessionId: 1, query: 'alpha', limit: 10, includeCatalog: false });
+    const ask = () => query(index, { sessionId: 1, query: 'alpha', limit: 10, includeCatalog: false });
 
     expect(index.index({
       sessionId: 1,
@@ -104,7 +112,7 @@ describe('SearchWorkerIndex', () => {
   it('keeps serving the previous catalog until a refresh post completes', () => {
     const index = new SearchWorkerIndex();
     post(index, 1, { movies: ['Alpha Movie'], series: ['Alpha Series'] });
-    const ask = () => index.query({ sessionId: 1, query: 'alpha', limit: 10, includeCatalog: true });
+    const ask = () => query(index, { sessionId: 1, query: 'alpha', limit: 10, includeCatalog: true });
 
     index.index({
       sessionId: 1,

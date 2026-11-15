@@ -1281,6 +1281,7 @@ describe('xtream-catalog one-request catalog', () => {
   it('keeps newer categories and waits to reorder them when categories are stale', async () => {
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
     cacheStore.set('x1|vod_all', {
+      key: 'x1|vod_all',
       data: [movie('10', '1')],
       timestamp: stale,
       state: { complete: true, refreshAfter: stale, freshSince: stale },

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 
 const { state, playlistMock } = vi.hoisted(() => {
   const state = {
@@ -276,11 +276,12 @@ describe('ReminderService store', () => {
 });
 
 describe('ReminderService scheduling', () => {
-  function mockLuna(): ReturnType<typeof vi.fn> & { failLast(): void } {
+  type LunaCall = (uri: string, options: { method: string; parameters: unknown }) => void;
+  function mockLuna(): Mock<LunaCall> & { failLast(): void } {
     const bridges: Array<{
       onservicecallback: ((message: string) => void) | null;
     }> = [];
-    const request = vi.fn() as ReturnType<typeof vi.fn> & { failLast(): void };
+    const request = Object.assign(vi.fn<LunaCall>(), { failLast: () => {} });
     class FakePalmServiceBridge {
       onservicecallback: ((message: string) => void) | null = null;
 

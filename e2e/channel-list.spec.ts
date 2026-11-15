@@ -1257,7 +1257,7 @@ test('Back from the Guide resumes the row you left, brought into view', async ({
 
   // Scroll the row just above the viewport, where it stays rendered.
   await settleVirtualScroll(page);
-  await row.evaluate((el) => {
+  await row.evaluate((el: HTMLElement) => {
     const list = el.closest<HTMLElement>('.channel-main')!;
     list.scrollTop = el.offsetTop + el.offsetHeight + 20;
   });

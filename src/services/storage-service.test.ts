@@ -1012,7 +1012,7 @@ describe('StorageService recently watched live store', () => {
     StorageService.set('cached_playlist', { value: 'cache' });
     const original = Storage.prototype.setItem;
     let rejected = false;
-    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
       if (!rejected && key === 'iptv_recently_watched_live') {
         rejected = true;
         throw new DOMException('quota', 'QuotaExceededError');

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 
 const { healthMock, playlistMock } = vi.hoisted(() => ({
   healthMock: {
@@ -67,7 +67,7 @@ import { showToast } from './toast';
 import { probeMedia } from '../services/media-probe';
 import { CONFIG } from '../config';
 import { KeyHandler } from '../navigation/key-handler';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { ParentalControlService } from '../services/parental-control';
 import { VodSubtitles } from '../services/vod-subtitles';
 import { HlsSubtitles } from '../services/hls-subtitles';
@@ -228,7 +228,7 @@ let container: HTMLElement;
 let player: Player;
 let video: HTMLVideoElement;
 let allowAutoRevealOsd: boolean;
-let onHealthChanged: ReturnType<typeof vi.fn>;
+let onHealthChanged: Mock<NonNullable<ConstructorParameters<typeof Player>[4]>>;
 
 // The desktop path probes the stream's Content-Type before routing; stub it so
 // tests stay offline and deterministic (HLS → hls.js fallback sets video.src).
@@ -255,7 +255,7 @@ beforeEach(() => {
   healthMock.recordPlaybackSuccess.mockResolvedValue(false);
   vi.mocked(probeMedia).mockResolvedValue(null);
   allowAutoRevealOsd = true;
-  onHealthChanged = vi.fn();
+  onHealthChanged = vi.fn<NonNullable<ConstructorParameters<typeof Player>[4]>>();
   player = new Player(
     container,
     vi.fn(),
@@ -2800,7 +2800,7 @@ describe('Player VOD mode', () => {
     });
 
     it('drops the episode left\'s stream info, subtitles and menu while a skip is pending', async () => {
-      vi.mocked(probeMedia).mockResolvedValue({ videoCodec: 'hvc1', audioCodec: 'ec-3', width: 3840, height: 2160, fps: 24 });
+      vi.mocked(probeMedia).mockResolvedValue({ videoCodec: 'hvc1', audioCodec: 'ec-3', width: 3840, height: 2160, fps: 24, hdr: '' });
       player.playVod(req({ ...ep(1), resumeSecs: 0, episodeQueue: [ep(2)] }));
       await flush();
       const info = () => container.querySelector('.osd-stream-info')?.textContent ?? '';

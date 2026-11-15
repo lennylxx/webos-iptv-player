@@ -101,7 +101,7 @@ test('keeps the focus ring clear of the rail edge at See all', async ({ page }) 
   })).toBeGreaterThanOrEqual(11);
   // On such an engine the room past the last tile must come from content.
   // Drop the padding here to measure what it would scroll to.
-  expect(await seeAll.evaluate((el) => {
+  expect(await seeAll.evaluate((el: HTMLElement) => {
     const track = el.parentElement!;
     track.style.paddingRight = '0';
     const room = track.scrollWidth - (el.offsetLeft + el.offsetWidth - track.offsetLeft);

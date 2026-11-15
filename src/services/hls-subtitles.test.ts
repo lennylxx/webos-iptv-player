@@ -114,7 +114,7 @@ describe('parseMediaPlaylist', () => {
 });
 
 describe('newestPdt', () => {
-  const seg = (pdtMs: number | null) => ({ uri: 'u', pdtMs });
+  const seg = (pdtMs: number | null) => ({ uri: 'u', pdtMs, durS: SEG });
 
   it('returns the largest PROGRAM-DATE-TIME (the live edge)', () => {
     expect(newestPdt([seg(E0), seg(E0 + 8 * SEG * 1000), seg(E0 + 4 * SEG * 1000)])).toBe(E0 + 8 * SEG * 1000);
@@ -130,7 +130,7 @@ describe('newestPdt', () => {
 });
 
 describe('oldestPdt', () => {
-  const seg = (pdtMs: number | null) => ({ uri: 'u', pdtMs });
+  const seg = (pdtMs: number | null) => ({ uri: 'u', pdtMs, durS: SEG });
 
   it('returns the smallest PROGRAM-DATE-TIME (the window start)', () => {
     expect(oldestPdt([seg(E0 + 8000), seg(E0), seg(E0 + 4000)])).toBe(E0);

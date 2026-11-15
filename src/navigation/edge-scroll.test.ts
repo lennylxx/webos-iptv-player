@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { CONFIG } from '../config';
 import { html } from '../utils/dom';
 import { morph } from '../utils/morph';
@@ -13,7 +13,7 @@ let root: HTMLElement;
 let hit: Element | null;
 let owner: FocusScope;
 let dispose: () => void;
-let scrolled: ReturnType<typeof vi.fn>;
+let scrolled: Mock<(track: HTMLElement) => void>;
 let x = 500;
 let y = 150;
 let screen = 0;
@@ -76,7 +76,7 @@ beforeEach(() => {
   });
   owner = Focus.register({ id: 'edge-test', root });
   Focus.setBase(() => owner);
-  scrolled = vi.fn();
+  scrolled = vi.fn<(track: HTMLElement) => void>();
   dispose = installEdgeScroll(scrolled);
   screen = 0;
   move(500);

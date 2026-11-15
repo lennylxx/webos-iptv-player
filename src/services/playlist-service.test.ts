@@ -9,7 +9,7 @@ const { storageMock, cacheMock, fetchTextMock, heldReleaseMock } = vi.hoisted(()
     getFavorites: vi.fn(() => [] as string[]),
     migrateFavoriteKeys: vi.fn(),
     getShowHiddenChannels: vi.fn(() => false),
-    getChannelCustomization: vi.fn(() => null),
+    getChannelCustomization: vi.fn((): ChannelCustomization | null => null),
     getPlaylistRefreshIntervalMs: vi.fn(() => 6 * 60 * 60 * 1000),
     setChannelCustomization: vi.fn(),
     clearChannelCustomization: vi.fn(),
@@ -300,7 +300,7 @@ describe('PlaylistService.refresh', () => {
   });
 
   it('reports cumulative channel-loading progress across sources', async () => {
-    const progress: Parameters<typeof PlaylistService.refresh>[0] extends
+    const progress: NonNullable<Parameters<typeof PlaylistService.refresh>[0]> extends
       ((value: infer Value) => void) ? Value[] : never = [];
 
     await PlaylistService.refresh(value => progress.push(value));

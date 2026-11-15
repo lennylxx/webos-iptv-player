@@ -34,10 +34,10 @@ describe('fetchText / fetchWithTimeout', () => {
   });
 
   it('passes an abort signal through to fetch', async () => {
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn<typeof fetch>(async () => okResponse());
     vi.stubGlobal('fetch', fetchMock);
     await fetchWithTimeout('http://x');
-    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+    expect(fetchMock.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it('throws on a non-ok HTTP status', async () => {

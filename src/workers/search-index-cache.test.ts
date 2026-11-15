@@ -76,7 +76,7 @@ class MemoryReader implements SearchCacheReader {
   writeFailure: string | null = null;
 }
 
-const PLAYLIST_REF: SearchCacheRecord = { store: 'playlist-cache', key: 'combined', timestamp: 10 };
+const PLAYLIST_REF = { store: 'playlist-cache', key: 'combined', timestamp: 10 } satisfies SearchCacheRecord;
 const EPG_REF = { url: 'http://host/epg', timestamp: 20 };
 const VOD_REF: SearchCacheRecord = { store: 'catalog-cache', key: 'a|vod_all', timestamp: 30 };
 
@@ -379,7 +379,7 @@ describe('SearchWorkerIndex with cached documents', () => {
   });
 
   it('rejects a programme run whose list no longer matches', async () => {
-    const { channels, selection } = displayedChannels();
+    const { channels } = displayedChannels();
     const runs = new ProgrammeRuns();
     runs.add(1, { url: EPG_REF.url, id: 'e1', timestamp: EPG_REF.timestamp }, 3);
     const index = new SearchWorkerIndex(reader());

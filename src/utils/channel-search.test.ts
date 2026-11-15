@@ -49,7 +49,7 @@ describe('rankByName', () => {
   describe('Chrome 53 Unicode fallback', () => {
     it('keeps Unicode punctuation as a search boundary', async () => {
       const NativeRegExp = RegExp;
-      const LegacyRegExp = function (pattern?: string | RegExp, flags?: string): RegExp {
+      const LegacyRegExp = function (pattern: string | RegExp, flags?: string): RegExp {
         if (typeof pattern === 'string' && pattern.includes('\\p{')) {
           throw new SyntaxError('Unsupported Unicode property escape');
         }

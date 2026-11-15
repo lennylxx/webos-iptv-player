@@ -10,7 +10,8 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "typecheck:all": "npm run typecheck && npm run service:typecheck && npm run benchmark:typecheck",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
+    "typecheck:all": "npm run typecheck && npm run typecheck:tests && npm run service:typecheck && npm run benchmark:typecheck",
     "build": "npm run typecheck && node esbuild.config.mjs",
     "service:typecheck": "tsc -p bundled-service/tsconfig.json --noEmit",
     "service:build": "rm -rf build/bundled-service && tsc -p bundled-service/tsconfig.json && node scripts/service-compat-gate.mjs build/bundled-service && cp bundled-service/package.json bundled-service/src/services.json build/bundled-service/ && cp bundled-service/src/setup/setup-page.html build/bundled-service/setup/",
@@ -43,6 +44,7 @@
   "devDependencies": {
     "@mdn/browser-compat-data": "8.1.7",
     "@playwright/test": "^1.64.1",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^26.6.6",
     "@typescript-eslint/parser": "^8.72.1",
     "acorn": "8.19.0",

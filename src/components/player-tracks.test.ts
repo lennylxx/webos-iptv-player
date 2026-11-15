@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
 import type { Channel, VodPlayback } from '../types';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { StorageService } from '../services/storage-service';
@@ -644,16 +644,7 @@ describe('PlayerTracks', () => {
 
     it('does not reselect VOD subtitles when reapplying the native compositor', () => {
       setup([]);
-      vod = {
-        accountId: 'acc1',
-        kind: 'movie',
-        itemId: 'item1',
-        title: 'Alpha',
-        url: 'http://host/a',
-        resumeSecs: 0,
-        durationSecs: 0,
-        subtitles: [],
-      };
+      vod = vodRequest({ accountId: 'acc1', itemId: 'item1', title: 'Alpha', url: 'http://host/a' });
       const apply = vi.spyOn(
         tracks as unknown as { applyNativeSubtitleSelection(): void },
         'applyNativeSubtitleSelection',
@@ -1532,14 +1523,13 @@ describe('PlayerTracks', () => {
       document.body.appendChild(host);
       vod = {
         accountId: 'a',
-        kind: 'movie',
+        kind: 'vod',
         itemId: 'm1',
         title: 'Video 1',
         url: 'http://host/m',
         poster: '',
         resumeSecs: 0,
         onBack: vi.fn(),
-        extras: {},
         searchMeta: {},
         subtitles: [],
       };
@@ -1575,14 +1565,13 @@ describe('PlayerTracks', () => {
       subtitleSearchServiceMock.search.mockResolvedValueOnce([]);
       vod = {
         accountId: 'a',
-        kind: 'movie',
+        kind: 'vod',
         itemId: 'm1',
         title: 'Video 1',
         url: 'http://host/m',
         poster: '',
         resumeSecs: 0,
         onBack: vi.fn(),
-        extras: {},
         searchMeta: { imdbId: '123', year: 2020 },
         subtitles: [],
       };
@@ -1602,14 +1591,13 @@ describe('PlayerTracks', () => {
       subtitleSearchServiceMock.setAvailable(true);
       vod = {
         accountId: 'a',
-        kind: 'movie',
+        kind: 'vod',
         itemId: 'm1',
         title: 'Video 1',
         url: 'http://host/m',
         poster: '',
         resumeSecs: 0,
         onBack: vi.fn(),
-        extras: {},
         searchMeta: {},
         subtitles: [],
       };
@@ -1648,7 +1636,7 @@ describe('PlayerTracks', () => {
       subtitleSearchServiceMock.setAvailable(true);
       const firstVod = vodRequest({
         accountId: 'a',
-        kind: 'movie',
+        kind: 'vod',
         itemId: 'm1',
         title: 'Video 1',
         url: 'http://host/m1',
@@ -1828,9 +1816,9 @@ describe('PlayerTracks', () => {
 describe('PlayerTracks Luna audio', () => {
   let video: HTMLVideoElement;
   let luna: Array<{ index: number; language: string; selected: boolean }>;
-  let selectLunaAudio: ReturnType<typeof vi.fn>;
+  let selectLunaAudio: Mock<PlayerPipeline['selectLunaAudio']>;
   let tracks: PlayerTracks;
-  let log: ReturnType<typeof vi.spyOn>;
+  let log: MockInstance<typeof console.log>;
 
   const manifest = (audio: Array<{ name: string; lang: string }>) => ({
     audio: audio.map(item => ({ ...item, isDefault: false })),

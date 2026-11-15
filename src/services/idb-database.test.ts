@@ -25,7 +25,8 @@ describe('openPersistenceDb reconnection', () => {
     // app (not something this code requested) — the exact failure mode that
     // left every read/write hitting "The database connection is closing"
     // until the app was relaunched.
-    forceCloseDatabase(first!);
+    // fake-indexeddb types the parameter as the FDBDatabase class, but it takes an instance.
+    forceCloseDatabase(first as unknown as Parameters<typeof forceCloseDatabase>[0]);
 
     const second = await openPersistenceDb();
     expect(second).not.toBeNull();

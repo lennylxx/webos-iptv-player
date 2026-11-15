@@ -148,7 +148,7 @@ describe('ChannelHealthService', () => {
   });
 
   it('does not persist an active result over a newer playback update', async () => {
-    let finishSecond: (() => void) | null = null;
+    let finishSecond = null as (() => void) | null;
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       if (String(input).indexOf('/b') !== -1) {
         await new Promise<void>(resolve => { finishSecond = resolve; });
@@ -173,7 +173,7 @@ describe('ChannelHealthService', () => {
   });
 
   it('does not apply a probe result over playback updated while probing', async () => {
-    let finishProbe: (() => void) | null = null;
+    let finishProbe = null as (() => void) | null;
     const fetchMock = vi.fn(async () => {
       await new Promise<void>(resolve => { finishProbe = resolve; });
       return new Response(new Uint8Array([1]), { status: 200 });
@@ -223,7 +223,7 @@ describe('ChannelHealthService', () => {
     const fetchMock = vi.fn(async () => new Response(new Uint8Array([1]), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     let waitCount = 0;
-    let resume: (() => void) | null = null;
+    let resume = null as (() => void) | null;
     const waitWhilePaused = vi.fn(() => {
       waitCount++;
       if (waitCount === 1) return Promise.resolve();

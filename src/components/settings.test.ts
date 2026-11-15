@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { ChannelCycleMode, ManualEpgSource, PlaylistEntry, TzMode, XtreamLiveCategorySnapshot } from '../types';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import type { Channel, ChannelCycleMode, ManualEpgSource, PlaylistEntry, TzMode, XtreamLiveCategorySnapshot } from '../types';
 import type { AnimationMode } from '../services/motion-service';
 import type { XtreamAccountInfo, XtreamLiveCategory } from '../services/xtream-client';
+import type { ChannelHealthService, ChannelHealthSummary } from '../services/channel-health';
+import type { ServiceInfo } from '../services/setup-client';
 
 const {
   state,
@@ -107,7 +109,7 @@ const {
       getEpgOffsets: vi.fn(() => ({ ...state.epgOffsets })),
       getLocalePreference: vi.fn(() => state.locale),
       getOnlineSubtitleConfig: vi.fn(() => state.onlineSubtitles),
-      getSelectedXtreamAccountId: vi.fn(() => null),
+      getSelectedXtreamAccountId: vi.fn((): string | null => null),
       getLiveCategorySnapshot: vi.fn(() => null),
       setLiveCategorySnapshot: vi.fn(),
       getShowHiddenChannels: vi.fn(() => state.showHidden),
@@ -155,7 +157,7 @@ const {
       }),
       migrateCatchupEpgOffsets: vi.fn(),
       setLocalePreference: vi.fn(),
-      setOnlineSubtitleConfig: vi.fn((cfg: any) => { state.onlineSubtitles = cfg; }),
+      setOnlineSubtitleConfig: vi.fn((cfg: typeof state.onlineSubtitles) => { state.onlineSubtitles = cfg; }),
       remove: vi.fn(),
       clearRecentlyWatched: vi.fn(),
       clearWatchlist: vi.fn(),
@@ -167,7 +169,7 @@ const {
     setupMock: {
       // Default to "service unreachable" so render's async refreshSetupInfo is a
       // no-op for existing tests. Tests can override via mockResolvedValueOnce.
-      getInfo: vi.fn(async () => null),
+      getInfo: vi.fn(async (): Promise<ServiceInfo | null> => null),
     },
     uploadMock: {
       remove: vi.fn(async () => true),
@@ -187,7 +189,10 @@ const {
         suspect: 0,
         unavailable: 0,
       })),
-      checkAll: vi.fn(async () => ({
+      checkAll: vi.fn(async (
+        _channels: Channel[],
+        _options?: Parameters<typeof ChannelHealthService.checkAll>[1],
+      ): Promise<ChannelHealthSummary> => ({
         total: 0,
         unknown: 0,
         healthy: 0,
@@ -248,8 +253,8 @@ import { CONFIG } from '../config';
 import { ParentalControlService } from '../services/parental-control';
 
 let container: HTMLElement;
-let onSave: ReturnType<typeof vi.fn>;
-let onChannelsChanged: ReturnType<typeof vi.fn>;
+let onSave: Mock<ConstructorParameters<typeof Settings>[1]>;
+let onChannelsChanged: Mock<NonNullable<ConstructorParameters<typeof Settings>[2]>>;
 let settings: Settings;
 
 beforeEach(() => {
@@ -284,8 +289,8 @@ beforeEach(() => {
   document.body.innerHTML = '';
   container = document.createElement('div');
   document.body.appendChild(container);
-  onSave = vi.fn();
-  onChannelsChanged = vi.fn();
+  onSave = vi.fn<ConstructorParameters<typeof Settings>[1]>();
+  onChannelsChanged = vi.fn<NonNullable<ConstructorParameters<typeof Settings>[2]>>();
   settings = new Settings(container, onSave, onChannelsChanged);
   Focus.setBase(() => settings.focusScope);
 });
@@ -376,9 +381,9 @@ describe('Settings.render', () => {
       signal?: AbortSignal;
       waitWhilePaused?: () => Promise<void>;
     } = {};
-    let finish: (() => void) | null = null;
+    let finish = (): void => {};
     healthMock.checkAll.mockImplementationOnce(async (_channels, value) => {
-      options = value;
+      options = value ?? {};
       await new Promise<void>(resolve => { finish = resolve; });
       return {
         total: 1,
@@ -404,7 +409,7 @@ describe('Settings.render', () => {
     click('#cancel-channel-health');
     await cancelled;
     expect(options.signal?.aborted).toBe(true);
-    finish?.();
+    finish();
     await vi.waitFor(() => expect(container.querySelector('#check-channel-health')).not.toBeNull());
   });
 
@@ -1238,9 +1243,9 @@ describe('Settings editing', () => {
       catchupDays: 0,
     }];
     let signal: AbortSignal | undefined;
-    let finish: (() => void) | null = null;
+    let finish = (): void => {};
     healthMock.checkAll.mockImplementationOnce(async (_channels, options) => {
-      signal = options.signal;
+      signal = options?.signal;
       await new Promise<void>(resolve => { finish = resolve; });
       return {
         total: 1,
@@ -1260,7 +1265,7 @@ describe('Settings editing', () => {
 
     await vi.waitFor(() => expect(signal?.aborted).toBe(true));
     expect(cacheMock.clearAllCachedData).not.toHaveBeenCalled();
-    finish?.();
+    finish();
     await vi.waitFor(() => expect(cacheMock.clearAllCachedData).toHaveBeenCalled());
   });
 

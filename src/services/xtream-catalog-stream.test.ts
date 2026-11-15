@@ -8,6 +8,7 @@ import {
 import { writeHeldValue } from '../workers/held-values';
 import type { CacheWrite } from '../workers/search-cache-reader';
 import { serializedBytes } from '../utils/serialized-bytes';
+import type { SeriesItem, VodItem } from '../types';
 
 const request = (categoryIds: string[]): XtreamCatalogStreamRequest => ({
   url: 'http://host/a',
@@ -122,7 +123,7 @@ describe('streamXtreamCatalogInWorker', () => {
   it('holds the merged list for the cache write', async () => {
     serve(JSON.stringify([movie(10, '1'), movie(20, '2'), movie(10, '2')]));
     const { response, chunks } = await run(['2', '1']);
-    const items = chunks.flatMap(chunk => chunk.items);
+    const items = chunks.flatMap<VodItem | SeriesItem>(chunk => chunk.items);
     const writes: CacheWrite[] = [];
     const result = await writeHeldValue(
       { token: response.held!.token, timeoutMs: 1000, field: 'data', writes: [{ store: 's', value: {} }] },
@@ -146,7 +147,7 @@ describe('streamXtreamCatalogInWorker', () => {
   it('holds nothing when the list matches the cached one', async () => {
     serve(JSON.stringify([movie(10, '1'), movie(20, '1')]));
     const { response: first, chunks } = await run(['1']);
-    const cached = chunks.flatMap(chunk => chunk.items);
+    const cached = chunks.flatMap<VodItem | SeriesItem>(chunk => chunk.items);
     serve(JSON.stringify([movie(10, '1'), movie(20, '1')]));
     const previous = { key: 'x1|vod_all', timestamp: 5 };
     const lookups: unknown[] = [];

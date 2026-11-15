@@ -101,7 +101,7 @@ describe('LiveCategoryPicker', () => {
     const keys = Array.from(root().querySelectorAll<HTMLElement>('[data-category-id]')).map(el => el.dataset.key);
     expect(keys[0]).toBe('new:c3');
     expect(keys).not.toContain('all:c3');
-    expect(keys.filter(key => key.endsWith(':c3'))).toHaveLength(1);
+    expect(keys.filter(key => key?.endsWith(':c3'))).toHaveLength(1);
   });
 
   it('returns the original filter when nothing changed', async () => {

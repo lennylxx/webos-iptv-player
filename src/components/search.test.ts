@@ -27,9 +27,7 @@ const {
   playlistMock: {
     channels: [] as unknown[],
     complete: true,
-    search: vi.fn(() => [] as unknown[]),
-    searchRanked: vi.fn(),
-    indexOf: vi.fn(() => 0),
+    indexOf: vi.fn((_channel: { name: string }) => 0),
     getChannelCacheSource: vi.fn((): unknown => null),
   },
   epgMock: {
@@ -145,11 +143,6 @@ beforeEach(() => {
   workerMock.terminate();
   playlistMock.channels = [];
   playlistMock.complete = true;
-  playlistMock.search.mockReturnValue([]);
-  playlistMock.searchRanked.mockImplementation((query: string, limit: number) => {
-    const items = playlistMock.search(query);
-    return { items: items.slice(0, limit), hasMore: items.length > limit };
-  });
   playlistMock.indexOf.mockReturnValue(0);
   playlistMock.getChannelCacheSource.mockReturnValue(null);
   epgMock.programmeCacheOrigin.mockReturnValue(null);

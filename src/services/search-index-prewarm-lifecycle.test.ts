@@ -66,7 +66,7 @@ class FakeWorker {
     }, 0);
   }
 
-  addEventListener(type: string, listener: (event: { data: unknown; message: string }) => void): void {
+  addEventListener(type: string, listener: (event: { data: unknown } | { message: string }) => void): void {
     if (type === 'message') this.listeners.push(listener);
     if (type === 'error') this.errorListeners.push(listener);
   }

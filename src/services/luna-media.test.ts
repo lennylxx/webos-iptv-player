@@ -212,7 +212,8 @@ describe('Luna calls', () => {
       await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.LUNA_MEDIA_CALL_TIMEOUT_MS);
       expect(await outcome).toBeInstanceOf(LunaMediaError);
       expect(cancels[0]).not.toHaveBeenCalled();
-      requests[0].options.onSuccess?.({ returnValue: true, mediaId: 'lm9' });
+      const loaded = { returnValue: true, mediaId: 'lm9' };
+      requests[0].options.onSuccess?.(loaded);
       expect(requests[1].options).toMatchObject({ method: 'unload', parameters: { mediaId: 'lm9' } });
       expect(cancels[0]).toHaveBeenCalledOnce();
     } finally {

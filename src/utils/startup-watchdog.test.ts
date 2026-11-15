@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { StartupWatchdog, type StartupProbe } from './startup-watchdog';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { StartupWatchdog, type StartupProbe, type StartupWatchdogOptions } from './startup-watchdog';
 
 function scriptedProbe(states: StartupProbe[]): () => StartupProbe {
   let i = 0;
@@ -14,11 +14,11 @@ const started: StartupProbe = { readyState: 3, networkState: 1 };
 
 const OPTS = { pollMs: 500, timeoutMs: 5000 };
 
-let onFailure: ReturnType<typeof vi.fn>;
+let onFailure: Mock<StartupWatchdogOptions['onFailure']>;
 
 beforeEach(() => {
   vi.useFakeTimers();
-  onFailure = vi.fn();
+  onFailure = vi.fn<StartupWatchdogOptions['onFailure']>();
 });
 afterEach(() => { vi.useRealTimers(); });
 

@@ -95,7 +95,7 @@ function cookieCounts(value: unknown): StreamProxyCookies {
 export function openStreamProxy(
   url: string,
   headers: Record<string, string>,
-  timeoutMs = serviceAnswered ? CONFIG.PLAYER.PROXY_OPEN_TIMEOUT : CONFIG.PLAYER.PROXY_FIRST_OPEN_TIMEOUT,
+  timeoutMs: number = serviceAnswered ? CONFIG.PLAYER.PROXY_OPEN_TIMEOUT : CONFIG.PLAYER.PROXY_FIRST_OPEN_TIMEOUT,
 ): Promise<StreamProxyResult> {
   return new Promise<StreamProxyResult>(resolve => {
     let settled = false;

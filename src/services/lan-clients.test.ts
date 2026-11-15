@@ -1,21 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { PlaylistEntry } from '../types';
 
 const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
   storageMock: {
-    playlists: [] as Array<{
-      id?: string;
-      name: string;
-      url: string;
-      source?: 'upload' | 'url' | 'xtream';
-      enabled?: boolean;
-      count?: number;
-      xtream?: {
-        username: string;
-        password: string;
-        liveOutput?: 'auto' | 'ts' | 'm3u8';
-        liveCategories?: { mode: 'include' | 'exclude'; ids: string[] };
-      };
-    }>,
+    playlists: [] as Array<Omit<PlaylistEntry, 'id'> & { id?: string }>,
     manualEpgSources: [] as Array<{ url: string; playlistIds: string[] }>,
     onlineSubtitles: {
       preferredLanguage: '',
@@ -574,8 +562,8 @@ describe('SetupClient.applyPendingActions', () => {
   });
 
   it('leaves a parental-locked source in place when the phone removes or turns it off', async () => {
-    const locked = { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url' };
-    const other = { id: 'p2', name: 'Bravo', url: 'http://host/b.m3u', source: 'url' };
+    const locked = { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url' as const };
+    const other = { id: 'p2', name: 'Bravo', url: 'http://host/b.m3u', source: 'url' as const };
     storageMock.playlists = [locked, other];
     guardedSourceIds.add('p1');
     fetchWithTimeoutMock

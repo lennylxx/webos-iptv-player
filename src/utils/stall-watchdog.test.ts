@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { StallWatchdog, type StallProbe } from './stall-watchdog';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { StallWatchdog, type StallProbe, type StallWatchdogOptions } from './stall-watchdog';
 
 // A scriptable probe: each call returns the next state, repeating the last one
 // once the script is exhausted (a stream that stays in its final state).
@@ -16,13 +16,13 @@ const frozen = (t: number, readyState = 1): StallProbe =>
 
 const OPTS = { pollMs: 1000, freezeTicks: 3, maxReloads: 2 };
 
-let onReload: ReturnType<typeof vi.fn>;
-let onEscalate: ReturnType<typeof vi.fn>;
+let onReload: Mock<StallWatchdogOptions['onReload']>;
+let onEscalate: Mock<StallWatchdogOptions['onEscalate']>;
 
 beforeEach(() => {
   vi.useFakeTimers();
-  onReload = vi.fn();
-  onEscalate = vi.fn();
+  onReload = vi.fn<StallWatchdogOptions['onReload']>();
+  onEscalate = vi.fn<StallWatchdogOptions['onEscalate']>();
 });
 afterEach(() => { vi.useRealTimers(); });
 

@@ -11,16 +11,20 @@ async function captureDiagnostics(page: Page) {
   });
   await client.send('Runtime.enable');
   return {
-    report: () => assembleDiagnosticReport({
-      capturedAt: new Date().toISOString(),
-      full: false,
-      app: {},
-      environment: {},
-      probe: { playlists: [] },
-      native: [],
-      logs,
-      networkEvents: [],
-    }),
+    report: () => {
+      const report = assembleDiagnosticReport({
+        capturedAt: new Date().toISOString(),
+        full: false,
+        app: {},
+        environment: {},
+        probe: { playlists: [] },
+        native: [],
+        logs,
+        networkEvents: [],
+      });
+      // JS inference loses the timeline's computed `code` key.
+      return { ...report, diagnostics: report.diagnostics as Array<typeof report.diagnostics[number] & { code: string }> };
+    },
     summary: formatDiagnosticSummary,
     field: (event: { text: string }, key: string) => eventField(event.text, key),
     close: () => client.detach(),

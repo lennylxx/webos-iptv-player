@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { SearchIndexCandidate } from '../workers/tasks';
 
 const mocks = vi.hoisted(() => ({
@@ -41,7 +41,7 @@ import { persistSearchIndexes, SearchIndexPrewarmer } from './search-index-store
 const candidate = (key: string): SearchIndexCandidate => ({ key, prefix: `${key}|`, bytes: 10 });
 const reservation = { generation: 0, evicted: 1, fields: { cacheCategory: 'search', byteSize: 10 } };
 
-function logged(spy: ReturnType<typeof vi.spyOn>, event: string): string[] {
+function logged(spy: MockInstance<typeof console.log>, event: string): string[] {
   return spy.mock.calls
     .map(call => call.filter(part => typeof part === 'string').join(' '))
     .filter(line => line.includes(`event=${event} `) || line.endsWith(`event=${event}`));
@@ -159,7 +159,7 @@ describe('SearchIndexPrewarmer', () => {
   });
 
   afterEach(() => {
-    delete win.requestIdleCallback;
+    Reflect.deleteProperty(win, 'requestIdleCallback');
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -231,7 +231,7 @@ describe('SearchIndexPrewarmer', () => {
   });
 
   it('falls back to a timer without requestIdleCallback', async () => {
-    delete win.requestIdleCallback;
+    Reflect.deleteProperty(win, 'requestIdleCallback');
     vi.useFakeTimers();
     const prewarm = new SearchIndexPrewarmer(() => [SOURCE]);
     prewarm.schedule('startup');

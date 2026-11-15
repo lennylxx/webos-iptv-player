@@ -26,7 +26,7 @@ function stableChannelKey(url: string): string {
 
 function key(page: Page, keyCode: number): Promise<void> {
   return page.evaluate(
-    (code) => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: code, bubbles: true })),
+    (code) => { document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: code, bubbles: true })); },
     keyCode,
   );
 }

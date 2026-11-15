@@ -40,7 +40,7 @@ describe('parseDrmConfig', () => {
     });
   });
 
-  it.each([
+  it.each<Record<string, string>>([
     { 'inputstream.adaptive.drm_legacy': 'org.w3.clearkey|https://host/license|x-token=a%26b' },
     {
       'inputstream.adaptive.license_type': 'clearkey',

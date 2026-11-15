@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import type { Channel } from '../types';
 import type { RecentlyWatchedItem } from '../services/recently-watched';
 import { CONFIG } from '../config';
 
-const { channels, epgMock, recentMock, toastMock, healthMock, workerMock } = vi.hoisted(() => {
+const { channels, favoriteIds, epgMock, recentMock, toastMock, healthMock, workerMock } = vi.hoisted(() => {
   function makeChannel(over: Partial<Channel>): Channel {
     return {
       id: '', name: '', logo: '', group: '', url: '', extras: null,
@@ -14,9 +14,11 @@ const { channels, epgMock, recentMock, toastMock, healthMock, workerMock } = vi.
   return {
     channels: [
       makeChannel({ id: 'a', name: 'Alpha', group: 'News', playlistIds: ['PL1'] }),
-      makeChannel({ id: 'b', name: 'Bravo', group: 'News', playlistIds: ['PL1'], favorite: true }),
+      makeChannel({ id: 'b', name: 'Bravo', group: 'News', playlistIds: ['PL1'] }),
       makeChannel({ id: 'c', name: 'Charlie', group: 'Sports', playlistIds: ['PL2'] }),
     ] as Channel[],
+    // Favorites live in storage by channel key, not on the channel.
+    favoriteIds: new Set(['b']),
     epgMock: {
       nowPlaying: null as { title: string } | null,
     },
@@ -50,7 +52,7 @@ vi.mock('../services/playlist-service', () => ({
     },
     getByGroup: (group: string, playlist?: string) => {
       let source = playlist ? channels.filter(ch => ch.playlistIds.includes(playlist)) : channels;
-      if (group === 'builtin:favorites') source = source.filter(ch => ch.favorite);
+      if (group === 'builtin:favorites') source = source.filter(ch => favoriteIds.has(ch.id));
       else if (group.startsWith('source:')) source = source.filter(ch => ch.group === group.slice(7));
       return source;
     },
@@ -95,9 +97,10 @@ import { PlaylistService } from '../services/playlist-service';
 
 let container: HTMLElement;
 let el: HTMLElement;
-let getCurrentIndex: ReturnType<typeof vi.fn>;
-let getCurrentCatchupStart: ReturnType<typeof vi.fn>;
-let onSelect: ReturnType<typeof vi.fn>;
+type SidebarArgs = ConstructorParameters<typeof Sidebar>;
+let getCurrentIndex: Mock<SidebarArgs[1]>;
+let getCurrentCatchupStart: Mock<NonNullable<SidebarArgs[3]>>;
+let onSelect: Mock<SidebarArgs[2]>;
 let sidebar: Sidebar;
 
 beforeEach(() => {
@@ -112,9 +115,9 @@ beforeEach(() => {
   container.appendChild(el);
   document.body.appendChild(container);
 
-  getCurrentIndex = vi.fn(() => 1);
-  getCurrentCatchupStart = vi.fn(() => null);
-  onSelect = vi.fn();
+  getCurrentIndex = vi.fn<SidebarArgs[1]>(() => 1);
+  getCurrentCatchupStart = vi.fn<NonNullable<SidebarArgs[3]>>(() => null);
+  onSelect = vi.fn<SidebarArgs[2]>();
   recentMock.items = [];
   recentMock.getItems.mockClear();
   recentMock.catchupInfo.mockReset();
@@ -230,14 +233,14 @@ describe('Sidebar', () => {
       const attached = new Set<EventListenerOrEventListenerObject>();
       const add = el.addEventListener.bind(el);
       const remove = el.removeEventListener.bind(el);
-      el.addEventListener = (type: string, fn: EventListenerOrEventListenerObject | null,
+      el.addEventListener = (type: string, fn: EventListenerOrEventListenerObject,
         options?: boolean | AddEventListenerOptions) => {
-        if (type === 'transitionend' && fn) attached.add(fn);
+        if (type === 'transitionend') attached.add(fn);
         add(type, fn, typeof options === 'object' ? !!options.capture : options);
       };
-      el.removeEventListener = (type: string, fn: EventListenerOrEventListenerObject | null,
+      el.removeEventListener = (type: string, fn: EventListenerOrEventListenerObject,
         options?: boolean | EventListenerOptions) => {
-        if (type === 'transitionend' && fn) attached.delete(fn);
+        if (type === 'transitionend') attached.delete(fn);
         remove(type, fn, options);
       };
       const before = attached.size;
@@ -833,12 +836,12 @@ describe('Sidebar', () => {
       expect(groupItems()[1].querySelector('.sidebar-group-count')?.textContent).toBe('1');
 
       sidebar.hide();
-      channels[0].favorite = true;
+      favoriteIds.add('a');
       sidebar.show();
       sidebar.handleAction('left');
 
       expect(groupItems()[1].querySelector('.sidebar-group-count')?.textContent).toBe('2');
-      channels[0].favorite = false;
+      favoriteIds.delete('a');
     });
 
     it('updates Recently Watched count when reopened after history changes', () => {
@@ -865,10 +868,10 @@ describe('Sidebar', () => {
       sidebar.handleAction('select');
       expect(items().map(item => item.querySelector('.ch-name')?.textContent)).toEqual(['Bravo']);
 
-      channels[1].favorite = false;
+      favoriteIds.delete('b');
       sidebar.refresh();
       expect(items()).toHaveLength(0);
-      channels[1].favorite = true;
+      favoriteIds.add('b');
     });
 
     it('retains the selected group after tuning within it', () => {

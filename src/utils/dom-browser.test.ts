@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 type Focus = (this: HTMLElement, options?: FocusOptions) => void;
 
 let list: HTMLElement;
 let option: HTMLElement;
-let logs: ReturnType<typeof vi.spyOn>;
+let logs: MockInstance<typeof console.log>;
 
 // Stands in for an engine's focus(): it scrolls the list to the target unless
 // it both reads and honors `preventScroll`.

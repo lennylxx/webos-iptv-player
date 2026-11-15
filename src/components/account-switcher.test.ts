@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { AccountSwitcher } from './account-switcher';
 import { Focus } from '../navigation/focus-scope';
 import type { PlaylistEntry } from '../types';
+
+type OnSelect = ConstructorParameters<typeof AccountSwitcher>[1]['onSelect'];
 
 function account(id: string, name: string): PlaylistEntry {
   return { id, name, url: 'http://host/a', source: 'xtream', xtream: { username: 'u', password: 'p' } };
 }
 
 let slot: HTMLElement;
-let onSelect: ReturnType<typeof vi.fn>;
+let onSelect: Mock<OnSelect>;
 let sw: AccountSwitcher;
 
 const A = [account('a1', 'Alpha'), account('a2', 'Bravo'), account('a3', 'Charlie')];
@@ -17,7 +19,7 @@ const A = [account('a1', 'Alpha'), account('a2', 'Bravo'), account('a3', 'Charli
 beforeEach(() => {
   document.body.innerHTML = '<div id="slot"></div>';
   slot = document.getElementById('slot')!;
-  onSelect = vi.fn();
+  onSelect = vi.fn<OnSelect>();
   sw = new AccountSwitcher(slot, { onSelect });
   sw.init();
 });
@@ -160,7 +162,7 @@ describe('AccountSwitcher with a focus scope', () => {
 
   it('hands the keys back to the scope below when closed or a row is chosen', () => {
     scoped.openMenu('key');
-    scoped.closeMenu('back');
+    scoped.closeMenu('key');
     expect(Focus.owner()).toBe(below);
     expect(slot.querySelector('.focused')).toBe(null);
     scoped.openMenu('key');

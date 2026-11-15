@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { ChannelCustomizationService } from './channel-customization';
 
 const {
   channelOverrideMock,
@@ -8,12 +9,9 @@ const {
   epgRefreshIntervalMock,
   parseXMLTVMock,
 } = vi.hoisted(() => ({
-  channelOverrideMock: vi.fn(() => null as {
-    epgChannelId?: string;
-    epgOffsetDeltaMinutes?: number;
-  } | null),
+  channelOverrideMock: vi.fn<typeof ChannelCustomizationService.overrideFor>(() => null),
   epgChannelIdsMock: vi.fn(() => [] as string[]),
-  epgChannelIdsForMock: vi.fn(() => [] as string[]),
+  epgChannelIdsForMock: vi.fn<typeof ChannelCustomizationService.epgChannelIdsFor>(() => []),
   fetchAndParseXMLTVMock: vi.fn(),
   epgRefreshIntervalMock: vi.fn((): number | null => 6 * 60 * 60 * 1000),
   parseXMLTVMock: vi.fn(),
@@ -57,7 +55,7 @@ vi.mock('../parsers/xmltv-parser', () => {
 import { EpgService, onEpgCacheWritten } from './epg-service';
 import { getCachedEpg, setCachedEpg } from './idb-cache';
 import { holdRecord } from './held-records';
-import { parseXMLTVWithStats } from '../parsers/xmltv-parser';
+import { parseXMLTVWithStats, type XMLTVParseOptions } from '../parsers/xmltv-parser';
 import { fetchMaybeGzipText } from '../utils/fetch-helper';
 import type { Channel, EpgSource, ParsedEpg, Programme } from '../types';
 import type { CachedEpgFilter } from './idb-cache';
@@ -101,7 +99,7 @@ beforeEach(() => {
   fetchAndParseXMLTVMock.mockImplementation(async (
     url: string,
     _timeout: number,
-    options: unknown,
+    options?: XMLTVParseOptions,
   ) => parseXMLTVWithStats(await fetchMaybeGzipText(url, 120000), options));
   channelOverrideMock.mockReturnValue(null);
   epgChannelIdsMock.mockReturnValue([]);
@@ -882,7 +880,7 @@ describe('EpgService cache and refresh', () => {
   });
 
   it('publishes fetched programmes before their cache write completes', async () => {
-    let resolveCacheWrite!: () => void;
+    let resolveCacheWrite!: (written: boolean) => void;
     let markCacheWriteStarted!: () => void;
     const cacheWriteStarted = new Promise<void>(resolve => {
       markCacheWriteStarted = resolve;
@@ -909,7 +907,7 @@ describe('EpgService cache and refresh', () => {
     );
     expect(EpgService.getNowPlaying(id!)?.title).toBe('Fresh');
 
-    resolveCacheWrite();
+    resolveCacheWrite(true);
     await loading;
   });
 
@@ -1058,7 +1056,7 @@ describe('EpgService channel pre-filter', () => {
       const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 1));
       let done = false;
       try {
-        const restoring = EpgService.restoreCached([source('http://a', ['a'])], null)
+        const restoring = EpgService.restoreCached([source('http://a', ['a'])])
           .then(() => { done = true; });
         await flushMicrotasks();
         expect(done).toBe(false);
@@ -1079,7 +1077,7 @@ describe('EpgService channel pre-filter', () => {
       const now = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 1));
       try {
         let done = false;
-        const restoring = EpgService.restoreCached([source('http://a', ['a'])], null)
+        const restoring = EpgService.restoreCached([source('http://a', ['a'])])
           .then(() => { done = true; });
         await flushMicrotasks();
         expect(done).toBe(false);

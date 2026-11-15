@@ -228,7 +228,7 @@ describe('fetchAndParseXMLTV', () => {
       let value: unknown;
       await writeHeldValue(
         { token, timeoutMs: 1000, field: 'data', writes: [{ store: 's', value: { key: 'k' } }] },
-        async writes => { value = writes[0].value.data; },
+        async writes => { value = writes[0].value?.data; },
       );
       // The worker caches the guide packed, which the page reads back sliced.
       expect(isPackedEpg(value)).toBe(true);

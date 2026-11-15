@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { Focus } from '../navigation/focus-scope';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import { ReminderPrompt } from './reminder-prompt';
 
 let prompt: ConfirmationPrompt;
-let onConfirm: ReturnType<typeof vi.fn>;
-let onCancel: ReturnType<typeof vi.fn>;
+type Options = Parameters<ConfirmationPrompt['show']>[0];
+let onConfirm: Mock<Options['onConfirm']>;
+let onCancel: Mock<Options['onCancel']>;
 
 beforeEach(() => {
   document.body.innerHTML = '';
   prompt = new ConfirmationPrompt('prompt.test');
-  onConfirm = vi.fn();
-  onCancel = vi.fn();
+  onConfirm = vi.fn<Options['onConfirm']>();
+  onCancel = vi.fn<Options['onCancel']>();
   prompt.show({
     title: 'Clear data?',
     message: 'This removes local data.',

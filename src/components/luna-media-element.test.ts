@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import type { LunaMediaElementOptions } from './luna-media-element';
 import { CONFIG } from '../config';
 
 const media = vi.hoisted(() => ({
@@ -806,11 +807,11 @@ describe('LunaMediaElement audio', () => {
       }],
     },
   };
-  let onAudioTracks: ReturnType<typeof vi.fn>;
+  let onAudioTracks: Mock<NonNullable<LunaMediaElementOptions['onAudioTracks']>>;
   let warn: string[];
 
   async function loaded(): Promise<InstanceType<typeof LunaMediaElement>> {
-    onAudioTracks = vi.fn();
+    onAudioTracks = vi.fn<NonNullable<LunaMediaElementOptions['onAudioTracks']>>();
     const element = new LunaMediaElement(video, {
       uri: 'http://host/a.m3u8',
       headers: { Referer: 'http://host/' },

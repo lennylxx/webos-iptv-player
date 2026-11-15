@@ -348,8 +348,9 @@ async function pointAt(page: import('@playwright/test').Page, target: import('@p
 }
 
 function pressGreen(page: import('@playwright/test').Page): Promise<void> {
-  return page.evaluate(() => document.dispatchEvent(
-    new KeyboardEvent('keydown', { keyCode: 404, bubbles: true })));
+  return page.evaluate(() => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 404, bubbles: true }));
+  });
 }
 
 test.describe('a pointer click on a section tab', () => {

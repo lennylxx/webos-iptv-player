@@ -72,7 +72,7 @@ async function openEpg(page: Page): Promise<void> {
 
 function key(page: Page, keyCode: number): Promise<void> {
   return page.evaluate(
-    (k) => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: k, bubbles: true })),
+    (k) => { document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: k, bubbles: true })); },
     keyCode,
   );
 }

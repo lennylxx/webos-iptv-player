@@ -66,12 +66,10 @@ class FakeWorker {
 
   addEventListener(
     type: 'message' | 'error' | 'messageerror',
-    listener: (event: MessageEvent<unknown>) => void,
+    listener: (event: MessageEvent<unknown> | ErrorEvent) => void,
   ): void {
     if (type === 'message') this.messageListener = listener;
-    if (type === 'error') {
-      this.errorListener = listener as (event: ErrorEvent) => void;
-    }
+    if (type === 'error') this.errorListener = listener;
   }
 }
 
@@ -204,7 +202,7 @@ describe('fetchAndParseXMLTV worker client', () => {
     let clock = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => (clock += 20));
     // The decode outlasts the worker's idle timeout.
-    vi.mocked(yieldToEventLoop).mockImplementation(() => vi.advanceTimersByTimeAsync(1000));
+    vi.mocked(yieldToEventLoop).mockImplementation(async () => { await vi.advanceTimersByTimeAsync(1000); });
 
     const result = await fetchAndParseXMLTV('http://host/a', 1000, {}, true);
 

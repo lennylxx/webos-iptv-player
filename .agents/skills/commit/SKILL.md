@@ -24,7 +24,8 @@ Run tests against the final changes, scoped to what they can affect:
   `npm run test:e2e`. That covers build, config, or dependency changes,
   and anything whose blast radius you can't name with confidence.
 
-Also run `npm run typecheck` and `npm run lint` for any code change, and
+Also run `npm run typecheck`, `npm run typecheck:tests`, and
+`npm run lint` for any code change, and
 `npm run service:smoke` for `bundled-service/`. State the scope you chose
 and the commands you ran. Do not commit unless they pass after the last
 code change; if one fails, fix it (or report it) and rerun.

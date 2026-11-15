@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LivePreview } from './live-preview';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { LivePreview, type LivePreviewOptions } from './live-preview';
 import { EpgService } from '../services/epg-service';
 import { PlaylistService } from '../services/playlist-service';
 import { StorageService } from '../services/storage-service';
@@ -51,21 +51,21 @@ describe('LivePreview', () => {
   let preview: LivePreview;
   let view: LivePreviewInternals;
   let favorite: boolean;
-  let playerPlay: ReturnType<typeof vi.fn>;
-  let liveSnapshot: ReturnType<typeof vi.fn>;
+  let playerPlay: Mock<Player['play']>;
+  let liveSnapshot: Mock<Player['getLivePlaybackSnapshot']>;
   let livePreviewMode: boolean;
   let actions: {
-    isFavorite: ReturnType<typeof vi.fn>;
-    onFavorite: ReturnType<typeof vi.fn>;
-    onClose: ReturnType<typeof vi.fn>;
-    onMute: ReturnType<typeof vi.fn>;
-    onExpand: ReturnType<typeof vi.fn>;
-    onPlayFullscreen: ReturnType<typeof vi.fn>;
-    onFocus: ReturnType<typeof vi.fn>;
-    onBlur: ReturnType<typeof vi.fn>;
-    onReturn: ReturnType<typeof vi.fn>;
-    onHighlightEntryPoint: ReturnType<typeof vi.fn>;
-    onSetPlaying: ReturnType<typeof vi.fn>;
+    isFavorite: Mock<LivePreviewOptions['isFavorite']>;
+    onFavorite: Mock<LivePreviewOptions['toggleFavorite']>;
+    onClose: Mock<Player['stop']>;
+    onMute: Mock<Player['togglePreviewMute']>;
+    onExpand: Mock<LivePreviewOptions['showPlayer']>;
+    onPlayFullscreen: Mock<LivePreviewOptions['playFullscreen']>;
+    onFocus: Mock<LivePreviewOptions['blurTabBar']>;
+    onBlur: Mock<() => void>;
+    onReturn: Mock<ChannelList['restoreFocus']>;
+    onHighlightEntryPoint: Mock<ChannelList['highlightEntryPoint']>;
+    onSetPlaying: Mock<ChannelList['setPlaying']>;
   };
 
   beforeEach(() => {
@@ -88,8 +88,8 @@ describe('LivePreview', () => {
       onPlayFullscreen: vi.fn(), onBlur: vi.fn(), onReturn: vi.fn(),
       onHighlightEntryPoint: vi.fn(), onSetPlaying: vi.fn(),
     };
-    playerPlay = vi.fn();
-    liveSnapshot = vi.fn(() => null);
+    playerPlay = vi.fn<Player['play']>();
+    liveSnapshot = vi.fn<Player['getLivePlaybackSnapshot']>(() => null);
     livePreviewMode = false;
     const player = {
       getVideoElement: vi.fn(() => null),

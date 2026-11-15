@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
 import { CONFIG } from '../config';
 import {
   SeekPreview,
@@ -128,9 +128,9 @@ describe('thumbnail tracks', () => {
 describe('SeekPreview', () => {
   let loads: string[];
   let outcomes: Record<string, boolean>;
-  let onUpdate: ReturnType<typeof vi.fn>;
+  let onUpdate: Mock<() => void>;
   let preview: SeekPreview;
-  let info: ReturnType<typeof vi.spyOn>;
+  let info: MockInstance<typeof console.log>;
 
   const loader: ImageLoader = url => {
     loads.push(url);
@@ -159,7 +159,7 @@ describe('SeekPreview', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
     loads = [];
     outcomes = {};
-    onUpdate = vi.fn();
+    onUpdate = vi.fn<() => void>();
     preview = new SeekPreview(onUpdate, loader);
     info = vi.spyOn(console, 'log').mockImplementation(() => {});
   });
