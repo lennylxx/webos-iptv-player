@@ -1,6 +1,6 @@
 {
   "name": "webos-iptv-player",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "private": true,
   "license": "Apache-2.0",
   "comment:browserslist": "The gate's target = the FLOOR of the supported fleet: webOS 4 = Chromium 53. Drives stylelint/doiuse (CSS) and eslint-plugin-compat (JS APIs); esbuild uses its own 'chrome53' syntax target. A static gate can only check the floor (eslint-plugin-compat flags not-yet-added APIs, NOT ones removed by newer engines), so forward-compat on newer TVs is left to the Playwright e2e, which runs on a current Chromium.",
