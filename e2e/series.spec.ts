@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, liveLoaded } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, liveLoaded, endHoldingUpNext } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // Seed one Xtream account (enables the tab bar) and stub the player_api.php
@@ -144,18 +144,24 @@ test('stepping right along Continue Watching keeps a series\' stacked cards in v
   })).toBeGreaterThanOrEqual(0);
 });
 
-test('CH+ and CH- step through a series\' episodes, as the OSD skips do', async ({ page }) => {
-  await seedSeries(page);
-  await neuterVideo(page);
+// Three episodes, optionally with stills, so the middle one has a skip live on
+// each side and Up Next has a next episode to show.
+async function routeThreeEpisodes(page: import('@playwright/test').Page, stills = false): Promise<void> {
   await page.route('**/player_api.php*action=get_series_info*', (route) => route.fulfill({
     status: 200, contentType: 'application/json', body: JSON.stringify({
       episodes: { '1': [1, 2, 3].map((n) => ({
         id: 10 + n, title: `Episode ${n}`, season: 1, episode_num: n, container_extension: 'mp4',
-        info: { plot: '', duration_secs: 1500, movie_image: '' },
+        info: { plot: '', duration_secs: 1500, movie_image: stills ? `http://host/still/${n}.svg` : '' },
       })) },
     }),
   }));
-  await page.goto('/');
+  await page.route('http://host/still/**', (route) => route.fulfill({
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="9"><rect width="16" height="9" fill="#468"/></svg>',
+  }));
+}
+
+async function playSecondEpisode(page: import('@playwright/test').Page): Promise<void> {
   await enterTab(page, 'series');
   await page.locator('.catalog-tile[data-item-id="1"]')
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
@@ -163,24 +169,104 @@ test('CH+ and CH- step through a series\' episodes, as the OSD skips do', async 
   await page.locator('.episode-row[data-episode-id="12"]')
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
   await page.keyboard.press('Enter');
+}
+
+const rect = (el: Element) => {
+  const r = el.getBoundingClientRect();
+  return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top),
+    bottom: Math.round(r.bottom), width: Math.round(r.width), height: Math.round(r.height) };
+};
+
+test('CH+ and CH- step through a series\' episodes, as the OSD skips do', async ({ page }) => {
+  await seedSeries(page);
+  await neuterVideo(page);
+  await routeThreeEpisodes(page);
+  await page.goto('/');
+  await playSecondEpisode(page);
 
   const osd = page.locator('#player-osd');
   const title = osd.locator('.osd-vod-detail');
   const previous = osd.locator('[data-skip-episode="-1"]');
   const next = osd.locator('[data-skip-episode="1"]');
+  const playPause = osd.locator('[data-playpause]');
   await expect(title).toContainText('S1 E2');
   await expect(previous).toBeEnabled();
   await expect(next).toBeEnabled();
+  // The skips sit a row gap either side of play/pause, which never moves.
+  const [before, middle, after] = await Promise.all([previous, playPause, next].map((l) => l.evaluate(rect)));
+  expect(middle.left - before.right).toBe(12);
+  expect(after.left - middle.right).toBe(12);
 
   await page.keyboard.press('PageUp');
   await expect(title).toContainText('S1 E3');
   await expect(next).toBeDisabled();
+  expect((await playPause.evaluate(rect)).left).toBe(middle.left);
   await page.keyboard.press('PageDown');
   await page.keyboard.press('PageDown');
   await expect(title).toContainText('S1 E1');
   await expect(previous).toBeDisabled();
+  expect((await playPause.evaluate(rect)).left).toBe(middle.left);
   await next.click();
   await expect(title).toContainText('S1 E2');
+});
+
+test('Up Next sets the next episode\'s still beside its text and spaces its actions', async ({ page }) => {
+  await seedSeries(page);
+  await neuterVideo(page);
+  await routeThreeEpisodes(page, true);
+  await page.goto('/');
+  await playSecondEpisode(page);
+  await expect(page.locator('#player-osd .osd-vod-detail')).toContainText('S1 E2');
+
+  await endHoldingUpNext(page);
+  const card = page.locator('#player-osd .osd-next-episode');
+  await expect(card).toContainText('S1 E3');
+  const thumb = card.locator('.osd-next-episode-thumb');
+  await expect.poll(() => thumb.evaluate((img) => (img as HTMLImageElement).complete)).toBe(true);
+
+  const still = await thumb.evaluate(rect);
+  const body = await card.locator('.osd-next-episode-body').evaluate(rect);
+  expect([still.width, still.height]).toEqual([384, 216]);
+  expect(body.left - still.right).toBe(24);
+  expect(Math.abs((body.top + body.bottom) - (still.top + still.bottom))).toBeLessThanOrEqual(2);
+
+  const [playNow, cancel] = await card.locator('.osd-next-episode-actions button').evaluateAll((buttons) =>
+    buttons.map((b) => { const r = b.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top }; }));
+  expect(Math.round(cancel.left - playNow.right)).toBe(12);
+  expect(cancel.top).toBe(playNow.top);
+  const icon = await card.locator('[data-next-play] .osd-next-episode-icon').evaluate(rect);
+  const label = await card.locator('[data-next-play] > span:last-child').evaluate(rect);
+  expect(label.left - icon.right).toBe(8);
+});
+
+test('Continue Watching series sit apart, their stacked cards short of the next tile', async ({ page }) => {
+  await seedSeries(page);
+  await page.addInitScript(() => {
+    const resume: Record<string, unknown> = {};
+    for (let i = 0; i < 3; i++) {
+      resume[`x1|episode|e${i}`] = {
+        accountId: 'x1', kind: 'episode', itemId: `e${i}`, name: `Series ${i} — S1E1`, poster: '', ext: 'mp4',
+        position: 100, duration: 600, updatedAt: 20 - i, season: 1, episode: 1,
+        watchlistOwner: { kind: 'series', itemId: `s${i}`, name: `Series ${i}`, poster: '' },
+      };
+    }
+    localStorage.setItem('iptv_resume', JSON.stringify(resume));
+  });
+  await page.goto('/');
+  await enterTab(page, 'series');
+  const tiles = page.locator('#view-series [data-rail-key="continue"] .catalog-tile-stack');
+  await expect(tiles).toHaveCount(3);
+
+  const layout = await tiles.evaluateAll((els) => els.map((el) => {
+    const r = el.getBoundingClientRect();
+    const back = getComputedStyle(el, '::after');
+    return { left: r.left, right: r.right, cardRight: r.left + parseFloat(back.width), card: back.content };
+  }));
+  for (let i = 1; i < layout.length; i++) {
+    expect(Math.round(layout[i].left - layout[i - 1].right)).toBe(32);
+    expect(layout[i - 1].card).not.toBe('none');
+    expect(layout[i - 1].cardRight).toBeLessThan(layout[i].left);
+  }
 });
 
 test('browse Series, open a detail, and play an episode', async ({ page }) => {

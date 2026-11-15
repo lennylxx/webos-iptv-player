@@ -1,4 +1,4 @@
-import { enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page, liveLoaded } from './helpers';
+import { endHoldingUpNext, enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page, liveLoaded } from './helpers';
 import { type Browser } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { findGappedLooseText, measureLooseText, newLegacyPage, pixelDiff } from './pixel-parity';
@@ -142,9 +142,37 @@ async function prepareM3U(page: Page): Promise<void> {
   await expect(page.locator('.channel-item')).toHaveCount(2);
 }
 
+// Three episodes with stills, so the series player has a live skip on each
+// side of play/pause and Up Next lays a still beside its text.
+async function routeSeriesEpisodes(page: Page): Promise<void> {
+  await page.route('**/player_api.php*action=get_series_info*', (r) => r.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      info: { name: 'Series One', plot: 'A series plot.' },
+      episodes: { 1: [1, 2, 3].map((n) => ({
+        id: String(10 + n), title: `Episode ${String(n)}`, season: 1, episode_num: n,
+        container_extension: 'mp4',
+        info: { duration_secs: 600, plot: 'An episode.', movie_image: `http://host/still/${String(n)}.svg` },
+      })) },
+    }),
+  }));
+  await page.route('http://host/still/**', (r) => r.fulfill({
+    status: 200,
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="9"><rect width="16" height="9" fill="#468"/></svg>',
+  }));
+}
+
+async function imagesLoaded(p: Page, selector: string): Promise<void> {
+  await expect.poll(() => p.locator(selector).evaluateAll((images) =>
+    images.every((img) => (img as HTMLImageElement).complete))).toBe(true);
+}
+
 async function prepareXtream(page: Page): Promise<void> {
   await page.clock.setFixedTime(NOW);
   await seedXtream(page, { catalog: 'large' });
+  await routeSeriesEpisodes(page);
   await page.goto('/');
   await liveLoaded(page);
 }
@@ -615,7 +643,50 @@ const XTREAM_SCREENS: Screen[] = [
     budget: 0,
     go: async (p) => {
       await p.locator('#view-series .catalog-tile[data-item-id="20"]').first().click();
-      await expect(p.locator('#view-series .episode-row')).toBeVisible();
+      await expect(p.locator('#view-series .episode-row')).toHaveCount(3);
+      await imagesLoaded(p, '#view-series img');
+    },
+  },
+  {
+    // The middle episode, so both skips flank play/pause.
+    name: 'series-osd',
+    budget: 0.001, // opaque-panel residue, as on the movie player
+    go: async (p) => {
+      await p.locator('#view-series .episode-row[data-episode-id="12"]')
+        .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+      await p.keyboard.press('Enter');
+      await expect(p.locator('#player-osd .osd-vod-detail')).toContainText('S1 E2');
+      await expect(p.locator('#player-osd [data-skip-episode="-1"]')).toBeEnabled();
+      await expect(p.locator('#player-osd [data-skip-episode="1"]')).toBeEnabled();
+    },
+  },
+  {
+    name: 'series-up-next',
+    budget: 0.001,
+    go: async (p) => {
+      await endHoldingUpNext(p);
+      await expect(p.locator('#player-osd .osd-next-episode')).toContainText('S1 E3');
+      await imagesLoaded(p, '#player-osd .osd-next-episode-thumb');
+    },
+  },
+  {
+    name: 'series-continue-watching',
+    budget: 0,
+    go: async (p) => {
+      await seedUserData(p, 'playback-progress', [1, 2, 3].map((n) => ({
+        key: `resume:x1|episode|e${String(n)}`,
+        value: {
+          accountId: 'x1', kind: 'episode', itemId: `e${String(n)}`, name: `Series ${String(n)} — S1E1`,
+          poster: '', ext: 'mp4', position: 100, duration: 600, updatedAt: Date.now() - n,
+          season: 1, episode: 1,
+          watchlistOwner: { kind: 'series', itemId: `s${String(n)}`, name: `Series ${String(n)}`, poster: '' },
+        },
+        updatedAt: Date.now() - n,
+      })));
+      await expect(p.locator('.tab-bar-item[data-section="series"]')).toBeVisible();
+      await enterTab(p, 'series');
+      await expect(p.locator('#view-series [data-rail-key="continue"] .catalog-tile-stack').nth(2))
+        .toBeVisible();
     },
   },
   {

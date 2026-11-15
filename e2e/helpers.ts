@@ -90,6 +90,20 @@ export async function neuterVideo(page: Page): Promise<void> {
   });
 }
 
+/** End the playing title with Up Next's countdown held on its first second, so
+ *  the card stays up and reads the same whenever it is sampled. */
+export async function endHoldingUpNext(page: Page): Promise<void> {
+  await page.locator('#video-player').evaluate((video) => {
+    const real = window.setInterval;
+    window.setInterval = (() => 0) as unknown as typeof window.setInterval;
+    try {
+      video.dispatchEvent(new Event('ended'));
+    } finally {
+      window.setInterval = real;
+    }
+  });
+}
+
 export interface PlayerKeyState {
   osdBefore: boolean;
   osd: boolean;
