@@ -170,8 +170,9 @@ build constant; `scripts/sync-version.mjs` runs on `npm version`.
   intervals, and player/EPG/storage constants. Prefer it over magic numbers.
 - **Bundled service** (`bundled-service/`) — Node.js 0.12.2 CommonJS service
   `com.lennylxx.iptv.service` for LAN setup/uploads, dev-mode reminder
-  alerts, the Luna path's header-carrying manifest fetch, and the Local
-  proxy that plays header channels over loopback. See
+  alerts, the Luna path's header-carrying manifest fetch, the Local
+  proxy that plays header channels over loopback, and the TV's per-app
+  aspect ratio, which settingsservice denies the app itself. See
   `bundled-service/AGENTS.md` and `docs/http-header-playback.md`.
 
 ## Conventions

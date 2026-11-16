@@ -45,6 +45,7 @@ Luna (called by the app's LAN/reminder/manifest clients and by Activity Manager)
 | `openProxy` | no | Open a loopback proxy session that sends a stream's HTTP headers; app-only. |
 | `touchProxy` | no | Keep a loopback proxy session alive and report its last upstream status; app-only. |
 | `closeProxy` | no | End a loopback proxy session; app-only. |
+| `setAspectRatio` | no | Set the TV's picture aspect ratio for the app (settingsservice `arcPerApp`); app-only. |
 
 HTTP (called by phones, and by the app for reconcile):
 
@@ -217,6 +218,68 @@ webOS. `IPTV_PROXY_ALLOW_LOOPBACK=1` lets the proxy reach an upstream on
 this machine (other than itself), as the E2E server is. How to run the
 desktop preview against it is in
 [HTTP header playback](http-header-playback.md#desktop-preview).
+
+## Aspect ratio
+
+The webOS video plane ignores CSS (`object-fit`, transforms), so the
+player menu's Aspect Ratio sets the TV's own per-app setting instead:
+`com.webos.settingsservice/setSystemSettings` with category
+`aspectRatio`, the app's id as `app_id`, and key `arcPerApp`. The web
+app's identity gets `Access denied` from settingsservice, and so does
+reading it, so the app calls the service's `setAspectRatio`, which sends
+the request on an anonymous palmbus handle.
+
+| Menu | `arcPerApp` | Picture |
+|---|---|---|
+| Auto | `original` | The stream's own shape |
+| 16:9 | `16x9` | Stretched to 16:9 |
+| 4:3 | `4x3` | Stretched into a centered 4:3 box |
+| Zoom | `allDirZoom` | The TV's 4-way zoom: uniform, edges cropped |
+
+The TV also lists `vertZoom` (vertical stretch only) and hides
+`full_wide`, `32x9`, `32x12`, and `twinZoom`; the service accepts only
+the four values above. The zoom amount (`allDirZoomHRatio` /
+`allDirZoomVRatio`, 0–15, default 12) is left to the TV's menu.
+
+### When the app writes
+
+The TV keeps a single `arcPerApp` value for the app. It persists after
+the app exits, and the user can change it from the TV's menu. The
+per-channel records say what each channel wants, not who set the value
+now on the TV, so `iptv_aspect_dirty` records whether the app set it.
+The app writes only:
+
+- a remembered ratio, when it differs from the last value the app wrote;
+- `original` on a channel without one, and only while
+  `iptv_aspect_dirty` says the current value is the app's;
+- any pick from the player menu, which always writes and shows a toast
+  on failure.
+
+Tuning in replaces a ratio the user set in the TV's menu only on a
+channel with a remembered ratio, or while `iptv_aspect_dirty` is set,
+when it writes `original` once; the app cannot read `arcPerApp` to tell.
+Reset App keeps `iptv_aspect_dirty`, since the TV keeps the ratio.
+After a `denied`, `bad_value`, `no_bus`, `settings_denied`, or
+`settings_failed` failure, tuning in stops writing for the session (the
+flag stays) until a menu pick succeeds; a tune-in made meanwhile is
+applied once that pick succeeds. Any other failure (`timeout`,
+`superseded`, `bus_error`, an unreachable service, or another Luna
+error) is retried on the next tune-in. The app gives up on a request the
+service has not answered in 7 s and treats it as `timeout`. Failures are
+logged as `event=player.aspect_failed reason=…` once per reason per
+session.
+
+### Service queue
+
+The service writes one value at a time: a request that arrives while one
+is in flight waits, a newer one replaces it (the replaced one answers
+`superseded`), and a write settingsservice has not answered in 5 s is
+canceled before the next goes out. A palmbus handle that throws
+(`bus_error`) or lets a write time out is dropped, and the next write
+builds a new one. Request: `{ "value": "allDirZoom" }`;
+reply: `{ "returnValue": true, "value": … }` or `returnValue: false`
+with `errorCode` `denied`, `bad_value`, `no_bus`, `timeout`,
+`superseded`, `bus_error`, `settings_denied`, or `settings_failed`.
 
 ## Event-driven updates
 

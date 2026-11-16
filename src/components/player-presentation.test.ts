@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlayerPresentation } from './player-presentation';
+import type { AspectRatio } from '../services/aspect-ratio';
 
 const preview = { left: 880, top: 160, width: 960, height: 540 };
 
@@ -181,6 +182,66 @@ describe('PlayerPresentation', () => {
     expect(video!.style.opacity).toBe('0.8');
     expect(video!.className).toBe('active');
     presentation.refresh();
+    expectBaseline();
+  });
+});
+
+describe('PlayerPresentation aspect ratio emulation', () => {
+  let mode: AspectRatio;
+  const box = (left: number, top: number, width: number, height: number) => ({ left, top, width, height });
+
+  beforeEach(() => {
+    mode = 'auto';
+    presentation = new PlayerPresentation(() => video, () => slot, () => {}, () => mode, true);
+  });
+
+  it('stretches into a centered 4:3 or 16:9 box full screen', () => {
+    mode = '4x3';
+    presentation.showFullscreen();
+    expect(video?.style.objectFit).toBe('fill');
+    expectGeometry(box(240, 0, 1440, 1080));
+
+    mode = '16x9';
+    presentation.refresh();
+    expectGeometry(box(0, 0, 1920, 1080));
+  });
+
+  it('fills and crops for Zoom, and Auto restores the stylesheet fit', () => {
+    mode = 'zoom';
+    presentation.showFullscreen();
+    expect(video?.style.objectFit).toBe('cover');
+    expectBaseline();
+
+    mode = 'auto';
+    presentation.refresh();
+    expect(video?.style.objectFit).toBe('');
+    expectBaseline();
+  });
+
+  it('boxes inside the preview slot but reports the slot to the pipeline', () => {
+    const onLayout = vi.fn();
+    presentation = new PlayerPresentation(() => video, () => slot, onLayout, () => mode, true);
+    mode = '4x3';
+    presentation.showPreview();
+    expectGeometry(box(880 + 120, 160, 720, 540));
+    expect(onLayout).toHaveBeenLastCalledWith(preview);
+  });
+
+  it('clears the emulated fit from a replaced video node', () => {
+    mode = 'zoom';
+    presentation.showFullscreen();
+    const original = video!;
+    video = document.createElement('video');
+    presentation.refresh();
+    expect(original.style.objectFit).toBe('');
+    expect(video.style.objectFit).toBe('cover');
+  });
+
+  it('leaves the video alone where the TV scales the picture', () => {
+    presentation = new PlayerPresentation(() => video, () => slot, () => {}, () => mode, false);
+    mode = '4x3';
+    presentation.showFullscreen();
+    expect(video?.style.objectFit).toBe('');
     expectBaseline();
   });
 });

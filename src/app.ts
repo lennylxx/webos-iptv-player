@@ -276,6 +276,8 @@ class App {
       (rate) => this.player.setPlaybackRate(rate),
       () => this.player.subtitleSearchAvailable(),
       () => this.player.openSubtitleSearch(),
+      () => this.player.getAspectRatio(),
+      (mode) => this.player.setAspectRatio(mode),
     );
 
     this.movies = new Movies(this.views.movies, {

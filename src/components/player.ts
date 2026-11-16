@@ -25,6 +25,7 @@ import {
   channelHttpHeaders,
   channelKey,
   channelStreamIdentity,
+  aspectPreferenceKey,
   channelStreamKey,
 } from '../utils/channel';
 import { dvrWindow, dvrState, type DvrWindow } from '../utils/dvr';
@@ -38,6 +39,7 @@ import {
 } from '../services/parental-control';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
+import { TvAspectRatio, type AspectRatio } from '../services/aspect-ratio';
 import { CONFIG } from '../config';
 import { StallWatchdog, type StallProbe, type StallRecovery } from '../utils/stall-watchdog';
 import { StartupWatchdog, type StartupFailure, type StartupProbe } from '../utils/startup-watchdog';
@@ -176,6 +178,17 @@ export class Player {
   private liveMuted = false;
   private liveVolume = 1;
   private previewMuteOverride: boolean | null = null;
+  private aspectRatio: AspectRatio = 'auto';
+  // The TV ignores CSS on its video plane; it scales the picture itself.
+  private tvAspect = isWebOS() ? new TvAspectRatio(undefined, {
+    get: () => StorageService.getAspectDirty(),
+    set: dirty => StorageService.setAspectDirty(dirty),
+  }) : null;
+  // Relayouts the CSS emulation; on webOS the TV scales the picture, and a
+  // relayout would reach the outgoing Luna pipeline.
+  private aspectListener: () => void = () => {};
+  // Bumped by stop(): a pick that fails after the player closed stays silent.
+  private aspectSession = 0;
   constructor(
     container: HTMLElement,
     onBack: () => void,
@@ -639,6 +652,8 @@ export class Player {
     old.parentNode!.replaceChild(fresh, old);
     this.videoEl = fresh;
     this.pipeline.setVideoElement(fresh);
+    // The fresh element lacks the emulated aspect ratio's styles.
+    if (!this.tvAspect && this.aspectRatio !== 'auto') this.aspectListener();
     this.osd.refreshProgress();
     this.onPlaybackStateChanged();
   }
@@ -1158,6 +1173,7 @@ export class Player {
   }
 
   stop(): void {
+    this.aspectSession++;
     if (this.liveSessionActive) this.rememberLiveAudio();
     this.liveSessionActive = false;
     this.livePreviewMode = false;
@@ -1370,6 +1386,7 @@ export class Player {
       this.reopenResume = false;
     }
     this.loadPlayed = false;
+    if (!opts?.reload) this.loadAspectRatio();
     this.tracks.resetForLoad();
     this.vodTracksLatePending = false;
     this.manifestVariants = [];
@@ -2326,6 +2343,41 @@ export class Player {
     }
     showToast(t('player.playbackSpeedFailed'));
     this.onPlaybackStateChanged();
+  }
+
+  getAspectRatio(): AspectRatio {
+    return this.aspectRatio;
+  }
+
+  // Remembered per channel, movie, or series.
+  setAspectRatio(mode: AspectRatio): void {
+    const key = aspectPreferenceKey(this.currentChannel, this.vod);
+    if (key) StorageService.setAspectRatio(key, mode);
+    this.showAspectRatio(mode);
+    const session = this.aspectSession;
+    void this.tvAspect?.pick(mode).then(result => {
+      // A failure that settles after a zap or exit belongs to what was left.
+      if (result === 'failed' && session === this.aspectSession &&
+        aspectPreferenceKey(this.currentChannel, this.vod) === key) {
+        showToast(t('player.aspectRatioFailed'));
+      }
+    });
+  }
+
+  onAspectRatioChange(listener: () => void): void {
+    this.aspectListener = listener;
+  }
+
+  private loadAspectRatio(): void {
+    const mode = StorageService.getAspectRatio(aspectPreferenceKey(this.currentChannel, this.vod));
+    this.showAspectRatio(mode);
+    this.tvAspect?.enter(mode);
+  }
+
+  private showAspectRatio(mode: AspectRatio): void {
+    const changed = mode !== this.aspectRatio;
+    this.aspectRatio = mode;
+    if (changed && !this.tvAspect) this.aspectListener();
   }
 
   async setPlaybackRate(rate: PlaybackRate): Promise<boolean> {

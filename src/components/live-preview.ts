@@ -67,7 +67,9 @@ export class LivePreview {
       () => options.player.getVideoElement(),
       () => this.slot,
       rect => options.player.setVideoDisplay(rect),
+      () => options.player.getAspectRatio(),
     );
+    options.player.onAspectRatioChange(() => this.presentation.refresh());
     container.setAttribute('data-self-activate', '');
     container.addEventListener('nav:hover', event => {
       const target = event.target;

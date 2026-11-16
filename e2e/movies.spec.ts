@@ -707,8 +707,7 @@ test('a VOD sidecar subtitle creates its application track when selected', async
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await page.keyboard.press('ArrowDown'); // Title Info -> Settings
-  await page.keyboard.press('ArrowDown'); // Settings -> Playback Speed
-  await page.keyboard.press('ArrowDown'); // Playback Speed -> Subtitles
+  await page.keyboard.press('ArrowDown'); // Settings -> Subtitles
   await page.keyboard.press('Enter');     // open the Subtitles sub-menu
   await expect(menu).toContainText('Track 1');
 
@@ -753,8 +752,7 @@ test('a VOD ASS sidecar renders through the assjs overlay when selected', async 
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await page.keyboard.press('ArrowDown'); // Title Info -> Settings
-  await page.keyboard.press('ArrowDown'); // Settings -> Playback Speed
-  await page.keyboard.press('ArrowDown'); // Playback Speed -> Subtitles
+  await page.keyboard.press('ArrowDown'); // Settings -> Subtitles
   await page.keyboard.press('Enter');     // open the Subtitles sub-menu
   await expect(menu).toContainText('ASS 1');
 

@@ -74,6 +74,7 @@ describe('StorageService IndexedDB migration', () => {
       ch1: { off: false, name: 'Track 2', lang: 'l2' },
     }));
     localStorage.setItem('iptv_subtitle_offsets', JSON.stringify({ ch1: 1.5 }));
+    localStorage.setItem('iptv_aspect_ratios', JSON.stringify({ ch1: 'zoom' }));
     localStorage.setItem('iptv_resume', JSON.stringify({ 'x1|vod|10': resume }));
     localStorage.setItem('iptv_watchlist', JSON.stringify({ 'x1|vod|10': watch }));
     localStorage.setItem('iptv_online_sub_picks', JSON.stringify({
@@ -104,6 +105,7 @@ describe('StorageService IndexedDB migration', () => {
       lang: 'l2',
     });
     expect(StorageService.getSubtitleOffset('ch1')).toBe(1.5);
+    expect(StorageService.getAspectRatio('ch1')).toBe('zoom');
     expect(StorageService.getResume('x1', 'vod', '10')).toEqual(resume);
     expect(StorageService.getWatchlist('x1', 'vod')).toEqual([watch]);
     expect(StorageService.getCatchupProgress('ch1', 5_000)).toEqual({
@@ -126,6 +128,7 @@ describe('StorageService IndexedDB migration', () => {
       'audio_prefs',
       'subtitle_prefs',
       'subtitle_offsets',
+      'aspect_ratios',
       'resume',
       'watchlist',
       'online_sub_picks',

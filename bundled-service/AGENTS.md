@@ -6,9 +6,9 @@ A sandbox-separate Node (CommonJS) webOS service,
 `com.lennylxx.iptv.service`. It hosts LAN phone setup and M3U uploads and,
 in Developer Mode, interactive program-reminder alerts. It also reads
 manifests with channel headers for the app's Luna playback, and
-proxies header streams on loopback for the app's Local proxy mode.
-`src/index.ts` wires `lan/`, `setup/`, `reminder/`, `fetch/`, and
-`proxy/`.
+proxies header streams on loopback for the app's Local proxy mode, and
+sets the TV's per-app aspect ratio. `src/index.ts` wires `lan/`,
+`setup/`, `reminder/`, `fetch/`, `proxy/`, and `aspect/`.
 
 **Read `docs/lan-service.md` before changing it.**
 
@@ -29,7 +29,12 @@ that `tv.sh logs --service` and `tv.sh diag` read.
 - **Luna:** `start` / `stop` / `heartbeat` / `serviceEvents` for LAN
   changes; `getDevMode` / `fireReminderAlert` for reminders;
   `fetchManifest` (app-only) for Luna header playback; `openProxy` /
-  `touchProxy` / `closeProxy` (app-only) for Local proxy header playback.
+  `touchProxy` / `closeProxy` (app-only) for Local proxy header playback;
+  `setAspectRatio` (app-only) for the TV's per-app aspect ratio, which
+  settingsservice denies the app but answers on an anonymous palmbus
+  handle (`docs/lan-service.md`). Register an app-only method with
+  `appMethod` in `src/luna-reply.ts`, which owns the caller check, the
+  `outcome=denied` log, the one-shot responder, and `lunaFailure`.
 - **HTTP:** phone setup pages and uploads; a separate loopback-only
   proxy server for Local proxy sessions, plus its `POST /open`,
   `/touch`, and `/close` control routes when run standalone off the TV

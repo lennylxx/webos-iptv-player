@@ -31,6 +31,7 @@ vi.mock('../services/storage-service', () => ({
     setCatchupProgress: vi.fn(), getCatchupProgress: vi.fn(), clearCatchupProgress: vi.fn(),
     touchRecentlyWatchedLive: vi.fn(),
     getSubtitleOffset: vi.fn(() => 0), setSubtitleOffset: vi.fn(),
+    getAspectRatio: vi.fn(() => 'auto'), setAspectRatio: vi.fn(),
     getChannelCycleMode: vi.fn(() => 'global'),
     getLiveReconnectAttempts: vi.fn(() => 3),
     getHeaderPlayback: vi.fn(() => 'off'),
@@ -1705,6 +1706,33 @@ describe('Player Recently Watched recording', () => {
     video.dispatchEvent(new Event('playing'));
     vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS);
     expect(touchLive()).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Player aspect ratio', () => {
+  afterEach(() => {
+    vi.mocked(StorageService.getAspectRatio).mockImplementation(() => 'auto');
+    vi.mocked(StorageService.setAspectRatio).mockReset();
+  });
+
+  it('remembers the choice per channel and restores it on tune-in', () => {
+    const saved: Record<string, string> = {};
+    vi.mocked(StorageService.setAspectRatio).mockImplementation((key, mode) => { saved[key] = mode; });
+    vi.mocked(StorageService.getAspectRatio).mockImplementation(key => (saved[key] ?? 'auto') as 'auto');
+    const changed = vi.fn();
+    player.onAspectRatioChange(changed);
+    playlistMock.getByIndex.mockImplementation((i: number) => (i === 1 ? CHANNEL_NO_CATCHUP : CHANNEL));
+
+    player.play(0);
+    player.setAspectRatio('zoom');
+    expect(saved[channelKey(CHANNEL)]).toBe('zoom');
+    expect(changed).toHaveBeenCalledTimes(1);
+
+    player.play(1);
+    expect(player.getAspectRatio()).toBe('auto');
+    player.play(0);
+    expect(player.getAspectRatio()).toBe('zoom');
+    expect(changed).toHaveBeenCalledTimes(3);
   });
 });
 

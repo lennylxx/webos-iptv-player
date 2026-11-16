@@ -83,6 +83,7 @@
 - **Channel HTTP headers** — channels whose M3U sets a Referer, User-Agent, Cookie, or Authorization play through the TV's media service, or optionally a local proxy, with those headers ([details](docs/http-header-playback.md))
 - **Audio & subtitle tracks** — pick from the player menu, remembered per channel or VOD item; subtitles cover in-manifest WebVTT and CEA-608/708 (live), in-container / sidecar SRT/WebVTT/ASS (VOD), and online search (SubDL, OpenSubtitles, and Assrt) with a manual title box; online search remains available when bundled tracks exist, and subtitle timing can be adjusted live
 - **Playback speed** — choose 0.5×–2× for movies and episodes in file formats such as MP4 and MKV; live TV, catch-up, and HLS/DASH streams play at normal speed because the webOS native pipeline ignores rate changes for them
+- **Aspect ratio** — choose Auto, 16:9, 4:3, or Zoom from the player menu, remembered per channel, movie, or series; on the TV it sets the TV's own aspect ratio for the app, whose Aspect Ratio menu still offers finer adjustment
 - **On-screen display** — program title, progress, and a live stream-info readout (resolution, HDR, frame rate, codec, audio channels), with adjustable auto-hide and number-entry timeouts
 - **Automatic playback recovery** — detect streams that fail to start or stall, reload transient failures, and advance to the next live channel after an adjustable number of reconnect attempts
 - **Resync A/V** (🔄) — one tap on the playback bar re-locks audio and video that drift apart during a long catch-up or on-demand stream

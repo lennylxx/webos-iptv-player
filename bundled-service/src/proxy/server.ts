@@ -12,20 +12,22 @@ import * as https from 'https';
 import * as net from 'net';
 import * as nodeUrl from 'url';
 import * as zlib from 'zlib';
+import { sanitizeHeaders } from '../fetch/manifest-fetch';
 import {
-  MANIFEST_FETCH_MAX_REDIRECTS,
-  REDIRECT_STATUSES,
   httpUrl,
+  isRedirect,
+  nextHop,
   origin,
-  requestAuth,
   requestHeaders,
-  sanitizeHeaders,
+  transport,
+  upstreamOptions,
   withoutCredentials,
-} from '../fetch/manifest-fetch';
+} from '../upstream';
 import { createCookieJar, type CookieJar } from './cookie-jar';
 import { proxyUrl, rewriteDash, rewriteHls, sniffManifest, targetFromPath, type ManifestKind } from './rewrite';
 import { bufferFrom } from '../compat';
 import { createLogger } from '../logger';
+import { lunaFailure } from '../luna-reply';
 
 const log = createLogger('proxy');
 
@@ -148,7 +150,7 @@ export interface StreamProxy {
 }
 
 function failure(errorCode: string, errorText: string): ProxyOpenFailure {
-  return { returnValue: false, errorCode: errorCode, errorText: errorText };
+  return lunaFailure(errorCode, errorText);
 }
 
 function hasOwn(object: object, key: string): boolean {
@@ -447,21 +449,10 @@ export function createStreamProxy(options: ProxyOptions = {}): StreamProxy {
       });
       const accept = req.headers.accept;
       if (!hasOwn(headers, 'accept') && typeof accept === 'string' && accept) headers.accept = accept;
-      const requestOptions: https.RequestOptions = {
-        method: method,
-        hostname: url.hostname,
-        port: url.port ? Number(url.port) : undefined,
-        path: url.path || '/',
-        headers: headers,
-        agent: secure ? httpsAgent : httpAgent,
-      };
-      const basic = requestAuth(url, auth);
-      if (basic) requestOptions.auth = basic;
-      // As fetchManifest: no certificate check, and so no credential over https.
-      if (secure) requestOptions.rejectUnauthorized = false;
+      const requestOptions = upstreamOptions(url, method, headers, auth, secure ? httpsAgent : httpAgent);
       let upReq: http.ClientRequest;
       try {
-        upReq = (secure ? https : http).request(requestOptions);
+        upReq = transport(url).request(requestOptions);
       } catch {
         fail(502);
         return;
@@ -489,17 +480,14 @@ export function createStreamProxy(options: ProxyOptions = {}): StreamProxy {
         const status = upRes.statusCode || 0;
         const location = upRes.headers.location;
         session.jar.store(upRes.headers['set-cookie'], url);
-        if (REDIRECT_STATUSES.indexOf(status) >= 0 && typeof location === 'string' && location) {
+        if (isRedirect(status, location)) {
           upRes.resume();
-          const next = redirects < MANIFEST_FETCH_MAX_REDIRECTS
-            ? httpUrl(nodeUrl.resolve(url.href || '', location)) : null;
-          if (!next) {
+          const next = nextHop(url, location, redirects, carried, auth);
+          if (typeof next === 'string') {
             fail(502);
             return;
           }
-          const sameOrigin = origin(next) === origin(url);
-          hop(next, redirects + 1, sameOrigin ? carried : withoutCredentials(carried),
-            sameOrigin ? next.auth || auth : '');
+          hop(next.url, redirects + 1, next.carried, next.auth);
           return;
         }
         if (headerTimer) clearTimeout(headerTimer);

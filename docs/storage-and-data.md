@@ -99,6 +99,7 @@ This is the complete active key inventory:
 | `iptv_animation_mode` | `essential \| reduced \| full` | Animation profile; defaults to immediate navigation scrolling, while Essential disables costly motion for older TVs | Preference |
 | `iptv_overlay_style` | `dark \| frosted` | Player OSD/sidebar/menu glass style | Preference |
 | `iptv_tz_mode` | `device \| feed` | Which time zone displays EPG times | Preference |
+| `iptv_aspect_dirty` | `true` (absent when clear) | The app left a non-`original` TV aspect ratio for itself that it has not restored; set before the write goes out, removed once an `original` write succeeds; Reset App keeps it | Playback state |
 | `iptv_epg_tz_offset` | `number \| null` | Last known feed offset in minutes east of UTC | Small derived state |
 | `iptv_epg_offsets` | `Record<string, number>` | User time correction in minutes, keyed by EPG source URL | Preference |
 | `iptv_online_subtitles` | `OnlineSubtitleConfig` | Preferred language; SubDL and Assrt API keys; OpenSubtitles API key, username, password, access token, and token timestamp | Configuration and credentials |
@@ -131,6 +132,7 @@ origin, so object-store names do not repeat the `iptv_` prefix.
 | `channel-state` | `audio:<channel-key>` | None | Preferred audio rendition name and language |
 | `channel-state` | `subtitle:<channel-key>` | None | Explicit off state or preferred subtitle name/language/CC mode |
 | `channel-state` | `offset:<channel-key>` | None | Subtitle timing adjustment in seconds |
+| `channel-state` | `aspect:<channel-key>` | None | Aspect ratio other than Auto: `16x9`, `4x3`, or `zoom`; a movie uses `vod:<account-id>:vod:<item-id>` and a series' episodes share `vod:<account-id>:series:<series-id>`, but an episode without a series owner (such as some Continue Watching entries) uses its own `vod:<account-id>:episode:<item-id>` |
 | `watchlist` | `watch:<account-id>\|<vod-or-series>\|<item-id>` | `scope` | Name, poster, rating, category, extension, and added time; scope is account and content kind |
 | `playback-progress` | `resume:<account-id>\|<vod-or-episode>\|<item-id>` | `expiresAt`, `updatedAt` | Position, duration, title/poster/extension snapshot, optional autoplay queue and Watchlist owner |
 | `playback-progress` | `catchup:<channel-key>\|<program-start>` | `expiresAt`, `updatedAt` | EPG source URL, program start/stop, title/description/icon snapshot, position, completion, update time, and computed expiry |
@@ -481,7 +483,8 @@ database failure can be reported:
 
 1. Clear all derived cache stores and `cache-meta`.
 2. Clear all user-data stores and internal metadata.
-3. Clear localStorage.
+3. Clear localStorage, except `iptv_aspect_dirty`: the TV keeps the
+   aspect ratio the app set, so the app must still restore `original`.
 4. Emit the completion event.
 5. Reload the app.
 

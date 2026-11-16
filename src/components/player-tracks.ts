@@ -45,7 +45,7 @@ import {
   shiftForeignTrack,
   subtitleLabel,
 } from '../utils/subtitle-tracks';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { legacyPlaybackPreferenceKey, playbackPreferenceKey } from '../utils/channel';
 import { createLogger } from '../utils/logger';
 import { isWebOS } from '../utils/platform';
 import { $ } from '../utils/dom';
@@ -1104,15 +1104,10 @@ export class PlayerTracks {
   }
 
   private preferenceKey(): string {
-    const vod = this.options.getVod();
-    if (vod) return `vod:${vod.accountId}:${vod.kind}:${vod.itemId}`;
-    const channel = this.options.getChannel();
-    return channel ? channelKey(channel) : '';
+    return playbackPreferenceKey(this.options.getChannel(), this.options.getVod());
   }
 
   private legacyPreferenceKey(): string {
-    if (this.options.getVod()) return '';
-    const channel = this.options.getChannel();
-    return channel ? legacyChannelKey(channel) : '';
+    return legacyPlaybackPreferenceKey(this.options.getChannel(), this.options.getVod());
   }
 }

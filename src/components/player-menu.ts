@@ -2,7 +2,7 @@ import type { Action, AudioTrackOption, Channel, SubtitleTrackOption } from '../
 import { CONFIG } from '../config';
 import { $, html, inShownView, onceTransitionEnd, raw, withInstantScroll } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { AUDIO_ICON, SPEED_ICON, SUBTITLE_ICON } from './icons';
+import { ASPECT_ICON, AUDIO_ICON, SPEED_ICON, SUBTITLE_ICON } from './icons';
 import { t } from '../i18n';
 import {
   PLAYBACK_RATES,
@@ -10,6 +10,7 @@ import {
   type PlaybackRateState,
 } from '../services/playback-rate';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
+import { ASPECT_RATIOS, type AspectRatio } from '../services/aspect-ratio';
 
 const AUTO_HIDE_MS = 5000;
 
@@ -35,6 +36,14 @@ const OPEN_OFFSET = '__subs_offset__';
 const OPEN_SEARCH = '__subs_search__';
 const OPEN_SPEED = '__speed_open__';
 const PICK_SPEED = '__speed_rate__';
+const OPEN_ASPECT = '__aspect_open__';
+const PICK_ASPECT = '__aspect_ratio__';
+
+function aspectLabel(mode: AspectRatio): string {
+  if (mode === 'auto') return t('player.aspectAuto');
+  if (mode === 'zoom') return t('player.aspectZoom');
+  return mode === '16x9' ? '16:9' : '4:3';
+}
 
 /**
  * The action overlay shown on the right edge during playback. Owns its own
@@ -62,10 +71,12 @@ export class PlayerMenu {
   private openSubtitleSearch: () => void;
   private getPlaybackRateState: () => PlaybackRateState;
   private selectPlaybackRate: (rate: PlaybackRate) => Promise<boolean>;
+  private getAspectRatio: () => AspectRatio | null;
+  private selectAspectRatio: (mode: AspectRatio) => void;
   private isVisible = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private focusIdx = 0;
-  private mode: 'main' | 'audio' | 'subtitles' | 'speed' = 'main';
+  private mode: 'main' | 'audio' | 'subtitles' | 'speed' | 'aspect' = 'main';
   private cancelHide: (() => void) | null = null;
   // Registered on the first show; focusIdx stays the model, the scope paints it.
   private scope: FocusScope | null = null;
@@ -84,6 +95,9 @@ export class PlayerMenu {
     selectPlaybackRate: (rate: PlaybackRate) => Promise<boolean>,
     subtitleSearchAvailable: () => boolean,
     openSubtitleSearch: () => void,
+    // null hides the Aspect Ratio row.
+    getAspectRatio: () => AspectRatio | null = () => null,
+    selectAspectRatio: (mode: AspectRatio) => void = () => {},
   ) {
     this.getCurrentChannel = getCurrentChannel;
     this.onAction = onAction;
@@ -97,6 +111,8 @@ export class PlayerMenu {
     this.selectPlaybackRate = selectPlaybackRate;
     this.subtitleSearchAvailable = subtitleSearchAvailable;
     this.openSubtitleSearch = openSubtitleSearch;
+    this.getAspectRatio = getAspectRatio;
+    this.selectAspectRatio = selectAspectRatio;
     this.el = $('#player-menu', container);
     this.bindEvents();
   }
@@ -159,6 +175,11 @@ export class PlayerMenu {
     if (!this.isVisible) return;
     if (this.mode === 'speed') {
       if (this.getPlaybackRateState().available) this.render();
+      else this.openMain();
+      return;
+    }
+    if (this.mode === 'aspect') {
+      if (this.getAspectRatio()) this.render();
       else this.openMain();
       return;
     }
@@ -297,6 +318,8 @@ export class PlayerMenu {
       this.openSubtitles();
     } else if (action === OPEN_SPEED) {
       this.openSpeed();
+    } else if (action === OPEN_ASPECT) {
+      this.openAspect();
     } else if (action === BACK) {
       this.openMain();
     } else if (action === PICK_AUDIO) {
@@ -313,6 +336,12 @@ export class PlayerMenu {
     } else if (action === OPEN_OFFSET) {
       this.hide();
       this.openSubtitleOffset();
+    } else if (action === PICK_ASPECT) {
+      const mode = item.dataset.aspectRatio;
+      if ((ASPECT_RATIOS as readonly string[]).indexOf(mode ?? '') !== -1) {
+        this.selectAspectRatio(mode as AspectRatio);
+      }
+      this.openMain();
     } else if (action === PICK_SPEED) {
       const rate = Number(item.dataset.playbackRate) as PlaybackRate;
       if (PLAYBACK_RATES.indexOf(rate) !== -1) {
@@ -354,6 +383,15 @@ export class PlayerMenu {
     this.resetTimer();
   }
 
+  private openAspect(): void {
+    this.mode = 'aspect';
+    const current = this.getAspectRatio();
+    const active = current ? ASPECT_RATIOS.indexOf(current) : -1;
+    this.render();
+    this.openAt(active >= 0 ? active + 1 : 1);
+    this.resetTimer();
+  }
+
   private openMain(): void {
     this.mode = 'main';
     this.render();
@@ -365,6 +403,7 @@ export class PlayerMenu {
     if (this.mode === 'audio') this.renderAudio();
     else if (this.mode === 'subtitles') this.renderSubtitles();
     else if (this.mode === 'speed') this.renderSpeed();
+    else if (this.mode === 'aspect') this.renderAspect();
     else this.renderMain();
   }
 
@@ -380,6 +419,7 @@ export class PlayerMenu {
     const subtitles = this.getSubtitleTracks();
     const activeSub = subtitles.find(t => t.active);
     const speed = this.getPlaybackRateState();
+    const aspect = this.getAspectRatio();
 
     const audioShown = tracks.length >= 2;
 
@@ -397,15 +437,6 @@ export class PlayerMenu {
             <span class="menu-item-label">${t(item.labelKey)}</span>
           </div>
         `)}
-        ${speed.available ? html`
-          <div class="menu-item"
-               data-key="${OPEN_SPEED}"
-               data-focusable data-menu-action="${OPEN_SPEED}">
-            <span class="menu-icon speed">${raw(SPEED_ICON)}</span>
-            <span class="menu-item-label">${t('player.playbackSpeed')}</span>
-            <span class="menu-item-value">${speed.rate}x</span>
-          </div>
-        ` : ''}
         ${audioShown ? html`
           <div class="menu-item"
                data-key="${OPEN_AUDIO}"
@@ -424,6 +455,51 @@ export class PlayerMenu {
             <span class="menu-item-value">${activeSub?.label || t('common.off')}</span>
           </div>
         ` : ''}
+        ${aspect ? html`
+          <div class="menu-item"
+               data-key="${OPEN_ASPECT}"
+               data-focusable data-menu-action="${OPEN_ASPECT}">
+            <span class="menu-icon aspect">${raw(ASPECT_ICON)}</span>
+            <span class="menu-item-label">${t('player.aspectRatio')}</span>
+            <span class="menu-item-value">${aspectLabel(aspect)}</span>
+          </div>
+        ` : ''}
+        ${speed.available ? html`
+          <div class="menu-item"
+               data-key="${OPEN_SPEED}"
+               data-focusable data-menu-action="${OPEN_SPEED}">
+            <span class="menu-icon speed">${raw(SPEED_ICON)}</span>
+            <span class="menu-item-label">${t('player.playbackSpeed')}</span>
+            <span class="menu-item-value">${speed.rate}x</span>
+          </div>
+        ` : ''}
+      </div>
+    `);
+  }
+
+  private renderAspect(): void {
+    const el = this.el;
+    if (!el) return;
+    const active = this.getAspectRatio();
+
+    morph(el, html`
+      <div class="menu-header">
+        <h2>${t('player.aspectRatio')}</h2>
+      </div>
+      <div class="menu-items">
+        <div class="menu-item" data-key="${BACK}"
+             data-focusable data-menu-action="${BACK}">
+          <span class="menu-check menu-back">‹</span>
+          <span class="menu-item-label">${t('common.back')}</span>
+        </div>
+        ${ASPECT_RATIOS.map((mode) => html`
+          <div class="menu-item" data-key="aspect:${mode}"
+               data-focusable data-menu-action="${PICK_ASPECT}"
+               data-aspect-ratio="${mode}">
+            <span class="menu-check">${mode === active ? '✓' : ''}</span>
+            <span class="menu-track-label">${aspectLabel(mode)}</span>
+          </div>
+        `)}
       </div>
     `);
   }

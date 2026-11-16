@@ -1105,11 +1105,13 @@
 .menu-icon.audio { color: #9b59b6; }
 .menu-icon.subtitle { color: #1abc9c; }
 .menu-icon.speed { color: #f5b041; }
+.menu-icon.aspect { color: #f06292; }
 .menu-icon svg { display: block; width: 22px; height: 22px; }
 /* Deeper shades for the light Frosted panel; the row label carries the meaning. */
 [data-overlay="frosted"] .menu-icon.audio { color: #8e44ad; }
 [data-overlay="frosted"] .menu-icon.subtitle { color: #00897b; }
 [data-overlay="frosted"] .menu-icon.speed { color: #d35400; }
+[data-overlay="frosted"] .menu-icon.aspect { color: #c2185b; }
 
 /* Current audio track shown on the "Audio Track" row */
 .player-menu .menu-item-value {

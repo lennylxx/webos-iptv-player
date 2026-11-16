@@ -23,6 +23,7 @@ vi.mock('../services/playlist-service', () => ({
 import { PlayerMenu } from './player-menu';
 import { Focus } from '../navigation/focus-scope';
 import type { PlaybackRateState } from '../services/playback-rate';
+import type { AspectRatio } from '../services/aspect-ratio';
 
 // Number of colour actions before the "Audio Track" row in the main menu.
 const MENU_ACTIONS = 4;
@@ -657,6 +658,80 @@ describe('PlayerMenu', () => {
 
       expect(el.querySelector('[data-playback-rate]')).toBeNull();
       expect(menu.visible).toBe(true);
+    });
+  });
+
+  describe('aspect ratio sub-menu', () => {
+    let aspect: AspectRatio;
+    let selectAspectRatio: Mock<(mode: AspectRatio) => void>;
+
+    beforeEach(() => {
+      aspect = '4x3';
+      selectAspectRatio = vi.fn((mode: AspectRatio) => { aspect = mode; });
+      // A fresh root, so the default menu's listeners stay out of these tests.
+      const fresh = el.cloneNode(false) as HTMLElement;
+      el.replaceWith(fresh);
+      el = fresh;
+      menu = new PlayerMenu(
+        container, getCurrentChannel, onAction,
+        getAudioTracks, selectAudioTrack,
+        getSubtitleTracks, selectSubtitleTrack,
+        getSubtitleOffsetState, openSubtitleOffset,
+        getPlaybackRateState, selectPlaybackRate,
+        subtitleSearchAvailable, openSubtitleSearch,
+        () => aspect, selectAspectRatio,
+      );
+    });
+
+    it('orders the setting rows Audio Track, Subtitles, Aspect Ratio, Playback Speed', () => {
+      audioTracks = [
+        { index: 0, label: 'Track 1', active: true, available: true },
+        { index: 1, label: 'Track 2', active: false, available: true },
+      ];
+      subtitleTracks = [{ index: 0, label: 'Track 1', active: false, available: true }];
+      getPlaybackRateState.mockReturnValue({ available: true, rate: 1 });
+      menu.show();
+      expect(items().slice(MENU_ACTIONS).map(row => row.dataset.key)).toEqual([
+        '__audio_open__', '__subs_open__', '__aspect_open__', '__speed_open__',
+      ]);
+    });
+
+    it('shows the current aspect ratio on its main-menu row', () => {
+      menu.show();
+      const row = el.querySelector('[data-menu-action="__aspect_open__"]');
+      expect(row!.querySelector('.menu-item-label')!.textContent).toBe('Aspect Ratio');
+      expect(row!.querySelector('.menu-item-value')!.textContent).toBe('4:3');
+    });
+
+    it('lists Auto, 16:9, 4:3 and Zoom with the current one focused and checked', () => {
+      menu.show();
+      el.querySelector<HTMLElement>('[data-menu-action="__aspect_open__"]')!.click();
+
+      const rows = items();
+      expect(rows.map(row => row.textContent!.replace(/\s+/g, ' ').trim())).toEqual([
+        '‹ Back', 'Auto', '16:9', '✓ 4:3', 'Zoom',
+      ]);
+      expect(rows[3].classList.contains('focused')).toBe(true);
+    });
+
+    it('applies a pick from the D-pad and returns to the main menu', () => {
+      menu.show();
+      el.querySelector<HTMLElement>('[data-menu-action="__aspect_open__"]')!.click();
+      menu.handleAction('down');
+      menu.handleAction('select');
+
+      expect(selectAspectRatio).toHaveBeenCalledWith('zoom');
+      const row = el.querySelector('[data-menu-action="__aspect_open__"]');
+      expect(row!.querySelector('.menu-item-value')!.textContent).toBe('Zoom');
+      expect(menu.visible).toBe(true);
+    });
+
+    it('goes back to the main menu without changing the ratio', () => {
+      menu.show();
+      el.querySelector<HTMLElement>('[data-menu-action="__aspect_open__"]')!.click();
+      expect(menu.handleBack()).toBe(true);
+      expect(selectAspectRatio).not.toHaveBeenCalled();
+      expect(el.querySelector('[data-menu-action="__aspect_open__"]')).not.toBeNull();
     });
   });
 

@@ -52,6 +52,7 @@ vi.mock('../services/storage-service', () => ({
     touchRecentlyWatchedLive: vi.fn(),
     getChannelCycleMode: vi.fn(() => 'global'),
     getLiveReconnectAttempts: vi.fn(() => 3),
+    getAspectRatio: vi.fn(() => 'auto'),
   },
 }));
 vi.mock('../services/media-probe', () => ({

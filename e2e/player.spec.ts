@@ -570,7 +570,7 @@ test('the right-edge player menu opens and lists its color actions', async ({ pa
 
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
-  await expect(menu.locator('.menu-item')).toHaveCount(4);
+  await expect(menu.locator('.menu-item')).toHaveCount(5);
   await expect(menu).toContainText('Program Guide');
   await expect(menu).toContainText('Settings');
 
@@ -936,7 +936,7 @@ test('keeps pseudo-localized player menu labels within the panel', async ({ page
 
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
-  await expect(menu.locator('.menu-item')).toHaveCount(4);
+  await expect(menu.locator('.menu-item')).toHaveCount(5);
   await expect(menu.locator('.menu-item').first()).toContainText('[!!');
   const menuWidth = await menu.evaluate(element => element.getBoundingClientRect().width);
   expect(menuWidth).toBeGreaterThan(340);
@@ -1146,6 +1146,42 @@ async function playFirstChannel(page: Page, body: string): Promise<void> {
   await expect(page.locator('#view-player')).toBeVisible();
   await expect(page.locator('.osd-channel-number')).toHaveText('1');
 }
+
+test('the player menu sets the aspect ratio and each channel remembers its own', async ({ page }) => {
+  await playFirstChannel(page, SEARCH_M3U);
+  const video = page.locator('#video-player');
+  const fit = () => video.evaluate(element => getComputedStyle(element).objectFit);
+  await expect.poll(fit).toBe('contain');
+
+  await page.keyboard.press('ArrowRight');
+  const menu = page.locator('#player-menu');
+  await expect(menu).toHaveClass(/visible/);
+  const row = menu.locator('[data-menu-action="__aspect_open__"]');
+  await expect(row).toContainText('Aspect Ratio');
+  await expect(row.locator('.menu-item-value')).toHaveText('Auto');
+  // Four color rows, then Aspect Ratio.
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowDown');
+  await expect(row).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+  await expect(menu.locator('.menu-header h2')).toHaveText('Aspect Ratio');
+  await expect(menu.locator('[data-aspect-ratio="auto"]')).toHaveClass(/focused/);
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown');
+  await expect(menu.locator('[data-aspect-ratio="zoom"]')).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+
+  await expect(row.locator('.menu-item-value')).toHaveText('Zoom');
+  await expect.poll(fit).toBe('cover');
+  await pressRemoteBack(page);
+  await expect(menu).not.toHaveClass(/visible/);
+
+  await page.keyboard.press('2');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Beta News');
+  await expect.poll(fit).toBe('contain');
+
+  await page.keyboard.press('1');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Alpha News');
+  await expect.poll(fit).toBe('cover');
+});
 
 test('a number key tunes that channel directly from the player view', async ({ page }) => {
   await playFirstChannel(page, SEARCH_M3U);

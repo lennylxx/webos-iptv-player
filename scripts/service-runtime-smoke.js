@@ -213,9 +213,44 @@ startServer(0, dataDir).then(function (bound) {
 }).then(function () {
   return proxySmoke();
 }).then(function () {
+  aspectSmoke();
   serviceLogSmoke();
   finish();
 }, finish);
+
+// setAspectRatio through its Luna registration, with an anonymous palmbus
+// handle stand-in: one request per call on one reused handle.
+function aspectSmoke() {
+  var aspect = require(path.join(buildDir, 'aspect', 'service'));
+  var sent = [];
+  var handles = 0;
+  function Handle() { handles++; }
+  Handle.prototype.call = function (uri, payload) {
+    sent.push([uri, JSON.parse(payload)]);
+    return {
+      addListener: function (event, listener) {
+        listener({ payload: function () { return '{"returnValue":true}'; } });
+      },
+      cancel: function () {},
+    };
+  };
+  var handler = null;
+  aspect.registerAspectService({
+    register: function (name, h) { if (name === 'setAspectRatio') handler = h; },
+  }, 'com.example.app', aspect.anonymousLunaCall({ Handle: Handle }));
+  if (!handler) throw new Error('setAspectRatio was not registered');
+  var replies = [];
+  ['allDirZoom', 'original', 'stretch'].forEach(function (value) {
+    handler({ sender: 'com.example.app 1234', payload: { value: value },
+      respond: function (r) { replies.push(r); } });
+  });
+  if (handles !== 1 || sent.length !== 2 ||
+      sent[0][0] !== 'luna://com.webos.settingsservice/setSystemSettings' ||
+      sent[0][1].app_id !== 'com.example.app' || sent[0][1].settings.arcPerApp !== 'allDirZoom' ||
+      !replies[0].returnValue || !replies[1].returnValue || replies[2].errorCode !== 'bad_value') {
+    throw new Error('setAspectRatio: ' + JSON.stringify({ handles: handles, sent: sent, replies: replies }));
+  }
+}
 
 // The log tee on the real runtime: file mode, line format, and rotation.
 function serviceLogSmoke() {

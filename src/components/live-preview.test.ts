@@ -102,6 +102,8 @@ describe('LivePreview', () => {
       stop: actions.onClose,
       showOSD: vi.fn(),
       togglePreviewMute: actions.onMute,
+      getAspectRatio: vi.fn(() => 'auto'),
+      onAspectRatioChange: vi.fn(),
     } as unknown as Player;
     const channelList = {
       isEditing: false,

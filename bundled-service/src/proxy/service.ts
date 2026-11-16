@@ -5,7 +5,7 @@
  * proxy itself lives in server.ts.
  */
 
-import { isAppCaller, senderShape } from '../fetch/service';
+import { appMethod, type AppMsg, type LunaRegistry } from '../luna-reply';
 import { createStreamProxy, type ProxyOpenResult, type StreamProxy } from './server';
 import { createKeepAlive, type ActivityManagerLike } from '../keep-alive';
 import { createLogger } from '../logger';
@@ -13,21 +13,11 @@ import { createLogger } from '../logger';
 const log = createLogger('proxy');
 const ACTIVITY = 'proxyKeepAlive';
 
-// Minimal shape of the webos-service Service object this module uses.
-interface LunaService {
-  register(method: string, handler: (msg: ProxyLunaMsg) => void): void;
+interface LunaService extends LunaRegistry<ProxyLunaMsg> {
   activityManager?: ActivityManagerLike;
 }
 
-export type ProxyLunaMsg = {
-  respond: (r: unknown) => unknown;
-  payload?: { url?: unknown; headers?: unknown; token?: unknown };
-  sender?: unknown;
-  ls2Message?: {
-    applicationID?: () => string;
-    senderServiceName?: () => string;
-  };
-};
+export type ProxyLunaMsg = AppMsg<{ url?: unknown; headers?: unknown; token?: unknown }>;
 
 export function registerProxyService(service: LunaService, appId: string, proxy?: StreamProxy): StreamProxy {
   const keepAlive = createKeepAlive(() => service.activityManager, ACTIVITY, log);
@@ -37,44 +27,24 @@ export function registerProxyService(service: LunaService, appId: string, proxy?
   };
   const streamProxy = proxy || createStreamProxy({ onBusyChange: activity });
 
-  const responder = (method: string, msg: ProxyLunaMsg) => (result: unknown): void => {
-    try {
-      msg.respond(result);
-    } catch (e) {
-      log.error(method + ' respond failed:', e);
-    }
-  };
-  const denied = (method: string, msg: ProxyLunaMsg): boolean => {
-    if (isAppCaller(msg, appId)) return false;
-    log.warn(method + ' outcome=denied sender=' + senderShape(msg));
-    responder(method, msg)({ returnValue: false, errorCode: 'denied', errorText: 'Caller is not allowed' });
-    return true;
-  };
-
-  service.register('openProxy', (msg) => {
-    if (denied('openProxy', msg)) return;
-    const payload = msg.payload || {};
+  appMethod(service, appId, 'openProxy', log, (payload, respond) => {
     streamProxy.open({ url: payload.url, headers: payload.headers }, (result: ProxyOpenResult) => {
       // No URL or header in the log.
       if (result.returnValue) log.info('openProxy outcome=ok sessions=' + String(streamProxy.sessionCount()));
       else log.info('openProxy outcome=failed reason=' + result.errorCode);
-      responder('openProxy', msg)(result);
+      respond(result);
     });
   });
 
-  service.register('touchProxy', (msg) => {
-    if (denied('touchProxy', msg)) return;
-    const payload = msg.payload || {};
+  appMethod(service, appId, 'touchProxy', log, (payload, respond) => {
     const status = streamProxy.touch(payload.token);
-    responder('touchProxy', msg)({ returnValue: true, alive: status.alive, lastStatus: status.lastStatus,
+    respond({ returnValue: true, alive: status.alive, lastStatus: status.lastStatus,
       manifestStatus: status.manifestStatus, cookies: status.cookies });
   });
 
-  service.register('closeProxy', (msg) => {
-    if (denied('closeProxy', msg)) return;
-    const payload = msg.payload || {};
+  appMethod(service, appId, 'closeProxy', log, (payload, respond) => {
     const result = streamProxy.closeWithStatus(payload.token);
-    responder('closeProxy', msg)({ returnValue: true, closed: result.closed, cookies: result.cookies });
+    respond({ returnValue: true, closed: result.closed, cookies: result.cookies });
   });
 
   return streamProxy;

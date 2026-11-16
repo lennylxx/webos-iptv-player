@@ -589,6 +589,49 @@ describe('StorageService', () => {
       expect(StorageService.getSubtitleOffset('')).toBe(0);
     });
   });
+
+  describe('aspect ratio dirty flag', () => {
+    it('persists until cleared', () => {
+      expect(StorageService.getAspectDirty()).toBe(false);
+      StorageService.setAspectDirty(true);
+      expect(localStorage.getItem('iptv_aspect_dirty')).toBe('true');
+      expect(StorageService.getAspectDirty()).toBe(true);
+      StorageService.setAspectDirty(false);
+      expect(localStorage.getItem('iptv_aspect_dirty')).toBeNull();
+    });
+
+    it('survives an app reset, which leaves the TV ratio as it was', () => {
+      StorageService.setAspectDirty(true);
+      StorageService.set('theme', 'light');
+      StorageService.clearAll();
+      expect(StorageService.getAspectDirty()).toBe(true);
+      expect(localStorage.length).toBe(1);
+      StorageService.setAspectDirty(false);
+      StorageService.clearAll();
+      expect(localStorage.length).toBe(0);
+    });
+  });
+
+  describe('aspect ratios', () => {
+    it('defaults to auto and round-trips per key', () => {
+      expect(StorageService.getAspectRatio('ch1')).toBe('auto');
+      StorageService.setAspectRatio('ch1', 'zoom');
+      StorageService.setAspectRatio('vod:x1:vod:10', '4x3');
+      expect(StorageService.getAspectRatio('ch1')).toBe('zoom');
+      expect(StorageService.getAspectRatio('ch2')).toBe('auto');
+      expect(StorageService.getAspectRatio('vod:x1:vod:10')).toBe('4x3');
+    });
+    it('drops the entry when set back to auto', () => {
+      StorageService.setAspectRatio('ch1', '16x9');
+      StorageService.setAspectRatio('ch1', 'auto');
+      expect(StorageService.getAspectRatio('ch1')).toBe('auto');
+      expect(localStorage.getItem('iptv_aspect_ratios')).not.toContain('ch1');
+    });
+    it('ignores an unknown stored value', () => {
+      localStorage.setItem('iptv_aspect_ratios', JSON.stringify({ ch1: 'stretch' }));
+      expect(StorageService.getAspectRatio('ch1')).toBe('auto');
+    });
+  });
 });
 
 import type { CatchupProgressEntry, ResumeEntry, WatchlistEntry } from '../types';

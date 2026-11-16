@@ -69,6 +69,8 @@ export const CONFIG = {
     // Opening a loopback proxy session; the first open may cold-start the service.
     PROXY_OPEN_TIMEOUT: 5000,
     PROXY_FIRST_OPEN_TIMEOUT: 8000,
+    // Longer than the service's own 5 s settingsservice wait, so its answer wins.
+    ASPECT_RATIO_TIMEOUT: 7000,
     // Under the service's 2-minute idle expiry, so a paused player keeps its session.
     PROXY_TOUCH_INTERVAL: 45000,
     // A channel with HTTP headers starts no further step after this long, so

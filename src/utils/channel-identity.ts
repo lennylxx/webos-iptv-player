@@ -1,4 +1,4 @@
-import type { Channel } from '../types';
+import type { Channel, VodQueueItem } from '../types';
 import { DRM_OPTION_KEYS } from '../services/drm-option-keys';
 
 // FNV-1a (32-bit) — fast, dependency-free, non-cryptographic. Good enough for a
@@ -154,4 +154,26 @@ export function channelStreamKey(ch: Channel): string {
  *  differ only by a token, such as one channel on two accounts. */
 export function channelExactStreamKey(ch: Channel): string {
   return fnv1a(channelExactStreamIdentity(ch));
+}
+
+type PreferenceVod = Pick<VodQueueItem, 'accountId' | 'kind' | 'itemId' | 'watchlistOwner'>;
+
+// Keys per-stream playback choices (audio, subtitles, aspect ratio): the VOD
+// item when one plays, else the channel.
+export function playbackPreferenceKey(channel: Channel | null, vod: PreferenceVod | null): string {
+  if (vod) return `vod:${vod.accountId}:${vod.kind}:${vod.itemId}`;
+  return channel ? channelKey(channel) : '';
+}
+
+export function legacyPlaybackPreferenceKey(channel: Channel | null, vod: PreferenceVod | null): string {
+  if (vod) return '';
+  return channel ? legacyChannelKey(channel) : '';
+}
+
+// One aspect-ratio choice covers every episode of a series.
+export function aspectPreferenceKey(channel: Channel | null, vod: PreferenceVod | null): string {
+  if (vod?.kind === 'episode' && vod.watchlistOwner) {
+    return `vod:${vod.accountId}:series:${vod.watchlistOwner.itemId}`;
+  }
+  return playbackPreferenceKey(channel, vod);
 }

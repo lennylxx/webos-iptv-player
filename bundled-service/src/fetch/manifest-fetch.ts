@@ -6,14 +6,14 @@
  */
 
 import * as http from 'http';
-import * as https from 'https';
 import * as nodeUrl from 'url';
 import * as zlib from 'zlib';
+import { lunaFailure } from '../luna-reply';
+import { httpUrl, isRedirect, nextHop, requestHeaders, transport, upstreamOptions } from '../upstream';
 
 export const MANIFEST_FETCH_HARD_MAX_BYTES = 1024 * 1024;
 export const MANIFEST_FETCH_DEFAULT_TIMEOUT_MS = 5000;
 export const MANIFEST_FETCH_MAX_TIMEOUT_MS = 10000;
-export const MANIFEST_FETCH_MAX_REDIRECTS = 5;
 
 const MAX_HEADERS = 32;
 const MAX_HEADER_VALUE_LENGTH = 8192;
@@ -33,11 +33,6 @@ const DROPPED_HEADERS = [
   'transfer-encoding',
   'upgrade',
 ];
-// As on the app's Luna path, UMS does not verify TLS certificates, so
-// credentials never travel over https; they also never leave their origin.
-const CREDENTIAL_HEADERS = ['authorization', 'cookie'];
-export const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
-
 export interface ManifestFetchRequest {
   url?: unknown;
   headers?: unknown;
@@ -63,16 +58,7 @@ export interface ManifestFetchFailure {
 export type ManifestFetchResult = ManifestFetchSuccess | ManifestFetchFailure;
 
 export function manifestFetchFailure(errorCode: string, errorText: string, status?: number): ManifestFetchFailure {
-  const result: ManifestFetchFailure = { returnValue: false, errorCode: errorCode, errorText: errorText };
-  if (status !== undefined) result.status = status;
-  return result;
-}
-
-export function httpUrl(input: unknown): nodeUrl.Url | null {
-  if (typeof input !== 'string' || !input || /[\0-\x20\x7f]/.test(input)) return null;
-  const parsed = nodeUrl.parse(input);
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-  return parsed.hostname ? parsed : null;
+  return status !== undefined ? lunaFailure(errorCode, errorText, { status: status }) : lunaFailure(errorCode, errorText);
 }
 
 function boundedInteger(value: unknown, fallback: number, max: number): number {
@@ -100,43 +86,15 @@ export function sanitizeHeaders(input: unknown): Record<string, string> {
   return headers;
 }
 
-export function withoutCredentials(headers: Record<string, string>): Record<string, string> {
-  const kept: Record<string, string> = {};
-  Object.keys(headers).forEach((name) => {
-    if (CREDENTIAL_HEADERS.indexOf(name) < 0) kept[name] = headers[name];
-  });
-  return kept;
-}
-
-/** The headers one request sends: credentials stay off https. */
-export function requestHeaders(protocol: string, carried: Record<string, string>): Record<string, string> {
-  const headers = protocol === 'https:' ? withoutCredentials(carried) : carried;
-  const outgoing: Record<string, string> = { 'accept-encoding': 'gzip, deflate' };
-  Object.keys(headers).forEach((name) => { outgoing[name] = headers[name]; });
-  return outgoing;
-}
-
-// The URL's user:password goes out as Basic auth over http only, as Cookie
-// and Authorization do; a redirect carries it only within its origin.
-
-export function requestAuth(url: nodeUrl.Url, carried: string): string | undefined {
-  return url.protocol === 'https:' || !carried ? undefined : carried;
-}
-
 // The final URL as reported back to the app, without its user:password.
 function reportedHref(url: nodeUrl.Url): string {
   const href = url.href || '';
   return url.auth ? href.replace(/^(https?:\/\/)[^@\/?#]*@/i, '$1') : href;
 }
 
-export function origin(url: nodeUrl.Url): string {
-  const port = url.port || (url.protocol === 'https:' ? '443' : '80');
-  return url.protocol + '//' + (url.hostname || '').toLowerCase() + ':' + port;
-}
-
 /**
  * GET one http(s) URL with the given headers. Redirects are followed up to
- * MANIFEST_FETCH_MAX_REDIRECTS times, and the timeout covers the whole chain.
+ * MAX_REDIRECTS times, and the timeout covers the whole chain.
  * `done` runs exactly once.
  */
 export function fetchManifest(input: ManifestFetchRequest, done: (result: ManifestFetchResult) => void): void {
@@ -166,23 +124,10 @@ export function fetchManifest(input: ManifestFetchRequest, done: (result: Manife
   }, timeoutMs);
 
   const hop = (url: nodeUrl.Url, redirects: number, carried: Record<string, string>, auth: string): void => {
-    const secure = url.protocol === 'https:';
-    const options: https.RequestOptions = {
-      method: 'GET',
-      hostname: url.hostname,
-      port: url.port ? Number(url.port) : undefined,
-      path: url.path || '/',
-      headers: requestHeaders(url.protocol || '', carried),
-      agent: false,
-    };
-    const basic = requestAuth(url, auth);
-    if (basic) options.auth = basic;
-    // UMS plays the stream without verifying the certificate either; no
-    // credential header is ever sent over https.
-    if (secure) options.rejectUnauthorized = false;
+    const options = upstreamOptions(url, 'GET', requestHeaders(url.protocol || '', carried), auth, false);
     let req: http.ClientRequest;
     try {
-      req = (secure ? https : http).request(options);
+      req = transport(url).request(options);
     } catch (e) {
       finish(manifestFetchFailure('bad_url', e instanceof Error ? e.message : String(e)));
       return;
@@ -198,21 +143,17 @@ export function fetchManifest(input: ManifestFetchRequest, done: (result: Manife
       }
       const status = res.statusCode || 0;
       const location = res.headers.location;
-      if (REDIRECT_STATUSES.indexOf(status) >= 0 && typeof location === 'string' && location) {
+      if (isRedirect(status, location)) {
         res.resume();
         active = null;
-        if (redirects >= MANIFEST_FETCH_MAX_REDIRECTS) {
+        const next = nextHop(url, location, redirects, carried, auth);
+        if (next === 'too_many_redirects') {
           finish(manifestFetchFailure('too_many_redirects', 'Too many redirects', status));
-          return;
-        }
-        const next = httpUrl(nodeUrl.resolve(url.href || '', location));
-        if (!next) {
+        } else if (next === 'bad_url') {
           finish(manifestFetchFailure('bad_url', 'Redirect left http and https', status));
-          return;
+        } else {
+          hop(next.url, redirects + 1, next.carried, next.auth);
         }
-        const sameOrigin = origin(next) === origin(url);
-        hop(next, redirects + 1, sameOrigin ? carried : withoutCredentials(carried),
-          sameOrigin ? next.auth || auth : '');
         return;
       }
       if (status < 200 || status >= 300) {

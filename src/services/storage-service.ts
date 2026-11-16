@@ -8,6 +8,7 @@ import { isCatalogSort, isCatalogSortDirection, type CatalogSortPreference } fro
 import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
 import { isLocalePreference, type LocalePreference } from '../i18n';
+import { isAspectRatio, type AspectRatio } from './aspect-ratio';
 import {
   DEFAULT_ANIMATION_MODE,
   isAnimationMode,
@@ -51,6 +52,7 @@ interface UserDataState {
   audioPrefs: Record<string, AudioPref>;
   subtitlePrefs: Record<string, SubtitlePref>;
   subtitleOffsets: Record<string, number>;
+  aspectRatios: Record<string, AspectRatio>;
   resume: Record<string, ResumeEntry>;
   watchlist: Record<string, WatchlistEntry>;
   onlineSubPicks: Record<string, PickedOnlineSub>;
@@ -249,6 +251,8 @@ function allUserRecords(data: UserDataState): Parameters<typeof replaceAllUserDa
         .map(key => record(`subtitle:${key}`, data.subtitlePrefs[key])),
       ...Object.keys(data.subtitleOffsets)
         .map(key => record(`offset:${key}`, data.subtitleOffsets[key])),
+      ...Object.keys(data.aspectRatios)
+        .map(key => record(`aspect:${key}`, data.aspectRatios[key])),
       ...Object.keys(data.liveCategorySnapshots).map(key =>
         record(LIVE_CATEGORY_KEY_PREFIX + key, data.liveCategorySnapshots[key])),
     ],
@@ -371,6 +375,13 @@ function legacyRecords(key: string, value: unknown): {
           .map(item => record(`offset:${item}`, (value as Record<string, number>)[item])),
         replacePrefix: 'offset:',
       };
+    case 'aspect_ratios':
+      return {
+        store: 'channel-state',
+        records: Object.keys(value as Record<string, AspectRatio>)
+          .map(item => record(`aspect:${item}`, (value as Record<string, AspectRatio>)[item])),
+        replacePrefix: 'aspect:',
+      };
     case 'resume':
       return {
         store: 'playback-progress',
@@ -448,6 +459,7 @@ async function loadUserDataState(): Promise<UserDataState> {
     audioPrefs: {},
     subtitlePrefs: {},
     subtitleOffsets: {},
+    aspectRatios: {},
     resume: {},
     watchlist: {},
     onlineSubPicks: {},
@@ -476,6 +488,8 @@ async function loadUserDataState(): Promise<UserDataState> {
         item.value as XtreamLiveCategorySnapshot;
     } else if (item.key.startsWith('offset:')) {
       data.subtitleOffsets[item.key.slice(7)] = item.value as number;
+    } else if (item.key.startsWith('aspect:')) {
+      if (isAspectRatio(item.value)) data.aspectRatios[item.key.slice(7)] = item.value;
     } else if (item.key.startsWith('custom:channel:') && data.channelCustomization) {
       data.channelCustomization.overrides[item.key.slice(15)] =
         item.value as ChannelCustomization['overrides'][string];
@@ -513,6 +527,7 @@ async function initUserData(): Promise<void> {
     ['audio_prefs', {}],
     ['subtitle_prefs', {}],
     ['subtitle_offsets', {}],
+    ['aspect_ratios', {}],
     ['resume', {}],
     ['watchlist', {}],
     ['online_sub_picks', {}],
@@ -664,8 +679,11 @@ export const StorageService = {
     await migrateLegacyStreamMimeCache();
   },
 
+  // Keeps the aspect flag: the TV keeps the ratio the app set through a reset.
   clearAll(): void {
+    const aspectDirty = this.getAspectDirty();
     localStorage.clear();
+    if (aspectDirty) this.setAspectDirty(true);
   },
 
   async clearUserData(): Promise<void> {
@@ -1215,6 +1233,42 @@ export const StorageService = {
     const all = get<Record<string, number>>('subtitle_offsets', {});
     if (seconds) all[channelId] = seconds; else delete all[channelId];
     set('subtitle_offsets', all);
+  },
+
+  // Per-stream picture aspect ratio (keyed by channelPrefKey, same as the
+  // subtitle pref). Absent = auto.
+  getAspectRatio(channelId: string): AspectRatio {
+    if (!channelId) return 'auto';
+    const all = userData
+      ? userData.aspectRatios
+      : get<Record<string, AspectRatio>>('aspect_ratios', {});
+    const mode = all[channelId];
+    return isAspectRatio(mode) ? mode : 'auto';
+  },
+  setAspectRatio(channelId: string, mode: AspectRatio): void {
+    if (!channelId) return;
+    if (userData) {
+      if (mode !== 'auto') {
+        userData.aspectRatios[channelId] = mode;
+        persistUserChanges('channel-state', [record(`aspect:${channelId}`, mode)]);
+      } else {
+        delete userData.aspectRatios[channelId];
+        persistUserChanges('channel-state', [], [`aspect:${channelId}`]);
+      }
+      return;
+    }
+    const all = get<Record<string, AspectRatio>>('aspect_ratios', {});
+    if (mode !== 'auto') all[channelId] = mode; else delete all[channelId];
+    set('aspect_ratios', all);
+  },
+
+  // The app left a non-original TV aspect ratio that it has not restored.
+  getAspectDirty(): boolean {
+    return get<boolean>('aspect_dirty', false) === true;
+  },
+  setAspectDirty(dirty: boolean): void {
+    if (dirty) set('aspect_dirty', true);
+    else remove('aspect_dirty');
   },
 
   // 'device' = the device's timezone (default), 'feed' = the EPG feed's timezone.

@@ -62,6 +62,8 @@ export const SPEED_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill=
 export const AUDIO_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M21 2v13a3.2 3.2 0 1 1-1.8-2.88V6.4l-8.4 1.9V17.5a3.2 3.2 0 1 1-1.8-2.88V4.6z"/></svg>';
 // Closed-caption card (player menu subtitles row).
 export const SUBTITLE_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm2 7v2h6v-2H6zm8 0v2h4v-2h-4zM6 8v2h4V8H6zm6 0v2h6V8h-6z"/></svg>';
+// Screen frame with corner marks (player menu aspect-ratio row).
+export const ASPECT_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 4.5h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2zM4 6.5v11h16v-11zM6 8.5h5v2H8v3H6zM18 15.5h-5v-2h3v-3h2z"/></svg>';
 
 // Replay arrow marking an aired (catch-up) programme in the EPG.
 export const REPLAY_ICON = '<svg class="epg-replay-glyph" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>';

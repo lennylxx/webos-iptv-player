@@ -135,13 +135,16 @@ a new term after review, add a row here.
 | Rating sort direction | Highest / Lowest | 最高 / 最低 |
 | Header-channel playback setting | HTTP headers | HTTP 请求头 |
 | Header playback modes | Off / Media service / Local proxy | 关闭 / 媒体服务 / 本地代理 |
+| Player aspect ratio setting | Aspect Ratio | 画面比例 |
+| Aspect ratio modes | Auto / 16:9 / 4:3 / Zoom | 自动 / 16:9 / 4:3 / 缩放 |
 
 Rejected: 片单 (watchlist), HTTP 标头 (headers), Luna / System player
 (header playback mode), 正在播放 for NOW, 节目单 (guide),
 全局频道 / "Global" for all channels, "programme",
 Ascending / Descending / 升序 / 降序 / Asc / Desc and 最旧 (sort
 direction),
-"Exception" / 例外 (set separately), "Mixed" / 混合 (partly locked).
+"Exception" / 例外 (set separately), "Mixed" / 混合 (partly locked),
+宽高比 (aspect ratio), 原始 / 满屏 / 填充 (aspect modes).
 
 ## Checks
 

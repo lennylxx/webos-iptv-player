@@ -8,6 +8,7 @@
  * - Reminder alerts through dev-mode interactive createAlert (reminder/)
  * - Manifest fetch that carries the channel's headers (fetch/)
  * - Loopback stream proxy that plays a header-gated stream (proxy/)
+ * - The TV's per-app picture aspect ratio (aspect/)
  *
  * Off webOS (local testing), it falls back to a direct upload HTTP
  * listener and a loopback proxy on IPTV_PROXY_PORT (default 47390) whose
@@ -20,6 +21,7 @@ import { resolveDataDir } from './upload/store';
 import { registerReminderService } from './reminder/service';
 import { registerManifestFetchService } from './fetch/service';
 import { registerProxyService, startProxyStandalone } from './proxy/service';
+import { anonymousLunaCall, registerAspectService } from './aspect/service';
 import { installServiceLog, serviceLogDir } from './service-log';
 import { createLogger } from './logger';
 
@@ -62,6 +64,7 @@ if (Service) {
     registerReminderService(service);
     registerManifestFetchService(service, APP_ID);
     registerProxyService(service, APP_ID);
+    registerAspectService(service, APP_ID, anonymousLunaCall());
   } catch (e) {
     log.error('failed to register Luna service:', e);
     throw e;

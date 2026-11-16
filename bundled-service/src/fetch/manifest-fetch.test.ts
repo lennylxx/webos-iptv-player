@@ -5,14 +5,14 @@ import * as zlib from 'zlib';
 import {
   MANIFEST_FETCH_HARD_MAX_BYTES,
   fetchManifest,
-  requestAuth,
-  requestHeaders,
   sanitizeHeaders,
   type ManifestFetchRequest,
   type ManifestFetchResult,
 } from './manifest-fetch';
+import { requestAuth, requestHeaders } from '../upstream';
 import * as nodeUrl from 'url';
-import { isAppCaller, registerManifestFetchService, senderShape, type LunaMsg } from './service';
+import { registerManifestFetchService, type LunaMsg } from './service';
+import { isAppCaller, senderShape } from '../luna-reply';
 
 const PLAYLIST = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv1.m3u8\n';
 
