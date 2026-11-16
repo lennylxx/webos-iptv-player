@@ -25,6 +25,21 @@ are webOS platform limitations; the rest are design choices.
   normal speed. See
   [LG's streaming specifications](https://webostv.developer.lge.com/develop/specifications/streaming-protocol-drm).
 
+- **Adjustable audio offset (audio delay):** webOS gives web apps no way to
+  delay audio against video for one app's playback. `HTMLMediaElement` has no
+  offset property, and webOS TVs don't support Web Audio
+  `createMediaElementSource`. The undocumented `mediaOption` field
+  `option.lipsyncOffset` applies the same offset to both the audio and the
+  video output, so the two stay aligned: a test shows a 500 ms value leaves a
+  stream's beep and flash in sync. Kodi's native webOS port can offer an
+  offset because it feeds the media pipeline itself and shifts the video
+  timestamps. To correct a constant lip-sync error, use the TV's **Match
+  Screen and Sound** sound setting (**AV Sync Adjustment** on webOS 5 and
+  earlier); see
+  [LG's guide](https://www.lg.com/us/support/help-library/how-to-sync-the-picture-and-sound-on-your-lg-tv--20155410401575).
+  For drift that builds up during catch-up or VOD, use **Resync audio and
+  video** in the player.
+
 - **Match frame rate (auto frame rate, AFR):** webOS gives apps no control
   over the panel refresh rate, and the
   [`mediaOption` parameter](https://webostv.developer.lge.com/develop/guides/mediaoption-parameter)
