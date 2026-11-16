@@ -24,7 +24,7 @@
 
 | 回看续播 | 频道信息 |
 | --- | --- |
-| ![回看续播](https://github.com/user-attachments/assets/641a72bf-db7e-4757-ac71-c8add5114c7a) | ![频道信息](https://github.com/user-attachments/assets/9adf8302-750f-429b-9155-828c8c30f097) |
+| ![回看续播](https://github.com/user-attachments/assets/641a72bf-db7e-4757-ac71-c8add5114c7a) | ![频道信息](https://github.com/user-attachments/assets/b6a469ff-8a57-4d8a-895f-48d44963c672) |
 
 | 播放浮层 | 字幕 |
 | --- | --- |
@@ -57,6 +57,7 @@
 - **M3U 播放列表** — 支持加载多个 M3U/M3U8 播放列表并自动去重；播放源可临时停用，无需删除原有配置
 - **Xtream Codes 账号** — 支持添加、临时停用账号，并可通过顶部栏头像快速切换；播放列表和 EPG 数据将根据账号凭据自动获取
 - **局域网设置** — 扫描二维码后，即可通过同一局域网内的手机配置播放源和在线字幕，或上传 `.m3u` 文件（[局域网服务](docs/lan-service.md)）
+- **定时刷新** — 频道列表、节目指南和 Xtream 电影/剧集目录可分别设置刷新周期，频道列表和节目指南也可关闭自动刷新；还可通过“刷新所有数据”随时手动重新加载
 
 **直播与视频点播**
 
@@ -68,8 +69,9 @@
 - **电影和剧集** — 浏览 Xtream 账号提供的视频点播（VOD）内容，并按账号分别维护“继续观看”和“稍后观看”列表
 - **片库排序** — 电影和剧集可按名称、加入日期、评分或年份升序或降序排列，两个分区分别记住各自的排序方式
 - **管理“继续观看”和“稍后观看”** — 可逐个移除影片、清空整个列表，或在电影详情页清除观看进度
-- **视频点播自动连播队列** — 自动接续播放后续剧集或“稍后观看”中的电影，并在播放完成后将其移出列表
+- **视频点播自动连播队列** — 自动接续播放后续剧集或“稍后观看”中的电影，并在播放完成后将其移出列表；“即将播放”卡片会倒计时进入下一部，播放器菜单还可直接切换到上一集或下一集
 - **回看与直播时移** — 播放已播出的节目；观看直播时可暂停、回退或一键返回直播点
+- **进度条预览** — 按下或按住左/右键移动跳转目标，按住越久步长越大，停止操作后一次性跳转；服务器提供缩略图时，气泡中会显示预览画面（支持 OTT Navigator `seek_preview`、Flussonic、Nimble 及 HLS/DASH 图像轨道）（[详情](docs/seek-preview.md)）
 - **家长控制** — 使用 PIN 锁定直播分组、电影和剧集分类或单个节目，并建议锁定疑似成人内容的分组；锁定的内容可带锁显示或隐藏，并可设置何时再次要求输入 PIN
 
 **播放**
@@ -78,10 +80,11 @@
 - **MPEG-DASH 播放** — 明文和 PlayReady `.mpd` 频道使用 webOS 原生媒体管线，Widevine/ClearKey 频道按需启用 Shaka MSE/EME；支持 MPD 轨道元数据、直播时移和字幕（[详情](docs/mpeg-dash.md)）
 - **原生 PlayReady DRM** — 在兼容的 webOS 电视上，通过 LG DRM 服务和原生硬件媒体管线播放受保护的 MPEG-DASH 频道，并从 Kodi 风格的 M3U 属性读取授权设置（[详情](docs/mpeg-dash.md)）
 - **Widevine / ClearKey DRM** — 按需加载 Shaka DASH-only 引擎，支持 Kodi 风格的授权地址、请求头和经过校验的 ClearKey 内联密钥（[详情](docs/mpeg-dash.md)）
+- **频道 HTTP 请求头** — M3U 中设置了 Referer、User-Agent、Cookie 或 Authorization 的频道，会携带这些请求头通过电视的媒体服务播放，也可选择通过本地代理播放（[详情](docs/http-header-playback.md)）
 - **音轨与字幕轨道** — 可从播放器菜单中选择，并按频道或点播项目分别记忆。直播字幕支持 HLS 清单内的 WebVTT 和 CEA-608/708；点播字幕支持内封字幕及外挂 SRT、WebVTT、ASS。还可通过 SubDL、OpenSubtitles 和 Assrt 在线搜索，或手动输入片名；即使媒体自带字幕，在线搜索仍然可用，并支持播放期间实时调整字幕同步
 - **播放速度** — 电影和剧集可选择 0.5×–2×，适用于 MP4、MKV 等文件格式；直播、回看及 HLS/DASH 流始终以正常速度播放，因为 webOS 原生播放管线会忽略这些内容的变速请求
-- **OSD（屏幕显示）** — 显示节目名称、播放进度及码流信息，包括分辨率、HDR、帧率、编解码器和音频声道
-- **自动播放故障恢复** — 检测无法开始播放或播放卡住的流，自动重新加载临时故障；若多次恢复失败，则切换至下一个直播频道
+- **OSD（屏幕显示）** — 显示节目名称、播放进度及码流信息，包括分辨率、HDR、帧率、编解码器和音频声道；控制栏自动隐藏时间和频道号码输入超时均可调整
+- **自动播放故障恢复** — 检测无法开始播放或播放卡住的流，自动重新加载临时故障；达到可设置的重连次数后，自动切换至下一个直播频道
 - **音视频重新同步**（🔄）— 长时间播放回看或点播内容后若出现音画不同步，可通过播放控制栏一键重新同步
 
 **导航**
@@ -306,6 +309,8 @@ mpegts.js 和 Shaka 播放相应格式的视频。
 - [`docs/audio-track-selection.md`](docs/audio-track-selection.md) — 原生 webOS 播放器的音轨切换机制
 - [`docs/hls-subtitles.md`](docs/hls-subtitles.md) — webOS 上的直播 HLS 字幕处理方式，包括清单内字幕格式及其渲染路径
 - [`docs/mpeg-dash.md`](docs/mpeg-dash.md) — DASH 格式检测、原生播放、字幕和直播 DVR 的实现
+- [`docs/http-header-playback.md`](docs/http-header-playback.md) — 需要 Referer、User-Agent、Cookie 或 Authorization 的频道如何通过电视的媒体服务或本地代理播放
+- [`docs/seek-preview.md`](docs/seek-preview.md) — 跳转目标及其加速机制的实现，以及支持哪些服务器的预览缩略图
 - [`docs/vod-subtitles.md`](docs/vod-subtitles.md) — Xtream 电影与剧集的字幕实现，包括容器内字幕、外挂 SRT/WebVTT/ASS 字幕，以及 SubDL、OpenSubtitles 和 Assrt 在线搜索
 - [`docs/storage-and-data.md`](docs/storage-and-data.md) — 应用的数据存储范围与位置，以及用户数据和临时缓存的隔离方式
 - [`docs/lan-service.md`](docs/lan-service.md) — 通过内置局域网服务完成手机端设置和 M3U 文件上传

@@ -17,7 +17,8 @@
 //                      adult groups, and a locked group with one channel set separately
 //   setup-page.png     authorized LAN setup page for a phone or laptop
 //   player.png         playback overlays: channel switcher + action menu
-//   channel-info.png   channel info bar (the OSD) — live DVR (timeshift) view
+//   channel-info.png   channel info bar (the OSD) — live DVR (timeshift) view,
+//                      scrubbing back with a seek-bar preview frame
 //   subtitles.png      self-rendered WebVTT cues — ::cue colors + positioning
 //   subtitle-search.png  online subtitle search overlay — provider-labeled results
 //                      with the right-aligned download-count badge
@@ -160,7 +161,8 @@ const HEALTH_FIXTURE = [
   { index: 2, status: 'healthy', consecutiveFailures: 0, latencyMs: 180 },
 ];
 // The hero channel advertises catch-up (time-shift), so its already-aired
-// programs can carry resume markers in the guide (epg-catchup-resume shot).
+// programs can carry resume markers in the guide (epg-catchup-resume shot), and
+// publishes seek-bar preview frames (channel-info shot).
 const CATCHUP_IDS = new Set(['ch0']);
 
 function m3u(slice, withTvg) {
@@ -168,6 +170,7 @@ function m3u(slice, withTvg) {
   for (const ch of slice) {
     const cu = CATCHUP_IDS.has(ch.id)
       ? ` catchup="default" catchup-source="https://demo.local/timeshift/${ch.id}.m3u8?start={utc}&end={utcend}" catchup-days="7"`
+        + ` seek_preview="https://demo.local/preview/${ch.id}/{utc}.jpg"`
       : '';
     lines.push(`#EXTINF:-1 tvg-id="${ch.id}" group-title="${ch.group}"${cu},${ch.name}`);
     lines.push(`https://demo.local/stream/${ch.id}.m3u8`);
@@ -1253,8 +1256,9 @@ try {
   }
 
   // 5) Channel info bar (the OSD) — the live DVR (timeshift) view: rewound ~2 min
-  //    behind the live edge (scrubber, "behind live" offset, LIVE control), driven
-  //    by the feature-rich master so the stream-info pills all show.
+  //    behind the live edge (scrubber, "behind live" offset, LIVE control) and
+  //    scrubbing back with a seek-bar preview frame, driven by the feature-rich
+  //    master so the stream-info pills all show.
   {
     const { context, page } = await newPage({ fakeStream: true });
     // (screenshot-only) A live stream reports duration Infinity; give it a large
@@ -1270,6 +1274,8 @@ try {
       });
     });
     await page.route(/\/stream\/ch\d+\.m3u8(?:[?#]|$)/, fulfill(MASTER_HLS_RICH, 'application/vnd.apple.mpegurl'));
+    await page.route('**/preview/**', fulfill(
+      decodeURIComponent(LIVE_PREVIEW_POSTER.slice(LIVE_PREVIEW_POSTER.indexOf(',') + 1)), 'image/svg+xml'));
     await gotoChannels(page, base);
     await page.keyboard.press('Enter');
     await page.locator('#player-osd .osd-programme-title').waitFor({ state: 'visible' });
@@ -1285,7 +1291,16 @@ try {
       }
       const vp = document.getElementById('view-player');
       if (vp) vp.style.background = bg;
+      // Hold the pending scrub open: drop the seek-commit timer
+      // (CONFIG.PLAYER.SEEK_COMMIT_DELAY), which would seek the pinned playhead.
+      const realSetTimeout = window.setTimeout;
+      window.setTimeout = (fn, ms, ...args) => (ms === 800 ? 0 : realSetTimeout(fn, ms, ...args));
     }, frameGradient('60% 32%'));
+    // Scrub back 30 s (the frozen clock keeps every press on the 10 s step): a
+    // ghost knob at -2:30 with the server's preview frame above it, kept near
+    // the live edge so the bubble hides as little of the info row as it can.
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowLeft');
+    await page.locator('#player-osd .osd-scrub-image').waitFor({ state: 'visible' });
     await clearToasts(page);
     await page.waitForTimeout(400);
     await shoot(page, 'channel-info.png');

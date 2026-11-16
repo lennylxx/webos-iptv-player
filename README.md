@@ -24,7 +24,7 @@
 
 | Catch-up resume | Channel info |
 | --- | --- |
-| ![Catch-up resume](https://github.com/user-attachments/assets/641a72bf-db7e-4757-ac71-c8add5114c7a) | ![Channel info](https://github.com/user-attachments/assets/9adf8302-750f-429b-9155-828c8c30f097) |
+| ![Catch-up resume](https://github.com/user-attachments/assets/641a72bf-db7e-4757-ac71-c8add5114c7a) | ![Channel info](https://github.com/user-attachments/assets/b6a469ff-8a57-4d8a-895f-48d44963c672) |
 
 | Playback overlays | Subtitles |
 | --- | --- |
@@ -57,6 +57,7 @@
 - **M3U playlists** — load multiple M3U/M3U8 lists, auto-deduplicated, and temporarily disable a source without deleting its setup
 - **Xtream Codes accounts** — add or temporarily disable accounts, or switch between accounts from the top-bar avatar; playlists and EPG data are derived from their credentials
 - **LAN setup** — configure sources and online subtitle settings or upload `.m3u` files from a phone on the same network by scanning a QR code ([LAN service](docs/lan-service.md))
+- **Scheduled refresh** — refresh channel lists, program guides, and Xtream Movies/Series catalogs on separate schedules, turn channel-list or guide refresh off, or reload everything on demand with Refresh All Data
 
 **Live TV & on-demand**
 
@@ -68,7 +69,7 @@
 - **Movies & Series** — browse an Xtream account's VOD catalogs, with Continue Watching and account-scoped Watchlist rails
 - **Catalog sorting** — sort Movies and Series by name, date added, rating, or year in either direction; each section remembers its choice
 - **Continue Watching & Watchlist management** — remove individual titles, clear a whole list, or clear a movie's saved progress from its details page
-- **Automatic VOD queues** — continue through series episodes or remaining Watchlist movies, removing completed titles from the Watchlist
+- **Automatic VOD queues** — continue through series episodes or remaining Watchlist movies, removing completed titles from the Watchlist; an Up Next card counts down to the next title, and the player menu jumps to the previous or next episode
 - **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams
 - **Seek-bar previews** — press or hold Left/Right to move a seek target in steps that grow while held, then seek once; the bubble shows a preview frame when the server publishes thumbnails (OTT Navigator `seek_preview`, Flussonic, Nimble, HLS/DASH image tracks) ([details](docs/seek-preview.md))
 - **Parental controls** — lock Live TV groups, movie and series categories, or individual titles with a PIN, with adult groups suggested for locking; locked content can stay listed with a lock or be hidden, and you choose when the PIN is asked again
@@ -82,8 +83,8 @@
 - **Channel HTTP headers** — channels whose M3U sets a Referer, User-Agent, Cookie, or Authorization play through the TV's media service, or optionally a local proxy, with those headers ([details](docs/http-header-playback.md))
 - **Audio & subtitle tracks** — pick from the player menu, remembered per channel or VOD item; subtitles cover in-manifest WebVTT and CEA-608/708 (live), in-container / sidecar SRT/WebVTT/ASS (VOD), and online search (SubDL, OpenSubtitles, and Assrt) with a manual title box; online search remains available when bundled tracks exist, and subtitle timing can be adjusted live
 - **Playback speed** — choose 0.5×–2× for movies and episodes in file formats such as MP4 and MKV; live TV, catch-up, and HLS/DASH streams play at normal speed because the webOS native pipeline ignores rate changes for them
-- **On-screen display** — program title, progress, and a live stream-info readout (resolution, HDR, frame rate, codec, audio channels)
-- **Automatic playback recovery** — detect streams that fail to start or stall, reload transient failures, and advance to the next live channel when recovery is exhausted
+- **On-screen display** — program title, progress, and a live stream-info readout (resolution, HDR, frame rate, codec, audio channels), with adjustable auto-hide and number-entry timeouts
+- **Automatic playback recovery** — detect streams that fail to start or stall, reload transient failures, and advance to the next live channel after an adjustable number of reconnect attempts
 - **Resync A/V** (🔄) — one tap on the playback bar re-locks audio and video that drift apart during a long catch-up or on-demand stream
 
 **Navigation**
