@@ -255,6 +255,23 @@ describe('Player live preview', () => {
     expect(pipeline.load).toHaveBeenCalledWith(replacement.url, replacement.extras, { headers: {} });
   });
 
+  it('keeps playing a rebound channel whose URL carries the current time', () => {
+    const timed = { ...channels[0], url: `${channels[0].url}?now={lutc}` };
+    playlist.channels = [timed];
+    player.enterLivePreview();
+    player.play(0);
+    const replacement = { ...timed };
+    playlist.channels = [replacement];
+    pipeline.load.mockClear();
+    let clock = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => (clock += 1000));
+
+    player.syncCurrentIndex();
+
+    expect(player.getCurrentChannel()).toBe(replacement);
+    expect(pipeline.load).not.toHaveBeenCalled();
+  });
+
   it('retunes a replacement channel whose stream options changed', () => {
     const oldChannel = { ...channels[0], extras: { 'http-referrer': 'http://host/a' } };
     playlist.channels = [oldChannel];

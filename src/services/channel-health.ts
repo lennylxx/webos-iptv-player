@@ -2,6 +2,7 @@ import { CONFIG } from '../config';
 import type { Channel, ChannelHealthRecord, ChannelHealthStatus } from '../types';
 import { channelKey } from '../utils/channel';
 import { createLogger } from '../utils/logger';
+import { expandLiveUrl } from '../utils/catchup-url';
 import { isMpdText } from '../utils/url';
 import {
   clearCachedChannelHealth,
@@ -260,7 +261,8 @@ class ChannelHealthServiceImpl {
         const previous = this.data()[key];
         const started = Date.now();
         try {
-          await probeUrl(channel.url, channel.httpHeaders ?? {}, options.signal);
+          const url = expandLiveUrl(channel.url, Math.floor(Date.now() / 1000));
+          await probeUrl(url, channel.httpHeaders ?? {}, options.signal);
           if (options.signal?.aborted) return;
           if (this.data()[key] === previous) {
             this.recordSuccess(key, Date.now() - started);

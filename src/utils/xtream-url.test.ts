@@ -169,6 +169,29 @@ describe('Xtream catch-up URLs', () => {
       .toMatchObject({ streamId: '43', output: 'ts' });
   });
 
+  it('reads plain URLs as the URL parser would', () => {
+    const account = (baseUrl: string, username = 'u1', password = 'p1') => ({ baseUrl, username, password });
+    expect(xtreamCredentialsFromLiveUrl('HTTP://Host:80/live/u1/p1/42.TS'))
+      .toEqual({ credentials: account('http://host'), streamId: '42', output: 'ts' });
+    expect(xtreamCredentialsFromLiveUrl('https://x@host:443//u1//p1/7'))
+      .toEqual({ credentials: account('https://host'), streamId: '7', output: 'ts' });
+    expect(xtreamCredentialsFromLiveUrl('http://host/a/./b/7'))
+      .toEqual({ credentials: account('http://host', 'a', 'b'), streamId: '7', output: 'ts' });
+    expect(xtreamCredentialsFromLiveUrl('http://host/u1/p1/x/..')).toBeNull();
+    expect(xtreamCredentialsFromLiveUrl('http://host/u1/p1/42.ts')).toBeNull();
+    expect(xtreamCredentialsFromLiveUrl('http://host/live/ch1/index.m3u8')).toBeNull();
+    expect(xtreamCredentialsFromLiveUrl('http://host:99999/u1/p1/7')).toBeNull();
+  });
+
+  it('takes only the /live/ form when asked, on both parsing paths', () => {
+    expect(xtreamCredentialsFromLiveUrl('http://host/u1/p1/7', '', true)).toBeNull();
+    expect(xtreamCredentialsFromLiveUrl('http://host/a/./b/7', '', true)).toBeNull();
+    expect(xtreamCredentialsFromLiveUrl('http://host/live/u1/p1/7.ts', '', true))
+      .toMatchObject({ streamId: '7', output: 'ts' });
+    expect(xtreamCredentialsFromLiveUrl('http://host/live/./u1/p1/7.ts', '', true))
+      .toMatchObject({ streamId: '7', output: 'ts' });
+  });
+
   it('recovers a live URL relative to a path-prefixed portal base', () => {
     expect(xtreamCredentialsFromLiveUrl(
       'http://host:8080/panel/live/u1/p1/42.ts',

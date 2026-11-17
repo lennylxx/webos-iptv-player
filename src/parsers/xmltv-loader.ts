@@ -6,7 +6,8 @@ import {
 } from './xmltv-parser';
 import { runAppWorkerTask } from '../workers/app-worker-client';
 import { holdEpg } from '../workers/held-values';
-import { PACKED_EPG_FORMAT, packEpg, unpackEpgSliced } from '../services/epg-cache-codec';
+import { packEpg, unpackEpgSliced } from '../services/epg-cache-codec';
+import { PACKED_EPG_FORMAT } from '../services/idb-schema';
 import { holdWorkerValue } from '../services/worker-held-records';
 import { releaseHeldRecord } from '../services/held-records';
 import type {
@@ -42,7 +43,11 @@ export async function fetchAndParseXMLTV(
   );
   let decodeFailed = false;
   try {
-    const blocks: Record<'channels' | 'programmes', string[]> = { channels: [], programmes: [] };
+    const blocks: Record<'channels' | 'programmes' | 'catchupIds', string[]> = {
+      channels: [],
+      programmes: [],
+      catchupIds: [],
+    };
     const result = await runAppWorkerTask('xmltv.load', {
       url,
       timeout,
@@ -52,6 +57,12 @@ export async function fetchAndParseXMLTV(
         channelNames: options.channelNames ? Array.from(options.channelNames) : undefined,
         retainChannelCatalog: options.retainChannelCatalog,
         maxProgrammes: options.maxProgrammes,
+        catchupIdChannelIds: options.catchupIdChannelIds
+          ? Array.from(options.catchupIdChannelIds)
+          : undefined,
+        catchupIdChannelNames: options.catchupIdChannelNames
+          ? Array.from(options.catchupIdChannelNames)
+          : undefined,
       },
       ...(holdForCache ? { holdForCache } : {}),
     }, chunk => {
@@ -242,14 +253,11 @@ export async function fetchAndParseXMLTVInWorker(
   if (!first.parser.needsOrderRetry()) {
     return deliverGuide(createResponse(first, 1, Date.now() - started), first.guide, request, emitChunk);
   }
-  const channelIds = first.parser.acceptedChannelIds();
+  const retryOptions = first.parser.retryOptions(options);
   const { inputBytes, chunks } = first;
   // Its parser's sink holds the whole first guide, which the retry rebuilds.
   first = null;
-  const retry = await parsePass(request.url, request.timeout, {
-    ...options,
-    channelIds,
-  }, 'retry', true, emitChunk, 2);
+  const retry = await parsePass(request.url, request.timeout, retryOptions, 'retry', true, emitChunk, 2);
   retry.inputBytes += inputBytes;
   retry.chunks += chunks;
   return deliverGuide(createResponse(retry, 2, Date.now() - started), retry.guide, request, emitChunk);
@@ -270,11 +278,12 @@ function deliverGuide(
   const packed = packEpg(guide);
   sendBlocks('channels', packed.channels, emitChunk);
   sendBlocks('programmes', packed.programmes, emitChunk);
+  if (packed.catchupIds) sendBlocks('catchupIds', packed.catchupIds, emitChunk);
   return cacheable ? { ...response, held: { token: holdEpg(() => packed) } } : response;
 }
 
 function sendBlocks(
-  part: 'channels' | 'programmes',
+  part: 'channels' | 'programmes' | 'catchupIds',
   blocks: string[],
   emitChunk: (chunk: XMLTVWorkerChunk) => void,
 ): void {
@@ -515,6 +524,12 @@ function deserializeOptions(request: XMLTVWorkerRequest): XMLTVParseOptions {
       : undefined,
     channelNames: request.options.channelNames
       ? new Set(request.options.channelNames)
+      : undefined,
+    catchupIdChannelIds: request.options.catchupIdChannelIds
+      ? new Set(request.options.catchupIdChannelIds)
+      : undefined,
+    catchupIdChannelNames: request.options.catchupIdChannelNames
+      ? new Set(request.options.catchupIdChannelNames)
       : undefined,
   };
 }

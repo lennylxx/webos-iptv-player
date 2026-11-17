@@ -26,6 +26,7 @@ import {
   type XtreamServerClockResult,
 } from '../services/xtream-client';
 import { xtreamCatchupSource } from '../utils/xtream-url';
+import { catchupYieldsToArchive, clearDerivedCatchup, revokeInheritedCatchup } from '../utils/catchup-url';
 import { CONFIG } from '../config';
 import { holdBatches } from '../workers/held-values';
 import { holdWorkerValue } from '../services/worker-held-records';
@@ -92,9 +93,24 @@ export async function fetchAndParseM3U(
     ...(liveStreams && xtreamCatchup ? { xtreamCatchup } : {}),
   };
   const channelBatches: Channel[] = [];
+  const shareCatchup = catchupStringSharer();
+  let revokedBefore = 0;
+  // In place, so every surface shows it on its next render; the next batch's
+  // arrival renders the lists. Repeats are harmless.
+  const revokeArrived = (before: number): void => {
+    const end = Math.min(before, channelBatches.length);
+    for (let i = revokedBefore; i < end; i++) revokeInheritedCatchup(channelBatches[i]);
+    revokedBefore = Math.max(revokedBefore, end);
+  };
   const handleChunk = (chunk: M3UWorkerChunk): void => {
+    if (chunk.kind === 'catchupRevoked') {
+      revokeArrived(chunk.before);
+      return;
+    }
     if (chunk.kind === 'channels') {
-      channelBatches.push(...chunk.channels);
+      shareCatchup(chunk.channels);
+      // No spread: a large chunk would overflow the call stack.
+      for (const channel of chunk.channels) channelBatches.push(channel);
       onChannels?.(chunk.channels);
     } else {
       log.info(
@@ -135,6 +151,8 @@ export async function fetchAndParseM3U(
     );
     throw error;
   }
+  if (result.catchupRevokedBefore) revokeArrived(result.catchupRevokedBefore);
+  shareCatchup(result.data.channels);
   onChannels?.(result.data.channels);
   if (channelBatches.length) {
     result.data.channels = channelBatches.concat(result.data.channels);
@@ -212,6 +230,8 @@ export async function fetchAndParseM3UInWorker(
     catchup,
   );
   let emittedChannels = 0;
+  let keptEmitted = 0;
+  let catchupRevokedBefore = 0;
   const playlistId = request.playlistId;
   const seen = playlistId !== undefined ? new Set<string>() : null;
   let duplicates = 0;
@@ -250,12 +270,23 @@ export async function fetchAndParseM3UInWorker(
     ...(liveFilters.channelPostfilter
       ? { channelPostfilter: liveFilters.channelPostfilter }
       : {}),
+    onCatchupInheritanceRevoked: () => {
+      // Every channel sent so far came before the revoking one.
+      catchupRevokedBefore = keptEmitted;
+      if (keptEmitted) emitChunk?.({ kind: 'catchupRevoked', before: keptEmitted });
+      if (held) {
+        for (const batch of held) {
+          for (const channel of batch) revokeInheritedCatchup(channel);
+        }
+      }
+    },
     ...(emitChunk
       ? {
           channelBatchSize: CHANNEL_BATCH_SIZE,
           onChannelBatch: (channels: Channel[]) => {
             emittedChannels += channels.length;
             const kept = uniqueStreams(channels);
+            keptEmitted += kept.length;
             holdBatch(kept);
             const chunk: M3UWorkerChunk = {
               kind: 'channels',
@@ -340,6 +371,7 @@ export async function fetchAndParseM3UInWorker(
     return {
       data,
       ...(held?.length ? { held: { token: holdBatches(held) } } : {}),
+      ...(catchupRevokedBefore ? { catchupRevokedBefore } : {}),
       metrics: {
         transport,
         filter: liveFilters.mode,
@@ -395,7 +427,7 @@ export async function fetchAndParseM3UInWorker(
     }
   }
 
-  function rememberProgress(chunk: M3UWorkerChunk): void {
+  function rememberProgress(chunk: Exclude<M3UWorkerChunk, { kind: 'catchupRevoked' }>): void {
     reportedInputBytes = chunk.inputBytes;
     reportedChannelsEmitted = chunk.channelsEmitted;
     reportedChannelsDropped = chunk.channelsDropped;
@@ -528,7 +560,10 @@ function createXtreamCatchupStamper(
     : null;
   return {
     stamp(channel, resolvedId) {
-      if (!knownIds) return;
+      if (!knownIds) {
+        clearDerivedCatchup(channel);
+        return;
+      }
       // A provider id from the URL wins when the catalog knows it.
       const streamId = channel.catchupStreamId && knownIds.has(channel.catchupStreamId)
         ? channel.catchupStreamId
@@ -536,11 +571,15 @@ function createXtreamCatchupStamper(
       const stream = archived.get(streamId);
       if (!stream) {
         if (!streamId) counts.unmatched++;
+        else clearDerivedCatchup(channel);
         return;
       }
       channel.catchupStreamId = streamId;
       channel.catchupAccountId = catchup.accountId;
-      if (!channel.catchupSource) {
+      // Header defaults yield to the account's archive, as archive days do.
+      if (!channel.catchupSource || catchupYieldsToArchive(channel)) {
+        delete channel.catchupDerived;
+        delete channel.catchupInherited;
         channel.catchup = 'xtream';
         channel.catchupSource = xtreamCatchupSource(
           catchup.credentials,
@@ -640,4 +679,34 @@ export function decodedResponseLength(headers: Headers | undefined): number {
   if (encoding !== 'identity') return 0;
   const length = Number(headers.get('content-length'));
   return Number.isFinite(length) && length > 0 ? Math.floor(length) : 0;
+}
+
+const SHARED_CATCHUP_STRINGS = 64;
+
+function stringPool(): (value: string) => string {
+  const pool = new Map<string, string>();
+  let last = '';
+  return (value) => {
+    if (value === last) return last;
+    const known = pool.get(value);
+    if (known !== undefined) return last = known;
+    if (pool.size < SHARED_CATCHUP_STRINGS) pool.set(value, value);
+    return last = value;
+  };
+}
+
+// A structured clone gives every channel its own copy of a catch-up type or
+// template many channels repeat (a header default); share one per load.
+export function catchupStringSharer(): (channels: Channel[]) => void {
+  const types = stringPool();
+  const sources = stringPool();
+  return (channels) => {
+    for (const channel of channels) {
+      if (channel.catchup) channel.catchup = types(channel.catchup);
+      // A template that only names its own channel (Xtream) is never shared.
+      if (channel.catchupSource && channel.catchup !== 'xtream') {
+        channel.catchupSource = sources(channel.catchupSource);
+      }
+    }
+  };
 }

@@ -31,6 +31,69 @@ describe('parseXMLTV', () => {
     expect(result.sourceName).toBe('Generator Alpha');
   });
 
+  it('reads a program catch-up id, in any attribute position, and decodes entities', () => {
+    const now = new Date();
+    const start = xmltvDate(new Date(now.getTime() - 3_600_000));
+    const stop = xmltvDate(new Date(now.getTime() + 3_600_000));
+    const later = xmltvDate(new Date(now.getTime() + 7_200_000));
+    const last = xmltvDate(new Date(now.getTime() + 10_800_000));
+    const result = parseXMLTVWithStats(`<tv>
+      <programme catchup-id="http://host/vod?id=p1&amp;x=1" start="${start}" stop="${stop}" channel="ch1">
+        <title>Alpha</title>
+      </programme>
+      <programme start="${stop}" stop="${later}" channel="ch1" catchup-id="p2"><title>Bravo</title></programme>
+      <programme start="${later}" stop="${last}" channel="ch1"><title>Charlie</title></programme>
+    </tv>`).data;
+
+    const [alpha, bravo, charlie] = result.programmes.ch1;
+    expect(charlie.title).toBe('Charlie');
+    expect('catchupId' in charlie).toBe(false);
+    expect(alpha.catchupId).toBe('http://host/vod?id=p1&x=1');
+    expect(bravo.catchupId).toBe('p2');
+  });
+
+  it('reads the catch-up id among attributes it does not use', () => {
+    const now = new Date();
+    const start = xmltvDate(new Date(now.getTime() - 3_600_000));
+    const stop = xmltvDate(new Date(now.getTime() + 3_600_000));
+    const later = xmltvDate(new Date(now.getTime() + 7_200_000));
+    const result = parseXMLTVWithStats(`<tv>
+      <programme vps-start="${start}" clumpidx="0/1" catchup-idx="no" catchup-id="p3&amp;q"
+        pdc-start="${start}" start="${start}" stop="${stop}" showview='a"b' channel="ch1">
+        <title>Alpha</title>
+      </programme>
+      <programme start="${stop}" stop="${later}" channel="ch1" videoplus="x" catchup-id='p4'
+        clumpidx="1/2"><title>Bravo</title></programme>
+    </tv>`).data;
+
+    expect(result.programmes.ch1.map(p => [p.title, p.catchupId])).toEqual([
+      ['Alpha', 'p3&q'],
+      ['Bravo', 'p4'],
+    ]);
+  });
+
+  it('keeps catch-up ids only for the channels asked for, by id or display name', () => {
+    const now = new Date();
+    const start = xmltvDate(new Date(now.getTime() - 3_600_000));
+    const stop = xmltvDate(new Date(now.getTime() + 3_600_000));
+    const xml = `<tv>
+      <channel id="ch2"><display-name>Bravo</display-name></channel>
+      <programme start="${start}" stop="${stop}" channel="ch1" catchup-id="p1"><title>A</title></programme>
+      <programme start="${start}" stop="${stop}" channel="ch2" catchup-id="p2"><title>B</title></programme>
+      <programme start="${start}" stop="${stop}" channel="ch3" catchup-id="p3"><title>C</title></programme>
+    </tv>`;
+    const ids = (options: Parameters<typeof parseXMLTVWithStats>[1]) => {
+      const { programmes } = parseXMLTVWithStats(xml, options).data;
+      return ['ch1', 'ch2', 'ch3'].map(id => programmes[id]?.[0]?.catchupId ?? null);
+    };
+
+    expect(ids({})).toEqual(['p1', 'p2', 'p3']);
+    expect(ids({ catchupIdChannelIds: new Set(['ch1']), catchupIdChannelNames: new Set(['bravo']) }))
+      .toEqual(['p1', 'p2', null]);
+    expect(ids({ catchupIdChannelIds: new Set(), catchupIdChannelNames: new Set() }))
+      .toEqual([null, null, null]);
+  });
+
   it('parses channels with display names and icons', () => {
     const xml = `<?xml version="1.0"?>
       <tv>

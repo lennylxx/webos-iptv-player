@@ -44,6 +44,8 @@ export function streamRouteKey(url: string): string {
 // A local proxy URL: /p/<token>/<scheme>/<host><path>.
 const PROXIED_PATH = /^\/p\/[^/]*\/(https?)\/([^/?#]+)(.*)$/;
 
+const CATCHUP_TIME_PARAM = /^(?:utc|lutc|archive|archive_end|timeshift|timenow)$/i;
+
 export function diagnosticStreamUrl(url: string): string {
   try {
     const proxied = /^(https?:\/\/[^/]+)(\/p\/.*)$/.exec(url);
@@ -64,10 +66,11 @@ export function diagnosticStreamUrl(url: string): string {
       parsed.pathname = parts.join('/');
     }
 
-    parsed.searchParams.forEach((_, key) => {
-      if (!/^(?:start|end|duration|extension|stream)$/i.test(key)) {
-        parsed.searchParams.set(key, '***');
-      }
+    parsed.searchParams.forEach((value, key) => {
+      if (/^(?:start|end|duration|extension|stream)$/i.test(key)) return;
+      // Catch-up times are what a position bug report needs, and never secret.
+      if (CATCHUP_TIME_PARAM.test(key) && /^\d+$/.test(value)) return;
+      parsed.searchParams.set(key, '***');
     });
     return parsed.toString();
   } catch {

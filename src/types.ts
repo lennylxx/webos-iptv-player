@@ -51,6 +51,14 @@ export interface Channel {
   catchupAccountId?: string;
   catchupStreamId?: string;
   catchupDays: number;
+  /** Catch-up came only from archive days, with no type or source, so an
+   *  Xtream archive for the stream takes precedence. */
+  catchupDerived?: boolean;
+  /** Catch-up came from the #EXTM3U header's defaults: a later channel's own
+   *  attribute revokes it, and an Xtream archive for the stream replaces it. */
+  catchupInherited?: boolean;
+  /** Hours added to the times in an M3U catch-up URL (`catchup-correction`). */
+  catchupCorrection?: number;
   /** Provider timezone used to format Xtream's wall-clock timeshift path. */
   catchupTimeZone?: string;
   /** Fixed fallback when the provider timezone is absent or unsupported. */
@@ -153,6 +161,8 @@ export interface Programme {
   description: string;
   category: string;
   icon: string;
+  /** XMLTV `catchup-id`: the program's id on the archive server. */
+  catchupId?: string;
 }
 
 export interface EpgChannel {
@@ -345,6 +355,8 @@ export interface CatchupInfo {
   icon: string;
   /** EPG feed that supplied the corrected programme times. */
   epgSourceUrl?: string;
+  /** XMLTV `catchup-id` of the program, for `{catchup-id}` URLs. */
+  catchupId?: string;
   /** If set, seek to this position (seconds) once metadata loads — set by resume callers. */
   resumeSecs?: number;
 }
@@ -658,6 +670,7 @@ export interface CatchupProgressEntry {
   title?: string;      // display snapshot for Recently Watched; absent on legacy entries
   description?: string;
   icon?: string;
+  catchupId?: string;  // XMLTV catchup-id, for `{catchup-id}` catch-up URLs
   position: number;    // playback position seconds
   duration: number;    // media duration seconds (0 = unknown)
   updatedAt: number;   // epoch ms of last checkpoint

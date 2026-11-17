@@ -1098,12 +1098,14 @@ describe('StorageService catchup progress store', () => {
   });
 
   it('round-trips a catchup progress entry', () => {
-    StorageService.setCatchupProgress(mkEntry({ title: 'Program Alpha', description: 'Summary', icon: 'http://host/a' }), 7, baseNow);
+    StorageService.setCatchupProgress(mkEntry({
+      title: 'Program Alpha', description: 'Summary', icon: 'http://host/a', catchupId: 'p1',
+    }), 7, baseNow);
     const got = StorageService.getCatchupProgress('ck1', baseNow - HOUR, baseNow);
     expect(got).not.toBeNull();
     expect(got!.position).toBe(60);
     expect(got!.completed).toBe(false);
-    expect(got).toMatchObject({ title: 'Program Alpha', description: 'Summary', icon: 'http://host/a' });
+    expect(got).toMatchObject({ title: 'Program Alpha', description: 'Summary', icon: 'http://host/a', catchupId: 'p1' });
   });
 
   it('migrates catchup progress keys when an EPG offset changes', () => {

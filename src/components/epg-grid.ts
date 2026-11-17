@@ -29,6 +29,7 @@ import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { WorkerListSearch } from '../workers/list-search-client';
 import { isIndexRetryPending } from '../workers/index-retry';
 import { createLogger } from '../utils/logger';
+import { catchupNeedsId, hasCatchup } from '../utils/catchup-url';
 import { liveBadge } from './live-badge';
 import { Focus, Tier, type FocusScope, type Via } from '../navigation/focus-scope';
 import { InputMode } from '../navigation/input-mode';
@@ -534,9 +535,9 @@ export class EpgGrid {
     const groupRange = this.groupVirtualizer.getRange(groups.length, groupViewport);
 
     // Load catch-up progress once per render for the current channel.
-    const hasCatchup = !!(channel && channel.catchupSource);
+    const channelHasCatchup = !!channel && hasCatchup(channel);
     let progressMap: Map<number, CatchupProgressEntry> | undefined;
-    if (hasCatchup && channel) {
+    if (channelHasCatchup && channel) {
       const chKey = channelKey(channel);
       const entries = StorageService.getCatchupProgressList(
         chKey,
@@ -680,14 +681,14 @@ export class EpgGrid {
                     const now = Date.now();
                     const startMs = p.start.getTime();
                     const stopMs = p.stop.getTime();
-                    // Three temporal states drive the row's color: aired (replayable
-                    // via catch-up), live (airing now), and upcoming.
+                    // Three temporal states drive the row's color: aired, live (airing
+                    // now), and upcoming. Only replayable aired rows get the replay icon.
                     const state = stopMs <= now ? 'past' : startMs > now ? 'future' : 'live';
                     const current = state === 'live';
                     const catchupAvailable = state === 'past' && channel
-                      ? XtreamArchiveService.isAvailable(channel, startMs)
+                      ? XtreamArchiveService.isAvailable(channel, startMs, now, p.catchupId)
                       : false;
-                    const progress = catchupAvailable && hasCatchup ? progressMap!.get(startMs) : undefined;
+                    const progress = catchupAvailable && channelHasCatchup ? progressMap!.get(startMs) : undefined;
                     return html`
                       <div class="epg-programme-item
                                   state-${state} ${current ? 'current' : ''}"
@@ -696,7 +697,7 @@ export class EpgGrid {
                            style="top:${this.programmeVirtualizer.getItemOffset(i)}px">
                         <div class="epg-prog-time-col">
                           <span class="epg-prog-time">${formatTime(p.start)}</span>
-                          <span class="epg-prog-dur">${state === 'past'
+                          <span class="epg-prog-dur">${catchupAvailable
                             ? raw(REPLAY_ICON)
                             : ''}<span>${formatDuration(stopMs - startMs)}</span></span>
                         </div>
@@ -1144,13 +1145,14 @@ export class EpgGrid {
     const channel = PlaylistService.channels[this.selectedChannelIdx];
     let catchup: CatchupInfo | undefined;
     if (progStop <= now && channel &&
-        XtreamArchiveService.isAvailable(channel, prog.start.getTime())) {
+        XtreamArchiveService.isAvailable(channel, prog.start.getTime(), Date.now(), prog.catchupId)) {
       catchup = {
         start: progStart,
         end: progStop,
         title: prog.title,
         description: prog.description || '',
         icon: prog.icon || '',
+        ...(prog.catchupId ? { catchupId: prog.catchupId } : {}),
         epgSourceUrl: EpgService.getSourceUrl(channel) ?? undefined,
         resumeSecs,
       };
@@ -1165,20 +1167,24 @@ export class EpgGrid {
 
     const channel = PlaylistService.channels[this.selectedChannelIdx];
     const isPast = prog.stop.getTime() <= Date.now();
-    if (isPast && channel?.catchupAccountId && channel.catchupStreamId) {
+    const startMs = prog.start.getTime();
+    // Only an Xtream account's archive answers "unavailable", as in Search; any
+    // other aired program that can't be replayed (outside the archive days,
+    // or without the id its URL needs) opens the channel live.
+    if (isPast && channel?.catchupAccountId && channel.catchupStreamId && hasCatchup(channel)
+        && (!!prog.catchupId || !catchupNeedsId(channel))) {
       const channelIndex = this.selectedChannelIdx;
       await XtreamArchiveService.load(channel);
       if (PlaylistService.channels[channelIndex] !== channel) return;
       this.render();
+      if (!XtreamArchiveService.isAvailable(channel, startMs, Date.now(), prog.catchupId)) {
+        showToast(t('epg.catchupUnavailable'));
+        return;
+      }
     }
-    if (isPast && channel?.catchupSource &&
-        !XtreamArchiveService.isAvailable(channel, prog.start.getTime())) {
-      showToast(t('epg.catchupUnavailable'));
-      return;
-    }
-    if (isPast && channel?.catchupSource) {
+    if (isPast && channel
+        && XtreamArchiveService.isAvailable(channel, startMs, Date.now(), prog.catchupId)) {
       const chKey = channelKey(channel);
-      const startMs = prog.start.getTime();
       const entries = StorageService.getCatchupProgressList(
         chKey,
         undefined,

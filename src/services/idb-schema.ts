@@ -7,9 +7,11 @@ export const CATALOG_STORE = 'catalog-cache';
 export const PLAYLIST_STORE = 'playlist-cache';
 export const SEARCH_INDEX_STORE = 'search-index-cache';
 export const CACHE_META_STORE = 'cache-meta';
-// Avoid deserializing caches that may contain Xtream VOD rows or channels whose
-// URL still carries an unparsed `|Name=value` header suffix.
-export const PLAYLIST_CACHE_KEY = 'combined-v4';
+// Bump when parsed channels change shape or meaning, so old caches are never
+// served: v5 re-reads M3U catch-up attributes. A write evicts older keys.
+export const PLAYLIST_CACHE_KEY = 'combined-v5';
+// Bumping it invalidates cached guides; v2 adds program catch-up ids.
+export const PACKED_EPG_FORMAT = 'epg-packed-v2';
 // Bump when item lists gain fields, so old catalog rows are never served.
 export const VOD_STREAMS_RESOURCE = 'vod_streams-v2';
 export const SERIES_RESOURCE = 'series-v2';

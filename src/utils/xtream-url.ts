@@ -86,11 +86,17 @@ export function xtreamLiveUrl(c: XtreamCredentials, streamId: string, output: Xt
   return `${base}/live/${encodeURIComponent(c.username)}/${encodeURIComponent(c.password)}/${encodeURIComponent(streamId)}.${output}`;
 }
 
-/** Recover an Xtream account only from unambiguous standard live URL shapes. */
+/** Recover an Xtream account only from unambiguous standard live URL shapes;
+ *  `livePath` accepts only `/live/<user>/<pass>/<id>`, not the bare form. */
 export function xtreamCredentialsFromLiveUrl(
   url: string,
   baseUrl = '',
+  livePath = false,
 ): XtreamLiveUrlParts | null {
+  if (!baseUrl) {
+    const simple = simpleLiveUrlParts(url, livePath);
+    if (simple !== undefined) return simple;
+  }
   try {
     const parsed = new URL(url);
     let pathname = parsed.pathname;
@@ -107,10 +113,12 @@ export function xtreamCredentialsFromLiveUrl(
     const parts = pathname.split('/').filter(Boolean);
     const prefixed = parts[0]?.toLowerCase() === 'live';
     if ((prefixed && parts.length !== 4) || (!prefixed && parts.length !== 3)) return null;
+    if (livePath && !prefixed) return null;
     const usernameIndex = prefixed ? 1 : 0;
     const streamPart = parts[usernameIndex + 2];
     const match = streamPart.match(/^([^/.]+)(?:\.(ts|m3u8))?$/i);
     if (!match || (!prefixed && match[2])) return null;
+    if (livePath && !NUMERIC_STREAM_ID.test(match[1])) return null;
     return {
       credentials: {
         baseUrl: credentialBase,
@@ -123,6 +131,53 @@ export function xtreamCredentialsFromLiveUrl(
   } catch {
     return null;
   }
+}
+
+// A plain http(s) URL, which the URL parser leaves as is past the host: no
+// escapes, query, fragment, backslash, or whitespace.
+const SIMPLE_HTTP_URL = /^(https?):\/\/([A-Za-z0-9._~!$&'()*+,;=:@-]+)(\/[A-Za-z0-9._~!$&'()*+,;=:@/-]*)?$/i;
+const STREAM_PART = /^([^/.]+)(?:\.(ts|m3u8))?$/i;
+// Xtream stream ids are integers; a playlist that only implies catch-up needs
+// one before a /live/ URL counts as Xtream-shaped.
+const NUMERIC_STREAM_ID = /^\d+$/;
+const ORIGINS = new Map<string, string>();
+const MAX_ORIGINS = 64;
+
+// The same answer as the URL-parsing path, for the common plain URL, without
+// parsing one per channel: undefined leaves the URL to that path.
+function simpleLiveUrlParts(url: string, livePath: boolean): XtreamLiveUrlParts | null | undefined {
+  const match = SIMPLE_HTTP_URL.exec(url);
+  if (!match) return undefined;
+  const parts = (match[3] ?? '').split('/').filter(Boolean);
+  for (const part of parts) {
+    if (part === '.' || part === '..') return undefined;
+  }
+  const prefixed = parts[0]?.toLowerCase() === 'live';
+  if ((prefixed && parts.length !== 4) || (!prefixed && parts.length !== 3)) return null;
+  if (livePath && !prefixed) return null;
+  const usernameIndex = prefixed ? 1 : 0;
+  const stream = STREAM_PART.exec(parts[usernameIndex + 2]);
+  if (!stream || (!prefixed && stream[2])) return null;
+  if (livePath && !NUMERIC_STREAM_ID.test(stream[1])) return null;
+  const authority = `${match[1]}://${match[2]}`;
+  let origin = ORIGINS.get(authority);
+  if (origin === undefined) {
+    try {
+      origin = new URL(`${authority}/`).origin;
+    } catch {
+      return undefined;
+    }
+    if (ORIGINS.size < MAX_ORIGINS) ORIGINS.set(authority, origin);
+  }
+  return {
+    credentials: {
+      baseUrl: origin,
+      username: parts[usernameIndex],
+      password: parts[usernameIndex + 1],
+    },
+    streamId: stream[1],
+    output: stream[2]?.toLowerCase() === 'm3u8' ? 'm3u8' : 'ts',
+  };
 }
 
 /** VOD (movie) stream URL: `{base}/movie/{user}/{pass}/{streamId}.{ext}`.

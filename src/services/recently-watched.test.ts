@@ -10,7 +10,7 @@ const { data, archiveMock, storageMock, epgMock, playlistMock } = vi.hoisted(() 
     data,
     archiveMock: {
       load: vi.fn(async () => null),
-      isAvailable: vi.fn(() => data.available),
+      isAvailable: vi.fn((..._args: unknown[]) => data.available),
     },
     storageMock: {
       getRecentlyWatchedLive: vi.fn(() => data.live),
@@ -27,6 +27,7 @@ const { data, archiveMock, storageMock, epgMock, playlistMock } = vi.hoisted(() 
         icon: string;
       }>>,
       findChannelId: vi.fn((): string | null => null),
+      catchupIdsKnown: vi.fn(() => true),
       getProgrammeAtStart: vi.fn(function (this: {
         programmes: Record<string, Array<{ start: Date }>>;
       }, id: string, timestamp: number) {
@@ -91,8 +92,9 @@ beforeEach(() => {
   data.available = true;
   epgMock.programmes = {};
   epgMock.findChannelId.mockReset().mockReturnValue(null);
+  epgMock.catchupIdsKnown.mockReset().mockReturnValue(true);
   archiveMock.load.mockClear();
-  archiveMock.isAvailable.mockClear();
+  archiveMock.isAvailable.mockClear().mockImplementation(() => data.available);
   playlistMock.resolveChannelKey.mockClear();
   storageMock.clearCatchupProgress.mockClear();
 });
@@ -246,6 +248,74 @@ describe('RecentlyWatchedService.catchupInfo', () => {
       resumeSecs: 600,
     });
     expect(archiveMock.load).toHaveBeenCalledWith(ch);
+  });
+
+  it('restores the saved program catch-up id, or the guide one for older entries', async () => {
+    const ch = channel({ catchup: 'vod', catchupSource: '' });
+    const item = (over: Partial<CatchupProgressEntry>) => ({
+      kind: 'catchup' as const, channel: ch, channelIndex: 0, progress: progress(ch, over), updatedAt: 2000,
+    });
+
+    await expect(RecentlyWatchedService.catchupInfo(item({ catchupId: 'p1' })))
+      .resolves.toMatchObject({ catchupId: 'p1', resumeSecs: 600 });
+    expect(archiveMock.isAvailable).toHaveBeenLastCalledWith(ch, 1_000_000, expect.any(Number), 'p1');
+
+    epgMock.findChannelId.mockReturnValue('ch1');
+    epgMock.programmes = { ch1: [{
+      start: new Date(1_000_000), stop: new Date(4_600_000), title: 'Program Alpha',
+      description: '', category: '', icon: '', catchupId: 'p2',
+    } as never] };
+    await expect(RecentlyWatchedService.catchupInfo(item({})))
+      .resolves.toMatchObject({ catchupId: 'p2' });
+  });
+
+  it('skips the guide lookup for a channel whose URL needs no catch-up id', async () => {
+    epgMock.getProgrammeAtStart.mockClear();
+    const ch = channel();
+    data.channels.push(ch);
+    data.catchup.push(progress(ch));
+    RecentlyWatchedService.getItems();
+    await RecentlyWatchedService.catchupInfo({
+      kind: 'catchup', channel: ch, channelIndex: 0, progress: progress(ch), updatedAt: 2000,
+    });
+    expect(epgMock.findChannelId).not.toHaveBeenCalled();
+    expect(epgMock.getProgrammeAtStart).not.toHaveBeenCalled();
+  });
+
+  it('keeps an entry without an id until the guide can tell whether the program has one', () => {
+    const ch = channel({ catchup: 'default', catchupSource: 'http://host/v/{catchup-id}' });
+    data.channels.push(ch);
+    data.catchup.push(progress(ch));
+    archiveMock.isAvailable.mockImplementation((...args: unknown[]) => !!args[3]);
+    const start = new Date(1_000_000);
+    const guideProgram = { start, stop: new Date(4_600_000), title: 'Program Alpha',
+      description: '', category: '', icon: '' };
+
+    expect(RecentlyWatchedService.getItems()).toEqual([]);
+    epgMock.findChannelId.mockReturnValue('ch1');
+    epgMock.programmes = { ch1: [guideProgram] };
+    epgMock.catchupIdsKnown.mockReturnValue(false);
+    expect(RecentlyWatchedService.getItems()).toEqual([]);
+    expect(storageMock.clearCatchupProgress).not.toHaveBeenCalled();
+
+    epgMock.catchupIdsKnown.mockReturnValue(true);
+    expect(RecentlyWatchedService.getItems()).toEqual([]);
+    expect(storageMock.clearCatchupProgress).toHaveBeenCalledWith(channelKey(ch), 1_000_000);
+  });
+
+  it('resumes a vod entry by its saved id after the guide dropped the program', async () => {
+    const ch = channel({ catchup: 'vod', catchupSource: '' });
+    data.channels.push(ch);
+    data.catchup.push(progress(ch, { catchupId: 'p1' }));
+    archiveMock.isAvailable.mockImplementation((...args: unknown[]) => !!args[3]);
+    epgMock.findChannelId.mockReturnValue('ch1');
+    epgMock.programmes = {};
+
+    const [item] = RecentlyWatchedService.getItems();
+    expect(item).toMatchObject({ kind: 'catchup' });
+    await expect(RecentlyWatchedService.catchupInfo(item as Extract<typeof item, { kind: 'catchup' }>))
+      .resolves.toMatchObject({ catchupId: 'p1', resumeSecs: 600 });
+    expect(storageMock.clearCatchupProgress).not.toHaveBeenCalled();
   });
 
   it('removes an entry when archive metadata explicitly makes it unavailable', async () => {

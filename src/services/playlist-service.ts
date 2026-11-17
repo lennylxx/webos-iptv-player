@@ -18,6 +18,7 @@ import {
   type XtreamCredentials,
   type XtreamLiveOutput,
 } from '../utils/xtream-url';
+import { catchupYieldsToArchive, clearDerivedCatchup } from '../utils/catchup-url';
 import {
   channelKey,
   channelExactStreamIdentity,
@@ -939,14 +940,26 @@ class PlaylistServiceImpl {
     const archived = new Map(streams
       .filter(stream => stream.archive)
       .map(stream => [stream.streamId, stream]));
-    if (!archived.size) return 0;
-
-    const clock = await client.getServerClock();
+    // Nothing to stamp, and nothing that yields to the archive to take back.
+    if (!archived.size && !channels.some(catchupYieldsToArchive)) return 0;
     const knownIds = new Set(streams.map(stream => stream.streamId));
     const resolveLiveStreamId = createXtreamLiveStreamIdResolver(
       streams,
       credentials.baseUrl,
     );
+    if (!archived.size) {
+      let cleared = 0;
+      for (const channel of channels) {
+        if (catchupYieldsToArchive(channel) && knownIds.has(resolveLiveStreamId(channel.url))) {
+          clearDerivedCatchup(channel);
+          cleared++;
+        }
+      }
+      // A change makes the caller write these channels, not the worker's copy.
+      return cleared;
+    }
+
+    const clock = await client.getServerClock();
     let enabled = 0;
     let unmatched = 0;
     let changed = 0;
@@ -957,12 +970,18 @@ class PlaylistServiceImpl {
       const stream = archived.get(streamId);
       if (!stream) {
         if (!streamId) unmatched++;
+        else if (catchupYieldsToArchive(channel) && knownIds.has(streamId)) {
+          clearDerivedCatchup(channel);
+          changed++;
+        }
         continue;
       }
       changed++;
       channel.catchupStreamId = streamId;
       channel.catchupAccountId = accountId;
-      if (!channel.catchupSource) {
+      if (!channel.catchupSource || catchupYieldsToArchive(channel)) {
+        delete channel.catchupDerived;
+        delete channel.catchupInherited;
         channel.catchup = 'xtream';
         channel.catchupSource = xtreamCatchupSource(credentials, streamId, output);
         channel.catchupDays = stream.archiveDurationDays;

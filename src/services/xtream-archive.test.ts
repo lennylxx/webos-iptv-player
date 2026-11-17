@@ -117,6 +117,27 @@ describe('XtreamArchiveService', () => {
     expect(XtreamArchiveService.isAvailable(ch, START * 1000, START * 1000 + 1000)).toBe(true);
   });
 
+  it('offers M3U catch-up types that need no catchup-source', () => {
+    const generic = { catchupSource: '', catchupAccountId: undefined, catchupStreamId: undefined };
+    const at = START * 1000 + 1000;
+    expect(XtreamArchiveService.isAvailable(channel({ ...generic, catchup: 'shift' }), START * 1000, at))
+      .toBe(true);
+    expect(XtreamArchiveService.isAvailable(channel({ ...generic, catchup: 'append' }), START * 1000, at))
+      .toBe(false);
+  });
+
+  it('needs a program catch-up id when the channel URL is built from one', () => {
+    const generic = { catchupAccountId: undefined, catchupStreamId: undefined };
+    const at = START * 1000 + 1000;
+    const vod = channel({ ...generic, catchup: 'vod', catchupSource: '' });
+    expect(XtreamArchiveService.isAvailable(vod, START * 1000, at)).toBe(false);
+    expect(XtreamArchiveService.isAvailable(vod, START * 1000, at, 'p1')).toBe(true);
+    const template = channel({ ...generic, catchup: 'default', catchupSource: 'http://host/a/{catchup-id}' });
+    expect(XtreamArchiveService.isAvailable(template, START * 1000, at)).toBe(false);
+    const shift = channel({ ...generic, catchup: 'shift', catchupSource: '' });
+    expect(XtreamArchiveService.isAvailable(shift, START * 1000, at)).toBe(true);
+  });
+
   it('rejects programs older than the advertised retention window', () => {
     const now = START * 1000 + 8 * 86400000;
     expect(XtreamArchiveService.isAvailable(channel(), START * 1000, now)).toBe(false);

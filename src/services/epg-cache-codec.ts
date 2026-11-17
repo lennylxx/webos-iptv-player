@@ -1,14 +1,16 @@
 import type { EpgChannel, ParsedEpg, Programme } from '../types';
+import { PACKED_EPG_FORMAT } from './idb-schema';
 
 // A cached guide as one structured clone takes seconds to read on a TV, all
 // in one task. Packed as JSON text blocks, the read copies strings only and
 // the blocks then parse a few at a time between other work.
-export const PACKED_EPG_FORMAT = 'epg-packed-1';
+// Program catch-up ids ride in a sparse `catchupIds` field.
 
 // Small enough that one block decodes well inside a frame on a TV.
 const CHANNELS_PER_BLOCK = 500;
 const PROGRAMMES_PER_BLOCK = 500;
 const PROGRAMME_FIELDS = 6;
+const CATCHUP_IDS_PER_BLOCK = 500;
 const META_KEYS = ['channelCatalogComplete', 'sourceName', 'tzOffsetMinutes'] as const;
 
 type EpgMeta = Pick<ParsedEpg, typeof META_KEYS[number]>;
@@ -20,6 +22,9 @@ export interface PackedEpg {
   channels: string[];
   // [id, [start, stop, title, description, category, icon, ...], ...]
   programmes: string[];
+  // [id, [programIndex, catchupId, ...], ...] for the channels with any;
+  // absent when no program has one.
+  catchupIds?: string[];
 }
 
 export function isPackedEpg(value: unknown): value is PackedEpg {
@@ -48,12 +53,17 @@ export function packEpg(data: ParsedEpg): PackedEpg {
   }
   if (count) channels.push(JSON.stringify(block));
   const programmes: string[] = [];
+  const catchupIds: string[] = [];
+  let idBlock: unknown[] = [];
+  let idCount = 0;
   block = [];
   count = 0;
   for (const id in data.programmes) {
     const list = data.programmes[id];
     const flat: unknown[] = [];
-    for (const programme of list) {
+    let ids: unknown[] | null = null;
+    for (let index = 0; index < list.length; index++) {
+      const programme = list[index];
       flat.push(
         programme.start.getTime(),
         programme.stop.getTime(),
@@ -62,8 +72,18 @@ export function packEpg(data: ParsedEpg): PackedEpg {
         programme.category,
         programme.icon,
       );
+      if (programme.catchupId) (ids ??= []).push(index, programme.catchupId);
     }
     block.push(id, flat);
+    if (ids) {
+      idBlock.push(id, ids);
+      idCount += ids.length / 2;
+      if (idCount >= CATCHUP_IDS_PER_BLOCK) {
+        catchupIds.push(JSON.stringify(idBlock));
+        idBlock = [];
+        idCount = 0;
+      }
+    }
     count += list.length;
     if (count >= PROGRAMMES_PER_BLOCK) {
       programmes.push(JSON.stringify(block));
@@ -72,7 +92,14 @@ export function packEpg(data: ParsedEpg): PackedEpg {
     }
   }
   if (block.length) programmes.push(JSON.stringify(block));
-  return { format: PACKED_EPG_FORMAT, meta, channels, programmes };
+  if (idBlock.length) catchupIds.push(JSON.stringify(idBlock));
+  return {
+    format: PACKED_EPG_FORMAT,
+    meta,
+    channels,
+    programmes,
+    ...(catchupIds.length ? { catchupIds } : {}),
+  };
 }
 
 function decodeChannels(text: string, into: Record<string, EpgChannel>): void {
@@ -104,10 +131,24 @@ function decodeProgrammes(text: string, into: Record<string, Programme[]>): void
   }
 }
 
+function decodeCatchupIds(text: string, into: Record<string, Programme[]>): void {
+  const block = JSON.parse(text) as unknown[];
+  for (let i = 0; i < block.length; i += 2) {
+    const list = into[block[i] as string];
+    const ids = block[i + 1] as unknown[];
+    if (!list) continue;
+    for (let k = 0; k < ids.length; k += 2) {
+      const programme = list[ids[k] as number];
+      if (programme) programme.catchupId = ids[k + 1] as string;
+    }
+  }
+}
+
 function decodeTasks(packed: PackedEpg, data: ParsedEpg): Array<() => void> {
   return [
     ...packed.channels.map(text => () => decodeChannels(text, data.channels)),
     ...packed.programmes.map(text => () => decodeProgrammes(text, data.programmes)),
+    ...(packed.catchupIds ?? []).map(text => () => decodeCatchupIds(text, data.programmes)),
   ];
 }
 
@@ -144,6 +185,10 @@ export interface EpgFilterLists {
   ids: string[];
   names: string[];
   key?: string;
+  /** The subset whose catch-up URL needs program catch-up ids: the guide
+   *  kept ids for these channels only. Absent means none. */
+  catchupIds?: string[];
+  catchupNames?: string[];
 }
 
 // A filter holds a name per playlist channel, hundreds of thousands of short
@@ -152,12 +197,16 @@ export interface EpgFilterLists {
 export interface PackedEpgFilter {
   lists: string;
   key?: string;
+  catchupIds?: string[];
+  catchupNames?: string[];
 }
 
 export function packEpgFilter(filter: EpgFilterLists): PackedEpgFilter {
   return {
     lists: JSON.stringify([filter.ids, filter.names]),
     ...(filter.key !== undefined ? { key: filter.key } : {}),
+    ...(filter.catchupIds?.length ? { catchupIds: filter.catchupIds } : {}),
+    ...(filter.catchupNames?.length ? { catchupNames: filter.catchupNames } : {}),
   };
 }
 
@@ -173,5 +222,7 @@ export function unpackEpgFilter(stored: unknown): EpgFilterLists | null | undefi
     get ids() { return lists()[0]; },
     get names() { return lists()[1]; },
     ...(value.key !== undefined ? { key: value.key } : {}),
+    ...(value.catchupIds ? { catchupIds: value.catchupIds } : {}),
+    ...(value.catchupNames ? { catchupNames: value.catchupNames } : {}),
   };
 }

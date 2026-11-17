@@ -1029,6 +1029,96 @@ http://host/series/u1/p1/301.mkv`);
     expect(heldReleaseMock).not.toHaveBeenCalled();
   });
 
+  it('lets the Xtream archive decide catch-up implied only by archive days', async () => {
+    archivedFeed();
+    const stream = (streamId: string, archive: boolean) => ({
+      streamId, name: streamId, icon: '', epgChannelId: '', categoryId: 'c1', categoryIds: ['c1'],
+      directSource: '', archive, archiveDurationDays: archive ? 4 : 0,
+    });
+    const derived = (streamId: string): Channel => ({
+      id: streamId, name: streamId, logo: '', group: '', extras: null, playlistIds: [],
+      url: `http://host/live/u1/p1/${streamId}.ts`,
+      catchup: 'xtream',
+      catchupSource: `http://host/timeshift/u1/p1/{duration}/{start}/${streamId}.ts`,
+      catchupDays: 3,
+      catchupStreamId: streamId,
+      catchupDerived: true,
+    });
+    const channels = [derived('101'), derived('102')];
+    const apply = (PlaylistService as unknown as {
+      applyXtreamCatchup(...args: unknown[]): Promise<number>;
+    }).applyXtreamCatchup.bind(PlaylistService);
+    const credentials = { baseUrl: 'http://host', username: 'u1', password: 'p1' };
+
+    await apply(channels, credentials, 'a1', 'm3u8', [stream('101', true), stream('102', false)]);
+
+    expect(channels[0]).toMatchObject({
+      catchup: 'xtream',
+      catchupSource: 'http://host/timeshift/u1/p1/{duration}/{start}/101.m3u8',
+      catchupDays: 4,
+      catchupAccountId: 'a1',
+    });
+    expect(channels[1]).toMatchObject({ catchup: '', catchupSource: '', catchupDays: 0 });
+
+    const lone = [derived('102')];
+    // Changed, so the page writes these channels rather than the worker's copy.
+    expect(await apply(lone, credentials, 'a1', 'm3u8', [stream('102', false)])).toBe(1);
+    expect(lone[0]).toMatchObject({ catchup: '', catchupSource: '' });
+  });
+
+  it('lets the Xtream archive replace catch-up a channel took from the playlist header', async () => {
+    archivedFeed();
+    const stream = (streamId: string, archive: boolean) => ({
+      streamId, name: streamId, icon: '', epgChannelId: '', categoryId: 'c1', categoryIds: ['c1'],
+      directSource: '', archive, archiveDurationDays: archive ? 4 : 0,
+    });
+    const channel = (streamId: string, inherited: boolean): Channel => ({
+      id: streamId, name: streamId, logo: '', group: '', extras: null, playlistIds: [],
+      url: `http://host/live/u1/p1/${streamId}.ts`,
+      catchup: 'append',
+      catchupSource: '?utc={utc}',
+      catchupDays: 3,
+      ...(inherited ? { catchupInherited: true } : {}),
+    });
+    const channels = [channel('101', true), channel('102', true), channel('103', false)];
+    const apply = (PlaylistService as unknown as {
+      applyXtreamCatchup(...args: unknown[]): Promise<number>;
+    }).applyXtreamCatchup.bind(PlaylistService);
+
+    await apply(channels, { baseUrl: 'http://host', username: 'u1', password: 'p1' }, 'a1', 'm3u8',
+      [stream('101', true), stream('102', false), stream('103', false)]);
+
+    expect(channels[0]).toMatchObject({ catchup: 'xtream', catchupDays: 4, catchupAccountId: 'a1' });
+    expect(channels[0].catchupInherited).toBeUndefined();
+    expect(channels[1]).toMatchObject({ catchup: '', catchupSource: '', catchupDays: 0 });
+    // The channel's own attribute stays.
+    expect(channels[2]).toMatchObject({ catchup: 'append', catchupSource: '?utc={utc}', catchupDays: 3 });
+  });
+
+  it('does not look at each channel when an account has no archive and nothing to take back', async () => {
+    archivedFeed();
+    let urlReads = 0;
+    const plain = Array.from({ length: 50 }, (_, i): Channel => {
+      const ch = {
+        id: `c${String(i)}`, name: `C${String(i)}`, logo: '', group: '', extras: null, playlistIds: [],
+        catchup: '', catchupSource: '', catchupDays: 0,
+      } as unknown as Channel;
+      Object.defineProperty(ch, 'url', { get: () => { urlReads++; return `http://host/live/u1/p1/${String(i)}.ts`; } });
+      return ch;
+    });
+    const apply = (PlaylistService as unknown as {
+      applyXtreamCatchup(...args: unknown[]): Promise<number>;
+    }).applyXtreamCatchup.bind(PlaylistService);
+    const stream = {
+      streamId: '1', name: '1', icon: '', epgChannelId: '', categoryId: 'c1', categoryIds: ['c1'],
+      directSource: '', archive: false, archiveDurationDays: 0,
+    };
+
+    expect(await apply(plain, { baseUrl: 'http://host', username: 'u1', password: 'p1' }, 'a1', 'ts', [stream]))
+      .toBe(0);
+    expect(urlReads).toBe(0);
+  });
+
   it('lets the worker drop its channels once catch-up matching fails', async () => {
     fetchTextMock.mockImplementation((url: string) => {
       if (url.includes('action=get_live_streams')) return Promise.reject(new Error('down'));

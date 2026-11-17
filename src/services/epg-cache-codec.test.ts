@@ -8,6 +8,7 @@ import {
   unpackEpgFilter,
   unpackEpgSliced,
 } from './epg-cache-codec';
+import { PACKED_EPG_FORMAT } from './idb-schema';
 
 function programme(start: number, title: string): Programme {
   return {
@@ -52,6 +53,37 @@ describe('epg cache codec', () => {
     expect('tzOffsetMinutes' in restored).toBe(true);
     expect('sourceName' in restored).toBe(false);
     expect('tzOffsetMinutes' in unpackEpg(packEpg({ channels: {}, programmes: {} }))).toBe(false);
+  });
+
+  it('round-trips program catch-up ids without adding them to programs that lack one', () => {
+    const withId = { ...programme(1_700_000_000_000, 'Show 1'), catchupId: 'p1' };
+    const data: ParsedEpg = {
+      channels: {},
+      programmes: {
+        ch1: [programme(1_699_996_400_000, 'Show 0'), withId],
+        ch2: [programme(1_700_000_000_000, 'Show 2')],
+      },
+    };
+    const restored = unpackEpg(packEpg(data));
+    expect(restored).toEqual(data);
+    expect('catchupId' in restored.programmes.ch1[0]).toBe(false);
+    expect(restored.programmes.ch1[1].catchupId).toBe('p1');
+  });
+
+  it('packs program catch-up ids sparsely, only when a program has one', () => {
+    const data: ParsedEpg = {
+      channels: { ch1: { name: 'Alpha', icon: '' } },
+      programmes: { ch1: [{ ...programme(1_700_000_000_000, 'Show 1'), catchupId: 'p1' }] },
+    };
+    const packed = packEpg(data);
+    expect(packed.format).toBe(PACKED_EPG_FORMAT);
+    expect(JSON.parse(packed.catchupIds![0])).toEqual(['ch1', [0, 'p1']]);
+    expect('catchupIds' in packEpg(guide(2, 2))).toBe(false);
+    expect(unpackEpg(packed)).toEqual(data);
+  });
+
+  it('does not take an older packed format for this one', () => {
+    expect(isPackedEpg({ format: 'epg-packed-1', meta: {}, channels: [], programmes: [] })).toBe(false);
   });
 
   it('splits a large guide into blocks and tells packed data from a parsed guide', () => {

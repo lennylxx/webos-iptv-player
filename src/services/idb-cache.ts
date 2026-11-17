@@ -26,7 +26,11 @@ import {
   withHeldValue,
   type HeldRecord,
 } from './held-records';
-import { cacheEntryMetaId, cacheRecordTimestamp, PLAYLIST_CACHE_KEY } from './idb-schema';
+import {
+  cacheEntryMetaId,
+  cacheRecordTimestamp,
+  PLAYLIST_CACHE_KEY,
+} from './idb-schema';
 import { JSON_NULL_BYTES, serializedBytes } from '../utils/serialized-bytes';
 import { yieldToEventLoop } from '../utils/yield';
 import {
@@ -475,6 +479,13 @@ function isNormalizedRecord(store: CacheStore, raw: Record<string, unknown>): ra
 interface HeldSlot {
   record: HeldRecord;
   field: string;
+  /** The page's copy of a top-level `field` as stored, when it differs from
+   *  the value the record was built with. */
+  pageValue?: () => unknown;
+}
+
+function usePageValue(record: Record<string, unknown>, slot: HeldSlot): void {
+  if (slot.pageValue) record[slot.field] = slot.pageValue();
 }
 
 // Null once the worker lost the value, so only the page's copy is left.
@@ -1140,6 +1151,7 @@ async function commitWithFallback(
 ): Promise<void> {
   if (await commitRecord(store, record, await readEntryMeta(store, key), target.held)) return;
   logHeldFallback(store, 'write', 'page');
+  if (target.held) usePageValue(record, target.held);
   target.held = null;
   const measured = record.byteSize;
   record.byteSize = 0;
@@ -1173,6 +1185,7 @@ async function putRawNow(
   if (held && bytes === null) {
     logHeldFallback(store, 'measure', held.record.detached ? 'skipped' : 'page');
     if (held.record.detached) return false;
+    usePageValue(raw, held);
     held = null;
   }
   const previous = await readEntryMeta(store, key);
@@ -1368,12 +1381,22 @@ function playlistSourceSignature(): string {
 export async function getCachedEpg(url: string): Promise<CachedEpgEntry | null> {
   const raw = await readRaw(EPG_STORE, url);
   if (!raw) return null;
+  if (!isPackedEpg(raw.data)) {
+    // Another format, or none: a miss, dropped with the metadata already read.
+    void enqueueMutation(() => deleteCandidates([{
+      store: EPG_STORE,
+      key: url,
+      category: 'epg',
+      byteSize: raw.byteSize,
+      expiresAt: raw.expiresAt,
+      lastAccessedAt: raw.lastAccessedAt,
+    }]));
+    return null;
+  }
   return {
     url,
     timestamp: cacheRecordTimestamp(raw),
-    data: isPackedEpg(raw.data)
-      ? await unpackEpgSliced(raw.data, yieldToEventLoop, CONFIG.EPG.CACHE_DECODE_SLICE_MS)
-      : raw.data as ParsedEpg,
+    data: await unpackEpgSliced(raw.data, yieldToEventLoop, CONFIG.EPG.CACHE_DECODE_SLICE_MS),
     filter: unpackEpgFilter(raw.filter),
   };
 }
@@ -1390,11 +1413,11 @@ export async function setCachedEpg(
     return await putRaw(EPG_STORE, {
       url,
       timestamp,
-      // The worker packs its own copy; a page fallback writes this one as is.
+      // The worker packs its own copy; a page fallback packs this one.
       data: held ? data : packEpg(data),
       filter: filter ? packEpgFilter(filter) : filter,
       expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
-    }, true, held && { record: held, field: 'data' });
+    }, true, held && { record: held, field: 'data', pageValue: () => packEpg(data) });
   } finally {
     held?.release();
   }
@@ -1913,13 +1936,62 @@ function setCachedPlaylistWithSignature(
       ...(sourceIds ? { sourceIds } : {}),
     } satisfies CachedPlaylistPayload,
     expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,
-  }, true, held && { record: held, field: 'data.channels' }).then((stored) => {
+  }, true, held && { record: held, field: 'data.channels' }).then(async (stored) => {
     held?.release();
-    if (stored) rememberRecord(channels, { store: PLAYLIST_STORE, key: PLAYLIST_CACHE_KEY, timestamp });
+    if (stored) {
+      rememberRecord(channels, { store: PLAYLIST_STORE, key: PLAYLIST_CACHE_KEY, timestamp });
+      // Off the save's path, and once a launch: only an upgrade leaves any.
+      if (!stalePlaylistsChecked) {
+        stalePlaylistsChecked = true;
+        void evictStalePlaylists();
+      }
+    }
     return stored;
   }, (error: unknown) => {
     held?.release();
     throw error;
+  });
+}
+
+let stalePlaylistsChecked = false;
+
+// Playlists cached under an older PLAYLIST_CACHE_KEY, and their chunks, are
+// never read again once a current one is written; only quota pressure would
+// otherwise remove them.
+function evictStalePlaylists(): Promise<void> {
+  return enqueueMutation(async () => {
+    const db = await openDb();
+    if (!db) return;
+    try {
+      const tx = db.transaction(PLAYLIST_STORE, 'readonly');
+      const keys = await requestResult(tx.objectStore(PLAYLIST_STORE).getAllKeys());
+      const heads = new Set<string>();
+      for (const key of keys) {
+        if (typeof key !== 'string') continue;
+        const head = isPlaylistChunkKey(key) ? key.slice(0, key.indexOf('#')) : key;
+        if (head !== PLAYLIST_CACHE_KEY) heads.add(head);
+      }
+      if (!heads.size) return;
+      const tracked = (await collectCandidates())
+        .filter(item => item.store === PLAYLIST_STORE && heads.has(String(item.key)));
+      await deleteCandidates(tracked);
+      const untracked: string[] = [];
+      heads.forEach((key) => {
+        if (!tracked.some(item => item.key === key)) untracked.push(key);
+      });
+      if (!untracked.length) return;
+      const write = db.transaction(PLAYLIST_STORE, 'readwrite');
+      const store = write.objectStore(PLAYLIST_STORE);
+      for (const key of untracked) {
+        const [lower, upper] = playlistChunkRange(key);
+        store.delete(key);
+        store.delete(IDBKeyRange.bound(lower, upper));
+      }
+      await transactionDone(write);
+    } catch (err) {
+      log.warn('Stale playlist cache eviction failed', 'event=persistence.cache.eviction.failed',
+        'operation=evict', 'category=playlist', err);
+    }
   });
 }
 
@@ -1947,6 +2019,7 @@ export async function clearCachedPlaylist(): Promise<void> {
 
 export async function clearAllCachedData(): Promise<void> {
   discardScheduledPlaylist('cache_clear');
+  stalePlaylistsChecked = false;
   playlistGeneration++;
   catalogGeneration++;
   clearGeneration++;

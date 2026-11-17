@@ -17,6 +17,7 @@ import type { CachedEpgFilter } from './idb-cache';
 import { ChannelCustomizationService } from './channel-customization';
 import { channelKey } from '../utils/channel';
 import { StorageService } from './storage-service';
+import { catchupNeedsIdUncached } from '../utils/catchup-url';
 
 const log = createLogger('EPG');
 
@@ -24,6 +25,8 @@ interface SourceState {
   data: ParsedEpg;
   timestamp: number;
   needsRefresh: boolean;
+  /** The data came from a parser that reads program catch-up ids. */
+  catchupIdsKnown: boolean;
   mappingIndex?: PreparedEpgMappingSearchEntry[];
   /** Timestamp of the epg-cache record holding `data`'s programme arrays. */
   cacheTimestamp?: number;
@@ -74,6 +77,9 @@ function shiftProgrammes(programmes: Programme[], deltaMs: number): Programme[] 
 interface SourceFilter {
   ids: Set<string>;
   names: Set<string>;
+  /** The channels among these whose catch-up URL needs program catch-up ids. */
+  catchupIds: Set<string>;
+  catchupNames: Set<string>;
   /** Fingerprint of the inputs it was built from; see `FilterKey`. */
   key: string;
 }
@@ -166,11 +172,52 @@ function filterServes(source: EpgSource): (channel: Channel) => boolean {
   return channel => servedBy(playlistIds, channel);
 }
 
-function addToFilter(filter: SourceFilter, channel: Channel): void {
+function addToFilter(
+  filter: SourceFilter,
+  channel: Channel,
+  needsCatchupIds: boolean,
+  source: EpgSource,
+): void {
   if (channel.id) filter.ids.add(channel.id);
   // A rename keeps the source name, and findChannelId matches either one.
   if (channel.name) filter.names.add(channel.name.toLowerCase());
   if (channel.sourceName) filter.names.add(channel.sourceName.toLowerCase());
+  if (!needsCatchupIds) return;
+  if (channel.id) filter.catchupIds.add(channel.id);
+  if (channel.name) filter.catchupNames.add(channel.name.toLowerCase());
+  if (channel.sourceName) filter.catchupNames.add(channel.sourceName.toLowerCase());
+  // A mapped guide channel is where this channel's programs, and ids, come from.
+  const mapped = mappedEpgIdIn(source, channel);
+  if (mapped) filter.catchupIds.add(mapped);
+}
+
+function mappedEpgIdIn(source: EpgSource, channel: Channel): string | null {
+  const key = ChannelCustomizationService.overrideFor(channelKey(channel))?.epgChannelId;
+  const mapped = key ? splitEpgChannelKey(key) : null;
+  return mapped?.url === source.url ? mapped.id : null;
+}
+
+function splitEpgChannelKey(key: string): { url: string; id: string } | null {
+  const separator = key.indexOf('::');
+  if (separator < 0) return null;
+  try {
+    return {
+      url: decodeURIComponent(key.slice(0, separator)),
+      id: key.slice(separator + 2),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function emptyFilter(mappedIds: string[]): SourceFilter {
+  return {
+    ids: new Set(mappedIds),
+    names: new Set(),
+    catchupIds: new Set(),
+    catchupNames: new Set(),
+    key: '',
+  };
 }
 
 /**
@@ -185,17 +232,23 @@ class FilterKey {
   private sum: HashPair = [0, 0];
   private count = 0;
 
-  constructor(source: EpgSource, mappedIds: string[]) {
+  constructor(private readonly source: EpgSource, mappedIds: string[]) {
     let head = hashString(SEED, filterSourceKey(source));
     for (const id of mappedIds.slice().sort()) head = hashString(head, id);
     this.head = head;
   }
 
-  addChannel(channel: Channel): void {
+  // A channel needing program catch-up ids changes the key, with the guide
+  // channel it is mapped to, so a cached guide is checked for its ids.
+  addChannel(channel: Channel, needsCatchupIds: boolean): void {
     if (!channel.id && !channel.name && !channel.sourceName) return;
     let hash = hashString(SEED, channel.id || '');
     hash = hashString(hash, channel.name || '');
     hash = hashString(hash, channel.sourceName || '');
+    if (needsCatchupIds) {
+      hash = hashString(hash, '\u0001catchup-id');
+      hash = hashString(hash, mappedEpgIdIn(this.source, channel) ?? '');
+    }
     this.sum = [(this.sum[0] + hash[0]) | 0, (this.sum[1] + hash[1]) | 0];
     this.count++;
   }
@@ -224,13 +277,14 @@ function hashString(start: HashPair, value: string): HashPair {
 }
 
 function buildFilter(source: EpgSource, channels: Channel[], mappedIds: string[]): SourceFilter {
-  const filter: SourceFilter = { ids: new Set(mappedIds), names: new Set(), key: '' };
+  const filter = emptyFilter(mappedIds);
   const key = new FilterKey(source, mappedIds);
   const serves = filterServes(source);
   for (const channel of channels) {
     if (!serves(channel)) continue;
-    addToFilter(filter, channel);
-    key.addChannel(channel);
+    const needs = catchupNeedsIdUncached(channel);
+    addToFilter(filter, channel, needs, source);
+    key.addChannel(channel, needs);
   }
   filter.key = key.digest();
   return filter;
@@ -252,13 +306,14 @@ async function buildFilterSliced(
   channels: Channel[],
   mappedIds: string[],
 ): Promise<SourceFilter> {
-  const filter: SourceFilter = { ids: new Set(mappedIds), names: new Set(), key: '' };
+  const filter = emptyFilter(mappedIds);
   const key = new FilterKey(source, mappedIds);
   const serves = filterServes(source);
   await forEachSliced(channels, (channel) => {
     if (!serves(channel)) return;
-    addToFilter(filter, channel);
-    key.addChannel(channel);
+    const needs = catchupNeedsIdUncached(channel);
+    addToFilter(filter, channel, needs, source);
+    key.addChannel(channel, needs);
   });
   filter.key = key.digest();
   return filter;
@@ -272,9 +327,20 @@ async function filterKeySliced(
   const key = new FilterKey(source, mappedIds);
   const serves = filterServes(source);
   await forEachSliced(channels, (channel) => {
-    if (serves(channel)) key.addChannel(channel);
+    if (serves(channel)) key.addChannel(channel, catchupNeedsIdUncached(channel));
   });
   return key.digest();
+}
+
+const catchupIdLists = new WeakMap<Programme[], boolean>();
+
+function carriesCatchupIds(programmes: Programme[]): boolean {
+  let carries = catchupIdLists.get(programmes);
+  if (carries === undefined) {
+    carries = programmes.some(programme => !!programme.catchupId);
+    catchupIdLists.set(programmes, carries);
+  }
+  return carries;
 }
 
 function sourceAppliesToChannel(source: EpgSource, channel: Channel): boolean {
@@ -590,6 +656,17 @@ class EpgServiceImpl {
     return this.states.get(url)?.data.sourceName?.trim() || null;
   }
 
+  /** Whether the guide data for this channel carries program catch-up ids,
+   *  so a program without one has none. A channel whose programs carry none
+   *  at all is not trusted to: its ids may simply not have been kept. */
+  catchupIdsKnown(channel: Channel): boolean {
+    const url = this.getSourceUrl(channel);
+    if (!url || this.states.get(url)?.catchupIdsKnown !== true) return false;
+    const id = this.findChannelId(channel);
+    const programmes = id ? this.getProgrammes(id) : null;
+    return !!programmes && carriesCatchupIds(programmes);
+  }
+
   getSourceUrl(channel: Channel): string | null {
     const channelId = this.findChannelId(channel);
     if (!channelId) return null;
@@ -855,8 +932,7 @@ class EpgServiceImpl {
       // compare against it instead of reloading every source.
       const memo = this.currentFilterMemo();
       memo.bySource.set(filterSourceKey(source), {
-        ids: new Set(),
-        names: new Set(),
+        ...emptyFilter([]),
         key: new FilterKey(source, this.mappedIdsFor(memo, source)).digest(),
       });
       return 'missing';
@@ -887,18 +963,23 @@ class EpgServiceImpl {
     const age = Date.now() - cached.timestamp;
     const refreshIntervalMs = StorageService.getEpgRefreshIntervalMs();
     const hasTzField = 'tzOffsetMinutes' in cached.data;
+    // Program catch-up ids are kept only for the channels whose URL needs
+    // them; a trusted key means the same such channels as at the parse.
+    const idsCovered = trusted || !filter || catchupIdsCovered(cached.filter, filter);
     const hasChannelCatalog = !cached.filter
       || cached.data.channelCatalogComplete === true;
     // A filtered rewrite below keeps the timestamp and the kept id arrays.
     const stored = await this.setState(source.url, {
       data: filtered.data,
       timestamp: cached.timestamp,
-      needsRefresh: !hasTzField || !hasChannelCatalog || !covered,
+      needsRefresh: !hasTzField || !idsCovered || !hasChannelCatalog || !covered,
+      catchupIdsKnown: idsCovered,
       cacheTimestamp: cached.timestamp,
     }, revision);
     if (!stored) return 'missing';
     const fresh = (refreshIntervalMs === null || age < refreshIntervalMs)
       && hasTzField
+      && idsCovered
       && hasChannelCatalog
       && covered;
     if (fresh && !trusted && (filtered.changed || !filtersEqual(cached.filter, filter))) {
@@ -945,6 +1026,8 @@ class EpgServiceImpl {
         ? {
             channelIds: filter.ids,
             channelNames: filter.names,
+            catchupIdChannelIds: filter.catchupIds,
+            catchupIdChannelNames: filter.catchupNames,
             retainChannelCatalog: true,
             maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES,
           }
@@ -970,6 +1053,7 @@ class EpgServiceImpl {
         data: result,
         timestamp: Date.now(),
         needsRefresh: truncated,
+        catchupIdsKnown: true,
       };
       if (!await this.setState(source.url, state, revision)) {
         done();
@@ -1248,16 +1332,7 @@ class EpgServiceImpl {
   }
 
   private splitChannelKey(key: string): { url: string; id: string } | null {
-    const separator = key.indexOf('::');
-    if (separator < 0) return null;
-    try {
-      return {
-        url: decodeURIComponent(key.slice(0, separator)),
-        id: key.slice(separator + 2),
-      };
-    } catch {
-      return null;
-    }
+    return splitEpgChannelKey(key);
   }
 
   private findLegacyChannelId(channel: Channel): string | null {
@@ -1353,7 +1428,8 @@ function sameKeys(
 
 function sameFilter(current: SourceFilter | null, next: SourceFilter | null): boolean {
   if (!current || !next) return current === next;
-  return sameSet(current.ids, next.ids) && sameSet(current.names, next.names);
+  return sameSet(current.ids, next.ids) && sameSet(current.names, next.names)
+    && sameSet(current.catchupIds, next.catchupIds) && sameSet(current.catchupNames, next.catchupNames);
 }
 
 function sameSet(current: ReadonlySet<string>, next: ReadonlySet<string>): boolean {
@@ -1371,7 +1447,24 @@ function serializeFilter(filter: SourceFilter | null): CachedEpgFilter | null {
     ids: [...filter.ids],
     names: [...filter.names],
     key: filter.key,
+    ...(filter.catchupIds.size ? { catchupIds: [...filter.catchupIds] } : {}),
+    ...(filter.catchupNames.size ? { catchupNames: [...filter.catchupNames] } : {}),
   };
+}
+
+/** Whether the cached guide kept the program catch-up ids `wanted` needs. */
+function catchupIdsCovered(
+  cached: CachedEpgFilter | null | undefined,
+  wanted: SourceFilter,
+): boolean {
+  if (!wanted.catchupIds.size && !wanted.catchupNames.size) return true;
+  // A guide parsed without a filter kept every id.
+  if (!cached) return true;
+  const ids = new Set(cached.catchupIds ?? []);
+  const names = new Set(cached.catchupNames ?? []);
+  for (const id of wanted.catchupIds) if (!ids.has(id)) return false;
+  for (const name of wanted.catchupNames) if (!names.has(name)) return false;
+  return true;
 }
 
 function filtersEqual(
@@ -1379,11 +1472,15 @@ function filtersEqual(
   wanted: SourceFilter | null,
 ): boolean {
   if (!cached || !wanted) return !cached && !wanted;
-  if (cached.ids.length !== wanted.ids.size || cached.names.length !== wanted.names.size) {
+  if (cached.ids.length !== wanted.ids.size || cached.names.length !== wanted.names.size
+    || (cached.catchupIds?.length ?? 0) !== wanted.catchupIds.size
+    || (cached.catchupNames?.length ?? 0) !== wanted.catchupNames.size) {
     return false;
   }
   return cached.ids.every((id) => wanted.ids.has(id))
-    && cached.names.every((name) => wanted.names.has(name));
+    && cached.names.every((name) => wanted.names.has(name))
+    && (cached.catchupIds ?? []).every((id) => wanted.catchupIds.has(id))
+    && (cached.catchupNames ?? []).every((name) => wanted.catchupNames.has(name));
 }
 
 function filterParsedEpg(

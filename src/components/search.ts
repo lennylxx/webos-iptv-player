@@ -9,6 +9,7 @@ import { EpgService } from '../services/epg-service';
 import { ReminderService } from '../services/reminder-service';
 import { StorageService } from '../services/storage-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
+import { catchupNeedsId, hasCatchup } from '../utils/catchup-url';
 import { persistSearchIndexes } from '../services/search-index-store';
 import {
   getSearchCatalogExpiresAt,
@@ -1863,7 +1864,7 @@ export class Search {
       ? t('search.liveNow')
       : state === 'future'
         ? (ReminderService.has(channelKey(channel), programme.start.getTime()) ? t('search.reminderSet') : t('search.setReminder'))
-        : XtreamArchiveService.isAvailable(channel, programme.start.getTime()) ? t('search.catchUp') : t('search.openChannel');
+        : XtreamArchiveService.isAvailable(channel, programme.start.getTime(), Date.now(), programme.catchupId) ? t('search.catchUp') : t('search.openChannel');
     return html`
       <div class="search-program-row state-${state}" data-focusable
            data-key="p:${String(result.channelIndex)}:${String(programme.start.getTime())}"
@@ -1905,9 +1906,11 @@ export class Search {
       return;
     }
 
-    if (programme.stop.getTime() <= now && channel.catchupAccountId && channel.catchupStreamId) {
+    // A stream id alone, kept for every Xtream channel, is no catch-up.
+    if (programme.stop.getTime() <= now && channel.catchupAccountId && channel.catchupStreamId
+      && hasCatchup(channel) && (!!programme.catchupId || !catchupNeedsId(channel))) {
       await XtreamArchiveService.load(channel);
-      if (!XtreamArchiveService.isAvailable(channel, programme.start.getTime())) {
+      if (!XtreamArchiveService.isAvailable(channel, programme.start.getTime(), Date.now(), programme.catchupId)) {
         showToast(t('epg.catchupUnavailable'));
         this.render();
         return;
@@ -1915,7 +1918,7 @@ export class Search {
     }
 
     if (programme.stop.getTime() <= now &&
-        XtreamArchiveService.isAvailable(channel, programme.start.getTime())) {
+        XtreamArchiveService.isAvailable(channel, programme.start.getTime(), Date.now(), programme.catchupId)) {
       const key = channelKey(channel);
       const startMs = programme.start.getTime();
       const progress = StorageService.getCatchupProgressList(
@@ -1944,13 +1947,14 @@ export class Search {
     rememberQuery(query, liveParentalRequest(channel));
     let catchup: CatchupInfo | undefined;
     if (programme.stop.getTime() <= Date.now() &&
-        XtreamArchiveService.isAvailable(channel, programme.start.getTime())) {
+        XtreamArchiveService.isAvailable(channel, programme.start.getTime(), Date.now(), programme.catchupId)) {
       catchup = {
         start: Math.floor(programme.start.getTime() / 1000),
         end: Math.floor(programme.stop.getTime() / 1000),
         title: programme.title,
         description: programme.description,
         icon: programme.icon,
+        ...(programme.catchupId ? { catchupId: programme.catchupId } : {}),
         epgSourceUrl: EpgService.getSourceUrl(channel) ?? undefined,
         resumeSecs,
       };

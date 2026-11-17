@@ -70,7 +70,7 @@
 - **Catalog sorting** — sort Movies and Series by name, date added, rating, or year in either direction; each section remembers its choice
 - **Continue Watching & Watchlist management** — remove individual titles, clear a whole list, or clear a movie's saved progress from its details page
 - **Automatic VOD queues** — continue through series episodes or remaining Watchlist movies, removing completed titles from the Watchlist; an Up Next card counts down to the next title, and the player menu jumps to the previous or next episode
-- **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams
+- **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams; M3U catch-up supports the `default`, `append`, `shift`, `archive`, `timeshift`, `vod` (XMLTV `catchup-id`), Flussonic, and Xtream (`xc`) formats
 - **Seek-bar previews** — press or hold Left/Right to move a seek target in steps that grow while held, then seek once; the bubble shows a preview frame when the server publishes thumbnails (OTT Navigator `seek_preview`, Flussonic, Nimble, HLS/DASH image tracks) ([details](docs/seek-preview.md))
 - **Parental controls** — lock Live TV groups, movie and series categories, or individual titles with a PIN, with adult groups suggested for locking; locked content can stay listed with a lock or be hidden, and you choose when the PIN is asked again
 

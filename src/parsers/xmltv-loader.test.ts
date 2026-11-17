@@ -6,10 +6,10 @@ import { fetchAndParseXMLTVInWorker } from './xmltv-loader';
 import { writeHeldValue } from '../workers/held-values';
 import {
   isPackedEpg,
-  PACKED_EPG_FORMAT,
   unpackEpg,
   type PackedEpg,
 } from '../services/epg-cache-codec';
+import { PACKED_EPG_FORMAT } from '../services/idb-schema';
 import type { XMLTVWorkerChunk, XMLTVWorkerRequest, XMLTVWorkerResponse } from '../workers/tasks';
 import type { ParsedEpg } from '../types';
 
@@ -28,7 +28,9 @@ function responseInChunks(bytes: Uint8Array, chunkSize: number): Response {
 }
 
 function packedFrom(chunks: XMLTVWorkerChunk[]): PackedEpg {
-  const packed: PackedEpg = { format: PACKED_EPG_FORMAT, meta: {}, channels: [], programmes: [] };
+  const packed: Required<PackedEpg> = {
+    format: PACKED_EPG_FORMAT, meta: {}, channels: [], programmes: [], catchupIds: [],
+  };
   for (const chunk of chunks) {
     if (chunk.kind === 'guide') packed[chunk.part].push(...chunk.blocks);
   }
@@ -67,6 +69,20 @@ describe('fetchAndParseXMLTV', () => {
 
     expect(guide.channels.ch1.name).toBe('Alpha é');
     expect(guide.programmes.ch1[0].title).toBe('Bravo é');
+  });
+
+  it('carries program catch-up ids to the page', async () => {
+    const xml = `<tv><programme channel="ch1" start="${start}" stop="${stop}" catchup-id="p1">`
+      + '<title>Bravo</title></programme></tv>';
+    vi.stubGlobal('fetch', vi.fn(async () => responseInChunks(strToU8(xml), 64)));
+
+    const { guide } = await load({
+      url: 'http://host/a',
+      timeout: 1000,
+      options: { nowMs: new Date('2026-08-14T19:30:00Z').getTime() },
+    });
+
+    expect(guide.programmes.ch1[0].catchupId).toBe('p1');
   });
 
   it('incrementally decompresses a gzip response', async () => {

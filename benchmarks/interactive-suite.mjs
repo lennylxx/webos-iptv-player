@@ -323,7 +323,8 @@ export function generateInteractiveFixture(origin, options) {
     );
   }
 
-  const m3uLines = [`#EXTM3U url-tvg="${origin}/epg.xml"\n`];
+  const m3uHeader = options.m3uHeader ? ` ${options.m3uHeader}` : '';
+  const m3uLines = [`#EXTM3U url-tvg="${origin}/epg.xml"${m3uHeader}\n`];
   for (let index = 0; index < m3uChannels; index++) {
     m3uLines.push(
       `#EXTINF:-1 tvg-id="ch${String(index)}" tvg-logo="${origin}/img/l${String(index)}.png" `

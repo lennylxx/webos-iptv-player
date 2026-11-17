@@ -40,6 +40,8 @@ export interface InteractiveFixtureOptions {
   categories: number;
   m3uChannels: number;
   epgProgrammes: number;
+  /** Extra `#EXTM3U` header attributes, e.g. playlist-wide catch-up. */
+  m3uHeader?: string;
 }
 
 export interface InteractiveFixtureSummary extends InteractiveFixtureOptions {

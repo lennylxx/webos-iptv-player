@@ -52,7 +52,9 @@ const {
   },
   archiveMock: {
     load: vi.fn(async () => null as Set<number> | null),
-    isAvailable: vi.fn((channel: { catchupSource?: string }) => !!channel.catchupSource),
+    isAvailable: vi.fn((
+      channel: { catchupSource?: string }, _start?: number, _now?: number, _catchupId?: string,
+    ) => !!channel.catchupSource),
   },
   toastMock: vi.fn(),
   workerMock: {
@@ -2648,6 +2650,42 @@ describe('Search', () => {
     expect(handlers.onPlayChannel).toHaveBeenCalledWith(1, expect.objectContaining({ title: 'Past Report' }));
   });
 
+  it('opens a vod channel live for an aired program without a catch-up id', async () => {
+    const now = Date.now();
+    playlistMock.channels = [{ ...chan('Bravo'), catchup: 'vod', catchupSource: '' }];
+    epgMock.programmes = { Bravo: [prog('Past Report', now - 120000, now - 60000)] };
+    archiveMock.isAvailable.mockImplementation(
+      (_channel, _start, _now, catchupId) => !!catchupId);
+    const { view, handlers } = await openWith();
+    await view.setQuery('report');
+
+    const row = container.querySelector<HTMLElement>('.search-program-row')!;
+    expect(row.textContent).toContain('Open channel');
+    row.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve();
+    expect(handlers.onPlayChannel).toHaveBeenCalledWith(0, undefined);
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it('starts catch-up with the program catch-up id', async () => {
+    const now = Date.now();
+    const channel = { ...chan('Bravo'), catchup: 'vod', catchupSource: '' };
+    playlistMock.channels = [channel];
+    epgMock.programmes = {
+      Bravo: [{ ...prog('Past Report', now - 120000, now - 60000), catchupId: 'p1' }],
+    };
+    archiveMock.isAvailable.mockImplementation(
+      (_channel, _start, _now, catchupId) => !!catchupId);
+    const { view, handlers } = await openWith();
+    await view.setQuery('report');
+
+    container.querySelector<HTMLElement>('.search-program-row')!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(handlers.onPlayChannel).toHaveBeenCalledWith(0, expect.objectContaining({ catchupId: 'p1' }));
+  });
+
   it('offers resume or start over for a partially watched catch-up program', async () => {
     const now = Date.now();
     const start = now - 120000;
@@ -2698,6 +2736,23 @@ describe('Search', () => {
     expect(handlers.onPlayChannel).not.toHaveBeenCalled();
     expect(toastMock).toHaveBeenCalledWith("This program isn't available for catch-up.");
     expect(storageMock.addSearchHistory).not.toHaveBeenCalled();
+  });
+
+  it('opens an Xtream channel without catch-up live for an aired program', async () => {
+    const now = Date.now();
+    playlistMock.channels = [{ ...chan('Alpha'), catchupAccountId: 'x1', catchupStreamId: '101' }];
+    epgMock.programmes = { Alpha: [prog('Past Report', now - 120000, now - 60000)] };
+    archiveMock.load.mockResolvedValue(new Set());
+    archiveMock.isAvailable.mockReturnValue(false);
+    const { view, handlers } = await openWith();
+    await view.setQuery('past');
+    container.querySelector<HTMLElement>('.search-program-row')!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve();
+
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(handlers.onPlayChannel).toHaveBeenCalledWith(0, undefined);
   });
 
   it('toggles a reminder for a future program', async () => {

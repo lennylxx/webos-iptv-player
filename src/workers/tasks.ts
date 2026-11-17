@@ -76,6 +76,9 @@ export interface M3UWorkerResponse {
   };
   /** The worker kept every channel it sent, chunks first, for the cache write. */
   held?: { token: string };
+  /** The header's catch-up was revoked: the first this many channels sent in
+   *  chunks still carry it and are to be cleared with revokeInheritedCatchup. */
+  catchupRevokedBefore?: number;
 }
 
 export type M3UWorkerChunk =
@@ -96,6 +99,12 @@ export type M3UWorkerChunk =
       chunks: number;
       channelsEmitted: number;
       channelsDropped: number;
+    }
+  | {
+      /** The first `before` channels sent took catch-up from the #EXTM3U
+       *  header, which a later channel's own attribute revoked. */
+      kind: 'catchupRevoked';
+      before: number;
     };
 
 export interface XMLTVWorkerRequest {
@@ -107,6 +116,8 @@ export interface XMLTVWorkerRequest {
     channelNames?: string[];
     retainChannelCatalog?: boolean;
     maxProgrammes?: number;
+    catchupIdChannelIds?: string[];
+    catchupIdChannelNames?: string[];
   };
   /** Keep the parsed guide so its cache write can run in the worker. */
   holdForCache?: boolean;
@@ -128,7 +139,7 @@ export interface XMLTVWorkerResponse {
 }
 
 export type XMLTVWorkerChunk =
-  | { kind: 'guide'; part: 'channels' | 'programmes'; blocks: string[] }
+  | { kind: 'guide'; part: 'channels' | 'programmes' | 'catchupIds'; blocks: string[] }
   | {
       kind: 'progress';
       attempt: number;

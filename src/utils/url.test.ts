@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   containerMime,
+  diagnosticStreamUrl,
   mpdOpeningVerdict,
   sniffStreamContentType,
   streamMime,
@@ -134,5 +135,18 @@ describe('containerMime', () => {
     expect(containerMime('http://host/a.avi')).toBe('');
     expect(containerMime('http://host/a.mov')).toBe('');
     expect(containerMime('http://host/a.webm')).toBe('');
+  });
+});
+
+describe('diagnosticStreamUrl', () => {
+  it('keeps numeric catch-up times and masks tokens and other values', () => {
+    expect(diagnosticStreamUrl('http://host/a.ts?token=t1&utc=1000&lutc=1600'))
+      .toBe('http://host/a.ts?token=***&utc=1000&lutc=1600');
+    expect(diagnosticStreamUrl('http://host/a.ts?archive=1000&archive_end=1120&timeshift=1000&timenow=1600'))
+      .toBe('http://host/a.ts?archive=1000&archive_end=1120&timeshift=1000&timenow=1600');
+    expect(diagnosticStreamUrl('http://host/a.ts?utc=secret'))
+      .toBe('http://host/a.ts?utc=***');
+    expect(diagnosticStreamUrl('http://u1:p1@host/timeshift/u1/p1/60/2026-01-02:03-04/42.ts'))
+      .toBe('http://***:***@host/timeshift/***/***/60/2026-01-02:03-04/42.ts');
   });
 });

@@ -3,6 +3,7 @@ import { CONFIG } from '../config';
 import { StorageService } from './storage-service';
 import { createXtreamClient } from './xtream-client';
 import { isSourceEnabled } from '../utils/playlist';
+import { catchupNeedsId, hasCatchup } from '../utils/catchup-url';
 
 type Availability = Map<number, boolean> | null;
 
@@ -80,8 +81,9 @@ export const XtreamArchiveService = {
   getCached: cached,
   load,
 
-  isAvailable(channel: Channel, startMs: number, now = Date.now()): boolean {
-    if (!channel.catchupSource) return false;
+  isAvailable(channel: Channel, startMs: number, now = Date.now(), catchupId?: string): boolean {
+    if (!hasCatchup(channel)) return false;
+    if (!catchupId && catchupNeedsId(channel)) return false;
     if (channel.catchupDays > 0 && startMs < now - channel.catchupDays * 86400000) return false;
     if (!keyFor(channel)) return true;
     const availability = cached(channel, now);

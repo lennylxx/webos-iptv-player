@@ -77,16 +77,336 @@ describe('parseM3U', () => {
     expect(channel.catchupSources).toBeUndefined();
   });
 
-  it('keeps an explicit catchup-source instead of inferring catchup=xc', () => {
+  it('uses the Xtream timeshift form for catchup=xc with an explicit source', () => {
     const m3u = [
       '#EXTM3U',
       '#EXTINF:-1 catchup="xc" catchup-source="http://host/archive/{utc}",Alpha',
       'http://host/live/u1/p1/42.ts',
     ].join('\n');
     const channel = parseM3U(m3u).channels[0];
-    expect(channel.catchup).toBe('xc');
+    expect(channel.catchup).toBe('xtream');
     expect(channel.catchupSource).toBe('http://host/archive/{utc}');
+    expect(channel.catchupStreamId).toBeUndefined();
     expect(channel.catchupSources).toBeUndefined();
+  });
+
+  it('applies header catch-up to every channel when none declares its own', () => {
+    const m3u = [
+      '#EXTM3U catchup="flussonic" catchup-days="7" catchup-correction="-2.5"',
+      '#EXTINF:-1 tvg-id="ch1",Alpha',
+      'http://host/ch1/index.m3u8',
+      '#EXTINF:-1 tvg-id="ch2" catchup-enable="0",Bravo',
+      'http://host/ch2/index.m3u8',
+      'http://host/ch3/index.m3u8',
+    ].join('\n');
+    const [alpha, bravo, bare] = parseM3U(m3u).channels;
+    expect(alpha).toMatchObject({
+      catchup: 'flussonic', catchupSource: '', catchupDays: 7, catchupCorrection: -2.5,
+    });
+    expect(bravo).toMatchObject({ catchup: '', catchupSource: '' });
+    expect(bravo.sourceAttributes).toBeUndefined();
+    expect(bare).toMatchObject({ catchup: 'flussonic', catchupDays: 7 });
+  });
+
+  it('limits header catch-up to channels with their own catch-up attributes', () => {
+    const m3u = [
+      '#EXTM3U catchup="flussonic" catchup-days="7"',
+      '#EXTINF:-1 tvg-id="ch0",Zulu',
+      'http://host/ch0/index.m3u8',
+      '#EXTINF:-1 tvg-id="ch1" catchup-days="3",Alpha',
+      'http://host/ch1/index.m3u8',
+      '#EXTINF:-1 tvg-id="ch2",Bravo',
+      'http://host/ch2/index.m3u8',
+      '#EXTINF:-1 tvg-id="ch3" catchup-days="0",Charlie',
+      'http://host/ch3/index.m3u8',
+    ].join('\n');
+    const [zulu, alpha, bravo, charlie] = parseM3U(m3u).channels;
+    expect(alpha).toMatchObject({ catchup: 'flussonic', catchupDays: 3 });
+    expect(zulu).toMatchObject({ catchup: '', catchupSource: '', catchupDays: 0 });
+    expect(bravo).toMatchObject({ catchup: '', catchupSource: '', catchupDays: 0 });
+    expect(charlie).toMatchObject({ catchup: '', catchupDays: 0 });
+  });
+
+  it('takes archive length from catchup-days and catchup-time before timeshift and tvg-rec', () => {
+    const days = (attrs: string) => parseM3U(`#EXTM3U\n#EXTINF:-1 ${attrs},A\nhttp://host/a`).channels[0].catchupDays;
+    expect(days('catchup-time="3600" timeshift="7"')).toBe(1);
+    expect(days('catchup-days="2" catchup-time="259200"')).toBe(3);
+    expect(days('timeshift="4" tvg-rec="9"')).toBe(4);
+    expect(days('tvg-rec="9"')).toBe(9);
+    expect(parseM3U('#EXTM3U timeshift="5"\n#EXTINF:-1,A\nhttp://host/a').channels[0])
+      .toMatchObject({ catchup: 'shift', catchupDays: 5 });
+  });
+
+  it('reads archive days as Xtream catch-up only on a /live/ URL, and xc on either form', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 tvg-rec="3",Alpha',
+      'http://host/hls/ch1/index',
+      '#EXTINF:-1 tvg-rec="3",Bravo',
+      'http://host/live/u1/p1/2.ts',
+      '#EXTINF:-1 catchup="xc",Charlie',
+      'http://host/u1/p1/3',
+      '#EXTINF:-1 catchup-days="3",Delta',
+      'http://host/live/ch1/720p/index.m3u8',
+    ].join('\n');
+    expect(parseM3U(m3u).channels.map(c => [c.name, c.catchup, c.catchupStreamId])).toEqual([
+      ['Alpha', 'shift', undefined],
+      ['Bravo', 'xtream', '2'],
+      ['Charlie', 'xtream', '3'],
+      ['Delta', 'shift', undefined],
+    ]);
+  });
+
+  it('keeps every string in place when header catch-up strings are shared', () => {
+    const m3u = [
+      '#EXTM3U catchup="default" catchup-source="http://host/a?u={utc}"',
+      '#EXTINF:-1 tvg-id="ch0",Zulu',
+      'http://host/ch0.m3u8',
+      '#EXTINF:-1 tvg-id="ch1" catchup="default" catchup-source="http://host/a?u={utc}",Alpha',
+      'http://host/ch1.m3u8',
+      '#EXTINF:-1 tvg-id="ch2" catchup="append" catchup-source="?b={utc}",Bravo',
+      'http://host/ch2.m3u8',
+      '#EXTINF:-1 tvg-id="ch3" tvg-rec="2",Charlie',
+      'http://host/live/u1/p1/3.ts',
+      '#EXTINF:-1 tvg-id="ch4" tvg-rec="2",Delta',
+      'http://host/ch4.m3u8',
+    ].join('\n');
+    expect(parseM3U(m3u).channels.map(c => [c.id, c.name, c.url, c.catchup, c.catchupSource])).toEqual([
+      ['ch0', 'Zulu', 'http://host/ch0.m3u8', '', ''],
+      ['ch1', 'Alpha', 'http://host/ch1.m3u8', 'default', 'http://host/a?u={utc}'],
+      ['ch2', 'Bravo', 'http://host/ch2.m3u8', 'append', '?b={utc}'],
+      // Archive days alone take the header's type and source.
+      ['ch3', 'Charlie', 'http://host/live/u1/p1/3.ts', 'default', 'http://host/a?u={utc}'],
+      ['ch4', 'Delta', 'http://host/ch4.m3u8', 'default', 'http://host/a?u={utc}'],
+    ]);
+    const derived = parseM3U(m3u.replace(/^#EXTM3U .*$/m, '#EXTM3U')).channels;
+    expect(derived.slice(3).map(c => [c.id, c.name, c.url, c.catchup, c.catchupSource])).toEqual([
+      ['ch3', 'Charlie', 'http://host/live/u1/p1/3.ts', 'xtream', expect.stringContaining('/timeshift/u1/p1/')],
+      ['ch4', 'Delta', 'http://host/ch4.m3u8', 'shift', ''],
+    ]);
+  });
+
+  it('never lets a later header take back a channel\'s own catch-up', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 catchup="default" catchup-source="http://host/a?s={utc}&e={utcend}",ch1',
+      'http://host/a',
+      '#EXTM3U catchup="shift" catchup-days="3"',
+      '#EXTINF:-1,ch2',
+      'http://host/b',
+      '#EXTINF:-1 catchup-days="5",ch3',
+      'http://host/c',
+    ].join('\n');
+    const revokes: number[] = [];
+    const parser = new M3UStreamParser('', { onCatchupInheritanceRevoked: () => revokes.push(1) });
+    parser.write(m3u);
+    const channels = parser.finish().channels;
+    expect(channels.map(c => [c.name, c.catchup, c.catchupDays])).toEqual([
+      ['ch1', 'default', 0],
+      // The first channel's own attribute ended the header defaults before they came.
+      ['ch2', '', 0],
+      ['ch3', 'shift', 5],
+    ]);
+    expect(revokes).toEqual([]);
+  });
+
+  it('revokes header catch-up for an own-attribute channel the filters drop', () => {
+    const m3u = [
+      '#EXTM3U catchup="shift" catchup-days="7"',
+      '#EXTINF:-1,Alpha',
+      'http://host/a.ts',
+      '#EXTINF:-1 tvg-rec="2",Own',
+      'http://host/own.ts',
+      '#EXTINF:-1,Bravo',
+      'http://host/b.ts',
+    ].join('\n');
+    const dropOwn = (location: string) => !location.includes('own');
+    const byLocation = parseM3U(m3u, '', { streamLocationPrefilter: dropOwn }).channels;
+    const byChannel = parseM3U(m3u, '', { channelPostfilter: channel => dropOwn(channel.url) }).channels;
+    for (const channels of [byLocation, byChannel]) {
+      expect(channels.map(c => [c.name, c.catchup, c.catchupDays])).toEqual([
+        ['Alpha', '', 0],
+        ['Bravo', '', 0],
+      ]);
+    }
+    // Attribute names are case-insensitive whether or not the entry is kept.
+    const upper = m3u.replace('tvg-rec="2"', 'CATCHUP-DAYS="2"');
+    expect(parseM3U(upper, '', { streamLocationPrefilter: dropOwn }).channels.map(c => c.catchup))
+      .toEqual(['', '']);
+    expect(parseM3U(upper).channels.map(c => c.catchup)).toEqual(['', 'shift', '']);
+    // A title that only mentions it is no attribute.
+    const titled = m3u.replace('tvg-rec="2",Own', 'tvg-name="x",Own catchup timeshift');
+    expect(parseM3U(titled, '', { streamLocationPrefilter: dropOwn }).channels.map(c => c.catchup))
+      .toEqual(['shift', 'shift']);
+  });
+
+  it('flushes batches under header catch-up and reports a later revoke for the ones sent', () => {
+    const batches: Channel[][] = [];
+    const revokes: number[] = [];
+    const parser = new M3UStreamParser('', {
+      channelBatchSize: 2,
+      onChannelBatch: channels => batches.push(channels.map(channel => ({ ...channel }))),
+      onCatchupInheritanceRevoked: () => revokes.push(batches.flat().length),
+    });
+    parser.write([
+      '#EXTM3U catchup="shift" catchup-days="7"',
+      // Past the format-detection sample, so lines parse as they arrive.
+      `#EXTPAD:${'x'.repeat(70_000)}`,
+      '#EXTINF:-1,Alpha',
+      'http://host/a.ts',
+      '#EXTINF:-1,Bravo',
+      'http://host/b.ts',
+      '#EXTINF:-1,Charlie',
+      'http://host/c.ts',
+      '',
+    ].join('\n'));
+    // A full batch went out before the end, still carrying the header's catch-up.
+    expect(batches.flat().map(channel => [channel.name, channel.catchup])).toEqual([
+      ['Alpha', 'shift'],
+      ['Bravo', 'shift'],
+    ]);
+    parser.write([
+      '#EXTINF:-1 catchup-days="2",Delta',
+      'http://host/d.ts',
+      '#EXTINF:-1,Echo',
+      'http://host/e.ts',
+      '',
+    ].join('\n'));
+    const rest = parser.finish().channels;
+    // Revoked once, after two channels were sent: the caller clears those.
+    expect(revokes).toEqual([2]);
+    expect([...batches.flat().slice(2), ...rest].map(channel => [channel.name, channel.catchup])).toEqual([
+      ['Charlie', ''],
+      ['Delta', 'shift'],
+      ['Echo', ''],
+    ]);
+  });
+
+  it('never sends a batch larger than the batch size', () => {
+    const sizes: number[] = [];
+    const parser = new M3UStreamParser('', {
+      channelBatchSize: 3,
+      onChannelBatch: channels => sizes.push(channels.length),
+    });
+    const lines = ['#EXTM3U'];
+    for (let i = 0; i < 10; i++) lines.push(`#EXTINF:-1,C${String(i)}`, `http://host/${String(i)}.ts`);
+    parser.write(lines.join('\n'));
+    parser.finish();
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(3);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(10);
+  });
+
+  it('keeps rule-built catch-up off non-HTTP streams unless the channel names a type', () => {
+    const m3u = [
+      '#EXTM3U catchup="shift" catchup-days="3"',
+      '#EXTINF:-1,Alpha',
+      'udp://@239.0.0.1:1234',
+      '#EXTINF:-1,Bravo',
+      'rtsp://host/b',
+    ].join('\n');
+    const [alpha, bravo] = parseM3U(m3u).channels;
+    expect(alpha).toMatchObject({ catchup: '', catchupDays: 0 });
+    expect(bravo).toMatchObject({ catchup: '', catchupDays: 0 });
+
+    const own = parseM3U([
+      '#EXTM3U',
+      '#EXTINF:-1 tvg-rec="3",Alpha',
+      'rtp://@239.0.0.1:1234',
+      '#EXTINF:-1 catchup="shift",Bravo',
+      'udp://@239.0.0.2:1234',
+    ].join('\n')).channels;
+    expect(own[0]).toMatchObject({ catchup: '', catchupDays: 0 });
+    expect(own[1]).toMatchObject({ catchup: 'shift' });
+  });
+
+  it('reads legacy archive attributes as shift catch-up', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 timeshift="3",Alpha',
+      'http://host/a.ts',
+      '#EXTINF:-1 tvg-rec="2",Bravo',
+      'http://host/b.ts',
+      '#EXTINF:-1 catchup-time="7200",Charlie',
+      'http://host/c.ts',
+      '#EXTINF:-1 catchup-enable="1",Delta',
+      'http://host/d.ts',
+      '#EXTINF:-1 catchup="default" catchup-source="http://host/e/{utc}" catchup-days="0",Echo',
+      'http://host/e.ts',
+      '#EXTINF:-1 tvg-rec="0",Foxtrot',
+      'http://host/f.ts',
+    ].join('\n');
+    const [alpha, bravo, charlie, delta, echo, foxtrot] = parseM3U(m3u).channels;
+    expect(alpha).toMatchObject({ catchup: 'shift', catchupDays: 3, catchupDerived: true });
+    expect(alpha.tvgShift).toBeUndefined();
+    expect(bravo).toMatchObject({ catchup: 'shift', catchupDays: 2 });
+    expect(charlie).toMatchObject({ catchup: 'shift', catchupDays: 1 });
+    expect(delta).toMatchObject({ catchup: 'shift', catchupDays: 0 });
+    expect(echo).toMatchObject({ catchup: '', catchupSource: '' });
+    expect(foxtrot).toMatchObject({ catchup: '', catchupDays: 0 });
+  });
+
+  it('lets explicit catch-up attributes win over legacy timeshift and tvg-rec', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 catchup="append" catchup-source="?a={utc}" catchup-days="2" timeshift="7",A',
+      'http://host/a.ts',
+      '#EXTINF:-1 catchup-days="2" tvg-rec="9" timeshift="7",B',
+      'http://host/b.ts',
+      '#EXTINF:-1 tvg-rec="9" timeshift="7",C',
+      'http://host/c.ts',
+      '#EXTINF:-1 catchup="default" catchup-source="http://host/d/{utc}" tvg-rec="4",D',
+      'http://host/d.ts',
+    ].join('\n');
+    const [a, b, c, d] = parseM3U(m3u).channels;
+    expect(a).toMatchObject({ catchup: 'append', catchupDays: 2 });
+    expect(b).toMatchObject({ catchup: 'shift', catchupDays: 2 });
+    expect(c).toMatchObject({ catchup: 'shift', catchupDays: 7 });
+    expect(d).toMatchObject({ catchup: 'default', catchupDays: 4 });
+  });
+
+  it('prefers Xtream catch-up over shift implied by archive days on an Xtream URL', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 tvg-rec="3",Alpha',
+      'http://host:8080/live/u1/p1/42.ts',
+      '#EXTINF:-1 catchup="shift" catchup-days="3",Bravo',
+      'http://host:8080/live/u1/p1/43.ts',
+    ].join('\n');
+    const [alpha, bravo] = parseM3U(m3u).channels;
+    expect(alpha).toMatchObject({
+      catchup: 'xtream',
+      catchupDays: 3,
+      catchupStreamId: '42',
+      catchupSource: 'http://host:8080/timeshift/u1/p1/{duration}/{start}/42.ts',
+      catchupDerived: true,
+    });
+    expect(bravo).toMatchObject({ catchup: 'shift', catchupSource: '' });
+  });
+
+  it('reads catchup-time and catchup-correction on a channel', () => {
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 catchup="shift" catchup-days="1" catchup-time="172800" catchup-correction="3",Alpha',
+      'http://host/a.ts',
+      '#EXTINF:-1 catchup="shift",Bravo',
+      'http://host/b.ts',
+    ].join('\n');
+    const [alpha, bravo] = parseM3U(m3u).channels;
+    expect(alpha).toMatchObject({ catchup: 'shift', catchupDays: 2, catchupCorrection: 3 });
+    expect(alpha.sourceAttributes).toBeUndefined();
+    expect(bravo.catchupCorrection).toBeUndefined();
+  });
+
+  it('infers Xtream catch-up from a header catchup=xc', () => {
+    const m3u = [
+      '#EXTM3U catchup="xc"',
+      '#EXTINF:-1,Alpha',
+      'http://host:8080/live/u1/p1/42.ts',
+    ].join('\n');
+    expect(parseM3U(m3u).channels[0]).toMatchObject({
+      catchup: 'xtream',
+      catchupStreamId: '42',
+    });
   });
 
   it('matches attribute names without regard to case', () => {

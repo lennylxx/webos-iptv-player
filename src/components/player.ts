@@ -18,6 +18,7 @@ import {
   xtreamCatchupSources as buildXtreamCatchupSources,
   xtreamCredentialsFromLiveUrl,
 } from '../utils/xtream-url';
+import { buildCatchupUrl, catchupPlan, expandLiveUrl, hasCatchup } from '../utils/catchup-url';
 import { show, hide } from '../utils/dom';
 import {
   channelExactStreamIdentity,
@@ -140,6 +141,12 @@ export class Player {
   private catchupSuspendPos = -1;
   private catchupSourceIndex = 0;
   private catchupVariantConfirmed = false;
+  // An unbounded catch-up URL plays on into live; its start carries
+  // catchupOffset seconds of the program, so position = offset + currentTime.
+  private catchupUnbounded = false;
+  private catchupOffset = 0;
+  // A seek in an unbounded catch-up reloads the stream; a paused one stays paused.
+  private catchupRestartPaused = false;
   private playbackGeneration = 0;
   private healthSuccessGeneration = -1;
   private healthStartedAt = 0;
@@ -459,6 +466,11 @@ export class Player {
       this.confirmLiveHistory(el);
       if (this.osd.isVisible()) this.osd.resetTimer();
       this.finishLunaRestore(el);
+      if (this.catchupRestartPaused) {
+        this.catchupRestartPaused = false;
+        this.userPaused = true;
+        el.pause();
+      }
     });
     onCurrent('waiting', () => {
       update('buffering');
@@ -481,6 +493,10 @@ export class Player {
       this.reconcileLiveDvrPosition(el);
       this.reconcilePendingSeek(el);
       this.refreshProgress();
+      if (this.catchupUnbounded && this.playbackActive && el === this.videoEl
+          && this.playbackPosition() >= this.catchupDuration()) {
+        this.onEnded();
+      }
     });
     onCurrent('progress', () => {
       this.reconcileLiveDvrPosition(el);
@@ -580,7 +596,7 @@ export class Player {
       // collapse the resume point to the start on the next play().
       if (this.catchupInfo) {
         this.catchupSuspendPos = Math.max(
-          this.videoEl.currentTime,
+          this.playbackPosition(),
           this.pendingResumeSecs,
           this.pendingSeekTarget ?? 0,
         );
@@ -722,6 +738,10 @@ export class Player {
   // a catch-up window is active. Shared by play() and the stall reload path.
   private xtreamCatchupSources(channel: Channel): XtreamCatchupSource[] {
     if (channel.catchupSources?.length) return channel.catchupSources;
+    // A playlist's own catchup-source for `xc` is used as written.
+    if (!channel.catchupAccountId && !channel.catchupStreamId) {
+      return [{ kind: 'path-ts', url: channel.catchupSource }];
+    }
     const inferred = xtreamCredentialsFromLiveUrl(channel.url);
     const account = channel.catchupAccountId
       ? StorageService.getPlaylists()
@@ -742,26 +762,82 @@ export class Player {
   }
 
   private resolveStreamUrl(channel: Channel, catchup: CatchupInfo | null): string {
-    if (catchup && channel.catchupSource) {
-      let source = channel.catchup === 'xtream'
-        ? this.xtreamCatchupSources(channel)[this.catchupSourceIndex]?.url || channel.catchupSource
-        : channel.catchupSource;
-      if (channel.catchup === 'xtream') {
-        const durationMinutes = Math.max(1, Math.ceil((catchup.end - catchup.start) / 60));
-        source = source
-          .replace('{duration}', String(durationMinutes))
-          .replace('{start}', formatXtreamCatchupStart(
-            catchup.start,
-            channel.catchupTimeZone,
-            channel.catchupTimeOffsetMinutes,
-          ));
-      }
+    const now = Math.floor(Date.now() / 1000);
+    if (catchup && channel.catchup === 'xtream' && channel.catchupSource) {
+      const durationMinutes = Math.max(1, Math.ceil((catchup.end - catchup.start) / 60));
+      const source = this.xtreamCatchupSources(channel)[this.catchupSourceIndex]?.url
+        || channel.catchupSource;
       return source
+        .replace('{duration}', String(durationMinutes))
+        .replace('{start}', formatXtreamCatchupStart(
+          catchup.start,
+          channel.catchupTimeZone,
+          channel.catchupTimeOffsetMinutes,
+        ))
         .replace('{channel-id}', encodeURIComponent(channel.id || channel.name))
         .replace('{utc}', String(catchup.start))
         .replace('{utcend}', String(catchup.end));
     }
-    return channel.url;
+    if (catchup) {
+      const url = this.m3uCatchupUrl(channel, catchup, now);
+      if (url) return url;
+    }
+    return expandLiveUrl(channel.url, now);
+  }
+
+  // An unbounded archive URL starts at the program position it should play
+  // from, since the stream itself cannot seek back past it.
+  private m3uCatchupUrl(channel: Channel, catchup: CatchupInfo, now: number): string | null {
+    if (!hasCatchup(channel)) return null;
+    return buildCatchupUrl({
+      liveUrl: channel.url,
+      type: channel.catchup,
+      source: channel.catchupSource,
+      start: catchup.start + (this.catchupUnbounded ? this.catchupOffset : 0),
+      end: catchup.end,
+      now,
+      channelId: encodeURIComponent(channel.id || channel.name),
+      catchupId: catchup.catchupId,
+      correctionHours: channel.catchupCorrection,
+    });
+  }
+
+  private canPlayCatchup(channel: Channel, catchup: CatchupInfo): boolean {
+    if (channel.catchup === 'xtream') return !!channel.catchupSource;
+    return this.m3uCatchupUrl(channel, catchup, Math.floor(Date.now() / 1000)) !== null;
+  }
+
+  private catchupDuration(): number {
+    return this.catchupInfo ? Math.max(0, this.catchupInfo.end - this.catchupInfo.start) : 0;
+  }
+
+  /** The position the OSD, progress, and seeks use: program time for an
+   *  unbounded catch-up URL, else the element's (pending) time. */
+  private playbackPosition(): number {
+    const v = this.videoEl;
+    if (this.catchupUnbounded) return this.catchupOffset + (v?.currentTime || 0);
+    return this.pendingSeekTarget ?? v?.currentTime ?? 0;
+  }
+
+  private playbackDuration(): number {
+    if (this.catchupUnbounded) return this.catchupDuration();
+    return this.videoEl ? this.videoEl.duration : NaN;
+  }
+
+  // Reloads an unbounded catch-up URL at a new program position.
+  private restartCatchupAt(offset: number): void {
+    if (!this.currentChannel || !this.catchupInfo) return;
+    this.catchupOffset = offset;
+    this.pendingSeekTarget = null;
+    this.catchupRestartPaused = this.userPaused;
+    this.recreateVideoEl();
+    this.videoEl?.classList.add('active');
+    this.loadStream(
+      this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
+      this.currentChannel.extras,
+      { headers: channelHttpHeaders(this.currentChannel) },
+    );
+    this.saveCatchupProgress();
   }
 
   private startPlaybackGeneration(): void {
@@ -830,6 +906,12 @@ export class Player {
     scope?: ChannelScope | null,
   ): void {
     if (!this.videoEl) return;
+    if (catchup && !this.canPlayCatchup(channel, catchup)) {
+      log.warn('Catch-up URL unavailable; playing live', 'event=catchup.url.unavailable',
+        `type=${catchupPlan(channel.catchup, channel.catchupSource, channel.url)?.mode ?? 'none'}`);
+      showToast(t('epg.catchupUnavailable'));
+      catchup = undefined;
+    }
     this.playbackRate.reset();
     if (this.liveSessionActive) this.rememberLiveAudio();
     this.playbackActive = true;
@@ -870,6 +952,20 @@ export class Player {
     this.onTvPlaybackChanged(channelIndex, catchup ? catchup.start * 1000 : null);
     this.catchupSourceIndex = 0;
     this.catchupVariantConfirmed = false;
+    const plan = catchup && channel.catchup !== 'xtream'
+      ? catchupPlan(channel.catchup, channel.catchupSource, channel.url)
+      : null;
+    if (plan?.unknownType) {
+      log.info('Unknown catch-up type; using catchup-source as the URL template',
+        'event=catchup.type.unknown', 'fallback=default');
+    }
+    this.catchupUnbounded = !!plan && !plan.bounded;
+    this.catchupOffset = 0;
+    this.catchupRestartPaused = false;
+    if (this.catchupUnbounded) {
+      this.catchupOffset = Math.max(0, Math.min(this.pendingResumeSecs, this.catchupDuration()));
+      this.pendingResumeSecs = 0;
+    }
     this.vod = null;
     this.videoEl.muted = this.livePreviewMode && this.previewMuteOverride !== null
       ? this.previewMuteOverride
@@ -1017,13 +1113,17 @@ export class Player {
   private saveCatchupProgress(opts?: { completed?: boolean }): void {
     const info = this.catchupInfo;
     const ch = this.currentChannel;
-    if (!info || !ch || !ch.catchupSource) return;
+    if (!info || !ch || !hasCatchup(ch)) return;
     const el = this.videoEl;
-    const pos = this.pendingSeekTarget ?? (el ? (el.currentTime || 0) : 0);
+    const pos = this.playbackPosition() || 0;
     const progStartMs = info.start * 1000;
     const progEndMs = info.end * 1000;
     const epgDur = info.end - info.start; // seconds, as fallback when media duration unknown
-    const dur = el && Number.isFinite(el.duration) && el.duration > 0 ? el.duration : epgDur;
+    // An unbounded URL's position is program time; its stream's own length
+    // only counts from the offset it started at.
+    const dur = !this.catchupUnbounded && el && Number.isFinite(el.duration) && el.duration > 0
+      ? el.duration
+      : epgDur;
     const isCompleted = (opts?.completed ?? false) || (dur > 0 && pos >= dur - CONFIG.CATCHUP.FINISH_PAD);
     // Avoid writing a sub-threshold position that would delete a valid stored entry.
     if (!isCompleted && pos < CONFIG.CATCHUP.RESUME_MIN_SECS) return;
@@ -1035,6 +1135,7 @@ export class Player {
       title: info.title,
       description: info.description,
       icon: info.icon,
+      ...(info.catchupId ? { catchupId: info.catchupId } : {}),
       position: pos,
       duration: dur,
       updatedAt: Date.now(),
@@ -1124,6 +1225,14 @@ export class Player {
   // would reset the watchdog's reload budget and prevent escalation.
   private reloadCurrentStream(): void {
     if (!this.currentChannel) return;
+    // A catch-up reload continues from the program position, not its start.
+    if (this.catchupInfo && this.catchupUnbounded) {
+      this.catchupOffset = Math.min(this.playbackPosition(), this.catchupDuration());
+      this.pendingResumeSecs = 0;
+    } else if (this.catchupInfo) {
+      const position = this.playbackPosition();
+      if (position > 0) this.pendingResumeSecs = Math.max(this.pendingResumeSecs, position);
+    }
     this.osd.updateMessage(t('player.reconnecting'));
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
@@ -1208,6 +1317,9 @@ export class Player {
     this.catchupSuspendPos = -1;
     this.catchupSourceIndex = 0;
     this.catchupVariantConfirmed = false;
+    this.catchupUnbounded = false;
+    this.catchupOffset = 0;
+    this.catchupRestartPaused = false;
     this.resyncing = false;
     if (this.resyncTimer) { clearTimeout(this.resyncTimer); this.resyncTimer = null; }
     this.onPlaybackStateChanged();
@@ -1706,6 +1818,7 @@ export class Player {
     const v = this.videoEl;
     if (!this.osd.isVisible() || !v) return false;
     if (this.vod) return Number.isFinite(v.duration) && v.duration > 0;
+    if (this.catchupInfo && this.catchupUnbounded) return this.catchupDuration() > 0;
     if (this.catchupInfo) return Number.isFinite(v.duration) && v.duration > 0;
     return this.isLiveDvr();
   }
@@ -1717,6 +1830,9 @@ export class Player {
     if (!v) return null;
     const win = this.liveDvrWindow();
     if (win) return { min: this.oldestDvrTarget(win), max: win.end - CONFIG.PLAYER.DVR_GO_LIVE_PAD };
+    if (this.catchupUnbounded) {
+      return { min: 0, max: Math.max(0, this.catchupDuration() - CONFIG.PLAYER.SEEK_END_PAD) };
+    }
     if (Number.isFinite(v.duration) && v.duration > 0) {
       return { min: 0, max: Math.max(0, v.duration - CONFIG.PLAYER.SEEK_END_PAD) };
     }
@@ -1730,7 +1846,7 @@ export class Player {
     const range = this.seekRange();
     if (!range) return;
     const prev = this.scrub;
-    const from = prev?.target ?? this.pendingSeekTarget ?? this.videoEl?.currentTime ?? 0;
+    const from = prev?.target ?? this.playbackPosition();
     // Already at (or past) the bound: a clamp would move the target the
     // opposite way, e.g. Right a few seconds behind the live edge.
     if (dir > 0 ? from >= range.max : from <= range.min) {
@@ -1783,7 +1899,8 @@ export class Player {
     if (!v) return;
     const f = Math.max(0, Math.min(1, fraction));
     const win = this.liveDvrWindow();
-    const target = win ? win.start + f * win.length : Number.isFinite(v.duration) ? f * v.duration : null;
+    const duration = this.playbackDuration();
+    const target = win ? win.start + f * win.length : Number.isFinite(duration) ? f * duration : null;
     if (target === null) return;
     const before = this.seekLogContext();
     const landed = this.seekTo(target);
@@ -1793,7 +1910,8 @@ export class Player {
   private seekLogContext(): { kind: string; from: number; win: DvrWindow | null } {
     const win = this.liveDvrWindow();
     const kind = win ? 'dvr' : this.vod ? 'vod' : this.catchupInfo ? 'catchup' : 'live';
-    return { kind, from: this.videoEl?.currentTime ?? 0, win };
+    const from = this.catchupUnbounded ? this.playbackPosition() : this.videoEl?.currentTime ?? 0;
+    return { kind, from, win };
   }
 
   // A DVR window's media times are opaque, so its seeks also say how far
@@ -1823,6 +1941,14 @@ export class Player {
       const liveEdge = win.end - CONFIG.PLAYER.DVR_GO_LIVE_PAD;
       const oldest = this.oldestDvrTarget(win);
       this.pendingSeekTarget = time >= liveEdge ? liveEdge : Math.max(oldest, time);
+    } else if (this.catchupUnbounded) {
+      const target = Math.max(0, Math.min(this.catchupDuration(), time));
+      this.restartCatchupAt(target);
+      if (showControls) {
+        if (this.osd.isVisible()) this.osd.resetTimer(); else this.showOSD();
+      }
+      this.refreshProgress();
+      return target;
     } else if (Number.isFinite(v.duration) && v.duration > 0) {
       this.pendingSeekTarget = Math.max(0, Math.min(v.duration, time));
     } else {
@@ -2005,11 +2131,11 @@ export class Player {
     const upcoming = epgId ? EpgService.getUpcoming(epgId, 1) : [];
     const win = this.liveDvrWindow();
     const video = this.videoEl;
-    const position = this.pendingSeekTarget ?? video?.currentTime ?? 0;
+    const position = this.playbackPosition();
     return {
       playback: video ? {
         position,
-        duration: video.duration,
+        duration: this.playbackDuration(),
         paused: video.paused,
       } : null,
       channel,
@@ -2046,13 +2172,14 @@ export class Player {
   // The pending key target wins over the pointer hover.
   private scrubSnapshot(position: number, win: DvrWindow | null): PlayerOsdScrub | null {
     const v = this.videoEl;
+    const duration = this.playbackDuration();
     const hover = this.hoverFraction;
     let target: number | null = this.scrub?.target ?? null;
     if (target === null && hover !== null && v) {
       if (win) target = win.start + hover * win.length;
       // A live stream between DVR windows (mid-reload) has nothing to preview.
-      else if ((this.vod || this.catchupInfo) && Number.isFinite(v.duration) && v.duration > 0) {
-        target = hover * v.duration;
+      else if ((this.vod || this.catchupInfo) && Number.isFinite(duration) && duration > 0) {
+        target = hover * duration;
       }
     }
     if (target === null || !v) {
@@ -2061,7 +2188,7 @@ export class Player {
     }
     const dvr = win ? dvrState(win, target, CONFIG.PLAYER.DVR_LIVE_EDGE) : null;
     const fraction = dvr ? dvr.fraction
-      : Number.isFinite(v.duration) && v.duration > 0 ? target / v.duration : 0;
+      : Number.isFinite(duration) && duration > 0 ? target / duration : 0;
     this.ensurePreview(win);
     return {
       fraction,
@@ -2193,8 +2320,7 @@ export class Player {
       return;
     }
     if (this.liveSessionActive && !this.catchupInfo
-        && (this.resolveStreamUrl(current, null)
-          !== this.resolveStreamUrl(resolved.channel, null)
+        && (current.url !== resolved.channel.url
           || channelStreamIdentity(current)
             !== channelStreamIdentity(resolved.channel))) {
       const { channel, channelIndex } = resolved;

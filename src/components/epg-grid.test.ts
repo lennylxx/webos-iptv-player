@@ -402,6 +402,50 @@ describe('EpgGrid mouse interaction', () => {
     expect(catchup?.start).toBeLessThan(catchup?.end ?? 0);
   });
 
+  it('passes the program catch-up id and its availability check through', () => {
+    state.channels = [{ name: 'Chan A', url: 'http://host/a', catchup: 'vod', catchupSource: 'http://host/v/{catchup-id}' }];
+    state.programmes['Chan A'][0] = { ...state.programmes['Chan A'][0], catchupId: 'p1' };
+    storageMock.getCatchupProgressList.mockReturnValue([]);
+    grid.render();
+    clickData('data-prog-idx', 0);
+    expect(onSelect.mock.calls[0][1]).toMatchObject({ title: 'Morning', catchupId: 'p1' });
+    expect(archiveMock.isAvailable).toHaveBeenCalledWith(
+      state.channels[0], state.programmes['Chan A'][0].start.getTime(), expect.any(Number), 'p1');
+  });
+
+  it('opens a vod channel live for a past program without a catch-up id', async () => {
+    state.channels = [{ name: 'Chan A', url: 'http://host/a', catchup: 'vod', catchupSource: '' }];
+    archiveMock.isAvailable.mockImplementation(
+      (_channel: unknown, _start?: number, _now?: number, catchupId?: string) => !!catchupId);
+    const start = state.programmes['Chan A'][0].start.getTime();
+    storageMock.getCatchupProgressList.mockReturnValue([{
+      channelKey: 'k', progStart: start, progEnd: start + 3_600_000, position: 600,
+      duration: 3600, updatedAt: 1, completed: false,
+    }]);
+    grid.render();
+    expect(container.querySelector('[data-prog-idx="0"] .epg-catchup-badge')).toBeNull();
+    expect(container.querySelector('[data-prog-idx="0"] .epg-catchup-progress')).toBeNull();
+
+    clickData('data-prog-idx', 0);
+    await vi.runAllTimersAsync();
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, expect.anything());
+  });
+
+  it('opens the channel live for a past program outside its archive days', async () => {
+    state.channels = [{ name: 'Chan A', url: 'http://host/a', catchupSource: 'http://host/catchup/{start}', catchupDays: 1 }];
+    // The archive days leave this program out.
+    archiveMock.isAvailable.mockReturnValue(false);
+    storageMock.getCatchupProgressList.mockReturnValue([]);
+    grid.render();
+    expect(container.querySelector('[data-prog-idx="0"] .epg-replay-glyph')).toBeNull();
+
+    clickData('data-prog-idx', 0);
+    await vi.runAllTimersAsync();
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, expect.anything());
+  });
+
   it('clicking a future program sets a reminder instead of tuning', () => {
     clickData('data-prog-idx', 2); // Afternoon 13:00-14:00, future vs noon
     expect(reminderMock.add).toHaveBeenCalledTimes(1);
@@ -979,6 +1023,17 @@ describe('EpgGrid catch-up resume markers', () => {
     ]);
     grid.render();
     expect(container.querySelector('.epg-catchup-badge')).toBeNull();
+  });
+
+  it('shows the replay icon only on aired programs that can be replayed', () => {
+    grid.render();
+    expect(container.querySelector('[data-prog-idx="0"] .epg-replay-glyph')).not.toBeNull();
+    expect(container.querySelector('[data-prog-idx="2"] .epg-replay-glyph')).toBeNull();
+
+    state.channels = [{ name: 'Chan A', url: 'http://host/a' }];
+    grid.render();
+    expect(container.querySelector('[data-prog-idx="0"]')!.classList.contains('state-past')).toBe(true);
+    expect(container.querySelector('.epg-replay-glyph')).toBeNull();
   });
 
   it('does not render a marker for a future programme', () => {

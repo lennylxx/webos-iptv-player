@@ -10,6 +10,7 @@ import {
   xtreamCredentialsFromLiveUrl,
 } from '../utils/xtream-url';
 import { isMpdText } from '../utils/url';
+import { catchupPlan, revokeInheritedCatchup } from '../utils/catchup-url';
 
 export interface M3UParseOptions {
   maxChannels?: number;
@@ -18,6 +19,11 @@ export interface M3UParseOptions {
   channelPostfilter?: (channel: Channel) => boolean;
   channelBatchSize?: number;
   onChannelBatch?: (channels: Channel[]) => void;
+  /** A channel with its own catch-up attribute ended the #EXTM3U header's
+   *  catch-up for every channel before it. The parser clears the ones it
+   *  still holds; the ones already passed to onChannelBatch are the caller's
+   *  to clear, with revokeInheritedCatchup. */
+  onCatchupInheritanceRevoked?: () => void;
 }
 
 type PendingDirectiveKind =
@@ -79,6 +85,10 @@ export class M3UStreamParser {
   private stopped = false;
   private finished = false;
   private acceptedChannels = 0;
+  private readonly catchup: CatchupContext = { defaults: null, inherit: true, origin: 'none' };
+  // Some channel took catch-up from a header.
+  private catchupInherited = false;
+  private readonly onCatchupInheritanceRevoked?: () => void;
 
   constructor(
     private readonly sourceUrl = '',
@@ -90,6 +100,7 @@ export class M3UStreamParser {
     this.channelPostfilter = options.channelPostfilter;
     this.channelBatchSize = options.channelBatchSize ?? 0;
     this.onChannelBatch = options.onChannelBatch;
+    this.onCatchupInheritanceRevoked = options.onCatchupInheritanceRevoked;
   }
 
   write(chunk: string): void {
@@ -287,7 +298,7 @@ export class M3UStreamParser {
           if (this.pendingExtInfBody !== null) this.clearPendingChannel();
           this.pendingExtInfBody = body;
         } else {
-          this.current = parseExtInf(body);
+          this.current = parseExtInf(body, this.catchup);
         }
         break;
       case '#EXTGRP':
@@ -337,6 +348,7 @@ export class M3UStreamParser {
     const attrs = scanAttributes(body, 0).values;
     Object.assign(this.headerAttributes, attrs);
     this.epgUrls = collectEpgUrls(this.headerAttributes);
+    this.catchup.defaults = headerCatchupDefaults(this.headerAttributes);
     const maxConn = parseInt(attrs['max-conn'] || '', 10);
     if (maxConn > 0) this.maxConnections = maxConn;
   }
@@ -359,6 +371,8 @@ export class M3UStreamParser {
       this.streamLocationPrefilter
       && !this.streamLocationPrefilter(line)
     ) {
+      // A channel filtered out still says the header's catch-up is not for all.
+      if (this.catchup.inherit && this.droppedHasOwnCatchup()) this.endCatchupInheritance();
       this.current = null;
       this.clearPendingChannel();
       return;
@@ -366,7 +380,10 @@ export class M3UStreamParser {
     if (this.pendingExtInfBody !== null) {
       this.current = this.materializePendingChannel();
     }
-    if (!this.current) this.current = emptyChannel(nameFromUrl(line));
+    if (!this.current) {
+      this.current = emptyChannel(nameFromUrl(line));
+      applyCatchupAttributes(this.current, {}, this.catchup);
+    }
     this.current.url = line;
     if (pipeHeaders) {
       this.current.urlSuffix = pipeHeaders;
@@ -374,20 +391,13 @@ export class M3UStreamParser {
     } else {
       delete this.current.urlSuffix;
     }
-    if (this.current.catchup.toLowerCase() === 'xc' && !this.current.catchupSource) {
-      const inferred = xtreamCredentialsFromLiveUrl(line);
-      if (inferred) {
-        this.current.catchupSource = xtreamCatchupSource(
-          inferred.credentials,
-          inferred.streamId,
-          inferred.output,
-        );
-        this.current.catchup = 'xtream';
-        this.current.catchupStreamId = inferred.streamId;
-      }
-    }
+    const origin = this.catchup.origin;
+    this.catchup.origin = 'none';
+    resolveCatchupForUrl(this.current, line, origin);
     const channel = this.current;
     this.current = null;
+    if (origin === 'own') this.endCatchupInheritance();
+    else if (origin === 'inherited') this.catchupInherited = true;
     if (this.channelPostfilter && !this.channelPostfilter(channel)) return;
     channel.group = this.internGroup(channel.group);
     if (channel.sourceGroups) {
@@ -441,7 +451,7 @@ export class M3UStreamParser {
   }
 
   private materializePendingChannel(): Channel {
-    const channel = parseExtInf(this.pendingExtInfBody!);
+    const channel = parseExtInf(this.pendingExtInfBody!, this.catchup);
     if (this.pendingDirectiveKind !== null) {
       this.applyPendingDirective(
         channel,
@@ -487,16 +497,35 @@ export class M3UStreamParser {
     this.additionalPendingDirectives = null;
   }
 
+  // A channel with a catch-up attribute of its own ends the header's
+  // defaults for good: whatever any channel took from a header is revoked.
+  private endCatchupInheritance(): void {
+    if (!this.catchup.inherit) return;
+    this.catchup.inherit = false;
+    if (!this.catchupInherited) return;
+    for (const held of this.channels) revokeInheritedCatchup(held);
+    this.onCatchupInheritanceRevoked?.();
+  }
+
+  // The #EXTINF of an entry the location prefilter dropped is never parsed;
+  // a substring check skips the attribute scan for nearly every one.
+  private droppedHasOwnCatchup(): boolean {
+    const body = this.pendingExtInfBody;
+    if (body === null) return this.current !== null && this.catchup.origin === 'own';
+    if (!OWN_CATCHUP_NAME.test(body)) return false;
+    return hasOwnCatchupMarker(scanAttributes(body, extInfAttributesStart(body)).values);
+  }
+
   private flushChannelBatch(): void {
     if (!this.onChannelBatch || !this.channels.length) return;
     this.detachPendingChannelStrings();
-    const batch = this.channels.splice(0);
-    this.onChannelBatch(batch);
+    const size = this.channelBatchSize > 0 ? this.channelBatchSize : this.channels.length;
+    while (this.channels.length) this.onChannelBatch(this.channels.splice(0, size));
   }
 
   private detachPendingChannelStrings(): void {
     if (!this.pendingStringDetach.length) return;
-    detachChannelStrings(this.pendingStringDetach);
+    detachChannelStrings(this.pendingStringDetach, this.catchup.defaults);
     this.pendingStringDetach.length = 0;
   }
 
@@ -545,9 +574,10 @@ const CHANNEL_STRING_KEYS = [
   'name',
   'logo',
   'url',
-  'catchup',
-  'catchupSource',
 ] as const;
+const CATCHUP_STRING_KEYS = ['catchup', 'catchupSource'] as const;
+// Every name hasOwnCatchupMarker reads contains one of these.
+const OWN_CATCHUP_NAME = /catchup|tvg-rec|timeshift/i;
 const OPTIONAL_CHANNEL_STRING_KEYS = [
   'sourceName',
   'sourceGroup',
@@ -559,11 +589,29 @@ const OPTIONAL_CHANNEL_STRING_KEYS = [
   'seekPreview',
 ] as const;
 
-function detachChannelStrings(channels: readonly Channel[]): void {
+// The header's catch-up defaults are detached once, and the types the parser
+// sets itself are literals, so channels share them instead of copying each.
+function sharedCatchupString(value: string, defaults: CatchupDefaults | null): string | null {
+  if (value === 'shift') return 'shift';
+  if (value === 'xtream') return 'xtream';
+  if (!defaults) return null;
+  if (value === defaults.type) return defaults.type;
+  if (value === defaults.source) return defaults.source;
+  return null;
+}
+
+function detachChannelStrings(channels: readonly Channel[], defaults: CatchupDefaults | null): void {
   const values: string[] = [];
   for (const channel of channels) {
     for (const key of CHANNEL_STRING_KEYS) {
       if (channel[key]) values.push(channel[key]);
+    }
+    for (const key of CATCHUP_STRING_KEYS) {
+      const value = channel[key];
+      if (!value) continue;
+      const shared = sharedCatchupString(value, defaults);
+      if (shared === null) values.push(value);
+      else channel[key] = shared;
     }
     for (const key of OPTIONAL_CHANNEL_STRING_KEYS) {
       if (channel[key]) values.push(channel[key]!);
@@ -592,6 +640,10 @@ function detachChannelStrings(channels: readonly Channel[]): void {
   for (const channel of channels) {
     for (const key of CHANNEL_STRING_KEYS) {
       if (channel[key]) channel[key] = copies[index++];
+    }
+    for (const key of CATCHUP_STRING_KEYS) {
+      const value = channel[key];
+      if (value && sharedCatchupString(value, defaults) === null) channel[key] = copies[index++];
     }
     for (const key of OPTIONAL_CHANNEL_STRING_KEYS) {
       if (channel[key]) channel[key] = copies[index++];
@@ -712,7 +764,8 @@ function result(
   };
 }
 
-function parseExtInf(body: string): Channel {
+// Past the duration, where an #EXTINF's attributes start.
+function extInfAttributesStart(body: string): number {
   let index = 0;
   while (index < body.length && isWhitespace(body.charCodeAt(index))) index++;
   if (body.charCodeAt(index) === 43 || body.charCodeAt(index) === 45) index++;
@@ -721,7 +774,11 @@ function parseExtInf(body: string): Channel {
     if ((code >= 48 && code <= 57) || code === 46) index++;
     else break;
   }
-  const scanned = scanAttributes(body, index);
+  return index;
+}
+
+function parseExtInf(body: string, catchup: CatchupContext | null = null): Channel {
+  const scanned = scanAttributes(body, extInfAttributesStart(body));
   const attrs = scanned.values;
   const displayName = scanned.titleIndex >= 0
     ? body.slice(scanned.titleIndex + 1).trim()
@@ -731,14 +788,10 @@ function parseExtInf(body: string): Channel {
   );
   channel.id = attrs['tvg-id'] || '';
   channel.logo = attrs['tvg-logo'] || attrs.logo || '';
-  channel.catchup = attrs.catchup || attrs['catchup-type'] || '';
-  channel.catchupSource = attrs['catchup-source'] || '';
+  if (catchup) applyCatchupAttributes(channel, attrs, catchup);
+  else applyCatchupAttributes(channel, attrs, { defaults: null, inherit: false, origin: 'none' });
   const seekPreview = attrs.seek_preview || attrs['seek-preview'];
   if (seekPreview) channel.seekPreview = seekPreview;
-  channel.catchupDays = parseInt(
-    attrs['catchup-days'] || attrs['tvg-rec'] || '0',
-    10,
-  ) || 0;
   applyGroups(channel, attrs['group-title'] || UNCATEGORIZED_GROUP, false);
 
   const channelNumberRaw = attrs['tvg-chno']
@@ -748,7 +801,7 @@ function parseExtInf(body: string): Channel {
     const channelNumber = parseInt(channelNumberRaw, 10);
     if (Number.isFinite(channelNumber)) channel.channelNumber = channelNumber;
   }
-  const tvgShiftRaw = attrs['tvg-shift'] || attrs.timeshift;
+  const tvgShiftRaw = attrs['tvg-shift'];
   if (tvgShiftRaw) {
     const tvgShift = parseFloat(tvgShiftRaw);
     if (Number.isFinite(tvgShift)) channel.tvgShift = tvgShift;
@@ -757,6 +810,170 @@ function parseExtInf(body: string): Channel {
   preserveUnknownAttributes(channel, attrs);
   applyExtInfHeaders(channel, attrs);
   return channel;
+}
+
+interface CatchupDefaults {
+  type: string;
+  source: string;
+  days: number;
+  /** The header declares an archive, not only a correction. */
+  declared: boolean;
+  correction?: string;
+}
+
+type CatchupOrigin = 'own' | 'inherited' | 'none';
+
+interface CatchupContext {
+  defaults: CatchupDefaults | null;
+  /** Header defaults still apply to channels without catch-up attributes. */
+  inherit: boolean;
+  /** Where the last parsed channel's catch-up came from. */
+  origin: CatchupOrigin;
+}
+
+interface ArchiveDays {
+  days: number;
+  /** Some attribute names a positive archive. */
+  declared: boolean;
+}
+
+// catchup-days (with catchup-time) wins; legacy timeshift fills in only
+// without it, and tvg-rec only without either.
+function archiveDays(attrs: Record<string, string>): ArchiveDays | null {
+  const daysRaw = attrs['catchup-days'];
+  const timeRaw = attrs['catchup-time'];
+  const legacyRaw = attrs.timeshift ?? attrs['tvg-rec'];
+  let days: number;
+  if (daysRaw !== undefined || timeRaw !== undefined) {
+    days = daysRaw !== undefined ? parseInt(daysRaw, 10) || 0 : 0;
+    const seconds = timeRaw !== undefined ? parseInt(timeRaw, 10) || 0 : 0;
+    if (seconds > 0) days = Math.max(days, Math.ceil(seconds / 86400));
+  } else if (legacyRaw !== undefined) {
+    days = parseInt(legacyRaw, 10) || 0;
+  } else {
+    return null;
+  }
+  return { days, declared: days > 0 };
+}
+
+function headerCatchupDefaults(header: Record<string, string>): CatchupDefaults | null {
+  const [type, source] = copyRetainedStrings([
+    header.catchup || header['catchup-type'] || '',
+    header['catchup-source'] || '',
+  ]);
+  const archive = archiveDays(header);
+  const correction = header['catchup-correction'];
+  const declared = !!(type || source) || !!archive?.declared;
+  if (!declared && correction === undefined) return null;
+  return { type, source, days: archive?.days ?? 0, declared, correction };
+}
+
+function hasOwnCatchupMarker(attrs: Record<string, string>): boolean {
+  return attrs.catchup !== undefined
+    || attrs['catchup-type'] !== undefined
+    || attrs['catchup-source'] !== undefined
+    || attrs['catchup-days'] !== undefined
+    || attrs['catchup-time'] !== undefined
+    || attrs['tvg-rec'] !== undefined
+    || attrs.timeshift !== undefined
+    || attrs['catchup-enable'] === '1';
+}
+
+// Channel attributes win over the #EXTM3U header's catch-up defaults. Archive
+// days without a type or source mean `shift`.
+function applyCatchupAttributes(
+  channel: Channel,
+  attrs: Record<string, string>,
+  context: CatchupContext,
+): void {
+  // The channel is fresh from emptyChannel, so it has no catch-up yet.
+  const defaults = context.defaults;
+  const correctionRaw = attrs['catchup-correction'] ?? defaults?.correction;
+  if (correctionRaw !== undefined) {
+    const correction = parseFloat(correctionRaw);
+    if (Number.isFinite(correction) && correction !== 0) channel.catchupCorrection = correction;
+  }
+
+  const marker = hasOwnCatchupMarker(attrs);
+  // The common case, a channel without catch-up, does no more work.
+  if (!marker && !(context.inherit && defaults?.declared)) {
+    context.origin = 'none';
+    return;
+  }
+  const own = archiveDays(attrs);
+  const enable = attrs['catchup-enable'];
+  if (enable === '0' || (own && !own.declared && enable !== '1')) {
+    context.origin = marker ? 'own' : 'none';
+    return;
+  }
+  let type: string;
+  let source: string;
+  if (marker) {
+    type = attrs.catchup || attrs['catchup-type'] || '';
+    source = attrs['catchup-source'] || '';
+    if (!type && !source && defaults) {
+      type = defaults.type;
+      source = defaults.source;
+    }
+    channel.catchupDays = own ? own.days : defaults?.days ?? 0;
+    context.origin = 'own';
+  } else if (context.inherit && defaults?.declared) {
+    type = defaults.type;
+    source = defaults.source;
+    channel.catchupDays = defaults.days;
+    channel.catchupInherited = true;
+    context.origin = 'inherited';
+  } else {
+    context.origin = 'none';
+    return;
+  }
+  if (!type && !source) {
+    type = 'shift';
+    channel.catchupDerived = true;
+  }
+  channel.catchup = type;
+  channel.catchupSource = source;
+}
+
+function clearCatchup(channel: Channel): void {
+  channel.catchup = '';
+  channel.catchupSource = '';
+  channel.catchupDays = 0;
+  delete channel.catchupStreamId;
+  delete channel.catchupDerived;
+  delete channel.catchupInherited;
+}
+
+// Settles catch-up once the stream URL is known: Xtream inference for `xc`
+// and for archive days on an Xtream-shaped URL, and no rule-built archive URL
+// for a non-HTTP stream unless the channel names the type itself.
+function resolveCatchupForUrl(channel: Channel, url: string, origin: CatchupOrigin): void {
+  if (!channel.catchup) return;
+  const kind = channel.catchup.toLowerCase();
+  if (kind === 'xc' && channel.catchupSource) {
+    channel.catchup = 'xtream';
+    return;
+  }
+  if (kind === 'xc' || channel.catchupDerived) {
+    // Archive days alone are no Xtream hint: only the `/live/` form counts.
+    const inferred = xtreamCredentialsFromLiveUrl(url, '', kind !== 'xc');
+    if (inferred) {
+      channel.catchupSource = xtreamCatchupSource(
+        inferred.credentials,
+        inferred.streamId,
+        inferred.output,
+      );
+      channel.catchup = 'xtream';
+      channel.catchupStreamId = inferred.streamId;
+      return;
+    }
+  }
+  if ((origin === 'inherited' || channel.catchupDerived) && !/^https?:\/\//i.test(url)) {
+    const plan = catchupPlan(channel.catchup, channel.catchupSource, url);
+    if (plan && plan.mode !== 'default' && plan.mode !== 'append' && plan.mode !== 'vod') {
+      clearCatchup(channel);
+    }
+  }
 }
 
 interface ScannedAttributes {
@@ -868,6 +1085,9 @@ function isKnownAttribute(key: string): boolean {
     case 'catchup-type':
     case 'catchup-source':
     case 'catchup-days':
+    case 'catchup-time':
+    case 'catchup-correction':
+    case 'catchup-enable':
     case 'seek_preview':
     case 'seek-preview':
     case 'tvg-rec':

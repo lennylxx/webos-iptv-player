@@ -1,6 +1,7 @@
 import { CONFIG } from '../config';
 import type { CatchupInfo, CatchupProgressEntry, Channel } from '../types';
 import { channelKey } from '../utils/channel';
+import { catchupNeedsId } from '../utils/catchup-url';
 import { EpgService } from './epg-service';
 import { PlaylistService } from './playlist-service';
 import { StorageService } from './storage-service';
@@ -39,7 +40,24 @@ function resolveLegacyProgress(
     title: programme.title,
     description: programme.description,
     icon: programme.icon,
+    ...(programme.catchupId ? { catchupId: programme.catchupId } : {}),
   };
+}
+
+interface CatchupIdLookup {
+  id?: string;
+  /** False while the guide cannot tell: not loaded, or cached without ids. */
+  known: boolean;
+}
+
+// Progress saved before catch-up ids were kept takes the guide's, for the
+// channels whose URL needs one.
+function savedCatchupId(channel: Channel, progress: CatchupProgressEntry): CatchupIdLookup {
+  if (progress.catchupId || !catchupNeedsId(channel)) return { id: progress.catchupId, known: true };
+  const epgId = EpgService.findChannelId(channel);
+  if (!epgId || !EpgService.catchupIdsKnown(channel)) return { known: false };
+  const programme = EpgService.getProgrammeAtStart(epgId, progress.progStart);
+  return programme ? { id: programme.catchupId, known: true } : { known: false };
 }
 
 function removeUnavailable(progress: CatchupProgressEntry): void {
@@ -66,7 +84,10 @@ export const RecentlyWatchedService = {
       const resolved = PlaylistService.resolveChannelKey(stored.channelKey, undefined,
         channel => matchesPlaylist(channel, playlistId));
       if (!resolved || !matchesPlaylist(resolved.channel, playlistId)) continue;
-      if (!XtreamArchiveService.isAvailable(resolved.channel, stored.progStart)) {
+      const lookup = savedCatchupId(resolved.channel, stored);
+      // Kept until the guide can say whether the program has an id.
+      if (!lookup.known) continue;
+      if (!XtreamArchiveService.isAvailable(resolved.channel, stored.progStart, Date.now(), lookup.id)) {
         removeUnavailable(stored);
         continue;
       }
@@ -96,7 +117,10 @@ export const RecentlyWatchedService = {
 
   async catchupInfo(item: Extract<RecentlyWatchedItem, { kind: 'catchup' }>): Promise<CatchupInfo | null> {
     await XtreamArchiveService.load(item.channel);
-    if (!XtreamArchiveService.isAvailable(item.channel, item.progress.progStart)) {
+    const lookup = savedCatchupId(item.channel, item.progress);
+    if (!lookup.known) return null;
+    const catchupId = lookup.id;
+    if (!XtreamArchiveService.isAvailable(item.channel, item.progress.progStart, Date.now(), catchupId)) {
       removeUnavailable(item.progress);
       return null;
     }
@@ -107,6 +131,7 @@ export const RecentlyWatchedService = {
       description: item.progress.description ?? '',
       icon: item.progress.icon ?? '',
       epgSourceUrl: item.progress.epgSourceUrl,
+      ...(catchupId ? { catchupId } : {}),
       resumeSecs: item.progress.position,
     };
   },

@@ -66,6 +66,79 @@ describe('fetchAndParseM3UInWorker', () => {
     expect(result.metrics.catchup).toEqual({ streams: 2, archived: 1, enabled: 1, unmatched: 0, clock: 'ok' });
   });
 
+  it('lets the Xtream archive decide catch-up implied only by archive days', async () => {
+    const playlist = [
+      '#EXTM3U',
+      '#EXTINF:-1 tvg-rec="3",Alpha',
+      'http://host/live/u1/p1/101.ts',
+      '#EXTINF:-1 tvg-rec="3",Bravo',
+      'http://host/live/u1/p1/102.ts',
+      '#EXTINF:-1 catchup="shift" catchup-days="3",Charlie',
+      'http://host/live/u1/p1/103.ts',
+    ].join('\n');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.includes('player_api.php')
+      ? new Response(JSON.stringify({ server_info: {} }))
+      : streamResponse([new TextEncoder().encode(playlist)])));
+
+    const result = await fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: [
+        { streamId: '101', directSource: '', archive: true, archiveDurationDays: 5 },
+        { streamId: '102', directSource: '' },
+        { streamId: '103', directSource: '' },
+      ],
+      xtreamCatchup: catchup,
+    });
+
+    const [alpha, bravo, charlie] = result.data.channels;
+    expect(alpha).toMatchObject({
+      catchup: 'xtream',
+      catchupSource: 'http://host/timeshift/u1/p1/{duration}/{start}/101.m3u8',
+      catchupDays: 5,
+      catchupAccountId: 'a1',
+    });
+    expect(alpha.catchupDerived).toBeUndefined();
+    expect(bravo).toMatchObject({ catchup: '', catchupSource: '', catchupDays: 0 });
+    expect(charlie).toMatchObject({ catchup: 'shift', catchupDays: 3 });
+  });
+
+  it('keeps the Xtream archive for a stream whose header catch-up a later channel revokes', async () => {
+    const playlist = [
+      '#EXTM3U catchup="append" catchup-source="?utc={utc}"',
+      '#EXTINF:-1,Alpha',
+      'http://host/live/u1/p1/101.ts',
+      '#EXTINF:-1,Bravo',
+      'http://host/live/u1/p1/102.ts',
+      '#EXTINF:-1 catchup-days="2",Charlie',
+      'http://host/live/u1/p1/103.ts',
+    ].join('\n');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.includes('player_api.php')
+      ? new Response(JSON.stringify({ server_info: {} }))
+      : streamResponse([new TextEncoder().encode(playlist)])));
+
+    const result = await fetchAndParseM3UInWorker({
+      url: 'http://host/get.php',
+      timeout: 5000,
+      xtreamLive: [
+        { streamId: '101', directSource: '', archive: true, archiveDurationDays: 5 },
+        { streamId: '102', directSource: '' },
+        { streamId: '103', directSource: '' },
+      ],
+      xtreamCatchup: catchup,
+    });
+
+    const [alpha, bravo, charlie] = result.data.channels;
+    expect(alpha).toMatchObject({
+      catchup: 'xtream',
+      catchupSource: 'http://host/timeshift/u1/p1/{duration}/{start}/101.m3u8',
+      catchupDays: 5,
+      catchupAccountId: 'a1',
+    });
+    expect(bravo).toMatchObject({ catchup: '', catchupSource: '', catchupDays: 0 });
+    expect(charlie).toMatchObject({ catchup: 'append', catchupSource: '?utc={utc}', catchupDays: 2 });
+  });
+
   it('passes archived Live catalog streams to the worker for catch-up', async () => {
     stubCatchupFetch();
     const stream = (streamId: string, archive: boolean) => ({
@@ -416,7 +489,7 @@ describe('fetchAndParseM3UInWorker', () => {
     const totals: Array<number | undefined> = [];
 
     await fetchAndParseM3UInWorker({ url: 'http://host/a', timeout: 5000 }, chunk => {
-      totals.push(chunk.totalBytes);
+      if (chunk.kind !== 'catchupRevoked') totals.push(chunk.totalBytes);
     });
 
     expect(totals.length).toBeGreaterThan(1);

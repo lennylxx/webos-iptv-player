@@ -64,6 +64,7 @@ import {
   streamUrlMime,
 } from '../utils/url';
 import { StorageService } from '../services/storage-service';
+import { t } from '../i18n';
 import { showToast } from './toast';
 import { probeMedia } from '../services/media-probe';
 import { CONFIG } from '../config';
@@ -762,6 +763,212 @@ describe('Player catch-up completion', () => {
     await flush();
     expect(video.src)
       .toContain('/timeshift/u1/p1/62/2026-07-21:15-30/42.m3u8');
+  });
+
+  describe('unbounded catch-up URLs', () => {
+    const SHIFT_CHANNEL = {
+      ...CHANNEL, url: 'http://host/play/c1.ts', catchup: 'shift', catchupSource: '',
+    };
+    const loads = () => {
+      const pipeline = (player as unknown as {
+        pipeline: { load(url: string, extras: unknown, opts?: unknown): void };
+      }).pipeline;
+      return vi.spyOn(pipeline, 'load');
+    };
+    const keepElement = () => vi.spyOn(
+      player as unknown as { recreateVideoEl(): void }, 'recreateVideoEl',
+    ).mockImplementation(() => {});
+    const utcOf = (url: string) => Number(/[?&]utc=(\d+)/.exec(url)?.[1]);
+
+    beforeEach(() => {
+      vi.setSystemTime(new Date((CATCHUP.start + 600) * 1000));
+      video = fakeVideo(Infinity);
+      player.init(video);
+      playlistMock.getByIndex.mockReturnValue(SHIFT_CHANNEL);
+    });
+
+    it('resumes by starting the URL at the resume position', async () => {
+      player.play(0, { ...CATCHUP, resumeSecs: 30 });
+      await flush();
+      expect(utcOf(video.src)).toBe(CATCHUP.start + 30);
+      video.dispatchEvent(new Event('loadedmetadata'));
+      expect(video.currentTime).toBe(0);
+    });
+
+    it('seeks by rebuilding the URL and shows program-relative time', async () => {
+      keepElement();
+      player.play(0, CATCHUP);
+      await flush();
+      player.showOSD();
+      expect(player.canSeek()).toBe(true);
+      const load = loads();
+      video.currentTime = 20;
+      press('right', 1);
+      commitSeek();
+      const target = 20 + 10;
+      expect(utcOf(load.mock.calls[0][0])).toBe(CATCHUP.start + target);
+      video.currentTime = 5;
+      video.dispatchEvent(new Event('timeupdate'));
+      player.showOSD();
+      expect(elapsed()).toBe('0:35');
+    });
+
+    it('returns to live when playback reaches the program end', async () => {
+      keepElement();
+      player.play(0, { ...CATCHUP, resumeSecs: 100 });
+      await flush();
+      const load = loads();
+      video.currentTime = 19;
+      video.dispatchEvent(new Event('timeupdate'));
+      expect(load).not.toHaveBeenCalled();
+      video.currentTime = 20;
+      video.dispatchEvent(new Event('timeupdate'));
+      expect(load.mock.calls[0][0]).toBe('http://host/play/c1.ts');
+      expect(vi.mocked(StorageService.setCatchupProgress)).toHaveBeenCalledWith(
+        expect.objectContaining({ completed: true, position: 120 }), 7,
+      );
+    });
+
+    it('a stall reload continues from the program position', async () => {
+      keepElement();
+      player.play(0, { ...CATCHUP, resumeSecs: 40 });
+      await flush();
+      const load = loads();
+      video.currentTime = 15;
+      (player as unknown as { reloadCurrentStream(): void }).reloadCurrentStream();
+      expect(utcOf(load.mock.calls[0][0])).toBe(CATCHUP.start + 55);
+    });
+
+    it('does not finish early when the stream from the offset is shorter than the program', async () => {
+      video = fakeVideo(1200);
+      player.init(video);
+      const hour = { ...CATCHUP, end: CATCHUP.start + 3600, resumeSecs: 2400 };
+      player.play(0, hour);
+      await flush();
+      vi.mocked(StorageService.setCatchupProgress).mockClear();
+      video.currentTime = 30;
+      player.handleAction('back');
+      expect(StorageService.setCatchupProgress).toHaveBeenCalledWith(
+        expect.objectContaining({ position: 2430, duration: 3600, completed: false }), 7);
+    });
+
+    it('stays paused when a seek reloads the stream', async () => {
+      keepElement();
+      player.play(0, CATCHUP);
+      await flush();
+      player.showOSD();
+      player.handleAction('pause');
+      expect(video.paused).toBe(true);
+      press('right', 1);
+      commitSeek();
+      // The fresh stream autoplays, then reports it is playing.
+      void video.play();
+      video.dispatchEvent(new Event('playing'));
+      expect(video.paused).toBe(true);
+    });
+  });
+
+  it('a stall reload resumes bounded catch-up where it was', async () => {
+    vi.spyOn(player as unknown as { recreateVideoEl(): void }, 'recreateVideoEl')
+      .mockImplementation(() => {});
+    player.play(0, CATCHUP);
+    await flush();
+    video.currentTime = 50;
+    (player as unknown as { reloadCurrentStream(): void }).reloadCurrentStream();
+    video.currentTime = 0;
+    video.dispatchEvent(new Event('loadedmetadata'));
+    expect(video.currentTime).toBe(50);
+  });
+
+  it('plays live with a notice when the catch-up URL cannot be built', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(showToast).mockClear();
+    playlistMock.getByIndex.mockReturnValue({
+      ...CHANNEL, catchupSource: 'http://host/catchup/{catchup-id}',
+    });
+    player.play(0, CATCHUP);
+    await flush();
+    expect(video.src).toBe('http://host/play/c1');
+    expect(showToast).toHaveBeenCalledWith(t('epg.catchupUnavailable'));
+    expect(player.getCurrentCatchupStart()).toBeNull();
+    vi.mocked(StorageService.setCatchupProgress).mockClear();
+    video.currentTime = 60;
+    player.handleAction('back');
+    expect(StorageService.setCatchupProgress).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map(args => args.join(' '))).toEqual(expect.arrayContaining([
+      expect.stringContaining('event=catchup.url.unavailable type=default'),
+    ]));
+    warn.mockRestore();
+  });
+
+  it('plays a vod program from its catch-up id and saves the id with progress', async () => {
+    playlistMock.getByIndex.mockReturnValue({ ...CHANNEL, catchup: 'vod', catchupSource: '' });
+    player.play(0, { ...CATCHUP, catchupId: 'http://host/vod/p1.m3u8' });
+    await flush();
+    expect(video.src).toBe('http://host/vod/p1.m3u8');
+    vi.mocked(StorageService.setCatchupProgress).mockClear();
+    video.currentTime = 60;
+    player.handleAction('back');
+    expect(StorageService.setCatchupProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ catchupId: 'http://host/vod/p1.m3u8', position: 60 }), 7);
+  });
+
+  it('uses an explicit Xtream catch-up source as written', async () => {
+    const start = Date.UTC(2026, 6, 21, 19, 30) / 1000;
+    playlistMock.getByIndex.mockReturnValue({
+      ...CHANNEL,
+      url: 'http://host/live/u1/p1/42.ts',
+      catchup: 'xtream',
+      catchupSource: 'http://host/archive/{start}/{duration}?c={channel-id}',
+      catchupTimeZone: 'UTC',
+    });
+    player.play(0, { ...CATCHUP, start, end: start + 3600 });
+    await flush();
+    expect(video.src).toBe('http://host/archive/2026-07-21:19-30/60?c=c1');
+  });
+
+  it('builds M3U catch-up URLs through the catch-up URL builder', async () => {
+    vi.setSystemTime(new Date((CATCHUP.start + 600) * 1000));
+    playlistMock.getByIndex.mockReturnValue({
+      ...CHANNEL, url: 'http://host/play/c1.ts?token=t1', catchup: 'shift', catchupSource: '',
+    });
+    player.play(0, CATCHUP);
+    await flush();
+    expect(video.src).toBe(
+      `http://host/play/c1.ts?token=t1&utc=${CATCHUP.start}&lutc=${CATCHUP.start + 600}`,
+    );
+
+    playlistMock.getByIndex.mockReturnValue({
+      ...CHANNEL,
+      catchupSource: 'http://host/catchup/c1/{utc}/{utc}?d={duration:60}',
+      catchupCorrection: 1,
+    });
+    player.play(0, CATCHUP);
+    await flush();
+    expect(video.src)
+      .toBe(`http://host/catchup/c1/${CATCHUP.start + 3600}/${CATCHUP.start + 3600}?d=2`);
+  });
+
+  it('reports an unknown catch-up type that falls back to the source template', async () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    playlistMock.getByIndex.mockReturnValue({ ...CHANNEL, catchup: 'custom' });
+    player.play(0, CATCHUP);
+    await flush();
+    expect(video.src).toBe(`http://host/catchup/c1?start=${CATCHUP.start}&end=${CATCHUP.end}`);
+    expect(info.mock.calls.map(args => args.join(' '))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('event=catchup.type.unknown fallback=default'),
+      ]),
+    );
+    info.mockRestore();
+  });
+
+  it('fills the current time in a live stream URL', async () => {
+    vi.setSystemTime(new Date(CATCHUP.start * 1000));
+    playlistMock.getByIndex.mockReturnValue({ ...CHANNEL, url: 'http://host/play/c1?now={lutc}' });
+    player.play(0);
+    await flush();
+    expect(video.src).toBe(`http://host/play/c1?now=${CATCHUP.start}`);
   });
 
   it('tries each Xtream catch-up candidate once in order', async () => {

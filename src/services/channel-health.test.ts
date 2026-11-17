@@ -61,6 +61,21 @@ describe('ChannelHealthService', () => {
     expect(cacheMock.setCachedChannelHealth).toHaveBeenCalledOnce();
   });
 
+  it('probes a live URL with its current-time variables filled', async () => {
+    vi.setSystemTime(new Date(1_000_000_000));
+    const fetchMock = vi.fn(async () =>
+      new Response(new Uint8Array([0x47, 0x40, 0x00, 0x10]), {
+        status: 200,
+        headers: { 'content-type': 'video/mp2t' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await ChannelHealthService.checkAll([channel('http://host/a?now={lutc}')]);
+
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe('http://host/a?now=1000000');
+    vi.useRealTimers();
+  });
+
   it('follows an HLS manifest to its first media segment', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(

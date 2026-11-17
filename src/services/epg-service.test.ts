@@ -1414,6 +1414,110 @@ describe('EpgService channel pre-filter', () => {
     expect(fetchMaybeGzipText).toHaveBeenCalledWith('http://a', expect.any(Number));
   });
 
+  describe('program catch-up ids', () => {
+    const withIds = (data: ParsedEpg): ParsedEpg => {
+      for (const id in data.programmes) {
+        data.programmes[id] = data.programmes[id].map(programme => ({ ...programme, catchupId: 'p1' }));
+      }
+      return data;
+    };
+    const plain = channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] });
+    const bravo = channel({ id: 'b', name: 'Bravo', playlistIds: ['a'] });
+    const vodAlpha = { ...plain, catchup: 'vod' };
+    // One app launch: restore the cache, then the launch's single refresh.
+    const launch = async (channels: Channel[]) => {
+      EpgService.reset();
+      await EpgService.restoreCached([source('http://a', ['a'])], channels);
+      vi.mocked(fetchMaybeGzipText).mockClear();
+      await EpgService.refresh();
+    };
+    // Serves the guide the last launch cached on the next one.
+    const cacheWritten = () => {
+      const calls = vi.mocked(setCachedEpg).mock.calls;
+      const [, data, filter] = calls[calls.length - 1];
+      vi.mocked(getCachedEpg).mockResolvedValue({ url: 'http://a', timestamp: NOON, data, filter: filter! });
+      vi.mocked(setCachedEpg).mockClear();
+      vi.mocked(fetchMaybeGzipText).mockClear();
+      fetchAndParseXMLTVMock.mockClear();
+    };
+
+    beforeEach(() => {
+      epgRefreshIntervalMock.mockReturnValue(null);
+      parseXMLTVMock.mockReturnValue({ ...parsed('a', 'Alpha', 'Cached'), channelCatalogComplete: true });
+    });
+
+    it('parses a cached guide again once a channel starts needing ids, keeping only its ids', async () => {
+      await launch([plain, bravo]);
+      cacheWritten();
+      parseXMLTVMock.mockReturnValue(withIds(parsed('a', 'Alpha', 'Fresh')));
+
+      // The same channel, now with a catch-up URL built from program ids.
+      EpgService.reset();
+      await EpgService.restoreCached([source('http://a', ['a'])], [vodAlpha, bravo]);
+      expect(EpgService.getNowPlaying(EpgService.findChannelId(vodAlpha)!)?.title).toBe('Cached');
+      expect(EpgService.catchupIdsKnown(vodAlpha)).toBe(false);
+      await EpgService.refresh();
+
+      expect(fetchMaybeGzipText).toHaveBeenCalledTimes(1);
+      const options = fetchAndParseXMLTVMock.mock.calls[0][2] as XMLTVParseOptions;
+      expect([...options.catchupIdChannelIds!]).toEqual(['a']);
+      expect([...options.catchupIdChannelNames!]).toEqual(['alpha']);
+      expect(EpgService.getNowPlaying(EpgService.findChannelId(vodAlpha)!)?.title).toBe('Fresh');
+      expect(EpgService.catchupIdsKnown(vodAlpha)).toBe(true);
+    });
+
+    it('keeps the ids of the guide channel a channel needing them is mapped to', async () => {
+      parseXMLTVMock.mockReturnValue(parsed('epg.8', 'Bravo', 'Mapped'));
+      const mappedId = `${encodeURIComponent('http://a')}::epg.8`;
+      channelOverrideMock.mockReturnValue({ epgChannelId: mappedId });
+      epgChannelIdsMock.mockReturnValue([mappedId]);
+      epgChannelIdsForMock.mockReturnValue([mappedId]);
+
+      await EpgService.load([source('http://a', ['a'])], [vodAlpha]);
+
+      const options = vi.mocked(parseXMLTVWithStats).mock.calls[0][1] as XMLTVParseOptions;
+      expect([...options.catchupIdChannelIds!].sort()).toEqual(['a', 'epg.8']);
+    });
+
+    it('does not vouch for a channel whose programs carry no ids at all', async () => {
+      await launch([vodAlpha]);
+      expect(EpgService.getNowPlaying(EpgService.findChannelId(vodAlpha)!)?.title).toBe('Cached');
+      expect(EpgService.catchupIdsKnown(vodAlpha)).toBe(false);
+    });
+
+    it('parses again when mappings swap between a channel needing ids and a plain one', async () => {
+      const x = (id: string) => `${encodeURIComponent('http://a')}::${id}`;
+      const vod = { ...vodAlpha, url: 'http://host/a' };
+      const plainBravo = { ...bravo, url: 'http://host/b' };
+      let mapping: Record<string, string> = { [channelKey(vod)]: x('x1'), [channelKey(plainBravo)]: x('x2') };
+      channelOverrideMock.mockImplementation(key => (mapping[key] ? { epgChannelId: mapping[key] } : null));
+      epgChannelIdsMock.mockImplementation(() => Object.values(mapping));
+      epgChannelIdsForMock.mockImplementation(() => Object.values(mapping));
+      await launch([vod, plainBravo]);
+      cacheWritten();
+
+      mapping = { [channelKey(vod)]: x('x2'), [channelKey(plainBravo)]: x('x1') };
+      await launch([vod, plainBravo]);
+
+      expect(fetchMaybeGzipText).toHaveBeenCalledTimes(1);
+      const options = fetchAndParseXMLTVMock.mock.calls[0][2] as XMLTVParseOptions;
+      expect(options.catchupIdChannelIds!.has('x2')).toBe(true);
+      expect(options.catchupIdChannelIds!.has('x1')).toBe(false);
+    });
+
+    it('trusts a cached guide parsed for the same channels needing ids', async () => {
+      parseXMLTVMock.mockReturnValue(withIds({ ...parsed('a', 'Alpha', 'Cached'), channelCatalogComplete: true }));
+      await launch([vodAlpha, bravo]);
+      cacheWritten();
+
+      await launch([vodAlpha, bravo]);
+
+      expect(fetchMaybeGzipText).not.toHaveBeenCalled();
+      expect(setCachedEpg).not.toHaveBeenCalled();
+      expect(EpgService.catchupIdsKnown(vodAlpha)).toBe(true);
+    });
+  });
+
   it('rebuilds derived indexes when an expired source is refreshed', async () => {
     parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Initial'));
     await EpgService.load([source('http://a', ['a'])]);

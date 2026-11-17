@@ -158,8 +158,8 @@ eviction algorithm.
 
 | Object store | Key path | Indexes | Contents |
 | --- | --- | --- | --- |
-| `playlist-cache` | `key` | `expiresAt`, `lastAccessedAt` | Key `combined`: payload version, playlist-source signature, derived EPG sources, timestamp, and chunk and channel counts. The parsed `Channel[]` (playback URLs/headers/catch-up metadata included) sits in chunk records `<key>#000000`, … with the same timestamp, a small first chunk and larger ones after, so a launch shows the first channels while the rest are read; eviction and clearing remove the chunks with the head, which alone holds the entry's accounting. |
-| `epg-cache` | `url` | `expiresAt`, `lastAccessedAt` | Parsed XMLTV channels, aliases/icons, program start/stop/title/description/category/icon, feed offset, optional channel filter, and timestamp |
+| `playlist-cache` | `key` | `expiresAt`, `lastAccessedAt` | Key `combined-v5`: playlist-source signature, derived EPG sources, timestamp, and chunk and channel counts. The parsed `Channel[]` (playback URLs/headers/catch-up metadata included) sits in chunk records `<key>#000000`, … with the same timestamp, a small first chunk and larger ones after, so a launch shows the first channels while the rest are read; eviction and clearing remove the chunks with the head, which alone holds the entry's accounting. Entries under any older key, with their chunks, are removed once per launch. |
+| `epg-cache` | `url` | `expiresAt`, `lastAccessedAt` | Parsed XMLTV channels, aliases/icons, program start/stop/title/description/category/icon, feed offset, optional channel filter (including the channels whose catch-up needs program ids), and timestamp. The guide is stored packed with the format marker `epg-packed-v2`, plus a sparse `catchupIds` block holding XMLTV `catchup-id`s only for channels whose catch-up URL needs them; a record in any other format is a miss and is removed when read |
 | `catalog-cache` | `key` | `expiresAt`, `lastAccessedAt` | Xtream categories, VOD/series lists and details, and media-container probes |
 | `stream-mime-cache` | `key` | `expiresAt`, `lastAccessedAt` | Normalized provider route mapped to detected MIME and probe time; accounted and evicted in the `catalog` category |
 | `subtitle-cache` | `key` | `expiresAt`, `lastAccessedAt` | Provider/result key and downloaded SRT, WebVTT, ASS, or SSA text |
@@ -210,15 +210,17 @@ concurrent updates cannot apply byte deltas to stale metadata. If metadata is
 missing or predates this envelope, the app scans all cache stores and rebuilds
 it.
 
-The combined playlist uses the fixed key `combined`, payload version 2, and an
+The combined playlist uses the key `combined-v5` and an
 FNV-1a signature of the configured playlist JSON. A source edit therefore
-invalidates a structurally valid but now unrelated parsed playlist.
+invalidates a structurally valid but now unrelated parsed playlist. Changing
+the key when the parsed `Channel` shape changes discards older caches; they
+are parsed again from the source once.
 
 ### Cache freshness
 
 | Category | Refresh setting | Read behavior |
 | --- | --- | --- |
-| Playlist | Off, 1, 3, 6, 12, or 24 hours; default 6 | Requires matching payload version, source signature, and non-empty channels. Startup uses a matching cache at any age; the current setting is compared with the stored timestamp to schedule the next refresh, which runs at once in the background when the cache is overdue. Off keeps a matching cache until its source configuration changes or the user refreshes all data |
+| Playlist | Off, 1, 3, 6, 12, or 24 hours; default 6 | Requires the current cache key, a matching source signature, and non-empty channels. Startup uses a matching cache at any age; the current setting is compared with the stored timestamp to schedule the next refresh, which runs at once in the background when the cache is overdue. Off keeps a matching cache until its source configuration changes or the user refreshes all data |
 | Program guide | Off, 1, 3, 6, 12, or 24 hours; default 6 | Each source retains its own timestamp. Off stops periodic refresh and ignores age, but a missing or structurally invalid source is still downloaded once so a cold cache can populate |
 | Xtream catalog | 1, 3, 6, 12, or 24 hours; default 6 | Callers compare each entry's timestamp with the current setting. An expired list (categories, category items, or the whole Search catalog) is returned at once and re-fetched in the background for the next open; an expired detail is re-fetched before it is shown. There is no Off option, so Movies, Series, and Search cannot remain permanently stale |
 | Media probe | No expiry | Stored in the catalog category and still subject to LRU/budget cleanup |

@@ -19,6 +19,10 @@ export interface XMLTVParseOptions {
   retainChannelCatalog?: boolean;
   /** Stop retaining programmes past this many; unlimited when absent. */
   maxProgrammes?: number;
+  /** Keep program catch-up ids only for these channels (ids, and lowercased
+   *  display names as in `channelNames`); every channel's when both are absent. */
+  catchupIdChannelIds?: ReadonlySet<string>;
+  catchupIdChannelNames?: ReadonlySet<string>;
 }
 
 export interface XMLTVRecordSink {
@@ -59,6 +63,7 @@ interface ProgrammeAttributes {
   channelId: string | undefined;
   start: string | undefined;
   stop: string | undefined;
+  catchupId: string | undefined;
 }
 
 export class XMLTVStreamParser {
@@ -89,6 +94,9 @@ export class XMLTVStreamParser {
   private readonly minTime: number;
   private readonly maxTime: number;
   private readonly maxProgrammes: number;
+  // Channels whose program catch-up ids are kept; null keeps every channel's.
+  private readonly catchupIdChannels: Set<string> | null;
+  private readonly readsCatchupIds: boolean;
   private tzOffsetMinutes: number | null = null;
   private sourceName: string | undefined;
 
@@ -103,6 +111,12 @@ export class XMLTVStreamParser {
     const { channelIds, channelNames } = options;
     const filtering = (channelIds?.size ?? 0) > 0 || (channelNames?.size ?? 0) > 0;
     this.acceptedIds = filtering ? new Set(channelIds ?? []) : null;
+    const { catchupIdChannelIds, catchupIdChannelNames } = options;
+    const limited = !!catchupIdChannelIds || !!catchupIdChannelNames;
+    this.catchupIdChannels = limited ? new Set(catchupIdChannelIds ?? []) : null;
+    this.readsCatchupIds = !limited
+      || (catchupIdChannelIds?.size ?? 0) > 0
+      || (catchupIdChannelNames?.size ?? 0) > 0;
   }
 
   write(chunk: string): void {
@@ -139,6 +153,16 @@ export class XMLTVStreamParser {
 
   acceptedChannelIds(): ReadonlySet<string> {
     return this.acceptedIds ?? new Set();
+  }
+
+  /** The options an order retry parses with: the channels found by name,
+   *  for programmes and for catch-up ids, known up front. */
+  retryOptions(options: XMLTVParseOptions): XMLTVParseOptions {
+    return {
+      ...options,
+      channelIds: this.acceptedChannelIds(),
+      ...(this.catchupIdChannels ? { catchupIdChannelIds: this.catchupIdChannels } : {}),
+    };
   }
 
   private drain(final: boolean): void {
@@ -263,6 +287,11 @@ export class XMLTVStreamParser {
         this.acceptedIds.add(id);
       }
     }
+    const catchupNames = this.options.catchupIdChannelNames;
+    if (this.catchupIdChannels && catchupNames?.size
+      && displayNames.some((value) => catchupNames.has(value.toLowerCase()))) {
+      this.catchupIdChannels.add(id);
+    }
     const retainedNames = retainDisplayNames(displayNames, this.options.channelNames);
     const names = copyStrings(retainedNames.length ? retainedNames : [id]);
     const icon = copyString(readElementAttribute(body, 'icon', 'src') ?? '');
@@ -283,6 +312,7 @@ export class XMLTVStreamParser {
       element.tagStart + 1,
       element.tagEnd + 1,
       this.acceptedIds,
+      this.readsCatchupIds,
     );
     const channelId = attributes.channelId;
     if (!channelId) {
@@ -318,12 +348,19 @@ export class XMLTVStreamParser {
     }
 
     const body = this.buffer.slice(element.bodyStart, element.bodyEnd);
-    const [title, description, category, icon] = copyStrings([
+    const keptCatchupId = attributes.catchupId
+      && (!this.catchupIdChannels || this.catchupIdChannels.has(channelId))
+      ? attributes.catchupId
+      : '';
+    const texts = [
       readElementText(body, 'title'),
       readElementText(body, 'desc'),
       readElementText(body, 'category'),
       readElementAttribute(body, 'icon', 'src') ?? '',
-    ]);
+    ];
+    // Copied with the texts, so it no longer pins the XML buffer.
+    if (keptCatchupId) texts.push(keptCatchupId);
+    const [title, description, category, icon, catchupId] = copyStrings(texts);
     const programme: Programme = {
       start: new Date(start.time),
       stop: new Date(stop.time),
@@ -332,6 +369,7 @@ export class XMLTVStreamParser {
       category,
       icon,
     };
+    if (catchupId) programme.catchupId = catchupId;
     const previousStart = this.lastStartByChannel.get(channelId);
     if (previousStart !== undefined && start.time < previousStart) {
       this.unsortedChannels.add(channelId);
@@ -397,10 +435,7 @@ export function parseXMLTVWithStats(
   let data = parser.finish();
   if (!parser.needsOrderRetry()) return { data, stats: parser.stats };
 
-  const retry = new XMLTVStreamParser({
-    ...options,
-    channelIds: parser.acceptedChannelIds(),
-  });
+  const retry = new XMLTVStreamParser(parser.retryOptions(options));
   retry.write(xmlString);
   data = retry.finish();
   return { data, stats: retry.stats };
@@ -521,19 +556,44 @@ function readAttribute(
   return undefined;
 }
 
+const ATTRIBUTE_CHANNEL = 1;
+const ATTRIBUTE_START = 2;
+const ATTRIBUTE_STOP = 3;
+const ATTRIBUTE_CATCHUP_ID = 4;
+
+function nameMatches(value: string, from: number, name: string): boolean {
+  for (let i = 0; i < name.length; i++) {
+    if (value.charCodeAt(from + i) !== name.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+// Which programme attribute a name is, without slicing it out of the buffer.
+function programmeAttribute(value: string, from: number, to: number): number {
+  switch (to - from) {
+    case 7: return nameMatches(value, from, 'channel') ? ATTRIBUTE_CHANNEL : 0;
+    case 5: return nameMatches(value, from, 'start') ? ATTRIBUTE_START : 0;
+    case 4: return nameMatches(value, from, 'stop') ? ATTRIBUTE_STOP : 0;
+    case 10: return nameMatches(value, from, 'catchup-id') ? ATTRIBUTE_CATCHUP_ID : 0;
+    default: return 0;
+  }
+}
+
 function readProgrammeAttributes(
   value: string,
   start: number,
   end: number,
   acceptedIds: ReadonlySet<string> | null,
+  readsCatchupId: boolean,
 ): ProgrammeAttributes {
   const result: ProgrammeAttributes = {
     channelId: undefined,
     start: undefined,
     stop: undefined,
+    catchupId: undefined,
   };
   let cursor = start;
-  let remaining = 3;
+  let remaining = readsCatchupId ? 4 : 3;
   while (cursor < end && remaining > 0) {
     while (cursor < end && isSpace(value.charCodeAt(cursor))) cursor++;
     const nameStart = cursor;
@@ -542,7 +602,8 @@ function readProgrammeAttributes(
       cursor++;
       continue;
     }
-    const name = value.slice(nameStart, cursor);
+    let kind = programmeAttribute(value, nameStart, cursor);
+    if (kind === ATTRIBUTE_CATCHUP_ID && !readsCatchupId) kind = 0;
     while (cursor < end && isSpace(value.charCodeAt(cursor))) cursor++;
     if (value.charCodeAt(cursor) !== 61) continue;
     cursor++;
@@ -551,17 +612,22 @@ function readProgrammeAttributes(
     if (quote !== 34 && quote !== 39) continue;
     const valueStart = ++cursor;
     while (cursor < end && value.charCodeAt(cursor) !== quote) cursor++;
-    const attributeValue = decodeEntities(value.slice(valueStart, cursor));
-    if (name === 'channel') {
-      result.channelId = attributeValue;
-      remaining--;
-      if (acceptedIds && !acceptedIds.has(attributeValue)) return result;
-    } else if (name === 'start') {
-      result.start = attributeValue;
-      remaining--;
-    } else if (name === 'stop') {
-      result.stop = attributeValue;
-      remaining--;
+    if (kind) {
+      const attributeValue = decodeEntities(value.slice(valueStart, cursor));
+      if (kind === ATTRIBUTE_CHANNEL) {
+        if (result.channelId === undefined) remaining--;
+        result.channelId = attributeValue;
+        if (acceptedIds && !acceptedIds.has(attributeValue)) return result;
+      } else if (kind === ATTRIBUTE_START) {
+        if (result.start === undefined) remaining--;
+        result.start = attributeValue;
+      } else if (kind === ATTRIBUTE_STOP) {
+        if (result.stop === undefined) remaining--;
+        result.stop = attributeValue;
+      } else {
+        if (result.catchupId === undefined) remaining--;
+        result.catchupId = attributeValue;
+      }
     }
     cursor++;
   }

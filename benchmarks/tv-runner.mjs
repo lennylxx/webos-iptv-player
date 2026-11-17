@@ -702,7 +702,7 @@ async function runTvBenchmark() {
           });
           const tx = db.transaction('playlist-cache', 'readonly');
           const cached = await new Promise((resolve, reject) => {
-            const request = tx.objectStore('playlist-cache').get('combined-v4');
+            const request = tx.objectStore('playlist-cache').get('combined-v5');
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });
