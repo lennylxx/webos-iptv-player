@@ -15,7 +15,11 @@ const SYNONYM_GROUPS = [
 
 const STOP_WORDS = new Set(['find', 'me', 'show', 'watch', 'for', 'please', 'channel', 'channels', 'program', 'programs']);
 
+// NFD leaves ASCII as is and strips no mark from it, so skip both there.
+const ASCII_ONLY = /^[\x00-\x7f]*$/;
+
 function fold(value: string): string {
+  if (ASCII_ONLY.test(value)) return value.toLowerCase();
   return stripCombiningDiacritics(value.normalize('NFD')).toLowerCase();
 }
 

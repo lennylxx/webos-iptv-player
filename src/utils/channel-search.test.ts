@@ -1,7 +1,9 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
 import type { Channel } from '../types';
+import { stripCombiningDiacritics } from './unicode-text';
 import {
+  foldSearchText,
   prepareSearchItems,
   prepareNameSearchItems,
   rankByName,
@@ -156,5 +158,30 @@ describe('rankByFields', () => {
     const result = rankPreparedTopK(prepared, 'alpha', 2);
     expect(result.items).toEqual(items.slice(0, 2));
     expect(result.hasMore).toBe(true);
+  });
+});
+
+describe('foldSearchText', () => {
+  const slowFold = (value: string) => stripCombiningDiacritics(value.normalize('NFD')).toLowerCase();
+
+  it('folds ASCII exactly as the full Unicode path does', () => {
+    let all = '';
+    for (let code = 0; code < 128; code++) all += String.fromCharCode(code);
+    const corpus = [all, '', ' ', 'ABC News HD', 'A+B_C-D.E/F\\G', '\t\r\n\u0000\u007f', 'MiXeD 123 !?#'];
+    let seed = 1;
+    for (let i = 0; i < 2000; i++) {
+      let value = '';
+      for (let j = i % 24; j > 0; j--) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        value += String.fromCharCode(seed % 128);
+      }
+      corpus.push(value);
+    }
+    for (const value of corpus) expect(foldSearchText(value)).toBe(slowFold(value));
+  });
+
+  it('still strips accents from non-ASCII text', () => {
+    expect(foldSearchText('Caf\u00c9 Ni\u00f1o')).toBe('cafe nino');
+    expect(foldSearchText('A\u0301B')).toBe('ab');
   });
 });

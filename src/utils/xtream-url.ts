@@ -159,6 +159,20 @@ function simpleLiveUrlParts(url: string, livePath: boolean): XtreamLiveUrlParts 
   const stream = STREAM_PART.exec(parts[usernameIndex + 2]);
   if (!stream || (!prefixed && stream[2])) return null;
   if (livePath && !NUMERIC_STREAM_ID.test(stream[1])) return null;
+  const origin = simpleOrigin(match);
+  if (origin === undefined) return undefined;
+  return {
+    credentials: {
+      baseUrl: origin,
+      username: parts[usernameIndex],
+      password: parts[usernameIndex + 1],
+    },
+    streamId: stream[1],
+    output: stream[2]?.toLowerCase() === 'm3u8' ? 'm3u8' : 'ts',
+  };
+}
+
+function simpleOrigin(match: RegExpExecArray): string | undefined {
   const authority = `${match[1]}://${match[2]}`;
   let origin = ORIGINS.get(authority);
   if (origin === undefined) {
@@ -169,15 +183,19 @@ function simpleLiveUrlParts(url: string, livePath: boolean): XtreamLiveUrlParts 
     }
     if (ORIGINS.size < MAX_ORIGINS) ORIGINS.set(authority, origin);
   }
-  return {
-    credentials: {
-      baseUrl: origin,
-      username: parts[usernameIndex],
-      password: parts[usernameIndex + 1],
-    },
-    streamId: stream[1],
-    output: stream[2]?.toLowerCase() === 'm3u8' ? 'm3u8' : 'ts',
-  };
+  return origin;
+}
+
+const DOT_SEGMENT = /\/\.\.?(?:\/|$)/;
+
+/** The pathname the URL parser gives a plain http(s) URL, without parsing
+ *  one; undefined leaves the URL to the parser. */
+export function simpleUrlPathname(url: string): string | undefined {
+  const match = SIMPLE_HTTP_URL.exec(url);
+  if (!match) return undefined;
+  const path = match[3] || '/';
+  if (DOT_SEGMENT.test(path) || simpleOrigin(match) === undefined) return undefined;
+  return path;
 }
 
 /** VOD (movie) stream URL: `{base}/movie/{user}/{pass}/{streamId}.{ext}`.

@@ -111,6 +111,20 @@ describe('group-name fallback', () => {
     expect(keep('Bravo')).toBe(false);
   });
 
+  it('answers the same for repeated names and past its cache cap', () => {
+    const groups: string[] = [];
+    for (let i = 0; i < 6000; i++) groups.push((i % 3 ? ' Group ' : 'GROUP  ') + String(i % 5000));
+    for (const mode of ['include', 'exclude'] as const) {
+      const filter = { mode, names: ['group 1', 'group 4999', 'group 2500'] };
+      const keep = createGroupNameMatcher(filter);
+      for (let pass = 0; pass < 2; pass++) {
+        for (const group of groups) {
+          expect(keep(group)).toBe(filter.names.indexOf(normalizeGroupName(group)) >= 0 === (mode === 'include'));
+        }
+      }
+    }
+  });
+
   it('returns null when the category list is unavailable', () => {
     expect(liveCategoryGroupFilter({ mode: 'include', ids: ['c1'] }, [])).toBeNull();
   });

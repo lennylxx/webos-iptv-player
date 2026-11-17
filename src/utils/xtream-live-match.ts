@@ -1,6 +1,7 @@
 import { stableStreamUrl } from './channel';
 import {
   normalizeXtreamBaseUrl,
+  simpleUrlPathname,
   xtreamCredentialsFromLiveUrl,
 } from './xtream-url';
 
@@ -144,15 +145,28 @@ function explicitQueryStreamId(value: string): string {
   }
 }
 
-function isExplicitXtreamNonLiveUrl(value: string): boolean {
-  try {
-    const parts = new URL(value).pathname.split('/').filter(Boolean);
-    if (parts.length < 4) return false;
-    const kind = parts[parts.length - 4].toLowerCase();
-    return kind === 'movie' || kind === 'series' || kind === 'vod';
-  } catch {
-    return false;
+// The fourth-last non-empty segment of a pathname, or ''.
+function fourthLastSegment(path: string): string {
+  let found = 0;
+  for (let end = path.length; end > 0;) {
+    const slash = path.lastIndexOf('/', end - 1);
+    if (slash < end - 1 && ++found === 4) return path.slice(slash + 1, end);
+    end = slash;
   }
+  return '';
+}
+
+function isExplicitXtreamNonLiveUrl(value: string): boolean {
+  let path = simpleUrlPathname(value);
+  if (path === undefined) {
+    try {
+      path = new URL(value).pathname;
+    } catch {
+      return false;
+    }
+  }
+  const kind = fourthLastSegment(path).toLowerCase();
+  return kind === 'movie' || kind === 'series' || kind === 'vod';
 }
 
 function xtreamBasePathPrefix(baseUrl: string): string {

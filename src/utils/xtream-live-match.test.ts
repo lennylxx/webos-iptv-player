@@ -36,6 +36,13 @@ describe('createXtreamLiveStreamIdResolver', () => {
     expect(prefixed('https://cdn/live/u1/p1/101.ts')).toBe('101');
   });
 
+  it('rejects a VOD route that a path-prefixed portal would read as a bare Live path', () => {
+    const prefixed = createXtreamLiveStreamIdResolver([{ streamId: '101', directSource: '' }], 'http://host/movie');
+    expect(prefixed('http://host/movie/u1/p1/101')).toBe('');
+    expect(prefixed('http://host/movie//u1/p1/101/')).toBe('');
+    expect(prefixed('http://host/movie/u1/p1/./101')).toBe('');
+  });
+
   it('rejects query-id collisions on explicit VOD routes', () => {
     expect(resolveStreamId('http://host/movie/u1/p1/201.mp4?stream_id=101')).toBe('');
     expect(resolveStreamId('http://host/series/u1/p1/201.mkv?stream=102')).toBe('');

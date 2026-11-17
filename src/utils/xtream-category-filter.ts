@@ -96,8 +96,20 @@ export function liveCategoryGroupFilter(
   return categories.length ? { mode: filter.mode, names } : null;
 }
 
+// Group names repeat across a playlist's channels; a cap keeps a playlist
+// of unique names from growing the matcher's cache without bound.
+const GROUP_MATCH_CACHE_MAX = 4096;
+
 export function createGroupNameMatcher(filter: XtreamGroupNameFilter): (group: string) => boolean {
   const names = new Set(filter.names);
   const include = filter.mode === 'include';
-  return group => names.has(normalizeGroupName(group)) === include;
+  const cache = new Map<string, boolean>();
+  return group => {
+    let keep = cache.get(group);
+    if (keep === undefined) {
+      keep = names.has(normalizeGroupName(group)) === include;
+      if (cache.size < GROUP_MATCH_CACHE_MAX) cache.set(group, keep);
+    }
+    return keep;
+  };
 }

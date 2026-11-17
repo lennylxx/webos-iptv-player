@@ -10,6 +10,7 @@ import {
   xtreamCatchupSource,
   xtreamCatchupSources,
   xtreamCredentialsFromLiveUrl,
+  simpleUrlPathname,
   formatXtreamCatchupStart,
   normalizeXtreamLiveOutputPreference,
   resolveXtreamLiveOutput,
@@ -296,5 +297,60 @@ describe('Xtream catch-up URLs', () => {
       'Invalid/Zone',
       120,
     )).toBe('2026-07-21:21-30');
+  });
+});
+
+describe('simpleUrlPathname', () => {
+  it('gives the URL parser\'s pathname for plain URLs and defers the rest', () => {
+    for (const url of [
+      'HTTP://U1:P1@HOST:8080/MOVIE/u1/p1/101.mp4',
+      'https://host',
+      'http://host//series//u1/p1/2/',
+      'http://u1@p1@host/movie/u1/p1/1',
+      'http://host/.a/b./~x;y=1',
+    ]) {
+      expect(simpleUrlPathname(url)).toBe(new URL(url).pathname);
+    }
+    for (const url of [
+      'http://[::1]:80/movie/u1/p1/1',
+      'http://host/a/../movie/u1/p1/1',
+      'http://host/./movie/u1/p1/1',
+      'http://host/movie/u1/p1/..',
+      'http://host/%2e%2e/movie/u1/p1/1',
+      'http://host/movie/u1/p1/1?x=1',
+      'http://host/movie/u1/p1/1#f',
+      'http://host:99999/movie/u1/p1/1',
+      'ftp://host/movie/u1/p1/1',
+      'http://host/a b',
+      'http:\\\\host/a',
+    ]) {
+      expect(simpleUrlPathname(url)).toBeUndefined();
+    }
+  });
+
+  it('matches the URL parser across a randomized corpus', () => {
+    const schemes = ['http', 'HTTP', 'https', 'HtTpS', 'ftp', 'http:'];
+    const userinfo = ['', 'u1:p1@', 'u1@', '@', ':@', 'u1:p@1@'];
+    const hosts = ['host', 'HOST', 'h.test', '1.2.3.4', '256.1.1.1', '0x7f.1', '[::1]', 'a..b', '', 'h_1', 'h!'];
+    const ports = ['', ':80', ':8080', ':', ':99999', ':0x', ':443'];
+    const segments = ['movie', 'MOVIE', 'Series', 'vod', 'live', 'u1', 'p1', '101.ts', '.', '..', '%2e',
+      '%2E%2E', 'a%20b', '', ' ', '\\', 'x;y', "a'b", '~', '\u00e9', ':', '@', '.a', 'a.', '...'];
+    const suffixes = ['', '', '', '/', '?q=1', '#f', '?a/b#c'];
+    let seed = 7;
+    const pick = <T>(list: readonly T[]): T => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return list[seed % list.length];
+    };
+    let simple = 0;
+    for (let i = 0; i < 20000; i++) {
+      let path = '';
+      for (let j = i % 7; j > 0; j--) path += '/' + pick(segments);
+      const url = pick(schemes) + '://' + pick(userinfo) + pick(hosts) + pick(ports) + path + pick(suffixes);
+      const fast = simpleUrlPathname(url);
+      if (fast === undefined) continue;
+      simple++;
+      expect(fast).toBe(new URL(url).pathname);
+    }
+    expect(simple).toBeGreaterThan(1000);
   });
 });
