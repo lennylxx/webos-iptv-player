@@ -1205,7 +1205,6 @@ function applyExtInfHeaders(channel: Channel, attrs: Record<string, string>): vo
   }
 }
 
-const HEADER_SUFFIX = /^!?[A-Za-z0-9_.-]+=[^&]*(?:&!?[A-Za-z0-9_.-]+=[^&]*)*$/;
 const KNOWN_SUFFIX_HEADERS = new Set([
   'authorization',
   'cookie',
@@ -1215,17 +1214,40 @@ const KNOWN_SUFFIX_HEADERS = new Set([
   'user-agent',
 ]);
 
-function suffixKey(pair: string): string {
-  return decodeHeaderPart(pair.slice(0, pair.indexOf('='))).trim().replace(/^!/, '').toLowerCase();
+function isSuffixKeyChar(code: number): boolean {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+    || code === 95 || code === 46 || code === 45;
+}
+
+// The lowercased name of the `!?Name=` pair starting at `start`, or null.
+function suffixPairKey(text: string, start: number): string | null {
+  let i = text.charCodeAt(start) === 33 ? start + 1 : start;
+  const keyStart = i;
+  while (i < text.length && isSuffixKeyChar(text.charCodeAt(i))) i++;
+  if (i === keyStart || text.charCodeAt(i) !== 61) return null;
+  return text.slice(keyStart, i).toLowerCase();
 }
 
 /** Index of the Kodi-style `|Name=value&Name2=value2` suffix, or -1. Only a
  *  suffix naming a known header counts, so a `|` inside the URL stays put. */
 export function headerSuffixStart(location: string): number {
-  for (let pipe = location.lastIndexOf('|'); pipe > 0; pipe = location.lastIndexOf('|', pipe - 1)) {
-    const suffix = location.slice(pipe + 1);
-    if (!HEADER_SUFFIX.test(suffix)) continue;
-    if (suffix.split('&').some(pair => KNOWN_SUFFIX_HEADERS.has(suffixKey(pair)))) return pipe;
+  // Walk the '&'-separated pairs from the end, so each pipe costs only its
+  // own name rather than a rescan of the whole suffix after it.
+  let known = false;
+  let end = location.length;
+  let pipe = location.lastIndexOf('|');
+  while (end > 0) {
+    if (pipe <= 0) return -1;
+    const amp = location.lastIndexOf('&', end - 1);
+    for (; pipe > amp && pipe > 0; pipe = location.lastIndexOf('|', pipe - 1)) {
+      const key = suffixPairKey(location, pipe + 1);
+      if (key !== null && (known || KNOWN_SUFFIX_HEADERS.has(key))) return pipe;
+    }
+    if (amp < 0) return -1;
+    const key = suffixPairKey(location, amp + 1);
+    if (key === null) return -1;
+    known = known || KNOWN_SUFFIX_HEADERS.has(key);
+    end = amp;
   }
   return -1;
 }

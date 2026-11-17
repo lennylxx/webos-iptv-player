@@ -82,6 +82,13 @@ describe('service log', () => {
     expect(files['/t/s.log']).not.toContain('u1');
   });
 
+  it('scans a long dotted token without a scheme in linear time', () => {
+    const text = 'a.'.repeat(32000) + ' http://u1:p1@host/x';
+    const started = Date.now();
+    expect(scrubServiceLogText(text)).toBe('a.'.repeat(32000) + ' http://host/...');
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
   it('masks credential-like values', () => {
     expect(scrubServiceLogText(
       "{ headers: { Authorization: 'Bearer t1', Cookie: 'c1' }, password: 'p1' }",

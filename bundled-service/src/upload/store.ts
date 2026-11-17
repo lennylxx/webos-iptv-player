@@ -46,13 +46,15 @@ export function resolveDataDir(envOverride?: string): string {
   return fallback;
 }
 
-function sanitizeId(name: string): string {
+export function sanitizeId(name: string): string {
   const base = String(name).replace(/\.m3u8?$/i, '');
-  const slug = base
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
+  const dashed = base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+  // A loop, not /^-+|-+$/, which rescans a long inner run of '-' from each dash.
+  let start = 0;
+  let end = dashed.length;
+  while (start < end && dashed.charAt(start) === '-') start++;
+  while (end > start && dashed.charAt(end - 1) === '-') end--;
+  const slug = dashed.slice(start, end).slice(0, 60);
   return isValidUploadId(slug) ? slug : 'playlist';
 }
 

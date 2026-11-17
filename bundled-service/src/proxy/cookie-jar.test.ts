@@ -29,6 +29,16 @@ describe('cookie jar', () => {
     expect(jar.drops()).toEqual({});
   });
 
+  it('trims a cookie value with a long inner run of spaces in linear time', () => {
+    const jar = createCookieJar();
+    const url = at('http://h.test/a/b.m3u8');
+    const value = 'a' + ' '.repeat(80000) + 'a';
+    const started = Date.now();
+    jar.store(['s=' + value + ' \t'], url);
+    expect(jar.header(url, ' \to=' + value + '\t ')).toBe('o=' + value + '; s=' + value);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
   it('counts each cookie it cannot honor by reason', () => {
     const jar = createCookieJar();
     jar.store(['=x', 'noequals', 's=1; Secure', 'x=1; Domain=other.test'], at('http://h.test/'));

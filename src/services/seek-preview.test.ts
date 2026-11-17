@@ -123,6 +123,22 @@ describe('thumbnail tracks', () => {
       { start: 3606, end: 3612, url: 'http://host/other.png', tile: null },
     ]);
   });
+
+  it('keeps cue timings after a leading label and attributes after a quoted comma', () => {
+    expect(parseThumbnailVtt('WEBVTT\n\nc1 00:01.000 --> 00:02.000 align:start\na.jpg', 'http://host/v.vtt'))
+      .toEqual([{ start: 1, end: 2, url: 'http://host/a.jpg', tile: null }]);
+    const master = '#EXT-X-IMAGE-STREAM-INF:CODECS="a,B=1",  RESOLUTION=320x180,URI="i.m3u8"';
+    expect(pickHlsImageStream(master, 'http://host/m.m3u8', 320)).toBe('http://host/i.m3u8');
+  });
+
+  it('scans long digit and attribute-name runs in linear time', () => {
+    const started = Date.now();
+    expect(parseThumbnailVtt('WEBVTT\n\n' + '1'.repeat(80000) + ' x -->\na.jpg', 'http://host/v.vtt'))
+      .toEqual([]);
+    expect(pickHlsImageStream('#EXT-X-IMAGE-STREAM-INF:' + 'A'.repeat(80000), 'http://host/m.m3u8', 320))
+      .toBe('');
+    expect(Date.now() - started).toBeLessThan(500);
+  });
 });
 
 describe('SeekPreview', () => {

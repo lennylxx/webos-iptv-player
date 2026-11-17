@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   decodePlaylistBytes,
   detectPlaylistFormat,
+  headerSuffixStart,
   M3UStreamParser,
   parseM3U,
   parseM3UBytes,
@@ -612,6 +613,27 @@ describe('parseM3U', () => {
     expect(channels[0].httpHeaders).toBeUndefined();
     expect(channels[1].httpHeaders).toEqual({ Referer: 'http://host/' });
     expect(channels[2].httpHeaders).toEqual({ 'User-Agent': 'Agent|1' });
+  });
+
+  it('finds the outermost pipe whose pairs are all Name=value and one names a known header', () => {
+    expect(headerSuffixStart('http://host/a|x=1&!Referer=r')).toBe(13);
+    expect(headerSuffixStart('http://host/a|Cookie=c|x=1&b c=2')).toBe(-1);
+    expect(headerSuffixStart('http://host/a|Cookie=c&x=1|y=2')).toBe(13);
+    expect(headerSuffixStart('http://host/a|origin=o|x=1')).toBe(13);
+    expect(headerSuffixStart('http://host/a|x=1|!=2')).toBe(-1);
+    expect(headerSuffixStart('|Referer=r')).toBe(-1);
+  });
+
+  it('finds a header suffix among many pipes in linear time', () => {
+    const line = 'http://host/a' + '|x='.repeat(80000);
+    const started = Date.now();
+    expect(headerSuffixStart(line)).toBe(-1);
+    expect(headerSuffixStart(line + '&Referer=r')).toBe(line.lastIndexOf('|'));
+    const pairs = 'http://host/a?' + 'x=1&'.repeat(100000) + 'x=1';
+    expect(headerSuffixStart(pairs)).toBe(-1);
+    expect(headerSuffixStart('|' + pairs)).toBe(-1);
+    expect(headerSuffixStart('http://host/a|' + 'x=1&'.repeat(100000) + 'Referer=r')).toBe(13);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 
   it('keeps an unencoded query inside a pipe Referer intact', () => {

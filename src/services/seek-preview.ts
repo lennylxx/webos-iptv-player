@@ -186,7 +186,9 @@ interface ImageSegment {
 
 function hlsAttrs(line: string): Record<string, string> {
   const out: Record<string, string> = {};
-  const re = /([A-Z0-9-]+)=("[^"]*"|[^,]*)/g;
+  // A name starts the list or follows its comma, so a long run of name
+  // characters is scanned once rather than from each of its offsets.
+  const re = /(?:^|,)\s*([A-Z0-9-]+)=("[^"]*"|[^,]*)/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(line))) out[match[1]] = match[2].replace(/^"|"$/g, '');
   return out;
@@ -293,7 +295,7 @@ export function parseThumbnailVtt(text: string, url: string): VttCue[] {
     const lines = block.split('\n');
     const timing = lines.findIndex(line => line.indexOf('-->') >= 0);
     if (timing < 0) continue;
-    const match = lines[timing].match(/([\d:.]+)\s+-->\s+([\d:.]+)/);
+    const match = lines[timing].match(/(?:^|[^\d:.])([\d:.]+)\s+-->\s+([\d:.]+)/);
     const payload = (lines[timing + 1] || '').trim();
     if (!match || !payload) continue;
     const hash = payload.indexOf('#');

@@ -33,7 +33,7 @@ const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 function trim(value: string): string {
-  return value.replace(/^[\s\t]+|[\s\t]+$/g, '');
+  return value.trim();
 }
 
 function defaultPath(path: string): string {

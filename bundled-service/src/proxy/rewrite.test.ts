@@ -131,6 +131,16 @@ describe('rewriteDash', () => {
     expect(out).toBe('<MPD><BaseURL>' + PREFIX + '/http/final/live/seg/</BaseURL><Period/></MPD>');
   });
 
+  it('passes an unclosed comment, CDATA section, PI, or declaration through in linear time', () => {
+    for (const opener of ['<!--x>', '<![CDATA[x>', '<?x>', '<!x']) {
+      const text = '<MPD>' + opener.repeat(100000);
+      const started = Date.now();
+      const out = rewriteDash(text, 'http://origin/live/m.mpd', false, map);
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(out).toBe(text);
+    }
+  });
+
   it('clamps a relative segment URL whose dot segments climb above the root', () => {
     const text = '<MPD><Period><SegmentList><SegmentURL media="../../../s1.m4s"/>'
       + '<SegmentURL media="../s2.m4s"/></SegmentList></Period></MPD>';

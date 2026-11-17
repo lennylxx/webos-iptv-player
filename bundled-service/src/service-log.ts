@@ -9,9 +9,10 @@ const RETRY_MS = 60 * 1000;
 const UNLINK_CHECK_EVERY = 64;
 const LEVELS = ['log', 'info', 'warn', 'error'];
 // Userinfo runs to the last '@' of the token, since providers hand out
-// passwords with unescaped '@', '/', or '?'.
+// passwords with unescaped '@', '/', or '?'. The scheme is capped at 64
+// characters to keep the scan linear, so a longer one is not redacted.
 const URL_PATTERN =
-  /\b([a-z][a-z0-9+.-]*:\/\/)(?:\S*@)?((?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::\d+)?)?(\S*)/gi;
+  /\b([a-z][a-z0-9+.-]{0,63}:\/\/)(?:\S*@)?((?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::\d+)?)?(\S*)/gi;
 const SECRET_PATTERN =
   /\b((?:proxy-)?authorization|(?:set-)?cookie|password|passwd|username|token|secret|api[_-]?key)(["']?\s*[:=]\s*)(?:(?:bearer|basic|digest)\s+)?("[^"]*"|'[^']*'|[^\s,;&}]+)/gi;
 

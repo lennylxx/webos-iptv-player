@@ -186,7 +186,9 @@ const URL_ATTRIBUTES: Record<string, string[]> = {
 // Elements whose text is a URL; they open no scope of their own.
 const URL_TEXT = ['BaseURL', 'Location', 'PatchLocation'];
 
-const TOKEN = new RegExp('<!--[\\s\\S]*?-->|<!\\[CDATA\\[[\\s\\S]*?\\]\\]>|<\\?[\\s\\S]*?\\?>|<![^>]*>'
+// An unclosed comment, CDATA section, PI, or declaration runs to the end;
+// failing instead would rescan the rest of the text from every '<'.
+const TOKEN = new RegExp('<!--[\\s\\S]*?(?:-->|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>|$)|<\\?[\\s\\S]*?(?:\\?>|$)|<![^>]*(?:>|$)'
   + '|<(\\/?)([A-Za-z_][\\w.-]*(?::[A-Za-z_][\\w.-]*)?)'
   + '((?:\\s+[^\\s=\\/>]+\\s*=\\s*(?:"[^"]*"|\'[^\']*\'))*)\\s*(\\/?)>', 'g');
 const ATTRIBUTE = /(\s+)([^\s=\/>]+)(\s*=\s*)("([^"]*)"|'([^']*)')/g;
