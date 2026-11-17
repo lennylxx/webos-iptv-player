@@ -518,6 +518,25 @@ describe('StorageService', () => {
       expect(StorageService.getAspectRatio('ch1')).toBe('auto');
     });
   });
+
+  describe('video quality', () => {
+    it('defaults the setting to auto and ignores an unknown value', () => {
+      expect(StorageService.getVideoQuality()).toBe('auto');
+      StorageService.setVideoQuality('max1080');
+      expect(StorageService.getVideoQuality()).toBe('max1080');
+      localStorage.setItem('iptv_video_quality', JSON.stringify('max480'));
+      expect(StorageService.getVideoQuality()).toBe('auto');
+    });
+    it('keeps a pick per key and drops it when it follows the setting again', () => {
+      StorageService.setQualityOverride('ch1', { height: 720, bandwidth: 3000000 });
+      StorageService.setQualityOverride('ch2', 'auto');
+      expect(StorageService.getQualityOverride('ch1')).toEqual({ height: 720, bandwidth: 3000000 });
+      expect(StorageService.getQualityOverride('ch2')).toBe('auto');
+      StorageService.setQualityOverride('ch1', null);
+      expect(StorageService.getQualityOverride('ch1')).toBeNull();
+      expect(localStorage.getItem('iptv_quality_picks')).not.toContain('ch1');
+    });
+  });
 });
 
 import type { CatchupProgressEntry, ResumeEntry, WatchlistEntry } from '../types';

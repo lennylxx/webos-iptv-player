@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlayerPipelineOptions } from './player-pipeline';
+import type { QualityRule } from '../utils/video-quality';
 import { CONFIG } from '../config';
 
 const cacheMocks = vi.hoisted(() => ({
@@ -72,6 +73,7 @@ function callbacks(): PlayerPipelineOptions {
     mediaState: () => '',
     isCatchup: () => false,
     headerPlayback: () => 'luna',
+    qualityRule: () => ({ kind: 'auto' }),
     onError: vi.fn(),
     onAudioTracksUpdated: vi.fn(),
     onSubtitleTracksUpdated: vi.fn(),
@@ -652,6 +654,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
       subtitles: [expect.objectContaining({ name: 'l1' })],
       closedCaptions: [expect.objectContaining({ instreamId: 'CC1' })],
       variants: [],
+      qualityTiers: expect.any(Array),
       masterUrl: 'http://host/a.m3u8',
     });
     expect(pipeline.isLunaActive()).toBe(true);
@@ -734,7 +737,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
 
       await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
       expect(pipeline.opts.onManifest).toHaveBeenCalledWith(
-        { audio: [], subtitles: [], closedCaptions: [], variants: [], masterUrl: '' });
+        { audio: [], subtitles: [], closedCaptions: [], variants: [], qualityTiers: [], masterUrl: '' });
       expect(serviceLogs()).toEqual([expect.stringContaining(
         `event=playback.luna.manifest.service load=1 outcome=failed reason=${reason} page=http_403`)]);
       expect(logs.filter(line => line.includes('event=subtitles.luna.unavailable')))
@@ -828,7 +831,7 @@ describe('PlayerPipeline webOS Luna routing', () => {
     expect(logs.join('\n')).not.toContain('http://host/');
     // Settled empty, so Luna audio labels stop waiting for names.
     expect(pipeline.opts.onManifest).toHaveBeenCalledExactlyOnceWith(
-      { audio: [], subtitles: [], closedCaptions: [], variants: [], masterUrl: '' });
+      { audio: [], subtitles: [], closedCaptions: [], variants: [], qualityTiers: [], masterUrl: '' });
     expect(pipeline.opts.onError).not.toHaveBeenCalled();
     expect(pipeline.isLunaActive()).toBe(true);
   });
@@ -2407,5 +2410,404 @@ describe('PlayerPipeline webOS Luna routing', () => {
       expect(luna.sessions[0].destroy).not.toHaveBeenCalled();
       expect(drmCalls.filter(call => call === 'load')).toHaveLength(1);
     });
+  });
+});
+
+describe('PlayerPipeline webOS Video quality', () => {
+  const WEBOS_25 = 'Mozilla/5.0 (Web0S; Linux/SmartTV) AppleWebKit/537.36 '
+    + '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WebAppManager';
+  const LADDER = [
+    '#EXTM3U',
+    '#EXT-X-STREAM-INF:BANDWIDTH=600000,AVERAGE-BANDWIDTH=400000,RESOLUTION=426x240',
+    'v0.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=1500000,AVERAGE-BANDWIDTH=1000000,RESOLUTION=854x480',
+    'v1.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=3000000,AVERAGE-BANDWIDTH=2000000,RESOLUTION=1280x720',
+    'v2.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=6000000,AVERAGE-BANDWIDTH=4000000,RESOLUTION=1920x1080',
+    'v3.m3u8',
+  ].join('\n');
+  const representations = [[240, 400000], [480, 1000000], [720, 2000000], [1080, 4000000]]
+    .map(([height, bandwidth]) =>
+      `<Representation id="v${height}" width="${height * 16 / 9}" height="${height}" bandwidth="${bandwidth}"/>`)
+    .join('');
+  const mpd = (protection = '') => `<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"><Period>
+  <AdaptationSet contentType="video" mimeType="video/mp4">${protection}${representations}</AdaptationSet>
+</Period></MPD>`;
+  const REFERER = { Referer: 'http://host/' };
+  const CAP_720: QualityRule = { kind: 'max', height: 720 };
+  const PIN_720: QualityRule = { kind: 'tier', height: 720, bandwidth: 2000000 };
+
+  let logs: string[];
+
+  beforeEach(() => {
+    vi.resetModules();
+    luna.sessions.length = 0;
+    cacheMocks.getCachedStreamMime.mockReset();
+    cacheMocks.setCachedStreamMime.mockReset();
+    localStorage.clear();
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, value: WEBOS_25 });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(LADDER)));
+    manifestService.fetchManifestViaService.mockReset();
+    manifestService.fetchManifestViaService.mockResolvedValue({ ok: false, reason: 'unavailable' });
+    logs = [];
+    const record = (...args: unknown[]) => { logs.push(args.join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(record);
+    vi.spyOn(console, 'warn').mockImplementation(record);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function pipelineFor(video: HTMLVideoElement, rule: QualityRule) {
+    const { PlayerPipeline } = await import('./player-pipeline');
+    const opts = { ...callbacks(), qualityRule: () => rule };
+    const pipeline = new PlayerPipeline(opts);
+    pipeline.setVideoElement(video);
+    return Object.assign(pipeline, { opts });
+  }
+
+  async function sourceOption(video: HTMLVideoElement) {
+    const { parseMediaOption } = await import('../utils/webos-media-option');
+    return parseMediaOption(video.querySelector('source')?.type ?? '');
+  }
+
+  it('holds a native HLS source until its master names the variants, then caps them', async () => {
+    let respond: (response: Response) => void = () => {};
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { respond = resolve; })));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null);
+    expect(video.querySelector('source')).toBeNull();
+    respond(new Response(LADDER));
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(await sourceOption(video)).toEqual({
+      mediaTransportType: 'HLS',
+      option: { adaptiveStreaming: { bps: { maximum: 3000000 } } },
+    });
+    expect(video.querySelector('source')?.type).toMatch(/^application\/vnd\.apple\.mpegurl;mediaOption=/);
+    expect(logs.join('\n')).toContain(
+      'event=playback.quality.applied load=1 rule=max format=hls path=native tiers=4 start=0 minimum=0 maximum=3000000');
+    await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+    expect(vi.mocked(pipeline.opts.onManifest).mock.calls[0][0].qualityTiers).toHaveLength(4);
+  });
+
+  it('stops the outgoing stream while a zap waits on its master', async () => {
+    const responders: Array<(response: Response) => void> = [];
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { responders.push(resolve); })));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null);
+    responders[0](new Response(LADDER));
+    await vi.waitFor(() => expect(video.querySelector('source')?.src).toBe('http://host/a.m3u8'));
+    pipeline.load('http://host/b.m3u8', null);
+
+    expect(video.querySelector('source')).toBeNull();
+    expect(pipeline.isSourcePending()).toBe(true);
+    (pipeline as unknown as { cancelManifest(): void }).cancelManifest();
+    expect(pipeline.isSourcePending()).toBe(false);
+  });
+
+  it('plays a stream it found single-variant at once on the next load', async () => {
+    const single = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=854x480\nv1.m3u8';
+    const responders: Array<(response: Response) => void> = [];
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { responders.push(resolve); })));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null);
+    expect(video.querySelector('source')).toBeNull();
+    responders[0](new Response(single));
+    await vi.waitFor(() => expect(video.querySelector('source')).not.toBeNull());
+
+    pipeline.load('http://host/a.m3u8', null);
+    expect(video.querySelector('source')?.type).toBe('application/vnd.apple.mpegurl');
+  });
+
+  it('names the top tier for Highest on webOS 4, which starts at or above it', async () => {
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true, value: WEBOS_25.replace('Chrome/120', 'Chrome/53'),
+    });
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, { kind: 'highest' });
+
+    pipeline.load('http://host/a.m3u8', null);
+    expect(pipeline.isSourcePending()).toBe(true);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect((await sourceOption(video))?.option).toEqual({ adaptiveStreaming: { bps: { start: 4000000 } } });
+  });
+
+  it('leaves webOS 4 its own start for Highest when the master cannot be read', async () => {
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true, value: WEBOS_25.replace('Chrome/120', 'Chrome/53'),
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, { kind: 'highest' });
+
+    pipeline.load('http://host/a.m3u8', null);
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(video.querySelector('source')?.type).toBe('application/vnd.apple.mpegurl');
+    expect(logs.join('\n')).toContain('event=playback.quality.skipped load=1 rule=highest');
+
+    pipeline.load('http://host/a.m3u8', null);
+    expect(video.querySelector('source')?.type).toBe('application/vnd.apple.mpegurl');
+  });
+
+  it('skips the master read for a stream whose master could not be read', async () => {
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null);
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    pipeline.load('http://host/a.m3u8', null);
+
+    expect(pipeline.isSourcePending()).toBe(false);
+    expect(video.querySelector('source')?.type).toBe('application/vnd.apple.mpegurl');
+  });
+
+  it('attaches the held source once when the tracks fail on the master', async () => {
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+    vi.mocked(pipeline.opts.onManifest).mockImplementation(() => { throw new Error('tracks'); });
+
+    pipeline.load('http://host/a.m3u8', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(video.play).toHaveBeenCalledOnce();
+    expect((await sourceOption(video))?.option).toEqual({ adaptiveStreaming: { bps: { maximum: 3000000 } } });
+    expect(logs.join('\n')).not.toContain('event=playback.quality.skipped');
+  });
+
+  it('starts Highest at once, without waiting on the master', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, { kind: 'highest' });
+
+    pipeline.load('http://host/a.m3u8', null);
+
+    expect(video.play).toHaveBeenCalledOnce();
+    expect((await sourceOption(video))?.option).toEqual({
+      adaptiveStreaming: { bps: { start: 1000000000 } },
+    });
+  });
+
+  it('plays without a range when the master cannot be read', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(video.querySelector('source')?.type).toBe('application/vnd.apple.mpegurl');
+    expect(logs.join('\n')).toContain(
+      'event=playback.quality.skipped load=1 rule=max format=hls path=native reason=manifest');
+  });
+
+  it('applies the Video quality to an HLS title played directly', async () => {
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, PIN_720);
+
+    pipeline.load('http://host/movie/m1.m3u8', null, { direct: true });
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect((await sourceOption(video))?.option).toEqual({
+      adaptiveStreaming: { bps: { minimum: 2000000, maximum: 3000000 } },
+    });
+  });
+
+  it('pins a native DASH representation', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(mpd())));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, PIN_720);
+
+    pipeline.load('http://host/a.mpd', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(await sourceOption(video)).toEqual({
+      mediaTransportType: 'MPEG-DASH',
+      option: { adaptiveStreaming: { bps: { minimum: 2000000, maximum: 2000000 } } },
+    });
+  });
+
+  it('keeps the PlayReady client and the range in one native DASH option', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(mpd(
+      '<ContentProtection schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"/>'))));
+    class FakePalmServiceBridge {
+      onservicecallback: ((message: string) => void) | null = null;
+      call(uri: string): void {
+        const method = uri.slice(uri.lastIndexOf('/') + 1);
+        if (method === 'load') {
+          this.onservicecallback?.(JSON.stringify({ returnValue: true, clientId: 'client-1' }));
+        } else if (method === 'sendDrmMessage') {
+          this.onservicecallback?.(JSON.stringify({ returnValue: true, resultCode: 0, msgId: 'msg-1' }));
+        } else {
+          this.onservicecallback?.('{"returnValue":true}');
+        }
+      }
+      cancel(): void {
+        this.onservicecallback = null;
+      }
+    }
+    Object.defineProperty(window, 'PalmServiceBridge', { configurable: true, value: FakePalmServiceBridge });
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+
+    pipeline.load('http://host/a.mpd', {
+      'inputstream.adaptive.license_type': 'com.microsoft.playready',
+      'inputstream.adaptive.license_key': 'http://host/license',
+    });
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(await sourceOption(video)).toEqual({
+      mediaTransportType: 'MPEG-DASH',
+      option: {
+        drm: { type: 'playready', clientId: 'client-1' },
+        adaptiveStreaming: { bps: { maximum: 2000000 } },
+      },
+    });
+    pipeline.destroy();
+    Reflect.deleteProperty(window, 'PalmServiceBridge');
+  });
+
+  it('holds Luna HLS on its master and loads it with the range', async () => {
+    let respond: (response: Response) => void = () => {};
+    const fetchMock = vi.fn(() => new Promise<Response>(resolve => { respond = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+    const pipeline = await pipelineFor(videoElement(), CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+    expect(luna.sessions).toHaveLength(0);
+    respond(new Response(LADDER));
+
+    await vi.waitFor(() => expect(luna.sessions).toHaveLength(1));
+    expect(luna.sessions[0]).toMatchObject({ uri: 'http://host/a.m3u8', bps: { maximum: 3000000 } });
+    expect(luna.sessions[0].start).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+    const manifest = vi.mocked(pipeline.opts.onManifest).mock.calls[0][0];
+    expect(manifest.variants).toEqual([]);
+    expect(manifest.qualityTiers).toHaveLength(4);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('reads a refused master through the service on the short budget a held load needs', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
+    manifestService.fetchManifestViaService.mockResolvedValue({ ok: true, text: LADDER, url: 'http://host/a.m3u8' });
+    const pipeline = await pipelineFor(videoElement(), CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+    expect(pipeline.isLunaPending()).toBe(true);
+
+    await vi.waitFor(() => expect(luna.sessions).toHaveLength(1));
+    expect(manifestService.fetchManifestViaService).toHaveBeenCalledWith('http://host/a.m3u8', expect.anything(),
+      expect.objectContaining({
+        timeoutMs: CONFIG.PLAYER.DASH_MANIFEST_SERVICE_TIMEOUT,
+        graceMs: CONFIG.PLAYER.DASH_MANIFEST_SERVICE_GRACE_MS,
+      }));
+    expect(luna.sessions[0]).toMatchObject({ bps: { maximum: 3000000 } });
+    expect(pipeline.isLunaPending()).toBe(false);
+  });
+
+  it('falls back from a held Luna HLS to the element with the master it read', async () => {
+    const fetchMock = vi.fn(async () => new Response(LADDER));
+    vi.stubGlobal('fetch', fetchMock);
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+    await vi.waitFor(() => expect(luna.sessions).toHaveLength(1));
+    luna.sessions[0].onFallback('load_failed', -1, 'load');
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect((await sourceOption(video))?.option).toEqual({ adaptiveStreaming: { bps: { maximum: 3000000 } } });
+    expect(logs.filter(line => line.includes('event=playback.quality.applied'))).toHaveLength(1);
+    const calls = vi.mocked(pipeline.opts.onManifest).mock.calls;
+    expect(calls[calls.length - 1][0].variants).toHaveLength(4);
+  });
+
+  it('drops a held load that a newer one replaced, on the element and on Luna', async () => {
+    const responders: Array<(response: Response) => void> = [];
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { responders.push(resolve); })));
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+
+    pipeline.load('http://host/a.m3u8', null);
+    expect(pipeline.isSourcePending()).toBe(true);
+    pipeline.load('http://host/b.m3u8', null, { headers: REFERER });
+    expect(pipeline.isSourcePending()).toBe(false);
+    expect(pipeline.isLunaPending()).toBe(true);
+    pipeline.destroy();
+    expect(pipeline.isLunaPending()).toBe(false);
+    responders.forEach(respond => respond(new Response(LADDER)));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(video.querySelector('source')).toBeNull();
+    expect(luna.sessions).toHaveLength(0);
+  });
+
+  it('names the variants of a directly played title without taking over its tracks', async () => {
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, { kind: 'auto' });
+
+    pipeline.load('http://host/movie/m1.m3u8', null, { direct: true });
+
+    expect(video.querySelector('source')?.hasAttribute('type')).toBe(false);
+    await vi.waitFor(() => expect(pipeline.opts.onManifest).toHaveBeenCalledOnce());
+    expect(vi.mocked(pipeline.opts.onManifest).mock.calls[0][0]).toMatchObject({
+      audio: [], subtitles: [], closedCaptions: [], variants: [], masterUrl: '',
+    });
+    expect(vi.mocked(pipeline.opts.onManifest).mock.calls[0][0].qualityTiers).toHaveLength(4);
+  });
+
+  it('loads Luna DASH with the range its MPD gives', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(mpd())));
+    const pipeline = await pipelineFor(videoElement(), PIN_720);
+
+    pipeline.load('http://host/a.mpd', null, { headers: REFERER });
+
+    await vi.waitFor(() => expect(luna.sessions).toHaveLength(1));
+    expect(luna.sessions[0]).toMatchObject({
+      transport: 'MPEG-DASH',
+      bps: { minimum: 2000000, maximum: 2000000 },
+    });
+  });
+
+  it('caps the stream the Local proxy serves', async () => {
+    const TOKEN = 'a'.repeat(32);
+    const PROXIED = `http://127.0.0.1:1/p/${TOKEN}/http/host/a.m3u8`;
+    let open: (result: unknown) => void = () => {};
+    proxyService.openStreamProxy.mockReset();
+    proxyService.touchStreamProxy.mockReset();
+    proxyService.touchStreamProxy.mockResolvedValue(null);
+    proxyService.openStreamProxy.mockImplementation(() => new Promise(resolve => { open = resolve; }));
+    localStorage.setItem('iptv_luna_window_unsupported', JSON.stringify(navigator.userAgent));
+    const fetchMock = vi.fn(async () => new Response(LADDER));
+    vi.stubGlobal('fetch', fetchMock);
+    const video = videoElement();
+    const pipeline = await pipelineFor(video, CAP_720);
+    pipeline.opts.headerPlayback = () => 'proxy';
+
+    pipeline.load('http://host/a.m3u8', null, { headers: REFERER });
+    await vi.waitFor(() => expect(proxyService.openStreamProxy).toHaveBeenCalledOnce());
+    open({ ok: true, url: PROXIED, token: TOKEN });
+
+    await vi.waitFor(() => expect(video.querySelector('source')?.src).toBe(PROXIED));
+    expect(fetchMock).toHaveBeenCalledWith(PROXIED, expect.anything());
+    expect((await sourceOption(video))?.option).toEqual({
+      adaptiveStreaming: { bps: { maximum: 3000000 } },
+    });
+    pipeline.destroy();
   });
 });

@@ -25,7 +25,7 @@ import { parseAudioRenditions } from '../utils/audio-tracks';
 import { FetchTextError, fetchFailureReason, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
 import { createLogger } from '../utils/logger';
-import { isWebOS } from '../utils/platform';
+import { isWebOS, isWebOS4 } from '../utils/platform';
 import {
   hasLunaHeaders,
   hasOnlyUserAgent,
@@ -38,9 +38,10 @@ import { LunaMediaElement, type LunaAudioTrack, type LunaFallbackReason } from '
 import { parseClosedCaptions, parseSubtitleRenditions } from '../utils/subtitle-tracks';
 import { parseVariants, type StreamVariant } from '../utils/stream-info';
 import { mediaOptionSourceType } from '../utils/webos-media-option';
-import { createHlsEngine } from './mse/hls-engine';
+import { bpsOption, needsTiers, qualityTiers, type BpsOption, type QualityRule, type QualityTier } from '../utils/video-quality';
+import { applyHlsQuality, createHlsEngine, hlsQualityTiers } from './mse/hls-engine';
 import type { MseEngine, PipelineStreamInfo } from './mse/engine';
-import { createShakaEngine, type ShakaPlayerLike } from './mse/shaka-engine';
+import { createShakaEngine, shakaQualityTiers, shakaRestrictions, type ShakaPlayerLike } from './mse/shaka-engine';
 import {
   containerMime,
   sniffStreamContentType,
@@ -205,6 +206,8 @@ export interface PipelineManifest {
   subtitles: ManifestSubtitle[];
   closedCaptions: ManifestClosedCaption[];
   variants: StreamVariant[];
+  /** The variants a Video quality pick chooses among, on every path. */
+  qualityTiers: QualityTier[];
   masterUrl: string;
   /** The master or MPD at masterUrl, when only the bundled service could read it. */
   masterText?: string;
@@ -224,6 +227,10 @@ export interface PlayerPipelineOptions {
   isCatchup: () => boolean;
   /** The HTTP headers setting, read per load. */
   headerPlayback: () => HeaderPlayback;
+  /** The Video quality to start each load with. */
+  qualityRule: () => QualityRule;
+  /** The desktop MSE library named its variants. */
+  onEngineQualityTiers?: () => void;
   onError: (reason?: 'unsupported') => void;
   onAudioTracksUpdated: () => void;
   onSubtitleTracksUpdated: () => void;
@@ -308,6 +315,12 @@ export class PlayerPipeline {
   private lunaPlayReadyUrls = new Map<string, LunaFallbackReason>();
   // The load whose Luna start waits on its MPD read or a PlayReady client.
   private lunaPreparing = -1;
+  // The load whose element source waits on its master's variants.
+  private sourcePreparing = -1;
+  // Masters read this session that named fewer than two variants, or could
+  // not be read: a Video quality has nothing to choose there, so their loads
+  // skip the read before playing.
+  private noChoice = new Set<string>();
   private lunaSkipToken = -1; // one playback.luna.skipped event per load
   private headersOffToken = -1;
   private proxyToken = '';
@@ -378,6 +391,11 @@ export class PlayerPipeline {
   /** Luna is about to start once its MPD is read or its PlayReady client is ready. */
   isLunaPending(): boolean {
     return this.lunaPreparing === this.loadToken;
+  }
+
+  /** The element's source waits on the master a Video quality needs. */
+  isSourcePending(): boolean {
+    return this.sourcePreparing === this.loadToken;
   }
 
   /** The stream Luna plays; the element itself holds only the placeholder. */
@@ -501,7 +519,9 @@ export class PlayerPipeline {
         log.info('Selected webOS native playback', 'event=playback.path.native',
           this.callbacks.playbackLabel(token),
           'reason=direct', '| webOS native VOD | MIME', mime || '(sniffed)');
-        this.playNative(url, mime);
+        // An HLS title takes the Video quality like a channel does.
+        if (isHlsUrl) this.playNativeHls(url, mime, token, undefined, true);
+        else this.playNative(url, mime);
         return;
       }
       const headers = opts?.headers ?? {};
@@ -530,7 +550,8 @@ export class PlayerPipeline {
         }
         if (isHlsUrl) {
           this.rememberUaRetry(url, headers, extras, token, mime);
-          void this.loadManifest(url, this.manifestSeq, token);
+          this.playNativeHls(url, mime, token);
+          return;
         }
         this.playNativeMime(url, mime);
         return;
@@ -560,7 +581,8 @@ export class PlayerPipeline {
             '| catchup:', this.callbacks.isCatchup());
           if (cachedMime === 'application/vnd.apple.mpegurl') {
             this.rememberUaRetry(url, headers, extras, token, cachedMime);
-            void this.loadManifest(url, this.manifestSeq, token);
+            this.playNativeHls(url, cachedMime, token);
+            return;
           } else if (cachedDash) {
             this.rememberUaRetry(url, headers, extras, token, cachedMime);
             this.loadNativeDash(url, extras, token);
@@ -600,7 +622,8 @@ export class PlayerPipeline {
             this.rememberUaRetry(url, headers, extras, token, mime);
           }
           if (mime === 'application/vnd.apple.mpegurl') {
-            void this.loadManifest(url, this.manifestSeq, token);
+            this.playNativeHls(url, mime, token);
+            return;
           } else if (mime === 'application/dash+xml') {
             this.loadNativeDash(url, extras, token);
             return;
@@ -685,6 +708,12 @@ export class PlayerPipeline {
     this.dropProxyOpen();
     this.playReadyDrm.release();
     this.activeDrm = '';
+  }
+
+  /** The MSE library's variants; null on the TV's own pipeline or before it parsed them. */
+  engineQualityTiers(): QualityTier[] | null {
+    const tiers = this.engine?.qualityTiers();
+    return tiers && tiers.length ? tiers : null;
   }
 
   /** The current load plays through a loopback proxy session. */
@@ -1341,9 +1370,32 @@ export class PlayerPipeline {
     reason: LunaRouteReason,
     fallbackMime = 'application/vnd.apple.mpegurl',
     dash: LunaDash | null = null,
+    // The HLS master, read before the load; null when unreadable.
+    hlsRead?: ManifestRead | null,
   ): void {
     const videoEl = this.videoEl;
     if (!videoEl) return;
+    const rule = this.callbacks.qualityRule();
+    // UMS takes the bitrate range only at load, so a Video quality that
+    // limits the variants holds Luna HLS on its master, as DASH holds on its MPD.
+    if (!dash && hlsRead === undefined && needsTiers(rule, isWebOS4()) && !this.noChoice.has(url)) {
+      this.cancelManifest();
+      // The outgoing stream must not play or fail under this load while it waits.
+      this.detachSource(videoEl);
+      this.lunaPreparing = token;
+      let held = false;
+      void this.loadManifest(url, this.manifestSeq, token, 'hls', undefined, async (_parsed, read) => {
+        // A throw after the hold re-enters it from the manifest's catch.
+        if (held) return;
+        held = true;
+        if (this.lunaPreparing === token) this.lunaPreparing = -1;
+        if (token !== this.loadToken || videoEl !== this.videoEl) return;
+        this.noteVariants(url, read);
+        this.loadLuna(url, headers, token, reason, fallbackMime, null, read);
+      }, headers, true);
+      return;
+    }
+    const hlsTiers = hlsRead === undefined ? undefined : hlsRead ? qualityTiers(parseVariants(hlsRead.text)) : null;
     if (this.luna) {
       const previous = this.luna;
       this.luna = null;
@@ -1398,7 +1450,12 @@ export class PlayerPipeline {
       }
       log.info('Selected webOS native playback', 'event=playback.path.native', label,
         'reason=luna_fallback', `format=${isHlsMime ? 'hls' : 'auto'}`);
-      if (isHlsMime) void this.loadManifest(url, this.manifestSeq, token);
+      if (isHlsMime) {
+        // Reuse the master the hold read, so the fallback keeps within the startup watchdog.
+        if (hlsRead) this.notifyManifest(hlsRead.baseUrl, hlsRead.text, null, hlsRead.viaService, token);
+        this.playNativeHls(url, fallbackMime, token, hlsTiers);
+        return;
+      }
       this.playNativeMime(url, fallbackMime);
     };
     // Only a clear load UMS rejected suggests the stream really is PlayReady.
@@ -1408,6 +1465,9 @@ export class PlayerPipeline {
       headers,
       transport: dash ? 'MPEG-DASH' : 'HLS',
       playReadyClientId: dash?.clientId || undefined,
+      bps: this.qualityBps(rule,
+        dash ? (dash.parsed ? qualityTiers(dash.parsed.variants) : null) : hlsTiers ?? null,
+        token, dash ? 'dash' : 'hls', 'luna') ?? undefined,
       label,
       onFallback: (fallback, code, stage, unsupported) => {
         if (this.luna !== luna) return;
@@ -1475,8 +1535,9 @@ export class PlayerPipeline {
     luna.setDisplay(this.lunaDisplay);
     this.nativePlaySeq++;
     luna.start();
-    // DASH already read its MPD before the load.
-    if (dash) return;
+    // DASH already read its MPD before the load, and a held HLS its master,
+    // which the hold hands on to the tracks once Luna is set.
+    if (dash || hlsRead !== undefined) return;
     // For subtitle renditions and audio names only, so Luna never waits on it:
     // the page reads it without the channel's headers, the service after a 4xx.
     this.cancelManifest();
@@ -1572,19 +1633,101 @@ export class PlayerPipeline {
     this.playNative(url, mime);
   }
 
-  private playNativeDash(url: string, clientId = ''): void {
+  // A Video quality that limits the variants reads them before the TV loads
+  // the stream, which takes mediaOption only at load.
+  // A title played directly (vod) keeps its sniffed type and its sidecar
+  // subtitles: its master only names the variants. Known tiers (a Luna
+  // fallback's) skip the read and its diag event.
+  private playNativeHls(
+    url: string, mime: string, token: number, known?: QualityTier[] | null, vod = false,
+  ): void {
+    const rule = this.callbacks.qualityRule();
+    if (known !== undefined) {
+      this.playNative(url, this.hlsSourceType(mime, rule, known, token, false));
+      return;
+    }
+    if (!needsTiers(rule, isWebOS4()) || this.noChoice.has(url)) {
+      void this.loadManifest(url, this.manifestSeq, token, 'hls', undefined, undefined, undefined, false, vod);
+      this.playNative(url, this.hlsSourceType(mime, rule, [], token));
+      return;
+    }
+    // The outgoing stream must not play or fail under this load while it waits.
+    if (this.videoEl) this.detachSource(this.videoEl);
+    this.sourcePreparing = token;
+    let held = false;
+    void this.loadManifest(url, this.manifestSeq, token, 'hls', undefined, async (_parsed, read) => {
+      // A throw after the hold re-enters it from the manifest's catch.
+      if (held) return;
+      held = true;
+      if (this.sourcePreparing === token) this.sourcePreparing = -1;
+      if (token !== this.loadToken || !this.videoEl) return;
+      const tiers = this.noteVariants(url, read);
+      this.playNative(url, this.hlsSourceType(mime, rule, tiers, token));
+    }, undefined, false, vod);
+  }
+
+  // The master's tiers, or null when it could not be read.
+  private noteVariants(url: string, read: ManifestRead | null): QualityTier[] | null {
+    const tiers = read ? qualityTiers(parseVariants(read.text)) : null;
+    if (!tiers || tiers.length < 2) {
+      if (this.noChoice.size >= CONFIG.PLAYER.NO_CHOICE_MEMORY) this.noChoice.clear();
+      this.noChoice.add(url);
+    }
+    return tiers;
+  }
+
+  private hlsSourceType(
+    mime: string, rule: QualityRule, tiers: QualityTier[] | null, token: number, report = true,
+  ): string {
+    const bps = this.qualityBps(rule, tiers, token, 'hls', 'native', report);
+    return bps
+      ? mediaOptionSourceType(mime || 'application/vnd.apple.mpegurl',
+        { mediaTransportType: 'HLS', option: { adaptiveStreaming: { bps } } })
+      : mime;
+  }
+
+  // tiers is null when the variants could not be read.
+  private qualityBps(
+    rule: QualityRule,
+    tiers: QualityTier[] | null,
+    token: number,
+    format: 'hls' | 'dash',
+    path: 'native' | 'luna' | 'mse',
+    report = true,
+  ): BpsOption | null {
+    if (rule.kind === 'auto') return null;
+    const label = this.callbacks.playbackLabel(token);
+    if (!tiers && needsTiers(rule, isWebOS4())) {
+      if (report) log.warn('Video quality not applied', 'event=playback.quality.skipped', label,
+        `rule=${rule.kind}`, `format=${format}`, `path=${path}`, 'reason=manifest');
+      return null;
+    }
+    // webOS 4 starts on the first variant at or above start, so Highest with
+    // no known top tier leaves the TV its own start.
+    const bps = rule.kind === 'highest' && !tiers?.length && isWebOS4() ? null : bpsOption(rule, tiers ?? []);
+    if (report) log.info('Video quality applied', 'event=playback.quality.applied', label,
+      `rule=${rule.kind}`, `format=${format}`, `path=${path}`, `tiers=${String(tiers?.length ?? 0)}`,
+      `start=${String(bps?.start ?? 0)}`, `minimum=${String(bps?.minimum ?? 0)}`,
+      `maximum=${String(bps?.maximum ?? 0)}`);
+    return bps;
+  }
+
+  private playNativeDash(url: string, clientId = '', tiers: QualityTier[] | null = null): void {
     const bare = CONFIG.PLAYER.DASH_SOURCE === 'bare';
-    const type = bare && !clientId
+    const bps = this.qualityBps(this.callbacks.qualityRule(), tiers, this.loadToken, 'dash', 'native');
+    const option = {
+      ...(clientId ? { drm: { type: 'playready' as const, clientId } } : {}),
+      ...(bps ? { adaptiveStreaming: { bps } } : {}),
+    };
+    const type = bare && !clientId && !bps
       ? ''
       : mediaOptionSourceType('video/mp4', {
         mediaTransportType: 'MPEG-DASH',
-        ...(clientId ? {
-          option: { drm: { type: 'playready' as const, clientId } },
-        } : {}),
+        ...(clientId || bps ? { option } : {}),
       });
     log.info('Native DASH source', 'event=playback.path.native.dash',
       this.callbacks.playbackLabel(this.loadToken), ...this.viaProxy(this.loadToken),
-      `hint=${bare && !clientId ? 'none' : 'mediaOption'}`,
+      `hint=${type ? 'mediaOption' : 'none'}`,
       `drm=${clientId ? 'playready' : 'none'}`);
     this.playNative(url, type);
   }
@@ -1633,13 +1776,14 @@ export class PlayerPipeline {
       this.loadWithShaka(url, loadToken, config);
       return;
     }
+    const tiers = parsed ? qualityTiers(parsed.variants) : null;
     if (configured?.type !== 'playready' && detected?.type !== 'playready') {
-      this.playNativeDash(url);
+      this.playNativeDash(url, '', tiers);
       return;
     }
     void this.preparePlayReady(configured?.type === 'playready' ? configured : DETECTED_PLAYREADY, loadToken)
       .then(clientId => {
-        if (clientId) this.playNativeDash(url, clientId);
+        if (clientId) this.playNativeDash(url, clientId, tiers);
       });
   }
 
@@ -1724,6 +1868,9 @@ export class PlayerPipeline {
         };
       }
       this.hlsRecoveries = 0;
+      const rule = this.callbacks.qualityRule();
+      // A Video quality picks hls.js levels before it loads any.
+      if (rule.kind !== 'auto') hlsConfig.autoStartLoad = false;
       const hls = new Hls(hlsConfig);
       this.hls = hls;
       this.engine = createHlsEngine(hls);
@@ -1735,6 +1882,11 @@ export class PlayerPipeline {
       hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, this.callbacks.onAudioTracksUpdated);
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, this.callbacks.onSubtitleTracksUpdated);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (rule.kind !== 'auto') {
+          applyHlsQuality(hls, this.qualityBps(rule, hlsQualityTiers(hls), loadToken, 'hls', 'mse'));
+          hls.startLoad();
+        }
+        this.callbacks.onEngineQualityTiers?.();
         log.info('hls.js manifest parsed; starting playback',
           'event=playback.manifest.parsed', this.callbacks.playbackLabel(loadToken),
           'path=hls');
@@ -1798,8 +1950,11 @@ export class PlayerPipeline {
       const engine = createShakaEngine(player);
       this.engine = engine;
       this.msePending = false;
+      const rule = this.callbacks.qualityRule();
       const config: Record<string, unknown> = {
         streaming: { bufferingGoal: CONFIG.PLAYER.BUFFER_LENGTH },
+        // Highest starts at the top variant; the estimate only seeds ABR.
+        ...(rule.kind === 'highest' ? { abr: { defaultBandwidthEstimate: 1000000000 } } : {}),
       };
       if (drm) {
         const keySystem = drm.type === 'clearkey' ? 'org.w3.clearkey' : 'com.widevine.alpha';
@@ -1904,6 +2059,10 @@ export class PlayerPipeline {
             `drm=${this.activeDrm}`,
             this.callbacks.playbackLabel(loadToken));
         }
+        this.qualityBps(rule, shakaQualityTiers(player), loadToken, 'dash', 'mse');
+        const restrictions = shakaRestrictions(player, rule);
+        if (restrictions) player.configure({ restrictions });
+        this.callbacks.onEngineQualityTiers?.();
         this.callbacks.onAudioTracksUpdated();
         this.callbacks.onSubtitleTracksUpdated();
         videoEl.play().catch(error => log.warn('Shaka play() rejected',
@@ -1971,6 +2130,10 @@ export class PlayerPipeline {
     hold?: (manifest: MpdManifest | null, read: ManifestRead | null) => Promise<void>,
     // The Luna path's headers: a 4xx page fetch retries through the bundled service.
     lunaHeaders?: Record<string, string>,
+    // A load waits on this read, so the service gets the short budget DASH has.
+    holding = false,
+    // Only the variants: a directly played title keeps its own tracks.
+    tiersOnly = false,
   ): Promise<MpdManifest | null> {
     const dash = format === 'dash';
     const controller = new AbortController();
@@ -2000,7 +2163,7 @@ export class PlayerPipeline {
         const status = e instanceof FetchTextError && e.code === 'http' ? e.status : 0;
         if (!lunaHeaders || controller.signal.aborted
           || (!credentials && (status < 400 || status >= 500))) throw e;
-        const fetched = await this.fetchManifestThroughService(url, lunaHeaders, dash, maxBytes,
+        const fetched = await this.fetchManifestThroughService(url, lunaHeaders, dash, holding, maxBytes,
           controller.signal, loadToken, credentials ? 'credentials' : fetchFailureReason(e));
         if (!fetched) throw e;
         text = fetched.text;
@@ -2021,7 +2184,14 @@ export class PlayerPipeline {
         await hold(parsed, { text, baseUrl, viaService });
         if (seq !== this.manifestSeq) return null;
       }
-      this.notifyManifest(baseUrl, text, parsed, viaService, loadToken);
+      if (tiersOnly) {
+        this.callbacks.onManifest({
+          audio: [], subtitles: [], closedCaptions: [], variants: [],
+          qualityTiers: qualityTiers(parseVariants(text)), masterUrl: '',
+        });
+      } else {
+        this.notifyManifest(baseUrl, text, parsed, viaService, loadToken);
+      }
       return parsed;
     } catch (e) {
       if (controller.signal.aborted) return null;
@@ -2036,7 +2206,9 @@ export class PlayerPipeline {
         log.info('Subtitles unavailable on Luna playback', 'event=subtitles.luna.unavailable',
           this.callbacks.playbackLabel(loadToken), 'stage=manifest', `reason=${fetchFailureReason(e)}`);
         // Settled with nothing, so Luna audio stops waiting for names.
-        this.callbacks.onManifest({ audio: [], subtitles: [], closedCaptions: [], variants: [], masterUrl: '' });
+        this.callbacks.onManifest({
+          audio: [], subtitles: [], closedCaptions: [], variants: [], qualityTiers: [], masterUrl: '',
+        });
         return null;
       }
       log.warn('Manifest fetch failed', 'event=playback.manifest.failed',
@@ -2053,17 +2225,19 @@ export class PlayerPipeline {
     url: string,
     headers: Record<string, string>,
     dash: boolean,
+    holding: boolean,
     maxBytes: number,
     signal: AbortSignal,
     loadToken: number,
     page: string,
   ): Promise<{ text: string; url: string } | null> {
     const started = Date.now();
+    // DASH, and an HLS master a Video quality needs, hold the Luna load until this settles.
+    const held = dash || holding;
     const result = await fetchManifestViaService(serviceRequestUrl(url), withDefaultUserAgent(headers), {
       maxBytes,
-      // DASH holds the Luna load until this settles.
-      timeoutMs: dash ? CONFIG.PLAYER.DASH_MANIFEST_SERVICE_TIMEOUT : CONFIG.PLAYER.MANIFEST_TIMEOUT,
-      graceMs: dash ? CONFIG.PLAYER.DASH_MANIFEST_SERVICE_GRACE_MS : CONFIG.PLAYER.MANIFEST_SERVICE_GRACE_MS,
+      timeoutMs: held ? CONFIG.PLAYER.DASH_MANIFEST_SERVICE_TIMEOUT : CONFIG.PLAYER.MANIFEST_TIMEOUT,
+      graceMs: held ? CONFIG.PLAYER.DASH_MANIFEST_SERVICE_GRACE_MS : CONFIG.PLAYER.MANIFEST_SERVICE_GRACE_MS,
       signal,
     });
     if (signal.aborted) return null;
@@ -2117,6 +2291,7 @@ export class PlayerPipeline {
       subtitles,
       closedCaptions,
       variants: luna ? [] : variants,
+      qualityTiers: qualityTiers(variants),
       masterUrl: subtitles.length ? url : '',
       // The page would be refused again, so subtitles start from this text.
       masterText: subtitles.length && viaService ? text : undefined,
@@ -2125,6 +2300,8 @@ export class PlayerPipeline {
 
   private cancelManifest(): void {
     this.manifestSeq++;
+    // A source held on the read it aborts is no longer pending.
+    this.sourcePreparing = -1;
     this.manifestController?.abort();
     this.manifestController = null;
   }

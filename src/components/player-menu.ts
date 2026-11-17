@@ -2,7 +2,7 @@ import type { Action, AudioTrackOption, Channel, SubtitleTrackOption } from '../
 import { CONFIG } from '../config';
 import { $, html, inShownView, onceTransitionEnd, raw, withInstantScroll } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { ASPECT_ICON, AUDIO_ICON, SPEED_ICON, SUBTITLE_ICON } from './icons';
+import { ASPECT_ICON, AUDIO_ICON, QUALITY_ICON, SPEED_ICON, SUBTITLE_ICON } from './icons';
 import { t } from '../i18n';
 import {
   PLAYBACK_RATES,
@@ -11,6 +11,18 @@ import {
 } from '../services/playback-rate';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
 import { ASPECT_RATIOS, type AspectRatio } from '../services/aspect-ratio';
+import { tierRate, type QualityOverride, type QualityTier, type VideoQuality } from '../utils/video-quality';
+import { qualityTierLabel, videoQualityLabel } from './video-quality-labels';
+
+export interface QualityMenuState {
+  /** The Video quality setting a stream without its own pick follows. */
+  setting: VideoQuality;
+  override: QualityOverride | null;
+  /** Lowest first. */
+  tiers: QualityTier[];
+  /** The tier the override pins, or -1. */
+  pinned: number;
+}
 
 const AUTO_HIDE_MS = 5000;
 
@@ -38,6 +50,14 @@ const OPEN_SPEED = '__speed_open__';
 const PICK_SPEED = '__speed_rate__';
 const OPEN_ASPECT = '__aspect_open__';
 const PICK_ASPECT = '__aspect_ratio__';
+const OPEN_QUALITY = '__quality_open__';
+const PICK_QUALITY = '__quality_pick__';
+
+function qualityValue(state: QualityMenuState): string {
+  if (state.override === 'auto') return t('player.qualityAuto');
+  const pinned = state.tiers[state.pinned];
+  return pinned ? qualityTierLabel(pinned) : videoQualityLabel(state.setting);
+}
 
 function aspectLabel(mode: AspectRatio): string {
   if (mode === 'auto') return t('player.aspectAuto');
@@ -73,10 +93,12 @@ export class PlayerMenu {
   private selectPlaybackRate: (rate: PlaybackRate) => Promise<boolean>;
   private getAspectRatio: () => AspectRatio | null;
   private selectAspectRatio: (mode: AspectRatio) => void;
+  private getQuality: () => QualityMenuState | null;
+  private selectQuality: (pick: QualityOverride | null) => void;
   private isVisible = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private focusIdx = 0;
-  private mode: 'main' | 'audio' | 'subtitles' | 'speed' | 'aspect' = 'main';
+  private mode: 'main' | 'audio' | 'subtitles' | 'speed' | 'aspect' | 'quality' = 'main';
   private cancelHide: (() => void) | null = null;
   // Registered on the first show; focusIdx stays the model, the scope paints it.
   private scope: FocusScope | null = null;
@@ -98,6 +120,9 @@ export class PlayerMenu {
     // null hides the Aspect Ratio row.
     getAspectRatio: () => AspectRatio | null = () => null,
     selectAspectRatio: (mode: AspectRatio) => void = () => {},
+    // null hides the Video Quality row.
+    getQuality: () => QualityMenuState | null = () => null,
+    selectQuality: (pick: QualityOverride | null) => void = () => {},
   ) {
     this.getCurrentChannel = getCurrentChannel;
     this.onAction = onAction;
@@ -113,6 +138,8 @@ export class PlayerMenu {
     this.openSubtitleSearch = openSubtitleSearch;
     this.getAspectRatio = getAspectRatio;
     this.selectAspectRatio = selectAspectRatio;
+    this.getQuality = getQuality;
+    this.selectQuality = selectQuality;
     this.el = $('#player-menu', container);
     this.bindEvents();
   }
@@ -183,7 +210,11 @@ export class PlayerMenu {
       else this.openMain();
       return;
     }
-    if ((this.mode === 'audio' || this.mode === 'subtitles') && this.el) {
+    if (this.mode === 'quality' && !this.getQuality()) {
+      this.openMain();
+      return;
+    }
+    if ((this.mode === 'audio' || this.mode === 'subtitles' || this.mode === 'quality') && this.el) {
       const focusedKey = this.keyAt(this.focusIdx);
       this.render();
       const rows = this.rows();
@@ -320,6 +351,8 @@ export class PlayerMenu {
       this.openSpeed();
     } else if (action === OPEN_ASPECT) {
       this.openAspect();
+    } else if (action === OPEN_QUALITY) {
+      this.openQuality();
     } else if (action === BACK) {
       this.openMain();
     } else if (action === PICK_AUDIO) {
@@ -341,6 +374,14 @@ export class PlayerMenu {
       if ((ASPECT_RATIOS as readonly string[]).indexOf(mode ?? '') !== -1) {
         this.selectAspectRatio(mode as AspectRatio);
       }
+      this.openMain();
+    } else if (action === PICK_QUALITY) {
+      const state = this.getQuality();
+      const pick = item.dataset.quality;
+      const tier = state?.tiers[Number(item.dataset.tierIndex)];
+      if (pick === 'default') this.selectQuality(null);
+      else if (pick === 'auto') this.selectQuality('auto');
+      else if (tier) this.selectQuality({ height: tier.height, bandwidth: tier.bandwidth });
       this.openMain();
     } else if (action === PICK_SPEED) {
       const rate = Number(item.dataset.playbackRate) as PlaybackRate;
@@ -392,6 +433,24 @@ export class PlayerMenu {
     this.resetTimer();
   }
 
+  private openQuality(): void {
+    const state = this.getQuality();
+    if (!state) return;
+    this.mode = 'quality';
+    this.render();
+    const key = this.qualityActiveKey(state);
+    const idx = this.rows().findIndex(row => row.dataset.key === key);
+    this.openAt(idx >= 0 ? idx : 1);
+    this.resetTimer();
+  }
+
+  private qualityActiveKey(state: QualityMenuState): string {
+    // With the setting on Auto, an Auto pick is the Default row.
+    if (state.override === 'auto') return state.setting === 'auto' ? 'quality:default' : 'quality:auto';
+    const pinned = state.tiers[state.pinned];
+    return pinned ? `quality:${tierRate(pinned)}` : 'quality:default';
+  }
+
   private openMain(): void {
     this.mode = 'main';
     this.render();
@@ -404,6 +463,7 @@ export class PlayerMenu {
     else if (this.mode === 'subtitles') this.renderSubtitles();
     else if (this.mode === 'speed') this.renderSpeed();
     else if (this.mode === 'aspect') this.renderAspect();
+    else if (this.mode === 'quality') this.renderQuality();
     else this.renderMain();
   }
 
@@ -420,6 +480,7 @@ export class PlayerMenu {
     const activeSub = subtitles.find(t => t.active);
     const speed = this.getPlaybackRateState();
     const aspect = this.getAspectRatio();
+    const quality = this.getQuality();
 
     const audioShown = tracks.length >= 2;
 
@@ -453,6 +514,15 @@ export class PlayerMenu {
             <span class="menu-icon subtitle">${raw(SUBTITLE_ICON)}</span>
             <span class="menu-item-label">${t('player.subtitles')}</span>
             <span class="menu-item-value">${activeSub?.label || t('common.off')}</span>
+          </div>
+        ` : ''}
+        ${quality ? html`
+          <div class="menu-item"
+               data-key="${OPEN_QUALITY}"
+               data-focusable data-menu-action="${OPEN_QUALITY}">
+            <span class="menu-icon quality">${raw(QUALITY_ICON)}</span>
+            <span class="menu-item-label">${t('player.videoQuality')}</span>
+            <span class="menu-item-value">${qualityValue(quality)}</span>
           </div>
         ` : ''}
         ${aspect ? html`
@@ -498,6 +568,48 @@ export class PlayerMenu {
                data-aspect-ratio="${mode}">
             <span class="menu-check">${mode === active ? '✓' : ''}</span>
             <span class="menu-track-label">${aspectLabel(mode)}</span>
+          </div>
+        `)}
+      </div>
+    `);
+  }
+
+  private renderQuality(): void {
+    const el = this.el;
+    const state = this.getQuality();
+    if (!el || !state) return;
+    const active = this.qualityActiveKey(state);
+    const check = (key: string): string => (key === active ? '✓' : '');
+    const tiers = state.tiers.map((tier, index) => ({ tier, index })).reverse();
+
+    morph(el, html`
+      <div class="menu-header">
+        <h2>${t('player.videoQuality')}</h2>
+      </div>
+      <div class="menu-items">
+        <div class="menu-item" data-key="${BACK}"
+             data-focusable data-menu-action="${BACK}">
+          <span class="menu-check menu-back">‹</span>
+          <span class="menu-item-label">${t('common.back')}</span>
+        </div>
+        <div class="menu-item" data-key="quality:default"
+             data-focusable data-menu-action="${PICK_QUALITY}" data-quality="default">
+          <span class="menu-check">${check('quality:default')}</span>
+          <span class="menu-track-label">${t('player.qualityDefault', { value: videoQualityLabel(state.setting) })}</span>
+        </div>
+        ${state.setting !== 'auto' ? html`
+          <div class="menu-item" data-key="quality:auto"
+               data-focusable data-menu-action="${PICK_QUALITY}" data-quality="auto">
+            <span class="menu-check">${check('quality:auto')}</span>
+            <span class="menu-track-label">${t('player.qualityAuto')}</span>
+          </div>
+        ` : ''}
+        ${tiers.map(({ tier, index }) => html`
+          <div class="menu-item" data-key="quality:${tierRate(tier)}"
+               data-focusable data-menu-action="${PICK_QUALITY}" data-quality="tier"
+               data-tier-index="${index}">
+            <span class="menu-check">${check(`quality:${tierRate(tier)}`)}</span>
+            <span class="menu-track-label">${qualityTierLabel(tier)}</span>
           </div>
         `)}
       </div>

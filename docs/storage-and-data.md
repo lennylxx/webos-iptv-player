@@ -99,6 +99,7 @@ This is the complete active key inventory:
 | `iptv_animation_mode` | `essential \| reduced \| full` | Animation profile; defaults to immediate navigation scrolling, while Essential disables costly motion for older TVs | Preference |
 | `iptv_overlay_style` | `dark \| frosted` | Player OSD/sidebar/menu glass style | Preference |
 | `iptv_tz_mode` | `device \| feed` | Which time zone displays EPG times | Preference |
+| `iptv_video_quality` | `auto \| highest \| max2160 \| max1080 \| max720 \| lowest` | Video quality every stream starts with unless it has its own pick; default `auto` | Preference |
 | `iptv_aspect_dirty` | `true` (absent when clear) | The app left a non-`original` TV aspect ratio for itself that it has not restored; set before the write goes out, removed once an `original` write succeeds; Reset App keeps it | Playback state |
 | `iptv_epg_tz_offset` | `number \| null` | Last known feed offset in minutes east of UTC | Small derived state |
 | `iptv_epg_offsets` | `Record<string, number>` | User time correction in minutes, keyed by EPG source URL | Preference |
@@ -133,6 +134,7 @@ origin, so object-store names do not repeat the `iptv_` prefix.
 | `channel-state` | `subtitle:<channel-key>` | None | Explicit off state or preferred subtitle name/language/CC mode |
 | `channel-state` | `offset:<channel-key>` | None | Subtitle timing adjustment in seconds |
 | `channel-state` | `aspect:<channel-key>` | None | Aspect ratio other than Auto: `16x9`, `4x3`, or `zoom`; a movie uses `vod:<account-id>:vod:<item-id>` and a series' episodes share `vod:<account-id>:series:<series-id>`, but an episode without a series owner (such as some Continue Watching entries) uses its own `vod:<account-id>:episode:<item-id>` |
+| `channel-state` | `quality:<channel-key>` | None | A stream's own Video quality pick: `auto`, or `tier:<height>:<bandwidth>` for a pinned variant; absent follows the setting. Keyed like `aspect:` |
 | `watchlist` | `watch:<account-id>\|<vod-or-series>\|<item-id>` | `scope` | Name, poster, rating, category, extension, and added time; scope is account and content kind |
 | `playback-progress` | `resume:<account-id>\|<vod-or-episode>\|<item-id>` | `expiresAt`, `updatedAt` | Position, duration, title/poster/extension snapshot, optional autoplay queue and Watchlist owner |
 | `playback-progress` | `mark:<account-id>\|<vod-series-or-episode>\|<item-id>` | `updatedAt` | A movie, series, or episode the viewer watched, or a movie or series they hid; a series is watched while every episode it lists is, derived again whenever its detail opens or an episode mark changes rather than kept as the source of truth; a title with neither mark has no record |

@@ -368,21 +368,30 @@ describe('parseMpd', () => {
       </AdaptationSet></Period>`));
     expect(r.variants).toEqual([
       { width: 1920, height: 1080, videoCodec: 'avc1.640028', audioCodec: 'mp4a.40.2',
-        atmos: false, videoRange: '', frameRate: 30000 / 1001 },
+        atmos: false, videoRange: '', frameRate: 30000 / 1001, bandwidth: 0 },
       { width: 1280, height: 720, videoCodec: 'avc1.4d401f', audioCodec: 'mp4a.40.2',
-        atmos: false, videoRange: '', frameRate: 25 },
+        atmos: false, videoRange: '', frameRate: 25, bandwidth: 0 },
     ]);
+  });
+
+  it('leaves a trick-mode AdaptationSet out of the variants', () => {
+    const r = parseMpd(mpd(`<Period>${VIDEO_SET}
+      <AdaptationSet contentType="video" mimeType="video/mp4">
+        <EssentialProperty schemeIdUri="http://dashif.org/guidelines/trickmode" value="1"/>
+        <Representation id="t1" width="320" height="180" codecs="avc1.42c00d" bandwidth="50000"/>
+      </AdaptationSet></Period>`));
+    expect(r.variants.map(v => v.height)).toEqual([1080, 720]);
   });
 
   it('inherits Representation attributes declared on the AdaptationSet', () => {
     const r = parseMpd(mpd(`<Period>
       <AdaptationSet contentType="video" mimeType="video/mp4"
                      width="3840" height="2160" codecs="hvc1.2.4.L153.B0" frameRate="50">
-        <Representation id="v1"/>
+        <Representation id="v1" bandwidth="8000000"/>
       </AdaptationSet></Period>`));
     expect(r.variants).toEqual([
       { width: 3840, height: 2160, videoCodec: 'hvc1.2.4.L153.B0', audioCodec: '',
-        atmos: false, videoRange: '', frameRate: 50 },
+        atmos: false, videoRange: '', frameRate: 50, bandwidth: 8000000 },
     ]);
   });
 

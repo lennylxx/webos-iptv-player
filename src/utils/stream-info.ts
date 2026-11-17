@@ -4,6 +4,10 @@ import { t } from '../i18n';
 export type StreamVariant = {
   width: number; height: number; videoCodec: string; audioCodec: string;
   atmos: boolean; videoRange: string; frameRate: number;
+  /** Peak bits per second (HLS BANDWIDTH, DASH @bandwidth); 0 when absent. */
+  bandwidth?: number;
+  /** HLS AVERAGE-BANDWIDTH; 0 when absent. */
+  averageBandwidth?: number;
 };
 export type ResolutionBadge = { label: string; tier: 'uhd' | 'fhd' | 'hd' | 'sd' };
 
@@ -104,6 +108,8 @@ export function parseVariants(manifest: string): StreamVariant[] {
     const aud = line.match(/AUDIO="([^"]*)"/i);
     const fps = line.match(/FRAME-RATE=([\d.]+)/i);
     const range = line.match(/VIDEO-RANGE=([A-Za-z]+)/i);
+    const peak = line.match(/[:,]BANDWIDTH=(\d+)/i);
+    const average = line.match(/AVERAGE-BANDWIDTH=(\d+)/i);
     let videoCodec = '';
     let audioCodec = '';
     if (cod) {
@@ -121,6 +127,8 @@ export function parseVariants(manifest: string): StreamVariant[] {
       atmos: (chan ? /\bJOC\b/i.test(chan[1]) : false) || (aud ? atmosGroups.has(aud[1]) : false),
       videoRange: range ? range[1] : '',
       frameRate: fps ? parseFloat(fps[1]) : 0,
+      bandwidth: peak ? parseInt(peak[1], 10) : 0,
+      averageBandwidth: average ? parseInt(average[1], 10) : 0,
     });
   }
   return variants;

@@ -1,4 +1,5 @@
 import { CONFIG } from '../config';
+import type { BpsOption } from '../utils/video-quality';
 import { lunaRequest, type LunaRequestHandle, type LunaResponse } from './luna';
 
 // Direct UMS playback, used when a stream needs HTTP headers that the page's
@@ -120,6 +121,7 @@ export function buildLoadParameters(
   windowId: string,
   headers: Record<string, string>,
   playReadyClientId = '',
+  bps?: BpsOption,
 ): Record<string, unknown> {
   const fields = splitHeaders(headers);
   const httpHeader: Record<string, string> = {};
@@ -133,6 +135,7 @@ export function buildLoadParameters(
   if (Object.keys(transmission).length) option.transmission = transmission;
   // The license request is the DRM client's own; it never carries these headers.
   if (playReadyClientId) option.drm = { type: 'playready', clientId: playReadyClientId };
+  if (bps) option.adaptiveStreaming = { bps };
   return {
     uri,
     type: 'media',

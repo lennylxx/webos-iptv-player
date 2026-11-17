@@ -7,6 +7,7 @@ import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
 import { isLocalePreference, type LocalePreference } from '../i18n';
 import { isAspectRatio, type AspectRatio } from './aspect-ratio';
+import { isVideoQuality, parseOverride, serializeOverride, type QualityOverride, type VideoQuality } from '../utils/video-quality';
 import {
   DEFAULT_ANIMATION_MODE,
   isAnimationMode,
@@ -49,6 +50,7 @@ interface UserDataState {
   subtitlePrefs: Record<string, SubtitlePref>;
   subtitleOffsets: Record<string, number>;
   aspectRatios: Record<string, AspectRatio>;
+  qualityPicks: Record<string, string>;
   resume: Record<string, ResumeEntry>;
   watchlist: Record<string, WatchlistEntry>;
   marks: Record<string, CatalogMark>;
@@ -254,6 +256,8 @@ function allUserRecords(data: UserDataState): Parameters<typeof replaceAllUserDa
         .map(key => record(`offset:${key}`, data.subtitleOffsets[key])),
       ...Object.keys(data.aspectRatios)
         .map(key => record(`aspect:${key}`, data.aspectRatios[key])),
+      ...Object.keys(data.qualityPicks)
+        .map(key => record(`quality:${key}`, data.qualityPicks[key])),
       ...Object.keys(data.liveCategorySnapshots).map(key =>
         record(LIVE_CATEGORY_KEY_PREFIX + key, data.liveCategorySnapshots[key])),
     ],
@@ -360,6 +364,13 @@ function fallbackRecords(key: string, value: unknown): {
         records: Object.keys(value as Record<string, AspectRatio>)
           .map(item => record(`aspect:${item}`, (value as Record<string, AspectRatio>)[item])),
       };
+    case 'quality_picks':
+      return {
+        store: 'channel-state',
+        records: Object.keys(value as Record<string, string>)
+          .filter(item => parseOverride((value as Record<string, string>)[item]))
+          .map(item => record(`quality:${item}`, (value as Record<string, string>)[item])),
+      };
     case 'resume':
       return {
         store: 'playback-progress',
@@ -441,6 +452,7 @@ async function loadUserDataState(): Promise<UserDataState> {
     subtitlePrefs: {},
     subtitleOffsets: {},
     aspectRatios: {},
+    qualityPicks: {},
     resume: {},
     watchlist: {},
     marks: {},
@@ -472,6 +484,8 @@ async function loadUserDataState(): Promise<UserDataState> {
       data.subtitleOffsets[item.key.slice(7)] = item.value as number;
     } else if (item.key.startsWith('aspect:')) {
       if (isAspectRatio(item.value)) data.aspectRatios[item.key.slice(7)] = item.value;
+    } else if (item.key.startsWith('quality:')) {
+      if (parseOverride(item.value)) data.qualityPicks[item.key.slice(8)] = item.value as string;
     } else if (item.key.startsWith('custom:channel:') && data.channelCustomization) {
       data.channelCustomization.overrides[item.key.slice(15)] =
         item.value as ChannelCustomization['overrides'][string];
@@ -512,6 +526,7 @@ async function initUserData(): Promise<void> {
     ['subtitle_prefs', {}],
     ['subtitle_offsets', {}],
     ['aspect_ratios', {}],
+    ['quality_picks', {}],
     ['resume', {}],
     ['watchlist', {}],
     ['online_sub_picks', {}],
@@ -1188,6 +1203,41 @@ export const StorageService = {
     const all = get<Record<string, AspectRatio>>('aspect_ratios', {});
     if (mode !== 'auto') all[channelId] = mode; else delete all[channelId];
     set('aspect_ratios', all);
+  },
+
+  getVideoQuality(): VideoQuality {
+    const quality = get<unknown>('video_quality', 'auto');
+    return isVideoQuality(quality) ? quality : 'auto';
+  },
+  setVideoQuality(quality: VideoQuality): void {
+    set('video_quality', quality);
+  },
+
+  // A stream's own Video quality pick (keyed like the aspect ratio). Absent
+  // follows the setting.
+  getQualityOverride(channelId: string): QualityOverride | null {
+    if (!channelId) return null;
+    const all = userData
+      ? userData.qualityPicks
+      : get<Record<string, string>>('quality_picks', {});
+    return parseOverride(all[channelId]);
+  },
+  setQualityOverride(channelId: string, override: QualityOverride | null): void {
+    if (!channelId) return;
+    const value = override ? serializeOverride(override) : '';
+    if (userData) {
+      if (value) {
+        userData.qualityPicks[channelId] = value;
+        persistUserChanges('channel-state', [record(`quality:${channelId}`, value)]);
+      } else {
+        delete userData.qualityPicks[channelId];
+        persistUserChanges('channel-state', [], [`quality:${channelId}`]);
+      }
+      return;
+    }
+    const all = get<Record<string, string>>('quality_picks', {});
+    if (value) all[channelId] = value; else delete all[channelId];
+    set('quality_picks', all);
   },
 
   // The app left a non-original TV aspect ratio that it has not restored.

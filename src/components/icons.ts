@@ -65,6 +65,8 @@ export const AUDIO_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill=
 // Closed-caption card (player menu subtitles row).
 export const SUBTITLE_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm2 7v2h6v-2H6zm8 0v2h4v-2h-4zM6 8v2h4V8H6zm6 0v2h6V8h-6z"/></svg>';
 // Screen frame with corner marks (player menu aspect-ratio row).
+export const QUALITY_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M2 16h3.5v5H2zm5.5-4H11v9H7.5zm5.5-4h3.5v13H13zm5.5-5H22v18h-3.5z"/></svg>';
+
 export const ASPECT_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 4.5h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2zM4 6.5v11h16v-11zM6 8.5h5v2H8v3H6zM18 15.5h-5v-2h3v-3h2z"/></svg>';
 
 // Replay arrow marking an aired (catch-up) programme in the EPG.

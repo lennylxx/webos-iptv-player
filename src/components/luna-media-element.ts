@@ -17,6 +17,7 @@ import {
 } from '../services/luna-media';
 import { isLunaAvailable, type LunaRequestHandle } from '../services/luna';
 import { createLogger } from '../utils/logger';
+import type { BpsOption } from '../utils/video-quality';
 
 const log = createLogger('Player');
 
@@ -34,6 +35,8 @@ export interface LunaMediaElementOptions {
   transport?: LunaTransport;
   /** A loaded PlayReady DRM client, for protected DASH. */
   playReadyClientId?: string;
+  /** The Video quality's mediaOption bitrate range. */
+  bps?: BpsOption;
   /** The playback label (`session=… load=…`) its diag events carry. */
   label: string;
   /**
@@ -378,7 +381,7 @@ export class LunaMediaElement {
     try {
       mediaId = await loadMedia(buildLoadParameters(
         this.options.uri, this.options.transport ?? 'HLS', __APP_ID__, windowId, this.options.headers,
-        this.options.playReadyClientId));
+        this.options.playReadyClientId, this.options.bps));
     } catch (error) {
       if (this.state === 'starting') this.fail('load_failed', errorCode(error), 'load');
       return;

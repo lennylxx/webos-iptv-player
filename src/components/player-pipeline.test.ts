@@ -46,6 +46,13 @@ class FakeHls {
   audioTrack = 1;
   subtitleTrack = 0;
   subtitleDisplay = true;
+  levels: Array<{
+    width: number; height: number; maxBitrate: number; averageBitrate: number;
+    videoCodec: string; attrs: Record<string, string>;
+  }> = [];
+  startLevel = -1;
+  autoLevelCapping = -1;
+  loadLevel = -1;
   loadLevelObj = {
     videoCodec: 'avc1.640028',
     audioCodec: 'mp4a.40.2',
@@ -195,6 +202,7 @@ function callbacks(overrides: Partial<PlayerPipelineOptions> = {}): PlayerPipeli
     mediaState: () => '',
     isCatchup: () => false,
     headerPlayback: () => 'luna',
+    qualityRule: () => ({ kind: 'auto' }),
     onError: vi.fn(),
     onAudioTracksUpdated: vi.fn(),
     onSubtitleTracksUpdated: vi.fn(),
@@ -281,6 +289,38 @@ describe('PlayerPipeline desktop routing', () => {
     });
     expect(hls.config.xhrSetup).toBeTypeOf('function');
     expect(pipeline.isMseActive()).toBe(true);
+  });
+
+  it.each([
+    [{ kind: 'max', height: 720 } as const, 2, -1, -1],
+    [{ kind: 'tier', height: 480, bandwidth: 1500000 } as const, -1, 1, 1],
+  ])('picks hls.js levels for %o before it loads any', async (rule, capping, manual, start) => {
+    installPreviewGlobals();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      contentTypeResponse('application/vnd.apple.mpegurl'),
+    ));
+    const pipeline = new PlayerPipeline(callbacks({ qualityRule: () => rule }));
+    pipeline.setVideoElement(videoElement());
+
+    pipeline.load('http://host/a', null);
+    await settle();
+    const hls = FakeHls.instances[FakeHls.instances.length - 1];
+    expect(hls.config.autoStartLoad).toBe(false);
+    // Before hls.js parses its levels, the variants are unknown, not none.
+    expect(pipeline.engineQualityTiers()).toBeNull();
+    hls.levels = [[240, 600000, 400000], [480, 1500000, 1000000], [720, 3000000, 2000000], [1080, 6000000, 4000000]]
+      .map(([height, maxBitrate, average]) => ({
+        width: height * 16 / 9, height, maxBitrate, videoCodec: 'avc1.640028',
+        // averageBitrate drifts with the measured rate; the attribute does not.
+        averageBitrate: maxBitrate * 2, attrs: { 'AVERAGE-BANDWIDTH': String(average) },
+      }));
+    hls.emit('manifest');
+
+    expect(hls.autoLevelCapping).toBe(capping);
+    expect(hls.loadLevel).toBe(manual);
+    expect(hls.startLevel).toBe(start);
+    expect(hls.startLoad).toHaveBeenCalledOnce();
+    expect(pipeline.engineQualityTiers()).toHaveLength(4);
   });
 
   it.each([
@@ -650,10 +690,11 @@ describe('PlayerPipeline desktop DASH', () => {
     url = 'http://host/a',
     contentType = 'application/dash+xml',
     extras: Record<string, string> | null = null,
+    overrides: Partial<PlayerPipelineOptions> = {},
   ) {
     installPreviewGlobals();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(contentTypeResponse(contentType)));
-    const opts = callbacks();
+    const opts = callbacks(overrides);
     const pipeline = new PlayerPipeline(opts);
     const video = videoElement();
     pipeline.setVideoElement(video);
@@ -661,6 +702,63 @@ describe('PlayerPipeline desktop DASH', () => {
     await settle();
     return { pipeline, video, opts };
   }
+
+  // Two audio tracks: Shaka lists each video once per audio pairing.
+  const multiAudio = () => vi.spyOn(FakeShakaPlayer.prototype, 'getVariantTracks').mockReturnValue(
+    [[480, 1000000], [720, 2000000], [1080, 4000000]].flatMap(([height, video], videoId) =>
+      [[10, 128000], [11, 384000]].map(([audioId, audio]) => ({
+        active: height === 1080 && audioId === 10, audioCodec: 'mp4a.40.2', channelsCount: 2, frameRate: 25,
+        hdr: null, videoCodec: 'avc1.640028', bandwidth: video + audio, width: height * 16 / 9, height,
+        videoId, audioId,
+      }))) as unknown as FakeShakaPlayer['variantTracks'],
+  );
+
+  it('pins one Shaka video across its audio pairings, keeping its DRM', async () => {
+    multiAudio();
+    const { pipeline } = await loadDash('http://host/a.mpd', 'application/dash+xml', {
+      'inputstream.adaptive.license_type': 'com.widevine.alpha',
+      'inputstream.adaptive.license_key': 'http://host/license',
+    }, { qualityRule: () => ({ kind: 'tier', height: 720, bandwidth: 2128000 }) });
+    const player = lastShakaPlayer();
+
+    expect(player?.configure).toHaveBeenCalledWith(expect.objectContaining({
+      drm: expect.objectContaining({ preferredKeySystems: ['com.widevine.alpha'] }),
+    }));
+    expect(player?.configure).toHaveBeenLastCalledWith({ restrictions: {
+      minBandwidth: 2128000, maxBandwidth: 2384000, minHeight: 720, maxHeight: 720,
+    } });
+    expect(pipeline.engineQualityTiers()?.map(tier => tier.bandwidth)).toEqual([1128000, 2128000, 4128000]);
+    expect(pipeline.drmLabel()).toBe('Widevine');
+  });
+
+  it('plays the lowest Shaka video when the cap is below every one', async () => {
+    multiAudio();
+    await loadDash('http://host/a.mpd', 'application/dash+xml', null, {
+      qualityRule: () => ({ kind: 'max', height: 360 }),
+    });
+    expect(lastShakaPlayer()?.configure).toHaveBeenLastCalledWith({ restrictions: {
+      minBandwidth: 1128000, maxBandwidth: 1384000, minHeight: 480, maxHeight: 480,
+    } });
+  });
+
+  it('caps Shaka by height, so every audio track stays playable', async () => {
+    multiAudio();
+    await loadDash('http://host/a.mpd', 'application/dash+xml', null, {
+      qualityRule: () => ({ kind: 'max', height: 720 }),
+    });
+    expect(lastShakaPlayer()?.configure).toHaveBeenLastCalledWith({ restrictions: { maxHeight: 720 } });
+  });
+
+  it('seeds Shaka with a high estimate for Highest', async () => {
+    await loadDash('http://host/a.mpd', 'application/dash+xml', null, {
+      qualityRule: () => ({ kind: 'highest' }),
+    });
+
+    expect(lastShakaPlayer()?.configure).toHaveBeenCalledWith({
+      streaming: { bufferingGoal: CONFIG.PLAYER.BUFFER_LENGTH },
+      abr: { defaultBandwidthEstimate: 1000000000 },
+    });
+  });
 
   it('routes a detected DASH content type through Shaka', async () => {
     const { pipeline, video } = await loadDash();
@@ -1094,7 +1192,10 @@ describe('PlayerPipeline manifest loading', () => {
         atmos: false,
         videoRange: '',
         frameRate: 30,
+        bandwidth: 1,
+        averageBandwidth: 0,
       }],
+      qualityTiers: [{ width: 1280, height: 720, bandwidth: 1, averageBandwidth: 0 }],
       masterUrl: 'http://host/a',
     });
   });

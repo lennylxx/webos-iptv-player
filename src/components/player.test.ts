@@ -35,6 +35,9 @@ vi.mock('../services/storage-service', () => ({
     getChannelCycleMode: vi.fn(() => 'global'),
     getLiveReconnectAttempts: vi.fn(() => 3),
     getHeaderPlayback: vi.fn(() => 'off'),
+    getVideoQuality: vi.fn(() => 'auto'),
+    getQualityOverride: vi.fn(() => null),
+    setQualityOverride: vi.fn(),
     getPlayerOsdTimeoutMs: vi.fn(() => 5000),
     getPlaylists: vi.fn(() => [{
       id: 'x',

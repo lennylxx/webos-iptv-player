@@ -7,7 +7,7 @@ const { pipeline, tracks, osd, playlist, health, saved, dirty, requests } = vi.h
   pipeline: {
     load: vi.fn(), destroy: vi.fn(), setVideoElement: vi.fn(),
     currentLoadToken: vi.fn(() => 1), videoLabel: vi.fn(() => 'video'),
-    isLunaActive: vi.fn(() => false), isLunaPending: vi.fn(() => false), isProxyPending: vi.fn(() => false),
+    isLunaActive: vi.fn(() => false), isLunaPending: vi.fn(() => false), isSourcePending: vi.fn(() => false), isProxyPending: vi.fn(() => false),
     canEscalate: vi.fn(() => false),
     isLunaStarting: vi.fn(() => false), lunaClock: vi.fn(() => null), setLunaDisplay: vi.fn(),
     lunaStreamUrl: vi.fn(() => ''), escalate: vi.fn(() => false),
@@ -52,6 +52,9 @@ vi.mock('../services/storage-service', () => ({
     getChannelCycleMode: vi.fn(() => 'global'),
     getLiveReconnectAttempts: vi.fn(() => 3),
     getHeaderPlayback: vi.fn(() => 'off'),
+    getVideoQuality: vi.fn(() => 'auto'),
+    getQualityOverride: vi.fn(() => null),
+    setQualityOverride: vi.fn(),
     getAspectRatio: vi.fn((key: string) => saved[key] ?? 'auto'),
     setAspectRatio: vi.fn((key: string, mode: string) => { saved[key] = mode; }),
     getAspectDirty: vi.fn(() => dirty.value),

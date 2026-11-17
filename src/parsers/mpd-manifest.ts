@@ -566,7 +566,8 @@ export function parseMpd(
     const rep = reps[0] ?? null;
     const kind = kindOf(set, rep);
     if (kind === 'video') {
-      videoSets.push({ set, reps });
+      // A trick-mode set only serves fast-forward thumbnails, never playback.
+      if (!isTrickMode(set)) videoSets.push({ set, reps });
       for (const el of children(set, 'Accessibility')) {
         const scheme = (el.getAttribute('schemeIdUri') || '').toLowerCase();
         if (scheme === CEA608_SCHEME || scheme === CEA708_SCHEME) {
@@ -624,6 +625,7 @@ export function parseMpd(
         atmos,
         videoRange: range || dvRange(codecs),
         frameRate: frameRate(attr(set, rep, 'frameRate')),
+        bandwidth: parseInt(attr(set, rep, 'bandwidth') || '0', 10) || 0,
       });
     }
   }
@@ -638,6 +640,11 @@ export function parseMpd(
     hasContentProtection: !!drm,
     drm,
   };
+}
+
+function isTrickMode(set: Element): boolean {
+  return children(set, 'EssentialProperty').some(el =>
+    (el.getAttribute('schemeIdUri') || '').toLowerCase() === 'http://dashif.org/guidelines/trickmode');
 }
 
 function videoRange(set: Element, rep: Element | null): string {

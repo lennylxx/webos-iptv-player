@@ -49,6 +49,8 @@ import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
 import { ParentalControlService, isResumeConcealed, isWatchlistConcealed } from '../services/parental-control';
 import { parentalPinSupported } from '../services/parental-pin';
+import { VIDEO_QUALITIES, isVideoQuality } from '../utils/video-quality';
+import { videoQualityLabel } from './video-quality-labels';
 import {
   formatNumber,
   localeOptions,
@@ -741,6 +743,7 @@ export class Settings {
     const autoPlay = StorageService.getAutoPlay();
     const livePreview = StorageService.getLivePreview();
     const channelCycleMode = StorageService.getChannelCycleMode();
+    const videoQuality = StorageService.getVideoQuality();
     const showHidden = StorageService.getShowHiddenChannels();
     const feedTime = StorageService.getTzMode() === 'feed';
     const tzOffset = StorageService.getEpgTzOffset();
@@ -981,6 +984,15 @@ export class Settings {
             <div class="settings-category" id="settings-playback" data-settings-category="playback">
               <div class="settings-section">
                 <h3 class="settings-section-title">${t('settings.playback')}</h3>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.videoQuality')}</div>
+                  ${dropdown(
+                    'video-quality',
+                    VIDEO_QUALITIES.map(value => ({ value, label: videoQualityLabel(value) })),
+                    videoQuality,
+                  )}
+                  <div class="settings-item-hint">${t('settings.videoQualityHint')}</div>
+                </div>
                 <div class="settings-item">
                   <div class="settings-item-title">${t('settings.autoPlay')}</div>
                   ${toggleGroup('auto-play', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], autoPlay ? 'on' : 'off')}
@@ -2916,6 +2928,9 @@ export class Settings {
 
     const locale = ($('#app-language', this.container) as HTMLElement | null)?.dataset.value as LocalePreference | undefined;
     if (locale) StorageService.setLocalePreference(locale);
+
+    const videoQuality = ($('#video-quality', this.container) as HTMLElement | null)?.dataset.value;
+    if (isVideoQuality(videoQuality)) StorageService.setVideoQuality(videoQuality);
 
     const liveReconnectAttempts = Number(
       ($('#live-reconnect-attempts', this.container) as HTMLElement | null)?.dataset.value,

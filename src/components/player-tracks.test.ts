@@ -206,7 +206,7 @@ describe('PlayerTracks', () => {
         { name: 'Track 2', lang: 'l2', isDefault: false, isForced: true },
       ],
       closedCaptions: [],
-      variants: [],
+      variants: [], qualityTiers: [],
       masterUrl: 'http://host/master.m3u8',
     });
 
@@ -269,7 +269,7 @@ describe('PlayerTracks', () => {
         audio: [],
         subtitles: [{ name: 'Track 1', lang: 'l1', isDefault: false, isForced: false }],
         closedCaptions: [],
-        variants: [],
+        variants: [], qualityTiers: [],
         masterUrl: 'http://host/b/a.m3u8',
         masterText: MASTER,
       });
@@ -289,7 +289,7 @@ describe('PlayerTracks', () => {
           dash: { kind: 'webvtt', url: 'http://host/b/sub.vtt' },
         }],
         closedCaptions: [],
-        variants: [],
+        variants: [], qualityTiers: [],
         masterUrl: 'http://host/b/a.mpd',
         masterText: MPD,
       });
@@ -316,7 +316,7 @@ describe('PlayerTracks', () => {
           dash: { kind: 'webvtt', url: 'http://host/c/sub.vtt' },
         }],
         closedCaptions: [],
-        variants: [],
+        variants: [], qualityTiers: [],
         masterUrl: 'http://host/c/a.mpd',
         masterText: MPD.replace('sub.vtt', 'http://host/c/sub.vtt'),
       });
@@ -350,7 +350,7 @@ describe('PlayerTracks', () => {
           dash: { kind: 'webvtt', url: 'http://host/d/sub.vtt' },
         }],
         closedCaptions: [],
-        variants: [],
+        variants: [], qualityTiers: [],
         masterUrl: 'http://host/d/a.mpd',
         masterText: MPD.replace('sub.vtt', 'http://host/d/sub.vtt'),
       });
@@ -1822,6 +1822,7 @@ describe('PlayerTracks Luna audio', () => {
     subtitles: [],
     closedCaptions: [],
     variants: [],
+    qualityTiers: [],
     masterUrl: '',
   });
   const logged = (): string => log.mock.calls.map(args => args.join(' ')).join('\n');

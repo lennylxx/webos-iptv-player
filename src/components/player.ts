@@ -41,6 +41,8 @@ import {
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { TvAspectRatio, type AspectRatio } from '../services/aspect-ratio';
+import { qualityRule, tierIndex, type QualityOverride, type QualityTier } from '../utils/video-quality';
+import type { QualityMenuState } from './player-menu';
 import { CONFIG } from '../config';
 import { StallWatchdog, type StallProbe, type StallRecovery } from '../utils/stall-watchdog';
 import { StartupWatchdog, type StartupFailure, type StartupProbe } from '../utils/startup-watchdog';
@@ -159,6 +161,9 @@ export class Player {
   private resyncing = false;
   private resyncTimer: ReturnType<typeof setTimeout> | null = null;
   private manifestVariants: StreamVariant[] = []; // HLS master variants for best-effort codec readout
+  private qualityTiers: QualityTier[] = [];
+  // A Video quality reload keeps the stream's tiers, so the menu row stays.
+  private keptQualityTiers: QualityTier[] | null = null;
   private vodInfo: MediaInfo | null = null; // container-header stream info for the active VOD (codec/fps/HDR)
   private stallWatchdog: StallWatchdog;
   private startupWatchdog: StartupWatchdog;
@@ -231,6 +236,9 @@ export class Player {
       mediaState: video => this.mediaState(video),
       isCatchup: () => this.catchupInfo !== null,
       headerPlayback: () => StorageService.getHeaderPlayback(),
+      qualityRule: () => qualityRule(StorageService.getVideoQuality(),
+        StorageService.getQualityOverride(aspectPreferenceKey(this.currentChannel, this.vod))),
+      onEngineQualityTiers: () => this.onPlaybackStateChanged(),
       onError: reason => this.onError(reason),
       onAudioTracksUpdated: () => {
         this.tracks.applyHlsAudioSelection();
@@ -320,7 +328,9 @@ export class Player {
         this.channelUp();
       },
       // A step that hangs is the startup watchdog's to escalate.
+      // A source still waiting on its master or MPD has not started to stall.
       holdStall: recovery => this.holdStallForLuna(recovery)
+        || this.pipeline.isLunaPending() || this.pipeline.isSourcePending()
         || (this.startupPending && this.pipeline.canEscalate()),
       // A reload reruns a header chain from its first step, past HEADER_CHAIN_CAP_MS.
       canReload: () => !this.chainUnstarted(),
@@ -588,7 +598,8 @@ export class Player {
     // is released too: the TV pauses the element before the app hears it is
     // hidden, and a paused player keeps fetching through its session.
     this.wasPlayingBeforeHide = !this.videoEl.paused || this.pipeline.isLunaActive()
-      || this.pipeline.isLunaPending() || this.pipeline.isProxyPending() || this.pipeline.isProxied();
+      || this.pipeline.isLunaPending() || this.pipeline.isSourcePending()
+      || this.pipeline.isProxyPending() || this.pipeline.isProxied();
     if (this.wasPlayingBeforeHide) {
       // Save catch-up position and remember it for resume() BEFORE the element is destroyed.
       // Prefer a not-yet-applied resume seek: if we suspend before loadedmetadata
@@ -1222,7 +1233,7 @@ export class Player {
   // Stall watchdog recovery: swap in a fresh <video> (kills the wedged native
   // pipeline) and reload the current channel WITHOUT going through play() — that
   // would reset the watchdog's reload budget and prevent escalation.
-  private reloadCurrentStream(): void {
+  private reloadCurrentStream(announce = true): void {
     if (!this.currentChannel) return;
     // A catch-up reload continues from the program position, not its start.
     if (this.catchupInfo && this.catchupUnbounded) {
@@ -1232,7 +1243,7 @@ export class Player {
       const position = this.playbackPosition();
       if (position > 0) this.pendingResumeSecs = Math.max(this.pendingResumeSecs, position);
     }
-    this.osd.updateMessage(t('player.reconnecting'));
+    if (announce) this.osd.updateMessage(t('player.reconnecting'));
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
     this.loadStream(
@@ -1503,6 +1514,8 @@ export class Player {
     this.tracks.resetForLoad();
     this.vodTracksLatePending = false;
     this.manifestVariants = [];
+    this.qualityTiers = this.keptQualityTiers ?? [];
+    this.keptQualityTiers = null;
     this.userPaused = false;
     this.startupPending = true;
     this.startupWatchdog.stop();
@@ -1564,7 +1577,11 @@ export class Player {
 
   private applyPipelineManifest(manifest: PipelineManifest): void {
     this.manifestVariants = manifest.variants;
+    // The menu shows the Video Quality row once a stream names its variants.
+    const tiersChanged = manifest.qualityTiers.length !== this.qualityTiers.length;
+    this.qualityTiers = manifest.qualityTiers;
     this.tracks.applyManifest(manifest);
+    if (tiersChanged) this.onPlaybackStateChanged();
   }
 
   // A channel with HTTP headers that never started moves to the next step
@@ -2470,6 +2487,41 @@ export class Player {
     }
     showToast(t('player.playbackSpeedFailed'));
     this.onPlaybackStateChanged();
+  }
+
+  getQualityMenu(): QualityMenuState | null {
+    const key = aspectPreferenceKey(this.currentChannel, this.vod);
+    if (!key) return null;
+    const tiers = this.pipeline.engineQualityTiers() ?? this.qualityTiers;
+    if (tiers.length < 2) return null;
+    const setting = StorageService.getVideoQuality();
+    const override = StorageService.getQualityOverride(key);
+    // Only a pick pins a row; the Lowest setting stays the Default row.
+    const pinned = override && override !== 'auto' ? tierIndex(qualityRule('auto', override), tiers) : -1;
+    return { setting, override, tiers, pinned };
+  }
+
+  // The TV reads the range only at load, so a new pick reloads in place.
+  setQualityOverride(pick: QualityOverride | null): void {
+    const key = aspectPreferenceKey(this.currentChannel, this.vod);
+    if (!key) return;
+    const setting = StorageService.getVideoQuality();
+    const before = qualityRule(setting, StorageService.getQualityOverride(key));
+    StorageService.setQualityOverride(key, pick);
+    if (JSON.stringify(before) === JSON.stringify(qualityRule(setting, pick))) return;
+    this.keptQualityTiers = this.pipeline.engineQualityTiers() ?? this.qualityTiers;
+    if (this.vod) this.reloadVod(this.vod);
+    else this.reloadCurrentStream(false);
+  }
+
+  private reloadVod(v: VodPlayback): void {
+    const position = this.pendingSeekTarget ?? this.videoEl?.currentTime ?? 0;
+    if (position > 0) this.pendingResumeSecs = Math.max(this.pendingResumeSecs, position);
+    this.pendingSeekTarget = null;
+    this.recreateVideoEl();
+    this.videoEl?.classList.add('active');
+    this.loadStream(v.url, null, { direct: true });
+    this.tracks.attachVod(v);
   }
 
   getAspectRatio(): AspectRatio {

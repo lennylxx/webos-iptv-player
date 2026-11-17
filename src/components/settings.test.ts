@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import type { Channel, ChannelCycleMode, ManualEpgSource, PlaylistEntry, TzMode, XtreamLiveCategorySnapshot } from '../types';
 import type { AnimationMode } from '../services/motion-service';
+import type { VideoQuality } from '../utils/video-quality';
 import type { XtreamAccountInfo, XtreamLiveCategory } from '../services/xtream-client';
 import type { ChannelHealthService, ChannelHealthSummary } from '../services/channel-health';
 import type { ServiceInfo } from '../services/setup-client';
@@ -43,6 +44,7 @@ const {
     channelCycleMode: 'global' as ChannelCycleMode,
     liveReconnectAttempts: 3,
     headerPlayback: 'luna' as 'off' | 'luna' | 'proxy',
+    videoQuality: 'auto' as VideoQuality,
     numberEntryOsdTimeoutMs: 1200,
     playerOsdTimeoutMs: 5000,
     playlistRefreshHours: 6,
@@ -98,6 +100,7 @@ const {
       getChannelCycleMode: vi.fn(() => state.channelCycleMode),
       getLiveReconnectAttempts: vi.fn(() => state.liveReconnectAttempts),
       getHeaderPlayback: vi.fn(() => state.headerPlayback),
+      getVideoQuality: vi.fn(() => state.videoQuality),
       getNumberEntryOsdTimeoutMs: vi.fn(() => state.numberEntryOsdTimeoutMs),
       getPlayerOsdTimeoutMs: vi.fn(() => state.playerOsdTimeoutMs),
       getPlaylistRefreshIntervalHours: vi.fn(() => state.playlistRefreshHours),
@@ -134,6 +137,7 @@ const {
       setTzMode: vi.fn(),
       setChannelCycleMode: vi.fn((m: ChannelCycleMode) => { state.channelCycleMode = m; }),
       setHeaderPlayback: vi.fn((mode: 'off' | 'luna' | 'proxy') => { state.headerPlayback = mode; }),
+      setVideoQuality: vi.fn((quality: VideoQuality) => { state.videoQuality = quality; }),
       setLiveReconnectAttempts: vi.fn((attempts: number) => {
         state.liveReconnectAttempts = attempts;
       }),
@@ -268,6 +272,7 @@ beforeEach(() => {
   state.textSize = '100';
   state.liveReconnectAttempts = 3;
   state.headerPlayback = 'luna';
+  state.videoQuality = 'auto';
   state.numberEntryOsdTimeoutMs = 1200;
   state.playerOsdTimeoutMs = 5000;
   state.playlistRefreshHours = 6;
@@ -1612,6 +1617,20 @@ describe('Settings.save', () => {
     click('#save-settings');
 
     expect(storageMock.setLiveReconnectAttempts).toHaveBeenCalledWith(5);
+    expect(onSave).toHaveBeenCalledWith('apply');
+  });
+
+  it('saves the Video quality under Playback', () => {
+    state.playlists = [];
+    settings.render();
+    const dropdown = container.querySelector('#settings-playback #video-quality');
+    expect(dropdown).not.toBeNull();
+
+    click('#video-quality [data-dropdown-trigger]');
+    click('#video-quality [data-dropdown-value="max1080"]');
+    click('#save-settings');
+
+    expect(storageMock.setVideoQuality).toHaveBeenCalledWith('max1080');
     expect(onSave).toHaveBeenCalledWith('apply');
   });
 

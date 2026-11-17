@@ -67,14 +67,18 @@ describe('parseVariants', () => {
   it('parses resolution and classifies codecs into video/audio', () => {
     const v = parseVariants(MASTER);
     expect(v).toEqual([
-      { width: 1920, height: 1080, videoCodec: 'avc1.640028', audioCodec: 'mp4a.40.2', atmos: false, videoRange: '', frameRate: 30 },
-      { width: 3840, height: 2160, videoCodec: 'hvc1.1.6.L150', audioCodec: 'ec-3', atmos: false, videoRange: 'PQ', frameRate: 59.94 },
-      { width: 0, height: 0, videoCodec: '', audioCodec: '', atmos: false, videoRange: '', frameRate: 0 },
+      { width: 1920, height: 1080, videoCodec: 'avc1.640028', audioCodec: 'mp4a.40.2', atmos: false, videoRange: '', frameRate: 30, bandwidth: 5000000, averageBandwidth: 0 },
+      { width: 3840, height: 2160, videoCodec: 'hvc1.1.6.L150', audioCodec: 'ec-3', atmos: false, videoRange: 'PQ', frameRate: 59.94, bandwidth: 9000000, averageBandwidth: 0 },
+      { width: 0, height: 0, videoCodec: '', audioCodec: '', atmos: false, videoRange: '', frameRate: 0, bandwidth: 800000, averageBandwidth: 0 },
     ]);
   });
   it('classifies codecs by prefix regardless of order', () => {
     const m = ['#EXTM3U', '#EXT-X-STREAM-INF:RESOLUTION=1280x720,CODECS="mp4a.40.2,avc1.42c00d"', 'v.m3u8'].join('\n');
-    expect(parseVariants(m)).toEqual([{ width: 1280, height: 720, videoCodec: 'avc1.42c00d', audioCodec: 'mp4a.40.2', atmos: false, videoRange: '', frameRate: 0 }]);
+    expect(parseVariants(m)).toEqual([{ width: 1280, height: 720, videoCodec: 'avc1.42c00d', audioCodec: 'mp4a.40.2', atmos: false, videoRange: '', frameRate: 0, bandwidth: 0, averageBandwidth: 0 }]);
+  });
+  it('reads BANDWIDTH and AVERAGE-BANDWIDTH separately', () => {
+    const m = ['#EXTM3U', '#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=1000000,BANDWIDTH=1500000', 'v.m3u8'].join('\n');
+    expect(parseVariants(m)[0]).toMatchObject({ bandwidth: 1500000, averageBandwidth: 1000000 });
   });
   it('flags Dolby Atmos from an inline CHANNELS JOC marker', () => {
     const m = [

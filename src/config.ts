@@ -56,13 +56,16 @@ export const CONFIG = {
     DEFAULT_PLAYER_OSD_TIMEOUT_MS: 5000,
     BUFFER_LENGTH: 30,
     MANIFEST_TIMEOUT: 5000,
+    // Streams remembered per session as offering no variant choice, so a
+    // Video quality skips their master read.
+    NO_CHOICE_MEMORY: 500,
     MANIFEST_MAX_BYTES: 256 * 1024,
     // Long live SegmentTimelines need a larger budget so the parser receives
     // complete MPD XML.
     MPD_MAX_BYTES: 1024 * 1024,
     // A master or MPD the page was refused is read again through the bundled
-    // service, which may still be starting. DASH holds the Luna load for it,
-    // so its budget is shorter.
+    // service, which may still be starting. DASH, and HLS whose Video quality
+    // needs the variants, hold the Luna load for it, so their budget is shorter.
     MANIFEST_SERVICE_GRACE_MS: 3000,
     DASH_MANIFEST_SERVICE_TIMEOUT: 2500,
     DASH_MANIFEST_SERVICE_GRACE_MS: 500,

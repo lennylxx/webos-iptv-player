@@ -75,6 +75,7 @@ describe('StorageService IndexedDB migration', () => {
     }));
     localStorage.setItem('iptv_subtitle_offsets', JSON.stringify({ ch1: 1.5 }));
     localStorage.setItem('iptv_aspect_ratios', JSON.stringify({ ch1: 'zoom' }));
+    localStorage.setItem('iptv_quality_picks', JSON.stringify({ ch1: 'tier:720:3000000', ch2: 'bad' }));
     localStorage.setItem('iptv_resume', JSON.stringify({ 'x1|vod|10': resume }));
     localStorage.setItem('iptv_watchlist', JSON.stringify({ 'x1|vod|10': watch }));
     localStorage.setItem('iptv_online_sub_picks', JSON.stringify({
@@ -106,6 +107,8 @@ describe('StorageService IndexedDB migration', () => {
     });
     expect(StorageService.getSubtitleOffset('ch1')).toBe(1.5);
     expect(StorageService.getAspectRatio('ch1')).toBe('zoom');
+    expect(StorageService.getQualityOverride('ch1')).toEqual({ height: 720, bandwidth: 3000000 });
+    expect(StorageService.getQualityOverride('ch2')).toBeNull();
     expect(StorageService.getResume('x1', 'vod', '10')).toEqual(resume);
     expect(StorageService.getWatchlist('x1', 'vod')).toEqual([watch]);
     expect(StorageService.getCatchupProgress('ch1', 5_000)).toEqual({
@@ -129,6 +132,7 @@ describe('StorageService IndexedDB migration', () => {
       'subtitle_prefs',
       'subtitle_offsets',
       'aspect_ratios',
+      'quality_picks',
       'resume',
       'watchlist',
       'online_sub_picks',
@@ -344,6 +348,26 @@ describe('StorageService IndexedDB migration', () => {
     vi.resetModules();
     const { StorageService: Cleared } = await import('./storage-service');
     await Cleared.clearUserData();
+  });
+
+  it('persists a Video quality pick and drops it when it follows the setting', async () => {
+    localStorage.clear();
+    vi.resetModules();
+    const { StorageService: First } = await import('./storage-service');
+    await First.init();
+    await First.clearUserData();
+    await First.init();
+    First.setQualityOverride('ch1', { height: 720, bandwidth: 3000000 });
+    First.setQualityOverride('ch2', 'auto');
+    First.setQualityOverride('ch2', null);
+    await First.flush();
+
+    vi.resetModules();
+    const { StorageService: Relaunched } = await import('./storage-service');
+    await Relaunched.init();
+    expect(Relaunched.getQualityOverride('ch1')).toEqual({ height: 720, bandwidth: 3000000 });
+    expect(Relaunched.getQualityOverride('ch2')).toBeNull();
+    await Relaunched.clearUserData();
   });
 
   it('persists watched and hidden marks and drops a mark with neither flag', async () => {

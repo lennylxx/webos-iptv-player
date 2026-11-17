@@ -20,10 +20,11 @@ vi.mock('../services/playlist-service', () => ({
   },
 }));
 
-import { PlayerMenu } from './player-menu';
+import { PlayerMenu, type QualityMenuState } from './player-menu';
 import { Focus } from '../navigation/focus-scope';
 import type { PlaybackRateState } from '../services/playback-rate';
 import type { AspectRatio } from '../services/aspect-ratio';
+import type { QualityOverride, QualityTier } from '../utils/video-quality';
 
 // Number of colour actions before the "Audio Track" row in the main menu.
 const MENU_ACTIONS = 4;
@@ -732,6 +733,144 @@ describe('PlayerMenu', () => {
       expect(menu.handleBack()).toBe(true);
       expect(selectAspectRatio).not.toHaveBeenCalled();
       expect(el.querySelector('[data-menu-action="__aspect_open__"]')).not.toBeNull();
+    });
+  });
+
+  describe('video quality sub-menu', () => {
+    const tier = (height: number, bandwidth: number): QualityTier => ({
+      width: height * 16 / 9, height, bandwidth, averageBandwidth: 0,
+    });
+    let quality: QualityMenuState | null;
+    let selectQuality: Mock<(pick: QualityOverride | null) => void>;
+
+    beforeEach(() => {
+      quality = {
+        setting: 'max1080',
+        override: null,
+        tiers: [tier(480, 1500000), tier(720, 3000000), tier(2160, 16000000)],
+        pinned: -1,
+      };
+      selectQuality = vi.fn();
+      const fresh = el.cloneNode(false) as HTMLElement;
+      el.replaceWith(fresh);
+      el = fresh;
+      menu = new PlayerMenu(
+        container, getCurrentChannel, onAction,
+        getAudioTracks, selectAudioTrack,
+        getSubtitleTracks, selectSubtitleTrack,
+        getSubtitleOffsetState, openSubtitleOffset,
+        getPlaybackRateState, selectPlaybackRate,
+        subtitleSearchAvailable, openSubtitleSearch,
+        () => null, () => {},
+        () => quality, selectQuality,
+      );
+    });
+
+    const open = (): void => {
+      menu.show();
+      el.querySelector<HTMLElement>('[data-menu-action="__quality_open__"]')!.click();
+    };
+    const labels = (): string[] => items().map(row => row.textContent!.replace(/\s+/g, ' ').trim());
+
+    it('lists Video Quality with the stream choices, above Aspect Ratio', () => {
+      const fresh = el.cloneNode(false) as HTMLElement;
+      el.replaceWith(fresh);
+      el = fresh;
+      menu = new PlayerMenu(
+        container, getCurrentChannel, onAction,
+        getAudioTracks, selectAudioTrack,
+        getSubtitleTracks, selectSubtitleTrack,
+        getSubtitleOffsetState, openSubtitleOffset,
+        getPlaybackRateState, selectPlaybackRate,
+        subtitleSearchAvailable, openSubtitleSearch,
+        () => '4x3', () => {},
+        () => quality, selectQuality,
+      );
+      audioTracks = [
+        { index: 0, label: 'Track 1', active: true, available: true },
+        { index: 1, label: 'Track 2', active: false, available: true },
+      ];
+      subtitleTracks = [{ index: 0, label: 'Track 1', active: false, available: true }];
+      getPlaybackRateState.mockReturnValue({ available: true, rate: 1 });
+      menu.show();
+      expect(items().slice(MENU_ACTIONS).map(row => row.dataset.key)).toEqual([
+        '__audio_open__', '__subs_open__', '__quality_open__', '__aspect_open__', '__speed_open__',
+      ]);
+    });
+
+    it('shows the setting a stream follows on its main-menu row, and hides with one variant', () => {
+      menu.show();
+      const row = el.querySelector('[data-menu-action="__quality_open__"]');
+      expect(row!.querySelector('.menu-item-label')!.textContent).toBe('Video Quality');
+      expect(row!.querySelector('.menu-item-value')!.textContent).toBe('Up to 1080p');
+      menu.hide();
+      quality = null;
+      menu.show();
+      expect(el.querySelector('[data-menu-action="__quality_open__"]')).toBeNull();
+    });
+
+    it('lists Default, Auto, then the variants from highest, with Default checked', () => {
+      open();
+      expect(labels()).toEqual([
+        '‹ Back', '✓ Default · Up to 1080p', 'Auto', '4K · 16 Mbps', '720p · 3 Mbps', '480p · 1.5 Mbps',
+      ]);
+      expect(items()[1].classList.contains('focused')).toBe(true);
+    });
+
+    it('checks and focuses a pinned variant, and drops Auto when the setting is Auto', () => {
+      quality = { ...quality!, setting: 'auto', override: { height: 720, bandwidth: 3000000 }, pinned: 1 };
+      open();
+      expect(labels()).toEqual([
+        '‹ Back', 'Default · Auto', '4K · 16 Mbps', '✓ 720p · 3 Mbps', '480p · 1.5 Mbps',
+      ]);
+      expect(items()[3].classList.contains('focused')).toBe(true);
+    });
+
+    it('keys rows by the rate the TV ranks by, so equal peaks stay distinct', () => {
+      quality = { ...quality!, tiers: [
+        { width: 1280, height: 720, bandwidth: 3000000, averageBandwidth: 1800000 },
+        { width: 1280, height: 720, bandwidth: 3000000, averageBandwidth: 2400000 },
+      ] };
+      open();
+      const keys = items().map(row => row.dataset.key);
+      expect(keys).toContain('quality:1800000');
+      expect(keys).toContain('quality:2400000');
+    });
+
+    it('shows the new pick on its row as soon as it is chosen', () => {
+      selectQuality.mockImplementation((pick) => {
+        quality = { ...quality!, override: pick, pinned: pick && pick !== 'auto' ? 1 : -1 };
+      });
+      open();
+      items()[4].click();
+      const row = el.querySelector('[data-menu-action="__quality_open__"]');
+      expect(row!.querySelector('.menu-item-value')!.textContent).toBe('720p · 3 Mbps');
+    });
+
+    it('keeps focus on its variant when the list changes under the open submenu', () => {
+      open();
+      menu.handleAction('down');
+      menu.handleAction('down');
+      menu.handleAction('down');
+      expect(items().find(row => row.classList.contains('focused'))?.dataset.key).toBe('quality:3000000');
+      quality = { ...quality!, tiers: [...quality!.tiers, tier(4320, 40000000)] };
+      menu.refresh();
+      expect(items().map(row => row.dataset.key)).toContain('quality:40000000');
+      expect(items().find(row => row.classList.contains('focused'))?.dataset.key).toBe('quality:3000000');
+      menu.handleAction('down');
+      expect(items().find(row => row.classList.contains('focused'))?.dataset.key).toBe('quality:1500000');
+    });
+
+    it('sends a variant, Auto, or Default as the pick', () => {
+      open();
+      items()[3].click();
+      expect(selectQuality).toHaveBeenLastCalledWith({ height: 2160, bandwidth: 16000000 });
+      open();
+      items()[2].click();
+      expect(selectQuality).toHaveBeenLastCalledWith('auto');
+      open();
+      items()[1].click();
+      expect(selectQuality).toHaveBeenLastCalledWith(null);
     });
   });
 

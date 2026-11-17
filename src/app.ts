@@ -278,6 +278,8 @@ class App {
       () => this.player.openSubtitleSearch(),
       () => this.player.getAspectRatio(),
       (mode) => this.player.setAspectRatio(mode),
+      () => this.player.getQualityMenu(),
+      (pick) => this.player.setQualityOverride(pick),
     );
 
     this.movies = new Movies(this.views.movies, {

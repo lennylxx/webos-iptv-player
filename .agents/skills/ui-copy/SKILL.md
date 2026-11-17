@@ -142,6 +142,10 @@ a new term after review, add a row here.
 | Hiding a title | Hide / Unhide | 隐藏 / 取消隐藏 |
 | Player aspect ratio setting | Aspect Ratio | 画面比例 |
 | Aspect ratio modes | Auto / 16:9 / 4:3 / Zoom | 自动 / 16:9 / 4:3 / 缩放 |
+| Video quality setting | Video quality (menu: Video Quality) | 画质 |
+| Video quality options | Auto / Highest / Up to 4K / Up to 1080p / Up to 720p / Lowest | 自动 / 最高画质 / 最高 4K / 最高 1080p / 最高 720p / 最低画质 |
+| Following the setting (menu row) | Default · {value} | 默认 · {value} |
+| A variant (menu row) | {resolution} · {bitrate} Mbps | {resolution} · {bitrate} Mbps |
 
 Rejected: 片单 (watchlist), 已看 / 未看 (watched), played / 已播放 (watched), unwatched (not watched), HTTP 标头 (headers), Luna / System player
 (header playback mode), 正在播放 for NOW, 节目单 (guide),
@@ -149,7 +153,9 @@ Rejected: 片单 (watchlist), 已看 / 未看 (watched), played / 已播放 (wat
 Ascending / Descending / 升序 / 降序 / Asc / Desc and 最旧 (sort
 direction),
 "Exception" / 例外 (set separately), "Mixed" / 混合 (partly locked),
-宽高比 (aspect ratio), 原始 / 满屏 / 填充 (aspect modes).
+宽高比 (aspect ratio), 原始 / 满屏 / 填充 (aspect modes),
+清晰度 (video quality), Data saver / 省流量 and Prefer highest / Prefer
+lowest (quality options).
 
 ## Checks
 

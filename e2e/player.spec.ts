@@ -1183,6 +1183,65 @@ test('the player menu sets the aspect ratio and each channel remembers its own',
   await expect.poll(fit).toBe('cover');
 });
 
+test('the player menu pins a video quality and reloads the channel with its bitrate range', async ({ page }) => {
+  // The webOS native path is the one that hands the range to the TV.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, value: 'Web0S Chrome/53.0' });
+    document.addEventListener('error', (event) => {
+      if (event.isTrusted && event.target instanceof HTMLMediaElement) event.stopImmediatePropagation();
+    }, true);
+  });
+  await routePlaylist(page);
+  await routeLiveManifest(page);
+  await page.route('**/one.m3u8', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/vnd.apple.mpegurl',
+    body: [
+      '#EXTM3U',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=854x480',
+      'http://host/v480.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720',
+      'http://host/v720.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080',
+      'http://host/v1080.m3u8',
+    ].join('\n'),
+  }));
+  await neuterVideo(page);
+  await seedPlaylist(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-player')).toBeVisible();
+  const sourceType = () => page.locator('#video-player source').evaluate(
+    element => decodeURIComponent(element.getAttribute('type') ?? ''));
+  await expect.poll(sourceType).toBe('application/vnd.apple.mpegurl');
+
+  await page.keyboard.press('ArrowRight');
+  const menu = page.locator('#player-menu');
+  await expect(menu).toHaveClass(/visible/);
+  const row = menu.locator('[data-menu-action="__quality_open__"]');
+  await expect(row.locator('.menu-item-label')).toHaveText('Video Quality');
+  await expect(row.locator('.menu-item-value')).toHaveText('Auto');
+  for (let i = 0; i < 8 && !(await row.evaluate(element => element.classList.contains('focused'))); i++) {
+    await page.keyboard.press('ArrowDown');
+  }
+  await expect(row).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+  await expect(menu.locator('.menu-header h2')).toHaveText('Video Quality');
+  await expect(menu.locator('.menu-item .menu-track-label')).toHaveText([
+    'Default · Auto', '1080p · 6 Mbps', '720p · 3 Mbps', '480p · 1.5 Mbps',
+  ]);
+  await expect(menu.locator('[data-key="quality:default"]')).toHaveClass(/focused/);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(menu.locator('[data-key="quality:3000000"]')).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+
+  await expect(row.locator('.menu-item-value')).toHaveText('720p · 3 Mbps');
+  await expect.poll(sourceType).toBe('application/vnd.apple.mpegurl;mediaOption='
+    + '{"mediaTransportType":"HLS","option":{"adaptiveStreaming":{"bps":{"minimum":3000000,"maximum":3000000}}}}');
+});
+
 test('a number key tunes that channel directly from the player view', async ({ page }) => {
   await playFirstChannel(page, SEARCH_M3U);
 
