@@ -9,7 +9,6 @@ import {
 import { serviceBase } from './service-http';
 import { StorageService } from './storage-service';
 import { uploadIdFromUrl } from './upload-client';
-import { ReminderService } from './reminder-service';
 import { ParentalControlService } from './parental-control';
 import type { OnlineSubtitleConfig } from './subtitle-search/types';
 
@@ -337,7 +336,6 @@ class SetupClientImpl {
       JSON.stringify(manualEpgSources) !== JSON.stringify(previousManualEpgSources);
     const subtitlesChanged =
       JSON.stringify(onlineSubtitles) !== JSON.stringify(previousOnlineSubtitles);
-    if (playlistsChanged) ReminderService.backfillSourceIds();
     const playlistsStored = !playlistsChanged || StorageService.setPlaylists(playlists);
     const epgStored =
       !epgChanged || StorageService.setManualEpgSources(manualEpgSources);

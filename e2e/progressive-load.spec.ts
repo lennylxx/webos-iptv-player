@@ -152,7 +152,7 @@ async function playChannelFive(page: Page, playlist: HeldPlaylist): Promise<void
   await page.addInitScript((url) => {
     if (localStorage.getItem('iptv_playlists')) return;
     localStorage.setItem('iptv_auto_play', 'true');
-    localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'Test', url }]));
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'Test', url }]));
   }, playlist.url);
   await page.goto('/');
   await headShown(page);
@@ -170,7 +170,7 @@ async function playChannelFive(page: Page, playlist: HeldPlaylist): Promise<void
 async function setPlaylists(page: Page, urls: string[]): Promise<void> {
   await page.evaluate((list) => {
     localStorage.setItem('iptv_playlists', JSON.stringify(
-      list.map((url, i) => ({ name: `Source ${String(i + 1)}`, url }))));
+      list.map((url, i) => ({ id: `p${String(i + 1)}`, name: `Source ${String(i + 1)}`, url }))));
   }, urls);
 }
 
@@ -526,7 +526,7 @@ test('a playlist read from the cache focuses its first channel', async ({ page }
   // Seed once: a new source id on reload would miss the cache.
   await page.addInitScript((url) => {
     if (!localStorage.getItem('iptv_playlists')) {
-      localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'Test', url }]));
+      localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'Test', url }]));
     }
   }, PLAYLIST_URL);
   const cached = page.waitForEvent('console',
@@ -567,7 +567,7 @@ test('a source that fails partway takes its channels off the list at once', asyn
     waiting.silenceNext();
     await page.addInitScript((urls) => {
       localStorage.setItem('iptv_playlists', JSON.stringify(
-        urls.map((url, i) => ({ name: `Source ${String(i + 1)}`, url }))));
+        urls.map((url, i) => ({ id: `p${String(i + 1)}`, name: `Source ${String(i + 1)}`, url }))));
     }, [failing.url, waiting.url]);
     await page.goto('/');
     await headShown(page);
@@ -590,7 +590,7 @@ test('the source after a failed one shows its first channels at once and focuses
   try {
     await page.addInitScript((urls) => {
       localStorage.setItem('iptv_playlists', JSON.stringify(
-        urls.map((url, i) => ({ name: `Source ${String(i + 1)}`, url }))));
+        urls.map((url, i) => ({ id: `p${String(i + 1)}`, name: `Source ${String(i + 1)}`, url }))));
     }, [failing.url, next.url]);
     await page.goto('/');
     await headShown(page);
@@ -625,7 +625,7 @@ test('a failed load leaves someone browsing the arrived channels where they are'
     await failSecondSource(page);
     await page.addInitScript((urls) => {
       localStorage.setItem('iptv_playlists', JSON.stringify(
-        urls.map((url, i) => ({ name: `Source ${String(i + 1)}`, url }))));
+        urls.map((url, i) => ({ id: `p${String(i + 1)}`, name: `Source ${String(i + 1)}`, url }))));
     }, [first.url, second.url]);
     await page.goto('/');
     await headShown(page);
@@ -648,7 +648,7 @@ test('a failed load nobody browsed opens Settings', async ({ page }) => {
     await failSecondSource(page);
     await page.addInitScript((urls) => {
       localStorage.setItem('iptv_playlists', JSON.stringify(
-        urls.map((url, i) => ({ name: `Source ${String(i + 1)}`, url }))));
+        urls.map((url, i) => ({ id: `p${String(i + 1)}`, name: `Source ${String(i + 1)}`, url }))));
     }, [first.url, second.url]);
     await page.goto('/');
     await headShown(page);

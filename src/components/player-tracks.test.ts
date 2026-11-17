@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
 import type { Channel, VodPlayback } from '../types';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { StorageService } from '../services/storage-service';
 import type { PlayerPipeline } from './player-pipeline';
 import {
@@ -187,10 +187,7 @@ describe('PlayerTracks', () => {
       { name: 'Track 2', lang: 'l2' },
     );
     tracks.applyNativeAudioSelection();
-    expect(StorageService.getAudioPref).toHaveBeenCalledWith(
-      channelKey(CHANNEL),
-      legacyChannelKey(CHANNEL),
-    );
+    expect(StorageService.getAudioPref).toHaveBeenCalledWith(channelKey(CHANNEL));
   });
 
   it('self-renders a forced live subtitle from the manifest', () => {
@@ -1343,7 +1340,7 @@ describe('PlayerTracks', () => {
       expect(audio.map((item) => item.enabled)).toEqual([false, true]);
     });
 
-    it('reads live preferences with current and legacy channel keys', () => {
+    it('reads live preferences with the stable channel key', () => {
       const audio = [
         nativeAudioTrack(true, { label: 'Track 1', language: 'l1' }),
         nativeAudioTrack(false, { label: 'Track 2', language: 'l2' }),
@@ -1356,7 +1353,7 @@ describe('PlayerTracks', () => {
       tracks.applyNativeAudioSelection();
 
       expect(StorageService.getAudioPref)
-        .toHaveBeenCalledWith(channelKey(live), legacyChannelKey(live));
+        .toHaveBeenCalledWith(channelKey(live));
     });
 
     it('reports the offset row available and clamps/persists/shifts on setSubtitleOffset', () => {
@@ -1929,7 +1926,7 @@ describe('PlayerTracks Luna audio', () => {
     tracks.applyLunaAudioSelection();
 
     expect(selectLunaAudio).toHaveBeenCalledExactlyOnceWith(1);
-    expect(StorageService.getAudioPref).toHaveBeenCalledWith(channelKey(CHANNEL), legacyChannelKey(CHANNEL));
+    expect(StorageService.getAudioPref).toHaveBeenCalledWith(channelKey(CHANNEL));
     expect(StorageService.setAudioPref).not.toHaveBeenCalled();
     expect(logged()).toContain('event=audio.luna.tracks session=1 load=7 count=2 manifest=2 naming=manifest pick=saved index=1');
   });

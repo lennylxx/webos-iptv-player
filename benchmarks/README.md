@@ -5,7 +5,7 @@ with 50,000 channels, groups, programs, movies, series, categories, and episodes
 uses IndexedDB and localStorage fixtures so network and fixture generation are
 excluded from the measured view operations.
 Playwright rebuilds the current database schema and seeds current-format
-records directly, so schema upgrades and legacy-data migration are not measured.
+records directly, so schema upgrades are not measured.
 
 ## Commands
 

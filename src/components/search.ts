@@ -26,7 +26,7 @@ import {
   rankPreparedNamesTopK,
   rankPreparedTopK,
 } from '../utils/channel-search';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { formatDayLabel, formatTime } from '../utils/time';
 import { showToast } from './toast';
 import { CatchupResumePrompt } from './catchup-resume-prompt';
@@ -1921,11 +1921,7 @@ export class Search {
         XtreamArchiveService.isAvailable(channel, programme.start.getTime(), Date.now(), programme.catchupId)) {
       const key = channelKey(channel);
       const startMs = programme.start.getTime();
-      const progress = StorageService.getCatchupProgressList(
-        key,
-        undefined,
-        legacyChannelKey(channel),
-      )
+      const progress = StorageService.getCatchupProgressList(key)
         .find(entry => entry.progStart === startMs && !entry.completed);
       if (progress) {
         this.resumePrompt.show(programme.title, progress.position, {

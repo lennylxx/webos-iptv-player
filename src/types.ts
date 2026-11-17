@@ -44,9 +44,6 @@ export interface Channel {
   playlistIds: string[];
   catchup: string;
   catchupSource: string;
-  // TODO(cleanup, post-1.15.0): remove after legacy playlist caches have expired.
-  /** Legacy cached field; new Xtream channels derive endpoint variants on demand. */
-  catchupSources?: XtreamCatchupSource[];
   /** Xtream account and stream identity used for program-level archive checks. */
   catchupAccountId?: string;
   catchupStreamId?: string;
@@ -205,8 +202,7 @@ export interface XtreamLiveCategorySnapshot {
 export interface PlaylistEntry {
   /** Stable identity assigned once at creation. Keys channel membership and the
    *  playlist tabs, so deleting/reordering/renaming never shifts the others and
-   *  two playlists sharing a URL or name stay independent. StorageService
-   *  backfills it for any legacy entry read from storage. */
+   *  two playlists sharing a URL or name stay independent. */
   id: string;
   name: string;
   /** For 'xtream' entries this is the normalized portal base (`http://host:port`);
@@ -681,7 +677,7 @@ export interface CatchupProgressEntry {
   progStart: number;   // programme start epoch ms
   progEnd: number;     // programme end epoch ms
   epgSourceUrl?: string;
-  title?: string;      // display snapshot for Recently Watched; absent on legacy entries
+  title?: string;      // display snapshot for Recently Watched
   description?: string;
   icon?: string;
   catchupId?: string;  // XMLTV catchup-id, for `{catchup-id}` catch-up URLs

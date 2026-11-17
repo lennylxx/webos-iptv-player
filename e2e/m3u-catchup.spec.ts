@@ -29,8 +29,8 @@ async function setup(page: Page, m3u = M3U, epg = EPG): Promise<string[]> {
   await page.route('**/epg.xml', (r) => r.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
   await page.clock.setFixedTime(NOW);
   await page.addInitScript(() => {
-    localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-    localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
     localStorage.setItem('iptv_tz_mode', JSON.stringify('device'));
   });
   return requested;

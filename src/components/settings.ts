@@ -31,7 +31,7 @@ import { newLiveCategoryIds, normalizeLiveCategoryFilter } from '../utils/xtream
 import { LiveCategoryPicker } from './live-category-picker';
 import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
 import { genPlaylistId, isSourceEnabled } from '../utils/playlist';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { formatEpgOffset } from '../utils/epg-offset';
 import { CONFIG } from '../config';
 import { THEMES, OVERLAY_STYLES, TEXT_SIZES, DEFAULT_TEXT_SIZE, type ThemeMeta, type OverlayStyle, type TextSize } from '../config/themes';
@@ -2855,7 +2855,6 @@ export class Settings {
       return;
     }
 
-    ReminderService.backfillSourceIds();
     // A re-pointed account loses its old snapshot on save; keep the one its picker just reviewed.
     if (StorageService.setPlaylists(nextSources)) {
       for (const [reviewedId, reviewed] of reviewedSnapshots) {
@@ -2882,21 +2881,10 @@ export class Settings {
     const tzModeBtn = $('#tz-mode .toggle-option.active', this.container);
     if (tzModeBtn?.dataset.value) StorageService.setTzMode(tzModeBtn.dataset.value as TzMode);
     const sourceByChannel: Record<string, string> = {};
-    const legacySources = new Map<string, string>();
-    const ambiguousLegacyKeys = new Set<string>();
     for (const channel of PlaylistService.channels) {
       const sourceUrl = EpgService.getSourceUrl(channel);
       if (!sourceUrl) continue;
       sourceByChannel[channelKey(channel)] = sourceUrl;
-      const legacyKey = legacyChannelKey(channel);
-      if (legacySources.has(legacyKey)) {
-        ambiguousLegacyKeys.add(legacyKey);
-      } else {
-        legacySources.set(legacyKey, sourceUrl);
-      }
-    }
-    for (const [legacyKey, sourceUrl] of legacySources) {
-      if (!ambiguousLegacyKeys.has(legacyKey)) sourceByChannel[legacyKey] = sourceUrl;
     }
     ReminderService.migrateEpgOffsets(
       this.storedEpgOffsets,

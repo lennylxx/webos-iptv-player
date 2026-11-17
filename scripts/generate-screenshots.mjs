@@ -585,9 +585,19 @@ async function setupPage(page, {
   // picks which account drives Movies / Series / Search). Their get.php resolves
   // to the full channel set; the first account (My Xtream) is the active one.
   await page.addInitScript(({ favs, playlists }) => {
+    // Favorites are keyed by channelKey, an FNV-1a hash of the stream URL.
+    const channelKey = (url) => {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < url.length; i++) {
+        h ^= url.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+      }
+      return (h >>> 0).toString(16).padStart(8, '0');
+    };
     localStorage.setItem('iptv_playlists', JSON.stringify(playlists));
-    localStorage.setItem('iptv_epg_url', JSON.stringify('https://demo.local/epg.xml'));
-    localStorage.setItem('iptv_favorites', JSON.stringify(favs));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'https://demo.local/epg.xml', playlistIds: [] }]));
+    localStorage.setItem('iptv_favorites',
+      JSON.stringify(favs.map(id => channelKey(`https://demo.local/stream/${id}.m3u8`))));
   }, {
     favs: FAVORITE_IDS,
     playlists: xtream
@@ -596,8 +606,8 @@ async function setupPage(page, {
           { id: 'demo-xtream-2', name: 'Backup Xtream', url: 'http://backup.xtream.local:8080', source: 'xtream', xtream: { username: 'demo2', password: 'demo2' } },
         ]
       : [
-          { name: 'Playlist 1', url: 'https://demo.local/playlist1.m3u' },
-          { name: 'Playlist 2', url: 'https://demo.local/playlist2.m3u' },
+          { id: 'demo-1', name: 'Playlist 1', url: 'https://demo.local/playlist1.m3u' },
+          { id: 'demo-2', name: 'Playlist 2', url: 'https://demo.local/playlist2.m3u' },
         ],
   });
 

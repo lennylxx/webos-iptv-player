@@ -23,7 +23,7 @@ vi.mock('../utils/channel', async importOriginal => {
 
 import { ReminderService } from './reminder-service';
 import { StorageService } from './storage-service';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { CONFIG } from '../config';
 import { setLocale } from '../i18n';
 import { ParentalControlService } from './parental-control';
@@ -72,29 +72,6 @@ describe('ReminderService store', () => {
 
     state.channels = many.slice(1) as never[];
     expect(ReminderService.resolveChannelIndex(target)).toBe(48);
-  });
-
-  it('resolves only unambiguous legacy channel keys', () => {
-    const legacy = legacyChannelKey(chan('http://host/a?id=1', 'A') as never);
-    state.channels = [chan('http://host/a?id=1', 'A')] as never[];
-    expect(ReminderService.resolveChannelIndex(legacy)).toBe(0);
-
-    state.channels = [...state.channels, chan('http://host/a?id=2', 'B')] as never[];
-    expect(ReminderService.resolveChannelIndex(legacy)).toBe(-1);
-  });
-
-  it('detects and removes the correct legacy reminder after query keys diverge', () => {
-    const first = chan('http://host/a?id=1', 'A');
-    const second = chan('http://host/a?id=2', 'B');
-    state.channels = [first, second] as never[];
-    const oldKey = legacyChannelKey(first as never);
-    ReminderService.add(rem({ channelKey: oldKey, channelName: 'A', startMs: 5000 }));
-
-    expect(ReminderService.has(channelKey(first as never), 5000)).toBe(true);
-    expect(ReminderService.has(channelKey(second as never), 5000)).toBe(false);
-
-    ReminderService.remove(channelKey(first as never), 5000);
-    expect(ReminderService.list()).toEqual([]);
   });
 
   it('dueNow returns only on-air, unanswered, resolvable reminders', () => {
@@ -198,15 +175,6 @@ describe('ReminderService store', () => {
     state.failed = [];
     ReminderService.prune(5000);
     expect(ReminderService.list()).toHaveLength(0);
-  });
-
-  it('backfills legacy reminder source ids before a source is disabled', () => {
-    state.channels = [chan('http://host/a', 'A', ['p1'])] as never[];
-    ReminderService.add(rem());
-
-    ReminderService.backfillSourceIds();
-
-    expect(ReminderService.list()[0].playlistIds).toEqual(['p1']);
   });
 
   it('migrates reminder times when an EPG offset changes', () => {

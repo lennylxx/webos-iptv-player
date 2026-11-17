@@ -110,96 +110,44 @@ Record<UserDataStore, UserDataRecord[]>
   }
 }
 
-// TODO: Remove this marker helper once all supported installs have upgraded to IndexedDB v4.
-export async function loadMigrationMarkers(): Promise<Set<string>> {
-  const db = await openPersistenceDb();
-  if (!db) return new Set();
-  try {
-    const tx = db.transaction(USER_META_STORE, 'readonly');
-    const keys = await requestResult(tx.objectStore(USER_META_STORE).getAllKeys());
-    const migrated = new Set<string>();
-    for (const key of keys) {
-      if (typeof key === 'string' && key.indexOf('migration:') === 0) {
-        migrated.add(key.slice(10));
-      }
-    }
-    return migrated;
-  } catch (err) {
-    log.error(
-      'Migration markers read failed',
-      'event=persistence.user.migration.failed',
-      'operation=read_markers',
-      err,
-    );
-    throw err;
-  }
-}
-
-export interface UserDataMigration {
-  legacyKey: string;
+// Records saved to localStorage while IndexedDB was unavailable. They have
+// no complete baseline, so they add or update records but never delete one.
+export interface FallbackRecordSet {
+  key: string;
   storeName: UserDataStore;
   records: UserDataRecord[];
-  replacePrefix: string | null;
-  replaceExisting: boolean;
 }
 
-// TODO: Remove this migration writer once all supported installs have upgraded to IndexedDB v4.
-export function migrateUserRecordSets(migrations: UserDataMigration[]): Promise<void> {
-  if (!migrations.length) return Promise.resolve();
+export function restoreFallbackRecords(sets: FallbackRecordSet[]): Promise<void> {
+  if (!sets.length) return Promise.resolve();
   return enqueueWrite(async () => {
     const db = await openPersistenceDb();
     if (!db) {
       log.warn(
         'User data storage is unavailable',
         'event=persistence.user.unavailable',
-        'operation=migrate',
+        'operation=restore_fallback',
       );
       throw new Error('IndexedDB unavailable');
     }
     try {
-      const storeNames = [...new Set(migrations.map(item => item.storeName))];
-      const existingKeys = new Map<UserDataStore, string[]>();
-      const replacementStores = [...new Set(migrations
-        .filter(item => item.replaceExisting)
-        .map(item => item.storeName))];
-      for (const storeName of replacementStores) {
-        const readTx = db.transaction(storeName, 'readonly');
-        const readDone = transactionDone(readTx);
-        const keys = await requestResult(readTx.objectStore(storeName).getAllKeys());
-        await readDone;
-        existingKeys.set(storeName, keys.filter((key): key is string => typeof key === 'string'));
-      }
-      const tx = db.transaction([...storeNames, USER_META_STORE], 'readwrite');
-      const meta = tx.objectStore(USER_META_STORE);
-      for (const migration of migrations) {
-        const store = tx.objectStore(migration.storeName);
-        const keys = existingKeys.get(migration.storeName) ?? [];
-        if (migration.replaceExisting) {
-          for (const key of keys) {
-            if (migration.replacePrefix === null || key.startsWith(migration.replacePrefix)) {
-              store.delete(key);
-            }
-          }
-        }
-        for (const record of migration.records) store.put(record);
-        meta.put({
-          key: `migration:${migration.legacyKey}`,
-          migratedAt: Date.now(),
-        });
+      const tx = db.transaction([...new Set(sets.map(item => item.storeName))], 'readwrite');
+      for (const set of sets) {
+        const store = tx.objectStore(set.storeName);
+        for (const record of set.records) store.put(record);
       }
       await transactionDone(tx);
       log.info(
-        'User data migration completed',
-        'event=persistence.user.migration.completed',
-        `datasets=${migrations.length}`,
-        `records=${migrations.reduce((count, item) => count + item.records.length, 0)}`,
+        'Fallback user data restored',
+        'event=persistence.user.fallback.restored',
+        `datasets=${sets.length}`,
+        `records=${sets.reduce((count, item) => count + item.records.length, 0)}`,
       );
     } catch (err) {
       log.error(
-        'User data migration failed',
-        'event=persistence.user.migration.failed',
-        'operation=migrate',
-        `keys=${migrations.map(item => item.legacyKey).join(',')}`,
+        'Fallback user data restore failed',
+        'event=persistence.user.fallback.failed',
+        `keys=${sets.map(item => item.key).join(',')}`,
         err,
       );
       throw err;

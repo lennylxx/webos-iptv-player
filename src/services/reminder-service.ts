@@ -2,7 +2,7 @@ import type { Channel, Reminder } from '../types';
 import { CONFIG } from '../config';
 import { StorageService } from './storage-service';
 import { PlaylistService } from './playlist-service';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { truncate } from '../utils/text';
 import { t } from '../i18n';
 import { createLogger } from '../utils/logger';
@@ -28,33 +28,24 @@ function parseReminderChannelKey(raw: unknown): string | null {
   return null;
 }
 
-interface ChannelKeyIndex {
-  exact: Map<string, number>;
-  // -1 marks a legacy key shared by several channels.
-  legacy: Map<string, number>;
-}
-
 // PlaylistService replaces its channel arrays on every change, so an index
 // per array stays valid and saves rehashing every channel per lookup.
-const keyIndexes = new WeakMap<Channel[], ChannelKeyIndex>();
+const keyIndexes = new WeakMap<Channel[], Map<string, number>>();
 
-function channelKeyIndex(channels: Channel[]): ChannelKeyIndex {
+function channelKeyIndex(channels: Channel[]): Map<string, number> {
   let index = keyIndexes.get(channels);
   if (index) return index;
-  index = { exact: new Map(), legacy: new Map() };
+  index = new Map();
   for (let i = 0; i < channels.length; i++) {
     const key = channelKey(channels[i]);
-    if (!index.exact.has(key)) index.exact.set(key, i);
-    const legacy = legacyChannelKey(channels[i]);
-    index.legacy.set(legacy, index.legacy.has(legacy) ? -1 : i);
+    if (!index.has(key)) index.set(key, i);
   }
   keyIndexes.set(channels, index);
   return index;
 }
 
 function indexOfChannelKey(channels: Channel[], chKey: string): number {
-  const index = channelKeyIndex(channels);
-  return index.exact.get(chKey) ?? index.legacy.get(chKey) ?? -1;
+  return channelKeyIndex(channels).get(chKey) ?? -1;
 }
 
 class ReminderServiceImpl {
@@ -77,7 +68,7 @@ class ReminderServiceImpl {
   }
 
   has(chKey: string, startMs: number): boolean {
-    return this.list().some(r => this.matchesChannel(r, chKey) && r.startMs === startMs);
+    return this.list().some(r => r.channelKey === chKey && r.startMs === startMs);
   }
 
   add(reminder: Reminder): void {
@@ -95,7 +86,7 @@ class ReminderServiceImpl {
 
   remove(chKey: string, startMs: number): void {
     const list = this.list();
-    const removed = list.filter(r => this.matchesChannel(r, chKey) && r.startMs === startMs);
+    const removed = list.filter(r => r.channelKey === chKey && r.startMs === startMs);
     StorageService.setReminders(list.filter(r => !removed.includes(r)));
     for (const reminder of removed) this.cancelSchedule(reminder.channelKey, startMs);
     if (removed.length) {
@@ -159,18 +150,6 @@ class ReminderServiceImpl {
     return indexOfChannelKey(PlaylistService.getUnconcealedChannels(), chKey) >= 0;
   }
 
-  private matchesChannel(reminder: Reminder, chKey: string): boolean {
-    if (reminder.channelKey === chKey) return true;
-    const target = PlaylistService.channels.find(ch => channelKey(ch) === chKey);
-    if (!target || legacyChannelKey(target) !== reminder.channelKey) return false;
-    const legacyMatches = PlaylistService.channels
-      .filter(ch => legacyChannelKey(ch) === reminder.channelKey);
-    if (legacyMatches.length === 1) return legacyMatches[0] === target;
-    const named = legacyMatches.filter(ch =>
-      ch.name === reminder.channelName || ch.sourceName === reminder.channelName);
-    return named.length === 1 && named[0] === target;
-  }
-
   // A disabled source, or one whose last load failed, may bring it back.
   private unavailableForNow(reminder: Reminder): boolean {
     const ids = reminder.playlistIds;
@@ -179,19 +158,6 @@ class ReminderServiceImpl {
       .filter(source => ids.includes(source.id));
     return matching.length > 0 && matching.every(source =>
       !isSourceEnabled(source) || PlaylistService.hasFailedSource([source.id]));
-  }
-
-  backfillSourceIds(): void {
-    const reminders = this.list();
-    let changed = false;
-    for (const reminder of reminders) {
-      if (reminder.playlistIds?.length) continue;
-      const index = this.resolveChannelIndex(reminder.channelKey);
-      if (index < 0) continue;
-      reminder.playlistIds = PlaylistService.channels[index].playlistIds.slice();
-      changed = true;
-    }
-    if (changed) StorageService.setReminders(reminders);
   }
 
   migrateEpgOffsets(

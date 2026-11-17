@@ -1,9 +1,7 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
+import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
-import { channelKey, legacyChannelKey } from '../utils/channel';
-import { genPlaylistId } from '../utils/playlist';
 import { isCatalogSort, isCatalogSortDirection, type CatalogSortPreference } from '../utils/catalog-sort';
 import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
@@ -17,7 +15,6 @@ import {
 import {
   clearCachedPlaylist,
   clearCachedStreamMimes,
-  migrateLegacyStreamMimeCache,
 } from './idb-cache';
 import { openPersistenceDb } from './idb-database';
 import {
@@ -25,8 +22,7 @@ import {
   clearAllUserData,
   flushUserDataWrites,
   loadAllUserRecords,
-  loadMigrationMarkers,
-  migrateUserRecordSets,
+  restoreFallbackRecords,
   replaceAllUserData,
   type UserDataRecord,
 } from './idb-user-data';
@@ -318,76 +314,51 @@ function parseLastChannel(stored: unknown): LastChannel | null {
   return last;
 }
 
-// TODO: Remove once all supported installs store the last channel as one
-// record instead of a bare index plus iptv_last_channel_key.
-function migrateLegacyLastChannel(): void {
-  const stored = get<unknown>('last_channel', null);
-  const hasLegacyKey = localStorage.getItem(PREFIX + 'last_channel_key') !== null;
-  if (typeof stored !== 'number' && !hasLegacyKey) return;
-  const legacyKey = hasLegacyKey ? get<unknown>('last_channel_key', null) : null;
-  let last = typeof stored === 'number' && Number.isFinite(stored)
-    ? { index: stored } as LastChannel
-    : parseLastChannel(stored);
-  if (typeof legacyKey === 'string' && legacyKey && !last?.key) {
-    last = { ...(last ?? { index: 0 }), key: legacyKey };
-  }
-  if (last) set('last_channel', last);
-  remove('last_channel_key');
-}
-
-// TODO: Remove this localStorage migration path once all supported installs use IndexedDB v4.
-function legacyRecords(key: string, value: unknown): {
+// The records a fallback localStorage key holds.
+function fallbackRecords(key: string, value: unknown): {
   store: Parameters<typeof applyUserChanges>[0];
   records: UserDataRecord[];
-  replacePrefix: string | null;
 } {
   switch (key) {
     case 'favorites':
       return {
         store: 'favorites',
         records: (value as string[]).map(item => record(`favorite:${item}`, item)),
-        replacePrefix: null,
       };
     case 'reminders':
       return {
         store: 'reminders',
         records: (value as Reminder[]).map(item =>
           record(reminderKey(item), item, { updatedAt: item.startMs })),
-        replacePrefix: null,
       };
     case 'channel_custom':
       return {
         store: 'channel-state',
         records: value ? customizationRecords(value as ChannelCustomization) : [],
-        replacePrefix: 'custom:',
       };
     case 'audio_prefs':
       return {
         store: 'channel-state',
         records: Object.keys(value as Record<string, AudioPref>)
           .map(item => record(`audio:${item}`, (value as Record<string, AudioPref>)[item])),
-        replacePrefix: 'audio:',
       };
     case 'subtitle_prefs':
       return {
         store: 'channel-state',
         records: Object.keys(value as Record<string, SubtitlePref>)
           .map(item => record(`subtitle:${item}`, (value as Record<string, SubtitlePref>)[item])),
-        replacePrefix: 'subtitle:',
       };
     case 'subtitle_offsets':
       return {
         store: 'channel-state',
         records: Object.keys(value as Record<string, number>)
           .map(item => record(`offset:${item}`, (value as Record<string, number>)[item])),
-        replacePrefix: 'offset:',
       };
     case 'aspect_ratios':
       return {
         store: 'channel-state',
         records: Object.keys(value as Record<string, AspectRatio>)
           .map(item => record(`aspect:${item}`, (value as Record<string, AspectRatio>)[item])),
-        replacePrefix: 'aspect:',
       };
     case 'resume':
       return {
@@ -396,7 +367,6 @@ function legacyRecords(key: string, value: unknown): {
           const entry = (value as Record<string, ResumeEntry>)[item];
           return record(resumeKey(entry), entry, { updatedAt: entry.updatedAt });
         }),
-        replacePrefix: 'resume:',
       };
     case 'watchlist':
       return {
@@ -408,14 +378,12 @@ function legacyRecords(key: string, value: unknown): {
             updatedAt: entry.addedAt,
           });
         }),
-        replacePrefix: null,
       };
     case 'online_sub_picks': {
       const entries = value as Record<string, PickedOnlineSub>;
       return {
         store: 'online-sub-picks',
         records: Object.keys(entries).map(item => record(`pick:${item}`, entries[item])),
-        replacePrefix: null,
       };
     }
     case 'catchup_progress': {
@@ -429,7 +397,6 @@ function legacyRecords(key: string, value: unknown): {
             expiresAt: entry.expiresAt,
           });
         }),
-        replacePrefix: 'catchup:',
       };
     }
     case 'catalog_marks': {
@@ -438,7 +405,6 @@ function legacyRecords(key: string, value: unknown): {
         store: 'playback-progress',
         records: Object.keys(marks).map(item =>
           record(markKey(marks[item]), marks[item], { updatedAt: marks[item].updatedAt })),
-        replacePrefix: 'mark:',
       };
     }
     case 'recently_watched_live':
@@ -446,10 +412,9 @@ function legacyRecords(key: string, value: unknown): {
         store: 'recently-watched',
         records: (value as RecentlyWatchedLiveEntry[]).map(item =>
           record(`live:${item.channelKey}`, item, { updatedAt: item.updatedAt })),
-        replacePrefix: null,
       };
     default:
-      throw new Error(`Unsupported legacy user-data key: ${key}`);
+      throw new Error(`Unsupported fallback user-data key: ${key}`);
   }
 }
 
@@ -538,8 +503,8 @@ async function loadUserDataState(): Promise<UserDataState> {
 
 async function initUserData(): Promise<void> {
   if (!await openPersistenceDb()) throw new Error('IndexedDB unavailable');
-  // TODO: Remove this legacy migration block once all supported installs use IndexedDB v4.
-  const migrations: [string, unknown][] = [
+  // Keys user data falls back to while IndexedDB is unavailable.
+  const fallbackKeys: [string, unknown][] = [
     ['favorites', []],
     ['reminders', []],
     ['channel_custom', null],
@@ -555,21 +520,11 @@ async function initUserData(): Promise<void> {
     ['catalog_marks', {}],
   ];
   const pending = [];
-  const migratedKeys = await loadMigrationMarkers();
-  for (let index = 0; index < migrations.length; index++) {
-    const [key, defaultValue] = migrations[index];
-    const legacyExists = localStorage.getItem(PREFIX + key) !== null;
-    const migrated = migratedKeys.has(key);
-    if (migrated && !legacyExists) continue;
-    const destination = legacyRecords(key, get<unknown>(key, defaultValue));
-    pending.push({
-      legacyKey: key,
-      storeName: destination.store,
-      records: destination.records,
-      replacePrefix: destination.replacePrefix,
-      // A post-migration fallback has no complete baseline, so it may add/update but not delete.
-      replaceExisting: !migrated,
-    });
+  for (let index = 0; index < fallbackKeys.length; index++) {
+    const [key, defaultValue] = fallbackKeys[index];
+    if (localStorage.getItem(PREFIX + key) === null) continue;
+    const destination = fallbackRecords(key, get<unknown>(key, defaultValue));
+    pending.push({ key, storeName: destination.store, records: destination.records });
   }
   // A config saved while IndexedDB was unavailable is newer than the stored one.
   const fallbackParental = localStorage.getItem(PREFIX + 'parental_control') !== null
@@ -577,16 +532,14 @@ async function initUserData(): Promise<void> {
     : null;
   if (fallbackParental) {
     pending.push({
-      legacyKey: 'parental_control',
+      key: 'parental_control',
       storeName: 'parental-control' as const,
       records: [record('config', fallbackParental)],
-      replacePrefix: null,
-      replaceExisting: false,
     });
   }
-  await migrateUserRecordSets(pending);
+  await restoreFallbackRecords(pending);
   const loadedUserData = await loadUserDataState();
-  for (const [key] of migrations) remove(key);
+  for (const [key] of fallbackKeys) remove(key);
   remove('parental_control');
   const trimmed = trimResume(loadedUserData.resume);
   if (trimmed.length) persistUserChanges('playback-progress', [], trimmed.map(resumeKey));
@@ -696,7 +649,6 @@ export const StorageService = {
         });
     }
     await userDataInitPromise;
-    await migrateLegacyStreamMimeCache();
   },
 
   // Keeps the aspect flag: the TV keeps the ratio the app set through a reset.
@@ -733,15 +685,7 @@ export const StorageService = {
   },
 
   getPlaylists(): PlaylistEntry[] {
-    const list = get<PlaylistEntry[]>('playlists', []);
-    // A legacy entry predates the stable id; backfill one and persist so it
-    // sticks (a fresh random id on every read would defeat the purpose).
-    let changed = false;
-    for (const pl of list) {
-      if (!pl.id) { pl.id = genPlaylistId(); changed = true; }
-    }
-    if (changed) set('playlists', list);
-    return list;
+    return get<PlaylistEntry[]>('playlists', []);
   },
   setPlaylists(playlists: PlaylistEntry[]): boolean {
     const previous = get<PlaylistEntry[]>('playlists', []);
@@ -887,20 +831,10 @@ export const StorageService = {
 
   getManualEpgSources(): ManualEpgSource[] {
     const stored = get<unknown>('manual_epg_sources', null);
-    if (Array.isArray(stored)) return sanitizeManualEpgSources(stored);
-    // TODO(post-1.16.0): Remove this migration and all `epg_url` access.
-    const legacy = get<string>('epg_url', '').trim();
-    if (!legacy) return [];
-    const migrated = [{ url: legacy, playlistIds: [] }];
-    if (set('manual_epg_sources', migrated)) remove('epg_url');
-    return migrated;
+    return Array.isArray(stored) ? sanitizeManualEpgSources(stored) : [];
   },
   setManualEpgSources(sources: ManualEpgSource[]): boolean {
-    const sanitized = sanitizeManualEpgSources(sources);
-    if (!set('manual_epg_sources', sanitized)) return false;
-    // TODO(post-1.16.0): Remove with the legacy `epg_url` migration.
-    remove('epg_url');
-    return true;
+    return set('manual_epg_sources', sanitizeManualEpgSources(sources));
   },
 
   getEpgOffsets(): Record<string, number> {
@@ -947,13 +881,10 @@ export const StorageService = {
   },
 
   getLastChannel(): LastChannel | null {
-    migrateLegacyLastChannel();
     return parseLastChannel(get<unknown>('last_channel', null));
   },
   setLastChannel(last: LastChannel): void {
     set('last_channel', last);
-    // TODO: Remove with migrateLegacyLastChannel.
-    remove('last_channel_key');
   },
   getChannelCustomization(): ChannelCustomization | null {
     const data = userData
@@ -1078,29 +1009,6 @@ export const StorageService = {
     return idx < 0; // true = added
   },
 
-  // Favorites have used both `id || name` and the query-stripped channelKey.
-  // Re-key every match so migration never silently discards a saved favorite.
-  // TODO(cleanup, post-1.9.0): after a couple of releases, remove this method,
-  // its PlaylistService call sites, and its tests; the flags can remain inert.
-  migrateFavoriteKeys(channels: Channel[]): void {
-    if (get<boolean>('fav_stream_keyed', false)) return;
-    if (!channels.length) return;
-    const urlKeyed = get<boolean>('fav_url_keyed', false);
-    const migrated: string[] = [];
-    for (const oldKey of new Set(this.getFavorites())) {
-      if (channels.some(ch => channelKey(ch) === oldKey)) {
-        migrated.push(oldKey);
-        continue;
-      }
-      const matches = channels.filter(ch =>
-        urlKeyed ? legacyChannelKey(ch) === oldKey : (ch.id || ch.name) === oldKey);
-      migrated.push(...matches.map(channelKey));
-    }
-    if (!this.setFavorites([...new Set(migrated)])) return;
-    if (!set('fav_url_keyed', true)) return;
-    set('fav_stream_keyed', true);
-  },
-
   // The user agent whose Luna answered it has no window lookup.
   getLunaWindowUnsupported(): string | null {
     const value = get<unknown>('luna_window_unsupported', null);
@@ -1189,10 +1097,10 @@ export const StorageService = {
   },
 
   // Preferred audio track per channel (keyed by channelKey). Absent = follow the stream's default.
-  getAudioPref(channelId: string, legacyChannelId = ''): AudioPref | null {
+  getAudioPref(channelId: string): AudioPref | null {
     if (!channelId) return null;
     const all = userData ? userData.audioPrefs : get<Record<string, AudioPref>>('audio_prefs', {});
-    const pref = all[channelId] ?? all[legacyChannelId] ?? null;
+    const pref = all[channelId] ?? null;
     return pref ? cloneValue(pref) : null;
   },
   setAudioPref(channelId: string, pref: AudioPref): void {
@@ -1209,12 +1117,12 @@ export const StorageService = {
 
   // Preferred subtitle per channel (keyed by channelKey). Absent = follow the
   // stream's default (forced subtitle, else off); a stored `off` keeps them off.
-  getSubtitlePref(channelId: string, legacyChannelId = ''): SubtitlePref | null {
+  getSubtitlePref(channelId: string): SubtitlePref | null {
     if (!channelId) return null;
     const all = userData
       ? userData.subtitlePrefs
       : get<Record<string, SubtitlePref>>('subtitle_prefs', {});
-    const pref = all[channelId] ?? all[legacyChannelId] ?? null;
+    const pref = all[channelId] ?? null;
     return pref ? cloneValue(pref) : null;
   },
   setSubtitlePref(channelId: string, pref: SubtitlePref): void {
@@ -1231,12 +1139,12 @@ export const StorageService = {
 
   // Per-stream subtitle timing offset in seconds (keyed by channelPrefKey, same as the
   // subtitle pref). Absent or 0 = no shift.
-  getSubtitleOffset(channelId: string, legacyChannelId = ''): number {
+  getSubtitleOffset(channelId: string): number {
     if (!channelId) return 0;
     const all = userData
       ? userData.subtitleOffsets
       : get<Record<string, number>>('subtitle_offsets', {});
-    return all[channelId] ?? all[legacyChannelId] ?? 0;
+    return all[channelId] ?? 0;
   },
   setSubtitleOffset(channelId: string, seconds: number): void {
     if (!channelId) return;
@@ -1569,7 +1477,6 @@ export const StorageService = {
     chKey: string,
     progStart: number,
     now?: number,
-    legacyChKey = '',
   ): CatchupProgressEntry | null {
     const n = now ?? Date.now();
     const all = userData
@@ -1589,8 +1496,7 @@ export const StorageService = {
         set('catchup_progress', all);
       }
     }
-    const stored = all[`${chKey}|${progStart}`]
-      ?? (legacyChKey ? all[`${legacyChKey}|${progStart}`] : undefined);
+    const stored = all[`${chKey}|${progStart}`];
     if (!stored) return null;
     const { expiresAt: _x, ...entry } = stored;
     return entry;
@@ -1703,11 +1609,7 @@ export const StorageService = {
     set('catchup_progress', all);
   },
 
-  getCatchupProgressList(
-    chKey: string,
-    now?: number,
-    legacyChKey = '',
-  ): CatchupProgressEntry[] {
+  getCatchupProgressList(chKey: string, now?: number): CatchupProgressEntry[] {
     const n = now ?? Date.now();
     const all = userData
       ? userData.catchupProgress
@@ -1726,18 +1628,15 @@ export const StorageService = {
         set('catchup_progress', all);
       }
     }
-    const prefixes = [`${chKey}|`];
-    if (legacyChKey && legacyChKey !== chKey) prefixes.push(`${legacyChKey}|`);
-    const byStart = new Map<number, CatchupProgressEntry>();
-    for (const prefix of prefixes) {
-      for (const k of Object.keys(all)) {
-        if (k.startsWith(prefix)) {
-          const { expiresAt: _x, ...entry } = all[k];
-          if (!byStart.has(entry.progStart)) byStart.set(entry.progStart, entry);
-        }
+    const prefix = `${chKey}|`;
+    const result: CatchupProgressEntry[] = [];
+    for (const k of Object.keys(all)) {
+      if (k.startsWith(prefix)) {
+        const { expiresAt: _x, ...entry } = all[k];
+        result.push(entry);
       }
     }
-    return [...byStart.values()];
+    return result;
   },
 
   getAllCatchupProgress(now?: number): CatchupProgressEntry[] {

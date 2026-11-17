@@ -737,7 +737,6 @@ export class Player {
   // Resolve the playable URL for a channel, applying the catch-up template when
   // a catch-up window is active. Shared by play() and the stall reload path.
   private xtreamCatchupSources(channel: Channel): XtreamCatchupSource[] {
-    if (channel.catchupSources?.length) return channel.catchupSources;
     // A playlist's own catchup-source for `xc` is used as written.
     if (!channel.catchupAccountId && !channel.catchupStreamId) {
       return [{ kind: 'path-ts', url: channel.catchupSource }];

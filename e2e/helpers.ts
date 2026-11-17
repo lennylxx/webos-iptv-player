@@ -152,7 +152,7 @@ export async function seedPointer(page: Page): Promise<void> {
 /** Pre-seed one configured URL playlist so the app boots into the channel list. */
 export async function seedPlaylist(page: Page, url = PLAYLIST_URL): Promise<void> {
   await page.addInitScript((u) => {
-    localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'Test', url: u }]));
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'Test', url: u }]));
   }, url);
 }
 

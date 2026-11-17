@@ -18,12 +18,10 @@ import {
   getCachedCatalogMetadata,
   getCachedEpg,
   getCachedPlaylist,
-  migrateLegacyPlaylistCache,
   openCachedPlaylist,
   getCachedStreamMime,
   getCachedChannelHealth,
   getCachedSubtitle,
-  migrateLegacyStreamMimeCache,
   onPlaylistCacheWritten,
   reserveSearchIndex,
   settleSearchIndex,
@@ -56,18 +54,6 @@ import { holdRecord, type HeldWriteRequest, type HeldWriteResult } from './held-
 import { serializedBytes } from '../utils/serialized-bytes';
 import { isPackedEpg, packEpg, packEpgFilter } from './epg-cache-codec';
 import { PLAYLIST_CHUNK_SIZE, PLAYLIST_FIRST_CHUNK_SIZE, playlistChunkKey } from './playlist-chunks';
-
-// The app worker's cache tasks run here against the same fake IndexedDB.
-const workerMock = vi.hoisted(() => ({ fail: false }));
-vi.mock('../workers/app-worker-client', async () => {
-  const { IdbSearchCacheReader: Reader } = await import('../workers/search-cache-reader');
-  return {
-    runAppWorkerTask: vi.fn((task: string, request: { key: string; keyPath: string; timeoutMs: number }) => {
-      if (task !== 'cache.migrate-playlist' || workerMock.fail) return Promise.reject(new Error(task));
-      return new Reader(indexedDB).migratePlaylist(request.key, request.keyPath, request.timeoutMs);
-    }),
-  };
-});
 
 const channel = (id: string): Channel => ({
   id,
@@ -359,19 +345,6 @@ describe('idb-cache', () => {
     expect((await getCacheUsage()).categories.catalog.entries).toBe(0);
   });
 
-  it('migrates legacy stream MIME probes and removes their localStorage key', async () => {
-    localStorage.setItem('iptv_stream_mimes', JSON.stringify({
-      'http://host/live': { mime: 'video/mp2t', updatedAt: Date.now() },
-      'http://host/expired': { mime: 'video/mp2t', updatedAt: 0 },
-    }));
-
-    await migrateLegacyStreamMimeCache();
-
-    expect(localStorage.getItem('iptv_stream_mimes')).toBeNull();
-    expect(await getCachedStreamMime('http://host/live')).toBe('video/mp2t');
-    expect(await getCachedStreamMime('http://host/expired')).toBeNull();
-  });
-
   it('clears stream MIME records without clearing catalog records', async () => {
     await setCachedCatalog('x1|vod_categories', ['a']);
     await setCachedStreamMime('http://host/live', 'video/mp2t');
@@ -586,102 +559,6 @@ describe('idb-cache', () => {
 
       expect(await getCachedPlaylist(null)).toBeNull();
       warn.mockRestore();
-    });
-
-    // As releases before chunked playlist caches stored it.
-    async function cacheAsOneRecord(channels: Channel[]): Promise<Record<string, unknown>> {
-      await setCachedPlaylist(channels, [], Date.now(), 60 * 60 * 1000);
-      const head = await playlistRecord('combined-v5');
-      const { chunkCount: _chunks, channelCount: _count, ...data } = head!.data as Record<string, unknown>;
-      const legacy = { ...head, data: { ...data, channels } };
-      await editPlaylistStore((store) => {
-        store.delete(IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff'));
-        store.put(legacy);
-      });
-      return legacy;
-    }
-
-    it('still reads a playlist cached as one record, then moves it into chunks', async () => {
-      const channels = many(PLAYLIST_FIRST_CHUNK_SIZE + 1);
-      const legacy = await cacheAsOneRecord(channels);
-      const bytes = (await getCacheUsage()).categories.playlist.bytes;
-      const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-      try {
-        expect((await getCachedPlaylist(null))?.channels).toEqual(channels);
-        await vi.waitFor(async () => expect(await playlistKeys()).toEqual([
-          'combined-v5',
-          playlistChunkKey('combined-v5', 0),
-          playlistChunkKey('combined-v5', 1),
-        ]), { timeout: 4000 });
-        await flushCacheWrites();
-        expect(info.mock.calls.map(call => call.filter(part => typeof part === 'string').join(' ')))
-          .toContainEqual(expect.stringContaining(
-            'event=persistence.cache.migration.completed operation=migrate category=playlist records=2',
-          ));
-      } finally {
-        info.mockRestore();
-      }
-      const head = await playlistRecord('combined-v5');
-      expect(head).toMatchObject({ timestamp: legacy.timestamp, expiresAt: legacy.expiresAt });
-      expect(head?.data).not.toHaveProperty('channels');
-      expect((await getCacheUsage()).categories.playlist.bytes).toBe(bytes);
-      expect((await getCachedPlaylist(null))?.channels).toEqual(channels);
-    });
-
-    it('leaves a playlist already in chunks to its own write', async () => {
-      await setCachedPlaylist(many(PLAYLIST_FIRST_CHUNK_SIZE + 1), [], 1000, null);
-      const before = await playlistRecord(playlistChunkKey('combined-v5', 1));
-      const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-      try {
-        await migrateLegacyPlaylistCache();
-        expect(info.mock.calls.some(call => call.join(' ').includes('event=persistence.cache.migration'))).toBe(false);
-      } finally {
-        info.mockRestore();
-      }
-      expect(await playlistRecord(playlistChunkKey('combined-v5', 1))).toEqual(before);
-    });
-
-    // Reads the playlist, then runs the migration that read may schedule.
-    async function readThenMigrate(): Promise<Channel[] | undefined> {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-      try {
-        const channels = (await getCachedPlaylist(null))?.channels;
-        await vi.advanceTimersByTimeAsync(CONFIG.PLAYLIST_CACHE_WRITE_DELAY_MS);
-        return channels;
-      } finally {
-        vi.useRealTimers();
-        await flushCacheWrites();
-      }
-    }
-
-    it('leaves an expired playlist to the refresh that replaces it', async () => {
-      const channels = many(PLAYLIST_FIRST_CHUNK_SIZE + 1);
-      await cacheAsOneRecord(channels);
-      const head = await playlistRecord('combined-v5');
-      await editPlaylistStore(store => store.put({ ...head, expiresAt: Date.now() - 1 }));
-
-      expect(await readThenMigrate()).toEqual(channels);
-      expect(await playlistKeys()).toEqual(['combined-v5']);
-    });
-
-    it('keeps reading a playlist it could not migrate', async () => {
-      const channels = many(3);
-      await cacheAsOneRecord(channels);
-      workerMock.fail = true;
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-      try {
-        await readThenMigrate();
-        expect(warn.mock.calls.map(call => call.filter(part => typeof part === 'string').join(' ')))
-          .toContainEqual(expect.stringContaining(
-            'event=persistence.cache.migration.failed operation=migrate category=playlist',
-          ));
-      } finally {
-        workerMock.fail = false;
-        warn.mockRestore();
-      }
-      expect(await playlistKeys()).toEqual(['combined-v5']);
-      expect(await readThenMigrate()).toEqual(channels);
-      expect(await playlistKeys()).toEqual(['combined-v5', playlistChunkKey('combined-v5', 0)]);
     });
 
     it('removes a playlist\'s chunks when a full disk evicts it', async () => {

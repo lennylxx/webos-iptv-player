@@ -39,11 +39,7 @@ const { data, archiveMock, storageMock, epgMock, playlistMock } = vi.hoisted(() 
       resolveChannelKey: vi.fn((key: string, _stream?: string, prefer?: (ch: Channel) => boolean) => {
         const shared = data.channels.filter(ch => channelKey(ch) === key);
         const exact = (prefer && shared.find(prefer)) || shared[0];
-        if (exact) return { channel: exact, channelIndex: data.channels.indexOf(exact) };
-        const legacy = data.channels.filter(ch => legacyChannelKey(ch) === key);
-        return legacy.length === 1
-          ? { channel: legacy[0], channelIndex: data.channels.indexOf(legacy[0]) }
-          : null;
+        return exact ? { channel: exact, channelIndex: data.channels.indexOf(exact) } : null;
       }),
     },
   };
@@ -55,7 +51,7 @@ vi.mock('./epg-service', () => ({ EpgService: epgMock }));
 vi.mock('./xtream-archive', () => ({ XtreamArchiveService: archiveMock }));
 
 import { RecentlyWatchedService } from './recently-watched';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 
 const channel = (over: Partial<Channel> = {}): Channel => ({
   id: 'ch1',
@@ -114,14 +110,6 @@ describe('RecentlyWatchedService.getItems', () => {
     expect(playlistMock.resolveChannelKey).toHaveBeenCalledTimes(2);
   });
 
-  it('resolves an unambiguous legacy channel key', () => {
-    const ch = channel({ url: 'http://host/a?id=1' });
-    data.channels.push(ch);
-    data.live.push({ channelKey: legacyChannelKey(ch), updatedAt: 3000 });
-
-    expect(RecentlyWatchedService.getItems()[0]?.channel).toBe(ch);
-  });
-
   it('shows the entry in the filtered playlist among channels sharing a key', () => {
     const first = channel();
     const second = channel({ id: 'ch2', playlistIds: ['p2'], httpHeaders: { Referer: 'http://host/r' } });
@@ -130,29 +118,6 @@ describe('RecentlyWatchedService.getItems', () => {
 
     expect(RecentlyWatchedService.getItems('p2').map(item => item.channel)).toEqual([second]);
     expect(RecentlyWatchedService.getItems().map(item => item.channel)).toEqual([first]);
-  });
-
-  it('does not guess an ambiguous legacy channel key', () => {
-    const first = channel({ url: 'http://host/a?id=1' });
-    const second = channel({ id: 'ch2', url: 'http://host/a?id=2' });
-    data.channels.push(first, second);
-    data.live.push({ channelKey: legacyChannelKey(first), updatedAt: 3000 });
-
-    expect(RecentlyWatchedService.getItems()).toEqual([]);
-  });
-
-  it('deduplicates legacy and current live entries after the channel is watched again', () => {
-    const ch = channel({ url: 'http://host/a?id=1' });
-    data.channels.push(ch);
-    data.live.push(
-      { channelKey: legacyChannelKey(ch), updatedAt: 2000 },
-      { channelKey: channelKey(ch), updatedAt: 3000 },
-    );
-
-    const items = RecentlyWatchedService.getItems();
-
-    expect(items).toHaveLength(1);
-    expect(items[0].updatedAt).toBe(3000);
   });
 
   it('filters both item types by playlist membership without changing order', () => {
@@ -184,36 +149,6 @@ describe('RecentlyWatchedService.getItems', () => {
 
     expect(RecentlyWatchedService.getItems()).toEqual([]);
     expect(storageMock.clearCatchupProgress).toHaveBeenCalledWith(channelKey(ch), 4);
-  });
-
-  it('resolves a legacy Catch-up title from the current EPG', () => {
-    const ch = channel();
-    data.channels.push(ch);
-    data.catchup.push(progress(ch, {
-      title: undefined,
-      description: undefined,
-      icon: undefined,
-    }));
-    epgMock.findChannelId.mockReturnValue('epg1');
-    epgMock.programmes.epg1 = [{
-      start: new Date(1_000_000),
-      stop: new Date(4_600_000),
-      title: 'Program Bravo',
-      description: 'Legacy summary',
-      category: '',
-      icon: 'http://host/icon',
-    }];
-
-    const item = RecentlyWatchedService.getItems()[0];
-
-    expect(item.kind).toBe('catchup');
-    if (item.kind === 'catchup') {
-      expect(item.progress).toMatchObject({
-        title: 'Program Bravo',
-        description: 'Legacy summary',
-        icon: 'http://host/icon',
-      });
-    }
   });
 
   it('limits the visible merged list', () => {

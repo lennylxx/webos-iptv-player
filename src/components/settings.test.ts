@@ -234,7 +234,6 @@ vi.mock('../services/upload-client', () => ({
 }));
 vi.mock('../services/reminder-service', () => ({
   ReminderService: {
-    backfillSourceIds: vi.fn(),
     migrateEpgOffsets: vi.fn(),
     listManageable: vi.fn(() => []),
   },
@@ -246,7 +245,7 @@ import { Settings, liveCategoriesButtonContent } from './settings';
 import { setLocale } from '../i18n';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 import { morph } from '../utils/morph';
 import { Focus } from '../navigation/focus-scope';
 import { CONFIG } from '../config';
@@ -852,7 +851,7 @@ describe('Settings.render', () => {
     expect(inputs[1].classList).toContain('focused');
   });
 
-  it('does not assign a source to an ambiguous legacy channel key', () => {
+  it('maps each channel to its EPG source by channel key', () => {
     const first = {
       id: 'ch1',
       name: 'Alpha',
@@ -881,9 +880,10 @@ describe('Settings.render', () => {
     click('#save-settings');
 
     const sourceMap = storageMock.migrateCatchupEpgOffsets.mock.calls[0][2];
-    expect(sourceMap[channelKey(first)]).toBe('http://host/a.xml');
-    expect(sourceMap[channelKey(second)]).toBe('http://host/b.xml');
-    expect(sourceMap).not.toHaveProperty(legacyChannelKey(first));
+    expect(sourceMap).toEqual({
+      [channelKey(first)]: 'http://host/a.xml',
+      [channelKey(second)]: 'http://host/b.xml',
+    });
     sourceUrl.mockRestore();
   });
 

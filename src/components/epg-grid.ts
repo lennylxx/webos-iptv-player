@@ -10,7 +10,7 @@ import type {
 } from '../types';
 import { html, inShownView, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { channelKey, groupDisplayLabel, legacyChannelKey } from '../utils/channel';
+import { channelKey, groupDisplayLabel } from '../utils/channel';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
@@ -539,11 +539,7 @@ export class EpgGrid {
     let progressMap: Map<number, CatchupProgressEntry> | undefined;
     if (channelHasCatchup && channel) {
       const chKey = channelKey(channel);
-      const entries = StorageService.getCatchupProgressList(
-        chKey,
-        undefined,
-        legacyChannelKey(channel),
-      );
+      const entries = StorageService.getCatchupProgressList(chKey);
       progressMap = new Map(entries.map(e => [e.progStart, e]));
     }
 
@@ -1185,11 +1181,7 @@ export class EpgGrid {
     if (isPast && channel
         && XtreamArchiveService.isAvailable(channel, startMs, Date.now(), prog.catchupId)) {
       const chKey = channelKey(channel);
-      const entries = StorageService.getCatchupProgressList(
-        chKey,
-        undefined,
-        legacyChannelKey(channel),
-      );
+      const entries = StorageService.getCatchupProgressList(chKey);
       const entry = entries.find(e => e.progStart === startMs);
       if (entry && !entry.completed) {
         // Partial entry — show resume prompt

@@ -1,7 +1,6 @@
 import { CONFIG } from '../config';
 import type { Channel, EpgSource, ParsedEpg } from '../types';
 import { createLogger } from '../utils/logger';
-import { runAppWorkerTask } from '../workers/app-worker-client';
 import type { SearchIndexCandidate } from '../workers/tasks';
 import {
   CACHE_META_STORE as META_STORE,
@@ -162,7 +161,7 @@ interface StreamMimeEntry {
 
 interface CachedPlaylistPayload {
   sourceSignature: string;
-  // Absent once the channels moved to chunk records (`chunkCount`).
+  // The channels a write carries; they are stored as chunk records (`chunkCount`).
   channels?: Channel[];
   chunkCount?: number;
   channelCount?: number;
@@ -1620,57 +1619,6 @@ export function clearCachedStreamMimes(): Promise<void> {
   return clearStore(STREAM_MIME_STORE);
 }
 
-// TODO: Remove this localStorage cache migration after all supported installs use IndexedDB v4.
-export async function migrateLegacyStreamMimeCache(): Promise<void> {
-  const legacyKey = CONFIG.STORAGE_PREFIX + 'stream_mimes';
-  try {
-    const raw = localStorage.getItem(legacyKey);
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as Record<string, Partial<StreamMimeEntry>>;
-    const now = Date.now();
-    let migrated = 0;
-    for (const routeKey of Object.keys(parsed)) {
-      const entry = parsed[routeKey];
-      const updatedAt = entry?.updatedAt;
-      if (
-        !routeKey
-        || typeof entry?.mime !== 'string'
-        || typeof updatedAt !== 'number'
-        || !Number.isFinite(updatedAt)
-        || now - updatedAt > CONFIG.PLAYER.STREAM_MIME_CACHE_TTL
-      ) {
-        continue;
-      }
-      const current = await readRawWithoutTouch(STREAM_MIME_STORE, routeKey);
-      if (current && current.updatedAt >= updatedAt) continue;
-      const stored = await putRaw(STREAM_MIME_STORE, {
-        key: routeKey,
-        timestamp: updatedAt,
-        data: { mime: entry.mime, updatedAt },
-        expiresAt: updatedAt + CONFIG.PLAYER.STREAM_MIME_CACHE_TTL,
-      });
-      if (!stored) return;
-      migrated++;
-    }
-    localStorage.removeItem(legacyKey);
-    log.info(
-      'Legacy stream MIME cache migration completed',
-      'event=persistence.cache.migration.completed',
-      'operation=migrate',
-      'category=catalog',
-      `records=${migrated}`,
-    );
-  } catch (err) {
-    log.warn(
-      'Legacy stream MIME cache migration failed',
-      'event=persistence.cache.migration.failed',
-      'operation=migrate',
-      'category=catalog',
-      err,
-    );
-  }
-}
-
 export async function getCachedSubtitle(key: string): Promise<string | null> {
   const raw = await readRaw(SUBTITLE_STORE, key);
   if (raw && raw.expiresAt !== null && raw.expiresAt <= Date.now()) {
@@ -1759,29 +1707,12 @@ export async function openCachedPlaylist(
   }
   const ref: CacheRecordRef = { store: PLAYLIST_STORE, key: PLAYLIST_CACHE_KEY, timestamp };
   const info = playlistChunkInfo(payload);
-  const legacy = payload.channels;
-  if (!info && !legacy?.length) return null;
-  if (info && !info.channelCount) return null;
+  if (!info?.channelCount) return null;
   const head = {
     epgSources: payload.epgSources ?? [],
     timestamp,
     sourceIds: payload.sourceIds,
   };
-  // TODO(cleanup, post-1.18.0): remove this legacy read with migrateLegacyPlaylistCache.
-  if (!info) {
-    const legacyChannels = legacy as Channel[];
-    return {
-      ...head,
-      channelCount: legacyChannels.length,
-      readChannels: (onChunk) => {
-        if (onChunk?.(legacyChannels) === false) return Promise.resolve(null);
-        rememberRecord(legacyChannels, ref);
-        // An expired cache is about to be replaced by the overdue refresh.
-        if (raw.expiresAt === null || raw.expiresAt > Date.now()) scheduleLegacyPlaylistMigration();
-        return Promise.resolve(legacyChannels);
-      },
-    };
-  }
   return {
     ...head,
     channelCount: info.channelCount,
@@ -1807,50 +1738,6 @@ export async function openCachedPlaylist(
       return channels;
     },
   };
-}
-
-let legacyPlaylistMigration: ReturnType<typeof setTimeout> | null = null;
-
-// After the launch it slowed, so the worker's rewrite doesn't hold up the next.
-function scheduleLegacyPlaylistMigration(): void {
-  if (legacyPlaylistMigration !== null) return;
-  legacyPlaylistMigration = setTimeout(() => {
-    void migrateLegacyPlaylistCache().then(() => { legacyPlaylistMigration = null; });
-  }, CONFIG.PLAYLIST_CACHE_WRITE_DELAY_MS);
-}
-
-// TODO(cleanup, post-1.18.0): once releases before chunked playlist caches
-// are gone, remove this migration, scheduleLegacyPlaylistMigration, the
-// legacy read in openCachedPlaylist, the worker's `cache.migrate-playlist`
-// task and `migratePlaylist`, and their tests.
-// The worker reads and rewrites the record itself, keeping its timestamp,
-// expiry, and accounting, so the page pays no clone for it.
-export function migrateLegacyPlaylistCache(): Promise<void> {
-  return enqueueMutation(async () => {
-    try {
-      const chunks = await runAppWorkerTask('cache.migrate-playlist', {
-        key: PLAYLIST_CACHE_KEY,
-        keyPath: cacheKeyPath(PLAYLIST_STORE),
-        timeoutMs: CONFIG.XTREAM.HELD_WRITE_TIMEOUT_MS,
-      });
-      if (chunks === null) return;
-      log.info(
-        'Legacy playlist cache migration completed',
-        'event=persistence.cache.migration.completed',
-        'operation=migrate',
-        'category=playlist',
-        `records=${String(chunks)}`,
-      );
-    } catch (err) {
-      log.warn(
-        'Legacy playlist cache migration failed',
-        'event=persistence.cache.migration.failed',
-        'operation=migrate',
-        'category=playlist',
-        err,
-      );
-    }
-  });
 }
 
 async function readPlaylistChunk(index: number, timestamp: unknown): Promise<Channel[] | null> {

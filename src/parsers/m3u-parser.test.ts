@@ -8,7 +8,7 @@ import {
   parseM3UBytes,
 } from './m3u-parser';
 import { UNCATEGORIZED_GROUP, type Channel } from '../types';
-import { channelKey, legacyChannelKey } from '../utils/channel';
+import { channelKey } from '../utils/channel';
 
 describe('parseM3U', () => {
   it('parses a basic channel with URL', () => {
@@ -75,7 +75,6 @@ describe('parseM3U', () => {
       catchupStreamId: '42',
       catchupSource: 'http://host:8080/timeshift/u1/p1/{duration}/{start}/42.m3u8',
     });
-    expect(channel.catchupSources).toBeUndefined();
   });
 
   it('uses the Xtream timeshift form for catchup=xc with an explicit source', () => {
@@ -88,7 +87,6 @@ describe('parseM3U', () => {
     expect(channel.catchup).toBe('xtream');
     expect(channel.catchupSource).toBe('http://host/archive/{utc}');
     expect(channel.catchupStreamId).toBeUndefined();
-    expect(channel.catchupSources).toBeUndefined();
   });
 
   it('applies header catch-up to every channel when none declares its own', () => {
@@ -663,7 +661,6 @@ describe('parseM3U', () => {
     expect(ch.url).toBe('http://host/a.m3u8?x=1');
     const before = { url: line } as Channel;
     expect(channelKey(ch)).toBe(channelKey(before));
-    expect(legacyChannelKey(ch)).toBe(legacyChannelKey(before));
   });
 
   it('parses KODIPROP inputstream.adaptive header properties', () => {

@@ -66,7 +66,7 @@ async function setup(
       localStorage.setItem('iptv_playlists', JSON.stringify([
         { id: 'p1', name: 'P1', url: 'http://host/playlist.m3u' },
       ]));
-      localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/guide.xml'));
+      localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/guide.xml', playlistIds: [] }]));
       localStorage.setItem('iptv_tz_mode', JSON.stringify('device'));
       if (enabled !== undefined) localStorage.setItem('iptv_live_preview', JSON.stringify(enabled));
       sessionStorage.setItem('preview-seeded', 'true');

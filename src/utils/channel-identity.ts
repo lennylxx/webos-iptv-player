@@ -66,7 +66,6 @@ export function channelIdentityUrl(ch: Channel): string {
 interface KeyMemo {
   identity: string;
   key?: string;
-  legacy?: string;
 }
 
 // Every boot keys each channel several times (customization, indexes, EPG);
@@ -81,14 +80,6 @@ function keyMemo(ch: Channel): KeyMemo {
     keyMemos.set(ch, memo);
   }
   return memo;
-}
-
-// TODO(cleanup, post-1.9.0): remove after the released query-stripped keys no
-// longer need migration or compatibility lookup.
-export function legacyChannelKey(ch: Channel): string {
-  const memo = keyMemo(ch);
-  if (memo.legacy === undefined) memo.legacy = fnv1a(memo.identity.split('#')[0].split('?')[0]);
-  return memo.legacy;
 }
 
 /** Stable per-stream identity used by all channel-scoped data. */
@@ -163,11 +154,6 @@ type PreferenceVod = Pick<VodQueueItem, 'accountId' | 'kind' | 'itemId' | 'watch
 export function playbackPreferenceKey(channel: Channel | null, vod: PreferenceVod | null): string {
   if (vod) return `vod:${vod.accountId}:${vod.kind}:${vod.itemId}`;
   return channel ? channelKey(channel) : '';
-}
-
-export function legacyPlaybackPreferenceKey(channel: Channel | null, vod: PreferenceVod | null): string {
-  if (vod) return '';
-  return channel ? legacyChannelKey(channel) : '';
 }
 
 // One aspect-ratio choice covers every episode of a series.

@@ -89,9 +89,9 @@ test('M3U channel results retain visible space above matching programmes', async
     route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
   await page.addInitScript(() => {
     localStorage.setItem('iptv_playlists', JSON.stringify([
-      { name: 'P', url: 'http://host/playlist.m3u' },
+      { id: 'p1', name: 'P', url: 'http://host/playlist.m3u' },
     ]));
-    localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/guide.xml'));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/guide.xml', playlistIds: [] }]));
   });
   await page.goto('/');
   await liveLoaded(page);

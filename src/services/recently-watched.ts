@@ -1,6 +1,5 @@
 import { CONFIG } from '../config';
 import type { CatchupInfo, CatchupProgressEntry, Channel } from '../types';
-import { channelKey } from '../utils/channel';
 import { catchupNeedsId } from '../utils/catchup-url';
 import { EpgService } from './epg-service';
 import { PlaylistService } from './playlist-service';
@@ -24,24 +23,6 @@ export type RecentlyWatchedItem =
 
 function matchesPlaylist(channel: Channel, playlistId?: string): boolean {
   return !playlistId || channel.playlistIds.includes(playlistId);
-}
-
-function resolveLegacyProgress(
-  progress: CatchupProgressEntry,
-  channel: Channel,
-): CatchupProgressEntry | null {
-  if (progress.title !== undefined) return progress;
-  const epgId = EpgService.findChannelId(channel);
-  if (!epgId) return null;
-  const programme = EpgService.getProgrammeAtStart(epgId, progress.progStart);
-  if (!programme) return null;
-  return {
-    ...progress,
-    title: programme.title,
-    description: programme.description,
-    icon: programme.icon,
-    ...(programme.catchupId ? { catchupId: programme.catchupId } : {}),
-  };
 }
 
 interface CatchupIdLookup {
@@ -91,26 +72,15 @@ export const RecentlyWatchedService = {
         removeUnavailable(stored);
         continue;
       }
-      const progress = resolveLegacyProgress(stored, resolved.channel);
-      if (!progress) continue;
       items.push({
         kind: 'catchup',
         ...resolved,
-        progress,
-        updatedAt: progress.updatedAt,
+        progress: stored,
+        updatedAt: stored.updatedAt,
       });
     }
 
-    const deduped = new Map<string, RecentlyWatchedItem>();
-    for (const item of items) {
-      const key = item.kind === 'live'
-        ? `live:${channelKey(item.channel)}`
-        : `catchup:${channelKey(item.channel)}:${item.progress.progStart}`;
-      const existing = deduped.get(key);
-      if (!existing || item.updatedAt > existing.updatedAt) deduped.set(key, item);
-    }
-
-    return [...deduped.values()]
+    return items
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, CONFIG.RECENTLY_WATCHED.MAX_VISIBLE_ITEMS);
   },

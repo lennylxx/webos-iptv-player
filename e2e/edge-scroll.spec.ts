@@ -260,7 +260,7 @@ async function seedPlaylists(page: Page, count = 24): Promise<void> {
   });
   await page.addInitScript((n) => {
     localStorage.setItem('iptv_playlists', JSON.stringify(Array.from({ length: n }, (_, i) =>
-      ({ name: `Playlist ${String(i)}`, url: `http://host/p${String(i)}.m3u` }))));
+      ({ id: `p${String(i)}`, name: `Playlist ${String(i)}`, url: `http://host/p${String(i)}.m3u` }))));
   }, count);
 }
 
@@ -648,7 +648,7 @@ test('Guide dates scroll to their end and back without selecting a day', async (
   await page.route('**/epg.xml', (route) => route.fulfill({ status: 200, contentType: 'application/xml',
     body: `<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/><channel id="ch2"/>${programmes.join('')}</tv>` }));
   await seedPlaylist(page);
-  await page.addInitScript(() => localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml')));
+  await page.addInitScript(() => localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }])));
   await page.goto('/');
   await liveLoaded(page);
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));

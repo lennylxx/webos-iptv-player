@@ -288,7 +288,7 @@ test('an expired playlist cache boots at once and refreshes in the background', 
   // the cache's source signature, turning the reload into a cache miss.
   await page.addInitScript((url) => {
     if (!localStorage.getItem('iptv_playlists')) {
-      localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'Test', url }]));
+      localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'Test', url }]));
     }
   }, PLAYLIST_URL);
   await page.route('**/playlist.m3u', async (route) => {
@@ -325,7 +325,7 @@ test('a reload asked for during a background refresh shows its progress at once'
   const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
   await page.addInitScript((url) => {
     if (!localStorage.getItem('iptv_playlists')) {
-      localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'Test', url }]));
+      localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'Test', url }]));
     }
   }, PLAYLIST_URL);
   await page.route('**/playlist.m3u', async (route) => {

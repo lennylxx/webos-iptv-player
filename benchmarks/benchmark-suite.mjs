@@ -323,7 +323,6 @@ export async function installBenchmarkFixture(options) {
         'playlist-cache',
         'playback-progress',
         'recently-watched',
-        'user-meta',
       );
     }
     const fixtureTx = db.transaction(fixtureStores, 'readwrite');
@@ -428,22 +427,6 @@ export async function installBenchmarkFixture(options) {
           value: entry,
           updatedAt: entry.updatedAt,
         });
-      }
-      const userMeta = fixtureTx.objectStore('user-meta');
-      for (const key of [
-        'favorites',
-        'reminders',
-        'channel_custom',
-        'audio_prefs',
-        'subtitle_prefs',
-        'subtitle_offsets',
-        'resume',
-        'watchlist',
-        'online_sub_picks',
-        'catchup_progress',
-        'recently_watched_live',
-      ]) {
-        userMeta.put({ key: `migration:${key}`, migratedAt: Date.now() });
       }
     }
     await transactionDone(fixtureTx);

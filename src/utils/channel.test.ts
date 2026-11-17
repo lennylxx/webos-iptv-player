@@ -6,7 +6,6 @@ import {
   channelKey,
   channelStreamIdentity,
   channelStreamKey,
-  legacyChannelKey,
 } from './channel';
 
 const ch = (url: string): Channel => ({
@@ -59,14 +58,6 @@ describe('channelKey', () => {
     channel.url = 'http://host/b';
     expect(channelKey(channel)).toBe(channelKey(ch('http://host/b')));
     expect(channelKey(channel)).not.toBe(before);
-    expect(legacyChannelKey(channel)).toBe(legacyChannelKey(ch('http://host/b')));
-  });
-});
-
-describe('legacyChannelKey', () => {
-  it('reproduces query-stripped persisted keys for migration', () => {
-    expect(legacyChannelKey(ch('http://host/a?id=1')))
-      .toBe(legacyChannelKey(ch('http://host/a?id=2')));
   });
 });
 

@@ -25,7 +25,6 @@ import {
   channelExactStreamKey,
   channelStreamIdentity,
   channelStreamKey,
-  legacyChannelKey,
 } from '../utils/channel';
 import { createXtreamLiveStreamIdResolver } from '../utils/xtream-live-match';
 import {
@@ -189,8 +188,6 @@ class PlaylistServiceImpl {
   private derivedGroupsSize = -1;
   // Channels sharing a key (one URL with other headers or DRM), in order.
   private channelsByKey: Map<string, Channel[]> | null = null;
-  // Built on the first key miss; most boots never need it.
-  private channelByLegacyKey: Map<string, Channel | null> | null = null;
   private channelSearchIndex: PreparedSearchItem<Channel>[] = [];
   private channelSearchByPlaylist = new Map<string, PreparedSearchItem<Channel>[]>();
   private indexedChannels: Channel[] | null = null;
@@ -327,7 +324,6 @@ class PlaylistServiceImpl {
     this.groupsByPlaylist = new Map();
     this.groupKeyByDisplay = new Map();
     this.channelsByKey = null;
-    this.channelByLegacyKey = null;
     this.channelSearchIndex = [];
     this.channelSearchByPlaylist = new Map();
     this.indexedChannels = null;
@@ -461,7 +457,6 @@ class PlaylistServiceImpl {
     log.info('Cache hit:', this.allChannels.length, 'channels,', this.epgSources.length, 'epg sources');
     if (!adopted) this.applyCustomization();
     this.buildPlaylistTabs();
-    StorageService.migrateFavoriteKeys(this.channels);
     this.logLoadCompleted('cache', enabledIds.size, 0);
     return this.channels;
   }
@@ -897,7 +892,6 @@ class PlaylistServiceImpl {
     }
     if (!adopted) this.applyCustomization();
     this.buildPlaylistTabs();
-    StorageService.migrateFavoriteKeys(this.channels);
     log.info('Refresh complete:', allChannels.length, 'total channels,', epgSources.length, 'epg sources');
     this.logLoadCompleted('network', playlists.length, failedPlaylists);
     done();
@@ -1059,7 +1053,6 @@ class PlaylistServiceImpl {
         this.appendIndexed(this.channelsByKey, channelKey(this.channels[i]), this.channels[i]);
       }
     }
-    this.channelByLegacyKey = null;
     this.indexDerived(from);
     this.publishDerivedIndexes();
     return true;
@@ -1184,7 +1177,6 @@ class PlaylistServiceImpl {
     this.derivedSole = undefined;
     this.derivedGroupsSize = -1;
     this.channelsByKey = null;
-    this.channelByLegacyKey = null;
     this.channelSearchIndex = [];
     this.channelSearchByPlaylist = new Map();
     this.searchIndexedChannels = null;
@@ -1284,21 +1276,6 @@ class PlaylistServiceImpl {
     const index = new Map<string, Channel[]>();
     for (const ch of this.channels) this.appendIndexed(index, channelKey(ch), ch);
     this.channelsByKey = index;
-    return index;
-  }
-
-  private legacyKeyIndex(): Map<string, Channel | null> {
-    if (this.channelByLegacyKey) return this.channelByLegacyKey;
-    const index = new Map<string, Channel | null>();
-    for (const ch of this.channels) {
-      // A legacy key is ambiguous only across different streams, not across
-      // entries that share one channelKey.
-      const legacyKey = legacyChannelKey(ch);
-      const legacy = index.get(legacyKey);
-      if (legacy === undefined) index.set(legacyKey, ch);
-      else if (legacy && channelKey(legacy) !== channelKey(ch)) index.set(legacyKey, null);
-    }
-    this.channelByLegacyKey = index;
     return index;
   }
 
@@ -1449,8 +1426,7 @@ class PlaylistServiceImpl {
       ? same.filter(channel => channelExactStreamIdentity(channel) === exactStream)
       : [];
     const pick = (list: Channel[]) => (prefer && list.find(prefer)) || list[0];
-    const channel = pick(exact) ?? pick(same) ?? pick(shared)
-      ?? this.legacyKeyIndex().get(key);
+    const channel = pick(exact) ?? pick(same) ?? pick(shared);
     if (!channel) return null;
     const channelIndex = this.indexOf(channel);
     return channelIndex < 0 ? null : { channel, channelIndex };
@@ -1483,46 +1459,32 @@ class PlaylistServiceImpl {
   /** The saved stream (a channelStreamKey) picks its entry among channels
    *  sharing the key, and the saved exact stream (a channelExactStreamKey),
    *  else the saved index, picks among copies that differ only by a token;
-   *  without a stream the first entry plays. A legacy key shared by
-   *  different streams stays ambiguous. */
+   *  without a stream the first entry plays. */
   resolveLastChannelIndex(last: LastChannel | null): number {
-    const legacyIndex = last ? last.index : 0;
+    const savedIndex = last ? last.index : 0;
     const stableKey = last?.key ?? '';
     const streamKey = last?.stream ?? '';
     const exactKey = last?.exact ?? '';
-    if (!stableKey) return legacyIndex;
+    if (!stableKey) return savedIndex;
     const matches = (channel: Channel | undefined) => !!channel
       && channelKey(channel) === stableKey
       && (!streamKey || channelStreamKey(channel) === streamKey);
     let first = -1;
     let stream = -1;
-    let legacy = -1;
-    let legacyKey = '';
-    let legacyAmbiguous = false;
     for (let i = 0; i < this.channels.length; i++) {
       const channel = this.channels[i];
-      const key = channelKey(channel);
-      if (key === stableKey) {
-        if (matches(channel)) {
-          if (exactKey && channelExactStreamKey(channel) === exactKey) return i;
-          if (stream < 0) stream = i;
-        }
-        if (first < 0) first = i;
-      } else if (legacyChannelKey(channel) === stableKey) {
-        if (legacy < 0) {
-          legacy = i;
-          legacyKey = key;
-        } else if (key !== legacyKey) {
-          legacyAmbiguous = true;
-        }
+      if (channelKey(channel) !== stableKey) continue;
+      if (matches(channel)) {
+        if (exactKey && channelExactStreamKey(channel) === exactKey) return i;
+        if (stream < 0) stream = i;
       }
+      if (first < 0) first = i;
     }
     if (stream >= 0) {
       // Token rotated on every copy: the saved index still tells them apart.
-      return streamKey && matches(this.channels[legacyIndex]) ? legacyIndex : stream;
+      return streamKey && matches(this.channels[savedIndex]) ? savedIndex : stream;
     }
-    if (first >= 0) return first;
-    return legacyAmbiguous ? -1 : legacy;
+    return first;
   }
 }
 

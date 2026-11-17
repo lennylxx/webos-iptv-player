@@ -1,6 +1,5 @@
 import { DB_NAME, DB_VERSION, PLAYLIST_STORE } from '../services/idb-schema';
 import {
-  chunkedPlaylistWrites,
   joinPlaylistRecord,
   playlistChunkInfo,
   playlistChunkRange,
@@ -82,34 +81,6 @@ export class IdbSearchCacheReader implements SearchCacheReader {
 
   write(store: string, value: CachedRecord, timeoutMs: number): Promise<void> {
     return this.run([store], 'readwrite', timeoutMs, tx => tx.objectStore(store).put(value), () => undefined);
-  }
-
-  // TODO(cleanup, post-1.18.0): remove with migrateLegacyPlaylistCache.
-  /**
-   * Rewrites a playlist cached as one record as a head and chunks, in one
-   * transaction so a newer write is never overwritten. The chunk count, or
-   * null when the record is already chunked or gone.
-   */
-  migratePlaylist(key: string, keyPath: string, timeoutMs: number): Promise<number | null> {
-    const keyRange = this.keyRange;
-    if (!keyRange) return Promise.reject(new SearchCacheError('unavailable'));
-    let chunks: number | null = null;
-    return this.run([PLAYLIST_STORE], 'readwrite', timeoutMs, (tx) => {
-      const store = tx.objectStore(PLAYLIST_STORE);
-      const request = store.get(key);
-      request.addEventListener('success', () => {
-        const record = request.result as CachedRecord | undefined;
-        const data = record?.data as { channels?: unknown } | undefined;
-        if (!record || !Array.isArray(data?.channels) || playlistChunkInfo(data)) return;
-        const writes = chunkedPlaylistWrites(PLAYLIST_STORE, record, keyPath);
-        for (const write of writes) {
-          if (write.deleteRange) store.delete(keyRange.bound(write.deleteRange[0], write.deleteRange[1]));
-          if (write.value) store.put(write.value);
-        }
-        chunks = writes.length - 2;
-      });
-      return request;
-    }, () => chunks);
   }
 
   /** Puts every value in one transaction, so all of them land or none does. */

@@ -167,7 +167,7 @@ test('M3U-only shows a docked bar with Live/Guide/Settings/Search only (no Movie
   await routeLiveManifest(page);
   await page.addInitScript(() => {
     localStorage.setItem('iptv_playlists', JSON.stringify([
-      { name: 'Test', url: 'http://host.example.com/playlist.m3u' },
+      { id: 'p1', name: 'Test', url: 'http://host.example.com/playlist.m3u' },
     ]));
   });
   await page.goto('/');

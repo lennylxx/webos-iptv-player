@@ -225,8 +225,8 @@ test.describe('EPG live badge', () => {
     await page.route('**/epg.xml', r => r.fulfill({ status: 200, contentType: 'application/xml', body: EPG }));
     await page.clock.setFixedTime(NOW);
     await page.addInitScript(() => {
-      localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-      localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+      localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+      localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
       localStorage.setItem('iptv_tz_mode', JSON.stringify('device'));
     });
   }
@@ -355,8 +355,8 @@ test.describe('EPG time zone', () => {
     await page.route('**/epg.xml', r => r.fulfill({ status: 200, contentType: 'application/xml', body: EPG }));
     await page.clock.setFixedTime(NOW);
     await page.addInitScript((mode) => {
-      localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-      localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+      localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+      localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
       localStorage.setItem('iptv_tz_mode', JSON.stringify(mode));
     }, tzMode);
   }
@@ -425,8 +425,8 @@ test('Down from the tab bar resumes the Guide on the day and channel Up left', a
     body: `<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/><channel id="ch2"/>${programmes.join('')}</tv>` }));
   await page.clock.setFixedTime(new Date('2024-03-10T06:00:00Z'));
   await page.addInitScript(() => {
-    localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-    localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
   });
   await page.goto('/');
   await expect(page.locator('#view-channels .channel-item').first()).toHaveClass(/\bfocused\b/);
@@ -472,8 +472,8 @@ test('Right on a channel with no programmes keeps the ring on the channel', asyn
     body: `<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/>${programmes.join('')}</tv>` }));
   await page.clock.setFixedTime(new Date('2024-03-10T06:00:00Z'));
   await page.addInitScript(() => {
-    localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-    localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
   });
   await page.goto('/');
   await expect(page.locator('#view-channels .channel-item').first()).toHaveClass(/\bfocused\b/);
@@ -518,8 +518,8 @@ test.describe('Guide pointer and keys', () => {
       body: `<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/><channel id="ch2"/>${programmes.join('')}</tv>` }));
     await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
     await page.addInitScript(() => {
-      localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-      localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+      localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+      localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
       localStorage.setItem('iptv_tz_mode', JSON.stringify('device'));
     });
     await page.goto('/');
@@ -741,8 +741,8 @@ test.describe('Guide pointer and keys', () => {
     });
     await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
     await page.addInitScript(() => {
-      localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-      localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+      localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+      localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
       localStorage.setItem('iptv_tz_mode', JSON.stringify('device'));
     });
     await page.goto('/');

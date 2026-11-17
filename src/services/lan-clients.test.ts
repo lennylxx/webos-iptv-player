@@ -49,9 +49,6 @@ storageMock.setOnlineSubtitleConfig.mockImplementation(
 
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../utils/fetch-helper', () => ({ fetchWithTimeout: fetchWithTimeoutMock }));
-vi.mock('../services/reminder-service', () => ({
-  ReminderService: { backfillSourceIds: vi.fn() },
-}));
 const guardedSourceIds = vi.hoisted(() => new Set<string>());
 vi.mock('../services/parental-control', () => ({
   ParentalControlService: {

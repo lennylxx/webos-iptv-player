@@ -84,7 +84,7 @@ This is the complete active key inventory:
 | Key | Type | Stored content | Classification |
 | --- | --- | --- | --- |
 | `iptv_playlists` | `PlaylistEntry[]` | Stable id, display name, source URL/type, uploaded channel count, and Xtream username, password, and live-output preference | Configuration |
-| `iptv_epg_url` | `string` | Manually configured XMLTV URL | Configuration |
+| `iptv_manual_epg_sources` | `ManualEpgSource[]` | Manually configured XMLTV URLs in order, each with the playlist ids it applies to (empty for all) | Configuration |
 | `iptv_last_channel` | `{ index, key?, stream?, exact? }` | Last played channel: its array index, stable channel key, stream hash (URL with rotating tokens dropped, plus headers and DRM options), and exact hash (URL as written). Autoplay resolves exact, then stream, then key, then index | Navigation state |
 | `iptv_selectedXtream` | `string \| null` | Account id used by Movies, Series, and Search | Navigation state |
 | `iptv_show_hidden_channels` | `boolean` | Whether normal lists reveal hidden channels in a dimmed state | Preference |
@@ -475,9 +475,11 @@ If recovery succeeds, the flush emits a recovered event. If it still fails, an
 explicit exit is canceled, the app remains open, and a save-failure toast is
 shown instead of silently losing the latest changes.
 
-When IndexedDB cannot open, initialization logs the failure. Destructive
-operations such as Clear Cache and Reset App do not report success when
-IndexedDB is unavailable.
+When IndexedDB cannot open, initialization logs the failure and user records
+fall back to their localStorage keys. The next launch that opens IndexedDB adds
+or updates those records, never deleting one (the fallback holds no complete
+baseline), then removes the keys. Destructive operations such as Clear Cache
+and Reset App do not report success when IndexedDB is unavailable.
 
 ### Reset transaction order
 

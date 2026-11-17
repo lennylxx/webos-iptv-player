@@ -88,21 +88,8 @@ const XTREAM_CHANNEL = {
   ...CHANNEL,
   catchup: 'xtream',
   catchupSource: 'http://host/timeshift/u1/p1/{duration}/{start}/42.ts',
-  catchupSources: [
-    {
-      kind: 'path-ts' as const,
-      url: 'http://host/timeshift/u1/p1/{duration}/{start}/42.ts',
-    },
-    {
-      kind: 'path-bare' as const,
-      url: 'http://host/timeshift/u1/p1/{duration}/{start}/42',
-    },
-    {
-      kind: 'legacy-ts' as const,
-      url: 'http://host/streaming/timeshift.php?username=u1&password=p1'
-        + '&stream=42&start={start}&duration={duration}&extension=ts',
-    },
-  ],
+  catchupAccountId: 'x',
+  catchupStreamId: '42',
   catchupTimeZone: 'America/New_York',
 };
 const DERIVED_XTREAM_CHANNEL = {
@@ -749,7 +736,6 @@ describe('Player catch-up completion', () => {
     ]);
     expect(sources[0].url)
       .toBe('http://host/timeshift/u1/p1/{duration}/{start}/42.m3u8');
-    expect(DERIVED_XTREAM_CHANNEL).not.toHaveProperty('catchupSources');
   });
 
   it('resolves an Xtream timeshift URL in the provider timezone', async () => {
@@ -984,36 +970,32 @@ describe('Player catch-up completion', () => {
 
     player.play(0, { ...CATCHUP, start, end: start + 3600 });
     await flush();
-    expect(realVideo.src).toContain('/timeshift/');
+    const urls: string[] = [];
+    let video = realVideo;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      video = container.querySelector('video')!;
+      urls.push(video.src);
+      video.dispatchEvent(new Event('error'));
+      await flush();
+    }
 
-    realVideo.dispatchEvent(new Event('error'));
-    await flush();
-    const bareVideo = container.querySelector('video')!;
-    expect(bareVideo.src).toContain(
-      '/timeshift/u1/p1/60/2026-07-21:15-30/42',
-    );
-    expect(bareVideo.src).not.toContain('42.ts');
-
-    bareVideo.dispatchEvent(new Event('error'));
-    await flush();
-    const legacyVideo = container.querySelector('video')!;
-    expect(legacyVideo.src).toContain(
+    expect(urls[0]).toContain('/timeshift/u1/p1/60/2026-07-21:15-30/42.ts');
+    expect(urls[1]).toMatch(/\/timeshift\/u1\/p1\/60\/2026-07-21:15-30\/42$/);
+    expect(urls[3]).toContain(
       '/streaming/timeshift.php?username=u1&password=p1&stream=42' +
       '&start=2026-07-21:15-30&duration=60&extension=ts',
     );
-
-    legacyVideo.dispatchEvent(new Event('error'));
-    expect(container.querySelector('video')).toBe(legacyVideo);
+    expect(container.querySelector('video')).toBe(video);
     expect(warn.mock.calls.map(args => args.join(' '))).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          'event=xtream.catchup.variant.attempted variant=path-bare attempt=2 total=3',
+          'event=xtream.catchup.variant.attempted variant=path-bare attempt=2 total=6',
         ),
         expect.stringContaining(
-          'event=xtream.catchup.variant.attempted variant=legacy-ts attempt=3 total=3',
+          'event=xtream.catchup.variant.attempted variant=legacy-ts attempt=4 total=6',
         ),
         expect.stringContaining(
-          'event=xtream.catchup.variant.failed variant=legacy-ts attempt=3 total=3',
+          'event=xtream.catchup.variant.failed variant=legacy-hls attempt=6 total=6',
         ),
       ]),
     );

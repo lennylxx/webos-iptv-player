@@ -209,8 +209,8 @@ test('no flex-gap container separates an element from loose text', async ({ page
   await page.route('**/epg.xml', (r) =>
     r.fulfill({ status: 200, contentType: 'application/xml', body: EPG }));
   await page.addInitScript(() => {
-    localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-    localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
     // A populated Reminder Manager: its rows never render while it is empty.
     // The key is fnv1a of the stream URL, as in src/utils/channel.ts.
     let h = 0x811c9dc5;

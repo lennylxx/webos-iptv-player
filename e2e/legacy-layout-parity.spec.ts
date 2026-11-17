@@ -125,7 +125,7 @@ async function prepareM3U(page: Page): Promise<void> {
   await stubLanService(page);
   await page.addInitScript((key) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([
-      { name: 'Source 1', url: 'http://host/playlist.m3u' },
+      { id: 'p1', name: 'Source 1', url: 'http://host/playlist.m3u' },
       {
         id: 'p2', name: 'Source 2', url: 'http://host/secondary.m3u',
         enabled: false,
@@ -138,8 +138,8 @@ async function prepareM3U(page: Page): Promise<void> {
       startMs: Date.now() + 3600_000,
       stopMs: Date.now() + 7200_000,
     }]));
-    localStorage.setItem('iptv_epg_url', JSON.stringify('http://epg.example.com/guide.xml'));
-    localStorage.setItem('iptv_favorites', JSON.stringify(['one']));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://epg.example.com/guide.xml', playlistIds: [] }]));
+    localStorage.setItem('iptv_favorites', JSON.stringify([key]));
     // A half-watched past program, so the EPG offers to resume it.
     const start = Date.now() - 2 * 3600_000;
     const end = start + 3600_000;
@@ -565,6 +565,17 @@ const M3U_SCREENS: Screen[] = [
     budget: 0,
     go: async (p) => {
       await p.route('**/playlist.m3u', (r) => new Promise(() => { void r; }));
+      // Without its cached copy, the playlist loads from the hanging request.
+      await p.evaluate(() => new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open('iptv');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const tx = open.result.transaction('playlist-cache', 'readwrite');
+          tx.objectStore('playlist-cache').clear();
+          tx.oncomplete = () => { open.result.close(); resolve(); };
+          tx.onerror = () => reject(tx.error);
+        };
+      }));
       await p.reload();
       await expect(p.locator('#view-channels .empty-state')).toHaveText('Loading channels…');
     },

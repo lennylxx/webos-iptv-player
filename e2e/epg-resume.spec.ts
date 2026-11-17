@@ -39,8 +39,8 @@ async function setup(page: Page, seed?: Seed): Promise<void> {
   await page.route('**/epg.xml', (r) => r.fulfill({ status: 200, contentType: 'application/xml', body: EPG }));
   await page.clock.setFixedTime(NOW);
   await page.addInitScript(({ url, s }) => {
-    localStorage.setItem('iptv_playlists', JSON.stringify([{ name: 'P', url: 'http://host/playlist.m3u' }]));
-    localStorage.setItem('iptv_epg_url', JSON.stringify('http://host/epg.xml'));
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
     localStorage.setItem('iptv_tz_mode', JSON.stringify('device'));
     if (!s) return;
     // Mirror channelKey(): FNV-1a of the URL with query/fragment stripped.

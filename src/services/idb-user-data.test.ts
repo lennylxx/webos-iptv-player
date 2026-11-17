@@ -5,9 +5,8 @@ import {
   clearAllUserData,
   flushUserDataWrites,
   loadAllUserRecords,
-  loadMigrationMarkers,
   loadUserRecords,
-  migrateUserRecordSets,
+  restoreFallbackRecords,
 } from './idb-user-data';
 
 describe('IndexedDB user-data write barrier', () => {
@@ -51,46 +50,27 @@ describe('IndexedDB user-data write barrier', () => {
     await expect(flushUserDataWrites()).resolves.toBeUndefined();
   });
 
-  it('replaces one migrated namespace without deleting sibling state', async () => {
+  it('adds and updates fallback records without deleting any', async () => {
     await applyUserChanges('channel-state', [
-      { key: 'audio:old', value: { name: 'Track 1' } },
+      { key: 'audio:ch1', value: { name: 'Track 1' } },
+      { key: 'audio:ch2', value: { name: 'Track 1' } },
       { key: 'subtitle:ch1', value: { off: true } },
     ]);
 
-    await migrateUserRecordSets([{
-      legacyKey: 'audio_prefs',
+    await restoreFallbackRecords([{
+      key: 'audio_prefs',
       storeName: 'channel-state',
-      records: [{ key: 'audio:new', value: { name: 'Track 2' } }],
-      replacePrefix: 'audio:',
-      replaceExisting: true,
+      records: [
+        { key: 'audio:ch1', value: { name: 'Track 2' } },
+        { key: 'audio:ch3', value: { name: 'Track 3' } },
+      ],
     }]);
 
     expect(await loadUserRecords('channel-state')).toEqual(expect.arrayContaining([
-      { key: 'audio:new', value: { name: 'Track 2' } },
+      { key: 'audio:ch1', value: { name: 'Track 2' } },
+      { key: 'audio:ch2', value: { name: 'Track 1' } },
+      { key: 'audio:ch3', value: { name: 'Track 3' } },
       { key: 'subtitle:ch1', value: { off: true } },
     ]));
-    expect((await loadUserRecords('channel-state')).some(item => item.key === 'audio:old'))
-      .toBe(false);
-  });
-
-  it('loads all completed migration markers in one batch', async () => {
-    await migrateUserRecordSets([
-      {
-        legacyKey: 'favorites',
-        storeName: 'favorites',
-        records: [],
-        replacePrefix: null,
-        replaceExisting: true,
-      },
-      {
-        legacyKey: 'watchlist',
-        storeName: 'watchlist',
-        records: [],
-        replacePrefix: null,
-        replaceExisting: true,
-      },
-    ]);
-
-    expect(await loadMigrationMarkers()).toEqual(new Set(['favorites', 'watchlist']));
   });
 });

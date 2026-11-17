@@ -45,7 +45,7 @@ import {
   shiftForeignTrack,
   subtitleLabel,
 } from '../utils/subtitle-tracks';
-import { legacyPlaybackPreferenceKey, playbackPreferenceKey } from '../utils/channel';
+import { playbackPreferenceKey } from '../utils/channel';
 import { createLogger } from '../utils/logger';
 import { isWebOS } from '../utils/platform';
 import { $ } from '../utils/dom';
@@ -295,10 +295,7 @@ export class PlayerTracks {
 
   // Load the saved offset for the current stream and apply it (called on tune-in).
   private loadSubtitleOffset(): void {
-    this.subtitleOffsetS = StorageService.getSubtitleOffset(
-      this.preferenceKey(),
-      this.legacyPreferenceKey(),
-    );
+    this.subtitleOffsetS = StorageService.getSubtitleOffset(this.preferenceKey());
     this.applySubtitleOffset();
   }
 
@@ -563,7 +560,7 @@ export class PlayerTracks {
     const { options, naming } = this.lunaAudioOptions();
     if (options.length < 2) return;
     this.lunaAudioReported = true;
-    const pref = StorageService.getAudioPref(this.preferenceKey(), this.legacyPreferenceKey());
+    const pref = StorageService.getAudioPref(this.preferenceKey());
     // UMS may list ISO 639-2 codes where the pick saved a 2-letter one.
     const keyed = options.map(option => ({ ...option, lang: languageKey(option.lang) }));
     // Names paired by position are display-only: a wrong guess must not switch.
@@ -627,10 +624,7 @@ export class PlayerTracks {
     if (!this.pipeline.isMseActive()) return;
     const options = this.audioOptions();
     if (options.length < 2) return;
-    const pref = StorageService.getAudioPref(
-      this.preferenceKey(),
-      this.legacyPreferenceKey(),
-    );
+    const pref = StorageService.getAudioPref(this.preferenceKey());
     const index = chooseAudioIndex(options, pref);
     this.logAudioChoice('hls', options, pref, index);
     if (index >= 0) this.pipeline.setMseAudioTrack(index);
@@ -642,10 +636,7 @@ export class PlayerTracks {
     const list = this.options.getVideoElement()?.audioTracks;
     if (!list || list.length < 2) return;
     const options = this.audioOptions();
-    const pref = StorageService.getAudioPref(
-      this.preferenceKey(),
-      this.legacyPreferenceKey(),
-    );
+    const pref = StorageService.getAudioPref(this.preferenceKey());
     const index = chooseAudioIndex(options, pref);
     this.logAudioChoice('native', options, pref, index);
     if (index < 0 || list[index].enabled) return; // already active — don't disturb playback
@@ -993,10 +984,7 @@ export class PlayerTracks {
   // rendition once subtitles are on. A saved CC pick is applied separately.
   private applySelfRenderSelection(): void {
     if (this.pipeline.isMseActive()) return;
-    const pref = StorageService.getSubtitlePref(
-      this.preferenceKey(),
-      this.legacyPreferenceKey(),
-    );
+    const pref = StorageService.getSubtitlePref(this.preferenceKey());
     this.loadSubtitleOffset();
     if (pref?.cc) {
       this.applySubtitleChoice(-1);
@@ -1047,10 +1035,7 @@ export class PlayerTracks {
     if (!this.pipeline.isMseActive()) return;
     const options = this.subtitleOptions();
     if (!options.length) return;
-    const pref = StorageService.getSubtitlePref(
-      this.preferenceKey(),
-      this.legacyPreferenceKey(),
-    );
+    const pref = StorageService.getSubtitlePref(this.preferenceKey());
     const index = chooseSubtitleIndex(options, pref);
     this.logSubtitleChoice('hls', options, pref, index);
     this.pipeline.setMseSubtitleTrack(index);
@@ -1063,10 +1048,7 @@ export class PlayerTracks {
   // live/catch-up WebVTT is handled by applySelfRenderSelection, CC below.
   applyNativeSubtitleSelection(): void {
     if (this.pipeline.isMseActive()) return; // hls.js owns the rendition and its native text tracks
-    const pref = StorageService.getSubtitlePref(
-      this.preferenceKey(),
-      this.legacyPreferenceKey(),
-    );
+    const pref = StorageService.getSubtitlePref(this.preferenceKey());
     if (this.options.getVod()) {
       // addTextTrack fires addtrack while the reusable sidecar renderer is being
       // created. Its selection is already authoritative; reapplying here can
@@ -1093,10 +1075,7 @@ export class PlayerTracks {
 
   reapplyNativeSubtitleCompositor(): void {
     if (this.pipeline.isMseActive() || this.options.getVod()) return;
-    const pref = StorageService.getSubtitlePref(
-      this.preferenceKey(),
-      this.legacyPreferenceKey(),
-    );
+    const pref = StorageService.getSubtitlePref(this.preferenceKey());
     const selected = this.manifestSubtitles[this.selfRenderIndex];
     if ((this.ccAvailable() && pref?.cc) || selected?.dash?.kind === 'native') {
       this.setNativeCC(true);
@@ -1105,9 +1084,5 @@ export class PlayerTracks {
 
   private preferenceKey(): string {
     return playbackPreferenceKey(this.options.getChannel(), this.options.getVod());
-  }
-
-  private legacyPreferenceKey(): string {
-    return legacyPlaybackPreferenceKey(this.options.getChannel(), this.options.getVod());
   }
 }

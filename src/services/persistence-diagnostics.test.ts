@@ -38,7 +38,6 @@ const contracts: DiagnosticContract[] = [
       'persistence.cache.write.failed',
       'persistence.cache.clear.failed',
       'persistence.cache.clear.completed',
-      'persistence.cache.migration.failed',
     ],
   },
   {
@@ -47,8 +46,8 @@ const contracts: DiagnosticContract[] = [
     events: [
       'persistence.user.unavailable',
       'persistence.user.read.failed',
-      'persistence.user.migration.failed',
-      'persistence.user.migration.completed',
+      'persistence.user.fallback.failed',
+      'persistence.user.fallback.restored',
       'persistence.user.write.failed',
       'persistence.user.clear.failed',
       'persistence.user.clear.completed',
