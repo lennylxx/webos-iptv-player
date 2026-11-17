@@ -19,6 +19,17 @@ const MODERN_SYNTAX = [
   [ts.SyntaxKind.TaggedTemplateExpression, 'tagged template'],
 ];
 
+// Lookbehind or a named group (however its name is escaped), a named
+// backreference, or an inline modifier group; `(?:` stays allowed.
+const MODERN_REGEX_PATTERN = /\(\?(?:<|[ims-]+:)|\\k</;
+
+// The text of a string constant passed to RegExp(), or '' for anything else.
+function stringConstant(node) {
+  return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ? node.text
+    : '';
+}
+
 const FORBIDDEN_MEMBER_APIS = new Set([
   'Buffer.alloc',
   'Buffer.allocUnsafe',
@@ -104,6 +115,13 @@ export function scanServiceSource(source, fileName = 'service.js') {
     violations.push({ file: fileName, line: lineOf(sourceFile, node), name });
   }
 
+  function checkRegex(node, pattern, flags) {
+    if (flags && /[suydv]/.test(flags)) add(node, 'regular expression flag u, y, s, d, or v');
+    if (pattern && MODERN_REGEX_PATTERN.test(pattern)) {
+      add(node, 'lookbehind, named group, or inline modifier in a regular expression');
+    }
+  }
+
   function visit(node) {
     for (const [kind, name] of MODERN_SYNTAX) {
       if (node.kind === kind) add(node, name);
@@ -138,8 +156,14 @@ export function scanServiceSource(source, fileName = 'service.js') {
          node.operatorToken.kind === ts.SyntaxKind.AsteriskAsteriskEqualsToken)) {
       add(node, 'exponentiation operator');
     }
-    if (ts.isRegularExpressionLiteral(node) && /\/[a-z]*[uy][a-z]*$/i.test(node.text)) {
-      add(node, 'Unicode or sticky regular expression');
+    if (ts.isRegularExpressionLiteral(node)) {
+      const slash = node.text.lastIndexOf('/');
+      checkRegex(node, node.text.slice(1, slash), node.text.slice(slash + 1));
+    }
+    if ((ts.isNewExpression(node) || ts.isCallExpression(node)) &&
+        ts.isIdentifier(node.expression) && node.expression.text === 'RegExp' && node.arguments) {
+      const [pattern, flags] = node.arguments;
+      checkRegex(node, stringConstant(pattern), stringConstant(flags));
     }
 
     if (!isCompatFile) {

@@ -36,6 +36,33 @@ describe('service compatibility gate', () => {
     ]);
   });
 
+  it('rejects regular expressions that Node.js 0.12 cannot compile', () => {
+    const violations = scanServiceSource(`
+      var a = /x/u, b = /x/y, c = /x/s, d = /x/d, e = /[a]/v;
+      var f = /(?<=a)b/, g = /(?<!a)b/, h = /(?<n>x)\\k<n>/, i = /(?<\\u0061>x)/;
+      var j = /(?i:a)/, k = /(?-i:a)/, l = /(?ims-:a)/;
+      var ok = /(?:a)(?=b)(?!c)[<]/gim;
+    `);
+
+    expect(violations.map(item => item.name)).toEqual([
+      ...Array(5).fill('regular expression flag u, y, s, d, or v'),
+      ...Array(7).fill('lookbehind, named group, or inline modifier in a regular expression'),
+    ]);
+  });
+
+  it('checks a RegExp built from string constants', () => {
+    const violations = scanServiceSource(`
+      var a = new RegExp('x', 'y'), b = RegExp('(?<=a)b'), c = new RegExp("(?i:a)");
+      var ok = new RegExp('(?:a)' + suffix, flags), ok2 = new RegExp(pattern, 'gim');
+    `);
+
+    expect(violations.map(item => item.name)).toEqual([
+      'regular expression flag u, y, s, d, or v',
+      'lookbehind, named group, or inline modifier in a regular expression',
+      'lookbehind, named group, or inline modifier in a regular expression',
+    ]);
+  });
+
   it('allows ES5 output and guarded native APIs in compat.js', () => {
     expect(scanServiceSource(`
       var nativeFrom = Buffer.from;

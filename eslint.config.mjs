@@ -1,6 +1,6 @@
 import compat from 'eslint-plugin-compat';
 import tsParser from '@typescript-eslint/parser';
-import { ALLOWLIST, DENYLIST } from './scripts/compat-gate.mjs';
+import { ALLOWLIST, DENYLIST, REGEX_RULES } from './scripts/compat-gate.mjs';
 import { focusRules, pointerEventRule } from './scripts/eslint-focus-rules.mjs';
 
 const entryByKind = new Map(DENYLIST.map((entry) => [entry.kind, entry]));
@@ -106,6 +106,7 @@ export default [
           selector: `CallExpression > MemberExpression[property.name='${e.name}']`,
           message: e.message,
         })),
+        ...REGEX_RULES,
         {
           // A raw class write can't see a ring FocusRing parked, so a later
           // return of the keys would show two (see src/navigation/focus-ring.ts).

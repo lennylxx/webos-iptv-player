@@ -103,6 +103,35 @@ export const DENYLIST = [
   { name: 'any', kind: 'static', object: 'Promise', minChrome: 85, message: 'Promise.any is Chrome 85+ — use an explicit first-success helper.' },
 ];
 
+// eslint `no-restricted-syntax` entries for regex features Chromium 53
+// lacks. esbuild rewrites most of these literals into a `new RegExp` that
+// throws at load, and leaves inline modifiers in place, where they fail the
+// whole bundle's parse. `(?<` covers lookbehind and named groups however the
+// name is escaped; an escaped `\(?<` or one inside a class is a false
+// positive — disable the rule for that line.
+export const REGEX_RULES = [
+  {
+    selector: 'Literal[regex.flags=/[sdv]/]',
+    message: 'Regex flags s (Chrome 62), d (90), and v (112) are unsupported on webOS 4.',
+  },
+  {
+    selector: 'Literal[regex.pattern=/\\(\\?(?:<|[ims-]+:)|\\\\k<|\\\\[pP]\\{/]',
+    message: 'Regex lookbehind and named groups (Chrome 62–64; compat/compat also flags lookbehind), '
+      + '\\p{…} (64), and (?i:…) modifiers (125) are unsupported on webOS 4.',
+  },
+  // The same checks for a RegExp built from string constants.
+  {
+    selector: ":matches(NewExpression, CallExpression)[callee.name='RegExp'][arguments.1.value=/[sdv]/]",
+    message: 'Regex flags s (Chrome 62), d (90), and v (112) are unsupported on webOS 4.',
+  },
+  {
+    selector: ":matches(NewExpression, CallExpression)[callee.name='RegExp']"
+      + '[arguments.0.value=/\\(\\?(?:<|[ims-]+:)|\\\\k<|\\\\[pP]\\{/]',
+    message: 'Regex lookbehind and named groups (Chrome 62–64), \\p{…} (64), and (?i:…) '
+      + 'modifiers (125) are unsupported on webOS 4; feature-detect them before use.',
+  },
+];
+
 // Post-53 tokens the bundle scan tolerates. Each entry documents WHY the token
 // is safe to ship:
 //   guarded       the code feature-detects and falls back at runtime

@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { scanBundle } from './compat-gate.mjs';
+import { Linter } from 'eslint';
+import tsParser from '@typescript-eslint/parser';
+import { REGEX_RULES, scanBundle } from './compat-gate.mjs';
+
+function lintRegex(code) {
+  const linter = new Linter({ cwd: '/repo' });
+  return linter.verify(code, [{
+    files: ['**/*.ts'],
+    languageOptions: { parser: tsParser, sourceType: 'module' },
+    rules: { 'no-restricted-syntax': ['error', ...REGEX_RULES] },
+  }], '/repo/src/utils/example.ts').map((m) => m.message);
+}
 
 describe('compat gate module workers', () => {
   it('rejects module Worker and SharedWorker constructors', () => {
@@ -141,5 +152,31 @@ describe('compat gate unsupported instance methods', () => {
     expect(scanBundle(`
       value.padStart(3, '0');
     `)).toEqual([]);
+  });
+});
+
+describe('compat gate regex syntax', () => {
+  it('rejects regex flags and syntax that Chromium 53 cannot compile', () => {
+    const flags = expect.stringContaining('Regex flags');
+    const syntax = expect.stringContaining('Regex lookbehind');
+    expect(lintRegex(`export const r = [
+      /a.b/s, /x/d, /[a]/v,
+      /(?<=a)b/, /(?<!a)b/, /(?<n>x)/, /(?<\\u0061>x)/, /\\k<n>(x)/, /\\p{L}/u,
+      /(?i:a)/, /(?-i:a)/, /(?ims-:a)/,
+    ];`)).toEqual([flags, flags, flags, ...Array(9).fill(syntax)]);
+  });
+
+  it('allows the syntax Chromium 53 supports', () => {
+    expect(lintRegex('export const r = [/(?:a)(?=b)(?!c)[<]/gimuy, /\\(x\\)/, /p{1}/];')).toEqual([]);
+  });
+
+  it('checks a RegExp built from string constants', () => {
+    const flags = expect.stringContaining('Regex flags');
+    const syntax = expect.stringContaining('Regex lookbehind');
+    expect(lintRegex(`export const r = [
+      new RegExp('a.b', 's'), RegExp('x', 'd'),
+      new RegExp('(?<=a)b'), RegExp('\\\\p{L}', 'u'), new RegExp('(?i:a)'),
+      new RegExp('(?:a)' + suffix, 'gimuy'), new RegExp(pattern, flags),
+    ];`)).toEqual([flags, flags, syntax, syntax, syntax]);
   });
 });

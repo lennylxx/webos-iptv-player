@@ -7,6 +7,7 @@ const LETTER_RANGES = `${LATIN_RANGES}${CYRILLIC_RANGES}${ARABIC_RANGES}${HAN_RA
 let supportsUnicodeProperties = true;
 // Runtime feature detection: Chrome 53 throws when compiling property escapes.
 try {
+  // eslint-disable-next-line no-restricted-syntax -- this probe is the feature detection
   new RegExp('\\p{L}', 'u');
 } catch {
   supportsUnicodeProperties = false;
