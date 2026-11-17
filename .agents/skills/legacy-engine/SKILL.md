@@ -49,7 +49,19 @@ calls native.
 - `css/legacy-webos-base.css` is **auto-generated** by
   `scripts/css-transforms.mjs` on every build: `> * + *` margins for flex
   `gap` (missing on webOS 4/5/6) under `html.q-no-flex-gap`, and scroll-end
-  spacers under `html.q-scroll-end-padding`. Never hand-edit it; commit the
+  spacers under `html.q-scroll-end-padding`. A row with `flex-wrap: wrap`
+  gets right and bottom margins on every child instead, and the row a
+  negative bottom margin (its declared one less the gap) for the last
+  line, so wrapped lines neither indent nor touch; the parity test's
+  quirk-scope check skips those row rules on purpose, and the build
+  refuses any other bottom margin for such a row (narrowed, variant, or in
+  `@media`) and any variant that stops it wrapping. The last right margin
+  stays, since taking it back would overflow a scroller, so a line may
+  break up to one gap early; a row whose children grow to fill it, inside
+  padding that takes the overhang (`.xtream-fields`), takes it back by hand
+  in `legacy-webos-overrides.css`. Parity sees a row only in a scene that
+  makes it wrap or fill.
+  Never hand-edit it; commit the
   regenerated file. It is linked **first**, but the quirk class makes each
   rule more specific than a plain component rule, so a component rule that
   must still win (a `margin-left: auto` push, a `::after` opt-out) is

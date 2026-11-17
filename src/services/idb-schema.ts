@@ -13,8 +13,8 @@ export const PLAYLIST_CACHE_KEY = 'combined-v5';
 // Bumping it invalidates cached guides; v2 adds program catch-up ids.
 export const PACKED_EPG_FORMAT = 'epg-packed-v2';
 // Bump when item lists gain fields, so old catalog rows are never served.
-export const VOD_STREAMS_RESOURCE = 'vod_streams-v2';
-export const SERIES_RESOURCE = 'series-v2';
+export const VOD_STREAMS_RESOURCE = 'vod_streams-v3';
+export const SERIES_RESOURCE = 'series-v3';
 
 function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;

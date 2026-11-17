@@ -551,6 +551,16 @@ describe('XtreamClient VOD', () => {
     });
   });
 
+  it('keeps a listed genre on movies and series', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify([
+      { stream_id: 1, series_id: 1, name: 'a', category_id: '1', genre: ' g1, g2 ' },
+      { stream_id: 2, series_id: 2, name: 'b', category_id: '1', genre: '' },
+    ]));
+    const client = createXtreamClient(creds);
+    expect((await client.getVodStreams('1')).map(item => item.genre)).toEqual(['g1, g2', undefined]);
+    expect((await client.getSeries('1')).map(item => item.genre)).toEqual(['g1, g2', undefined]);
+  });
+
   it('getVodStreams with no category omits the category_id param', async () => {
     fetchTextMock.mockResolvedValue('[]');
     await createXtreamClient(creds).getVodStreams();

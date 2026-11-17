@@ -25,7 +25,7 @@ vi.mock('../services/storage-service', () => ({
     getLastChannel: vi.fn(() => null), setLastChannel: vi.fn(),
     getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
     getAudioPref: vi.fn(), setAudioPref: vi.fn(),
-    setResume: vi.fn(), clearResume: vi.fn(), getResumeList: vi.fn(() => []), getResume: vi.fn(() => null),
+    setResume: vi.fn(), clearResume: vi.fn(), setCatalogMark: vi.fn(), getResumeList: vi.fn(() => []), getResume: vi.fn(() => null),
     removeWatchlist: vi.fn(),
     getPickedOnlineSub: vi.fn(), setPickedOnlineSub: vi.fn(),
     setCatchupProgress: vi.fn(), getCatchupProgress: vi.fn(), clearCatchupProgress: vi.fn(),
@@ -2661,6 +2661,7 @@ describe('Player VOD mode', () => {
     video.dispatchEvent(new Event('ended'));
     expect(StorageService.clearResume).toHaveBeenCalledWith('x1', 'vod', '10');
     expect(StorageService.removeWatchlist).toHaveBeenCalledWith('x1', 'vod', '10');
+    expect(StorageService.setCatalogMark).toHaveBeenCalledWith('x1', 'vod', '10', { watched: true });
     expect(r.onBack).toHaveBeenCalled();
   });
 
@@ -2849,6 +2850,7 @@ describe('Player VOD mode', () => {
     expect(vi.mocked(StorageService.clearResume).mock.calls).toEqual([
       ['x1', 'episode', 'e1'], ['x1', 'episode', 'e2'],
     ]);
+    expect(StorageService.setCatalogMark).toHaveBeenCalledWith('x1', 'episode', 'e2', { watched: true });
     expect(StorageService.setResume).toHaveBeenCalledWith(expect.objectContaining({
       itemId: 'e3', position: 0, ext: 'mkv', season: 1, episode: 3,
       episodeQueue: [later], watchlistOwner: owner,
@@ -2909,8 +2911,10 @@ describe('Player VOD mode', () => {
     player.playVod(req({ itemId: 'e1', kind: 'episode', episodeQueue: [next], watchlistOwner: owner }));
     video.dispatchEvent(new Event('loadedmetadata'));
     video.currentTime = 1780;
+    vi.mocked(StorageService.setCatalogMark).mockClear();
     player.handleAction('back');
     expect(StorageService.clearResume).toHaveBeenCalledWith('x1', 'episode', 'e1');
+    expect(StorageService.setCatalogMark).toHaveBeenCalledWith('x1', 'episode', 'e1', { watched: true });
     expect(StorageService.setResume).toHaveBeenCalledTimes(1);
     expect(StorageService.setResume).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: 'e2', position: 0 }), { keepStart: true });

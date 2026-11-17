@@ -450,9 +450,16 @@ function manualEpgScopeOptions(
   playlists: EpgScopePlaylist[],
   rowKey: string,
 ): Safe {
+  return html`<div class="manual-epg-scope-options">${manualEpgScopeButtons(source, playlists, rowKey)}</div>`;
+}
+
+function manualEpgScopeButtons(
+  source: ManualEpgSource,
+  playlists: EpgScopePlaylist[],
+  rowKey: string,
+): Safe {
   const allPlaylists = source.playlistIds.length === 0;
   return html`
-    <div class="manual-epg-scope-options">
       <button class="epg-scope-option ${allPlaylists ? 'active' : ''}"
               data-focusable data-scope-all data-key="${rowKey}:all">
         ${t('settings.allPlaylists')}
@@ -464,8 +471,7 @@ function manualEpgScopeOptions(
                 data-key="${rowKey}:playlist:${playlist.id}">
           ${playlist.name || playlist.url}
         </button>
-      `)}
-    </div>`;
+      `)}`;
 }
 
 /** "expires 2026-08-01" (UTC) or "never expires" for a unix-seconds expiry. */
@@ -2414,7 +2420,7 @@ export class Settings {
           source.playlistIds = source.playlistIds.filter(id => playlistIds.has(id));
         }
         const options = row.querySelector<HTMLElement>('.manual-epg-scope-options');
-        if (options) morph(options, manualEpgScopeOptions(source, playlists, row.dataset.key ?? ''));
+        if (options) morph(options, manualEpgScopeButtons(source, playlists, row.dataset.key ?? ''));
       });
   }
 

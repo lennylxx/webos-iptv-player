@@ -6,6 +6,20 @@ import { seedXtream } from './fixtures/xtream';
 import { channelKey } from '../src/utils/channel';
 import { type Channel } from '../src/types';
 
+
+// Narrows a flex row for a scene so it wraps, through a stylesheet, which a
+// re-render keeps, unlike an inline style.
+async function narrowRow(p: Page, selector: string, width: number): Promise<void> {
+  await p.evaluate(({ selector, width }) => {
+    const style = document.createElement('style');
+    style.id = 'parity-narrow';
+    style.textContent = `${selector} { max-width: ${String(width)}px; }`;
+    document.head.appendChild(style);
+  }, { selector, width });
+}
+
+const widenRow = (p: Page) => p.evaluate(() => document.getElementById('parity-narrow')?.remove());
+
 // webOS 4/5/6 lack flex `gap`, CSS Grid and backdrop-filter, so the app ships a
 // second layout built from `> * + *` margins and float/inline-block fallbacks.
 // Those fallbacks are meant to *reproduce* the modern layout, not merely to
@@ -173,6 +187,7 @@ async function prepareXtream(page: Page): Promise<void> {
   await page.clock.setFixedTime(NOW);
   await seedXtream(page, { catalog: 'large' });
   await routeSeriesEpisodes(page);
+  await stubLanService(page);
   await page.goto('/');
   await liveLoaded(page);
 }
@@ -614,17 +629,44 @@ const XTREAM_SCREENS: Screen[] = [
     },
   },
   {
+    // A category grid's sort row with its filters, held narrow so it wraps:
+    // the legacy margins must space the second line as flex gap does.
+    name: 'movies-grid-filters',
+    budget: 0,
+    go: async (p) => {
+      await p.keyboard.press('Enter');
+      await expect(p.locator('#view-movies .catalog-grid-title')).toHaveText('Cat B');
+      const row = p.locator('#view-movies .catalog-grid .catalog-sort');
+      await expect(row.locator('.catalog-filter-input')).toBeVisible();
+      await narrowRow(p, '#view-movies .catalog-grid .catalog-sort', 900);
+      await expect.poll(() => row.locator('.catalog-filter-search').evaluate((search) =>
+        search.getBoundingClientRect().top > search.parentElement!.getBoundingClientRect().top + 20)).toBe(true);
+    },
+  },
+  {
     name: 'movie-detail',
     budget: 0,
     go: async (p) => {
+      await widenRow(p);
+      await p.keyboard.press('Escape');
+      await expect(p.locator('#view-movies .catalog-grid')).toBeHidden();
       await p.locator('#view-movies .catalog-tile[data-item-id="10"]').first().click();
       await expect(p.locator('#view-movies .detail-plot')).toContainText('A plot.');
+    },
+  },
+  {
+    // The detail actions wrap onto a second line.
+    name: 'movie-detail-actions',
+    budget: 0,
+    go: async (p) => {
+      await narrowRow(p, '#view-movies .detail-actions', 700);
     },
   },
   {
     name: 'watchlist-toast',
     budget: 0,
     go: async (p) => {
+      await widenRow(p);
       await p.locator('#view-movies [data-action="watchlist"]').click();
       await expect(p.locator('.toast.visible')).toBeVisible();
     },
@@ -648,10 +690,22 @@ const XTREAM_SCREENS: Screen[] = [
     },
   },
   {
+    // The season's watched action wraps onto a second line.
+    name: 'series-detail-seasons',
+    budget: 0,
+    go: async (p) => {
+      const row = p.locator('#view-series .series-seasons');
+      await narrowRow(p, '#view-series .series-seasons', 500);
+      await expect.poll(() => row.locator('.series-season-mark').evaluate((mark) =>
+        mark.getBoundingClientRect().top > mark.parentElement!.getBoundingClientRect().top + 20)).toBe(true);
+    },
+  },
+  {
     // The middle episode, so both skips flank play/pause.
     name: 'series-osd',
     budget: 0.001, // opaque-panel residue, as on the movie player
     go: async (p) => {
+      await widenRow(p);
       await p.locator('#view-series .episode-row[data-episode-id="12"]')
         .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
       await p.keyboard.press('Enter');
@@ -830,6 +884,20 @@ const XTREAM_SCREENS: Screen[] = [
       await expect(p.locator('#view-movies .dropdown.open')).toBeVisible();
     },
   },
+  {
+    // An Xtream card's fields grow to fill each line.
+    name: 'settings-sources-xtream',
+    budget: 0,
+    go: async (p) => {
+      await p.keyboard.press('Escape');
+      await expect(p.locator('#view-movies .dropdown.open')).toHaveCount(0);
+      await enterTab(p, 'settings');
+      await expect(p.locator('.setup-qr')).toBeVisible();
+      await p.locator('[data-settings-target="sources"]').click();
+      await railAtRest(p, '.settings-scroll');
+      await expect(p.locator('.xtream-card .xtream-fields')).toBeVisible();
+    },
+  },
 ];
 
 /** Write user-data records straight into the already-created IndexedDB, then
@@ -877,6 +945,11 @@ async function quirkScopeMarginShifts(page: Page): Promise<{ rewritten: number; 
       for (let i = 0; i < sheet.cssRules.length; i++) {
         const rule = sheet.cssRules[i];
         if (!(rule instanceof CSSStyleRule) || rule.selectorText.indexOf(QUIRK) < 0) continue;
+        // A wrapping row's generated take-back margin is its own declared
+        // margin less the gap, so it means to beat that rule; the build
+        // refuses any other bottom margin for the row, and the pixel diff
+        // checks where it lands.
+        if (/legacy-webos-base/.test(sheet.href || '') && rule.selectorText.indexOf('>') < 0) continue;
         swapped.push([sheet, i, rule.cssText]);
         sheet.deleteRule(i);
         sheet.insertRule(rule.cssText.split(QUIRK).join(''), i);

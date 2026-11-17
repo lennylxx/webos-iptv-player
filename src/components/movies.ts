@@ -5,7 +5,7 @@ import { StorageService } from '../services/storage-service';
 import { loadVodCategories, loadVodStreams, loadVodInfo } from '../services/xtream-catalog';
 import { xtreamVodUrl } from '../utils/xtream-url';
 import { CatalogView, type CollectionKind, type CollectionEntry } from './catalog-view';
-import { PLAY_ICON, REMOVE_ICON, watchlistIcon } from './icons';
+import { CHECK_ICON, HIDE_ICON, PLAY_ICON, REMOVE_ICON, SHOW_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
 import { t, tp } from '../i18n';
 
@@ -43,6 +43,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
   protected itemName(v: VodItem): string { return v.name; }
   protected itemPoster(v: VodItem): string { return v.poster; }
   protected itemCategoryId(v: VodItem): string { return v.categoryId; }
+  protected itemGenre(v: VodItem): string { return v.genre ?? ''; }
   protected clearDetail(): void {
     this.detailController?.abort();
     this.detailController = null;
@@ -96,7 +97,8 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
            data-item-id="${vod.streamId}" data-category-id="${vod.categoryId}"
            data-watchlist-item="${vod.streamId}">
         <div class="catalog-poster-wrap">${this.posterCell(vod.name, vod.poster)}${
-          this.itemLockBadge(vod.categoryId, vod.streamId)}${this.removeMark(managing, `w:${vod.streamId}`)}</div>
+          this.itemLockBadge(vod.categoryId, vod.streamId)}${this.watchedBadge(vod.streamId)}${
+          this.removeMark(managing, `w:${vod.streamId}`)}</div>
         <div class="catalog-tile-name">${vod.name}</div>
       </div>
     `;
@@ -138,6 +140,20 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     }
     if (el.dataset.action === 'watchlist') {
       this.toggleWatchlist();
+      return true;
+    }
+    if ((el.dataset.action === 'watched' || el.dataset.action === 'hide') && this.currentVod) {
+      const flag = el.dataset.action === 'watched' ? 'watched' : 'hidden';
+      const on = this.toggleMark(flag, this.currentVod);
+      // A title marked watched leaves Continue Watching, as one played to the end does.
+      if (flag === 'watched' && on && this.account) {
+        StorageService.clearResume(this.account.id, 'vod', this.currentVod.streamId);
+        this.refreshResume();
+      }
+      showToast(t(flag === 'watched'
+        ? on ? 'catalog.markedWatched' : 'catalog.markedNotWatched'
+        : on ? 'catalog.titleHidden' : 'catalog.titleUnhidden'));
+      this.renderDetail();
       return true;
     }
     return false;
@@ -248,6 +264,8 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
       : '';
     const meta = [year, mins, info?.genre, vod.rating].filter((s) => !!s);
     const watchlisted = StorageService.isWatchlisted(a.id, 'vod', vod.streamId);
+    const watched = this.watchedIds.has(vod.streamId);
+    const hidden = this.hiddenIds.has(vod.streamId);
 
     morph(this.layer('detail'), html`
       <div class="catalog-view movies-detail" data-nav-container>
@@ -269,6 +287,14 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
             <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
               <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>
               <span>${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}</span>
+            </button>
+            <button class="detail-btn" data-focusable data-key="watched" data-action="watched">
+              <span class="detail-btn-icon">${raw(watched ? REMOVE_ICON : CHECK_ICON)}</span>
+              <span>${t(watched ? 'catalog.markNotWatched' : 'catalog.markWatched')}</span>
+            </button>
+            <button class="detail-btn" data-focusable data-key="hide" data-action="hide">
+              <span class="detail-btn-icon">${raw(hidden ? SHOW_ICON : HIDE_ICON)}</span>
+              <span>${t(hidden ? 'catalog.unhide' : 'catalog.hide')}</span>
             </button>
             ${saved ? html`
               <button class="detail-btn detail-btn-danger" data-focusable data-key="remove-resume" data-action="remove-resume">

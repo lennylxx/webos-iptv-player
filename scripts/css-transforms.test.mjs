@@ -77,6 +77,58 @@ describe('generateFlexGapFallback', () => {
     expect(out).toContain('html.q-no-flex-gap .card-wide > * + * { margin-left: 24px; margin-top: 0; }');
   });
 
+  it('spaces a wrapping row on both axes, taking the last line\'s back', () => {
+    const out = generateFlexGapFallback([`
+      .chips { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 0 0 30px; }
+      .tags { display: flex; flex-wrap: wrap; }
+      .tags.wide { gap: 12px; }
+    `]);
+    expect(out).toContain('html.q-no-flex-gap .chips { margin-bottom: 20px; }');
+    expect(out).toContain('html.q-no-flex-gap .chips > * { margin-bottom: 10px; margin-right: 24px; }');
+    expect(out).toContain('html.q-no-flex-gap .tags.wide { margin-bottom: -12px; }');
+    expect(out).not.toContain('.chips > * + *');
+  });
+
+  it('resets a wrapping row whose gap a variant zeroes', () => {
+    const out = generateFlexGapFallback([`
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chips.flush { gap: 0; }
+    `]);
+    expect(out).toContain('html.q-no-flex-gap .chips.flush { margin-bottom: 0px; }');
+    expect(out).toContain('html.q-no-flex-gap .chips.flush > * { margin-bottom: 0; margin-right: 0; }');
+  });
+
+  it('resets the axis a wrapping row variant zeroes and keeps the other', () => {
+    const out = generateFlexGapFallback([`
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chips.tight { gap: 0 16px; }
+    `]);
+    expect(out).toContain('html.q-no-flex-gap .chips.tight { margin-bottom: 0px; }');
+    expect(out).toContain('html.q-no-flex-gap .chips.tight > * { margin-bottom: 0; margin-right: 16px; }');
+  });
+
+  it('refuses a variant that stops a wrapping row from wrapping', () => {
+    expect(() => generateFlexGapFallback([`
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chips.one { flex-wrap: nowrap; gap: 8px; }
+    `])).toThrow('.chips.one');
+    expect(() => generateFlexGapFallback([`
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chips.stack { flex-direction: column; gap: 8px; }
+    `])).toThrow('.chips.stack');
+  });
+
+  it('refuses a bottom margin a wrapping row\'s take-back would override', () => {
+    expect(() => generateFlexGapFallback([`
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .panel .chips { margin-bottom: 40px; }
+    `])).toThrow('.panel .chips');
+    expect(() => generateFlexGapFallback([`
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+      @media (max-width: 900px) { .chips { margin: 0 0 4px; } }
+    `])).toThrow('.chips');
+  });
+
   it('keeps a gap reset so it can override an inherited fallback margin', () => {
     const out = generateFlexGapFallback([`
       .action { display: flex; gap: 8px; }

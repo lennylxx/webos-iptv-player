@@ -1252,6 +1252,7 @@ export class Player {
       if (v.kind === 'episode' && v.watchlistOwner) {
         this.advanceSeriesResume(v);
       } else {
+        StorageService.setCatalogMark(v.accountId, v.kind, v.itemId, { watched: true });
         StorageService.clearResume(v.accountId, v.kind, v.itemId);
         if (v.kind === 'vod') StorageService.removeWatchlist(v.accountId, 'vod', v.itemId);
       }
@@ -1340,6 +1341,7 @@ export class Player {
   // holds the place even before it reaches RESUME_MIN_SECS. The final episode
   // takes the series off Watchlist.
   private advanceSeriesResume(finished: VodPlayback): void {
+    StorageService.setCatalogMark(finished.accountId, 'episode', finished.itemId, { watched: true });
     const owner = finished.watchlistOwner!;
     const at = finished.searchMeta;
     const next = finished.episodeQueue?.[0];

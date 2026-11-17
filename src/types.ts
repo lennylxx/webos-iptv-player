@@ -540,6 +540,7 @@ export interface VodItem {
   containerExtension: string;
   addedAt?: number;
   year?: number;
+  genre?: string;
 }
 
 // A sidecar subtitle file (SRT or WebVTT) delivered alongside an Xtream VOD
@@ -581,6 +582,7 @@ export interface SeriesItem {
   categoryId: string;
   addedAt?: number;
   year?: number;
+  genre?: string;
 }
 
 export interface Episode {
@@ -612,6 +614,18 @@ export interface SeriesInfo {
 }
 
 export type WatchlistKind = 'vod' | 'series';
+
+/** A title the viewer finished or put away: a movie or episode is watched, a movie or series hidden. */
+export type CatalogMarkKind = 'vod' | 'series' | 'episode';
+
+export interface CatalogMark {
+  accountId: string;
+  kind: CatalogMarkKind;
+  itemId: string;
+  watched?: boolean;
+  hidden?: boolean;
+  updatedAt: number;
+}
 
 export interface WatchlistEntry {
   accountId: string;

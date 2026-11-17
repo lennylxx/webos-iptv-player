@@ -142,7 +142,7 @@ describe('xtream-catalog', () => {
   });
 
   it('returns fresh cache without calling the client', async () => {
-    cacheStore.set('x1|vod_streams-v2|1', { key: 'x1|vod_streams-v2|1', timestamp: Date.now(), data: [{ accountId: 'x1', streamId: '10' }] });
+    cacheStore.set('x1|vod_streams-v3|1', { key: 'x1|vod_streams-v3|1', timestamp: Date.now(), data: [{ accountId: 'x1', streamId: '10' }] });
     const out = await loadVodStreams(account, '1');
     expect(out).toEqual([{ accountId: 'x1', streamId: '10' }]);
     expect(clientMock.getVodStreams).not.toHaveBeenCalled();
@@ -159,15 +159,15 @@ describe('xtream-catalog', () => {
 
     expect(await loadVodStreams(account, '1')).toEqual(movies);
     expect(await loadSeries(account, '1')).toEqual(series);
-    expect(cacheStore.get('x1|vod_streams-v2|1')?.data).toEqual(movies);
-    expect(cacheStore.get('x1|series-v2|1')?.data).toEqual(series);
+    expect(cacheStore.get('x1|vod_streams-v3|1')?.data).toEqual(movies);
+    expect(cacheStore.get('x1|series-v3|1')?.data).toEqual(series);
     expect(cacheStore.get('x1|vod_streams|1')?.data).toEqual([{ accountId: 'x1', streamId: 'old' }]);
   });
 
   it('logs versioned list keys under their plain resource name', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
-    cacheStore.set('x1|series-v2|1', { key: 'x1|series-v2|1', timestamp: stale, data: [{ accountId: 'x1', seriesId: 's1' }] });
+    cacheStore.set('x1|series-v3|1', { key: 'x1|series-v3|1', timestamp: stale, data: [{ accountId: 'x1', seriesId: 's1' }] });
     clientMock.getSeries.mockRejectedValue(new XtreamRequestError('request_failed', 'down'));
     await loadSeries(account, '1');
     await settle();
@@ -222,7 +222,7 @@ describe('xtream-catalog', () => {
     clientMock.getVodStreams.mockResolvedValue([{ accountId: 'x1', streamId: '10', name: 'Movie One' }]);
     await loadAllVodStreams(account);
     expect(listener.mock.calls).toEqual([
-      ['x1|vod_categories'], ['x1|vod_streams-v2|1'], ['x1|vod_all'],
+      ['x1|vod_categories'], ['x1|vod_streams-v3|1'], ['x1|vod_all'],
     ]);
 
     await loadAllVodStreams(account);
@@ -235,14 +235,14 @@ describe('xtream-catalog', () => {
     await settle();
     stop();
     expect(listener.mock.calls).toEqual([
-      ['x1|vod_categories'], ['x1|vod_streams-v2|1'], ['x1|vod_all'],
-      ['x1|series_categories'], ['x1|series-v2|1'], ['x1|series_all'],
+      ['x1|vod_categories'], ['x1|vod_streams-v3|1'], ['x1|vod_all'],
+      ['x1|series_categories'], ['x1|series-v3|1'], ['x1|series_all'],
     ]);
   });
 
   it('shares one background refresh per key and detaches it from the caller signal', async () => {
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
-    cacheStore.set('x1|vod_streams-v2|1', { key: 'x1|vod_streams-v2|1', timestamp: stale, data: [{ accountId: 'x1', streamId: 'old' }] });
+    cacheStore.set('x1|vod_streams-v3|1', { key: 'x1|vod_streams-v3|1', timestamp: stale, data: [{ accountId: 'x1', streamId: 'old' }] });
     clientMock.getVodStreams.mockResolvedValue([{ accountId: 'x1', streamId: '10' }]);
     const controller = new AbortController();
 
@@ -255,7 +255,7 @@ describe('xtream-catalog', () => {
 
     expect(clientMock.getVodStreams).toHaveBeenCalledTimes(1);
     expect(clientMock.getVodStreams).toHaveBeenCalledWith('1', undefined);
-    expect(cacheStore.get('x1|vod_streams-v2|1')?.data).toEqual([{ accountId: 'x1', streamId: '10' }]);
+    expect(cacheStore.get('x1|vod_streams-v3|1')?.data).toEqual([{ accountId: 'x1', streamId: '10' }]);
   });
 
   it('drops a background refresh that finishes after the catalog cache was cleared', async () => {
@@ -279,7 +279,7 @@ describe('xtream-catalog', () => {
   it('runs at most two background refreshes at a time and queues the rest', async () => {
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
     for (const id of ['1', '2', '3']) {
-      cacheStore.set(`x1|vod_streams-v2|${id}`, { key: `x1|vod_streams-v2|${id}`, timestamp: stale, data: [{ accountId: 'x1', streamId: 'old' }] });
+      cacheStore.set(`x1|vod_streams-v3|${id}`, { key: `x1|vod_streams-v3|${id}`, timestamp: stale, data: [{ accountId: 'x1', streamId: 'old' }] });
     }
     const releases = new Map<string, () => void>();
     clientMock.getVodStreams.mockImplementation((id: string) => new Promise(resolve => {
@@ -296,13 +296,13 @@ describe('xtream-catalog', () => {
     releases.get('2')!();
     releases.get('3')!();
     await settle();
-    expect(cacheStore.get('x1|vod_streams-v2|3')?.data).toEqual([{ accountId: 'x1', streamId: 'new3' }]);
+    expect(cacheStore.get('x1|vod_streams-v3|3')?.data).toEqual([{ accountId: 'x1', streamId: 'new3' }]);
   });
 
   it('skips a queued background refresh once the catalog cache is cleared', async () => {
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
     for (const id of ['1', '2', '3']) {
-      cacheStore.set(`x1|vod_streams-v2|${id}`, { key: `x1|vod_streams-v2|${id}`, timestamp: stale, data: [{ accountId: 'x1', streamId: 'old' }] });
+      cacheStore.set(`x1|vod_streams-v3|${id}`, { key: `x1|vod_streams-v3|${id}`, timestamp: stale, data: [{ accountId: 'x1', streamId: 'old' }] });
     }
     const releases: Array<() => void> = [];
     clientMock.getVodStreams.mockImplementation(() => new Promise(resolve => {
@@ -320,15 +320,15 @@ describe('xtream-catalog', () => {
   it('clears the stale VOD category when a background refresh succeeds with an empty list', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
-    cacheStore.set('x1|vod_streams-v2|1', { key: 'x1|vod_streams-v2|1', timestamp: stale, data: [{ accountId: 'x1', streamId: '10' }] });
+    cacheStore.set('x1|vod_streams-v3|1', { key: 'x1|vod_streams-v3|1', timestamp: stale, data: [{ accountId: 'x1', streamId: '10' }] });
     clientMock.getVodStreams.mockResolvedValue([]);
     const out = await loadVodStreams(account, '1');
     await settle();
     expect(out).toEqual([{ accountId: 'x1', streamId: '10' }]);
     expect(setCachedCatalog).toHaveBeenCalledWith(
-      'x1|vod_streams-v2|1', [], CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
+      'x1|vod_streams-v3|1', [], CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
     );
-    expect(cacheStore.get('x1|vod_streams-v2|1')?.data).toEqual([]);
+    expect(cacheStore.get('x1|vod_streams-v3|1')?.data).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -428,7 +428,7 @@ describe('xtream-catalog series', () => {
   });
 
   it('returns a fresh series list without calling the client', async () => {
-    cacheStore.set('x1|series-v2|1', { key: 'x1|series-v2|1', timestamp: Date.now(), data: [{ accountId: 'x1', seriesId: 's1' }] });
+    cacheStore.set('x1|series-v3|1', { key: 'x1|series-v3|1', timestamp: Date.now(), data: [{ accountId: 'x1', seriesId: 's1' }] });
     const out = await loadSeries(account, '1');
     expect(out).toEqual([{ accountId: 'x1', seriesId: 's1' }]);
     expect(clientMock.getSeries).not.toHaveBeenCalled();
@@ -436,7 +436,7 @@ describe('xtream-catalog series', () => {
 
   it('serves a stale series list and refreshes it in the background', async () => {
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
-    cacheStore.set('x1|series-v2|1', { key: 'x1|series-v2|1', timestamp: stale, data: [{ accountId: 'x1', seriesId: 'old' }] });
+    cacheStore.set('x1|series-v3|1', { key: 'x1|series-v3|1', timestamp: stale, data: [{ accountId: 'x1', seriesId: 'old' }] });
     clientMock.getSeries.mockResolvedValue([{ accountId: 'x1', seriesId: 's1' }]);
     expect(await loadSeries(account, '1')).toEqual([{ accountId: 'x1', seriesId: 'old' }]);
     await settle();
@@ -447,16 +447,16 @@ describe('xtream-catalog series', () => {
   it('clears the stale series category when a background refresh succeeds with an empty list', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
-    cacheStore.set('x1|series-v2|1', { key: 'x1|series-v2|1', timestamp: stale, data: [{ accountId: 'x1', seriesId: 's1' }] });
+    cacheStore.set('x1|series-v3|1', { key: 'x1|series-v3|1', timestamp: stale, data: [{ accountId: 'x1', seriesId: 's1' }] });
     clientMock.getSeries.mockResolvedValue([]);
     const out = await loadSeries(account, '1');
     await settle();
     warn.mockRestore();
     expect(out).toEqual([{ accountId: 'x1', seriesId: 's1' }]);
     expect(setCachedCatalog).toHaveBeenCalledWith(
-      'x1|series-v2|1', [], CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
+      'x1|series-v3|1', [], CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
     );
-    expect(cacheStore.get('x1|series-v2|1')?.data).toEqual([]);
+    expect(cacheStore.get('x1|series-v3|1')?.data).toEqual([]);
   });
 
   it('caches series info and skips the write on a null response', async () => {
@@ -499,7 +499,7 @@ describe('xtream-catalog whole-catalog (search)', () => {
       items: clientMock.getVodStreams,
       idKey: 'streamId',
       categoryKey: 'vod_categories',
-      itemKey: 'vod_streams-v2',
+      itemKey: 'vod_streams-v3',
     },
     {
       resource: 'series_all',
@@ -508,7 +508,7 @@ describe('xtream-catalog whole-catalog (search)', () => {
       items: clientMock.getSeries,
       idKey: 'seriesId',
       categoryKey: 'series_categories',
-      itemKey: 'series-v2',
+      itemKey: 'series-v3',
     },
   ])('$resource category partitions', ({ resource, load, categories, items, idKey, categoryKey, itemKey }) => {
     const failure = new XtreamRequestError('too_large', 'Response exceeds limit');
@@ -1102,7 +1102,7 @@ describe('xtream-catalog whole-catalog (search)', () => {
     expect(cacheStore.get('x1|vod_all')).toMatchObject({
       data: [], state: { complete: true },
     });
-    expect(cacheStore.get('x1|vod_streams-v2|1')?.data).toEqual([]);
+    expect(cacheStore.get('x1|vod_streams-v3|1')?.data).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -1150,7 +1150,7 @@ describe('xtream-catalog whole-catalog (search)', () => {
     expect(cacheStore.get('x1|series_all')).toMatchObject({
       data: [], state: { complete: true },
     });
-    expect(cacheStore.get('x1|series-v2|1')?.data).toEqual([]);
+    expect(cacheStore.get('x1|series-v3|1')?.data).toEqual([]);
   });
 });
 
@@ -1197,7 +1197,7 @@ describe('xtream-catalog one-request catalog', () => {
       timestamp: stale,
       state: { complete: true, refreshAfter: stale, freshSince: stale },
     });
-    for (const id of ['1', '2']) cacheStore.delete(`x1|vod_streams-v2|${id}`);
+    for (const id of ['1', '2']) cacheStore.delete(`x1|vod_streams-v3|${id}`);
     await loadAllVodStreams(account);
     await vi.waitFor(() => expect(clientMock.getVodStreams).toHaveBeenCalledTimes(4));
     expect(clientMock.getAllVodStreams).toHaveBeenCalledTimes(1);

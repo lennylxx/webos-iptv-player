@@ -400,15 +400,15 @@ export async function installBenchmarkFixture(options) {
       data,
     }));
     put('vod_categories', categories);
-    put('vod_streams-v2|13', movies);
+    put('vod_streams-v3|13', movies);
     put('vod_all', movies);
     put('series_categories', categories);
-    put('series-v2|13', series);
+    put('series-v3|13', series);
     put('series_all', series);
     put('series_info|s0', { seasons: [1], episodesBySeason: { 1: episodes } });
     for (let category = 7; category <= 12; category++) {
-      put(`vod_streams-v2|${String(category)}`, []);
-      put(`series-v2|${String(category)}`, []);
+      put(`vod_streams-v3|${String(category)}`, []);
+      put(`series-v3|${String(category)}`, []);
     }
     if (directStorage) {
       const progressStore = fixtureTx.objectStore('playback-progress');

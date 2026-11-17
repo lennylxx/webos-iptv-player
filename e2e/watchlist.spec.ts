@@ -9,6 +9,10 @@ import {
   type Page,
 } from './helpers';
 
+// Resume, Play, and the Watchlist toggle stay on one row; the title's own marks
+// (Watched, Hide) and progress removal may wrap below them.
+const PLAYBACK_ACTIONS = '#view-movies .detail-btn[data-action="resume"], #view-movies .detail-btn[data-action="play"], #view-movies .detail-btn[data-action="watchlist"]';
+
 interface SeedWatchlistEntry {
   accountId: string;
   kind: 'vod' | 'series';
@@ -180,7 +184,7 @@ test('shows Resume on return, keeps playback actions aligned, and offers progres
 
   await expect(page.locator('#view-movies')).toBeVisible();
   await expect(page.locator('#view-movies [data-action="resume"]')).toBeVisible();
-  const actions = page.locator('#view-movies .detail-btn:not([data-action="remove-resume"])');
+  const actions = page.locator(PLAYBACK_ACTIONS);
   await expect(actions).toHaveCount(3);
   await expect(page.locator('#view-movies [data-action="remove-resume"]')).toContainText('Remove from Continue Watching');
   const layout = await actions.evaluateAll((buttons) => buttons.map((button) => ({
@@ -216,7 +220,7 @@ test('keeps pseudo-localized playback actions aligned and wraps progress removal
   await enterTab(page, 'movies');
   await focusAndSelect(page, '#view-movies [data-watchlist-item="10"]');
 
-  const actions = page.locator('#view-movies .detail-btn:not([data-action="remove-resume"])');
+  const actions = page.locator(PLAYBACK_ACTIONS);
   await expect(actions).toHaveCount(3);
   await expect(actions.first()).toContainText('[!!');
   const layout = await page.locator('#view-movies .detail-actions').evaluate((row) => ({
@@ -231,8 +235,10 @@ test('keeps pseudo-localized playback actions aligned and wraps progress removal
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
   expect(layout.buttons.every(button => button.scrollWidth <= button.clientWidth + 1)).toBe(true);
   expect(new Set(layout.buttons.slice(0, 3).map(button => button.top)).size).toBe(1);
-  expect(layout.buttons).toHaveLength(4);
-  expect(layout.buttons[3].top).toBeGreaterThanOrEqual(layout.buttons[0].top);
+  expect(layout.buttons).toHaveLength(6);
+  for (const button of layout.buttons.slice(3)) {
+    expect(button.top).toBeGreaterThanOrEqual(layout.buttons[0].top);
+  }
   await expect(page.locator('#view-movies [data-action="remove-resume"]')).toBeVisible();
 });
 

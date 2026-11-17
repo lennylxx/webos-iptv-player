@@ -54,6 +54,14 @@ html.q-no-flex-gap .player-menu .menu-item-value,
 html.q-no-flex-gap .tab-bar-search { margin-left: auto; }
 
 /*
+ * The Xtream fields grow to fill each line, so the trailing margin the
+ * generated wrap fallback leaves on the last one would stop the line short
+ * and could wrap it early. The card's 20px padding takes the row's box
+ * overhang, so here the margin can be taken back without overflow.
+ */
+html.q-no-flex-gap .xtream-fields { margin-right: -16px; }
+
+/*
  * The All categories rail shares .catalog-rail-track but is a block, not a
  * flex row: its generated scroll-end spacer would become an inline line box
  * and overflow the rail's fixed height.

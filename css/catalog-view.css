@@ -227,10 +227,24 @@
 }
 .series-season-btn.active { background: var(--accent, #3ea6ff); color: #fff; }
 .series-season-btn.focused { border-color: var(--text-primary); }
+.series-season-mark { display: inline-flex; align-items: center; gap: 10px; }
 
 .series-episodes { position: relative; overflow-anchor: none; }
 .series-episodes-spacer { position: relative; width: 100%; }
-.series-episode-cell { position: absolute; left: 0; right: 0; }
+.series-episode-cell { position: absolute; left: 0; right: 0; display: flex; align-items: stretch; gap: 16px; }
+.series-episode-cell .episode-row { flex: 1 1 auto; min-width: 0; }
+.episode-mark {
+  flex: 0 0 auto; width: 88px; padding: 0; border-radius: 12px; border: 3px solid transparent;
+  background: var(--catalog-surface); color: var(--text-secondary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.episode-mark svg { width: 36px; height: 36px; }
+/* Watched reads like a title's watched badge: a white check on an accent circle. */
+.episode-mark.watched svg {
+  box-sizing: border-box; width: 44px; height: 44px; padding: 9px;
+  border-radius: 50%; background: var(--accent); color: #fff;
+}
+.episode-mark.focused { border-color: var(--accent, #3ea6ff); }
 .episode-row {
   box-sizing: border-box;
   display: flex; gap: 20px; align-items: flex-start;
@@ -327,3 +341,55 @@
 .catalog-remove-mark.focused path { stroke: #fff; }
 .catalog-poster-wrap .lock-badge ~ .catalog-remove-mark { right: 58px; }
 .catalog-remove-mark svg { width: 100%; height: 100%; }
+
+/* Watched and hidden marks. A watched title carries a solid check badge
+   opposite the lock badge; a watched episode a muted pill. */
+.catalog-watched-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 40px;
+  height: 40px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+}
+.catalog-watched-badge svg { display: block; width: 100%; height: 100%; }
+.episode-watched {
+  font-size: 20px; font-weight: 600; color: var(--text-secondary);
+  background: var(--catalog-control); border-radius: 6px; padding: 2px 12px;
+}
+
+/* Category grid filters share the sort row. Each label wraps with its control,
+   and a long genre stays one line: the genre menu scrolls on its own, so
+   revealing an option never scrolls the grid under it. */
+.catalog-filter-group { display: flex; align-items: center; gap: 16px; }
+.catalog-sort .catalog-filter-genre .dropdown { max-width: 360px; }
+.catalog-sort .catalog-filter-genre .dropdown-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.catalog-sort .catalog-filter-genre .dropdown-menu { max-height: 560px; }
+.catalog-filter-search { position: relative; display: block; width: calc(400px * var(--font-scale)); }
+.catalog-filter-icon {
+  position: absolute;
+  top: 50%;
+  left: 16px;
+  width: calc(24px * var(--font-scale));
+  height: calc(24px * var(--font-scale));
+  margin-top: calc(-12px * var(--font-scale));
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.catalog-filter-icon svg { display: block; width: 100%; height: 100%; }
+/* The same 22px type and padding as the dropdown triggers, so the row's heights match. */
+.catalog-filter-input.settings-input {
+  box-sizing: border-box;
+  padding-left: calc(28px + 24px * var(--font-scale));
+  font-size: 22px;
+  line-height: 1.4;
+}

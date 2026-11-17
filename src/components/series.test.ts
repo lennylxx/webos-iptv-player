@@ -6,7 +6,13 @@ import type {
 import type { CatalogSortPreference } from '../utils/catalog-sort';
 
 const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() => {
-  const watchlistState = { entries: [] as WatchlistEntry[] };
+  const watchlistState = {
+    entries: [] as WatchlistEntry[],
+    marks: {} as Record<string, { watched?: boolean; hidden?: boolean }>,
+  };
+  const setMarks = (kind: string, ids: string[], flags: { watched?: boolean; hidden?: boolean }) => {
+    for (const id of ids) watchlistState.marks[`${kind}|${id}`] = { ...watchlistState.marks[`${kind}|${id}`], ...flags };
+  };
   return {
     catalogMock: { loadSeriesCategories: vi.fn(), loadSeries: vi.fn(), loadSeriesInfo: vi.fn() },
     watchlistState,
@@ -14,6 +20,15 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
       setCatalogSort: vi.fn((_kind: 'vod' | 'series', _sort: CatalogSortPreference) => true),
       getResumeList: vi.fn(() => [] as unknown[]),
+      catalogMarkIds: vi.fn((_accountId: string, kind: string, flag: 'watched' | 'hidden') =>
+        new Set(Object.keys(watchlistState.marks)
+          .filter(key => key.split('|')[0] === kind && watchlistState.marks[key][flag])
+          .map(key => key.split('|')[1]))),
+      setCatalogMark: vi.fn((_accountId: string, kind: string, id: string,
+        flags: { watched?: boolean; hidden?: boolean }) => setMarks(kind, [id], flags)),
+      setCatalogMarks: vi.fn((_accountId: string, kind: string, ids: string[],
+        flags: { watched?: boolean; hidden?: boolean }) => setMarks(kind, ids, flags)),
+      isWatched: vi.fn(() => false),
       getResume: vi.fn((_accountId: string, _kind: ResumeKind, _itemId: string): ResumeEntry | null => null),
       clearResume: vi.fn(),
       getWatchlist: vi.fn(() => watchlistState.entries),
@@ -55,6 +70,7 @@ beforeEach(() => {
   Focus.uninstall();
   Element.prototype.scrollIntoView = vi.fn();
   vi.clearAllMocks();
+  watchlistState.marks = {};
   // clearAllMocks clears calls but not implementations; re-establish defaults so a
   // prior test's mockReturnValue override doesn't leak (order-safety).
   storageMock.getResumeList.mockReturnValue([]);
@@ -355,6 +371,124 @@ async function openDetail(view: Series) {
 }
 
 describe('Series detail', () => {
+  it('shows a watched episode and hides the series from its detail', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    watchlistState.marks['episode|e1'] = { watched: true };
+    const { view } = await openWith();
+    await openDetail(view);
+    expect(container.querySelector('[data-episode-id="e1"] .episode-watched')?.textContent).toBe('Watched');
+    view.focusScope.track(JSON.stringify(['detail', '', 'hide']));
+    view.handleAction('select');
+    expect(storageMock.setCatalogMark).toHaveBeenCalledWith('x1', 'series', 's1', { hidden: true });
+  });
+
+  describe('watched marks', () => {
+    const label = (key: string) => container.querySelector(`[data-key="${key}"]`)?.textContent?.trim();
+    const select = (view: Series, key: string) => {
+      view.focusScope.track(JSON.stringify(['detail', '', key]));
+      view.handleAction('select');
+    };
+
+    it('marks the whole series, then clears it again', async () => {
+      catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+      const { view } = await openWith();
+      await openDetail(view);
+      expect(label('watched')).toBe('Mark as watched');
+      select(view, 'watched');
+      expect(storageMock.setCatalogMarks).toHaveBeenCalledWith('x1', 'episode', ['e1', 'e2'], { watched: true });
+      expect(watchlistState.marks['series|s1']).toEqual({ watched: true });
+      expect(toastMock.showToast).toHaveBeenLastCalledWith('Marked as watched');
+      expect(label('watched')).toBe('Mark as not watched');
+      expect(label('season-watched')).toBe('Mark season as not watched');
+      expect(container.querySelector('[data-key="ep-mark:e1"]')?.classList.contains('watched')).toBe(true);
+      select(view, 'watched');
+      expect(watchlistState.marks['episode|e1']).toEqual({ watched: false });
+      expect(watchlistState.marks['series|s1']).toEqual({ watched: false });
+      expect(label('watched')).toBe('Mark as watched');
+    });
+
+    it('marks a season, dropping its place in Continue Watching, and the last one marks the series', async () => {
+      catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+      storageMock.getResumeList.mockReturnValue([{
+        accountId: 'x1', kind: 'episode', itemId: 'e1', name: 'Series One', poster: '', ext: 'mp4',
+        position: 100, duration: 1500, updatedAt: 1,
+        watchlistOwner: { kind: 'series', itemId: 's1' },
+      }]);
+      // A hidden series' places stay out of Continue Watching, but not out of storage.
+      watchlistState.marks['series|s1'] = { hidden: true };
+      const { view } = await openWith();
+      await (view as unknown as { openDetail(s: unknown): Promise<void> }).openDetail(series('s1', 'Series One'));
+      select(view, 'season-watched');
+      expect(storageMock.setCatalogMarks).toHaveBeenCalledWith('x1', 'episode', ['e1'], { watched: true });
+      expect(storageMock.clearResume).toHaveBeenCalledWith('x1', 'episode', 'e1');
+      expect(toastMock.showToast).toHaveBeenLastCalledWith('Season marked as watched');
+      expect(watchlistState.marks['series|s1'].watched).toBeFalsy();
+      select(view, 'season:2');
+      select(view, 'season-watched');
+      expect(watchlistState.marks['series|s1']).toEqual({ hidden: true, watched: true });
+    });
+
+    it('toggles one episode by its mark or the green key', async () => {
+      catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+      const { view } = await openWith();
+      await openDetail(view);
+      select(view, 'ep-mark:e1');
+      expect(watchlistState.marks['episode|e1']).toEqual({ watched: true });
+      expect(container.querySelector('[data-episode-id="e1"] .episode-watched')).not.toBeNull();
+      view.focusScope.track(JSON.stringify(['detail', '', 'ep:e1']));
+      view.handleAction('green');
+      expect(watchlistState.marks['episode|e1']).toEqual({ watched: false });
+      expect(toastMock.showToast).toHaveBeenLastCalledWith('Marked as not watched');
+    });
+
+    it("leaves another account's series mark alone when the account switches", async () => {
+      catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+      const { view } = await openWith();
+      await openDetail(view);
+      watchlistState.marks['series|s1'] = { watched: true };
+      void view.open({ ...account, id: 'x2' });
+      expect(storageMock.setCatalogMark).not.toHaveBeenCalledWith('x2', 'series', 's1', { watched: false });
+      expect(watchlistState.marks['series|s1']).toEqual({ watched: true });
+    });
+
+    it('offers no series mark when its seasons list no episodes', async () => {
+      catalogMock.loadSeriesInfo.mockResolvedValue({ ...SERIES_INFO, episodesBySeason: { 1: [], 2: [] } });
+      const { view } = await openWith();
+      await openDetail(view);
+      expect(container.querySelector('[data-key="watched"]')).toBeNull();
+    });
+
+    it('makes a watched series unwatched once it lists a new episode', async () => {
+      catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+      watchlistState.marks['series|s1'] = { watched: true };
+      watchlistState.marks['episode|e1'] = { watched: true };
+      const { view } = await openWith();
+      expect(container.querySelector('.catalog-tile[data-item-id="s1"] .catalog-watched-badge')).not.toBeNull();
+      await openDetail(view);
+      expect(watchlistState.marks['series|s1']).toEqual({ watched: false });
+      expect(label('watched')).toBe('Mark as watched');
+    });
+
+    it('keeps Down on the watched marks column', async () => {
+      catalogMock.loadSeriesInfo.mockResolvedValue({
+        ...SERIES_INFO,
+        seasons: [1],
+        episodesBySeason: { 1: [SERIES_INFO.episodesBySeason[1][0], { ...SERIES_INFO.episodesBySeason[2][0], season: 1, episode: 2 }] },
+      });
+      const { view } = await openWith();
+      await openDetail(view);
+      view.focusScope.track(JSON.stringify(['detail', '', 'ep-mark:e1']));
+      document.documentElement.classList.add('keyboard-nav');
+      for (let i = 0; i < 2; i++) { // the first press shows the ring
+        view.handleAction('down');
+        Focus.input();
+        Focus.flush();
+      }
+      document.documentElement.classList.remove('keyboard-nav');
+      expect(view.focusScope.focusKey).toBe(JSON.stringify(['detail', '', 'ep-mark:e2']));
+    });
+  });
+
   it('renders a bounded episode window for a 50,000-item season', async () => {
     const episodes = Array.from({ length: 50_000 }, (_, index) => ({
       id: `e${String(index)}`,

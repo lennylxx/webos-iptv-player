@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
+import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist';
@@ -55,6 +55,7 @@ interface UserDataState {
   aspectRatios: Record<string, AspectRatio>;
   resume: Record<string, ResumeEntry>;
   watchlist: Record<string, WatchlistEntry>;
+  marks: Record<string, CatalogMark>;
   onlineSubPicks: Record<string, PickedOnlineSub>;
   catchupProgress: Record<string, StoredCatchup>;
   recentlyWatchedLive: RecentlyWatchedLiveEntry[];
@@ -207,6 +208,10 @@ function fallbackResume(): Record<string, ResumeEntry> {
   return all;
 }
 
+function markKey(entry: Pick<CatalogMark, 'accountId' | 'kind' | 'itemId'>): string {
+  return `mark:${entry.accountId}|${entry.kind}|${entry.itemId}`;
+}
+
 function watchlistKey(entry: Pick<WatchlistEntry, 'accountId' | 'kind' | 'itemId'>): string {
   return `watch:${entry.accountId}|${entry.kind}|${entry.itemId}`;
 }
@@ -275,6 +280,8 @@ function allUserRecords(data: UserDataState): Parameters<typeof replaceAllUserDa
           expiresAt: entry.expiresAt,
         });
       }),
+      ...Object.keys(data.marks).map(key =>
+        record(markKey(data.marks[key]), data.marks[key], { updatedAt: data.marks[key].updatedAt })),
     ],
     'recently-watched': data.recentlyWatchedLive.map(entry =>
       record(`live:${entry.channelKey}`, entry, { updatedAt: entry.updatedAt })),
@@ -425,6 +432,15 @@ function legacyRecords(key: string, value: unknown): {
         replacePrefix: 'catchup:',
       };
     }
+    case 'catalog_marks': {
+      const marks = value as Record<string, CatalogMark>;
+      return {
+        store: 'playback-progress',
+        records: Object.keys(marks).map(item =>
+          record(markKey(marks[item]), marks[item], { updatedAt: marks[item].updatedAt })),
+        replacePrefix: 'mark:',
+      };
+    }
     case 'recently_watched_live':
       return {
         store: 'recently-watched',
@@ -462,6 +478,7 @@ async function loadUserDataState(): Promise<UserDataState> {
     aspectRatios: {},
     resume: {},
     watchlist: {},
+    marks: {},
     onlineSubPicks: {},
     catchupProgress: {},
     recentlyWatchedLive: recentlyWatched.map(item => item.value),
@@ -509,6 +526,8 @@ async function loadUserDataState(): Promise<UserDataState> {
     } else if (item.key.startsWith('catchup:')) {
       const entry = item.value as StoredCatchup;
       data.catchupProgress[`${entry.channelKey}|${entry.progStart}`] = entry;
+    } else if (item.key.startsWith('mark:')) {
+      data.marks[item.key.slice(5)] = item.value as CatalogMark;
     }
   }
   for (const item of onlineSubPicks) {
@@ -533,6 +552,7 @@ async function initUserData(): Promise<void> {
     ['online_sub_picks', {}],
     ['catchup_progress', {}],
     ['recently_watched_live', []],
+    ['catalog_marks', {}],
   ];
   const pending = [];
   const migratedKeys = await loadMigrationMarkers();
@@ -1303,6 +1323,8 @@ export const StorageService = {
       entry = { ...entry, position: 0 };
     }
     const tooEarly = !opts.keepStart && entry.position < CONFIG.XTREAM.RESUME_MIN_SECS;
+    // A duration within the pad of zero (a growing EVENT playlist) can't tell an end.
+    if (finished && entry.duration > 2 * CONFIG.XTREAM.RESUME_FINISH_PAD) StorageService.setCatalogMark(entry.accountId, entry.kind, entry.itemId, { watched: true });
     if (userData) {
       if (finished || tooEarly) {
         delete userData.resume[key];
@@ -1453,6 +1475,72 @@ export const StorageService = {
   },
   setOnlineSubtitleConfig(cfg: OnlineSubtitleConfig): boolean {
     return set('online_subtitles', cfg);
+  },
+
+  getCatalogMark(accountId: string, kind: CatalogMarkKind, itemId: string): CatalogMark | null {
+    const all = userData ? userData.marks : get<Record<string, CatalogMark>>('catalog_marks', {});
+    const mark = all[`${accountId}|${kind}|${itemId}`];
+    return mark ? cloneValue(mark) : null;
+  },
+  isWatched(accountId: string, kind: CatalogMarkKind, itemId: string): boolean {
+    return !!StorageService.getCatalogMark(accountId, kind, itemId)?.watched;
+  },
+  isHidden(accountId: string, kind: CatalogMarkKind, itemId: string): boolean {
+    return !!StorageService.getCatalogMark(accountId, kind, itemId)?.hidden;
+  },
+  /** Item ids of one account and kind carrying a mark, for filtering a whole list at once. */
+  catalogMarkIds(accountId: string, kind: CatalogMarkKind, flag: 'watched' | 'hidden'): Set<string> {
+    const all = userData ? userData.marks : get<Record<string, CatalogMark>>('catalog_marks', {});
+    const ids = new Set<string>();
+    for (const key of Object.keys(all)) {
+      const mark = all[key];
+      if (mark.accountId === accountId && mark.kind === kind && mark[flag]) ids.add(mark.itemId);
+    }
+    return ids;
+  },
+  // A mark with neither flag left is deleted, so the store holds only marked titles.
+  setCatalogMark(
+    accountId: string,
+    kind: CatalogMarkKind,
+    itemId: string,
+    flags: { watched?: boolean; hidden?: boolean },
+  ): void {
+    StorageService.setCatalogMarks(accountId, kind, [itemId], flags);
+  },
+  // One write for many titles, such as every episode of a season.
+  setCatalogMarks(
+    accountId: string,
+    kind: CatalogMarkKind,
+    itemIds: string[],
+    flags: { watched?: boolean; hidden?: boolean },
+  ): void {
+    const all = userData ? userData.marks : get<Record<string, CatalogMark>>('catalog_marks', {});
+    const puts: UserDataRecord[] = [];
+    const deletes: string[] = [];
+    const now = Date.now();
+    for (const itemId of itemIds) {
+      const key = `${accountId}|${kind}|${itemId}`;
+      const previous = all[key];
+      const next: CatalogMark = { accountId, kind, itemId, updatedAt: now };
+      const watched = flags.watched ?? previous?.watched;
+      const hidden = flags.hidden ?? previous?.hidden;
+      if (watched) next.watched = true;
+      if (hidden) next.hidden = true;
+      if (!!previous?.watched === !!watched && !!previous?.hidden === !!hidden) continue;
+      if (watched || hidden) {
+        all[key] = next;
+        puts.push(record(markKey(next), next, { updatedAt: now }));
+      } else {
+        delete all[key];
+        deletes.push(markKey(next));
+      }
+    }
+    if (!puts.length && !deletes.length) return;
+    if (userData) {
+      persistUserChanges('playback-progress', puts, deletes);
+      return;
+    }
+    set('catalog_marks', all);
   },
 
   getPickedOnlineSub(accountId: string, kind: ResumeKind, itemId: string): PickedOnlineSub | null {

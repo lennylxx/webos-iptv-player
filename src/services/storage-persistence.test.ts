@@ -346,6 +346,79 @@ describe('StorageService IndexedDB migration', () => {
     await Cleared.clearUserData();
   });
 
+  it('persists watched and hidden marks and drops a mark with neither flag', async () => {
+    localStorage.clear();
+    vi.resetModules();
+    const { StorageService: First } = await import('./storage-service');
+    await First.init();
+    await First.clearUserData();
+    await First.init();
+    First.setResume(resumeEntry({ itemId: 'm1', position: 5990, duration: 6000 }));
+    // A duration this short (a growing EVENT playlist) can't tell the end.
+    First.setResume(resumeEntry({ itemId: 'm3', position: 5, duration: 10 }));
+    First.setCatalogMark('x1', 'series', 's1', { hidden: true });
+    First.setCatalogMark('x1', 'vod', 'm2', { watched: true });
+    First.setCatalogMark('x1', 'vod', 'm2', { watched: false });
+    First.setCatalogMarks('x1', 'episode', ['e1', 'e2', 'e3'], { watched: true });
+    First.setCatalogMarks('x1', 'episode', ['e2'], { watched: false });
+    await First.flush();
+
+    vi.resetModules();
+    const { StorageService: Relaunched } = await import('./storage-service');
+    await Relaunched.init();
+    expect(Relaunched.isWatched('x1', 'vod', 'm1')).toBe(true);
+    expect(Relaunched.catalogMarkIds('x1', 'series', 'hidden')).toEqual(new Set(['s1']));
+    expect(Relaunched.getCatalogMark('x1', 'vod', 'm2')).toBeNull();
+    expect(Relaunched.isWatched('x1', 'vod', 'm3')).toBe(false);
+    const keys = (await loadUserRecords('playback-progress')).map(item => item.key)
+      .filter(key => key.startsWith('mark:'));
+    expect(keys.sort()).toEqual(['mark:x1|episode|e1', 'mark:x1|episode|e3', 'mark:x1|series|s1', 'mark:x1|vod|m1']);
+    expect(Relaunched.catalogMarkIds('x1', 'episode', 'watched')).toEqual(new Set(['e1', 'e3']));
+    await Relaunched.clearUserData();
+  });
+
+  it('moves marks saved while IndexedDB was unavailable into it', async () => {
+    localStorage.clear();
+    vi.resetModules();
+    const { StorageService: First } = await import('./storage-service');
+    await First.init();
+    await First.clearUserData();
+    localStorage.setItem('iptv_catalog_marks', JSON.stringify({
+      'x1|vod|m9': { accountId: 'x1', kind: 'vod', itemId: 'm9', watched: true, updatedAt: 1 },
+    }));
+    vi.resetModules();
+    const { StorageService: Relaunched } = await import('./storage-service');
+    await Relaunched.init();
+    expect(Relaunched.isWatched('x1', 'vod', 'm9')).toBe(true);
+    expect(localStorage.getItem('iptv_catalog_marks')).toBeNull();
+    const keys = (await loadUserRecords('playback-progress')).map(item => item.key);
+    expect(keys).toContain('mark:x1|vod|m9');
+    await Relaunched.clearUserData();
+  });
+
+  it('adds fallback marks to the ones IndexedDB already holds', async () => {
+    localStorage.clear();
+    vi.resetModules();
+    const { StorageService: First } = await import('./storage-service');
+    await First.init();
+    await First.clearUserData();
+    await First.init();
+    First.setCatalogMark('x1', 'vod', 'm1', { watched: true });
+    await First.flush();
+    localStorage.setItem('iptv_catalog_marks', JSON.stringify({
+      'x1|series|s2': { accountId: 'x1', kind: 'series', itemId: 's2', hidden: true, updatedAt: 2 },
+    }));
+    vi.resetModules();
+    const { StorageService: Relaunched } = await import('./storage-service');
+    await Relaunched.init();
+    expect(Relaunched.isWatched('x1', 'vod', 'm1')).toBe(true);
+    expect(Relaunched.isHidden('x1', 'series', 's2')).toBe(true);
+    const keys = (await loadUserRecords('playback-progress')).map(item => item.key)
+      .filter(key => key.startsWith('mark:'));
+    expect(keys.sort()).toEqual(['mark:x1|series|s2', 'mark:x1|vod|m1']);
+    await Relaunched.clearUserData();
+  });
+
   it('persists resume evictions, list clears, and a refused Watchlist add', async () => {
     localStorage.clear();
     vi.resetModules();

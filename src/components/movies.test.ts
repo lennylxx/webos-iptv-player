@@ -4,7 +4,10 @@ import type { Action, PlaylistEntry, ResumeEntry, VodItem, WatchlistEntry, Watch
 import type { CatalogSortPreference } from '../utils/catalog-sort';
 
 const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() => {
-  const watchlistState = { entries: [] as WatchlistEntry[] };
+  const watchlistState = {
+    entries: [] as WatchlistEntry[],
+    marks: {} as Record<string, { watched?: boolean; hidden?: boolean }>,
+  };
   return {
     catalogMock: { loadVodCategories: vi.fn(), loadVodStreams: vi.fn(), loadVodInfo: vi.fn() },
     watchlistState,
@@ -12,6 +15,15 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
       setCatalogSort: vi.fn((_kind: 'vod' | 'series', _sort: CatalogSortPreference) => true),
       getResumeList: vi.fn(() => [] as unknown[]),
+      catalogMarkIds: vi.fn((_accountId: string, kind: string, flag: 'watched' | 'hidden') =>
+        new Set(Object.keys(watchlistState.marks)
+          .filter(key => key.split('|')[0] === kind && watchlistState.marks[key][flag])
+          .map(key => key.split('|')[1]))),
+      setCatalogMark: vi.fn((_accountId: string, kind: string, itemId: string,
+        flags: { watched?: boolean; hidden?: boolean }) => {
+        watchlistState.marks[`${kind}|${itemId}`] = { ...watchlistState.marks[`${kind}|${itemId}`], ...flags };
+      }),
+      isWatched: vi.fn(() => false),
       getResume: vi.fn((): ResumeEntry | null => null),
       clearResume: vi.fn(),
       getWatchlist: vi.fn(() => watchlistState.entries),
@@ -98,6 +110,7 @@ beforeEach(() => {
   storageMock.getCatalogSort.mockReturnValue({ by: 'default', direction: 'asc' });
   storageMock.setCatalogSort.mockReturnValue(true);
   watchlistState.entries = [];
+  watchlistState.marks = {};
   container = document.createElement('div');
   document.body.appendChild(container);
 });
@@ -603,6 +616,280 @@ describe('Movies browse + grid', () => {
       view.handleAction('down');
       expect(detail().querySelector('.focused')?.getAttribute('data-key'))
         .toBe(button.getAttribute('data-key'));
+    });
+  });
+
+  describe('category filters and marks', () => {
+    const titles = [
+      { ...vod('10', 'Alpha One'), genre: 'g1, g2' },
+      { ...vod('11', 'Bravo'), genre: 'g2' },
+      { ...vod('12', 'Charlie One'), genre: 'g3' },
+    ];
+    const names = () => Array.from(container.querySelectorAll('.catalog-grid .catalog-tile-name'))
+      .map(el => el.textContent);
+    async function openGrid() {
+      catalogMock.loadVodInfo.mockResolvedValue(null);
+      const opened = await openWith([{ id: '1', name: 'Cat A' }], titles);
+      container.querySelector<HTMLElement>('.catalog-see-all[data-category-id="1"], .catalog-cat[data-category-id="1"]')
+        ?.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      opened.view.focusScope.track(JSON.stringify(['browse', 'cat:1', 'all:1']));
+      (opened.view as unknown as { openGrid(id: string): Promise<void> }).openGrid('1');
+      for (let i = 0; i < 4; i++) await Promise.resolve();
+      return opened;
+    }
+    function pickOption(view: Movies, dropdownId: string, value: string) {
+      // jsdom's selector engine misreads an attribute value of "hidden".
+      const option = Array.from(container.querySelectorAll<HTMLElement>(`#${dropdownId} [data-dropdown-value]`))
+        .find(el => el.dataset.dropdownValue === value)!;
+      view.focusScope.track(JSON.stringify(['grid', '', option.getAttribute('data-key')]));
+      view.handleAction('select');
+    }
+
+    it('filters a category by genre, by watched state, and by a search in it', async () => {
+      watchlistState.marks['vod|11'] = { watched: true };
+      const { view } = await openGrid();
+      expect(names()).toEqual(['Alpha One', 'Bravo', 'Charlie One']);
+      expect(container.querySelector('.catalog-tile[data-item-id="11"] .catalog-watched-badge')).not.toBeNull();
+      const genres = Array.from(container.querySelectorAll('#movies-grid-genre .dropdown-option'))
+        .map(el => el.textContent);
+      expect(genres).toEqual(['All genres', 'g1', 'g2', 'g3']);
+
+      // Options carry the genre's index: g1 is the second genre, "g2".
+      pickOption(view, 'movies-grid-genre', 'g1');
+      expect(names()).toEqual(['Alpha One', 'Bravo']);
+      pickOption(view, 'movies-grid-show', 'unwatched');
+      expect(names()).toEqual(['Alpha One']);
+      pickOption(view, 'movies-grid-genre', 'all');
+      pickOption(view, 'movies-grid-show', 'all');
+
+      vi.useFakeTimers();
+      try {
+        const input = container.querySelector<HTMLInputElement>('.catalog-filter-input')!;
+        input.value = 'one';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        vi.advanceTimersByTime(300);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(names()).toEqual(['Alpha One', 'Charlie One']);
+      const input = container.querySelector<HTMLInputElement>('.catalog-filter-input')!;
+      input.value = 'zz';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      // Enter applies the search at once, without waiting out the typing delay.
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      expect(names()).toEqual([]);
+      expect(container.querySelector('.catalog-grid .catalog-hint')?.textContent).toBe('No titles match these filters.');
+    });
+
+    it('hides a title from its category until it is shown again from Hidden', async () => {
+      const { view } = await openGrid();
+      await view.openItem(account, titles[1], vi.fn());
+      view.focusScope.track(JSON.stringify(['detail', '', 'hide']));
+      view.handleAction('select');
+      expect(storageMock.setCatalogMark).toHaveBeenCalledWith('x1', 'vod', '11', { hidden: true });
+      expect(container.querySelector('.movies-detail [data-action="hide"]')?.textContent).toContain('Unhide');
+
+      await view.open(account);
+      expect(Array.from(container.querySelectorAll('[data-rail-key="cat:1"] .catalog-tile-name'))
+        .map(el => el.textContent)).toEqual(['Alpha One', 'Charlie One']);
+      await (view as unknown as { openGrid(id: string): Promise<void> }).openGrid('1');
+      pickOption(view, 'movies-grid-show', 'hidden');
+      expect(names()).toEqual(['Bravo']);
+    });
+
+    it('keeps the ring on the search box while it has the caret, then follows the pointer', async () => {
+      await openGrid();
+      const input = container.querySelector<HTMLInputElement>('.catalog-filter-input')!;
+      input.focus();
+      const tile = container.querySelector<HTMLElement>('.catalog-grid .catalog-tile[data-item-id="12"]')!;
+      tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      Focus.flush();
+      expect(tile.classList.contains('focused')).toBe(false);
+      input.blur();
+      Focus.flush();
+      expect(tile.classList.contains('focused')).toBe(true);
+    });
+
+    it('keeps the ring where it was when something above takes the keys from the search box', async () => {
+      const { view } = await openGrid();
+      const input = container.querySelector<HTMLInputElement>('.catalog-filter-input')!;
+      view.focusScope.track(JSON.stringify(['grid', '', 'filter-query']));
+      view.handleAction('select');
+      expect(document.activeElement).toBe(input);
+      container.querySelector<HTMLElement>('.catalog-grid .catalog-tile[data-item-id="12"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      const before = view.focusScope.focusKey;
+      const elsewhere = Focus.register({ id: 'test.elsewhere', root: document.body });
+      Focus.push(elsewhere);
+      Focus.flush();
+      expect(document.activeElement).not.toBe(input);
+      expect(view.focusScope.focusKey).toBe(before);
+      Focus.pop(elsewhere);
+    });
+
+    it('forgets a control the pointer left while the search box had the caret, which keeps its ring', async () => {
+      await openGrid();
+      const input = container.querySelector<HTMLInputElement>('.catalog-filter-input')!;
+      input.focus();
+      input.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      Focus.flush();
+      const tile = container.querySelector<HTMLElement>('.catalog-grid .catalog-tile[data-item-id="12"]')!;
+      tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      tile.dispatchEvent(new CustomEvent('nav:unhover', { bubbles: true }));
+      input.dispatchEvent(new CustomEvent('nav:unhover', { bubbles: true }));
+      Focus.flush();
+      expect(input.classList.contains('focused')).toBe(true);
+      input.blur();
+      Focus.flush();
+      expect(tile.classList.contains('focused')).toBe(false);
+    });
+
+    it('applies a search the pointer left before it settled, even from a detail it opened', async () => {
+      const { view } = await openGrid();
+      vi.useFakeTimers();
+      try {
+        const input = container.querySelector<HTMLInputElement>('.catalog-filter-input')!;
+        input.focus();
+        input.value = 'one';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.blur();
+        expect(names()).toEqual(['Alpha One', 'Charlie One']);
+        input.focus();
+        input.value = 'alpha';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        void view.openItem(account, titles[1], vi.fn());
+        vi.advanceTimersByTime(300);
+      } finally {
+        vi.useRealTimers();
+      }
+      view.handleAction('back');
+      expect(names()).toEqual(['Alpha One']);
+      expect(container.querySelector<HTMLInputElement>('.catalog-filter-input')!.value).toBe('alpha');
+    });
+
+    it('offers the genres of hidden titles while Show lists them', async () => {
+      watchlistState.marks['vod|11'] = { hidden: true };
+      watchlistState.marks['vod|12'] = { hidden: true };
+      const { view } = await openGrid();
+      const genres = () => Array.from(container.querySelectorAll('#movies-grid-genre .dropdown-option'))
+        .map(el => el.textContent);
+      expect(genres()).toEqual(['All genres', 'g1', 'g2']);
+      pickOption(view, 'movies-grid-show', 'hidden');
+      expect(genres()).toEqual(['All genres', 'g2', 'g3']);
+    });
+
+    it('keeps See all on a rail whose hidden titles would otherwise leave no grid', async () => {
+      watchlistState.marks['vod|12'] = { hidden: true };
+      await openWith([{ id: '1', name: 'Cat A' }], titles);
+      expect(container.querySelector('[data-rail-key="cat:1"] .catalog-see-all')).not.toBeNull();
+      for (const title of titles) watchlistState.marks[`vod|${title.streamId}`] = { hidden: true };
+      container.innerHTML = '';
+      Focus.uninstall();
+      await openWith([{ id: '1', name: 'Cat A' }], titles);
+      expect(container.querySelector('[data-rail-key="cat:1"] .catalog-see-all')).not.toBeNull();
+    });
+
+    it('keeps the genre dropdown while its genre still filters the grid', async () => {
+      const { view } = await openGrid();
+      pickOption(view, 'movies-grid-genre', 'g2');
+      expect(names()).toEqual(['Charlie One']);
+      watchlistState.marks['vod|10'] = { hidden: true };
+      watchlistState.marks['vod|11'] = { hidden: true };
+      view.refreshPlaybackState();
+      expect(names()).toEqual(['Charlie One']);
+      expect(container.querySelector('#movies-grid-genre')).not.toBeNull();
+    });
+
+    it('keeps a ring on the filters when clearing the genre drops its dropdown', async () => {
+      watchlistState.marks['vod|11'] = { hidden: true };
+      const { view } = await openGrid();
+      pickOption(view, 'movies-grid-genre', 'g1');
+      pickOption(view, 'movies-grid-show', 'hidden');
+      expect(names()).toEqual(['Bravo']);
+      const all = Array.from(container.querySelectorAll<HTMLElement>('#movies-grid-genre [data-dropdown-value]'))
+        .find(el => el.dataset.dropdownValue === 'all')!;
+      view.focusScope.track(JSON.stringify(['grid', '', all.getAttribute('data-key')]));
+      pressKey(view, 'select');
+      expect(container.querySelector('#movies-grid-genre')).toBeNull();
+      expect(view.focusScope.focusKey).toContain('movies-grid-show');
+    });
+
+    it('moves the hero past a first rail whose titles are all hidden', async () => {
+      watchlistState.marks['vod|10'] = { hidden: true };
+      catalogMock.loadVodCategories.mockResolvedValue([{ id: '1', name: 'Cat A' }, { id: '2', name: 'Cat B' }]);
+      catalogMock.loadVodStreams.mockImplementation((_a: unknown, categoryId: string) =>
+        Promise.resolve([vod(`${categoryId}0`, `Movie ${categoryId}`, categoryId)]));
+      tallScreen();
+      const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
+      Focus.setBase(() => view.focusScope);
+      await view.open(account);
+      expect(container.querySelector('.catalog-hero-title')?.textContent).toBe('Movie 2');
+    });
+
+    it('keeps a hidden title out of Continue Watching and the Watchlist', async () => {
+      storageMock.getResumeList.mockReturnValue([{
+        accountId: 'x1', kind: 'vod', itemId: '10', name: 'Alpha One', poster: '', ext: 'mp4',
+        position: 100, duration: 600, updatedAt: 1,
+      }]);
+      watchlistState.entries = [{
+        accountId: 'x1', kind: 'vod', itemId: '10', name: 'Alpha One',
+        poster: '', rating: '', categoryId: '1', containerExtension: 'mp4', addedAt: 1,
+      }];
+      catalogMock.loadVodInfo.mockResolvedValue(null);
+      const { view } = await openWith([{ id: '1', name: 'Cat A' }], titles);
+      expect(container.querySelector('[data-collection-manage="continue"]')).not.toBeNull();
+      const tile = container.querySelector<HTMLElement>('.catalog-tile[data-item-id="10"]')!;
+      tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      view.handleAction('select');
+      await Promise.resolve();
+      view.focusScope.track(JSON.stringify(['detail', '', 'hide']));
+      view.handleAction('select');
+      view.handleAction('back');
+      expect(container.querySelector('[data-collection-manage="continue"]')).toBeNull();
+      expect(container.querySelector('[data-collection-manage="watchlist"]')).toBeNull();
+      expect(container.querySelector('.catalog-tile[data-item-id="10"]')).toBeNull();
+    });
+
+    it('drops a genre filter whose last title was hidden', async () => {
+      const { view } = await openGrid();
+      pickOption(view, 'movies-grid-genre', 'g0');
+      expect(names()).toEqual(['Alpha One']);
+      watchlistState.marks['vod|10'] = { hidden: true };
+      view.refreshPlaybackState();
+      expect(names()).toEqual(['Bravo', 'Charlie One']);
+    });
+
+    it('says when every title of a category is hidden', async () => {
+      for (const title of titles) watchlistState.marks[`vod|${title.streamId}`] = { hidden: true };
+      await openGrid();
+      expect(container.querySelector('.catalog-grid .catalog-hint')?.textContent)
+        .toBe('Every title here is hidden. Choose Show: Hidden to see them.');
+    });
+
+    it('drops a search still being typed when another category opens', async () => {
+      const { view } = await openGrid();
+      vi.useFakeTimers();
+      try {
+        const input = container.querySelector<HTMLInputElement>('.catalog-filter-input')!;
+        input.value = 'one';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        void (view as unknown as { openGrid(id: string): Promise<void> }).openGrid('1');
+        vi.advanceTimersByTime(300);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(names()).toEqual(['Alpha One', 'Bravo', 'Charlie One']);
+    });
+
+    it('marks a movie watched from its detail', async () => {
+      const { view } = await openGrid();
+      await view.openItem(account, titles[0], vi.fn());
+      view.focusScope.track(JSON.stringify(['detail', '', 'watched']));
+      view.handleAction('select');
+      expect(storageMock.setCatalogMark).toHaveBeenCalledWith('x1', 'vod', '10', { watched: true });
+      expect(storageMock.clearResume).toHaveBeenCalledWith('x1', 'vod', '10');
+      expect(container.querySelector('.movies-detail [data-action="watched"]')?.textContent)
+        .toContain('Mark as not watched');
     });
   });
 

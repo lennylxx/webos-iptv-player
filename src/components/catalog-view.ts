@@ -13,7 +13,8 @@ import { FocusRing, ringShown } from '../navigation/focus-ring';
 import { InputMode } from '../navigation/input-mode';
 import { html, raw, Safe, withInstantScroll } from '../utils/dom';
 import { categoryLockBadge, lockBadge } from './parental-badge';
-import { SORT_ASCENDING_ICON, SORT_DESCENDING_ICON, SEE_ALL_ICON, REMOVE_ICON, CHECK_ICON, TRASH_ICON, PENCIL_ICON } from './icons';
+import { SORT_ASCENDING_ICON, SORT_DESCENDING_ICON, SEE_ALL_ICON, REMOVE_ICON, CHECK_ICON, TRASH_ICON, PENCIL_ICON, SEARCH_ICON } from './icons';
+import { foldSearchText } from '../utils/channel-search';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import { backKey, okHint } from './key-hints';
 import { showToast } from './toast';
@@ -77,6 +78,29 @@ export interface CatalogHandlers {
   onRevealTabBar: () => void;
   onBack: () => void;
   onPlayVod: (req: Omit<VodPlayback, 'onBack'>) => void;
+}
+
+// Which titles a category grid lists, by the viewer's marks.
+export type CatalogShowFilter = 'all' | 'unwatched' | 'watched' | 'hidden';
+
+interface GridFilter {
+  query: string;
+  genre: string;
+  show: CatalogShowFilter;
+}
+
+const NO_FILTER: GridFilter = { query: '', genre: '', show: 'all' };
+const FILTER_QUERY_DELAY_MS = 300;
+
+// Provider genre fields list several genres in one string.
+export function splitGenres(value: string | undefined): string[] {
+  if (!value) return [];
+  const genres: string[] = [];
+  for (const part of value.split(/\s*[,/|;]\s*/)) {
+    const genre = part.trim();
+    if (genre && genres.indexOf(genre) < 0) genres.push(genre);
+  }
+  return genres;
 }
 
 type Mode = 'browse' | 'grid' | 'detail';
@@ -211,6 +235,20 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private lastRevealKey: string | null = null;
   private lastRevealAt = 0;
   private lastRevealInstant = false;
+  private filter: GridFilter = NO_FILTER;
+  private filterTimer: ReturnType<typeof setTimeout> | null = null;
+  private filtered: { source: I[]; key: string; items: I[] } | null = null;
+  private gridGenres: string[] = [];
+  // Per source list, so a big category is split and folded once, not per render.
+  private genreCache = new WeakMap<I[], string[]>();
+  private foldedNames = new WeakMap<I[], Record<string, string>>();
+  private itemGenres = new WeakMap<I, string[]>();
+  private hiddenGenres = new WeakMap<I[], { hidden: Set<string>; genres: string[] }>();
+  private sortedByCategory: Record<string, I[]> = {};
+  // The control the pointer rests on while the search box keeps the caret.
+  private notedKey: string | null = null;
+  protected watchedIds = new Set<string>();
+  protected hiddenIds = new Set<string>();
 
   constructor(protected container: HTMLElement, protected handlers: CatalogHandlers) {
     const layer = (mode: Mode): HTMLElement => {
@@ -233,6 +271,45 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       has: (key) => this.hasKey(key),
       reveal: (key) => this.revealKey(key),
       concealOnLeave: true,
+      // A caret left in the category search keeps the arrows from the next owner;
+      // the control the pointer rested on is no longer picked as the caret goes.
+      onRelease: () => {
+        this.notedKey = null;
+        this.filterInput()?.blur();
+      },
+    });
+    this.container.addEventListener('input', (e: Event) => {
+      const input = e.target as HTMLInputElement;
+      if (!input.classList.contains('catalog-filter-input')) return;
+      if (this.filterTimer) clearTimeout(this.filterTimer);
+      this.filterTimer = setTimeout(() => {
+        this.filterTimer = null;
+        this.commitQuery(input.value);
+      }, FILTER_QUERY_DELAY_MS);
+    });
+    // The key handler leaves a text field its keys, so the field owns its ways out.
+    this.container.addEventListener('keydown', (e: KeyboardEvent) => {
+      const input = e.target as HTMLInputElement;
+      if (!input.classList.contains('catalog-filter-input')) return;
+      const back = e.key === 'Escape' || e.keyCode === CONFIG.KEYS.BACK;
+      const up = e.key === 'ArrowUp' || e.keyCode === CONFIG.KEYS.UP;
+      const down = e.key === 'ArrowDown' || e.keyCode === CONFIG.KEYS.DOWN;
+      const enter = e.key === 'Enter' || e.keyCode === CONFIG.KEYS.ENTER;
+      if (!back && !up && !down && !enter) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.flushQuery(input);
+      this.notedKey = null;
+      input.blur();
+      this.place(input, 'key');
+      if (up) {
+        if (!this.nav.move('up')) this.handlers.onRevealTabBar();
+      } else if ((down || enter) && this.gridSource().count) {
+        this.gridFocusIndex = 0;
+        this.revealGridIndex(0);
+        const first = this.layers.grid.querySelector<HTMLElement>('[data-grid-index="0"] [data-focusable]');
+        if (first) this.place(first, 'key');
+      }
     });
     // The pointer lights a tile or button where it rests, without scrolling.
     this.container.addEventListener('nav:hover', (e: Event) => {
@@ -240,7 +317,22 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       if (!target.hasAttribute('data-focusable') || !this.layers[this.mode].contains(target)) return;
       const menu = this.openSortMenu();
       if (menu && !menu.contains(target)) return;
+      // The caret keeps the keys; the ring follows the pointer once it leaves.
+      const caret = this.filterInput();
+      if (caret && document.activeElement === caret && target !== caret) {
+        this.notedKey = this.keyFor(target);
+        return;
+      }
       this.place(target, 'pointer');
+    });
+    this.container.addEventListener('focusout', (e: FocusEvent) => {
+      if (!(e.target as HTMLElement).classList.contains('catalog-filter-input')) return;
+      // However the caret left, the field's text is what the grid shows.
+      this.flushQuery(e.target as HTMLInputElement);
+      const noted = this.notedKey;
+      this.notedKey = null;
+      const el = noted !== null ? this.resolveKey(noted) : null;
+      if (el) this.place(el, 'pointer');
     });
     this.container.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
@@ -261,7 +353,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     }, true);
     // A ring the pointer left stays off; the next key only shows it again.
     this.container.addEventListener('nav:unhover', (e: Event) => {
-      if (e.target === this.current()) this.focusScope.conceal();
+      const target = e.target as HTMLElement;
+      if (this.notedKey !== null && this.notedKey === this.keyFor(target)) this.notedKey = null;
+      // A field with the caret keeps its ring.
+      const caret = this.filterInput();
+      if (caret && target === caret && document.activeElement === caret) return;
+      if (target === this.current()) this.focusScope.conceal();
     });
     this.container.addEventListener('scroll', (event: Event) => {
       const target = event.target as HTMLElement;
@@ -329,6 +426,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   protected abstract itemName(item: I): string;
   protected abstract itemPoster(item: I): string;
   protected abstract itemCategoryId(item: I): string;
+  protected abstract itemGenre(item: I): string;
   protected abstract itemCount(count: number): string;
   protected abstract readonly parentalKind: 'vod' | 'series';
   protected abstract openDetail(item: I): Promise<void>;
@@ -337,6 +435,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   // Section-specific selects (play/resume/season/episode). Returns true if handled.
   protected abstract selectExtra(el: HTMLElement): boolean;
   protected moveExtraFocus(_action: Action): boolean { return false; }
+  // A color key the section acts on; true when handled.
+  protected handleExtraAction(_action: Action): boolean { return false; }
   // A detail key the subclass virtualizes: whether it is still listed, and
   // bringing it into view (true when that scrolled, null when nothing had to).
   protected hasExtraKey(_key: string): boolean { return false; }
@@ -448,8 +548,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         render: index => entries[index].tile(this.managing),
       };
     }
-    const cat = this.gridCategory;
-    const items = cat ? (this.itemsByCategory[cat.id] ?? []) : [];
+    const items = this.gridItems();
     return {
       count: items.length,
       keyAt: index => `i:${this.itemCategoryId(items[index])}:${this.itemId(items[index])}`,
@@ -664,6 +763,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       this.nav.resetRecovery();
     }
     this.account = account;
+    this.refreshMarks();
   }
 
   protected get requestSignal(): AbortSignal | null {
@@ -689,6 +789,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   }
 
   refreshPlaybackState(): void {
+    this.refreshMarks();
     if (this.mode === 'detail') {
       this.refreshResume();
       this.renderDetail();
@@ -715,6 +816,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.dismissSort(null);
     const signal = this.beginRequests();
     this.account = account;
+    this.refreshMarks();
     this.deepLinkBack = null;
     this.browseReturn = null;
     this.browseStale = false;
@@ -728,6 +830,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.railsDirty = false;
     this.itemsByCategory = {};
     this.serverItemsByCategory = {};
+    this.sortedByCategory = {};
     this.sort = StorageService.getCatalogSort(this.parentalKind);
     this.browseSortReturn = null;
     this.resetBrowseRailOffsets = false;
@@ -780,6 +883,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       morph(this.layers.browse, this.loadingMarkup());
     }
     this.account = account;
+    this.refreshMarks();
     this.deepLinkBack = onDetailBack;
     await this.openDetail(item);
   }
@@ -930,6 +1034,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         this.onBack();
         return;
       default:
+        this.handleExtraAction(action);
         return;
     }
   }
@@ -982,12 +1087,26 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         }, direction);
         return;
       }
+      if (el.classList.contains('catalog-filter-input')) {
+        (el as HTMLInputElement).focus();
+        return;
+      }
       const dd = el.closest<HTMLElement>('.dropdown');
       if (el.hasAttribute('data-dropdown-trigger') && dd) {
         if (this.openSortMenu()) this.dismissSort(this.placementVia());
         else {
           this.nav.setRestrict(dd.querySelector<HTMLElement>('.dropdown-menu'));
           this.pick(this.placementVia(), () => toggleDropdown(this.container, this.nav, dd));
+        }
+      } else if (dd && el.dataset.dropdownValue !== undefined && /-grid-(genre|show)$/.test(dd.id)) {
+        const value = el.dataset.dropdownValue;
+        commitDropdownOption(el);
+        this.nav.setRestrict(this.layers[this.mode]);
+        const anchor = `#${dd.id} .dropdown-trigger`;
+        if (dd.id.slice(-6) === '-genre') {
+          this.applyFilter({ genre: value === 'all' ? '' : this.gridGenres[Number(value.slice(1))] ?? '' }, anchor);
+        } else {
+          this.applyFilter({ show: value as CatalogShowFilter }, anchor);
         }
       } else if (isCatalogSort(el.dataset.dropdownValue)) {
         const value = el.dataset.dropdownValue;
@@ -1253,9 +1372,229 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   private setCategoryItems(categoryId: string, items: I[]): void {
     this.serverItemsByCategory[categoryId] = items;
-    this.itemsByCategory[categoryId] = sortCatalogItems(
-      items, this.sort.by, getLocale(), this.sort.direction,
-    );
+    delete this.sortedByCategory[categoryId];
+    this.itemsByCategory[categoryId] = this.visibleItems(categoryId);
+  }
+
+  // A category's titles in the chosen order; sorted once per order, not per mark.
+  private sortedItems(categoryId: string): I[] {
+    let sorted = this.sortedByCategory[categoryId];
+    if (!sorted) {
+      sorted = sortCatalogItems(
+        this.serverItemsByCategory[categoryId] ?? [], this.sort.by, getLocale(), this.sort.direction,
+      );
+      this.sortedByCategory[categoryId] = sorted;
+    }
+    return sorted;
+  }
+
+  // ...without the ones the viewer hid.
+  private visibleItems(categoryId: string): I[] {
+    const sorted = this.sortedItems(categoryId);
+    return this.hiddenIds.size ? sorted.filter(item => !this.hiddenIds.has(this.itemId(item))) : sorted;
+  }
+
+  private rebuildItems(resort = false): void {
+    if (resort) this.sortedByCategory = {};
+    Object.keys(this.serverItemsByCategory).forEach(id => {
+      this.itemsByCategory[id] = this.visibleItems(id);
+    });
+    this.railSlots.forEach(slot => {
+      if (slot.state === 'loaded') {
+        slot.items = this.itemsByCategory[slot.category.id].slice(0, CONFIG.XTREAM.RAIL_ITEMS);
+      }
+    });
+    this.filtered = null;
+  }
+
+  // The viewer's watched and hidden titles of this section's account.
+  protected refreshMarks(): void {
+    const account = this.account;
+    const hidden = account
+      ? StorageService.catalogMarkIds(account.id, this.parentalKind, 'hidden') : new Set<string>();
+    this.watchedIds = account
+      ? StorageService.catalogMarkIds(account.id, this.parentalKind, 'watched') : new Set<string>();
+    const changed = hidden.size !== this.hiddenIds.size
+      || Array.from(hidden).some(id => !this.hiddenIds.has(id));
+    this.hiddenIds = hidden;
+    this.filtered = null;
+    if (changed) {
+      this.rebuildItems();
+      this.refreshResume();
+    }
+  }
+
+  // Flips the shown title's watched or hidden mark; true when it is now set.
+  protected toggleMark(flag: 'watched' | 'hidden', item: I): boolean {
+    const account = this.account;
+    if (!account) return false;
+    const id = this.itemId(item);
+    const on = !(flag === 'watched' ? this.watchedIds : this.hiddenIds).has(id);
+    StorageService.setCatalogMark(account.id, this.parentalKind, id, { [flag]: on });
+    this.refreshMarks();
+    return on;
+  }
+
+  protected watchedBadge(id: string): Safe | '' {
+    return this.watchedIds.has(id)
+      ? html`<span class="catalog-watched-badge" title="${t('catalog.watched')}">${raw(CHECK_ICON)}</span>`
+      : '';
+  }
+
+  private flushQuery(input: HTMLInputElement): void {
+    if (!this.filterTimer) return;
+    clearTimeout(this.filterTimer);
+    this.filterTimer = null;
+    this.commitQuery(input.value);
+  }
+
+  // Off the grid the query is only kept, for the grid to show when it returns.
+  private commitQuery(query: string): void {
+    if (this.mode === 'grid') this.applyFilter({ query }, null);
+    else {
+      this.filter = { ...this.filter, query };
+      this.filtered = null;
+    }
+  }
+
+  private filtersActive(): boolean {
+    const f = this.filter;
+    return !!(f.query.trim() || f.genre || f.show !== 'all');
+  }
+
+  private filterInput(): HTMLInputElement | null {
+    return this.layers.grid.querySelector<HTMLInputElement>('.catalog-filter-input');
+  }
+
+  // The category grid's titles after the viewer's genre, show, and search filters.
+  private gridItems(): I[] {
+    const cat = this.gridCategory;
+    if (!cat) return [];
+    let f = this.filter;
+    const base = f.show === 'hidden'
+      ? this.serverItemsByCategory[cat.id] ?? []
+      : this.itemsByCategory[cat.id] ?? [];
+    let key = JSON.stringify([cat.id, f, this.sort]);
+    if (this.filtered && this.filtered.source === base && this.filtered.key === key) {
+      return this.filtered.items;
+    }
+    // A genre whose last title the viewer hid is no longer offered, so it stops filtering.
+    if (f.genre && this.categoryGenres(cat.id, f.show).indexOf(f.genre) < 0) {
+      f = this.filter = { ...f, genre: '' };
+      key = JSON.stringify([cat.id, f, this.sort]);
+    }
+    const query = foldSearchText(f.query.trim());
+    let items = f.show === 'hidden'
+      ? this.sortedItems(cat.id).filter(item => this.hiddenIds.has(this.itemId(item)))
+      : base;
+    if (f.genre) items = items.filter(item => this.genresOf(item).indexOf(f.genre) >= 0);
+    if (f.show === 'watched') items = items.filter(item => this.watchedIds.has(this.itemId(item)));
+    if (f.show === 'unwatched') items = items.filter(item => !this.watchedIds.has(this.itemId(item)));
+    if (query) {
+      const all = this.sortedItems(cat.id);
+      let folded = this.foldedNames.get(all);
+      if (!folded) {
+        const names: Record<string, string> = {};
+        for (const item of all) names[this.itemId(item)] = foldSearchText(this.itemName(item));
+        folded = names;
+        this.foldedNames.set(all, folded);
+      }
+      const byId = folded;
+      items = items.filter(item => (byId[this.itemId(item)] ?? '').indexOf(query) >= 0);
+    }
+    this.filtered = { source: base, key, items };
+    return items;
+  }
+
+  // The genres of the titles Show lists: the visible ones, or the hidden ones.
+  private categoryGenres(categoryId: string, show: CatalogShowFilter): string[] {
+    if (show === 'hidden') {
+      const server = this.serverItemsByCategory[categoryId] ?? [];
+      const cached = this.hiddenGenres.get(server);
+      if (cached && cached.hidden === this.hiddenIds) return cached.genres;
+      const genres = this.collectGenres(server.filter(item => this.hiddenIds.has(this.itemId(item))));
+      this.hiddenGenres.set(server, { hidden: this.hiddenIds, genres });
+      return genres;
+    }
+    const items = this.itemsByCategory[categoryId] ?? [];
+    let genres = this.genreCache.get(items);
+    if (!genres) {
+      genres = this.collectGenres(items);
+      this.genreCache.set(items, genres);
+    }
+    return genres;
+  }
+
+  private collectGenres(items: I[]): string[] {
+    const seen: Record<string, true> = {};
+    const genres: string[] = [];
+    for (const item of items) {
+      for (const genre of this.genresOf(item)) {
+        if (!seen[genre]) {
+          seen[genre] = true;
+          genres.push(genre);
+        }
+      }
+    }
+    return genres.sort((a, b) => a.localeCompare(b, getLocale()));
+  }
+
+
+  private genresOf(item: I): string[] {
+    let genres = this.itemGenres.get(item);
+    if (!genres) {
+      genres = splitGenres(this.itemGenre(item));
+      this.itemGenres.set(item, genres);
+    }
+    return genres;
+  }
+
+  private applyFilter(patch: Partial<GridFilter>, anchor: string | null): void {
+    this.filter = { ...this.filter, ...patch };
+    this.filtered = null;
+    this.gridFocusIndex = 0;
+    this.gridVirtualizer.setScrollOffset(0);
+    this.renderGrid(false);
+    if (!anchor) return;
+    // Clearing the genre can drop the Genre dropdown itself; Show is always there.
+    const el = this.layer().querySelector<HTMLElement>(anchor)
+      ?? this.layer().querySelector(`#${this.scopeName()}-grid-show`)?.querySelector<HTMLElement>('.dropdown-trigger')
+      ?? null;
+    this.place(el, this.placementVia());
+  }
+
+  private filterControls(): Safe {
+    const cat = this.gridCategory;
+    const genres = cat ? this.categoryGenres(cat.id, this.filter.show) : [];
+    this.gridGenres = genres;
+    const genreIndex = genres.indexOf(this.filter.genre);
+    const show: Array<{ value: CatalogShowFilter; label: string }> = [
+      { value: 'all', label: t('catalog.showAll') },
+      { value: 'unwatched', label: t('catalog.showNotWatched') },
+      { value: 'watched', label: t('catalog.showWatched') },
+      { value: 'hidden', label: t('catalog.showHidden') },
+    ];
+    return html`
+      ${genres.length > 1 || this.filter.genre ? html`
+        <div class="catalog-filter-group catalog-filter-genre">
+          <span class="catalog-sort-label">${t('catalog.genre')}</span>
+          ${dropdown(`${this.scopeName()}-grid-genre`, [
+            { value: 'all', label: t('catalog.allGenres') },
+            ...genres.map((genre, index) => ({ value: `g${String(index)}`, label: genre })),
+          ], genreIndex >= 0 ? `g${String(genreIndex)}` : 'all')}
+        </div>
+      ` : ''}
+      <div class="catalog-filter-group">
+        <span class="catalog-sort-label">${t('catalog.show')}</span>
+        ${dropdown(`${this.scopeName()}-grid-show`, show, this.filter.show)}
+      </div>
+      <label class="catalog-filter-search">
+        <span class="catalog-filter-icon">${raw(SEARCH_ICON)}</span>
+        <input type="text" class="settings-input catalog-filter-input" data-focusable
+               data-key="filter-query" value="${this.filter.query}"
+               placeholder="${t('catalog.searchCategory')}">
+      </label>
+    `;
   }
 
   private openSortMenu(): HTMLElement | null {
@@ -1275,16 +1614,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     if (applied) {
       this.sort = sort;
       this.browseSortReturn = null;
-      Object.keys(this.serverItemsByCategory).forEach(id => {
-        this.itemsByCategory[id] = sortCatalogItems(
-          this.serverItemsByCategory[id], sort.by, getLocale(), sort.direction,
-        );
-      });
-      this.railSlots.forEach(slot => {
-        if (slot.state === 'loaded') {
-          slot.items = this.itemsByCategory[slot.category.id].slice(0, CONFIG.XTREAM.RAIL_ITEMS);
-        }
-      });
+      this.rebuildItems(true);
       this.gridFocusIndex = 0;
       this.gridVirtualizer.setScrollOffset(0);
       this.resetBrowseRailOffsets = true;
@@ -1301,16 +1631,17 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   private visibleResume(accountId: string): ResumeEntry[] {
     return StorageService.getResumeList(accountId)
-      .filter(entry => entry.kind === this.resumeKind && !isResumeConcealed(entry));
+      .filter(entry => entry.kind === this.resumeKind && !isResumeConcealed(entry)
+        && !this.hiddenIds.has((this.resumeKind === 'vod' ? entry.itemId : entry.watchlistOwner?.itemId) ?? ''));
   }
 
   protected visibleWatchlist(kind: WatchlistKind): WatchlistEntry[] {
     return StorageService.getWatchlist(this.account!.id, kind)
-      .filter(entry => !isWatchlistConcealed(entry));
+      .filter(entry => !isWatchlistConcealed(entry) && !this.hiddenIds.has(entry.itemId));
   }
 
   protected findItem(categoryId: string, id: string): I | null {
-    const inCat = this.itemsByCategory[categoryId] ?? [];
+    const inCat = this.serverItemsByCategory[categoryId] ?? this.itemsByCategory[categoryId] ?? [];
     return inCat.find((x) => this.itemId(x) === id) ?? this.fallbackItem(id);
   }
 
@@ -1322,6 +1653,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.collection = null;
     this.managing = false;
     this.gridCategory = this.categories.find((c) => c.id === categoryId) ?? null;
+    this.filter = NO_FILTER;
+    this.filtered = null;
+    if (this.filterTimer) clearTimeout(this.filterTimer);
+    this.filterTimer = null;
     const request = ++this.gridRequest;
     this.clearLayer('grid');
     if (!this.itemsByCategory[categoryId]) {
@@ -1393,7 +1728,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       <div class="catalog-tile" ${raw(managing ? '' : 'data-focusable')} data-key="i:${cat}:${id}"
            data-item-id="${id}" data-category-id="${cat}">
         <div class="catalog-poster-wrap">${this.posterCell(this.itemName(item), this.itemPoster(item))}${
-          this.itemLockBadge(cat, id)}${overlay}</div>
+          this.itemLockBadge(cat, id)}${this.watchedBadge(id)}${overlay}</div>
         <div class="catalog-tile-name">${this.itemName(item)}</div>
       </div>
     `;
@@ -1404,7 +1739,9 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const id = group.category.id;
     const total = this.itemsByCategory[id]?.length ?? group.items.length;
     const tiles = group.items.map((it) => this.tile(it));
-    if (total > group.items.length) {
+    // A category with hidden titles keeps a way to its grid, where Show: Hidden lists them.
+    const hidden = (this.serverItemsByCategory[id]?.length ?? total) > total;
+    if (total > group.items.length || hidden) {
       tiles.push(html`
         <div class="catalog-tile catalog-see-all" data-focusable data-key="all:${id}"
              data-category-id="${id}">
@@ -1445,15 +1782,17 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private leadingHero(): I | null {
     for (const slot of this.railSlots) {
       if (this.railHidden(slot)) continue;
-      if (slot.state === 'loaded') return slot.items[0];
-      break;
+      if (slot.state !== 'loaded') break;
+      // A rail whose titles are all hidden stays in browse but has no hero.
+      if (slot.items.length) return slot.items[0];
     }
     return this.heroFallback();
   }
 
   // A rail that failed or came back empty is left out of browse.
   private railHidden(slot: RailSlot<C, I>): boolean {
-    return slot.state === 'failed' || (slot.state === 'loaded' && !slot.items.length);
+    return slot.state === 'failed' || (slot.state === 'loaded' && !slot.items.length
+      && !(this.serverItemsByCategory[slot.category.id]?.length));
   }
 
   // Once some categories have no rail, "All Categories" lists every category,
@@ -1596,7 +1935,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const name = this.layers.browse.querySelector('.catalog-hero-title')?.textContent ?? '';
     if (!hero) return null;
     const leading = this.leadingHero();
-    if (name === (leading ? this.itemName(leading) : this.kicker)) return null;
+    // The section name is what the hero shows before any rail has a title.
+    if (name === this.kicker || (leading && name === this.itemName(leading))) return null;
     return { name, background: hero.style.backgroundImage };
   }
 
@@ -1707,6 +2047,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
             `)}
           </div>
         ` : ''}
+        ${this.mode === 'grid' && !this.collection ? this.filterControls() : ''}
       </div>
     `;
   }
@@ -1891,7 +2232,9 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         ${count === 0
           ? html`<p class="catalog-hint">${kind
             ? t(kind === 'continue' ? 'catalog.continueWatchingEmpty' : 'catalog.watchlistEmpty')
-            : this.gridEmptyMessage}</p>`
+            : this.filtersActive() ? t('catalog.noFilterMatches')
+              : cat && (this.serverItemsByCategory[cat.id] ?? []).length ? t('catalog.allHidden')
+                : this.gridEmptyMessage}</p>`
           : html`
             <div class="catalog-grid-track"
                  style="height:${this.gridVirtualizer.getTotalSize(count, viewportWidth)}px">${cells}

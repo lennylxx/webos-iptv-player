@@ -262,8 +262,9 @@ for (const mode of ['browse', 'grid']) {
     await expect(layer.locator('.catalog-sort .focused')).toHaveCount(1);
     await page.keyboard.press('ArrowDown');
     await expect(focused).toHaveAttribute('data-item-id', String(100 + offset));
+    // The grid's filters share the sort row, so Up may land on one of them.
     await page.keyboard.press('ArrowUp');
-    await page.keyboard.press('Enter');
+    await layer.locator('.catalog-sort [data-key$="-sort:trigger"]').click();
     await layer.locator('[data-dropdown-value="name"]').click();
     await layer.locator('[data-sort-direction="desc"]').click();
     await page.keyboard.press('ArrowDown');

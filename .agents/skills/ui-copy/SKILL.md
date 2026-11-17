@@ -135,10 +135,15 @@ a new term after review, add a row here.
 | Rating sort direction | Highest / Lowest | 最高 / 最低 |
 | Header-channel playback setting | HTTP headers | HTTP 请求头 |
 | Header playback modes | Off / Media service / Local proxy | 关闭 / 媒体服务 / 本地代理 |
+| Catalog genre filter | Genre / All genres | 类型 / 全部类型 |
+| Catalog title filter | Show: All titles / Not watched / Watched / Hidden | 显示：全部 / 未观看 / 已观看 / 已隐藏 |
+| Watched state and actions | Watched / Mark as watched / Mark as not watched | 已观看 / 标记为已观看 / 标记为未观看 |
+| Season watched actions | Mark season as watched / Mark season as not watched | 将本季标记为已观看 / 将本季标记为未观看 |
+| Hiding a title | Hide / Unhide | 隐藏 / 取消隐藏 |
 | Player aspect ratio setting | Aspect Ratio | 画面比例 |
 | Aspect ratio modes | Auto / 16:9 / 4:3 / Zoom | 自动 / 16:9 / 4:3 / 缩放 |
 
-Rejected: 片单 (watchlist), HTTP 标头 (headers), Luna / System player
+Rejected: 片单 (watchlist), 已看 / 未看 (watched), played / 已播放 (watched), unwatched (not watched), HTTP 标头 (headers), Luna / System player
 (header playback mode), 正在播放 for NOW, 节目单 (guide),
 全局频道 / "Global" for all channels, "programme",
 Ascending / Descending / 升序 / 降序 / Asc / Desc and 最旧 (sort

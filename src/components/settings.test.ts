@@ -813,6 +813,8 @@ describe('Settings.render', () => {
     expect(container.querySelector(
       `[data-manual-epg-source] [data-playlist-id="${addedId}"]`,
     )?.textContent?.trim()).toBe('Bravo');
+    // The refresh fills the options row; it never nests a second one inside.
+    expect(container.querySelector('.manual-epg-scope-options .manual-epg-scope-options')).toBeNull();
 
     const originalPlaylist = container.querySelector<HTMLElement>(
       '#playlist-entries .settings-row[data-id="p1"]',

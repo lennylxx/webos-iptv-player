@@ -50,6 +50,8 @@ function collectGridOverrides(stylesheets) {
   return claimed;
 }
 
+const classesOf = (compound) => compound.match(/\.[\w-]+/g) || [];
+
 const selectorParts = (selector) => selector.split(',').map((part) => part.trim());
 
 // The rightmost compound of a descendant selector, so an override like
@@ -60,6 +62,8 @@ const lastCompound = (part) => part.split(/[\s>+~]+/).filter(Boolean).pop() || p
 // a base rule with the same selector, narrows one (`#id .base`), or rides a
 // companion class on the same element (`.setup-box-info.device-setup-card`).
 // Collect what each selector declares anywhere so those rules still resolve.
+const FLEX_CONTEXT_PROP_RE = /^(display|flex-direction|flex-wrap|margin|margin-right|margin-bottom)$/;
+
 function collectFlexContext(stylesheets) {
   const context = new Map();
   const record = (key, prop, value) => {
@@ -72,7 +76,7 @@ function collectFlexContext(stylesheets) {
     postcss.parse(css).walkRules((rule) => {
       if (rule.parent.type !== 'root') return;
       rule.walkDecls((decl) => {
-        if (decl.prop !== 'display' && decl.prop !== 'flex-direction') return;
+        if (!FLEX_CONTEXT_PROP_RE.test(decl.prop)) return;
         for (const part of selectorParts(rule.selector)) record(part, decl.prop, decl.value.trim());
       });
     });
@@ -99,6 +103,7 @@ export function linkedStylesheets(indexHtml, cssDirFiles, generated) {
 
 const SCROLLING_RE = /^(auto|scroll)$/;
 const ZERO_LENGTH_RE = /^0(px|r?em|%)?$/;
+const nonZero = (value) => (value && !ZERO_LENGTH_RE.test(value) ? value : '');
 const SPACER_PROP_RE = /^(display|flex-direction|flex-wrap|justify-content|overflow(-x)?|padding(-right|-inline-end)?|gap|column-gap)$/;
 
 function boxSide(shorthand, index) {
@@ -177,7 +182,6 @@ export function generateScrollEndSpacers(stylesheets) {
     // specificity; without `content` from the spacer rule it renders nothing.
     if (spacer && spacer.legacy) legacy.push(`${NO_FLEX_GAP_QUIRK} ${selector}::after { ${spacer.legacy} }`);
   };
-  const classesOf = (compound) => compound.match(/\.[\w-]+/g) || [];
   const scrollers = [];
   for (const [selector, d] of declared) {
     const spacer = spacerFor(d);
@@ -201,8 +205,35 @@ export function generateScrollEndSpacers(stylesheets) {
   return { modern, legacy };
 }
 
+// A wrapping row's take-back margin is its declared bottom margin less the
+// gap, read from its own rule; it outranks any other rule's bottom margin for
+// that row, so a narrowed selector, a variant, or a media query that sets one
+// would silently lose. Refuse those rather than emit a wrong margin.
+function assertTakeBackHolds(stylesheets, wrapRows) {
+  for (const css of stylesheets) {
+    postcss.parse(css).walkRules((rule) => {
+      let margin = false;
+      rule.walkDecls((decl) => { if (/^margin(-bottom)?$/.test(decl.prop)) margin = true; });
+      if (!margin) return;
+      const nested = rule.parent.type !== 'root';
+      for (const part of selectorParts(rule.selector)) {
+        const classes = classesOf(lastCompound(part));
+        for (const row of wrapRows) {
+          const rowClasses = classesOf(lastCompound(row));
+          if (!rowClasses.length || !rowClasses.every((cls) => classes.indexOf(cls) !== -1)) continue;
+          if (part === row && !nested) continue;
+          if (wrapRows.indexOf(part) !== -1 && !nested) continue;
+          throw new Error(`${part}: sets a bottom margin on the wrapping gap row ${row}, `
+            + 'whose legacy take-back margin would override it');
+        }
+      }
+    });
+  }
+}
+
 export function generateFlexGapFallback(stylesheets) {
   const rules = [];
+  const wrapRows = [];
   const context = collectFlexContext(stylesheets);
   const gridOverrides = collectGridOverrides(stylesheets);
 
@@ -215,9 +246,11 @@ export function generateFlexGapFallback(stylesheets) {
       let rowGap = '';
       let columnGap = '';
       let templateColumns = '';
+      const own = {};
 
       rule.walkDecls((decl) => {
         const value = decl.value.trim();
+        if (FLEX_CONTEXT_PROP_RE.test(decl.prop)) own[decl.prop] = value;
         if (decl.prop === 'display') display = value;
         if (decl.prop === 'flex-direction') direction = value;
         if (decl.prop === 'gap') gap = value;
@@ -256,6 +289,44 @@ export function generateFlexGapFallback(stylesheets) {
       const spacing = column
         ? rowGap || shorthandRowGap
         : columnGap || shorthandColumnGap;
+
+      // A row that wraps: `> * + *` would indent each later line and leave no
+      // space between lines. Each child carries the gap on its right and
+      // bottom instead (bottom, since a top margin on the row would collapse
+      // with its neighbor's), and the row takes the last line's back with a
+      // negative bottom margin. The last right margin stays: taking it back
+      // would push the row's box past its parent, overflowing a scroller, so
+      // a line can break up to one gap earlier than with gap.
+      // A variant class (`.tags.wide`) wraps if its base class does.
+      const looseInherited = (prop) => inherited(prop) || parts.reduce((found, part) => found
+        || classesOf(lastCompound(part)).reduce((value, cls) => value || context.get(cls)?.[prop] || '', ''), '');
+      const wrap = own['flex-wrap'] || looseInherited('flex-wrap');
+      const wraps = !isGrid && !column && /^wrap/.test(wrap);
+      // A variant that stops a wrapping base row from wrapping would keep the
+      // base's child margins under its own; nothing here resets those.
+      const baseWrap = parts.some((part) => classesOf(lastCompound(part)).length > 1
+        && classesOf(lastCompound(part)).some((cls) => /^wrap/.test(context.get(cls)?.['flex-wrap'] || '')));
+      if (!wraps && baseWrap) {
+        throw new Error(`${rule.selector}: a variant of a wrapping gap row must keep wrapping in a row`);
+      }
+      if (wraps) {
+        const rowSpacing = nonZero(rowGap || shorthandRowGap);
+        const columnSpacing = nonZero(spacing);
+        const declared = (prop, side) => {
+          const value = own[prop] || boxSide(own.margin, side)
+            || looseInherited(prop) || boxSide(looseInherited('margin'), side) || '0px';
+          return value === '0' ? '0px' : value;
+        };
+        // Both axes always, so a zero one resets what a base row's fallback gave.
+        const bottom = declared('margin-bottom', 2);
+        const back = `margin-bottom: ${rowSpacing ? subtract(bottom, rowSpacing) : bottom};`;
+        const child = `margin-bottom: ${rowSpacing || '0'}; margin-right: ${columnSpacing || '0'};`;
+        const rows = parts.map((part) => `${NO_FLEX_GAP_QUIRK} ${part}`).join(', ');
+        const children = parts.map((part) => `${NO_FLEX_GAP_QUIRK} ${part} > *`).join(', ');
+        rules.push(`${rows} { ${back} }`, `${children} { ${child} }`);
+        wrapRows.push(...parts);
+        return;
+      }
       if (!spacing) return;
       const margin = column ? 'margin-top' : 'margin-left';
       // A rule that flips direction without redeclaring `display` overrides a base
@@ -267,6 +338,8 @@ export function generateFlexGapFallback(stylesheets) {
       rules.push(isGrid ? `@supports not (display: grid) {\n  ${declaration}\n}` : declaration);
     });
   }
+
+  assertTakeBackHolds(stylesheets, wrapRows);
 
   const spacers = generateScrollEndSpacers(stylesheets);
   rules.push(...spacers.legacy);

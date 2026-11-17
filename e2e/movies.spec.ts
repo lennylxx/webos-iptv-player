@@ -939,7 +939,7 @@ test.describe('Down from the tab bar resumes Movies as Up left it', () => {
     await upToTabBar(page);
     await page.keyboard.press('ArrowDown');
     await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
-    await expect(page.locator('#view-movies .catalog-grid .dropdown-trigger')).toHaveClass(/focused/);
+    await expect(page.locator('#view-movies .catalog-grid #movies-grid-sort .dropdown-trigger')).toHaveClass(/focused/);
     await page.keyboard.press('ArrowDown');
     await expect(gridFocus(page)).toHaveAttribute('data-item-id', '101');
   });

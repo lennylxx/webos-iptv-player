@@ -9,7 +9,7 @@ downloaded data that can be recreated.
 | Data | Examples | Where it is kept | Removed by Clear Cache? |
 | --- | --- | --- | --- |
 | Setup and preferences | Playlist and EPG sources, Xtream account details, theme, language, text size, time zone, active account and channel | Small app-private browser storage | No |
-| Personal data | Favorites, reminders, channel order and names, hidden channels, Watchlist, Recently Watched, playback progress, audio and subtitle choices | App-private database on the TV | No |
+| Personal data | Favorites, reminders, channel order and names, hidden channels, Watchlist, Recently Watched, playback progress, watched and hidden titles, audio and subtitle choices | App-private database on the TV | No |
 | Downloaded cache | Parsed playlists, program guides, movie and series catalogs, media metadata, downloaded subtitles, channel health results | App-private database on the TV | Yes |
 | LAN-uploaded playlists | Original M3U files uploaded from another device | Private storage owned by the bundled upload service | No |
 
@@ -135,6 +135,7 @@ origin, so object-store names do not repeat the `iptv_` prefix.
 | `channel-state` | `aspect:<channel-key>` | None | Aspect ratio other than Auto: `16x9`, `4x3`, or `zoom`; a movie uses `vod:<account-id>:vod:<item-id>` and a series' episodes share `vod:<account-id>:series:<series-id>`, but an episode without a series owner (such as some Continue Watching entries) uses its own `vod:<account-id>:episode:<item-id>` |
 | `watchlist` | `watch:<account-id>\|<vod-or-series>\|<item-id>` | `scope` | Name, poster, rating, category, extension, and added time; scope is account and content kind |
 | `playback-progress` | `resume:<account-id>\|<vod-or-episode>\|<item-id>` | `expiresAt`, `updatedAt` | Position, duration, title/poster/extension snapshot, optional autoplay queue and Watchlist owner |
+| `playback-progress` | `mark:<account-id>\|<vod-series-or-episode>\|<item-id>` | `updatedAt` | A movie, series, or episode the viewer watched, or a movie or series they hid; a series is watched while every episode it lists is, derived again whenever its detail opens or an episode mark changes rather than kept as the source of truth; a title with neither mark has no record |
 | `playback-progress` | `catchup:<channel-key>\|<program-start>` | `expiresAt`, `updatedAt` | EPG source URL, program start/stop, title/description/icon snapshot, position, completion, update time, and computed expiry |
 | `recently-watched` | `live:<channel-key>` | `updatedAt` | Channel key and last-confirmed watch time; capped to 30 live entries |
 | `online-sub-picks` | `pick:<account-id>\|<vod-or-episode>\|<item-id>` | None | Provider id, provider result id, display name, language, and subtitle format |

@@ -471,3 +471,28 @@ test('opening the section with the pointer leaves the catalog where it loads', a
   await expect(parked).toHaveCount(1);
   expect(await parked.getAttribute('data-key')).toBe(await first.getAttribute('data-key'));
 });
+
+test('Right from an episode reaches its watched mark, and OK toggles it', async ({ page }) => {
+  await seedSeries(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'series');
+  await page.locator('.catalog-tile[data-item-id="1"]')
+    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  const row = page.locator('#view-series .episode-row[data-episode-id="10"]');
+  const mark = page.locator('#view-series .episode-mark[data-episode-mark="10"]');
+  await expect(row).toBeVisible();
+  for (let i = 0; i < 6 && !(await row.evaluate((el) => el.classList.contains('focused'))); i++) {
+    await page.keyboard.press('ArrowDown');
+  }
+  await expect(row).toHaveClass(/focused/);
+  await page.keyboard.press('ArrowRight');
+  await expect(mark).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+  await expect(mark).toHaveClass(/watched/);
+  await expect(row.locator('.episode-watched')).toBeVisible();
+  await expect(page.locator('#view-series [data-key="season-watched"]')).toContainText('Mark season as not watched');
+  await page.keyboard.press('ArrowLeft');
+  await expect(row).toHaveClass(/focused/);
+});

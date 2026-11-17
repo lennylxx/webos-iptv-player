@@ -496,6 +496,7 @@ export function vodItemFrom(s: Record<string, unknown>, accountId: string): VodI
     categoryId: toStr(s.category_id),
     containerExtension: toStr(s.container_extension),
     ...catalogSortMetadata(s),
+    ...listGenre(s),
   };
 }
 
@@ -508,7 +509,13 @@ export function seriesItemFrom(s: Record<string, unknown>, accountId: string): S
     rating: toStr(s.rating),
     categoryId: toStr(s.category_id),
     ...catalogSortMetadata(s, true),
+    ...listGenre(s),
   };
+}
+
+function listGenre(item: Record<string, unknown>): { genre?: string } {
+  const genre = toStr(item.genre).trim();
+  return genre ? { genre } : {};
 }
 
 // Coerce an unknown JSON value to an array of plain objects (empty if not an array).
