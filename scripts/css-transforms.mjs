@@ -14,6 +14,12 @@ export const NO_FLEX_GAP_QUIRK = 'html.q-no-flex-gap';
 const RGB_PROP_RE = /^--[\w-]+-rgb$/;
 const RGB_VAR_ALIAS_RE = /^var\((--[\w-]+)\)$/;
 const MODERN_RGB_USAGE_RE = /rgb\(\s*var\((--[\w-]+)\)\s*\/\s*([^()]+)\)/g;
+const MODERN_RGB_CALL_RE = new RegExp(`^${MODERN_RGB_USAGE_RE.source}$`);
+
+// True when convertLegacyColorSyntax lowers this whole color call to rgba().
+export function isLoweredModernRgb(call) {
+  return call.includes('rgb(var(') && MODERN_RGB_CALL_RE.test(call);
+}
 
 const GRID_DISPLAY_RE = /\bgrid\b/;
 

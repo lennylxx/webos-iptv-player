@@ -1,6 +1,6 @@
 import stylelint from 'stylelint';
 import { describe, expect, it } from 'vitest';
-import { noMixedLegacySelectorPlugin } from '../stylelint.config.mjs';
+import { noMixedLegacySelectorPlugin, noSpaceSeparatedColorPlugin } from '../stylelint.config.mjs';
 import {
   isPost53Selector,
   postTargetApis,
@@ -269,6 +269,63 @@ describe('isPost53Selector', () => {
   it('classifies every selector feature BCD says the target lacks', () => {
     expect(unclassifiedSelectorFeatures()).toEqual([]);
     expect(postTargetSelectors()).toEqual(expect.arrayContaining([':has-slotted', ':target-before']));
+  });
+});
+
+describe('iptv/no-space-separated-color', () => {
+  const lint = async (code) => {
+    const { results } = await stylelint.lint({
+      code,
+      config: { plugins: [noSpaceSeparatedColorPlugin], rules: { 'iptv/no-space-separated-color': true } },
+    });
+    return results[0].warnings.map((w) => w.text);
+  };
+
+  it('rejects literal space-separated colors, alpha or not', async () => {
+    expect(await lint('.a { background: rgb(255 255 255 / 0.3); }')).toHaveLength(1);
+    expect(await lint('.a { box-shadow: 0 12px 40px rgb(0 0 0 / 0.5); }')).toHaveLength(1);
+    expect(await lint('.a { color: hsl(200 50% 40%); }')).toHaveLength(1);
+  });
+
+  it('matches color functions case-insensitively', async () => {
+    expect(await lint('.a { color: RGB(0 0 0 / .5); }')).toHaveLength(1);
+    expect(await lint('.a { color: Hsla(0 0% 0% / .5); }')).toHaveLength(1);
+  });
+
+  it('rejects space-separated forms with nested parentheses the build does not lower', async () => {
+    for (const color of [
+      'rgb(0 0 0 / var(--a))',
+      'rgb(calc(1) 0 0)',
+      'rgb(var(--x-rgb))',
+      'rgb(var(--x-rgb) / var(--a))',
+      'rgba(var(--x-rgb) / 0.2)',
+    ]) {
+      expect(await lint(`.a { color: ${color}; }`), color).toHaveLength(1);
+    }
+  });
+
+  it('suggests the comma form of the same function family', async () => {
+    expect((await lint('.a { color: rgb(0 0 0); }'))[0]).toContain('rgba(0, 0, 0, 0.5)');
+    expect((await lint('.a { color: hsl(0 0% 0%); }'))[0]).toContain('hsla(0, 0%, 0%, 0.5)');
+  });
+
+  it('allows the comma form and the var form the build lowers', async () => {
+    expect(await lint('.a { background: rgba(255, 255, 255, 0.3); color: rgb(0, 0, 0); }')).toEqual([]);
+    expect(await lint('.a { background: rgb(var(--accent-rgb) / 0.2); }')).toEqual([]);
+    for (const value of [
+      'rgb(0,0,0)',
+      'rgb( 0, 0, 0 )',
+      'rgba(var(--x), .2)',
+      'color(display-p3 1 0 0)',
+      'linear-gradient(to right, rgba(0, 0, 0, 0.5) 0%, hsl(0, 0%, 0%) 100%)',
+    ]) {
+      expect(await lint(`.a { background: ${value}; }`), value).toEqual([]);
+    }
+  });
+
+  it('ignores color names inside custom properties, url(), and strings', async () => {
+    expect(await lint(':root { --foo-rgb: 1, 2, 3; --accent-rgb: 1 2 3; }')).toEqual([]);
+    expect(await lint('.a { background: url(rgb(0 0 0).png); content: "rgb(0 0 0)"; }')).toEqual([]);
   });
 });
 

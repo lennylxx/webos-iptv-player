@@ -7,6 +7,7 @@
 // they degrade gracefully on Chromium 53.
 import stylelint from 'stylelint';
 import { isPost53Selector, splitSelectorList } from './scripts/chromium-53-simulation.mjs';
+import { isLoweredModernRgb } from './scripts/css-transforms.mjs';
 
 // Chromium 53 drops a whole rule when its selector list holds a selector it
 // cannot parse, taking the otherwise-valid selectors down with it — so
@@ -40,10 +41,101 @@ noMixedLegacySelector.messages = mixedSelectorMessages;
 
 export const noMixedLegacySelectorPlugin = stylelint.createPlugin(mixedSelectorRule, noMixedLegacySelector);
 
+// Chromium 53 parses only the comma form of rgb()/hsl(): `rgb(0 0 0 / 0.5)`
+// is dropped as invalid on webOS 4. The build lowers the var form
+// `rgb(var(--x-rgb) / a)` (scripts/css-transforms.mjs), but not literal values.
+const spaceColorRule = 'iptv/no-space-separated-color';
+const spaceColorMessages = stylelint.utils.ruleMessages(spaceColorRule, {
+  rejected: (color, example) => `"${color}" needs Chromium > 53; write it comma-separated (${example})`,
+});
+const COMMA_EXAMPLES = { rgb: 'rgba(0, 0, 0, 0.5)', hsl: 'hsla(0, 0%, 0%, 0.5)' };
+const COLOR_FUNCTIONS = new Set(['rgb', 'rgba', 'hsl', 'hsla']);
+const IDENT_CHAR_RE = /[\w-]/;
+// The build's comma-form companion of a --*-rgb property (css-transforms.mjs).
+const LEGACY_VAR_RE = /^var\(--[\w-]+-legacy\)$/;
+
+function skipString(value, i) {
+  const quote = value[i];
+  for (i += 1; i < value.length && value[i] !== quote; i += 1) if (value[i] === '\\') i += 1;
+  return i;
+}
+
+// Index of the ')' closing the '(' at `open`, or -1 when unbalanced.
+function matchParen(value, open) {
+  let depth = 0;
+  for (let i = open; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === '"' || ch === "'") i = skipString(value, i);
+    else if (ch === '(') depth += 1;
+    else if (ch === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function* colorCalls(value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === '"' || ch === "'") {
+      i = skipString(value, i);
+      continue;
+    }
+    if (!/[a-z]/i.test(ch) || (i > 0 && IDENT_CHAR_RE.test(value[i - 1]))) continue;
+    let end = i;
+    while (end < value.length && IDENT_CHAR_RE.test(value[end])) end += 1;
+    const name = value.slice(i, end).toLowerCase();
+    i = end - 1;
+    if (value[end] !== '(') continue;
+    const close = matchParen(value, end);
+    if (close < 0) return;
+    if (name === 'url') i = close;
+    else if (COLOR_FUNCTIONS.has(name)) {
+      yield { call: value.slice(end - name.length, close + 1), name, args: value.slice(end + 1, close) };
+    }
+  }
+}
+
+function hasTopLevelComma(args) {
+  let depth = 0;
+  for (let i = 0; i < args.length; i += 1) {
+    const ch = args[i];
+    if (ch === '"' || ch === "'") i = skipString(args, i);
+    else if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if (ch === ',' && depth === 0) return true;
+  }
+  return false;
+}
+
+function isLegacyColorCall({ call, args }) {
+  const trimmed = args.trim();
+  return !trimmed || hasTopLevelComma(trimmed) || LEGACY_VAR_RE.test(trimmed) || isLoweredModernRgb(call);
+}
+
+const noSpaceSeparatedColor = (primary) => (root, result) => {
+  if (!stylelint.utils.validateOptions(result, spaceColorRule, { actual: primary })) return;
+  root.walkDecls((decl) => {
+    for (const color of colorCalls(decl.value)) {
+      if (isLegacyColorCall(color)) continue;
+      stylelint.utils.report({
+        result,
+        ruleName: spaceColorRule,
+        node: decl,
+        word: color.call,
+        message: spaceColorMessages.rejected(color.call, COMMA_EXAMPLES[color.name.slice(0, 3)]),
+      });
+    }
+  });
+};
+noSpaceSeparatedColor.ruleName = spaceColorRule;
+noSpaceSeparatedColor.messages = spaceColorMessages;
+
+export const noSpaceSeparatedColorPlugin = stylelint.createPlugin(spaceColorRule, noSpaceSeparatedColor);
+
 export default {
-  plugins: ['stylelint-no-unsupported-browser-features', noMixedLegacySelectorPlugin],
+  plugins: ['stylelint-no-unsupported-browser-features', noMixedLegacySelectorPlugin, noSpaceSeparatedColorPlugin],
   rules: {
     'iptv/no-mixed-legacy-selector': true,
+    'iptv/no-space-separated-color': true,
     'plugin/no-unsupported-browser-features': [
       true,
       {

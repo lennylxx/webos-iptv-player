@@ -593,7 +593,7 @@
   background: var(--bg-secondary);
   border: 2px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
 .group-picker-title {
