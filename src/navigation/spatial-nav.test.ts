@@ -57,6 +57,298 @@ function ringed(el: Element): boolean {
 }
 
 describe('SpatialNav', () => {
+  it('places a target by its data-nav-rect child, not by a name sliding out beside it', () => {
+    const left = focusable({ x: 0, y: 0, w: 200, h: 60 });
+    // Widened by its name, the box's center sits right of the row below's button.
+    const round = focusable({ x: 220, y: 0, w: 300, h: 60 });
+    round.setAttribute('data-nav-rect', '');
+    const circle = document.createElement('span');
+    circle.getBoundingClientRect = () =>
+      ({ left: 220, top: 0, width: 60, height: 60, right: 280, bottom: 60, x: 220, y: 0, toJSON() {} }) as DOMRect;
+    round.appendChild(circle);
+    const below = focusable({ x: 160, y: 90, w: 180, h: 60 });
+    const { nav } = bound(makeContainer(left, round, below));
+
+    nav.focus(round);
+    nav.move('left');
+    expect(nav.focused).toBe(left);
+  });
+
+  it('enters a data-nav-enter="first" container at its first element from its enclosing container only', () => {
+    // [play] over a nested row [first ... last]; [below] in an unrelated row under it.
+    const outer = document.createElement('div');
+    outer.setAttribute('data-nav-container', '');
+    const play = focusable({ x: 300, y: 0, w: 200, h: 60 });
+    const row = document.createElement('div');
+    row.setAttribute('data-nav-container', '');
+    row.setAttribute('data-nav-enter', 'first');
+    const first = focusable({ x: 0, y: 80, w: 60, h: 60 });
+    const last = focusable({ x: 360, y: 80, w: 60, h: 60 });
+    row.append(first, last);
+    outer.append(play, row);
+    const other = document.createElement('div');
+    other.setAttribute('data-nav-container', '');
+    const below = focusable({ x: 360, y: 160, w: 60, h: 60 });
+    other.appendChild(below);
+    const { nav } = bound(makeContainer(outer, other));
+
+    nav.focus(play);
+    nav.move('down');
+    expect(nav.focused).toBe(first);
+    nav.focus(below);
+    nav.move('up');
+    expect(nav.focused).toBe(last);
+  });
+
+  it('leaves a container the way its data-nav-leave rule says, once nothing inside lies that way', () => {
+    const row = document.createElement('div');
+    row.setAttribute('data-nav-container', '');
+    row.setAttribute('data-nav-leave-right', '');
+    row.setAttribute('data-nav-leave-up', '[data-target]');
+    const a = focusable({ x: 0, y: 200, w: 100, h: 60 });
+    const b = focusable({ x: 120, y: 200, w: 100, h: 60 });
+    row.append(a, b);
+    const upRight = focusable({ x: 300, y: 100, w: 100, h: 60 });
+    const target = focusable({ x: 600, y: 0, w: 100, h: 60 });
+    target.setAttribute('data-target', '');
+    const { nav } = bound(makeContainer(row, upRight, target));
+
+    nav.focus(a);
+    nav.move('right');
+    expect(nav.focused).toBe(b);
+    expect(nav.move('right')).toBe(true);
+    expect(nav.focused).toBe(b);
+    nav.move('up');
+    expect(nav.focused).toBe(target);
+  });
+
+  it('keeps Left and Right on their own line in a data-nav-straight container', () => {
+    // Two wrapped lines 16px apart; the second line's [b2] sits a little right of [a1].
+    const row = document.createElement('div');
+    row.setAttribute('data-nav-container', '');
+    row.setAttribute('data-nav-straight', '');
+    row.setAttribute('data-nav-leave-left', '');
+    row.setAttribute('data-nav-leave-right', '');
+    const a1 = focusable({ x: 0, y: 0, w: 176, h: 60 });
+    const a2 = focusable({ x: 192, y: 0, w: 176, h: 60 });
+    const b1 = focusable({ x: 0, y: 76, w: 60, h: 60 });
+    const b2 = focusable({ x: 200, y: 76, w: 200, h: 60 });
+    row.append(a1, a2, b1, b2);
+    const { nav } = bound(makeContainer(row));
+
+    nav.focus(a1);
+    nav.move('right');
+    expect(nav.focused).toBe(a2);
+    nav.move('right');
+    expect(nav.focused).toBe(a2);
+    nav.focus(a1);
+    nav.move('left');
+    expect(nav.focused).toBe(a1);
+    nav.move('down');
+    expect(nav.focused).toBe(b1);
+  });
+
+  it('steps Up and Down a data-nav-straight container line by line, to the nearest element across', () => {
+    // Line 1: [a][b][c]; line 2: only [m], far left, under nothing but [a].
+    const row = document.createElement('div');
+    row.setAttribute('data-nav-container', '');
+    row.setAttribute('data-nav-straight', '');
+    const a = focusable({ x: 0, y: 0, w: 176, h: 60 });
+    const b = focusable({ x: 192, y: 0, w: 176, h: 60 });
+    const c = focusable({ x: 384, y: 0, w: 176, h: 60 });
+    const m = focusable({ x: 0, y: 76, w: 62, h: 62 });
+    row.append(a, b, c, m);
+    const below = document.createElement('div');
+    below.setAttribute('data-nav-container', '');
+    const episode = focusable({ x: 0, y: 300, w: 1600, h: 120 });
+    below.appendChild(episode);
+    const { nav } = bound(makeContainer(row, below));
+
+    nav.focus(c);
+    nav.move('down');
+    expect(nav.focused).toBe(m);
+    nav.move('up');
+    expect(nav.focused).toBe(a);
+    nav.focus(m);
+    nav.move('down');
+    expect(nav.focused).toBe(episode);
+  });
+
+  it('leaves a data-nav-straight container Up to the nearest element across on the line above', () => {
+    const actions = document.createElement('div');
+    actions.setAttribute('data-nav-container', '');
+    const play = focusable({ x: 0, y: 0, w: 260, h: 62 });
+    const first = focusable({ x: 272, y: 0, w: 62, h: 62 });
+    const second = focusable({ x: 346, y: 0, w: 62, h: 62 });
+    actions.append(play, first, second);
+    const seasons = document.createElement('div');
+    seasons.setAttribute('data-nav-container', '');
+    seasons.setAttribute('data-nav-straight', '');
+    // Overlaps both round actions; its center sits under the second.
+    const season = focusable({ x: 300, y: 200, w: 176, h: 60 });
+    seasons.appendChild(season);
+    const { nav } = bound(makeContainer(actions, seasons));
+
+    nav.focus(season);
+    nav.move('up');
+    expect(nav.focused).toBe(second);
+  });
+
+  it('keeps Left on the line past a nested row wrapped below, yet Down still reaches that row', () => {
+    const actions = document.createElement('div');
+    actions.setAttribute('data-nav-container', '');
+    actions.setAttribute('data-nav-straight', '');
+    actions.setAttribute('data-nav-leave-left', '');
+    const resume = focusable({ x: 0, y: 0, w: 260, h: 60 });
+    const play = focusable({ x: 272, y: 0, w: 260, h: 60 });
+    const icons = document.createElement('div');
+    icons.setAttribute('data-nav-container', '');
+    const watchlist = focusable({ x: 0, y: 80, w: 62, h: 62 });
+    icons.appendChild(watchlist);
+    actions.append(resume, play, icons);
+    const { nav } = bound(makeContainer(actions));
+
+    nav.focus(resume);
+    nav.move('left');
+    expect(nav.focused).toBe(resume);
+    nav.focus(play);
+    nav.move('down');
+    expect(nav.focused).toBe(watchlist);
+  });
+
+  it('forgets a remembered move once focus moves any other way, or into a trap without its source', () => {
+    const top = document.createElement('div');
+    top.setAttribute('data-nav-container', '');
+    const left = focusable({ x: 0, y: 0, w: 100, h: 60 });
+    const right = focusable({ x: 400, y: 0, w: 100, h: 60 });
+    top.append(left, right);
+    const bottom = document.createElement('div');
+    bottom.setAttribute('data-nav-container', '');
+    bottom.setAttribute('data-nav-remember', '');
+    const under = focusable({ x: 0, y: 100, w: 100, h: 60 });
+    const under2 = focusable({ x: 200, y: 100, w: 100, h: 60 });
+    bottom.append(under, under2);
+    const { nav } = bound(makeContainer(top, bottom));
+
+    nav.focus(right);
+    nav.move('down');
+    expect(nav.focused).toBe(under2);
+    nav.focus(under);
+    nav.focus(under2);
+    nav.move('up');
+    expect(nav.focused).not.toBe(right);
+
+    nav.focus(right);
+    nav.move('down');
+    nav.setRestrict(bottom);
+    nav.move('up');
+    expect(top.contains(nav.focused)).toBe(false);
+  });
+
+  it('remembers only moves into a data-nav-remember container, not out of one', () => {
+    const top = document.createElement('div');
+    top.setAttribute('data-nav-container', '');
+    top.setAttribute('data-nav-remember', '');
+    const left = focusable({ x: 0, y: 0, w: 100, h: 60 });
+    const right = focusable({ x: 400, y: 0, w: 100, h: 60 });
+    top.append(left, right);
+    const bottom = document.createElement('div');
+    bottom.setAttribute('data-nav-container', '');
+    const under = focusable({ x: 0, y: 100, w: 100, h: 60 });
+    bottom.appendChild(under);
+    const { nav } = bound(makeContainer(top, bottom));
+
+    nav.focus(right);
+    nav.move('down');
+    expect(nav.focused).toBe(under);
+    nav.move('up');
+    expect(nav.focused).toBe(left);
+  });
+
+  it('goes back with the opposite key after a move into a data-nav-remember container', () => {
+    const top = document.createElement('div');
+    top.setAttribute('data-nav-container', '');
+    const left = focusable({ x: 0, y: 0, w: 100, h: 60 });
+    const right = focusable({ x: 400, y: 0, w: 100, h: 60 });
+    top.append(left, right);
+    const bottom = document.createElement('div');
+    bottom.setAttribute('data-nav-container', '');
+    bottom.setAttribute('data-nav-remember', '');
+    const under = focusable({ x: 0, y: 100, w: 100, h: 60 });
+    bottom.appendChild(under);
+    const { nav } = bound(makeContainer(top, bottom));
+
+    nav.focus(right);
+    nav.move('down');
+    expect(nav.focused).toBe(under);
+    nav.move('up');
+    expect(nav.focused).toBe(right);
+  });
+
+  it('does not go back to a remembered source a re-render has moved out of that direction', () => {
+    const top = document.createElement('div');
+    top.setAttribute('data-nav-container', '');
+    const source = focusable({ x: 0, y: 0, w: 100, h: 60 });
+    top.appendChild(source);
+    const row = document.createElement('div');
+    row.setAttribute('data-nav-container', '');
+    row.setAttribute('data-nav-remember', '');
+    const left = focusable({ x: 0, y: 100, w: 100, h: 60 });
+    const right = focusable({ x: 200, y: 100, w: 100, h: 60 });
+    row.append(left, right);
+    const { nav } = bound(makeContainer(top, row));
+
+    nav.focus(source);
+    nav.move('down');
+    expect(nav.focused).toBe(left);
+    // The source now sits beside, not above.
+    source.getBoundingClientRect = () =>
+      ({ left: -200, top: 100, width: 100, height: 60, right: -100, bottom: 160, x: -200, y: 100, toJSON() {} }) as DOMRect;
+    nav.move('up');
+    expect(nav.focused).toBe(left);
+  });
+
+  it('steps Up from a straight row to what overlaps its column before a nearer center', () => {
+    const actions = document.createElement('div');
+    actions.setAttribute('data-nav-container', '');
+    const resume = focusable({ x: 493, y: 0, w: 206, h: 60 });
+    const play = focusable({ x: 708, y: 0, w: 423, h: 60 });
+    actions.append(resume, play);
+    const icons = document.createElement('div');
+    icons.setAttribute('data-nav-container', '');
+    icons.setAttribute('data-nav-straight', '');
+    // Its center is nearer Resume's, yet only Play stands above it.
+    const remove = focusable({ x: 718, y: 80, w: 62, h: 62 });
+    icons.appendChild(remove);
+    const { nav } = bound(makeContainer(actions, icons));
+
+    nav.focus(remove);
+    nav.move('up');
+    expect(nav.focused).toBe(play);
+  });
+
+  it('leaving a nested container prefers its enclosing container over an unrelated one', () => {
+    // An outer row holding [left] and a nested row of [round], and an
+    // unrelated row below-left of [round], nearer by score than [left].
+    const outer = document.createElement('div');
+    outer.setAttribute('data-nav-container', '');
+    const left = focusable({ x: 0, y: 0, w: 200, h: 60 });
+    const inner = document.createElement('div');
+    inner.setAttribute('data-nav-container', '');
+    const round = focusable({ x: 220, y: 0, w: 60, h: 60 });
+    inner.appendChild(round);
+    outer.append(left, inner);
+    const other = document.createElement('div');
+    other.setAttribute('data-nav-container', '');
+    const below = focusable({ x: 160, y: 70, w: 100, h: 60 });
+    other.appendChild(below);
+    const { nav } = bound(makeContainer(outer, other));
+
+    nav.focus(round);
+    nav.move('left');
+    expect(nav.focused).toBe(left);
+  });
+
   describe('focus', () => {
     it('has its scope ring the focused element and move the ring off the previous one', () => {
       const a = focusable({ x: 0, y: 0 });

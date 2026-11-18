@@ -28,6 +28,20 @@ export interface SpatialNavOptions {
   onRequest?: (el: HTMLElement | null, via: 'key' | 'pointer') => void;
 }
 
+const OPPOSITE: Record<NavDirection, NavDirection> = { up: 'down', down: 'up', left: 'right', right: 'left' };
+
+const containerOf = (el: Element | null | undefined): HTMLElement | null =>
+  el?.closest<HTMLElement>('[data-nav-container]') ?? null;
+
+const outerContainerOf = (container: HTMLElement): HTMLElement | null =>
+  containerOf(container.parentElement);
+
+// A `data-nav-rect` target sits on the grid where its first child does (a
+// round action whose name slides out beside it), so the name never moves it.
+function navRect(el: HTMLElement): DOMRect {
+  return (el.hasAttribute('data-nav-rect') && el.firstElementChild || el).getBoundingClientRect();
+}
+
 export class SpatialNav {
   private container: HTMLElement;
   private readonly follow: boolean;
@@ -42,6 +56,9 @@ export class SpatialNav {
   // Per-container memory for `data-nav-enter="last-focused"`: re-entering a
   // container returns to where focus left it instead of the nearest edge item.
   private lastFocusedIn = new Map<HTMLElement, HTMLElement>();
+  // The last key move into a container marked `data-nav-remember`: the
+  // opposite key from where it landed goes back.
+  private lastMove: { from: HTMLElement; to: HTMLElement; direction: NavDirection } | null = null;
   // Where focus last sat, to recover near it once a re-render removes the
   // element; null once the view swapped its content.
   private lastRect: DOMRect | null = null;
@@ -151,7 +168,7 @@ export class SpatialNav {
       if (container && candidateContainer !== container) continue;
       all.push({
         el,
-        rect: el.getBoundingClientRect(),
+        rect: navRect(el),
         container: candidateContainer,
       });
     }
@@ -250,7 +267,11 @@ export class SpatialNav {
       if (!valid) continue;
 
       const sameContainer = candidate.container === currentContainer;
-      const score = primary + secondary * 3 + (sameContainer ? 0 : 5000);
+      // Leaving a nested container (a row of buttons inside a row), its
+      // enclosing one is nearer than an unrelated container.
+      const related = !sameContainer && !!candidate.container && !!currentContainer
+        && (candidate.container.contains(currentContainer) || currentContainer.contains(candidate.container));
+      const score = primary + secondary * 3 + (sameContainer ? 0 : related ? 2500 : 5000);
 
       if (score < bestScore) {
         bestScore = score;
@@ -261,6 +282,8 @@ export class SpatialNav {
   }
 
   focus(el: HTMLElement | null, via: 'key' | 'pointer' = 'key'): void {
+    // Any other way focus moves ends what a remembered key move can undo.
+    if (el !== this.focused) this.lastMove = null;
     if (el) this.rememberFocus(el);
     // Already focused: skip scroll, but the scope may have hidden the ring,
     // so it hears the request again. A host mirroring focus into its scope
@@ -274,7 +297,7 @@ export class SpatialNav {
     this.lastContainer = el?.closest<HTMLElement>('[data-nav-container]') ?? null;
     this.focusInTrap = !this.restrictRoot || (!!el && this.restrictRoot.contains(el));
     if (el && !this.follow) {
-      this.lastRect = el.getBoundingClientRect();
+      this.lastRect = navRect(el);
     } else if (el) {
       const now = Date.now();
       const elapsed = now - this.lastScrollFocusAt;
@@ -287,7 +310,7 @@ export class SpatialNav {
         inline: 'nearest',
         behavior: repeated ? 'instant' : 'auto',
       });
-      this.lastRect = el.getBoundingClientRect();
+      this.lastRect = navRect(el);
     } else {
       this.lastScrollFocusAt = 0;
       this.lastRect = null;
@@ -313,12 +336,22 @@ export class SpatialNav {
 
   /**
    * Entering a container marked `data-nav-enter="last-focused"` returns to the
-   * element focus left it on, as long as that element is still navigable.
+   * element focus left it on, as long as that element is still navigable;
+   * one marked `"first"`, entered from its enclosing container, starts at
+   * its first navigable element.
    */
   private enterTarget(best: Candidate, candidates: Candidate[]): HTMLElement {
     const container = best.el.closest<HTMLElement>('[data-nav-container]');
-    if (!container || container.getAttribute('data-nav-enter') !== 'last-focused') return best.el;
+    const enter = container?.getAttribute('data-nav-enter');
+    if (!container || (enter !== 'last-focused' && enter !== 'first')) return best.el;
     if (this.focused && container.contains(this.focused)) return best.el;
+    // `first` is how the enclosing container's own buttons enter it; from
+    // anywhere else geometry still picks the way in.
+    if (enter === 'first') {
+      const outer = outerContainerOf(container);
+      if (!this.focused || !outer || !outer.contains(this.focused)) return best.el;
+      return candidates.find((c) => c.container === container)?.el ?? best.el;
+    }
 
     const remembered = this.lastFocusedIn.get(container);
     if (!remembered) return best.el;
@@ -401,7 +434,7 @@ export class SpatialNav {
     if (!this.scope?.concealed || !el || this.scope.focusKey !== (el.dataset.key ?? null)
         || !this.navigable(el)) return false;
     this.request(el, 'key');
-    this.lastRect = el.getBoundingClientRect();
+    this.lastRect = navRect(el);
     return true;
   }
 
@@ -430,6 +463,12 @@ export class SpatialNav {
 
   move(direction: NavDirection): boolean {
     if (this.showConcealed()) return true;
+    const back = this.rememberedSource(direction);
+    if (back) {
+      this.moveTo(back, direction);
+      this.lastMove = null;
+      return true;
+    }
     const root = this.root();
     const focusedContainer = this.focused?.closest<HTMLElement>('[data-nav-container]');
     if (this.focused && root.contains(this.focused) && focusedContainer
@@ -440,14 +479,20 @@ export class SpatialNav {
       const sameCandidates = this.getCandidates(sameElements, false, focusedContainer);
       const current = sameCandidates.find((c) => c.el === this.focused);
       if (current) {
-        const same = this.findBest(sameCandidates, current, direction);
-        // A cross-container candidate always pays at least 5000, so a nearer
-        // same-container result cannot be displaced by the full-view scan.
+        const same = this.findBest(this.inLane(focusedContainer, sameCandidates, current, direction), current, direction);
+        // A same-container result this near stands; only a farther one is
+        // weighed against the other containers in the full-view scan.
         if (same.candidate && same.score <= 5000) {
-          this.focus(same.candidate.el);
+          this.moveTo(same.candidate.el, direction);
           return true;
         }
       }
+    }
+
+    const leave = this.leaveTarget(direction);
+    if (leave !== undefined) {
+      if (leave) this.moveTo(leave, direction);
+      return true;
     }
 
     const candidates = this.getCandidates();
@@ -460,12 +505,95 @@ export class SpatialNav {
     }
     this.lastRect = current.rect;
 
-    const best = this.findBest(candidates, current, direction).candidate;
+    const lane = this.inLane(containerOf(this.focused), candidates, current, direction);
+    const best = this.findBest(lane, current, direction).candidate;
 
     if (best) {
-      this.focus(this.enterTarget(best, candidates));
+      this.moveTo(this.enterTarget(best, candidates), direction);
       return true;
     }
     return false;
+  }
+
+  /**
+   * In a `data-nav-straight` container, Left and
+   * Right keep to the line: everything inside the container, nested rows
+   * too, must share it. Up and Down step to the container's own adjacent line
+   * and the element there nearest across; with no line of its own left, the
+   * adjacent line beyond (a nested row wrapped below, or the next block)
+   * gets the same rule, unless a leave rule says otherwise.
+   */
+  private inLane(container: HTMLElement | null, candidates: Candidate[], current: Candidate,
+    direction: NavDirection): Candidate[] {
+    if (!container?.hasAttribute('data-nav-straight')) return candidates;
+    const r = current.rect;
+    if (direction === 'left' || direction === 'right') {
+      return candidates.filter((c) => c === current || !container.contains(c.el)
+        || (c.rect.top < r.bottom && c.rect.bottom > r.top));
+    }
+    const down = direction === 'down';
+    const ahead = (c: Candidate) => c !== current && (down ? c.rect.top >= r.bottom - 1 : c.rect.bottom <= r.top + 1);
+    const gap = (c: Candidate) => (down ? c.rect.top - r.bottom : r.top - c.rect.bottom);
+    const cx = r.left + r.width / 2;
+    // Nearest across: the smallest gap (none where it overlaps the column),
+    // then the nearest center.
+    const apart = (c: Candidate) => Math.max(c.rect.left - r.right, r.left - c.rect.right, 0);
+    const center = (c: Candidate) => Math.abs(c.rect.left + c.rect.width / 2 - cx);
+    const nearestOnNextLine = (pool: Candidate[]) => {
+      const nearest = pool.reduce((a, c) => (gap(c) < gap(a) ? c : a));
+      const line = pool.filter((c) => c.rect.top < nearest.rect.bottom && c.rect.bottom > nearest.rect.top);
+      return line.reduce((a, c) => (apart(c) < apart(a) || (apart(c) === apart(a) && center(c) < center(a)) ? c : a));
+    };
+    const own = candidates.filter((c) => c.container === container && ahead(c));
+    const others = candidates.filter((c) => c === current || c.container !== container);
+    if (own.length) return [...others, nearestOnNextLine(own)];
+    const beyond = candidates.filter((c) => c.container !== container && ahead(c));
+    return beyond.length ? [current, nearestOnNextLine(beyond)] : [current];
+  }
+
+  private moveTo(el: HTMLElement, direction: NavDirection): void {
+    const from = this.focused;
+    this.focus(el);
+    const toContainer = containerOf(el);
+    const remember = !!from && containerOf(from) !== toContainer && !!toContainer?.hasAttribute('data-nav-remember');
+    this.lastMove = remember ? { from: from!, to: el, direction } : null;
+  }
+
+  private rememberedSource(direction: NavDirection): HTMLElement | null {
+    const last = this.lastMove;
+    if (!last || last.to !== this.focused || direction !== OPPOSITE[last.direction]) return null;
+    if (!last.from.isConnected || !this.root().contains(last.from)) return null;
+    const [from, to] = this.getCandidates([last.from, last.to], false);
+    if (!from || !to || from.el !== last.from) return null;
+    // A re-render may have moved it, say a row that wrapped; then it is no
+    // longer the way back.
+    const dx = from.rect.left + from.rect.width / 2 - (to.rect.left + to.rect.width / 2);
+    const dy = from.rect.top + from.rect.height / 2 - (to.rect.top + to.rect.height / 2);
+    const ahead = direction === 'up' ? dy < -5 : direction === 'down' ? dy > 5 : direction === 'left' ? dx < -5 : dx > 5;
+    return ahead ? last.from : null;
+  }
+
+  /**
+   * A container may say where a direction leaves it:
+   * `data-nav-leave-up=".selector"` goes there, and an
+   * empty value keeps focus in place. It applies only once nothing inside the
+   * container lies that way; undefined leaves the move to geometry.
+   */
+  private leaveTarget(direction: NavDirection): HTMLElement | null | undefined {
+    const root = this.root();
+    for (let container = containerOf(this.focused); container && root.contains(container);
+      container = outerContainerOf(container)) {
+      const rule = container.getAttribute(`data-nav-leave-${direction}`);
+      if (rule === null) continue;
+      const inside = this.getCandidates(Array.from(container.querySelectorAll<HTMLElement>('[data-focusable]')), false);
+      const current = inside.find((c) => c.el === this.focused);
+      if (current && this.findBest(this.inLane(container, inside, current, direction), current, direction).candidate) {
+        return undefined;
+      }
+      if (rule === '') return null;
+      const target = root.querySelector<HTMLElement>(rule);
+      return target && this.getCandidates([target], false).length ? target : undefined;
+    }
+    return undefined;
   }
 }
