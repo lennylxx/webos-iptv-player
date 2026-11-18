@@ -614,7 +614,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
             ${info?.plot ? html`<p class="detail-plot">${info.plot}</p>` : ''}
             ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
             ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
-            <div class="detail-actions" data-nav-container data-nav-straight data-nav-remember
+            <div class="detail-actions" data-key="detail-actions" data-nav-container data-nav-straight data-nav-remember
                  data-nav-leave-left="" data-nav-leave-right="" data-nav-leave-down=".series-season-btn.active">
               ${resumed ? html`
                 <button class="detail-btn detail-btn-primary" data-focusable data-key="resume" data-action="resume">
