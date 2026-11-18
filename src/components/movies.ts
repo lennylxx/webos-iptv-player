@@ -5,7 +5,7 @@ import { StorageService } from '../services/storage-service';
 import { loadVodCategories, loadVodStreams, loadVodInfo } from '../services/xtream-catalog';
 import { xtreamVodUrl } from '../utils/xtream-url';
 import { CatalogView, type CollectionKind, type CollectionEntry } from './catalog-view';
-import { CHECK_ICON, HIDE_ICON, PLAY_ICON, REMOVE_ICON, SHOW_ICON, watchlistIcon } from './icons';
+import { CHECK_ICON, HIDE_ICON, PLAY_ICON, REMOVE_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
 import { t, tp } from '../i18n';
 
@@ -276,36 +276,29 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
           ${info?.plot ? html`<p class="detail-plot">${info.plot}</p>` : ''}
           ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
           ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
-          <div class="detail-actions">
+          <div class="detail-actions" data-nav-container data-nav-straight data-nav-remember
+               data-nav-leave-left="" data-nav-leave-right="" data-nav-leave-down="">
             ${saved ? html`
               <button class="detail-btn detail-btn-primary" data-focusable data-key="resume" data-action="resume">
                 <span class="detail-btn-icon">${raw(PLAY_ICON)}</span><span>${t('common.resume')}</span>
+                ${this.resumeBar(saved.position, saved.duration)}
               </button>` : ''}
             <button class="detail-btn ${saved ? '' : 'detail-btn-primary'}" data-focusable data-key="play" data-action="play">
               <span class="detail-btn-icon">${raw(PLAY_ICON)}</span><span>${t(saved ? 'catalog.playFromStart' : 'catalog.play')}</span>
             </button>
-            <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
-              <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>
-              <span>${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}</span>
-            </button>
-            <button class="detail-btn" data-focusable data-key="watched" data-action="watched">
-              <span class="detail-btn-icon">${raw(watched ? REMOVE_ICON : CHECK_ICON)}</span>
-              <span>${t(watched ? 'catalog.markNotWatched' : 'catalog.markWatched')}</span>
-            </button>
-            <button class="detail-btn" data-focusable data-key="hide" data-action="hide">
-              <span class="detail-btn-icon">${raw(hidden ? SHOW_ICON : HIDE_ICON)}</span>
-              <span>${t(hidden ? 'catalog.unhide' : 'catalog.hide')}</span>
-            </button>
-            ${saved ? html`
-              <button class="detail-btn detail-btn-danger" data-focusable data-key="remove-resume" data-action="remove-resume">
-                <span class="detail-btn-icon">${raw(REMOVE_ICON)}</span>
-                <span>${t('catalog.removeContinueWatching')}</span>
-              </button>
-            ` : ''}
+            ${this.detailIconRow('actions', [
+              this.detailIconButton('watchlist', watchlistIcon(watchlisted),
+                t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist'), watchlisted ? 'on' : ''),
+              this.detailIconButton('watched', CHECK_ICON,
+                t(watched ? 'catalog.markNotWatched' : 'catalog.markWatched'), watched ? 'on' : ''),
+              this.detailIconButton('hide', HIDE_ICON, t(hidden ? 'catalog.unhide' : 'catalog.hide'), hidden ? 'on' : ''),
+              saved ? this.detailIconButton('remove-resume', REMOVE_ICON, t('catalog.removeContinueWatching'), 'danger') : '',
+            ])}
           </div>
         </div>
       </div>
     `);
+    this.refreshIconRows();
     this.settleDetailFocus();
   }
 }

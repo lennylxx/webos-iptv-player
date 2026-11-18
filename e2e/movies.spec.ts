@@ -303,7 +303,7 @@ test('Back holds the rails still when the detail added the Watchlist rail above'
     .toBe(true);
   const before = await topOf();
   await page.keyboard.press('Enter');
-  const watchlist = movies.locator('.catalog-layer-detail .detail-btn[data-key="watchlist"]');
+  const watchlist = movies.locator('.catalog-layer-detail .detail-icon-btn[data-key="watchlist"]');
   // The detail re-renders once its info arrives; hover the final button.
   await expect(movies.locator('.detail-plot')).toContainText('A plot.');
   await expect(watchlist).toBeVisible();

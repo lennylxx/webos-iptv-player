@@ -237,6 +237,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private lastRevealInstant = false;
   private filter: GridFilter = NO_FILTER;
   private filterTimer: ReturnType<typeof setTimeout> | null = null;
+  private heldName: HTMLElement | null = null;
+  private heldNameTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly iconNameFits = new Map<string, { key: string; width: number }>();
+  private openedName: { row: HTMLElement; at: number } | null = null;
+  private instantRow: HTMLElement | null = null;
+  private instantSwaps = 0;
   private filtered: { source: I[]; key: string; items: I[] } | null = null;
   private gridGenres: string[] = [];
   // Per source list, so a big category is split and folded once, not per render.
@@ -358,7 +364,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       // A field with the caret keeps its ring.
       const caret = this.filterInput();
       if (caret && target === caret && document.activeElement === caret) return;
-      if (target === this.current()) this.focusScope.conceal();
+      if (target === this.current()) {
+        if (target.classList.contains('detail-icon-btn')) this.holdName(target);
+        this.focusScope.conceal();
+      }
     });
     this.container.addEventListener('scroll', (event: Event) => {
       const target = event.target as HTMLElement;
@@ -698,6 +707,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   // Back into the section from the tab bar: the focus Up left, in view.
   resumeFocus(): void {
+    // Back from the tab bar repaints the ring by key, past onFocusChanged.
+    if (this.mode === 'detail') this.fitIconNames();
     this.focusScope.focus(this.focusScope.focusKey, 'resume');
   }
 
@@ -1281,10 +1292,116 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     return html`<div class="catalog-progress"><div class="catalog-progress-fill" style="width:${percent}%"></div></div>`;
   }
 
+  protected resumeBar(position: number, duration: number): Safe | '' {
+    if (position <= 0 || duration <= 0) return '';
+    const percent = Math.max(2, Math.min(100, Math.round(position / duration * 100)));
+    return html`<span class="detail-btn-progress"><span style="width:${percent}%"></span></span>`;
+  }
+
+  // Every name in a row opens to its longest one's width. As one closes and
+  // the next opens, whatever slides under a resting pointer is still the
+  // button it was on: its circle or its name. A row is measured again only
+  // when its names, the language, or the text size change.
+  protected fitIconNames(): void {
+    const textSize = document.documentElement.dataset.textSize ?? '';
+    const pending: Array<{ row: HTMLElement; id: string; key: string; width: number }> = [];
+    for (const row of Array.from(this.layers.detail.querySelectorAll<HTMLElement>('.detail-icon-row'))) {
+      const id = row.dataset.row ?? '';
+      const names = Array.from(row.querySelectorAll<HTMLElement>('.detail-icon-name'));
+      const key = `${getLocale()}|${textSize}|${names.map((name) => name.textContent).join('|')}`;
+      const fit = this.iconNameFits.get(id);
+      if (fit?.key === key && row.style.getPropertyValue('--name-width')) continue;
+      // The text's own extent, never the label's box, which the last fit sized.
+      let width = 0;
+      for (const name of names) width = Math.max(width, name.getBoundingClientRect().width);
+      if (width > 0) pending.push({ row, id, key, width: Math.ceil(width) });
+    }
+    for (const { row, id, key, width } of pending) {
+      this.iconNameFits.set(id, { key, width });
+      row.style.setProperty('--name-width', `${width}px`);
+    }
+  }
+
+  // After a detail render: fit the names, and put back the state a re-render
+  // strips with the template's classes (a held name, an instant switch).
+  protected refreshIconRows(): void {
+    this.fitIconNames();
+    if (this.heldName?.isConnected) this.heldName.classList.add('name-held');
+    if (this.instantRow?.isConnected) this.instantRow.classList.add('names-instant');
+  }
+
+  // A name still opening when the next one in its row takes focus switches
+  // at once: the two would slide at different speeds and the row's width
+  // would dip for a moment under a resting pointer.
+  private swapNames(el: HTMLElement): void {
+    const row = el.parentElement;
+    if (!row) return;
+    const now = Date.now();
+    const last = this.openedName;
+    this.openedName = { row, at: now };
+    if (!last || last.row !== row || now - last.at >= CONFIG.NAVIGATION.ICON_NAME_SLIDE_MS) return;
+    this.instantRow?.classList.remove('names-instant');
+    this.instantRow = row;
+    row.classList.add('names-instant');
+    // Only the latest swap ends the instant switch, after its own two frames.
+    const swap = ++this.instantSwaps;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (swap !== this.instantSwaps) return;
+      row.classList.remove('names-instant');
+      this.instantRow = null;
+    }));
+  }
+
+  // A pointer slipping off a round action onto nothing keeps its name open a
+  // moment; the next focus closes it at once, as the new name opens.
+  private holdName(el: HTMLElement): void {
+    this.releaseName();
+    el.classList.add('name-held');
+    this.heldName = el;
+    this.heldNameTimer = setTimeout(() => this.releaseName(), CONFIG.NAVIGATION.ICON_NAME_HOLD_MS);
+  }
+
+  private releaseName(): void {
+    if (this.heldNameTimer) clearTimeout(this.heldNameTimer);
+    this.heldNameTimer = null;
+    this.heldName?.classList.remove('name-held');
+    this.heldName = null;
+  }
+
+  // The row's circles and its longest name decide a wrap; the last fit rides
+  // in the template so a re-render keeps it. A row that wraps below the
+  // playback buttons is a nav container of its own, so Right from Resume
+  // stays on Resume's line, and is entered at its first button, never the
+  // destructive one nearest below Play; one sharing a line with its
+  // neighbours (the season mark) is not.
+  protected detailIconRow(id: string, buttons: Array<Safe | ''>, ownLine = true): Safe {
+    const shown = buttons.filter((button): button is Safe => button !== '');
+    const fit = this.iconNameFits.get(id);
+    const width = fit ? `;--name-width:${fit.width}px` : '';
+    return html`<div class="detail-icon-row" ${raw(ownLine ? 'data-nav-container data-nav-straight data-nav-enter="first" data-nav-remember' : '')} data-row="${id}"
+      style="--icon-count:${shown.length}${width}">${shown}</div>`;
+  }
+
+  // A round detail action; its name shows beside it while it has focus.
+  protected detailIconButton(key: string, icon: string, label: string, state: 'on' | 'danger' | '' = ''): Safe {
+    return html`
+      <button class="detail-icon-btn ${state}" data-focusable data-nav-rect data-key="${key}" data-action="${key}" aria-label="${label}">
+        <span class="detail-icon-circle">${raw(icon)}</span><span class="detail-icon-label"><span class="detail-icon-name">${label}</span></span>
+      </button>
+    `;
+  }
+
   // SpatialNav picked `el`: hand it to the scope, and keep the browse hero
   // (title + backdrop) in sync with the focused item tile. Category tiles and
   // non-browse modes leave the hero unchanged.
   private onFocusChanged(el: HTMLElement | null): void {
+    this.releaseName();
+    if (el?.classList.contains('detail-icon-btn')) {
+      this.fitIconNames();
+      this.swapNames(el);
+    } else {
+      this.openedName = null;
+    }
     if (this.mode === 'browse' && !el?.closest('.catalog-sort')) this.browseSortReturn = null;
     this.request(el ? this.keyFor(el) : null, this.pickVia);
     const gridCell = el?.closest<HTMLElement>('[data-grid-index]');

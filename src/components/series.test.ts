@@ -939,6 +939,83 @@ describe('Series detail', () => {
     expect(container.querySelector('.episode-row[data-episode-id="e1"] .episode-resume')).toBeNull();
   });
 
+  it('keeps a held name and an instant switch through a re-render', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    const { view } = await openWith();
+    await openDetail(view);
+    view.focusScope.track(JSON.stringify(['detail', '', 'hide']));
+    const hide = () => container.querySelector<HTMLElement>('[data-action="hide"]')!;
+    hide().dispatchEvent(new CustomEvent('nav:unhover', { bubbles: true }));
+    expect(hide().classList.contains('name-held')).toBe(true);
+    const internals = view as unknown as { renderDetail(restoreFocus?: boolean): void; instantRow: HTMLElement | null };
+    internals.instantRow = hide().parentElement;
+    hide().parentElement!.classList.add('names-instant');
+    internals.renderDetail(false);
+    expect(hide().classList.contains('name-held')).toBe(true);
+    expect(hide().parentElement!.classList.contains('names-instant')).toBe(true);
+  });
+
+  it('ends an instant name switch only after the latest one\'s frames', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => frames.push(callback));
+    try {
+      const { view } = await openWith();
+      await openDetail(view);
+      const swap = (action: string) => (view as unknown as { swapNames(el: HTMLElement): void })
+        .swapNames(container.querySelector<HTMLElement>(`[data-action="${action}"]`)!);
+      const row = container.querySelector<HTMLElement>('[data-action="watchlist"]')!.parentElement!;
+      const frame = () => frames.splice(0).forEach((callback) => callback(0));
+      swap('watchlist');
+      swap('watched');
+      expect(row.classList.contains('names-instant')).toBe(true);
+      frame();
+      swap('hide');
+      frame();
+      expect(row.classList.contains('names-instant')).toBe(true);
+      frame();
+      frame();
+      expect(row.classList.contains('names-instant')).toBe(false);
+    } finally {
+      raf.mockRestore();
+    }
+  });
+
+  it('measures the round actions\' names once, not on every re-render', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    const measured = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const width = this.classList.contains('detail-icon-name') ? 100 : 0;
+      return { left: 0, top: 0, width, height: 0, right: width, bottom: 0, x: 0, y: 0, toJSON() {} } as DOMRect;
+    });
+    try {
+      const { view } = await openWith();
+      await openDetail(view);
+      const names = () => measured.mock.contexts.filter((el) => (el as HTMLElement).classList.contains('detail-icon-name')).length;
+      expect(names()).toBeGreaterThan(0);
+      expect(container.querySelector<HTMLElement>('.detail-icon-row')?.style.getPropertyValue('--name-width')).toBe('100px');
+      const before = names();
+      (view as unknown as { renderDetail(restoreFocus?: boolean): void }).renderDetail(false);
+      expect(names()).toBe(before);
+      expect(container.querySelector<HTMLElement>('.detail-icon-row')?.style.getPropertyValue('--name-width')).toBe('100px');
+    } finally {
+      measured.mockRestore();
+    }
+  });
+
+  it('draws resume progress only once a queued episode has been started', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+    let entry = { ...ownedResume('e1', 'Series One — S1E1', 1), position: 0 };
+    storageMock.getResumeList.mockImplementation(() => [entry]);
+    storageMock.getResume.mockImplementation((_a: string, _k: string, id: string) => id === 'e1' ? entry : null);
+    const { view } = await openWith();
+    await openDetail(view);
+    expect(container.querySelector('[data-action="resume"] .detail-btn-progress')).toBeNull();
+    entry = { ...entry, position: 450 };
+    view.handleAction('back');
+    await openDetail(view);
+    expect(container.querySelector('[data-action="resume"] .detail-btn-progress')).not.toBeNull();
+  });
+
   it('shows a loaded series\' poster for an entry saved without one', async () => {
     storageMock.getResumeList.mockReturnValue([ownedResume('e1', 'Series One — S1E1', 1)]);
     await openWith(undefined, [{ ...series('s1', 'Series One'), poster: 'http://host/series.jpg' }]);

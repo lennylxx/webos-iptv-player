@@ -36,6 +36,15 @@ html.q-no-flex-gap .tab-bar-inner > .tab-bar-account { margin-left: 52px; }
 html.q-no-flex-gap .epg-prog-title > .epg-bell-glyph { margin-left: 18px; }
 html.q-no-flex-gap .settings-field > .settings-item-hint { margin-top: 14px; }
 html.q-no-flex-gap .live-preview-favorite { margin-right: 20px; }
+html.q-no-flex-gap .detail-actions > .detail-btn:last-of-type { margin-right: 24px; }
+
+/* Absolutely placed along the button's foot, the progress bar takes no gap. */
+html.q-no-flex-gap .detail-btn > .detail-btn-progress { margin-left: 0; }
+
+/* A round-action row grows to fill its line; its trailing gap margin would
+   wrap it sooner than the modern engine does, so take it back. */
+html.q-no-flex-gap .detail-actions > .detail-icon-row,
+html.q-no-flex-gap .series-seasons > .detail-icon-row { margin-right: 0; }
 
 /*
  * The quirk class makes each generated margin more specific than the

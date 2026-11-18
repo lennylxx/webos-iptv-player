@@ -20,6 +20,32 @@ async function narrowRow(p: Page, selector: string, width: number): Promise<void
 
 const widenRow = (p: Page) => p.evaluate(() => document.getElementById('parity-narrow')?.remove());
 
+// Walk Right with the keys from `from` until `to` holds the focus.
+async function focusByKeys(p: Page, from: string, to: string): Promise<void> {
+  await p.locator(from).evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  for (let i = 0; i < 6 && !await p.locator(to).evaluate((el) => el.classList.contains('focused')); i++) {
+    await p.keyboard.press('ArrowRight');
+  }
+  await expect(p.locator(to)).toHaveClass(/focused/);
+  await expect(p.locator('html')).toHaveClass(/keyboard-nav/);
+}
+
+async function expectNameShown(p: Page, button: string): Promise<void> {
+  await expect.poll(() => p.locator(`${button} .detail-icon-label`)
+    .evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(40);
+}
+
+async function hoverCircle(p: Page, button: string): Promise<void> {
+  // Leave the keys first, so the measured circle is the one the pointer meets.
+  await p.mouse.move(10, 300);
+  await p.mouse.move(20, 300);
+  await expect(p.locator('html')).not.toHaveClass(/keyboard-nav/);
+  const box = (await p.locator(`${button} .detail-icon-circle`).boundingBox())!;
+  await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 });
+  await expect(p.locator(button)).toHaveClass(/focused/);
+  await expect(p.locator('html')).not.toHaveClass(/keyboard-nav/);
+}
+
 // webOS 4/5/6 lack flex `gap`, CSS Grid and backdrop-filter, so the app ships a
 // second layout built from `> * + *` margins and float/inline-block fallbacks.
 // Those fallbacks are meant to *reproduce* the modern layout, not merely to
@@ -683,6 +709,24 @@ const XTREAM_SCREENS: Screen[] = [
     },
   },
   {
+    // With the keys, the focused round action's name pushes the rest along.
+    name: 'movie-detail-icon-name',
+    budget: 0,
+    go: async (p) => {
+      await focusByKeys(p, '#view-movies [data-action="play"]', '#view-movies [data-action="watched"]');
+      await expectNameShown(p, '#view-movies [data-action="watched"]');
+    },
+  },
+  {
+    // Under the pointer the name opens the same way, as wide as the row's longest.
+    name: 'movie-detail-icon-pointer-name',
+    budget: 0,
+    go: async (p) => {
+      await hoverCircle(p, '#view-movies [data-action="hide"]');
+      await expectNameShown(p, '#view-movies [data-action="hide"]');
+    },
+  },
+  {
     name: 'series',
     budget: 0,
     go: async (p) => {
@@ -706,9 +750,18 @@ const XTREAM_SCREENS: Screen[] = [
     budget: 0,
     go: async (p) => {
       const row = p.locator('#view-series .series-seasons');
-      await narrowRow(p, '#view-series .series-seasons', 500);
-      await expect.poll(() => row.locator('.series-season-mark').evaluate((mark) =>
+      await narrowRow(p, '#view-series .series-seasons', 200);
+      await expect.poll(() => row.locator('.detail-icon-row').evaluate((mark) =>
         mark.getBoundingClientRect().top > mark.parentElement!.getBoundingClientRect().top + 20)).toBe(true);
+    },
+  },
+  {
+    name: 'series-detail-season-name',
+    budget: 0,
+    go: async (p) => {
+      await widenRow(p);
+      await focusByKeys(p, '#view-series .series-season-btn', '#view-series [data-action="season-watched"]');
+      await expectNameShown(p, '#view-series [data-action="season-watched"]');
     },
   },
   {
@@ -837,9 +890,22 @@ const XTREAM_SCREENS: Screen[] = [
     },
   },
   {
+    // A resumed title: Resume's progress bar runs along its whole foot.
+    name: 'movie-detail-resume',
+    budget: 0,
+    go: async (p) => {
+      await p.locator('#view-movies [data-rail-key="continue"] .catalog-tile').first().click();
+      await expect(p.locator('#view-movies .detail-btn-progress')).toBeVisible();
+      await expect.poll(() => p.locator('#view-movies .detail-btn-progress').evaluate((bar) =>
+        Math.round(bar.getBoundingClientRect().left - bar.parentElement!.getBoundingClientRect().left))).toBe(3);
+    },
+  },
+  {
     name: 'movies-continue-management',
     budget: 0,
     go: async p => {
+      await p.keyboard.press('Escape');
+      await expect(p.locator('#view-movies [data-collection-manage="continue"]')).toBeVisible();
       await p.locator('#view-movies [data-collection-manage="continue"]').click();
       await expect(p.locator('#view-movies .catalog-managing')).toBeVisible();
       await p.locator('#view-movies .catalog-remove-mark').hover();

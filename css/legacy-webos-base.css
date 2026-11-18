@@ -142,7 +142,6 @@ html.q-no-flex-gap .detail-btn > * + * { margin-left: 10px; }
 html.q-no-flex-gap .series-detail-head > * + * { margin-left: 56px; }
 html.q-no-flex-gap .series-seasons { margin-bottom: -16px; }
 html.q-no-flex-gap .series-seasons > * { margin-bottom: 16px; margin-right: 16px; }
-html.q-no-flex-gap .series-season-mark > * + * { margin-left: 10px; }
 html.q-no-flex-gap .series-episode-cell > * + * { margin-left: 16px; }
 html.q-no-flex-gap .episode-row > * + * { margin-left: 20px; }
 html.q-no-flex-gap .episode-title > * + * { margin-left: 16px; }

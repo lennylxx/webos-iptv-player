@@ -211,6 +211,58 @@
 .detail-btn-icon { display: inline-flex; width: 28px; height: 28px; flex: 0 0 auto; }
 .detail-btn-icon svg { width: 100%; height: 100%; }
 .detail-btn-code { font-weight: 400; }
+.detail-btn-primary { position: relative; overflow: hidden; }
+.detail-btn-progress {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 5px;
+  background: rgba(255, 255, 255, 0.3);
+}
+.detail-btn-progress > span { display: block; height: 100%; background: #fff; }
+
+/* Round secondary actions. The focused one's name slides out beside it and
+   pushes the rest along. The row takes the line's leftover width but never
+   less than its circles plus its longest name, so a row short of room for
+   the names wraps whole onto its own line instead of cutting them, and an
+   opening name never wraps it. The spacing is each button's own padding,
+   not a gap, so a pointer crossing the row always rests on a button and
+   never drops the open name. */
+.detail-icon-row {
+  flex: 1 1 0%; display: flex; align-items: center;
+  min-width: calc(74px * var(--icon-count, 1) - 12px + var(--name-width, 0px) + 22px);
+}
+/* Playback and title actions sit apart, without indenting a wrapped row. */
+.detail-actions > .detail-btn:last-of-type { margin-right: 12px; }
+.detail-icon-btn {
+  display: flex; align-items: center; flex: 0 1 auto; min-width: 74px; height: 62px; padding: 0 12px 0 0;
+  border: 0; background: none; color: var(--text-primary); cursor: pointer;
+}
+.detail-icon-btn:last-child { min-width: 62px; padding-right: 0; }
+button.detail-icon-btn.focused { box-shadow: none; }
+.detail-icon-btn.danger { color: var(--danger); }
+.detail-icon-circle {
+  display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 62px; height: 62px; box-sizing: border-box; border-radius: 50%;
+  border: 3px solid transparent; background: var(--catalog-control);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.detail-icon-circle svg { width: 28px; height: 28px; }
+/* On reads like an episode's watched mark: a white glyph on an accent circle. */
+.detail-icon-btn.on .detail-icon-circle { background: var(--accent); color: #fff; }
+.detail-icon-btn.focused .detail-icon-circle {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px var(--accent-glow);
+}
+/* The ring's accent would vanish into an on circle's accent fill. */
+.detail-icon-btn.on.focused .detail-icon-circle { border-color: var(--text-primary); }
+.detail-icon-label {
+  flex: 0 1 auto; min-width: 0; width: 0; overflow: hidden; white-space: nowrap;
+  opacity: 0; font-size: 24px; font-weight: 600;
+  transition: width 200ms ease-out, padding 200ms ease-out, opacity 200ms ease-out;
+}
+.detail-icon-row.names-instant .detail-icon-label { transition: none; }
+.detail-icon-btn.focused .detail-icon-label,
+.detail-icon-btn.name-held .detail-icon-label {
+  width: calc(var(--name-width, 600px) + 22px); padding: 0 8px 0 14px; opacity: 1; text-overflow: ellipsis;
+}
 .watchlist-glyph.set { fill: currentColor; }
 .watchlist-glyph.unset {
   fill: none;
@@ -236,7 +288,6 @@
 }
 .series-season-btn.active { background: var(--accent, #3ea6ff); color: #fff; }
 .series-season-btn.focused { border-color: var(--text-primary); }
-.series-season-mark { display: inline-flex; align-items: center; gap: 10px; }
 
 .series-episodes { position: relative; overflow-anchor: none; }
 .series-episodes-spacer { position: relative; width: 100%; }

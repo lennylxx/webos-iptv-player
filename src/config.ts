@@ -39,6 +39,11 @@ export const CONFIG = {
     // Longer than a native smooth reveal takes to bring its row in on a TV.
     REVEAL_SETTLE_MS: 800,
     EDGE_SCROLL_DWELL_MS: 400,
+    // A round detail action's name stays open this long after the pointer
+    // slips off it onto nothing, so a wobbling hand doesn't make it collapse.
+    ICON_NAME_HOLD_MS: 400,
+    // How long a round detail action's name takes to slide open (CSS matches).
+    ICON_NAME_SLIDE_MS: 200,
     EDGE_SCROLL_ZONE_PX: 64,
     // Edge scroll starts slow for precise stops and eases up to the top
     // speed over the ramp while the pointer stays on the same edge.

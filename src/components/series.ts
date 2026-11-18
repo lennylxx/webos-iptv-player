@@ -5,7 +5,7 @@ import { StorageService } from '../services/storage-service';
 import { loadSeriesCategories, loadSeries, loadSeriesInfo } from '../services/xtream-catalog';
 import { xtreamEpisodeUrl, type XtreamCredentials } from '../utils/xtream-url';
 import { CatalogView, type CatalogHandlers, type CollectionKind, type CollectionEntry } from './catalog-view';
-import { CHECK_ICON, HIDE_ICON, PLAY_ICON, REMOVE_ICON, SHOW_ICON, watchlistIcon } from './icons';
+import { CHECK_ICON, HIDE_ICON, PLAY_ICON, REMOVE_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
 import { t, tp } from '../i18n';
 import { VirtualList } from '../utils/virtual-list';
@@ -614,31 +614,23 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
             ${info?.plot ? html`<p class="detail-plot">${info.plot}</p>` : ''}
             ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
             ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
-            <div class="detail-actions">
+            <div class="detail-actions" data-nav-container data-nav-straight data-nav-remember
+                 data-nav-leave-left="" data-nav-leave-right="" data-nav-leave-down=".series-season-btn.active">
               ${resumed ? html`
                 <button class="detail-btn detail-btn-primary" data-focusable data-key="resume" data-action="resume">
                   <span class="detail-btn-icon">${raw(PLAY_ICON)}</span><span>${
                     t(resumed.position > 0 ? 'common.resume' : 'catalog.play')}</span>
                   ${resumedCode ? html`<span class="detail-btn-code">${resumedCode}</span>` : ''}
+                  ${this.resumeBar(resumed.position, resumed.duration)}
                 </button>` : ''}
-              <button class="detail-btn" data-focusable data-key="watchlist" data-action="watchlist">
-                <span class="detail-btn-icon">${raw(watchlistIcon(watchlisted))}</span>
-                <span>${t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist')}</span>
-              </button>
-              ${this.allEpisodes().length ? html`
-                <button class="detail-btn" data-focusable data-key="watched" data-action="watched">
-                  <span class="detail-btn-icon">${raw(seriesWatched ? REMOVE_ICON : CHECK_ICON)}</span>
-                  <span>${t(seriesWatched ? 'catalog.markNotWatched' : 'catalog.markWatched')}</span>
-                </button>` : ''}
-              <button class="detail-btn" data-focusable data-key="hide" data-action="hide">
-                <span class="detail-btn-icon">${raw(hidden ? SHOW_ICON : HIDE_ICON)}</span>
-                <span>${t(hidden ? 'catalog.unhide' : 'catalog.hide')}</span>
-              </button>
-              ${resumed ? html`
-                <button class="detail-btn detail-btn-danger" data-focusable data-key="remove-resume" data-action="remove-resume">
-                  <span class="detail-btn-icon">${raw(REMOVE_ICON)}</span>
-                  <span>${t('catalog.removeContinueWatching')}</span>
-                </button>` : ''}
+              ${this.detailIconRow('actions', [
+                this.detailIconButton('watchlist', watchlistIcon(watchlisted),
+                  t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist'), watchlisted ? 'on' : ''),
+                this.allEpisodes().length ? this.detailIconButton('watched', CHECK_ICON,
+                  t(seriesWatched ? 'catalog.markNotWatched' : 'catalog.markWatched'), seriesWatched ? 'on' : '') : '',
+                this.detailIconButton('hide', HIDE_ICON, t(hidden ? 'catalog.unhide' : 'catalog.hide'), hidden ? 'on' : ''),
+                resumed ? this.detailIconButton('remove-resume', REMOVE_ICON, t('catalog.removeContinueWatching'), 'danger') : '',
+              ])}
             </div>
             ${this.detailLoading
               ? html`<p class="catalog-hint">${t('common.loading')}</p>`
@@ -647,23 +639,22 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
                 : info.seasons.length === 0
                   ? html`<p class="catalog-hint">${t('catalog.noEpisodes')}</p>`
                   : html`
-                  <div class="series-seasons">
+                  <div class="series-seasons" data-nav-container data-nav-straight data-nav-remember
+                       data-nav-leave-left="" data-nav-leave-right=""
+                       data-nav-leave-down=".series-episode-cell[data-episode-index='0'] .episode-row">
                     ${info.seasons.map((n) => html`
                       <button class="series-season-btn ${n === this.selectedSeason ? 'active' : ''}"
                               data-focusable data-key="season:${n}" data-season="${n}">${t('catalog.season', { number: n })}</button>
                     `)}
-                    ${episodes.length ? html`
-                      <button class="series-season-btn series-season-mark" data-focusable data-key="season-watched"
-                              data-action="season-watched">
-                        <span class="detail-btn-icon">${raw(seasonWatched ? REMOVE_ICON : CHECK_ICON)}</span>
-                        <span>${t(seasonWatched ? 'catalog.markSeasonNotWatched' : 'catalog.markSeasonWatched')}</span>
-                      </button>` : ''}
+                    ${episodes.length ? this.detailIconRow('season', [this.detailIconButton('season-watched', CHECK_ICON,
+                      t(seasonWatched ? 'catalog.markSeasonNotWatched' : 'catalog.markSeasonWatched'), seasonWatched ? 'on' : '')], false) : ''}
                   </div>
                 `}
           </div>
         </div>
         ${info && info.seasons.length > 0 ? html`
-          <div class="series-episodes">
+          <div class="series-episodes" data-nav-container data-nav-remember data-nav-leave-up=".series-season-btn.active"
+               data-nav-leave-left="" data-nav-leave-right="" data-nav-leave-down="">
             ${episodes.length === 0
               ? html`<p class="catalog-hint">${t('catalog.noSeasonEpisodes')}</p>`
               : html`
@@ -716,6 +707,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
         this.instantEpisodeScroll,
       );
     }
+    this.refreshIconRows();
     if (restoreFocus) this.settleDetailFocus();
   }
 
@@ -771,6 +763,15 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       return true;
     }
     if (action !== 'up' && action !== 'down') return false;
+    // Down from the seasons enters at the first episode, which the list may
+    // have scrolled away; mount it so the seasons' leave rule finds it.
+    if (action === 'down' && this.current()?.closest('.series-seasons') && this.selectedEpisodes().length
+        && !this.layer('detail').querySelector('[data-episode-index="0"]')) {
+      const list = this.layer('detail').querySelector<HTMLElement>('.series-detail');
+      this.episodeVirtualizer.ensureVisible(0, list?.clientHeight || EPISODE_VIEWPORT_FALLBACK);
+      this.renderDetail(false);
+      return false;
+    }
     const current = key === null ? -1 : this.episodeIndexOf(key);
     if (current < 0) return false;
     const episodes = this.selectedEpisodes();
