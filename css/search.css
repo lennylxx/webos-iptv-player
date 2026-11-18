@@ -15,7 +15,6 @@
   margin-right: -80px;
   padding-left: 80px;
 }
-.search-view:not(.search-lists) .catalog-rail-track::-webkit-scrollbar-track { margin-left: 80px; }
 .search-bar { margin-bottom: 32px; }
 .search-input {
   width: 100%;

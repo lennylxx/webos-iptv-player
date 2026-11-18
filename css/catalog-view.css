@@ -76,10 +76,16 @@
 .catalog-rail { margin-bottom: 28px; }
 .catalog-rail-title { margin: 0 0 12px; font-size: 30px; font-weight: 600; color: var(--text-primary); }
 .catalog-rail-track { display: flex; gap: 20px; overflow-x: auto; padding: 12px 12px 20px; margin: 0 -12px; }
+/* Rails and the browse page scroll by focus and pointer edge scroll; a rail
+   bar would also shrink the fixed-height category rail and add a vertical
+   one, and the page bar would cut into the full-bleed hero. Chrome 121+
+   ignores the webkit rule once scrollbar-color or scrollbar-width applies;
+   Chromium 53 ignores scrollbar-width and keeps the webkit rule. */
+/* stylelint-disable-next-line plugin/no-unsupported-browser-features */
+.catalog-rails, .catalog-rail-track { scrollbar-width: none; }
+.catalog-rails::-webkit-scrollbar, .catalog-rail-track::-webkit-scrollbar { display: none; }
 .catalog-rails-body .catalog-rail-track { margin-left: -80px; padding-left: 80px; }
-/* The bar starts at the keyline the posters rest on, not the bleed edge. */
-.catalog-rails-body .catalog-rail-track::-webkit-scrollbar-track { margin-left: 80px; }
-.catalog-category-rail { height: 152px; display: block; overflow-anchor: none; }
+.catalog-category-rail { height: 152px; display: block; overflow-y: hidden; overflow-anchor: none; }
 .catalog-category-rail-spacer { position: relative; height: 120px; }
 .catalog-category-rail-cell {
   position: absolute;
@@ -221,6 +227,9 @@
 .series-detail-poster { width: 260px; height: 390px; }
 
 .series-seasons { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
+/* Loading, failure, and no-episode notes take the season row's slot. */
+.series-detail-head .catalog-hint { margin-top: 24px; font-size: 26px; }
+.series-episodes .catalog-hint { font-size: 26px; }
 .series-season-btn {
   padding: 12px 28px; border-radius: 10px; border: 3px solid transparent;
   background: var(--catalog-control); color: var(--text-primary); font-size: 26px; font-weight: 600; cursor: pointer;
