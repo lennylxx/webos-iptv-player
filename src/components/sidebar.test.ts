@@ -90,6 +90,7 @@ vi.mock('../workers/app-worker-client', async () => {
 });
 
 import { Sidebar } from './sidebar';
+import { groupIcon } from './group-icon';
 import { setLocale } from '../i18n';
 import { Focus, Tier } from '../navigation/focus-scope';
 import { setInputMode } from '../navigation/input-mode';
@@ -569,6 +570,23 @@ describe('Sidebar', () => {
       expect(groupItems()[0].classList.contains('active')).toBe(true);
       expect(groupItems()[0].classList.contains('focused')).toBe(true);
       expect(sidebar.pointerDismissX).toBe(740);
+    });
+
+    it('settles group icons with the playlist language', () => {
+      const originalGroups = PlaylistService.getGroupsForPlaylist;
+      PlaylistService.getGroupsForPlaylist = () => ['Telenovelas', 'Teletienda', 'Cine Gaming'];
+      PlaylistService.groupsRevision++;
+      try {
+        sidebar.refresh();
+        sidebar.handleAction('left');
+        const item = groupItems().find(g => g.textContent?.indexOf('Cine Gaming') !== -1);
+        const icon = item?.querySelector('.sidebar-group-icon')?.innerHTML;
+        expect(icon).toBe(groupIcon('Cine Gaming', undefined, 'es'));
+        expect(icon).not.toBe(groupIcon('Cine Gaming'));
+      } finally {
+        PlaylistService.getGroupsForPlaylist = originalGroups;
+        PlaylistService.groupsRevision++;
+      }
     });
 
     it('renders a bounded group window for 50,000 groups', () => {

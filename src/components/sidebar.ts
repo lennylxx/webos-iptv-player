@@ -7,6 +7,7 @@ import type {
   ChannelHealthStatus,
   ChannelScope,
 } from '../types';
+import { UNCATEGORIZED_GROUP } from '../types';
 import { CONFIG } from '../config';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
@@ -17,7 +18,7 @@ import { rankChannels } from '../utils/channel-search';
 import { groupDisplayLabel } from '../utils/channel';
 import { formatPosition } from '../utils/time';
 import { getLocale, t, type SupportedLocale } from '../i18n';
-import { groupIcon } from './group-icon';
+import { groupIcon, playlistLanguage } from './group-icon';
 import { CHEVRON_LEFT_ICON } from './icons';
 import { channelLockBadge, liveGroupLockBadge } from './parental-badge';
 import { showToast } from './toast';
@@ -124,6 +125,7 @@ export class Sidebar {
   private groupSourcePlaylist = '';
   private groupSourceRevision = -1;
   private groupSourceLocale: SupportedLocale | null = null;
+  private groupLanguage: SupportedLocale | null = null;
   private groupWidthProbe: SidebarGroup | null = null;
   private decodedLogos = new Set<string>();
   private logoDecodePromises = new Map<string, Promise<boolean>>();
@@ -724,6 +726,9 @@ export class Sidebar {
     this.groupSourcePlaylist = this.playlist;
     this.groupSourceRevision = PlaylistService.groupsRevision;
     this.groupSourceLocale = getLocale();
+    this.groupLanguage = playlistLanguage(groups
+      .filter(g => !g.builtin && g.id !== `source:${UNCATEGORIZED_GROUP}`)
+      .map(g => g.label));
     this.groupWidthProbe = groups.reduce((widest, item) =>
       this.groupWidthScore(item) > this.groupWidthScore(widest) ? item : widest);
     return this.groupSource;
@@ -851,6 +856,7 @@ export class Sidebar {
       this.sourceFocusIdx = Math.max(0, Math.min(sourceCount - 1, this.sourceFocusIdx));
     }
     const groups = this.getGroups();
+    const groupLang = this.groupLanguage;
     if (!groups.some(item => item.id === this.group)) {
       this.group = 'builtin:all';
       this.groupFocusIdx = 0;
@@ -898,7 +904,7 @@ export class Sidebar {
                  data-key="group:${item.id}" data-group-id="${item.id}" data-group-pos="${i}"
                  data-hover-target
                  style="top:${this.groupVirtualizer.getItemOffset(i)}px">
-              <span class="sidebar-group-icon">${raw(groupIcon(item.label, item.builtin))}</span>
+              <span class="sidebar-group-icon">${raw(groupIcon(item.label, item.builtin, groupLang))}</span>
               <span class="sidebar-group-name">${
                 raw(liveGroupLockBadge(item.id, this.playlist))}${item.label}</span>
               <span class="sidebar-group-count">${item.count}</span>

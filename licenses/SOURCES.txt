@@ -28,14 +28,9 @@ twemoji.txt
   A trailing space in the license text has been removed.
   Artwork attribution:
   https://github.com/jdecked/twemoji/blob/b6b55fef1e8636b540a6d016a4729ca8cdf2e60b/README.md#attribution-requirements
-  The 17 redistributed SVGs match that revision, ignoring line endings.
-  Local name -> upstream SVG name:
-  all -> 1f5c2, church -> 26ea, clapper_board -> 1f3ac, cooking -> 1f373,
-  entertainment -> 1f3ad, gaming -> 1f3ae, musical_note -> 1f3b5,
-  newspaper -> 1f4f0, no_one_under_eighteen -> 1f51e, shopping -> 1f6d2,
-  soccer_ball -> 26bd, star -> 2b50, teddy_bear -> 1f9f8,
-  television -> 1f4fa, three_oclock -> 1f552, world_map -> 1f5fa,
-  pencil -> 270f.
+  The redistributed SVGs (every file in assets/group-icons/ and
+  assets/icons/pencil.svg) match that revision, ignoring line endings. The
+  local filenames are descriptive aliases.
 
 This inventory covers the production IPK, not local-only development tools or
 desktop preview playback libraries.

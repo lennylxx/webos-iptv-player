@@ -72,24 +72,7 @@ Copyright (c) 2022-present Jason Sofonia & Justine De Caires.
 Copyright (c) 2014-2021 Twitter.
 The artwork matches Twemoji v17.0.3; see licenses/SOURCES.txt.
 The SVG artwork is unmodified; the local filenames are descriptive aliases.
-Files:
-  assets/group-icons/all.svg
-  assets/group-icons/church.svg
-  assets/group-icons/clapper_board.svg
-  assets/group-icons/cooking.svg
-  assets/group-icons/entertainment.svg
-  assets/group-icons/gaming.svg
-  assets/group-icons/musical_note.svg
-  assets/group-icons/newspaper.svg
-  assets/group-icons/no_one_under_eighteen.svg
-  assets/group-icons/shopping.svg
-  assets/group-icons/soccer_ball.svg
-  assets/group-icons/star.svg
-  assets/group-icons/teddy_bear.svg
-  assets/group-icons/television.svg
-  assets/group-icons/three_oclock.svg
-  assets/group-icons/world_map.svg
-  assets/icons/pencil.svg
+It covers every SVG in assets/group-icons/ and assets/icons/pencil.svg.
 
 Generated runtime helpers
 -------------------------

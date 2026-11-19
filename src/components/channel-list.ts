@@ -8,6 +8,7 @@ import type {
   ChannelScope,
   NumberEvent,
 } from '../types';
+import { UNCATEGORIZED_GROUP } from '../types';
 import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { KeyHandler } from '../navigation/key-handler';
 import { InputMode } from '../navigation/input-mode';
@@ -21,7 +22,7 @@ import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { ChannelHealthService } from '../services/channel-health';
-import { groupIcon } from './group-icon';
+import { groupIcon, playlistLanguage } from './group-icon';
 import { NAV_HORIZONTAL_ICON, PLAYING_ICON, favoriteIcon } from './icons';
 import { backKey, okHint } from './key-hints';
 import { channelLockBadge, liveGroupLockBadge } from './parental-badge';
@@ -129,6 +130,7 @@ export class ChannelList {
   private groupEntriesPlaylist = '';
   private groupEntriesRevision = -1;
   private groupEntriesLocale: SupportedLocale | null = null;
+  private groupLanguage: SupportedLocale | null = null;
 
   private authorizeEdit: (proceed: () => void) => void;
   constructor(
@@ -308,6 +310,7 @@ export class ChannelList {
     if (this.currentPlaylist && !tabs.some(t => t.id === this.currentPlaylist)) this.currentPlaylist = '';
     const showTabs = tabs.length > 1;
     const groups = this.getGroupEntries();
+    const groupLang = this.groupLanguage;
     if (this.awaitedGroup && groups.some(group => group.id === this.awaitedGroup)) {
       this.currentGroup = this.awaitedGroup;
       this.awaitedGroup = null;
@@ -415,6 +418,7 @@ export class ChannelList {
                   g,
                   groupRange.start + offset,
                   this.groupVirtualizer.getItemOffset(groupRange.start + offset),
+                  groupLang,
                 ))}
             </div>
           </div>
@@ -839,6 +843,7 @@ export class ChannelList {
     g: { id: ChannelGroupId; label: string; builtin?: BuiltinChannelGroup },
     position: number,
     top: number,
+    groupLang: SupportedLocale | null,
   ): Safe {
     const isSource = g.id.indexOf('source:') === 0;
     const key = isSource
@@ -856,7 +861,7 @@ export class ChannelList {
            data-key="g:${g.id}"
            data-focusable data-group="${g.id}" data-group-position="${position}"
            style="top:${top}px">
-        <span class="group-icon">${raw(groupIcon(g.label, g.builtin))}</span>
+        <span class="group-icon">${raw(groupIcon(g.label, g.builtin, groupLang))}</span>
         ${renaming
           ? html`<input class="edit-text-input" type="text" value="${this.editor.renameValue(g.label)}">`
           : html`<span class="group-name">${
@@ -1380,6 +1385,9 @@ export class ChannelList {
           label: groupDisplayLabel(name),
         })),
     ];
+    this.groupLanguage = playlistLanguage(this.groupEntries
+      .filter(g => !g.builtin && g.id !== `source:${UNCATEGORIZED_GROUP}`)
+      .map(g => g.label));
     return this.groupEntries;
   }
 

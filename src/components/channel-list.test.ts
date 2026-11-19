@@ -86,6 +86,7 @@ vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 vi.mock('../services/channel-health', () => ({ ChannelHealthService: healthMock }));
 
 import { ChannelList, type ChannelListOptions } from './channel-list';
+import { groupIcon } from './group-icon';
 import { Focus, Tier, type FocusScope } from '../navigation/focus-scope';
 import { ringsIn } from '../navigation/focus-ring';
 import { morph } from '../utils/morph';
@@ -554,6 +555,38 @@ describe('ChannelList.render', () => {
         .filter(g => g.dataset.group?.indexOf('source:') === 0)
         .map(g => g.querySelector('.group-name')?.textContent);
       expect(zh).toEqual(['Uncategorized', '未分类']);
+    } finally {
+      setLocale('en');
+      playlistMock.getGroupsForPlaylist = original;
+      playlistMock.groupsRevision++;
+    }
+  });
+
+  it('settles group icons with the playlist language', () => {
+    const original = playlistMock.getGroupsForPlaylist;
+    playlistMock.getGroupsForPlaylist = () => ['Telenovelas', 'Teletienda', 'Cine Gaming'];
+    playlistMock.groupsRevision++;
+    try {
+      list.render();
+      const icon = container.querySelector('[data-group="source:Cine Gaming"] .group-icon')?.innerHTML;
+      expect(icon).toBe(groupIcon('Cine Gaming', undefined, 'es'));
+      expect(icon).not.toBe(groupIcon('Cine Gaming'));
+    } finally {
+      playlistMock.getGroupsForPlaylist = original;
+      playlistMock.groupsRevision++;
+    }
+  });
+
+  it('leaves the uncategorized label out of the playlist language', () => {
+    const original = playlistMock.getGroupsForPlaylist;
+    playlistMock.getGroupsForPlaylist = () =>
+      ['Telenovelas', 'Teletienda', 'FR| Films', 'Cine Gaming', UNCATEGORIZED_GROUP];
+    playlistMock.groupsRevision++;
+    try {
+      setLocale('zh-CN');
+      list.render();
+      const icon = container.querySelector('[data-group="source:Cine Gaming"] .group-icon')?.innerHTML;
+      expect(icon).toBe(groupIcon('Cine Gaming', undefined, 'es'));
     } finally {
       setLocale('en');
       playlistMock.getGroupsForPlaylist = original;
