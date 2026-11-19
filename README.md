@@ -28,7 +28,7 @@
 
 | Playback overlays | Subtitles |
 | --- | --- |
-| ![Playback overlays](https://github.com/user-attachments/assets/08c81dd7-5811-4fe3-9ed0-3e766d7124f9) | ![Subtitles](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) |
+| ![Playback overlays](https://github.com/user-attachments/assets/212bb843-fe74-4cd3-be2a-c91d797bd170) | ![Subtitles](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) |
 
 | Subtitle search | Movies |
 | --- | --- |
@@ -36,7 +36,7 @@
 
 | Movie detail | Series detail |
 | --- | --- |
-| ![Movie detail](https://github.com/user-attachments/assets/b1acbc3c-47f7-4cd2-9fe6-f3b3aca03768) | ![Series detail](https://github.com/user-attachments/assets/2962184e-cc95-455d-aea7-888ff3297dc4) |
+| ![Movie detail](https://github.com/user-attachments/assets/34ede799-10cf-4066-a1f3-c251184e563c) | ![Series detail](https://github.com/user-attachments/assets/d3efcbf2-befb-46d4-8640-f9dd88dc5e91) |
 
 | Search | Settings |
 | --- | --- |
@@ -71,7 +71,7 @@
 - **Category filters, watched & hidden** — narrow a category by genre or by a search within it; a movie or episode is marked watched when it plays to the end, and you can mark a movie, a whole series, a season, or one episode (Green) by hand; hide a movie or series from browsing and find it again under Show: Hidden
 - **Continue Watching & Watchlist management** — remove individual titles, clear a whole list, or clear a movie's saved progress from its details page
 - **Automatic VOD queues** — continue through series episodes or remaining Watchlist movies, removing completed titles from the Watchlist; an Up Next card counts down to the next title, and the player menu jumps to the previous or next episode
-- **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams; M3U catch-up supports the `default`, `append`, `shift`, `archive`, `timeshift`, `vod` (XMLTV `catchup-id`), Flussonic, and Xtream (`xc`) formats
+- **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams; M3U catch-up supports the `default`, `append`, `shift`, `archive`, `timeshift`, `vod` (XMLTV `catchup-id`), Flussonic, and Xtream (`xc`) formats ([details](docs/catchup-formats.md))
 - **Seek-bar previews** — press or hold Left/Right to move a seek target in steps that grow while held, then seek once; the bubble shows a preview frame when the server publishes thumbnails (OTT Navigator `seek_preview`, Flussonic, Nimble, HLS/DASH image tracks) ([details](docs/seek-preview.md))
 - **Parental controls** — lock Live TV groups, movie and series categories, or individual titles with a PIN, with adult groups suggested for locking; locked content can stay listed with a lock or be hidden, and you choose when the PIN is asked again
 
@@ -92,7 +92,7 @@
 
 **Navigation**
 
-- **Search** — across channels, EPG programs, movies, and series, with direct live, catch-up, and reminder actions; recent searches drop down under the search box for one-press repeat searches; the search index is prebuilt in the background and cached, so Search is ready almost instantly
+- **Search** — across channels, EPG programs, movies, and series, listing the 100 best matches of each, with direct live, catch-up, and reminder actions; recent searches drop down under the search box for one-press repeat searches; the search index is prebuilt in the background and cached, so Search is ready almost instantly
 - **Channel sidebar** — switch channels over the video with current-program info, organized by group
 - **Channel customization** — reorder, hide, rename, regroup, manage favorites, and correct per-channel EPG matching or timing
 - **Auto-play and genre group icons** for faster browsing
@@ -313,6 +313,7 @@ some of the features above:
 - [`docs/hls-subtitles.md`](docs/hls-subtitles.md) — how live HLS subtitles are handled on webOS (in-manifest types and their render paths)
 - [`docs/mpeg-dash.md`](docs/mpeg-dash.md) — how DASH detection, native playback, subtitles, and live DVR work
 - [`docs/http-header-playback.md`](docs/http-header-playback.md) — how channels that need a Referer, User-Agent, Cookie, or Authorization play through the TV's media service or the local proxy
+- [`docs/catchup-formats.md`](docs/catchup-formats.md) — the M3U catch-up attributes and formats, and how each builds its archive URL
 - [`docs/seek-preview.md`](docs/seek-preview.md) — how the seek target and its acceleration work, and which servers' preview thumbnails are supported
 - [`docs/vod-subtitles.md`](docs/vod-subtitles.md) — how VOD (Xtream movies & episodes) subtitles work: in-container tracks plus sidecar SRT/WebVTT/ASS, and online subtitle search (SubDL, OpenSubtitles, Assrt)
 - [`docs/storage-and-data.md`](docs/storage-and-data.md) — what the app stores, where it lives, and how user data is separated from disposable caches

@@ -24,8 +24,10 @@
 //                      with the right-aligned download-count badge
 //   movies.png         Movies section — cinematic hero + content rails, with the
 //                      account-switcher dropdown open (picks the active Xtream account)
-//   movie-detail.png   Movie detail — plot/cast/rating + Resume / Play
-//   series-detail.png  Series detail — season selector + episode list
+//   movie-detail.png   Movie detail — plot/cast/rating + Resume / Play, and the
+//                      round actions with Add to Watchlist's name slid out
+//   series-detail.png  Series detail — season selector + episode list, with
+//                      a watched episode above a resumable one
 //   search.png         unified Search — Channels · Movies · Series results,
 //                      with the recent-searches dropdown over them
 //
@@ -208,6 +210,16 @@ const MASTER_HLS = [
   'video.m3u8',
 ].join('\n');
 
+// A variant ladder for the menu collage, so its Video Quality row shows.
+const MASTER_HLS_LADDER = MASTER_HLS.replace(/#EXT-X-STREAM-INF:.*\n[^\n]*$/, [
+  ['3840x2160', 16000000, 'video-2160.m3u8'],
+  ['1920x1080', 6000000, 'video-1080.m3u8'],
+  ['1280x720', 3000000, 'video-720.m3u8'],
+  ['854x480', 1500000, 'video-480.m3u8'],
+].map(([resolution, bandwidth, uri]) =>
+  `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution},` +
+  `CODECS="avc1.640028,mp4a.40.2",AUDIO="aud",SUBTITLES="sub"\n${uri}`).join('\n'));
+
 // Feature-rich variant for the channel-info OSD shot — 4K HDR Dolby Vision, Dolby
 // Digital+ Atmos (default audio gets CHANNELS="16/JOC"), 60fps.
 const MASTER_HLS_RICH = MASTER_HLS
@@ -225,13 +237,14 @@ const EMPTY_LIVE = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-
 
 // Subtitle cues — each carries its own positioning (the VTTCue props applyCueSettings
 // sets; line is a % → snapToLines:false) and a <c.class> color, so one frame shows
-// ::cue colors + positioning.
+// ::cue colors + positioning. The vertical cue's size keeps its box clear of the
+// bottom line, which would otherwise push the Default cue up.
 const SUBTITLE_CUES = [
   { text: '<c.cyan>Top center</c> · line:6%', line: 6, snapToLines: false, position: 50, align: 'center' },
-  { text: '<c.yellow>Left</c> · position:5% align:start', line: 32, snapToLines: false, position: 5, align: 'start' },
-  { text: '<c.green>Right</c> · position:95% align:end', line: 50, snapToLines: false, position: 95, align: 'end' },
-  { text: '<c.magenta>Narrow box</c> · size:38%', line: 70, snapToLines: false, position: 50, align: 'center', size: 38 },
-  { text: '<c.blue>竖排字幕</c>', vertical: 'rl', line: 12, snapToLines: false, position: 88 },
+  { text: '<c.yellow>Left</c> · position:2% align:start', line: 30, snapToLines: false, position: 2, align: 'start' },
+  { text: '<c.green>Right</c> · position:95% align:end', line: 47, snapToLines: false, position: 95, align: 'end' },
+  { text: '<c.magenta>Narrow box</c> · size:38%', line: 66, snapToLines: false, position: 50, align: 'center', size: 38 },
+  { text: '<c.blue>竖排字幕</c>', vertical: 'rl', line: 12, snapToLines: false, position: 69, size: 22 },
   { text: '<c.red>Default</c> — no settings (bottom center)' },
 ];
 
@@ -371,7 +384,13 @@ function playerApiJson(url) {
 const RESUME_SEED = {
   'demo-xtream|vod|100': { accountId: 'demo-xtream', kind: 'vod', itemId: '100', name: MOVIES[0].name, poster: poster(MOVIES[0].hue), ext: 'mp4', position: 1830, duration: 5400, updatedAt: NOW - 3 * HOUR },
   'demo-xtream|vod|101': { accountId: 'demo-xtream', kind: 'vod', itemId: '101', name: MOVIES[1].name, poster: poster(MOVIES[1].hue), ext: 'mp4', position: 900, duration: 6300, updatedAt: NOW - 26 * HOUR },
-  'demo-xtream|episode|50011': { accountId: 'demo-xtream', kind: 'episode', itemId: '50011', name: `${SERIESES[0].name} — S1E1`, poster: poster(SERIESES[0].hue), ext: 'mp4', position: 600, duration: 2700, updatedAt: NOW - 5 * HOUR },
+  'demo-xtream|episode|50012': { accountId: 'demo-xtream', kind: 'episode', itemId: '50012', name: `${SERIESES[0].name} — S1E2`, poster: poster(SERIESES[0].hue), ext: 'mp4', position: 600, duration: 2700, updatedAt: NOW - 5 * HOUR, season: 1, episode: 2, categoryId: SERIESES[0].category_id, watchlistOwner: { kind: 'series', itemId: SERIESES[0].series_id, name: SERIESES[0].name, poster: poster(SERIESES[0].hue) } },
+};
+
+// The episode before the resumed one is marked watched, so the series detail
+// shows a Watched badge and check mark above the Resume row.
+const MARK_SEED = {
+  'demo-xtream|episode|50011': { accountId: 'demo-xtream', kind: 'episode', itemId: '50011', watched: true, updatedAt: NOW - 24 * HOUR },
 };
 
 // ---------------------------------------------------------------------------
@@ -445,9 +464,9 @@ const REMINDER_MANAGER = [
 const CATCHUP_URL = `https://demo.local/stream/${CHANNELS[0].id}.m3u8`;
 const CATCHUP_PROGRESS = [
   // "The Garden Show" 20:00–21:00 — watched to the end.
-  { progStart: at(20), progEnd: at(21), position: 3600, duration: 3600, completed: true, updatedAt: NOW - 80 * 60_000 },
+  { progStart: at(20), progEnd: at(21), title: 'The Garden Show', position: 3600, duration: 3600, completed: true, updatedAt: NOW - 80 * 60_000 },
   // "The Evening Debate" 21:00–22:00 — ~25 min in (42%).
-  { progStart: at(21), progEnd: at(22), position: 1500, duration: 3600, completed: false, updatedAt: NOW - 40 * 60_000 },
+  { progStart: at(21), progEnd: at(22), title: 'The Evening Debate', position: 1500, duration: 3600, completed: false, updatedAt: NOW - 40 * 60_000 },
 ];
 
 function epgXml() {
@@ -698,7 +717,10 @@ async function setupPage(page, {
   // Seed a few resume points so the Movies/Series "Continue Watching" rails and
   // the detail "Resume" action render (Xtream shots only).
   if (xtream) {
-    await page.addInitScript((seed) => localStorage.setItem('iptv_resume', JSON.stringify(seed)), RESUME_SEED);
+    await page.addInitScript(({ resume, marks }) => {
+      localStorage.setItem('iptv_resume', JSON.stringify(resume));
+      localStorage.setItem('iptv_catalog_marks', JSON.stringify(marks));
+    }, { resume: RESUME_SEED, marks: MARK_SEED });
   }
 
   // Configure the online-subtitle providers (keys/creds so all three are enabled)
@@ -1210,6 +1232,8 @@ try {
   // 4) Playback overlays — grouped channel switcher (left) + action menu (right), no OSD.
   {
     const { context, page } = await newPage({ fakeStream: true, recently: true });
+    await page.route(/\/stream\/ch\d+\.m3u8(?:[?#]|$)/, fulfill(MASTER_HLS_LADDER, 'application/vnd.apple.mpegurl'));
+    await page.addInitScript(() => localStorage.setItem('iptv_video_quality', JSON.stringify('max2160')));
     await gotoChannels(page, base, { health: true });
     await page.keyboard.press('Enter');
     await page.locator('#player-osd .osd-programme-title').waitFor({ state: 'visible' });
@@ -1229,6 +1253,8 @@ try {
       '#player-menu .menu-item[data-menu-action="__subs_open__"] .menu-item-value',
       { hasText: 'English' },
     ).waitFor({ state: 'visible' });
+    await page.locator('#player-menu .menu-item[data-menu-action="__quality_open__"]')
+      .waitFor({ state: 'visible' });
     // Then open the sidebar; the menu's content persists and is forced back on below.
     await page.keyboard.press('ArrowLeft');  // hide menu...
     await page.keyboard.press('ArrowLeft');  // ...open the channel switcher
@@ -1463,6 +1489,7 @@ try {
 
   // 9) Movie detail — plot/cast/genre/duration + Resume / Play, opened from the
   //    first (Continue Watching) poster, which carries a seeded resume point.
+  //    Focus moves on to the first round action, so its name slides out.
   {
     const { context, page } = await newPage({ xtream: true });
     await gotoChannels(page, base);
@@ -1473,6 +1500,9 @@ try {
     await movieTile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
     await page.keyboard.press('Enter'); // open the focused movie's detail
     await page.locator('#view-movies .movies-detail .detail-plot').waitFor({ state: 'visible', timeout: 15_000 });
+    await page.keyboard.press('ArrowRight'); // Play from start
+    await page.keyboard.press('ArrowRight'); // Add to Watchlist
+    await page.locator('#view-movies .detail-icon-btn[data-key="watchlist"].focused').waitFor({ state: 'visible' });
     await page.waitForTimeout(600);
     await clearToasts(page);
     await shoot(page, 'movie-detail.png');

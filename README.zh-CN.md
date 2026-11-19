@@ -28,7 +28,7 @@
 
 | 播放浮层 | 字幕 |
 | --- | --- |
-| ![播放浮层](https://github.com/user-attachments/assets/08c81dd7-5811-4fe3-9ed0-3e766d7124f9) | ![字幕](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) |
+| ![播放浮层](https://github.com/user-attachments/assets/212bb843-fe74-4cd3-be2a-c91d797bd170) | ![字幕](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) |
 
 | 字幕搜索 | 电影 |
 | --- | --- |
@@ -36,7 +36,7 @@
 
 | 电影详情 | 剧集详情 |
 | --- | --- |
-| ![电影详情](https://github.com/user-attachments/assets/b1acbc3c-47f7-4cd2-9fe6-f3b3aca03768) | ![剧集详情](https://github.com/user-attachments/assets/2962184e-cc95-455d-aea7-888ff3297dc4) |
+| ![电影详情](https://github.com/user-attachments/assets/34ede799-10cf-4066-a1f3-c251184e563c) | ![剧集详情](https://github.com/user-attachments/assets/d3efcbf2-befb-46d4-8640-f9dd88dc5e91) |
 
 | 搜索 | 设置 |
 | --- | --- |
@@ -71,7 +71,7 @@
 - **分类筛选、已看和隐藏** — 可按类型筛选分类，或在分类中搜索；电影或分集播放到结尾后自动标记为已观看，也可以手动标记电影、整部剧、整季或单集（绿色键）；电影和剧集可从浏览中隐藏，在“显示：已隐藏”中找回
 - **管理“继续观看”和“稍后观看”** — 可逐个移除影片、清空整个列表，或在电影详情页清除观看进度
 - **视频点播自动连播队列** — 自动接续播放后续剧集或“稍后观看”中的电影，并在播放完成后将其移出列表；“即将播放”卡片会倒计时进入下一部，播放器菜单还可直接切换到上一集或下一集
-- **回看与直播时移** — 播放已播出的节目；观看直播时可暂停、回退或一键返回直播点；M3U 回看支持 `default`、`append`、`shift`、`archive`、`timeshift`、`vod`（XMLTV `catchup-id`）、Flussonic 及 Xtream（`xc`）格式
+- **回看与直播时移** — 播放已播出的节目；观看直播时可暂停、回退或一键返回直播点；M3U 回看支持 `default`、`append`、`shift`、`archive`、`timeshift`、`vod`（XMLTV `catchup-id`）、Flussonic 及 Xtream（`xc`）格式（[详情](docs/catchup-formats.md)）
 - **进度条预览** — 按下或按住左/右键移动跳转目标，按住越久步长越大，停止操作后一次性跳转；服务器提供缩略图时，气泡中会显示预览画面（支持 OTT Navigator `seek_preview`、Flussonic、Nimble 及 HLS/DASH 图像轨道）（[详情](docs/seek-preview.md)）
 - **家长控制** — 使用 PIN 锁定直播分组、电影和剧集分类或单个节目，并建议锁定疑似成人内容的分组；锁定的内容可带锁显示或隐藏，并可设置何时再次要求输入 PIN
 
@@ -92,7 +92,7 @@
 
 **导航**
 
-- **全局搜索** — 同时搜索频道、EPG 节目、电影和剧集，并可从搜索结果直接观看直播、播放回看或设置提醒；搜索框下方会列出最近搜索，一键即可再次搜索；搜索索引会在后台预先构建并缓存，打开搜索几乎无需等待
+- **全局搜索** — 同时搜索频道、EPG 节目、电影和剧集，每类列出最匹配的 100 项，并可从搜索结果直接观看直播、播放回看或设置提醒；搜索框下方会列出最近搜索，一键即可再次搜索；搜索索引会在后台预先构建并缓存，打开搜索几乎无需等待
 - **频道侧边栏** — 无需离开播放画面即可按分组切换频道，并查看当前节目信息
 - **频道自定义** — 支持调整顺序、隐藏、重命名、重新分组和管理收藏，还可修正各频道的 EPG 匹配及时间偏差
 - **自动播放与类型分组图标** — 让内容浏览更加快捷
@@ -313,6 +313,7 @@ mpegts.js 和 Shaka 播放相应格式的视频。
 - [`docs/hls-subtitles.md`](docs/hls-subtitles.md) — webOS 上的直播 HLS 字幕处理方式，包括清单内字幕格式及其渲染路径
 - [`docs/mpeg-dash.md`](docs/mpeg-dash.md) — DASH 格式检测、原生播放、字幕和直播 DVR 的实现
 - [`docs/http-header-playback.md`](docs/http-header-playback.md) — 需要 Referer、User-Agent、Cookie 或 Authorization 的频道如何通过电视的媒体服务或本地代理播放
+- [`docs/catchup-formats.md`](docs/catchup-formats.md) — M3U 回看的属性和格式，以及各格式如何生成回看地址
 - [`docs/seek-preview.md`](docs/seek-preview.md) — 跳转目标及其加速机制的实现，以及支持哪些服务器的预览缩略图
 - [`docs/vod-subtitles.md`](docs/vod-subtitles.md) — Xtream 电影与剧集的字幕实现，包括容器内字幕、外挂 SRT/WebVTT/ASS 字幕，以及 SubDL、OpenSubtitles 和 Assrt 在线搜索
 - [`docs/storage-and-data.md`](docs/storage-and-data.md) — 应用的数据存储范围与位置，以及用户数据和临时缓存的隔离方式
