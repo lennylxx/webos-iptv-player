@@ -578,7 +578,7 @@
 
 .osd-next-episode-actions button:first-child {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--accent-dim);
   color: #fff;
 }
 

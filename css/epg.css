@@ -518,9 +518,10 @@
 }
 
 .epg-date-item.selected {
-  background: var(--accent);
+  background: var(--accent-dim);
   color: #fff;
   border-top-color: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .epg-date-item.selected .epg-date-weekday {

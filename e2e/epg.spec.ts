@@ -8,6 +8,7 @@ import {
   routeLiveManifest,
   routePlaylist,
   seedPlaylist,
+  expectSelectionVisibleInEveryTheme,
 } from './helpers';
 
 // EPG guide: the LIVE badge and the day/time-zone handling. Both need a fixed
@@ -383,6 +384,16 @@ test.describe('EPG time zone', () => {
     await expect(page.locator('#epg-programmes .epg-prog-time').first()).toHaveText('00:30');
     // A program ending exactly at midnight must not create an empty 03/11 column.
     await expect(page.locator('#epg-dates .epg-date-item')).toHaveCount(2);
+  });
+
+  test('keeps the selected day distinct from the other days in every theme', async ({ page }) => {
+    await setup(page, 'feed');
+    await page.goto('/');
+    await liveLoaded(page);
+    await openEpg(page);
+    await expect(page.locator('#epg-dates .epg-date-item')).toHaveCount(2);
+    await expectSelectionVisibleInEveryTheme(page,
+      selectedDay(page), page.locator('#epg-dates .epg-date-item:not(.selected)'));
   });
 
   test('switching device → feed re-snaps the selected day to today', async ({ page }) => {

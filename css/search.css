@@ -130,7 +130,7 @@
 }
 .search-program-row.state-live .search-program-action {
   color: #fff;
-  background: var(--accent);
+  background: var(--accent-dim);
 }
 
 /* Recent searches: a translucent panel hung from the tab bar's empty search

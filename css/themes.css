@@ -26,7 +26,7 @@
   --text-secondary: #a0a0b0;
   --text-muted: #666680;
   --accent: #00d4ff;
-  --accent-dim: #0088aa;
+  --accent-dim: #007e9e;
   --catalog-sort-selected-bg: #007e9e;
   --accent-rgb: 0 212 255;
   --accent-glow: rgb(var(--accent-rgb) / 0.3);
@@ -70,7 +70,7 @@
   --text-secondary: #a8c2b5;
   --text-muted: #5f7a6d;
   --accent: #35e0c5;
-  --accent-dim: #1c9a86;
+  --accent-dim: #188372;
   --catalog-sort-selected-bg: #188372;
   --accent-rgb: 53 224 197;
   --accent-glow: rgb(var(--accent-rgb) / 0.3);
@@ -159,7 +159,7 @@
   --text-secondary: #d8dee9;
   --text-muted: #7b88a1;
   --accent: #88c0d0;
-  --accent-dim: #5e81ac;
+  --accent-dim: #56779e;
   --catalog-sort-selected-bg: #56779e;
   --accent-rgb: 136 192 208;
   --accent-glow: rgb(var(--accent-rgb) / 0.3);
@@ -203,7 +203,7 @@
   --text-secondary: #d5c4a1;
   --text-muted: #928374;
   --accent: #fe8019;
-  --accent-dim: #d65d0e;
+  --accent-dim: #c1540d;
   --catalog-sort-selected-bg: #c1540d;
   --accent-rgb: 254 128 25;
   --accent-glow: rgb(var(--accent-rgb) / 0.3);
@@ -339,7 +339,7 @@
   --text-secondary: #9da5b4;
   --text-muted: #5c6370;
   --accent: #61afef;
-  --accent-dim: #3e8ed0;
+  --accent-dim: #3579b1;
   --catalog-sort-selected-bg: #3579b1;
   --accent-rgb: 97 175 239;
   --accent-glow: rgb(var(--accent-rgb) / 0.3);
@@ -349,6 +349,52 @@
   --warning: #e5c07b;
   --warning-rgb: 229 192 123;
   --border: #3e4451;
+}
+
+/* OLED themes — true-black (#000) base for every pane, so unlit pixels stay
+   off; only cards and controls lift to near-black. */
+[data-theme="oled-pink"] {
+  --bg-primary: #000000;
+  --catalog-hero-scrim-rgb: 0 0 0;
+  --bg-secondary: #000000;
+  --bg-tertiary: #151515;
+  --bg-card: #1c1c1c;
+  --text-primary: #f8f8f2;
+  --text-secondary: #bfc3d6;
+  --text-muted: #6272a4;
+  --accent: #ff79c6;
+  --accent-dim: #bf185a;
+  --catalog-sort-selected-bg: var(--accent-dim);
+  --accent-rgb: 255 121 198;
+  --accent-glow: rgb(var(--accent-rgb) / 0.3);
+  --danger: #ff5555;
+  --danger-rgb: 255 85 85;
+  --success: #50fa7b;
+  --warning: #ffb86c;
+  --warning-rgb: 255 184 108;
+  --border: #2a2a2a;
+}
+
+[data-theme="oled-cyan"] {
+  --bg-primary: #000000;
+  --catalog-hero-scrim-rgb: 0 0 0;
+  --bg-secondary: #000000;
+  --bg-tertiary: #151515;
+  --bg-card: #1c1c1c;
+  --text-primary: #e8e8e8;
+  --text-secondary: #a0a0b0;
+  --text-muted: #666680;
+  --accent: #00d4ff;
+  --accent-dim: #007e9e;
+  --catalog-sort-selected-bg: #007e9e;
+  --accent-rgb: 0 212 255;
+  --accent-glow: rgb(var(--accent-rgb) / 0.3);
+  --danger: #ff4757;
+  --danger-rgb: 255 71 87;
+  --success: #2ed573;
+  --warning: #ffa502;
+  --warning-rgb: 255 165 2;
+  --border: #2a2a2a;
 }
 
 /* Scrollbars follow muted text on dark themes. Light themes use a softer
@@ -364,7 +410,9 @@
 [data-theme="pastel-mocha"],
 [data-theme="neon-night"],
 [data-theme="burgundy"],
-[data-theme="cobalt-slate"] {
+[data-theme="cobalt-slate"],
+[data-theme="oled-pink"],
+[data-theme="oled-cyan"] {
   --scrollbar-thumb: var(--text-muted);
 }
 
@@ -404,7 +452,9 @@
 [data-theme="pastel-latte"],
 [data-theme="paper-light"],
 [data-theme="burgundy"],
-[data-theme="cobalt-slate"] {
+[data-theme="cobalt-slate"],
+[data-theme="oled-pink"],
+[data-theme="oled-cyan"] {
   --catalog-surface: var(--bg-card);
   --catalog-control: var(--bg-tertiary);
   --catalog-focus: var(--accent);

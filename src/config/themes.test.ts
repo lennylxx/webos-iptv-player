@@ -51,6 +51,29 @@ describe('theme registry', () => {
   });
 });
 
+describe('theme contrast', () => {
+  const declared = (block: string, name: string): string | null => {
+    const m = new RegExp(`${name}:\\s*([^;]+);`).exec(block);
+    return m ? m[1].trim() : null;
+  };
+  const luminance = (hex: string): number => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+
+  it('keeps white text readable on the accent-dim fill of every theme and the unthemed root', () => {
+    const root = /:root\s*\{([^}]*)\}/.exec(mainCss)![1];
+    const blocks: Array<[string, string]> = [[':root', root], ...THEMES.map(t => [t.id, themeBlock(t.id)!] as [string, string])];
+    for (const [id, block] of blocks) {
+      const fill = declared(block, '--accent-dim')!;
+      expect(fill, `${id} --accent-dim`).toMatch(/^#[0-9a-f]{6}$/i);
+      const ratio = 1.05 / (luminance(fill) + 0.05);
+      expect(ratio, `${id} white on ${fill}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 describe('text size registry', () => {
   it('has a valid default and rejects unknown ids', () => {
     expect(isValidTextSize(DEFAULT_TEXT_SIZE)).toBe(true);

@@ -928,7 +928,7 @@
 }
 
 .toggle-option.active {
-  background: var(--accent);
+  background: var(--accent-dim);
   border-color: var(--accent);
   color: #fff;
   font-weight: 600;

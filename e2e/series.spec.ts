@@ -1,5 +1,6 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, liveLoaded, endHoldingUpNext } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, liveLoaded, endHoldingUpNext, expectSelectionVisibleInEveryTheme } from './helpers';
 import { seedXtream } from './fixtures/xtream';
+import { THEMES } from '../src/config/themes';
 
 // Seed one Xtream account (enables the tab bar) and stub the player_api.php
 // series calls + the get.php/xmltv.php the live path uses.
@@ -145,6 +146,50 @@ test('Down from Resume or a round action reaches the seasons, not the episodes p
   await expect(view.locator('[data-action="watchlist"]')).toHaveClass(/focused/);
   await page.keyboard.press('ArrowDown');
   await expect(season).toHaveCount(1);
+});
+
+test('keeps the selected season and an added round action distinct in every theme', async ({ page }) => {
+  await seedSeries(page);
+  await page.route('**/player_api.php*action=get_series_info*', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({
+      episodes: {
+        '1': [{ id: 10, title: 'Episode One', season: 1, episode_num: 1, container_extension: 'mp4', info: { duration_secs: 1500 } }],
+        '2': [{ id: 20, title: 'Episode Two', season: 2, episode_num: 1, container_extension: 'mp4', info: { duration_secs: 1500 } }],
+      },
+    }),
+  }));
+  await page.goto('/');
+  await enterTab(page, 'series');
+  const view = page.locator('#view-series');
+  const tile = view.locator('.catalog-tile[data-item-id="1"]').first();
+  await tile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await expect(view.locator('[data-season="2"]')).toBeVisible();
+  const watchlist = view.locator('.detail-icon-btn[data-key="watchlist"]');
+  await watchlist.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await expect(watchlist).toHaveClass(/\bon\b/);
+  // Move focus off both controls so only their selected styling is measured.
+  await view.locator('.episode-row').first().evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await expect(watchlist).not.toHaveClass(/focused/);
+
+  await expectSelectionVisibleInEveryTheme(page,
+    view.locator('.series-season-btn.active'), view.locator('.series-season-btn:not(.active)').first());
+  await expectSelectionVisibleInEveryTheme(page,
+    watchlist.locator('.detail-icon-circle'),
+    view.locator('.detail-icon-btn:not(.on):not(.danger) .detail-icon-circle').first());
+
+  // A focused season must not take the selected season's accent border.
+  const active = view.locator('.series-season-btn.active');
+  const other = view.locator('.series-season-btn:not(.active)').first();
+  await other.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await expect(other).toHaveClass(/focused/);
+  for (const theme of THEMES) {
+    await page.evaluate((id) => { document.documentElement.dataset.theme = id; }, theme.id);
+    const border = (el: Element): string => getComputedStyle(el).borderTopColor;
+    expect(await other.evaluate(border), `focused season border in ${theme.id}`)
+      .not.toBe(await active.evaluate(border));
+  }
 });
 
 test('the season mark\'s name opens whole beside many seasons, its row wrapping instead', async ({ page }) => {

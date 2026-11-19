@@ -1,6 +1,7 @@
 import { appendFileSync } from 'node:fs';
-import { test as base, expect, type Page } from '@playwright/test';
+import { test as base, expect, type Locator, type Page } from '@playwright/test';
 import { postTargetApis, removeApis } from '../scripts/chromium-53-simulation.mjs';
+import { THEMES } from '../src/config/themes';
 
 export { expect, type Page };
 
@@ -360,4 +361,42 @@ export const isChromium53 = (): boolean => test.info().project.name === 'chromiu
 export async function liveLoaded(page: Page): Promise<void> {
   await expect(page.locator('#view-channels')).toBeVisible();
   await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
+}
+
+// A selected control's fill, border, or inset ring must stand 3:1 apart from
+// an unselected sibling's fill in every theme, or selection is lost at 10 feet.
+// Transitions are off so each theme is read once, never mid-fade from the last.
+export async function expectSelectionVisibleInEveryTheme(
+  page: Page, selected: Locator, unselected: Locator,
+): Promise<void> {
+  await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' });
+  const other = await unselected.elementHandle();
+  for (const theme of THEMES) {
+    await page.evaluate((id) => { document.documentElement.dataset.theme = id; }, theme.id);
+    const ratio = await selected.evaluate((el, rest) => {
+      // Translucent glows and tints are skipped: only solid colors are a cue.
+      const parse = (text: string): number[][] => (text.match(/rgba?\([^)]*\)/g) ?? [])
+        .map((c) => c.match(/[\d.]+/g)!.map(Number))
+        .filter((c) => c.length < 4 || c[3] >= 1);
+      const luminance = ([r, g, b]: number[]): number => [r, g, b]
+        .map((v) => v / 255)
+        .map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+        .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const contrast = (a: number[], b: number[]): number => {
+        const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+        return (hi + 0.05) / (lo + 0.05);
+      };
+      const style = getComputedStyle(el);
+      const base = parse(getComputedStyle(rest as Element).backgroundColor)[0];
+      const cues = [
+        ...parse(style.backgroundColor),
+        ...(['Top', 'Right', 'Bottom', 'Left'] as const)
+          .filter((side) => parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0)
+          .flatMap((side) => parse(style.getPropertyValue(`border-${side.toLowerCase()}-color`))),
+        ...parse(style.boxShadow),
+      ];
+      return Math.max(...cues.map((cue) => contrast(cue, base)));
+    }, other);
+    expect(ratio, `selection contrast in ${theme.id}`).toBeGreaterThanOrEqual(3);
+  }
 }

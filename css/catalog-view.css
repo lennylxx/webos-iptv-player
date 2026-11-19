@@ -205,7 +205,7 @@
   background: var(--catalog-control); color: var(--text-primary); font-size: 24px; font-weight: 600;
   white-space: nowrap; cursor: pointer;
 }
-.detail-btn-primary { background: var(--accent, #3ea6ff); color: #fff; }
+.detail-btn-primary { background: var(--accent-dim); color: #fff; }
 .detail-btn-danger { color: var(--danger); }
 .detail-btn.focused { border-color: var(--text-primary); }
 .detail-btn-icon { display: inline-flex; width: 28px; height: 28px; flex: 0 0 auto; }
@@ -246,12 +246,12 @@ button.detail-icon-btn.focused { box-shadow: none; }
 }
 .detail-icon-circle svg { width: 28px; height: 28px; }
 /* On reads like an episode's watched mark: a white glyph on an accent circle. */
-.detail-icon-btn.on .detail-icon-circle { background: var(--accent); color: #fff; }
+.detail-icon-btn.on .detail-icon-circle { border-color: var(--accent); background: var(--accent-dim); color: #fff; }
 .detail-icon-btn.focused .detail-icon-circle {
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px var(--accent-glow);
 }
-/* The ring's accent would vanish into an on circle's accent fill. */
+/* The ring's accent would vanish into an on circle's accent border. */
 .detail-icon-btn.on.focused .detail-icon-circle { border-color: var(--text-primary); }
 .detail-icon-label {
   flex: 0 1 auto; min-width: 0; width: 0; overflow: hidden; white-space: nowrap;
@@ -286,8 +286,9 @@ button.detail-icon-btn.focused { box-shadow: none; }
   padding: 12px 28px; border-radius: 10px; border: 3px solid transparent;
   background: var(--catalog-control); color: var(--text-primary); font-size: 26px; font-weight: 600; cursor: pointer;
 }
-.series-season-btn.active { background: var(--accent, #3ea6ff); color: #fff; }
-.series-season-btn.focused { border-color: var(--text-primary); }
+.series-season-btn.active { border-color: var(--accent); background: var(--accent-dim); color: #fff; }
+/* Beat the global accent ring, which would match the selected season's border. */
+.series-season-btn.focused { border-color: var(--text-primary) !important; }
 
 .series-episodes { position: relative; overflow-anchor: none; }
 .series-episodes-spacer { position: relative; width: 100%; }
@@ -302,7 +303,7 @@ button.detail-icon-btn.focused { box-shadow: none; }
 /* Watched reads like a title's watched badge: a white check on an accent circle. */
 .episode-mark.watched svg {
   box-sizing: border-box; width: 44px; height: 44px; padding: 9px;
-  border-radius: 50%; background: var(--accent); color: #fff;
+  border-radius: 50%; background: var(--accent-dim); color: #fff;
 }
 .episode-mark.focused { border-color: var(--accent, #3ea6ff); }
 .episode-row {
@@ -320,7 +321,7 @@ button.detail-icon-btn.focused { box-shadow: none; }
 .episode-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .episode-resume {
   font-size: 20px; font-weight: 600; color: #fff;
-  background: var(--accent, #3ea6ff); border-radius: 6px; padding: 2px 12px;
+  background: var(--accent-dim); border-radius: 6px; padding: 2px 12px;
 }
 .episode-meta { font-size: 22px; color: var(--text-secondary); margin-top: 6px; }
 .episode-plot {
@@ -413,7 +414,7 @@ button.detail-icon-btn.focused { box-shadow: none; }
   padding: 8px;
   box-sizing: border-box;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--accent-dim);
   color: #fff;
 }
 .catalog-watched-badge svg { display: block; width: 100%; height: 100%; }

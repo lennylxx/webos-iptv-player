@@ -715,7 +715,7 @@ test.describe('Settings navigation', () => {
     }
   });
 
-  test('lays out the 15 theme swatches across three full rows', async ({ page }) => {
+  test('lays out the 17 theme swatches five per row', async ({ page }) => {
     await page.goto('/');
     await page.locator('[data-settings-target="appearance"]').click();
 
@@ -728,7 +728,7 @@ test.describe('Settings navigation', () => {
       return Array.from(rows.values());
     });
 
-    expect(rowCounts).toEqual([5, 5, 5]);
+    expect(rowCounts).toEqual([5, 5, 5, 2]);
   });
 
   test('selects and saves Local proxy for HTTP headers', async ({ page }) => {

@@ -1122,7 +1122,7 @@ describe('Settings theme picker', () => {
   beforeEach(() => settings.render());
 
   it('renders a swatch per registered theme with the saved theme active', () => {
-    expect(container.querySelectorAll('.theme-swatch')).toHaveLength(15);
+    expect(container.querySelectorAll('.theme-swatch')).toHaveLength(17);
     expect(container.querySelector('.theme-swatch.active')!.getAttribute('data-theme-id')).toBe('midnight');
   });
 
