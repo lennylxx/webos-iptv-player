@@ -230,11 +230,10 @@ export const CONFIG = {
     PREWARM_READ_TIMEOUT_MS: 10_000,
     // Latest the background index build waits for an idle period.
     PREWARM_IDLE_TIMEOUT_MS: 5000,
-    INITIAL_RESULTS: 200,       // first ranked results published per group
-    EXPANSION_FACTOR: 5,        // grow retained results near a virtual window boundary
-    RESULT_CAP: 50_000,         // final per-group cap after progressive expansion
-    DELIVERED_KEEP_FACTOR: 4,   // record items kept per shown result before a new epoch
-    DELIVERED_KEEP_MIN: 2_000,  // record items always kept per group
+    RESULTS: 100,               // ranked results shown per group
+    // Fuzzy matches join a group's ranking while it has fewer direct matches.
+    FUZZY_FILL: 200,
+    DELIVERED_KEEP: 2_000,      // record items kept per group before a new epoch
     HISTORY_MAX_ENTRIES: 10,    // recent searches kept
   },
 

@@ -98,7 +98,7 @@ test('M3U channel results retain visible space above matching programmes', async
   await enterSearch(page);
   await page.locator('.tab-bar-search-input').fill('one');
 
-  const channel = page.locator('#view-search .search-channel-row').first();
+  const channel = page.locator('#view-search .search-channel-tile').first();
   const programme = page.locator('#view-search .search-program-row').first();
   await expect(channel).toContainText('Channel One');
   await expect(programme).toContainText('Programme One');
@@ -109,6 +109,82 @@ test('M3U channel results retain visible space above matching programmes', async
     return channelBox.height >= 80
       && channelBox.y + channelBox.height <= programmeBox.y;
   }).toBe(true);
+});
+
+test('M3U-only results show channels as a rail, one Down above the programs', async ({ page }) => {
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const stop = new Date(start.getTime() + 60 * 60 * 1000);
+  const lines = ['#EXTM3U'];
+  for (let i = 1; i <= 40; i++) lines.push(`#EXTINF:-1 tvg-id="c${i}",Show ${i}`, `http://host/${i}.m3u8`);
+  const programmes = [1, 2, 3].map(i => `
+    <channel id="c${i}"><display-name>Show ${i}</display-name></channel>
+    <programme channel="c${i}" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+      <title>Show Hour ${i}</title>
+    </programme>`).join('');
+  await page.route('**/playlist.m3u', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: lines.join('\n') }));
+  await page.route('**/guide.xml', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/xml', body: `<tv>${programmes}</tv>` }));
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([
+      { id: 'p1', name: 'P', url: 'http://host/playlist.m3u' },
+    ]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/guide.xml', playlistIds: [] }]));
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('show');
+
+  const tiles = page.locator('#view-search .search-channel-rail .search-channel-tile');
+  await expect(page.locator('#view-search .search-program-row').first()).toBeVisible();
+  await expect.poll(() => tiles.count()).toBeGreaterThan(3);
+  const boxes = await tiles.evaluateAll(els => els.slice(0, 4).map((el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top };
+  }));
+  expect(new Set(boxes.map(b => b.y)).size).toBe(1);
+  for (let i = 1; i < boxes.length; i++) expect(boxes[i].x).toBeGreaterThan(boxes[i - 1].x);
+
+  await input.press('ArrowDown');
+  const focused = page.locator('#view-search .focused');
+  await expect(focused).toHaveCount(1);
+  await expect(focused).toHaveClass(/\bsearch-channel-tile\b/);
+  await page.keyboard.press('ArrowDown');
+  await expect(focused).toHaveCount(1);
+  await expect(focused).toHaveClass(/\bsearch-program-row\b/);
+});
+
+test('a query matching over 100 channels shows 100, and Right stops at the last', async ({ page }) => {
+  const lines = ['#EXTM3U'];
+  for (let i = 1; i <= 120; i++) lines.push(`#EXTINF:-1,Show ${i}`, `http://host/${i}.m3u8`);
+  await page.route('**/playlist.m3u', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: lines.join('\n') }));
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([
+      { id: 'p1', name: 'P', url: 'http://host/playlist.m3u' },
+    ]));
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('show');
+  const rail = page.locator('#view-search [data-search-virtual="channels-rail"]');
+  await expect(rail.locator('.search-virtual-rail-spacer')).toHaveAttribute('style', /width:\s*24000px/);
+
+  await input.press('ArrowDown');
+  const focusedIndex = () => page.locator('#view-search .focused').evaluate(el =>
+    el.closest<HTMLElement>('[data-search-index]')?.dataset.searchIndex);
+  await expect.poll(focusedIndex).toBe('0');
+  for (let i = 0; i < 99; i++) await page.keyboard.press('ArrowRight');
+  await expect.poll(focusedIndex).toBe('99');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(focusedIndex).toBe('99');
+  await expect(page.locator('#view-search .focused')).toHaveCount(1);
+  await expect(rail.locator('.search-virtual-rail-spacer')).toHaveAttribute('style', /width:\s*24000px/);
 });
 
 test('unified search matches channels, movies, and series; a channel result plays', async ({ page }) => {
@@ -536,6 +612,28 @@ test('a long clear label at the largest text size widens recent searches to fit'
   expect(clearBox!.x + clearBox!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width);
 });
 
+test('Right after the pointer hid the ring in recent searches shows it, not the clear button', async ({ page }) => {
+  await seedSearch(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_search_history', JSON.stringify(['one', 'Movie', 'abc']));
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+
+  const dropdown = page.locator('.search-history-dropdown');
+  const first = dropdown.locator('.search-history-tile').first();
+  await page.locator('.tab-bar-search-input').press('ArrowDown');
+  await expect(first).toHaveClass(/\bfocused\b/);
+  // Onto the tile, then off it inside the panel: the ring hides.
+  await first.hover();
+  await dropdown.locator('.search-history-title').hover();
+  await expect(first).not.toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowRight');
+  await expect(first).toHaveClass(/\bfocused\b/);
+  await expect(dropdown.locator('.search-history-clear')).not.toHaveClass(/\bfocused\b/);
+});
+
 // Regression: Back from a recent search or a result used to jump to Live.
 test('Back steps from recent searches and results to the box, then to the view search opened over', async ({ page }) => {
   await seedSearch(page);
@@ -741,8 +839,10 @@ test('Down from the box after Up rings a result at once, and one Right moves', a
   await liveLoaded(page);
   await enterSearch(page);
   const input = page.locator('.tab-bar-search-input');
-  await input.fill('one');
-  await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toContainText('Movie One');
+  // Two channel tiles, so Right has a neighbor on the line.
+  await input.fill('channel');
+  await expect(page.locator('#view-search .search-channel-tile')).toHaveCount(2);
+  await expect(page.locator('#view-search .search-view')).toHaveAttribute('data-search-partial', 'false');
   await input.press('ArrowDown');
   const focused = page.locator('#view-search .focused');
   await expect(focused).toHaveCount(1);
@@ -761,4 +861,67 @@ test('Down from the box after Up rings a result at once, and one Right moves', a
   await page.keyboard.press('ArrowRight');
   await expect(focused).toHaveCount(1);
   await expect(focused).not.toHaveAttribute('data-key', first ?? '');
+});
+
+test('Left and Right keep a program result on its line, past the channel tiles above', async ({ page }) => {
+  await seedSearch(page);
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const stop = new Date(start.getTime() + 60 * 60 * 1000);
+  const lines = ['#EXTM3U'];
+  for (let i = 1; i <= 8; i++) lines.push(`#EXTINF:-1 tvg-id="c${i}" group-title="News",One ${i}`, `http://host/${i}.m3u8`);
+  await page.route('**/get.php*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: lines.join('\n') }));
+  await page.route('**/xmltv.php*', (route) => route.fulfill({ status: 200, contentType: 'application/xml', body: `<tv>
+    <channel id="c1"><display-name>One 1</display-name></channel>
+    <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>One Show</title></programme>
+  </tv>` }));
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('one');
+  const row = page.locator('#view-search .search-program-row');
+  await expect(row).toContainText('One Show');
+  await expect(page.locator('#view-search .search-channel-tile')).toHaveCount(8);
+  await input.press('ArrowDown');
+  await row.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await expect(row).toHaveClass(/\bfocused\b/);
+
+  const focused = page.locator('#view-search .focused');
+  for (const key of ['ArrowLeft', 'ArrowRight']) {
+    await page.keyboard.press(key);
+    await expect(focused).toHaveCount(1);
+    await expect(row).toHaveClass(/\bfocused\b/);
+  }
+});
+
+test('Left and Right keep a recent search on its line', async ({ page }) => {
+  await seedSearch(page);
+  const history = Array.from({ length: 10 }, (_, i) => `query number ${String(i + 1)} ${'x'.repeat(i % 3 * 6)}`);
+  await page.addInitScript((list) => {
+    localStorage.setItem('iptv_search_history', JSON.stringify(list));
+  }, history);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  const tiles = page.locator('.search-history-dropdown .search-history-tile');
+  await expect(tiles).toHaveCount(10);
+  const tops = await tiles.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+  const lineStarts = tops.map((top, i) => (i > 0 && top !== tops[i - 1] ? i : -1)).filter((i) => i > 0);
+  // The tiles wrap onto at least three lines.
+  expect(lineStarts.length).toBeGreaterThanOrEqual(2);
+
+  await page.locator('.tab-bar-search-input').press('ArrowDown');
+  await expect(tiles.first()).toHaveClass(/\bfocused\b/);
+  const ringOn = async (i: number) => {
+    await tiles.nth(i).evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+    await expect(tiles.nth(i)).toHaveClass(/\bfocused\b/);
+  };
+  // The start of the second line, and the end of the second line.
+  await ringOn(lineStarts[0]);
+  await page.keyboard.press('ArrowLeft');
+  await expect(tiles.nth(lineStarts[0])).toHaveClass(/\bfocused\b/);
+  await ringOn(lineStarts[1] - 1);
+  await page.keyboard.press('ArrowRight');
+  await expect(tiles.nth(lineStarts[1] - 1)).toHaveClass(/\bfocused\b/);
 });

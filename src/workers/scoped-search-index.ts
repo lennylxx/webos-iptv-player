@@ -71,7 +71,7 @@ export class ScopedSearchIndex {
         request.query,
         state.index.index.length,
       );
-      return { indices: result.items, hasMore: result.hasMore };
+      return { indices: result.items };
     }
     const result = rankPreparedNamesTopK(
       state.index.index,
@@ -80,7 +80,6 @@ export class ScopedSearchIndex {
     );
     return {
       indices: result.items.map(item => item.index),
-      hasMore: result.hasMore,
     };
   }
 
@@ -143,7 +142,6 @@ export class ScopedSearchIndex {
     });
     return {
       indices: scored.map(item => item.index),
-      hasMore: false,
     };
   }
 

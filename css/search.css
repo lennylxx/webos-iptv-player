@@ -1,6 +1,6 @@
 /* Search results: a query box over Channels / Programs / Movies / Series.
    The poster rails reuse the shared catalog tile/poster visuals; these are the
-   search-only bits (the query box and the M3U vertical channel list). */
+   search-only bits (the query box, the program list, and the virtual rails). */
 .search-view {
   width: 1920px;
   height: 100%;
@@ -10,7 +10,7 @@
 }
 /* Rails bleed to both screen edges, posters resting on the left keyline;
    other results keep the view's margins. */
-.search-view:not(.search-lists) .catalog-rail-track {
+.search-view .catalog-rail-track {
   margin-left: -80px;
   margin-right: -80px;
   padding-left: 80px;
@@ -44,35 +44,6 @@
   overflow-anchor: none;
 }
 
-/* M3U-only results are one or two vertical lists that own the whole view, so
-   they share its height and bottom padding instead of stopping at the cap
-   above: a lone Channels list fills the screen, and with Programs alongside
-   it the two shrink in proportion to their contents. */
-.search-view.search-lists { padding-bottom: 0; }
-.search-lists .search-results {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-.search-lists .search-virtual-section {
-  display: flex;
-  flex-direction: column;
-  flex: 0 1 auto;
-  min-height: 0;
-}
-.search-lists .search-virtual-section:last-child { margin-bottom: 0; }
-.search-lists .search-virtual-scroll {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: none;
-}
-.search-lists-mixed .search-channels {
-  flex-shrink: 0;
-  max-height: 462px;
-}
-.search-lists-mixed .search-channels .search-virtual-scroll {
-  max-height: 420px;
-}
 .search-virtual-list-spacer,
 .search-virtual-rail-spacer {
   position: relative;
@@ -101,48 +72,6 @@
    box and contain the logo so it isn't cropped. */
 .search-channel-tile .catalog-poster-wrap { height: 124px; }
 .search-channel-tile .catalog-poster { object-fit: contain; }
-
-/* M3U-only Search: a vertical list of channel rows (Xtream uses the poster
-   rails above). */
-.search-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.search-channels { margin-bottom: 28px; }
-.search-channel-row {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  padding: 12px 20px;
-  border: 2px solid transparent;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.search-channel-row.focused {
-  background: var(--bg-tertiary);
-  border-color: var(--focus-ring);
-}
-.search-row-logo {
-  width: 84px;
-  height: 52px;
-  object-fit: contain;
-  flex: none;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 4px;
-}
-.search-row-logo-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 26px;
-  font-weight: 700;
-  color: var(--text-secondary);
-}
-.search-row-name {
-  font-size: 30px;
-  color: var(--text-primary);
-}
 
 .search-programs { margin: 0 0 28px; }
 .search-program-list {

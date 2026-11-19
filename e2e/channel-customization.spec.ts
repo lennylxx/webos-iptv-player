@@ -275,7 +275,7 @@ test('leaving edit mode through the tab bar keeps hidden channels out of Search'
   await enterTab(page, 'search');
   await page.locator('.tab-bar-search-input').fill('Beta News');
 
-  await expect(page.locator('.search-channel-row')).toHaveCount(0);
+  await expect(page.locator('.search-channel-tile')).toHaveCount(0);
   await expect(page.locator('.edit-hints')).toHaveCount(0);
 });
 

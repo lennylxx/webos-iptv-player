@@ -658,7 +658,7 @@ describe('SearchWorkerIndex with catalog records', () => {
       .toBeUndefined();
 
     const first = await index.query({ ...query(1, 'alpha'), limit: 1 });
-    expect(first?.movies).toEqual({ indices: [0], hasMore: true });
+    expect(first?.movies).toEqual({ indices: [0] });
     expect(first?.items).toEqual({ epoch: 1, movies: [[0, items[0]]], series: [] });
 
     const more = await index.query({ ...query(1, 'alpha'), delivered: { epoch: 1, movies: 1, series: 0 } });

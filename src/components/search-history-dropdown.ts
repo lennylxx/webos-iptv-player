@@ -1,5 +1,5 @@
 import type { Action } from '../types';
-import { SpatialNav } from '../navigation/spatial-nav';
+import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
@@ -126,6 +126,9 @@ export class SearchHistoryDropdown {
       else this.focusFirst();
       return;
     }
+    // A key after the pointer hid the ring only shows it again: Right must
+    // not read that as the row's end and land on the clear button.
+    if (isFocusMove(action) && this.nav.showConcealed()) return;
     switch (action) {
       // Tiles go straight back to the box, past the clear button, so Up then
       // OK can't wipe the history by accident; Right reaches it.
@@ -134,7 +137,8 @@ export class SearchHistoryDropdown {
             || this.nav.focused?.hasAttribute('data-history-clear')) this.returnToInput();
         return;
       case 'right':
-        if (!this.nav.move('right') && this.inTopRow(this.nav.focused)) {
+        this.nav.move('right');
+        if (this.nav.focused === focused && this.inTopRow(focused)) {
           this.nav.focus(this.root.querySelector<HTMLElement>('[data-history-clear]'));
         }
         return;
@@ -224,7 +228,8 @@ export class SearchHistoryDropdown {
           <div class="search-history-clear" data-focusable data-key="history-clear"
                data-history-clear>${raw(TRASH_ICON)}<span>${t('search.clearHistory')}</span></div>
         </div>
-        <div class="search-history-tiles">
+        <div class="search-history-tiles" data-nav-container data-nav-straight
+             data-nav-leave-left="" data-nav-leave-right="">
           ${history.map(query => html`
             <div class="search-history-tile" data-focusable data-key="history:${query}"
                  data-history-query="${query}">${query}</div>

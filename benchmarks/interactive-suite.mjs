@@ -603,7 +603,7 @@ export function installInteractiveProbe(config) {
       && view.getAttribute('data-search-query') === query
       && view.getAttribute('data-search-pending') === 'false';
   };
-  const SEARCH_RESULTS = '.catalog-tile, .search-channel-row, .search-channel-tile, .search-program-row';
+  const SEARCH_RESULTS = '.catalog-tile, .search-channel-tile, .search-program-row';
   const typeQuery = async (name, query, ready) => {
     await nextTask();
     const input = document.querySelector('.tab-bar-search-input');
@@ -734,7 +734,7 @@ export function installInteractiveProbe(config) {
       && searchView().getAttribute('data-search-partial') === 'false');
     probe.hits = {
       channels: document.querySelectorAll(
-        '#view-search .search-channel-row, #view-search .search-channel-tile',
+        '#view-search .search-channel-tile',
       ).length,
       movies: document.querySelectorAll('#view-search [data-search-virtual="movies"] .catalog-tile').length,
       series: document.querySelectorAll('#view-search [data-search-virtual="series"] .catalog-tile').length,

@@ -695,8 +695,7 @@ function rankedFields(
   query: string,
   limit: number,
 ): SearchRankedIndices {
-  const result = rankPreparedTopK(index, query, limit);
-  return { indices: result.items, hasMore: result.hasMore };
+  return { indices: rankPreparedTopK(index, query, limit, CONFIG.SEARCH.FUZZY_FILL).items };
 }
 
 function rankedNames(
@@ -704,8 +703,7 @@ function rankedNames(
   query: string,
   limit: number,
 ): SearchRankedIndices {
-  const result = rankPreparedNamesTopK(index, query, limit);
-  return { indices: result.items, hasMore: result.hasMore };
+  return { indices: rankPreparedNamesTopK(index, query, limit).items };
 }
 
 function emptyNames(): PreparedNameSearchIndex<number> {
@@ -713,5 +711,5 @@ function emptyNames(): PreparedNameSearchIndex<number> {
 }
 
 function emptyResult(): SearchRankedIndices {
-  return { indices: [], hasMore: false };
+  return { indices: [] };
 }

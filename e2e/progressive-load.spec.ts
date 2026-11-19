@@ -800,7 +800,7 @@ test('a Search opened while the channels arrive finds the ones that came after i
     await expect(page.locator('#view-search')).toBeVisible();
     await expect(page.locator('.search-results')).not.toContainText('Channel 5999');
     // More channels are on their way, so the results say they are not final.
-    await expect(page.locator('.search-results .search-channel-row, .search-results .search-channel-tile').first()).toBeVisible();
+    await expect(page.locator('.search-results .search-channel-tile').first()).toBeVisible();
     await expect(page.locator('.search-loading-more')).toBeVisible();
     await expect(page.locator('#view-search .search-view')).toHaveAttribute('data-search-partial', 'true');
 

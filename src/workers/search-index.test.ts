@@ -53,10 +53,10 @@ describe('SearchWorkerIndex', () => {
       limit: 10,
       includeCatalog: true,
     })).toEqual({
-      channels: { indices: [1, 0], hasMore: false },
-      programmes: { indices: [1], hasMore: false },
-      movies: { indices: [1, 0], hasMore: false },
-      series: { indices: [1, 0], hasMore: false },
+      channels: { indices: [1, 0] },
+      programmes: { indices: [1] },
+      movies: { indices: [1, 0] },
+      series: { indices: [1, 0] },
     });
   });
 
@@ -79,7 +79,7 @@ describe('SearchWorkerIndex', () => {
     })?.channels.indices).toEqual([0]);
   });
 
-  it('caps results and reports additional matches', () => {
+  it('caps results at the limit', () => {
     const index = new SearchWorkerIndex();
     post(index, 1, { movies: ['Alpha 1', 'Alpha 2', 'Alpha 3'] });
 
@@ -88,7 +88,18 @@ describe('SearchWorkerIndex', () => {
       query: 'alpha',
       limit: 2,
       includeCatalog: true,
-    })?.movies).toEqual({ indices: [0, 1], hasMore: true });
+    })?.movies).toEqual({ indices: [0, 1] });
+  });
+
+  it('ranks a close fuzzy match above direct ones buried in long titles', () => {
+    // More direct matches than the limit, fewer than the fuzzy fill.
+    const buried = Array.from({ length: 150 }, () => [`${'x'.repeat(900)} alpha`, 'Drama']);
+    const index = new SearchWorkerIndex();
+    post(index, 1, { channels: [...buried, ['Alhpa', 'Drama']], programmes: [...buried, ['Alhpa', 'Drama']] });
+
+    const response = query(index, { sessionId: 1, query: 'alpha', limit: 100, includeCatalog: false });
+    expect(response?.channels.indices).toContain(150);
+    expect(response?.programmes.indices).toContain(150);
   });
 
   it('assembles a source from ordered chunks and serves it only once complete', () => {

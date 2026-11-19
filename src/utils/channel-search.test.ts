@@ -157,7 +157,17 @@ describe('rankByFields', () => {
     const prepared = prepareSearchItems(items, item => [item.title]);
     const result = rankPreparedTopK(prepared, 'alpha', 2);
     expect(result.items).toEqual(items.slice(0, 2));
-    expect(result.hasMore).toBe(true);
+  });
+
+  it('ranks fuzzy matches while direct ones are fewer than the fuzzy fill', () => {
+    const items = [
+      { title: 'Alpha' },
+      { title: `${'x'.repeat(900)} alpha` },
+      { title: 'Alhpa' },
+    ];
+    const prepared = prepareSearchItems(items, item => [item.title]);
+    expect(rankPreparedTopK(prepared, 'alpha', 2, 3).items).toEqual([items[0], items[2]]);
+    expect(rankPreparedTopK(prepared, 'alpha', 3).items.slice(0, 2)).toEqual([items[0], items[2]]);
   });
 });
 

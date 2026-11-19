@@ -1492,65 +1492,33 @@ describe('Search', () => {
     expect(container.querySelector('.catalog-tile[data-series-id="s1"]')?.textContent).toContain('Series One');
   });
 
-  it('publishes a bounded first batch from 50,000 ranked results', async () => {
-    const initial = CONFIG.SEARCH.INITIAL_RESULTS;
-    const many = Array.from(
-      { length: CONFIG.SEARCH.RESULT_CAP + 5 },
-      (_, i) => vod(String(i), `Movie ${i}`),
-    );
-    const { view } = await openWith({ vod: many });
-    await view.setQuery('movie');
-    expect(initial).toBe(200);
-    expect(container.querySelectorAll('.catalog-tile[data-stream-id]').length).toBeLessThan(30);
-    expect(container.querySelector<HTMLElement>(
-      '[data-search-virtual="movies"] .search-virtual-rail-spacer',
-    )?.style.width).toBe(`${String(initial * 240)}px`);
-  });
-
-  it('expands the ranked batch near the virtual rail boundary', async () => {
-    const many = Array.from(
-      { length: 2_000 },
-      (_, i) => vod(String(i), `Movie ${i}`),
-    );
-    const { view } = await openWith({ vod: many });
-    await view.setQuery('movie');
-    const rail = container.querySelector<HTMLElement>('[data-search-virtual="movies"]')!;
-    rail.scrollLeft = CONFIG.SEARCH.INITIAL_RESULTS * 240;
-    rail.dispatchEvent(new Event('scroll', { bubbles: true }));
-    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-    expect(container.querySelector<HTMLElement>(
-      '[data-search-virtual="movies"] .search-virtual-rail-spacer',
-    )?.style.width).toBe(
-      `${String(CONFIG.SEARCH.INITIAL_RESULTS
-        * CONFIG.SEARCH.EXPANSION_FACTOR * 240)}px`,
-    );
-  });
-
-  it('asks for one more batch at a time while scrolling past the rail boundary', async () => {
+  it('caps each group at its first results and asks for no more at the rail end', async () => {
     const many = Array.from({ length: 2_000 }, (_, i) => vod(String(i), `Movie ${i}`));
     const { view } = await openWith({ vod: many });
+    Focus.setBase(() => view.focusScope);
     await view.setQuery('movie');
-    const internals = view as unknown as {
-      startQuery(generation: number, preserveOffsets?: boolean): Promise<void>;
-      resultLimit: number;
-    };
-    let finish = (): void => {};
-    const start = vi.spyOn(internals, 'startQuery')
-      .mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+    const spacer = () => container.querySelector<HTMLElement>(
+      '[data-search-virtual="movies"] .search-virtual-rail-spacer',
+    );
+    expect(spacer()?.style.width).toBe(`${String(CONFIG.SEARCH.RESULTS * 240)}px`);
+    expect(container.querySelectorAll('.catalog-tile[data-stream-id]').length).toBeLessThan(30);
+
+    const start = vi.spyOn(view as unknown as { startQuery(generation: number): Promise<void> }, 'startQuery');
     const rail = container.querySelector<HTMLElement>('[data-search-virtual="movies"]')!;
-    for (let i = 0; i < 4; i++) {
-      rail.scrollLeft = CONFIG.SEARCH.INITIAL_RESULTS * 240 - 300 + i * 10;
-      rail.dispatchEvent(new Event('scroll', { bubbles: true }));
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-    }
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(internals.resultLimit).toBe(CONFIG.SEARCH.INITIAL_RESULTS * CONFIG.SEARCH.EXPANSION_FACTOR);
-    finish();
-    await Promise.resolve();
-    await Promise.resolve();
+    rail.scrollLeft = CONFIG.SEARCH.RESULTS * 240;
     rail.dispatchEvent(new Event('scroll', { bubbles: true }));
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-    expect(start).toHaveBeenCalledTimes(2);
+    const last = container.querySelector<HTMLElement>(
+      `[data-search-section="movies"][data-search-index="${String(CONFIG.SEARCH.RESULTS - 1)}"] [data-focusable]`,
+    )!;
+    (view as unknown as { nav: { focus(el: HTMLElement): void } }).nav.focus(last);
+    Focus.flush();
+    view.handleAction('right');
+    Focus.flush();
+    expect(start).not.toHaveBeenCalled();
+    expect(spacer()?.style.width).toBe(`${String(CONFIG.SEARCH.RESULTS * 240)}px`);
+    expect(container.querySelector('.focused')?.getAttribute('data-key'))
+      .toBe(`v:${String(CONFIG.SEARCH.RESULTS - 1)}`);
   });
 
   it('re-renders a scrolled virtual rail only when its window changes', async () => {
@@ -1619,10 +1587,10 @@ describe('Search', () => {
     const alpha = view.setQuery('alpha');
     await view.setQuery('bravo');
     resolveAlpha({
-      channels: { indices: [0], hasMore: false },
-      programmes: { indices: [], hasMore: false },
-      movies: { indices: [], hasMore: false },
-      series: { indices: [], hasMore: false },
+      channels: { indices: [0] },
+      programmes: { indices: [] },
+      movies: { indices: [] },
+      series: { indices: [] },
     });
     await alpha;
 
@@ -1716,7 +1684,7 @@ describe('Search', () => {
     vi.mocked(playlistMock.indexOf).mockImplementation(
       ((channel: unknown) => playlistMock.channels.indexOf(channel)) as () => number,
     );
-    const local = vi.fn((query: string) => ({ items: query === 'bravo' ? [bravo] : [alpha], hasMore: false }));
+    const local = vi.fn((query: string) => ({ items: query === 'bravo' ? [bravo] : [alpha] }));
     Object.assign(playlistMock, { searchLocalRanked: local });
     const { view } = await openWith();
     // The new worker is empty, so the query finds no index and rebuilds it.
@@ -1765,10 +1733,40 @@ describe('Search', () => {
     expect(container.textContent).not.toContain('Alpha');
   });
 
+  it('ranks a close fuzzy match above buried direct ones on the main thread too', async () => {
+    const later = (offset: number) => [Date.now() + offset * 3600000, Date.now() + (offset + 1) * 3600000] as const;
+    const buried = `${'x'.repeat(900)} alpha`;
+    // A programme's text includes its channel's name, so the channel must not
+    // match the query itself.
+    const bravo = chan('Bravo');
+    playlistMock.channels = [bravo];
+    const searchLocalRanked = vi.fn(() => ({ items: [bravo] }));
+    Object.assign(playlistMock, { searchLocalRanked });
+    // More direct matches than a group holds, fewer than the fuzzy fill. The
+    // list runs by start time, so the fuzzy match airs first.
+    epgMock.programmes = { Bravo: [prog('Alhpa', ...later(1)),
+      ...Array.from({ length: 150 }, (_, i) => prog(buried, ...later(i + 2)))] };
+    const { view } = await openWith();
+    workerMock.restart();
+    const originalRun = workerMock.run.getMockImplementation()!;
+    workerMock.run.mockImplementation(async () => { throw new Error('App worker failed'); });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await view.setQuery('alpha');
+      expect(searchLocalRanked).toHaveBeenCalledWith('alpha', CONFIG.SEARCH.RESULTS, undefined, CONFIG.SEARCH.FUZZY_FILL);
+      expect(container.querySelector('.search-program-row')?.textContent).toContain('Alhpa');
+    } finally {
+      workerMock.run.mockImplementation(originalRun);
+      Reflect.deleteProperty(playlistMock, 'searchLocalRanked');
+    }
+  });
+
   it('ranks on the main thread without rebuilding until the retry delay passes', async () => {
     const alpha = chan('Alpha');
     playlistMock.channels = [alpha];
-    Object.assign(playlistMock, { searchLocalRanked: vi.fn(() => ({ items: [alpha], hasMore: false })) });
+    Object.assign(playlistMock, { searchLocalRanked: vi.fn(() => ({ items: [alpha] })) });
     const { view } = await openWith();
     // The new worker is empty and fails every rebuild.
     workerMock.restart();
@@ -1831,7 +1829,7 @@ describe('Search', () => {
   it('rebuilds at once on a new worker that replaced the one a rebuild failed on', async () => {
     const alpha = chan('Alpha');
     playlistMock.channels = [alpha];
-    Object.assign(playlistMock, { searchLocalRanked: vi.fn(() => ({ items: [alpha], hasMore: false })) });
+    Object.assign(playlistMock, { searchLocalRanked: vi.fn(() => ({ items: [alpha] })) });
     const { view } = await openWith();
     workerMock.restart();
     const originalRun = workerMock.run.getMockImplementation()!;
@@ -2089,7 +2087,7 @@ describe('Search', () => {
       [CONFIG.SEARCH.INDEX_CHUNK_SIZE * 2, 5, total],
     ]);
     await view.setQuery(`channel ${total - 1}`);
-    expect(container.querySelector('.search-channel-row, [data-channel-index]')).not.toBeNull();
+    expect(container.querySelector('[data-channel-index]')).not.toBeNull();
   });
 
   it('re-indexes a stale catalog once its background refresh lands', async () => {
@@ -2932,36 +2930,38 @@ describe('Search (M3U-only, no account)', () => {
     expect(catalogMock.loadAllSeries).not.toHaveBeenCalled();
   });
 
-  it('renders channel results as a vertical list (no poster rails)', async () => {
+  it('renders channel results as the tile rail, with initials for a missing logo', async () => {
     playlistMock.channels = [chan('Alpha News'), chan('Beta News')];
     playlistMock.indexOf.mockImplementation((ch: { name: string }) => (ch.name === 'Alpha News' ? 0 : 1));
     const { view } = await openM3U();
     await view.setQuery('news');
-    expect(container.querySelectorAll('.search-channel-row').length).toBe(2);
-    expect(container.querySelector('.catalog-rail')).toBeNull();
-    expect(container.querySelector('.search-channels .catalog-rail-title')?.textContent).toBe('Channels');
-    const cells = container.querySelectorAll<HTMLElement>('.search-virtual-list-cell');
-    expect(cells[0].style.top).toBe('0px');
-    expect(cells[1].style.top).toBe('88px');
+    const rail = container.querySelector('.search-channel-rail');
+    expect(rail?.querySelectorAll('.search-channel-tile').length).toBe(2);
+    expect(rail?.closest('.catalog-rail')?.querySelector('.catalog-rail-title')?.textContent).toBe('Channels');
+    expect(Array.from(rail?.querySelectorAll('.catalog-poster-empty') ?? [], el => el.textContent).sort())
+      .toEqual(['A', 'B']);
+    const cells = container.querySelectorAll<HTMLElement>('.search-virtual-rail-cell');
+    expect(cells[0].style.left).toBe('0px');
+    expect(cells[1].style.left).toBe('240px');
   });
 
-  it('plays a channel row on select', async () => {
+  it('plays a channel tile on select', async () => {
     playlistMock.channels = [chan('Alpha News')];
     playlistMock.indexOf.mockReturnValue(3);
     const { view, handlers } = await openM3U();
     await view.setQuery('news');
-    const row = container.querySelector('.search-channel-row') as HTMLElement;
+    const row = container.querySelector('.search-channel-tile') as HTMLElement;
     row.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     view.handleAction('select');
     expect(handlers.onPlayChannel).toHaveBeenCalledWith(3);
   });
 
-  it('plays a channel row on a pointer click', async () => {
+  it('plays a channel tile on a pointer click', async () => {
     playlistMock.channels = [chan('Alpha News')];
     playlistMock.indexOf.mockReturnValue(5);
     const { handlers, view } = await openM3U();
     await view.setQuery('news');
-    const row = container.querySelector('.search-channel-row') as HTMLElement;
+    const row = container.querySelector('.search-channel-tile') as HTMLElement;
     const orig = document.elementFromPoint;
     document.elementFromPoint = () => row;
     container.dispatchEvent(new MouseEvent('click', { clientX: 100, clientY: 50, bubbles: true }));
@@ -3163,7 +3163,7 @@ describe('Search with worker-held catalog records', () => {
       if (task === 'search.query' || (task === 'search.index' && payload.reset)) throw new Error('App worker failed');
       return originalRun(task, payload);
     });
-    Object.assign(playlistMock, { searchLocalRanked: vi.fn(() => ({ items: [], hasMore: false })) });
+    Object.assign(playlistMock, { searchLocalRanked: vi.fn(() => ({ items: [] })) });
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -3180,8 +3180,8 @@ describe('Search with worker-held catalog records', () => {
   });
 
   it('starts a new epoch once superseded queries left many items behind', async () => {
-    const groups = 12;
-    const per = CONFIG.SEARCH.INITIAL_RESULTS;
+    const per = CONFIG.SEARCH.RESULTS;
+    const groups = CONFIG.SEARCH.DELIVERED_KEEP / per + 2;
     syncRecords(Array.from({ length: groups * per }, (_, i) => (
       vod(String(i), `Q${String.fromCharCode(97 + Math.floor(i / per))}z ${String(i)}`)
     )));
@@ -3192,7 +3192,7 @@ describe('Search with worker-held catalog records', () => {
     const reported = workerMock.run.mock.calls
       .filter(([task]) => task === 'search.query')
       .map(([, payload]) => (payload as { delivered?: { movies: number } }).delivered?.movies ?? 0);
-    expect(Math.max(...reported)).toBeLessThanOrEqual(CONFIG.SEARCH.DELIVERED_KEEP_MIN);
+    expect(Math.max(...reported)).toBeLessThanOrEqual(CONFIG.SEARCH.DELIVERED_KEEP);
     expect(reported).toContain(-1);
   });
 

@@ -126,8 +126,6 @@ html.q-no-flex-gap .reminder-day-cards > * + * { margin-top: 12px; }
 html.q-no-flex-gap .reminder-manager-time > * + * { margin-left: 10px; }
 html.q-no-flex-gap .reminder-manager-empty > * + * { margin-top: 12px; }
 html.q-no-flex-gap .tab-bar-inner > * + * { margin-left: 32px; }
-html.q-no-flex-gap .search-list > * + * { margin-top: 8px; }
-html.q-no-flex-gap .search-channel-row > * + * { margin-left: 24px; }
 html.q-no-flex-gap .search-program-list > * + * { margin-top: 8px; }
 html.q-no-flex-gap .search-program-row > * + * { margin-left: 24px; }
 html.q-no-flex-gap .catalog-rail-track > * + * { margin-left: 20px; }

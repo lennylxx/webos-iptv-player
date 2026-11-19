@@ -1095,7 +1095,7 @@ test('relocking drops hidden channels from open search results', async ({ page }
 
   await enterTab(page, 'search');
   await page.locator('.tab-bar-search-input').fill('channel');
-  const rows = page.locator('#view-search .search-channel-row');
+  const rows = page.locator('#view-search .search-channel-tile');
   await expect(rows.filter({ hasText: 'Channel One' })).toHaveCount(1);
   await expect(rows.filter({ hasText: 'Channel Two' })).toHaveCount(1);
 

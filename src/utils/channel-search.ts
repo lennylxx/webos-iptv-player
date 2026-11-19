@@ -115,7 +115,6 @@ export interface PreparedNameSearchIndex<T> {
 
 export interface RankedSearchResult<T> {
   items: T[];
-  hasMore: boolean;
 }
 
 interface ScoredSearchItem<T> {
@@ -277,37 +276,32 @@ export function rankPreparedTopK<T>(
   items: PreparedSearchItem<T>[],
   query: string,
   limit: number,
-  includeFuzzy = true,
+  fuzzyFill = limit,
 ): RankedSearchResult<T> {
   const q = fold(query.trim());
   const terms = queryTokens(query);
-  if (!q || !terms.length || limit <= 0) return { items: [], hasMore: false };
+  if (!q || !terms.length || limit <= 0) return { items: [] };
   const heap = new BoundedHeap<ScoredSearchItem<T>>(limit, compareScored);
-  const directMatches = includeFuzzy ? new Uint8Array(items.length) : null;
+  const directMatches = new Uint8Array(items.length);
   let matches = 0;
   for (let i = 0; i < items.length; i++) {
     const prepared = items[i];
     const score = directScore(prepared, q);
     if (score === null) continue;
-    if (directMatches) directMatches[i] = 1;
+    directMatches[i] = 1;
     matches++;
     heap.add({ item: prepared.item, score, idx: i });
   }
-  if (includeFuzzy && matches < limit) {
+  if (matches < fuzzyFill) {
     for (let i = 0; i < items.length; i++) {
       const prepared = items[i];
-      if (directMatches?.[i]) continue;
+      if (directMatches[i]) continue;
       const score = fuzzyScore(prepared, terms);
       if (score === null) continue;
-      matches++;
       heap.add({ item: prepared.item, score, idx: i });
     }
   }
-  return {
-    items: heap.sorted().map(value => value.item),
-    hasMore: matches > limit
-      || (includeFuzzy && matches >= limit && items.length > matches),
-  };
+  return { items: heap.sorted().map(value => value.item) };
 }
 
 export function rankPreparedNamesTopK<T>(
@@ -316,9 +310,8 @@ export function rankPreparedNamesTopK<T>(
   limit: number,
 ): RankedSearchResult<T> {
   const q = fold(query.trim());
-  if (!q || limit <= 0) return { items: [], hasMore: false };
+  if (!q || limit <= 0) return { items: [] };
   const heap = new BoundedHeap<ScoredNameItem<T>>(limit, compareNameScored);
-  let matches = 0;
   for (let i = 0; i < index.items.length; i++) {
     const value = index.values[i];
     const pos = value.indexOf(q);
@@ -328,7 +321,6 @@ export function rankPreparedNamesTopK<T>(
       : pos === 0
         ? 1
         : !isLetterOrNumber(value[pos - 1]) ? 2 : 3;
-    matches++;
     heap.add({
       item: index.items[i],
       tier,
@@ -337,10 +329,7 @@ export function rankPreparedNamesTopK<T>(
       idx: i,
     });
   }
-  return {
-    items: heap.sorted().map(value => value.item),
-    hasMore: matches > limit,
-  };
+  return { items: heap.sorted().map(value => value.item) };
 }
 
 export function rankPrepared<T>(items: PreparedSearchItem<T>[], query: string): T[] {

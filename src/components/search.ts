@@ -231,7 +231,6 @@ export class Search {
   private visibleMovies: VodItem[] = [];
   private visibleSeries: SeriesItem[] = [];
   private resumePrompt = new CatchupResumePrompt('prompt.search');
-  private readonly channelListVirtualizer = this.createVirtualizer(88, SEARCH_ROW_OVERSCAN, SEARCH_LIST_VIEWPORT);
   private readonly programVirtualizer = this.createVirtualizer(109, SEARCH_ROW_OVERSCAN, SEARCH_LIST_VIEWPORT);
   private readonly channelRailVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
   private readonly movieVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
@@ -269,9 +268,6 @@ export class Search {
   private channelRepost: { sessionId: number; done: Promise<void> } | null = null;
   private active = false;
   private programIndexGeneration = 0;
-  private resultLimit: number = CONFIG.SEARCH.INITIAL_RESULTS;
-  private hasMoreResults = false;
-  private expandingGeneration: number | null = null;
   private workerSession = 0;
   private workerIndexReady = false;
   // A post failed, so the worker may hold a partial index; the next query rebuilds it.
@@ -374,7 +370,6 @@ export class Search {
     }
     this.account = account;
     this.query = query;
-    this.resultLimit = CONFIG.SEARCH.INITIAL_RESULTS;
     if (!reuseWorkerIndex) {
       this.pendingIndex = { channels: true, programmes: true, catalog: !!account };
       this.clearResults();
@@ -472,7 +467,6 @@ export class Search {
     this.focusPending = false;
     this.cancelScheduledQuery();
     this.query = query;
-    this.resultLimit = CONFIG.SEARCH.INITIAL_RESULTS;
     if (!query.trim()) {
       this.clearResults();
       this.render();
@@ -484,7 +478,6 @@ export class Search {
   scheduleQuery(query: string): void {
     this.focusPending = false;
     this.query = query;
-    this.resultLimit = CONFIG.SEARCH.INITIAL_RESULTS;
     const generation = ++this.queryGeneration;
     if (this.queryFrame !== null) cancelAnimationFrame(this.queryFrame);
     if (!query.trim()) {
@@ -1024,8 +1017,9 @@ export class Search {
     )?.clientWidth || SEARCH_RAIL_VIEWPORT;
     const range = virtualizer.getRange(items.length, viewport);
     this.railWindows.set(key, this.railWindow(items.length, range));
+    // Left and Right stop at a section's ends; only Up and Down leave it.
     return html`
-      <div class="catalog-rail">
+      <div class="catalog-rail" data-nav-container data-nav-leave-left="" data-nav-leave-right="">
         <h2 class="catalog-rail-title">${title}</h2>
         <div class="catalog-rail-track search-virtual-rail ${
                key === 'channels-rail' ? 'search-channel-rail' : ''
@@ -1062,9 +1056,7 @@ export class Search {
     )?.clientHeight || SEARCH_LIST_VIEWPORT;
     const range = virtualizer.getRange(items.length, viewport);
     return html`
-      <div class="search-virtual-section ${
-        key === 'channels-list' ? 'search-channels' : key === 'programmes' ? 'search-programs' : ''
-      }">
+      <div class="search-virtual-section ${key === 'programmes' ? 'search-programs' : ''}" data-nav-container data-nav-leave-left="" data-nav-leave-right="">
         <h2 class="catalog-rail-title">${title}</h2>
         <div class="search-virtual-scroll"
              data-search-virtual="${key}" data-search-axis="vertical">
@@ -1095,20 +1087,6 @@ export class Search {
         <div class="catalog-poster-wrap">${this.posterCell(ch.name, ch.logo)}${
           raw(channelLockBadge(ch))}</div>
         <div class="catalog-tile-name">${ch.name}</div>
-      </div>
-    `;
-  }
-
-  // A vertical-list row (logo + name) used for the M3U-only channel results.
-  private channelRow(ch: Channel): ReturnType<typeof html> {
-    const idx = PlaylistService.indexOf(ch);
-    return html`
-      <div class="search-channel-row" data-focusable data-key="ch:${String(idx)}"
-           data-channel-index="${String(idx)}">
-        ${ch.logo
-          ? html`<img class="search-row-logo" src="${ch.logo}" alt="" loading="lazy" onerror="this.style.display='none'">`
-          : html`<div class="search-row-logo search-row-logo-empty">${ch.name.charAt(0)}</div>`}
-        <span class="search-row-name">${raw(channelLockBadge(ch))}${ch.name}</span>
       </div>
     `;
   }
@@ -1479,7 +1457,7 @@ export class Search {
         const pending = runAppWorkerTask('search.query', this.queryRequest({
           sessionId,
           query,
-          limit: this.resultLimit,
+          limit: CONFIG.SEARCH.RESULTS,
           includeCatalog: !!this.account && !this.pendingIndex?.catalog && !this.lostSources?.catalog,
           includeProgrammes: !this.pendingIndex?.programmes && !this.lostSources?.programmes,
         }));
@@ -1556,35 +1534,25 @@ export class Search {
   }
 
   private queryLocally(query: string): SearchQueryResponse {
-    const channels = PlaylistService.searchLocalRanked(query, this.resultLimit);
+    const { RESULTS, FUZZY_FILL } = CONFIG.SEARCH;
+    const channels = PlaylistService.searchLocalRanked(query, RESULTS, undefined, FUZZY_FILL);
     const programmes = rankPreparedTopK(
       prepareSearchItems(this.programIndex, programDocument),
       query,
-      this.resultLimit,
+      RESULTS,
+      FUZZY_FILL,
     );
     const movies = this.account
-      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allVod), query, this.resultLimit)
-      : { items: [], hasMore: false };
+      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allVod), query, RESULTS)
+      : { items: [] };
     const series = this.account
-      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allSeries), query, this.resultLimit)
-      : { items: [], hasMore: false };
+      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allSeries), query, RESULTS)
+      : { items: [] };
     return {
-      channels: {
-        indices: channels.items.map(channel => PlaylistService.indexOf(channel)),
-        hasMore: channels.hasMore,
-      },
-      programmes: {
-        indices: indicesOf(this.programIndex, programmes.items),
-        hasMore: programmes.hasMore,
-      },
-      movies: {
-        indices: indicesOf(this.allVod, movies.items),
-        hasMore: movies.hasMore,
-      },
-      series: {
-        indices: indicesOf(this.allSeries, series.items),
-        hasMore: series.hasMore,
-      },
+      channels: { indices: channels.items.map(channel => PlaylistService.indexOf(channel)) },
+      programmes: { indices: indicesOf(this.programIndex, programmes.items) },
+      movies: { indices: indicesOf(this.allVod, movies.items) },
+      series: { indices: indicesOf(this.allSeries, series.items) },
     };
   }
 
@@ -1593,8 +1561,7 @@ export class Search {
     // epoch could match the kept one by chance.
     if (appWorkerGeneration() !== this.deliveredWorker) this.delivered = deliveredItems(-1);
     const kept = this.delivered;
-    const { DELIVERED_KEEP_FACTOR, DELIVERED_KEEP_MIN, RESULT_CAP } = CONFIG.SEARCH;
-    const cap = Math.min(RESULT_CAP, Math.max(this.resultLimit * DELIVERED_KEEP_FACTOR, DELIVERED_KEEP_MIN));
+    const cap = CONFIG.SEARCH.DELIVERED_KEEP;
     // -1 past the cap: the worker starts a new epoch, so the page drops the
     // items that earlier queries left behind.
     request.delivered = {
@@ -1647,7 +1614,7 @@ export class Search {
       const pending = runAppWorkerTask('search.query', this.queryRequest({
         sessionId,
         query,
-        limit: this.resultLimit,
+        limit: CONFIG.SEARCH.RESULTS,
         includeCatalog: !!this.account,
       }));
       const worker = appWorkerGeneration();
@@ -1780,8 +1747,6 @@ export class Search {
     this.visibleSeries = isRecordList(series)
       ? (kept ? keptAt(kept.series, response.series.indices) : [])
       : itemsAt(series, response.series.indices);
-    this.hasMoreResults = response.channels.hasMore || response.programmes.hasMore
-      || response.movies.hasMore || response.series.hasMore;
   }
 
   private clearResults(): void {
@@ -1790,7 +1755,6 @@ export class Search {
     this.visiblePrograms = [];
     this.visibleMovies = [];
     this.visibleSeries = [];
-    this.hasMoreResults = false;
     this.queryPending = false;
     this.resetVirtualOffsets();
   }
@@ -1960,22 +1924,8 @@ export class Search {
 
   private render(): void {
     const q = this.query.trim();
-    const isXtream = !!this.account;
-
     const hasResults = this.visibleChannels.length > 0 || this.visiblePrograms.length > 0
       || this.visibleMovies.length > 0 || this.visibleSeries.length > 0;
-    const hasMixedLists = !isXtream
-      && this.visibleChannels.length > 0
-      && this.visiblePrograms.length > 0;
-    const channelSection = this.visibleChannels.length
-      ? this.virtualList(
-          t('common.channels'),
-          'channels-list',
-          this.visibleChannels,
-          this.channelListVirtualizer,
-          (ch) => this.channelRow(ch),
-        )
-      : '';
     const programSection = this.visiblePrograms.length
       ? this.virtualList(
           t('search.programs'),
@@ -1986,8 +1936,8 @@ export class Search {
         )
       : '';
 
-    // Xtream: horizontal poster rails for catalog results. M3U-only channels and
-    // EPG programs use compact rows so their metadata remains readable.
+    // Channels, movies, and series are horizontal tile rails; EPG programs use
+    // compact rows so their metadata remains readable.
     const partial = this.partialIndex();
     const moreComing = partial || this.channelsArriving();
     const resultsBody = !q
@@ -2000,47 +1950,40 @@ export class Search {
         ? html`<p class="catalog-hint search-loading-more">${t('common.loading')}</p>`
         : !hasResults
         ? html`<p class="catalog-hint search-empty">${t('search.empty')}</p>`
-        : isXtream
-          ? html`
-                ${this.visibleChannels.length
-                  ? this.virtualRail(
-                      t('common.channels'),
-                      'channels-rail',
-                      this.visibleChannels,
-                      this.channelRailVirtualizer,
-                      (ch) => this.channelTile(ch),
-                    )
-                  : ''}
-                ${programSection}
-                ${this.visibleMovies.length
-                  ? this.virtualRail(
-                      t('common.movies'),
-                      'movies',
-                      this.visibleMovies,
-                      this.movieVirtualizer,
-                      (v) => this.movieTile(v),
-                    )
-                  : ''}
-                ${this.visibleSeries.length
-                  ? this.virtualRail(
-                      t('common.series'),
-                      'series',
-                      this.visibleSeries,
-                      this.seriesVirtualizer,
-                      (s) => this.seriesTile(s),
-                    )
-                  : ''}
-              `
-          : html`
-              ${channelSection}
-              ${programSection}
-            `;
+        : html`
+            ${this.visibleChannels.length
+              ? this.virtualRail(
+                  t('common.channels'),
+                  'channels-rail',
+                  this.visibleChannels,
+                  this.channelRailVirtualizer,
+                  (ch) => this.channelTile(ch),
+                )
+              : ''}
+            ${programSection}
+            ${this.visibleMovies.length
+              ? this.virtualRail(
+                  t('common.movies'),
+                  'movies',
+                  this.visibleMovies,
+                  this.movieVirtualizer,
+                  (v) => this.movieTile(v),
+                )
+              : ''}
+            ${this.visibleSeries.length
+              ? this.virtualRail(
+                  t('common.series'),
+                  'series',
+                  this.visibleSeries,
+                  this.seriesVirtualizer,
+                  (s) => this.seriesTile(s),
+                )
+              : ''}
+          `;
 
     // The query box lives in the tab bar; this view renders results only.
     morph(this.container, html`
-      <div class="search-view ${isXtream ? '' : 'search-lists'} ${
-        hasMixedLists ? 'search-lists-mixed' : ''
-      }" data-nav-container data-search-query="${q}"
+      <div class="search-view" data-nav-container data-search-query="${q}"
            data-search-pending="${this.queryPending ? 'true' : 'false'}"
            data-search-partial="${moreComing ? 'true' : 'false'}">
         <div class="search-results">${resultsBody}${moreComing && q && hasResults && !this.queryPending
@@ -2065,7 +2008,6 @@ export class Search {
 
   private virtualizers(): Record<string, VirtualList> {
     return {
-      'channels-list': this.channelListVirtualizer,
       programmes: this.programVirtualizer,
       'channels-rail': this.channelRailVirtualizer,
       movies: this.movieVirtualizer,
@@ -2110,11 +2052,6 @@ export class Search {
       this.scrollFrame = null;
       const latest = this.scrollGuard.readUserOffset(target, axis);
       if (latest !== null) virtualizer.setScrollOffset(latest);
-      const viewport = axis === 'horizontal' ? target.clientWidth : target.clientHeight;
-      const total = virtualizer.getTotalSize(this.resultCount(key));
-      if (virtualizer.scrollOffset + viewport >= total - this.resultItemSize(key) * 2) {
-        this.expandResults();
-      }
       if (axis === 'horizontal' && this.railWindows.get(key) === this.railWindow(
         this.resultCount(key),
         virtualizer.getRange(this.resultCount(key), target.clientWidth || SEARCH_RAIL_VIEWPORT),
@@ -2138,26 +2075,8 @@ export class Search {
     const horizontal = key === 'channels-rail' || key === 'movies' || key === 'series';
     if ((horizontal && action !== 'left' && action !== 'right')
         || (!horizontal && action !== 'up' && action !== 'down')) return false;
-    let items = key === 'channels-list' || key === 'channels-rail'
-      ? this.visibleChannels
-      : key === 'programmes'
-        ? this.visiblePrograms
-        : key === 'movies'
-          ? this.visibleMovies
-          : this.visibleSeries;
-    const current = parseInt(rawIndex, 10);
-    let next = current + (action === 'left' || action === 'up' ? -1 : 1);
-    if (next >= items.length && this.expandResults()) {
-      items = key === 'channels-list' || key === 'channels-rail'
-        ? this.visibleChannels
-        : key === 'programmes'
-          ? this.visiblePrograms
-          : key === 'movies'
-            ? this.visibleMovies
-            : this.visibleSeries;
-      next = current + 1;
-    }
-    if (next < 0 || next >= items.length) return false;
+    const next = parseInt(rawIndex, 10) + (action === 'left' || action === 'up' ? -1 : 1);
+    if (next < 0 || next >= this.resultCount(key)) return false;
     const scroll = this.container.querySelector<HTMLElement>(`[data-search-virtual="${key}"]`);
     const virtualizer = this.virtualizers()[key];
     virtualizer.ensureVisible(
@@ -2184,35 +2103,10 @@ export class Search {
   }
 
   private resultCount(key: string): number {
-    if (key === 'channels-list' || key === 'channels-rail') return this.visibleChannels.length;
+    if (key === 'channels-rail') return this.visibleChannels.length;
     if (key === 'programmes') return this.visiblePrograms.length;
     if (key === 'movies') return this.visibleMovies.length;
     return this.visibleSeries.length;
-  }
-
-  private resultItemSize(key: string): number {
-    if (key === 'channels-list') return 88;
-    if (key === 'programmes') return 109;
-    return 240;
-  }
-
-  private expandResults(): boolean {
-    if (!this.hasMoreResults || this.resultLimit >= CONFIG.SEARCH.RESULT_CAP
-        // A scroll keeps asking each frame until the batch it asked for lands.
-        || this.expandingGeneration === this.queryGeneration) {
-      return false;
-    }
-    this.resultLimit = Math.min(
-      CONFIG.SEARCH.RESULT_CAP,
-      this.resultLimit * CONFIG.SEARCH.EXPANSION_FACTOR,
-    );
-    const generation = ++this.queryGeneration;
-    this.expandingGeneration = generation;
-    const settle = (): void => {
-      if (this.expandingGeneration === generation) this.expandingGeneration = null;
-    };
-    this.startQuery(generation, true).then(settle, settle);
-    return true;
   }
 
   private cancelScheduledQuery(): void {

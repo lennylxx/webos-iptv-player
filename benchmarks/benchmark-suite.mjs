@@ -1833,7 +1833,7 @@ export async function runM3USearchBenchmark(options) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
   await waitForSearchQuery('rarechannelneedle');
   const sparseSearch = {
-    channels: document.querySelectorAll('.search-channel-row').length,
+    channels: document.querySelectorAll('.search-channel-tile').length,
     programs: 0,
   };
   input.value = 'rareprogramneedle';
@@ -1849,7 +1849,7 @@ export async function runM3USearchBenchmark(options) {
     indexBuildWarm,
     open: distribution(openValues),
     queries,
-    renderedChannels: document.querySelectorAll('.search-channel-row').length,
+    renderedChannels: document.querySelectorAll('.search-channel-tile').length,
     renderedPrograms: document.querySelectorAll('.search-program-row').length,
     sparseSearch,
     renderedCatalogSections: document.querySelectorAll(
@@ -2974,7 +2974,7 @@ export async function runBenchmarkSuites(options) {
     await waitForSearchQuery('rarechannelneedle');
     const sparseCounts = {
       channels: document.querySelectorAll(
-        '#view-search .search-channel-row, #view-search .search-channel-tile',
+        '#view-search .search-channel-tile',
       ).length,
       movies: 0,
       programs: 0,

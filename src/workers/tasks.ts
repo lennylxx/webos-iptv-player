@@ -318,7 +318,6 @@ export interface SearchDeliveredCount {
 
 export interface SearchRankedIndices {
   indices: number[];
-  hasMore: boolean;
 }
 
 /**
