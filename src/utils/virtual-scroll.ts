@@ -61,6 +61,13 @@ export class VirtualScrollGuard {
     if (expected) this.writeOffset(element, expected);
   }
 
+  // Apply a pending offset now and stop guarding it, so a scroll of the
+  // caller's own (focus bringing its row into view) is not undone.
+  release(element: HTMLElement): void {
+    this.flush(element);
+    this.expected.delete(element);
+  }
+
   // A smooth scroll past one viewport outlives the guard's frames and crosses
   // offsets whose window is not rendered, so its later events read as user
   // scrolls that re-window the list and drop the focused row.

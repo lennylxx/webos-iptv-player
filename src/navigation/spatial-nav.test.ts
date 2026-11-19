@@ -174,6 +174,20 @@ describe('SpatialNav', () => {
     expect(nav.focused).toBe(episode);
   });
 
+  it('steps Down a data-nav-straight container whose elements are not laid out yet', () => {
+    const row = document.createElement('div');
+    row.setAttribute('data-nav-container', '');
+    row.setAttribute('data-nav-straight', '');
+    const a = focusable({ x: 0, y: 0, w: 0, h: 0 });
+    const b = focusable({ x: 0, y: 0, w: 0, h: 0 });
+    row.append(a, b);
+    const { nav } = bound(makeContainer(row));
+
+    nav.focus(a);
+    expect(() => nav.move('down')).not.toThrow();
+    expect(nav.focused).toBe(a);
+  });
+
   it('leaves a data-nav-straight container Up to the nearest element across on the line above', () => {
     const actions = document.createElement('div');
     actions.setAttribute('data-nav-container', '');

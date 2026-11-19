@@ -541,7 +541,9 @@ export class SpatialNav {
     const center = (c: Candidate) => Math.abs(c.rect.left + c.rect.width / 2 - cx);
     const nearestOnNextLine = (pool: Candidate[]) => {
       const nearest = pool.reduce((a, c) => (gap(c) < gap(a) ? c : a));
-      const line = pool.filter((c) => c.rect.top < nearest.rect.bottom && c.rect.bottom > nearest.rect.top);
+      // `nearest` itself counts: an unmeasured one (zero height) overlaps nothing.
+      const line = pool.filter((c) => c === nearest
+        || (c.rect.top < nearest.rect.bottom && c.rect.bottom > nearest.rect.top));
       return line.reduce((a, c) => (apart(c) < apart(a) || (apart(c) === apart(a) && center(c) < center(a)) ? c : a));
     };
     const own = candidates.filter((c) => c.container === container && ahead(c));

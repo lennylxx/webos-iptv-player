@@ -647,7 +647,7 @@ describe('Settings.render', () => {
     expect(storageMock.setPlayerOsdTimeoutMs).toHaveBeenCalledWith(8000);
   });
 
-  // Left moves within a row by measuring peers, and a collapsed control has no
+  // Left moves within a line by measuring peers, and a collapsed control has no
   // vertical overlap with its row, so the overlap guard alone rejects it. With
   // the leading swatch collapsed the second one has no peer to its left, so
   // left leaves the row for the category sidebar.
@@ -674,6 +674,129 @@ describe('Settings.render', () => {
 
     expect(swatches[0].classList.contains('focused')).toBe(false);
     expect(container.querySelector('.settings-nav-item.focused')).not.toBeNull();
+  });
+
+  type Rect = [number, number, number, number];
+  // Lays Settings out on lines (the categories | Language; Refresh All Data,
+  // Clear Cache; Cancel, Save) with Reset off to the right, and presses a key.
+  const onLines = (
+    run: (press: (from: string, action: 'left' | 'right' | 'up' | 'down') => string) => void,
+    layout: Record<string, Rect> = {},
+  ) => {
+    settings.render();
+    const $el = (selector: string) => container.querySelector<HTMLElement>(selector)!;
+    const rects = new Map<Element, Rect>(
+      Array.from(container.querySelectorAll('.settings-nav-item'), (item, i): [Element, Rect] => [item, [0, 100 + 70 * i, 300, 60]]),
+    );
+    const lines: Record<string, Rect> = {
+      '#app-language .dropdown-trigger': [400, 100, 300, 60],
+      '#refresh-data': [400, 200, 200, 60],
+      '#clear-cache': [720, 200, 200, 60],
+      '#cancel-settings': [1300, 900, 200, 60],
+      '#save-settings': [1520, 900, 200, 60],
+      '#reset-app': [1800, 800, 100, 60],
+      ...layout,
+    };
+    for (const selector of Object.keys(lines)) rects.set($el(selector), lines[selector]);
+    const original = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function stub(this: Element): DOMRect {
+      const [left, top, width, height] = rects.get(this) ?? [0, 0, 0, 0];
+      return { left, top, width, height, right: left + width, bottom: top + height } as DOMRect;
+    };
+    try {
+      run((from, action) => {
+        $el(from).dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+        settings.handleAction(action);
+        const to = container.querySelector<HTMLElement>('[data-focusable].focused');
+        if (to?.classList.contains('settings-nav-item')) return 'category';
+        return to?.closest('[id]')?.id ?? '';
+      });
+    } finally {
+      Element.prototype.getBoundingClientRect = original;
+    }
+  };
+
+  // A control on the next line, or in the actions bar, lies right of the end
+  // of a line too: Right must not take it.
+  it('keeps Right on the line and stops at its end', () => {
+    onLines((press) => {
+      expect(press('#app-language .dropdown-trigger', 'right')).toBe('app-language');
+      expect(press('#refresh-data', 'right')).toBe('clear-cache');
+      expect(press('#clear-cache', 'right')).toBe('clear-cache');
+      expect(press('#cancel-settings', 'right')).toBe('save-settings');
+      expect(press('#save-settings', 'right')).toBe('save-settings');
+    });
+  });
+
+  it('keeps Left on the line, and leaves its start for the category', () => {
+    onLines((press) => {
+      expect(press('#clear-cache', 'left')).toBe('refresh-data');
+      expect(press('#refresh-data', 'left')).toBe('category');
+      expect(press('#save-settings', 'left')).toBe('cancel-settings');
+      expect(press('#cancel-settings', 'left')).toBe('category');
+    });
+  });
+
+  // The pane's scroll position picks the highlighted category, which a
+  // control the pointer left focus on may lie below.
+  it('leaves a line for the category of the control, not the one highlighted', () => {
+    onLines((press) => {
+      expect(container.querySelector<HTMLElement>('.settings-nav-item.active')!.dataset.settingsTarget).toBe('general');
+      expect(press('#refresh-data', 'left')).toBe('category');
+      expect(container.querySelector<HTMLElement>('.settings-nav-item.focused')!.dataset.settingsTarget).toBe('data');
+    });
+  });
+
+  // A wide control far up the column of Cancel must not beat the line just
+  // above it.
+  it('takes Up from the actions bar to the nearest line above', () => {
+    onLines((press) => {
+      expect(press('#cancel-settings', 'up')).toBe('clear-cache');
+    }, {
+      '#app-language .dropdown-trigger': [1200, 500, 600, 60],
+      '#refresh-data': [400, 800, 200, 60],
+      '#clear-cache': [620, 800, 200, 60],
+      '#reset-app': [1800, 300, 100, 60],
+    });
+  });
+
+  it('walks Down the pane line by line, and from its last line to Cancel', () => {
+    onLines((press) => {
+      expect(press('#app-language .dropdown-trigger', 'down')).toBe('refresh-data');
+      expect(press('#clear-cache', 'down')).toBe('reset-app');
+      expect(press('#reset-app', 'down')).toBe('cancel-settings');
+    }, { '#reset-app': [720, 700, 200, 60] });
+  });
+
+  // Clear Cache shares the last line, straight above Cancel: geometry alone
+  // would take Up there.
+  it('takes Up from Cancel back to the pane control Down left', () => {
+    onLines((press) => {
+      expect(press('#reset-app', 'down')).toBe('cancel-settings');
+      settings.handleAction('up');
+      expect(container.querySelector('[data-focusable].focused')?.id).toBe('reset-app');
+    }, { '#reset-app': [720, 700, 200, 60], '#clear-cache': [1300, 700, 200, 60] });
+  });
+
+  // Mirrors Left from Cancel: the last category has nothing below it in its
+  // column, and the pane line beside or below it is not where Down goes.
+  it('takes Down from the last category to Cancel and Up back, and Down from any other to the next', () => {
+    onLines((press) => {
+      const focusedCategory = () => container.querySelector<HTMLElement>('.settings-nav-item.focused')!.dataset.settingsTarget;
+      const items = Array.from(container.querySelectorAll<HTMLElement>('.settings-nav-item'));
+      for (let i = 0; i < items.length - 1; i++) {
+        expect(press(`.settings-nav-item[data-settings-target="${items[i].dataset.settingsTarget}"]`, 'down')).toBe('category');
+        expect(focusedCategory()).toBe(items[i + 1].dataset.settingsTarget);
+      }
+      expect(press(`.settings-nav-item[data-settings-target="${items[items.length - 1].dataset.settingsTarget}"]`, 'down'))
+        .toBe('cancel-settings');
+      // Up undoes that Down rather than landing in some category's pane.
+      settings.handleAction('up');
+      expect(focusedCategory()).toBe(items[items.length - 1].dataset.settingsTarget);
+    }, {
+      '#refresh-data': [400, 590, 200, 60],
+      '#clear-cache': [620, 660, 200, 60],
+    });
   });
 
   it('shows and restores the empty hint for manual EPG sources', () => {

@@ -776,7 +776,7 @@ export class Settings {
 
     this.container.innerHTML = String(html`
       <div class="settings-view">
-        <nav class="settings-sidebar" data-nav-container aria-label="${t('common.settings')}">
+        <nav class="settings-sidebar" data-nav-container data-nav-leave-down="#cancel-settings" aria-label="${t('common.settings')}">
           <h2 class="settings-title">${t('common.settings')}</h2>
           <div class="settings-nav-list">
             ${SETTINGS_CATEGORIES.map((category, index) => settingsNavItem(category, index === 0))}
@@ -794,7 +794,8 @@ export class Settings {
         </nav>
 
         <div class="settings-main">
-          <div class="settings-scroll">
+          <div class="settings-scroll" data-nav-container data-nav-straight
+               data-nav-leave-left=".settings-nav-item.active" data-nav-leave-right="">
             <div class="settings-category" id="settings-general" data-settings-category="general">
               <div class="settings-general-row">
                 <div class="settings-section settings-general-language">
@@ -1244,7 +1245,8 @@ export class Settings {
             </div>
           </div>
 
-          <div class="settings-actions" data-nav-container>
+          <div class="settings-actions" data-nav-container data-nav-straight data-nav-remember
+               data-nav-leave-left=".settings-nav-item.active" data-nav-leave-right="">
             <button class="btn btn-secondary btn-large" data-focusable id="cancel-settings">${t('common.cancel')}</button>
             <button class="btn btn-primary btn-large" data-focusable id="save-settings">${t('settings.saveApply')}</button>
           </div>
@@ -1410,6 +1412,7 @@ export class Settings {
   // after: the pane is re-morphed on every render, so a held element goes stale.
   // Up walks the category column on its own, so Up from the first
   // category leaves for the tab bar rather than the pane beside it.
+  // Down from the last category takes the sidebar's leave rule to Cancel.
   private moveFocus(action: NavDirection): boolean {
     const open = this.container.querySelector<HTMLElement>('.dropdown.open');
     const column = action === 'up'
@@ -1468,9 +1471,10 @@ export class Settings {
         {
           const openDropdown = this.container.querySelector<HTMLElement>('.dropdown.open');
           if (openDropdown) this.closeDropdown(openDropdown);
-          const peer = this.leftPeer(this.nav.focused);
-          if (peer) this.nav.focus(peer);
-          else this.focusActiveCategory();
+          // The pane's scroll position may highlight another category than
+          // the one a pointer-placed control belongs to.
+          this.markCategoryOf(this.nav.focused);
+          if (!this.nav.move(action)) this.focusActiveCategory();
         }
         break;
 
@@ -2176,30 +2180,6 @@ export class Settings {
       this.categoryScrollFrame = window.requestAnimationFrame(watch);
     };
     this.categoryScrollFrame = window.requestAnimationFrame(watch);
-  }
-
-  private leftPeer(el: HTMLElement | null): HTMLElement | null {
-    if (!el) return null;
-    const group = el.closest<HTMLElement>(
-      '.toggle-group, .theme-swatch-grid, .settings-row, .xtream-fields, .xtream-card-foot, .settings-actions, .epg-offset-controls',
-    );
-    if (!group) return null;
-    const rect = el.getBoundingClientRect();
-    let best: HTMLElement | null = null;
-    let bestScore = Infinity;
-    for (const candidate of group.querySelectorAll<HTMLElement>('[data-focusable]')) {
-      if (candidate === el) continue;
-      const other = candidate.getBoundingClientRect();
-      const overlap = Math.min(rect.bottom, other.bottom) - Math.max(rect.top, other.top);
-      if (other.left >= rect.left - 5 || overlap <= 5) continue;
-      const score = rect.left - other.right
-        + Math.abs((rect.top + rect.bottom) - (other.top + other.bottom));
-      if (score < bestScore) {
-        best = candidate;
-        bestScore = score;
-      }
-    }
-    return best;
   }
 
   private focusActiveCategory(): void {

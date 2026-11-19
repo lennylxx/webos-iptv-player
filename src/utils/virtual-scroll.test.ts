@@ -43,6 +43,19 @@ describe('VirtualScrollGuard', () => {
     expect(element.scrollTop).toBe(300);
   });
 
+  it('keeps a scroll made after release, and reads it as the user offset', () => {
+    const guard = new VirtualScrollGuard();
+    const element = document.createElement('div');
+    guard.syncOffset(element, 'vertical', 300);
+
+    guard.release(element);
+    element.scrollTop = 368;
+    vi.advanceTimersByTime(20);
+
+    expect(element.scrollTop).toBe(368);
+    expect(guard.readUserOffset(element, 'vertical')).toBe(368);
+  });
+
   it('cancels a pending correction when the desired offset is already applied', () => {
     const guard = new VirtualScrollGuard();
     const element = document.createElement('div');

@@ -908,6 +908,13 @@ describe('ChannelList interaction', () => {
     expect(ringed(channelItems()[0])).toBe(true);
   });
 
+  it('steps Down from Edit Channel List to the group shown, with no source tabs', () => {
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-edit-channels]')!);
+    expect(list.handleAction('down')).toBe(true);
+    expect(ringed(container.querySelector('.group-item.active'))).toBe(true);
+  });
+
   it('moves horizontally within the source list without jumping regions', () => {
     playlistMock.playlistTabs = [
       { id: 'a', name: 'A' },

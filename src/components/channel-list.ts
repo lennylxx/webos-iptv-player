@@ -36,8 +36,14 @@ import { CONFIG } from '../config';
 // .channel-item is 88px, .group-item is 60px plus its 8px vertical margin.
 const CHANNEL_ROW_STRIDE = 88;
 const GROUP_ROW_STRIDE = 68;
+// .group-list's top padding, above the first row.
+const GROUP_LIST_PADDING = 8;
 const CHANNEL_OVERSCAN = 12;
 const CHANNEL_VIEWPORT_FALLBACK = 900;
+function withLeading(list: VirtualList, size: number): VirtualList {
+  list.setLeadingSize(size);
+  return list;
+}
 const PLAYING_INDICATOR = `<div class="playing-indicator">${PLAYING_ICON}</div>`;
 
 type PreviewHintState = 'off' | 'ready' | 'active';
@@ -95,11 +101,11 @@ export class ChannelList {
     overscan: CHANNEL_OVERSCAN,
     fallbackViewportSize: CHANNEL_VIEWPORT_FALLBACK,
   });
-  private readonly groupVirtualizer = new VirtualList({
+  private readonly groupVirtualizer = withLeading(new VirtualList({
     itemSize: GROUP_ROW_STRIDE,
     overscan: CHANNEL_OVERSCAN,
     fallbackViewportSize: CHANNEL_VIEWPORT_FALLBACK,
-  });
+  }), GROUP_LIST_PADDING);
   private scrollFrame: number | null = null;
   private groupScrollFrame: number | null = null;
   // A channel tuned from outside the list since it was last entered.
@@ -375,7 +381,7 @@ export class ChannelList {
           && (managingFavorites || filteredChannels.length)
           ? 'has-channel-hints'
           : ''}">
-        <div class="sidebar" data-nav-container>
+        <div class="sidebar" data-nav-container data-nav-straight data-nav-leave-down="">
           <div class="sidebar-header">
             <div class="channel-count">${
               this.loadingChannels && !totalChannels ? '' : tp('channel.count', totalChannels)}</div>
@@ -777,7 +783,7 @@ export class ChannelList {
     }
 
     if (action === 'down' && focused.dataset.editChannels !== undefined) {
-      return this.focusActivePlaylist() || this.focusFirstChannel();
+      return this.focusActivePlaylist() || this.focusActiveGroup();
     }
 
     if (action === 'left' && focused.closest('.channel-main')) {
@@ -826,15 +832,6 @@ export class ChannelList {
     }
     if (!active) return false;
     this.nav.focus(active);
-    return true;
-  }
-
-  private focusFirstChannel(): boolean {
-    const first = this.container.querySelector<HTMLElement>(
-      '.channel-main [data-list-position="0"]',
-    );
-    if (!first) return false;
-    this.nav.focus(first);
     return true;
   }
 
@@ -1310,6 +1307,10 @@ export class ChannelList {
       const selector = `[data-group-position="${String(next)}"]`;
       const renderedTarget = this.container.querySelector<HTMLElement>(selector);
       if (renderedTarget && this.groupScrollFrame === null) {
+        // Within a frame or two of a render the guard would undo the scroll
+        // this focus makes, leaving the row out of view.
+        const list = this.container.querySelector<HTMLElement>('.group-list');
+        if (list) this.scrollGuard.release(list);
         this.nav.focus(renderedTarget);
         return true;
       }

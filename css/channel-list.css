@@ -93,6 +93,7 @@
   box-shadow: inset 0 0 0 2px var(--accent) !important;
 }
 
+/* GROUP_LIST_PADDING in channel-list.ts must stay this top padding. */
 .group-list {
   flex: 1;
   overflow-y: auto;

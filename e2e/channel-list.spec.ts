@@ -561,6 +561,39 @@ test('Down and CH- at the last channel and CH+ at the first stay in the list', a
   }
 });
 
+test('the group sidebar keeps Left and Down on its own lines', async ({ page }) => {
+  await routePlaylist(page, longPlaylist(30));
+  await seedPlaylist(page);
+  await page.goto('/');
+  await focusFirstChannelRow(page);
+  const sidebar = page.locator('#view-channels .sidebar');
+  const ring = page.locator('#view-channels .focused');
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebar.locator('.group-item.active')).toHaveClass(/\bfocused\b/);
+
+  // Down off the last group stays, not crossing into the channel list.
+  const last = sidebar.locator('[data-group-position]').last();
+  for (let i = 0; i < 10 && !(await last.evaluate((el) => el.classList.contains('focused'))); i++) {
+    await page.keyboard.press('ArrowDown');
+  }
+  await expect(last).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowDown');
+  await expect(last).toHaveClass(/\bfocused\b/);
+  await expect(ring).toHaveCount(1);
+
+  // Nothing is left of Edit Channel List on its line; the groups are below.
+  const edit = sidebar.locator('[data-edit-channels]');
+  for (let i = 0; i < 10 && !(await edit.evaluate((el) => el.classList.contains('focused'))); i++) {
+    await page.keyboard.press('ArrowUp');
+  }
+  await expect(edit).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowLeft');
+  await expect(edit).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowDown');
+  await expect(sidebar.locator('.group-item.active')).toHaveClass(/\bfocused\b/);
+  await expect(ring).toHaveCount(1);
+});
+
 function channelKey(url: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < url.length; i++) {
