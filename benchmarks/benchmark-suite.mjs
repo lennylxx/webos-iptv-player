@@ -3236,14 +3236,9 @@ export function assertBenchmarkScale(report, scale, options = {}) {
   closeTo(report.sidebar.totalSize, scale * 88);
   closeTo(report.epg.channelTotalSize, scale * 72);
   closeTo(report.epg.programTotalSize, scale * 80, 2048);
-  // An older build also lists the fixture's six empty movie categories, so a
-  // run measuring one warns instead of failing.
-  const categoryExtent = parseFloat(String(report.movies.categoryTotalSize).replace(/_/g, ''));
-  if (Math.abs(categoryExtent - scale * 320) <= 32) {
-    console.warn(`Warning: Movies category extent ${String(categoryExtent)}px includes the empty categories; expected ${String((scale - 6) * 320)}px`);
-  } else {
-    closeTo(report.movies.categoryTotalSize, (scale - 6) * 320, 32);
-  }
+  // Every category is a tile: once a rail is missing, All Categories is the
+  // complete index of the catalog, empty categories included.
+  closeTo(report.movies.categoryTotalSize, scale * 320, 32);
   closeTo(report.movies.totalSize, Math.ceil(scale / 7) * 395, 32);
   closeTo(report.series.totalSize, Math.ceil(scale / 7) * 395, 32);
   closeTo(report.series.episodes.totalSize, scale * 138);

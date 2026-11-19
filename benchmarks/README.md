@@ -327,10 +327,12 @@ startup, cold-load, group, and large-playlist times still mean the whole list
 is ready; an older build without the bar shows Live only once its list has
 loaded, so the same wait measures it alike.
 
-The TV run warns instead of failing on two known device deviations: a warm
-Search open that rebuilt an index the TV's small storage quota left unstored,
-and a Movies category rail that also lists the fixture's six empty categories,
-as an older build does.
+The TV run warns instead of failing on one known device deviation: a warm
+Search open that rebuilt an index the TV's small storage quota left unstored.
+
+The Movies All Categories rail lists every fixture category, the six empty
+ones included, since it is the catalog's complete index once some categories
+have no rail.
 
 The desktop XMLTV pipeline uses Playwright's immediate route fulfillment to
 isolate CPU and memory cost. The TV run starts temporary LAN HTTP servers for
