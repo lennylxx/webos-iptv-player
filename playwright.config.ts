@@ -9,6 +9,8 @@ const baseURL = `http://localhost:${process.env.PREVIEW_PORT || 3000}`;
 // dist/ on baseURL.
 export default defineConfig({
   testDir: './e2e',
+  // The focus fuzz walk runs only through `npm run test:fuzz`.
+  testIgnore: process.env.FOCUS_FUZZ ? [] : ['**/focus-fuzz.spec.ts'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

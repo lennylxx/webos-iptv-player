@@ -29,6 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:fuzz": "FOCUS_FUZZ=1 playwright test e2e/focus-fuzz.spec.ts",
     "test:all": "npm run typecheck:all && npm run lint && npm test && npm run test:e2e",
     "version": "node scripts/sync-version.mjs && git add appinfo.json",
     "benchmark:typecheck": "tsc -p benchmarks/tsconfig.json",
