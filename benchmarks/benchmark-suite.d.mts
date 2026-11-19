@@ -3,7 +3,6 @@ export interface BenchmarkFixtureOptions {
   accountId: string;
   epgUrl: string;
   backupKey: string;
-  directStorage?: boolean;
 }
 
 export interface BenchmarkRunOptions {

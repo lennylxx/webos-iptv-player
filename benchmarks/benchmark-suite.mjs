@@ -10,7 +10,6 @@ import { formatUrlHost, resolveLocalAddress } from './benchmark-shared.mjs';
 // functions must stay self-contained and must not close over Node APIs.
 
 export async function installBenchmarkFixture(options) {
-    const directStorage = options.directStorage === true;
     const openDb = () => new Promise((resolve, reject) => {
       const request = indexedDB.open('iptv');
       request.onupgradeneeded = () => {
@@ -44,7 +43,6 @@ export async function installBenchmarkFixture(options) {
       value,
       expiresAt = Date.now() + 6 * 60 * 60 * 1000,
     ) => {
-      if (!directStorage) return value;
       const timestamp = typeof value.timestamp === 'number' ? value.timestamp : Date.now();
       const record = {
         ...value,
@@ -81,11 +79,15 @@ export async function installBenchmarkFixture(options) {
       if (key !== null) backup[key] = localStorage.getItem(key);
     }
     let playlistCache = null;
+    let playlistChunks = null;
     if (db.objectStoreNames.contains('playlist-cache')) {
       const playlistTx = db.transaction('playlist-cache', 'readonly');
-      playlistCache = await requestValue(
-        playlistTx.objectStore('playlist-cache').get('combined-v5'),
-      ) || null;
+      const playlistStore = playlistTx.objectStore('playlist-cache');
+      [playlistCache, playlistChunks] = await Promise.all([
+        requestValue(playlistStore.get('combined-v5')),
+        requestValue(playlistStore.getAll(IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff'))),
+      ]);
+      playlistCache = playlistCache || null;
     }
     let cacheMeta = null;
     if (db.objectStoreNames.contains('cache-meta')) {
@@ -122,6 +124,7 @@ export async function installBenchmarkFixture(options) {
       data: {
         localStorage: backup,
         playlistCache,
+        playlistChunks,
         cacheMeta,
         recentlyWatched,
         playbackProgress,
@@ -164,10 +167,8 @@ export async function installBenchmarkFixture(options) {
 
     let firstUrl = 'http://host/0';
     try {
-      const cached = JSON.parse(backup.iptv_cached_playlist || 'null');
-      firstUrl = cached && cached.channels && cached.channels[0]
-        ? cached.channels[0].url || firstUrl
-        : firstUrl;
+      const first = playlistChunks && playlistChunks[0] && playlistChunks[0].channels[0];
+      firstUrl = (first && first.url) || firstUrl;
     } catch {
       // Keep the synthetic fallback.
     }
@@ -241,16 +242,6 @@ export async function installBenchmarkFixture(options) {
         playlistIds: [options.accountId],
         kind: 'm3u',
     }];
-    if (!directStorage) {
-      localStorage.setItem('iptv_cached_playlist', JSON.stringify({
-        version: 2,
-        channels,
-        epgSources,
-        timestamp: Date.now(),
-      }));
-      localStorage.setItem('iptv_recently_watched_live', JSON.stringify(recentLive));
-      localStorage.setItem('iptv_catchup_progress', JSON.stringify(catchupProgress));
-    }
 
     const day = new Date();
     day.setHours(0, 0, 0, 0);
@@ -317,14 +308,10 @@ export async function installBenchmarkFixture(options) {
     const fixtureStores = [
       'epg-cache',
       'catalog-cache',
+      'playlist-cache',
+      'playback-progress',
+      'recently-watched',
     ];
-    if (directStorage) {
-      fixtureStores.push(
-        'playlist-cache',
-        'playback-progress',
-        'recently-watched',
-      );
-    }
     const fixtureTx = db.transaction(fixtureStores, 'readwrite');
     // The app's packed guide format (`epg-packed-v2`), as it writes the cache
     // itself; a plain object guide would time a legacy read instead.
@@ -376,22 +363,35 @@ export async function installBenchmarkFixture(options) {
         ),
       },
     }));
-    if (directStorage) {
-      fixtureTx.objectStore('playlist-cache').put(cacheRecord(
-        'playlist-cache',
-        'playlist',
-        {
-        key: 'combined-v5',
+    // The app's chunked playlist format: a head that counts the channels and
+    // chunk records of them (src/services/playlist-chunks.ts).
+    const playlistRecord = cacheRecord('playlist-cache', 'playlist', {
+      key: 'combined-v5',
+      timestamp: Date.now(),
+      data: {
+        sourceSignature: (sourceHash >>> 0).toString(16),
+        channels,
+        epgSources,
         timestamp: Date.now(),
-        data: {
-          sourceSignature: (sourceHash >>> 0).toString(16),
-          channels,
-          epgSources,
-          timestamp: Date.now(),
-        },
-        },
-      ));
+      },
+    });
+    const playlistStore = fixtureTx.objectStore('playlist-cache');
+    playlistStore.delete(IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff'));
+    let chunkCount = 0;
+    for (let start = 0; start < channels.length; chunkCount++) {
+      const end = start + (chunkCount ? 8000 : 2000);
+      playlistStore.put({
+        key: `combined-v5#${String(1000000 + chunkCount).slice(1)}`,
+        timestamp: playlistRecord.timestamp,
+        channels: channels.slice(start, end),
+      });
+      start = end;
     }
+    const { channels: _channels, ...playlistHead } = playlistRecord.data;
+    playlistStore.put({
+      ...playlistRecord,
+      data: { ...playlistHead, chunkCount, channelCount: channels.length },
+    });
     const catalog = fixtureTx.objectStore('catalog-cache');
     const put = (suffix, data) => catalog.put(cacheRecord('catalog-cache', 'catalog', {
       key: `${options.accountId}|${suffix}`,
@@ -409,65 +409,61 @@ export async function installBenchmarkFixture(options) {
       put(`vod_streams-v3|${String(category)}`, []);
       put(`series-v3|${String(category)}`, []);
     }
-    if (directStorage) {
-      const progressStore = fixtureTx.objectStore('playback-progress');
-      for (const key of Object.keys(catchupProgress)) {
-        const entry = catchupProgress[key];
-        progressStore.put({
-          key: `catchup:${entry.channelKey}|${String(entry.progStart)}`,
-          value: entry,
-          updatedAt: entry.updatedAt,
-          expiresAt: entry.expiresAt,
-        });
-      }
-      const recentStore = fixtureTx.objectStore('recently-watched');
-      for (const entry of recentLive) {
-        recentStore.put({
-          key: `live:${entry.channelKey}`,
-          value: entry,
-          updatedAt: entry.updatedAt,
-        });
-      }
+    const progressStore = fixtureTx.objectStore('playback-progress');
+    for (const key of Object.keys(catchupProgress)) {
+      const entry = catchupProgress[key];
+      progressStore.put({
+        key: `catchup:${entry.channelKey}|${String(entry.progStart)}`,
+        value: entry,
+        updatedAt: entry.updatedAt,
+        expiresAt: entry.expiresAt,
+      });
+    }
+    const recentStore = fixtureTx.objectStore('recently-watched');
+    for (const entry of recentLive) {
+      recentStore.put({
+        key: `live:${entry.channelKey}`,
+        value: entry,
+        updatedAt: entry.updatedAt,
+      });
     }
     await transactionDone(fixtureTx);
 
-    if (directStorage) {
-      const usage = {
-        playlist: { bytes: 0, entries: 0 },
-        epg: { bytes: 0, entries: 0 },
-        catalog: { bytes: 0, entries: 0 },
-        subtitle: { bytes: 0, entries: 0 },
-      };
-      for (const { record } of cacheEntries) {
-        usage[record.cacheCategory].bytes += record.byteSize;
-        usage[record.cacheCategory].entries++;
-      }
-      const total = Object.keys(usage).reduce((sum, category) => ({
-        bytes: sum.bytes + usage[category].bytes,
-        entries: sum.entries + usage[category].entries,
-      }), { bytes: 0, entries: 0 });
-      const metaTx = db.transaction('cache-meta', 'readwrite');
-      const meta = metaTx.objectStore('cache-meta');
-      const now = Date.now();
-      for (const category of Object.keys(usage)) {
-        meta.put({ category, ...usage[category], updatedAt: now });
-      }
-      meta.put({ category: 'total', ...total, updatedAt: now });
-      for (const { store, record } of cacheEntries) {
-        const key = store === 'epg-cache' ? record.url : record.key;
-        meta.put({
-          category: `entry:${store}:${String(key)}`,
-          cacheCategory: record.cacheCategory,
-          store,
-          key,
-          byteSize: record.byteSize,
-          expiresAt: record.expiresAt,
-          lastAccessedAt: record.lastAccessedAt,
-        });
-      }
-      meta.put({ category: 'entry-index', version: 1, updatedAt: now });
-      await transactionDone(metaTx);
+    const usage = {
+      playlist: { bytes: 0, entries: 0 },
+      epg: { bytes: 0, entries: 0 },
+      catalog: { bytes: 0, entries: 0 },
+      subtitle: { bytes: 0, entries: 0 },
+    };
+    for (const { record } of cacheEntries) {
+      usage[record.cacheCategory].bytes += record.byteSize;
+      usage[record.cacheCategory].entries++;
     }
+    const total = Object.keys(usage).reduce((sum, category) => ({
+      bytes: sum.bytes + usage[category].bytes,
+      entries: sum.entries + usage[category].entries,
+    }), { bytes: 0, entries: 0 });
+    const metaTx = db.transaction('cache-meta', 'readwrite');
+    const meta = metaTx.objectStore('cache-meta');
+    const now = Date.now();
+    for (const category of Object.keys(usage)) {
+      meta.put({ category, ...usage[category], updatedAt: now });
+    }
+    meta.put({ category: 'total', ...total, updatedAt: now });
+    for (const { store, record } of cacheEntries) {
+      const key = store === 'epg-cache' ? record.url : record.key;
+      meta.put({
+        category: `entry:${store}:${String(key)}`,
+        cacheCategory: record.cacheCategory,
+        store,
+        key,
+        byteSize: record.byteSize,
+        expiresAt: record.expiresAt,
+        lastAccessedAt: record.lastAccessedAt,
+      });
+    }
+    meta.put({ category: 'entry-index', version: 1, updatedAt: now });
+    await transactionDone(metaTx);
     db.close();
     return { channels: channels.length };
 }
@@ -775,12 +771,11 @@ export async function cleanupBenchmarkFixture(options) {
     if (cleanupStores.indexOf('playlist-cache') >= 0) {
       const playlist = cleanupTx.objectStore('playlist-cache');
       const savedPlaylist = backupEntry?.data?.playlistCache;
-      // A newer app stores the channels as chunk records beside the head.
-      if (typeof IDBKeyRange !== 'undefined') {
-        playlist.delete(IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff'));
-      }
+      playlist.delete(IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff'));
       if (savedPlaylist) playlist.put(savedPlaylist);
       else playlist.delete('combined-v5');
+      const savedChunks = backupEntry?.data?.playlistChunks;
+      if (Array.isArray(savedChunks)) for (const chunk of savedChunks) playlist.put(chunk);
     }
     if (cleanupStores.indexOf('parental-control') >= 0
         && backupEntry?.data && 'parentalConfig' in backupEntry.data) {
@@ -1486,8 +1481,7 @@ export async function installUniqueGroupFixture(scale) {
   });
   const tx = db.transaction('playlist-cache', 'readwrite');
   const store = tx.objectStore('playlist-cache');
-  // A newer app may have moved the fixture's channels into chunk records;
-  // join them back, and the rewrite below stores one record again.
+  // The head counts the channels; chunk records carry them.
   const [cached, chunks] = await Promise.all(['combined-v5',
     IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff')].map((key, index) =>
     new Promise((resolve, reject) => {
@@ -1495,22 +1489,18 @@ export async function installUniqueGroupFixture(scale) {
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result);
     })));
-  if (cached && cached.data && !Array.isArray(cached.data.channels) && chunks.length) {
-    const { chunkCount: _chunks, channelCount: _count, ...data } = cached.data;
-    cached.data = { ...data, channels: [].concat(...chunks.map(chunk => chunk.channels)) };
-  }
-  store.delete(IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff'));
-  if (!cached || !cached.data || !Array.isArray(cached.data.channels)
-      || cached.data.channels.length !== scale) {
+  const channels = cached && cached.data && cached.data.chunkCount === chunks.length
+    ? [].concat(...chunks.map(chunk => chunk.channels))
+    : [];
+  if (!channels.length || channels.length !== cached.data.channelCount
+      || channels.length !== scale) {
     db.close();
     throw new Error('Cannot install unique groups without the channel fixture');
   }
-  for (let index = 0; index < cached.data.channels.length; index++) {
-    cached.data.channels[index].group = `Group ${String(index)}`;
+  for (let index = 0; index < channels.length; index++) {
+    channels[index].group = `Group ${String(index)}`;
   }
-  cached.byteSize = 0;
-  cached.byteSize = new TextEncoder().encode(JSON.stringify(cached)).byteLength;
-  store.put(cached);
+  for (const chunk of chunks) store.put(chunk);
   await new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
@@ -1518,8 +1508,8 @@ export async function installUniqueGroupFixture(scale) {
   });
   db.close();
   return {
-    channels: cached.data.channels.length,
-    groups: cached.data.channels.length,
+    channels: channels.length,
+    groups: channels.length,
   };
 }
 
@@ -1551,8 +1541,7 @@ export async function installM3USearchFixture() {
   });
   const tx = db.transaction('playlist-cache', 'readwrite');
   const store = tx.objectStore('playlist-cache');
-  // A newer app may have moved the fixture's channels into chunk records;
-  // join them back, and the rewrite below stores one record again.
+  // The head counts the channels; chunk records carry them.
   const [cached, chunks] = await Promise.all(['combined-v5',
     IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff')].map((key, index) =>
     new Promise((resolve, reject) => {
@@ -1560,18 +1549,14 @@ export async function installM3USearchFixture() {
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result);
     })));
-  if (cached && cached.data && !Array.isArray(cached.data.channels) && chunks.length) {
-    const { chunkCount: _chunks, channelCount: _count, ...data } = cached.data;
-    cached.data = { ...data, channels: [].concat(...chunks.map(chunk => chunk.channels)) };
-  }
-  store.delete(IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff'));
-  if (!cached || !cached.data || !Array.isArray(cached.data.channels)) {
+  const channels = cached && cached.data && cached.data.chunkCount === chunks.length
+    ? [].concat(...chunks.map(chunk => chunk.channels))
+    : [];
+  if (!channels.length || channels.length !== cached.data.channelCount) {
     db.close();
     throw new Error('M3U Search benchmark requires a cached playlist fixture');
   }
   cached.data.sourceSignature = sourceSignature;
-  cached.byteSize = 0;
-  cached.byteSize = new TextEncoder().encode(JSON.stringify(cached)).byteLength;
   store.put(cached);
   await new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();

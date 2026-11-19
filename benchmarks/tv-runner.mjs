@@ -260,7 +260,6 @@ async function installFixture(client) {
     accountId: ACCOUNT_ID,
     epgUrl: EPG_URL,
     backupKey: BACKUP_KEY,
-    directStorage: true,
   });
 }
 

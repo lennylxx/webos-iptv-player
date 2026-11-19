@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
+import { IDBFactory, IDBKeyRange, IDBObjectStore } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cleanupBenchmarkFixture,
@@ -13,7 +13,6 @@ const fixture = {
   accountId: 'a1',
   epgUrl: 'http://host/epg',
   backupKey: 'backup',
-  directStorage: true,
 };
 
 function withStore(run) {
@@ -51,6 +50,7 @@ const writeConfig = value => withStore(store => store.put({ key: 'config', value
 describe('TV benchmark parental backup', () => {
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
+    globalThis.IDBKeyRange = IDBKeyRange;
     localStorage.clear();
     await rebuildBenchmarkDatabase();
     await withStore(store => store.count());
@@ -75,6 +75,49 @@ describe('TV benchmark parental backup', () => {
     await writeConfig({ pin: 'benchmark' });
     await cleanupBenchmarkFixture(fixture);
     expect(await readConfig()).toBeUndefined();
+  });
+
+  it('seeds a chunked playlist cache and restores the device chunks', async () => {
+    const playlist = run => new Promise((resolve, reject) => {
+      const open = indexedDB.open('iptv');
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const tx = open.result.transaction('playlist-cache', 'readwrite');
+        const request = run(tx.objectStore('playlist-cache'));
+        tx.oncomplete = () => {
+          open.result.close();
+          resolve(request.result);
+        };
+        tx.onerror = () => reject(tx.error);
+      };
+    });
+    // More chunks on the device than the fixture writes: none may linger.
+    const device = [{ name: 'ch1', url: 'http://host/a' }];
+    const deviceTail = [{ name: 'ch2', url: 'http://host/b' }];
+    await playlist(store => store.put({ key: 'combined-v5#000000', timestamp: 1, channels: device }));
+    await playlist(store => store.put({ key: 'combined-v5#000001', timestamp: 1, channels: deviceTail }));
+    await playlist(store => store.put({
+      key: 'combined-v5',
+      timestamp: 1,
+      data: { chunkCount: 2, channelCount: 2 },
+    }));
+
+    await installBenchmarkFixture(fixture);
+    const head = await playlist(store => store.get('combined-v5'));
+    expect(head.data).toMatchObject({ chunkCount: 1, channelCount: fixture.scale });
+    expect(head.data.channels).toBeUndefined();
+    const chunk = await playlist(store => store.get('combined-v5#000000'));
+    expect(chunk.timestamp).toBe(head.timestamp);
+    expect(chunk.channels).toHaveLength(fixture.scale);
+    expect(chunk.channels[0].url).toBe('http://host/a');
+    expect(await playlist(store => store.get('combined-v5#000001'))).toBeUndefined();
+
+    await cleanupBenchmarkFixture(fixture);
+    expect((await playlist(store => store.get('combined-v5'))).data.channelCount).toBe(2);
+    expect(await playlist(store => store.get('combined-v5#000000')))
+      .toEqual({ key: 'combined-v5#000000', timestamp: 1, channels: device });
+    expect(await playlist(store => store.get('combined-v5#000001')))
+      .toEqual({ key: 'combined-v5#000001', timestamp: 1, channels: deviceTail });
   });
 
   afterEach(() => vi.restoreAllMocks());

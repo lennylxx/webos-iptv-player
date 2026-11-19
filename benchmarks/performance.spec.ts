@@ -83,7 +83,6 @@ const FIXTURE = {
   accountId: 'benchmark-x1',
   epgUrl: 'http://host/benchmark-epg',
   backupKey: '__tv_benchmark_backup__',
-  directStorage: true,
 };
 const COLD_PLAYLIST_URL = 'http://host/cold-list.m3u';
 const XMLTV_PIPELINE_URL = 'http://host/benchmark-guide.xml.gz';
