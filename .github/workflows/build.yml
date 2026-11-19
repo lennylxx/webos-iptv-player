@@ -36,6 +36,11 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    # Chromium's system libraries come preinstalled, so no job waits on apt
+    # mirrors. Keep the tag in step with @playwright/test in the lockfile.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-resolute
+      options: --ipc=host
     strategy:
       fail-fast: false
       matrix:
@@ -51,14 +56,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Cache Playwright browser
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
+      # A no-op while the image matches the lockfile; otherwise it fetches the
+      # browser, still without apt.
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: E2E tests
         run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
