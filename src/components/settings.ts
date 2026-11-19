@@ -142,6 +142,7 @@ function uploadLabel(pl: PlaylistEntry): string {
 function themeSwatch(theme: ThemeMeta, activeId: string): Safe {
   return html`
     <button class="theme-swatch ${theme.id === activeId ? 'active' : ''}" data-focusable
+            data-key="theme:${theme.id}"
             data-theme-id="${theme.id}" data-theme="${theme.id}" aria-label="${theme.name} theme">
       <span class="theme-swatch-preview" aria-hidden="true">
         <span class="tsp-tabs">
@@ -295,7 +296,7 @@ const SETTINGS_CATEGORIES: readonly {
 function settingsNavItem(category: typeof SETTINGS_CATEGORIES[number], active: boolean): Safe {
   return html`
     <button class="settings-nav-item ${active ? 'active' : ''}" data-focusable
-            data-settings-target="${category.id}">
+            data-key="settings-nav:${category.id}" data-settings-target="${category.id}">
       <span class="settings-nav-icon">${category.icon}</span>
       <span>${t(category.label)}</span>
     </button>
@@ -320,11 +321,57 @@ function uploadRow(pl: PlaylistEntry, enabled = isSourceEnabled(pl)): Safe {
         <div class="settings-field wide">
           <label>${uploadLabel(pl)}</label>
         </div>
-        ${sourceToggle(enabled)}
+        ${sourceToggle(enabled, `upload:${pl.url}:toggle`)}
         <button class="btn btn-danger remove-upload" data-focusable
+                data-key="upload:${pl.url}:remove"
                 data-url="${pl.url}">${t('common.remove')}</button>
       </div>
     `;
+}
+
+function emptyHint(key: string, text: string): Safe {
+  return html`<div class="empty-hint" data-key="${key}">${text}</div>`;
+}
+
+function playlistHeaderRow(): Safe {
+  return html`
+    <div class="settings-row playlist-header-row" data-key="playlist-header">
+      <div class="settings-field"><label>${t('settings.name')}</label></div>
+      <div class="settings-field"><label>${t('settings.url')}</label></div>
+      <div class="playlist-header-spacer"></div>
+    </div>`;
+}
+
+/** One editable M3U playlist row, keyed by the entry's stable id. */
+function playlistRow(pl: Pick<PlaylistEntry, 'id' | 'name' | 'url'>, enabled: boolean): Safe {
+  const key = `playlist:${pl.id || pl.url}`;
+  return html`
+    <div class="settings-row ${enabled ? '' : 'source-disabled'}"
+         data-key="${key}" data-id="${pl.id}" data-source-entry>
+      <div class="settings-field">
+        <input type="text" class="settings-input playlist-name" data-key="${key}:name"
+               aria-label="${t('settings.playlistName')}" placeholder="${t('settings.myPlaylist')}"
+               data-focusable value="${pl.name || ''}">
+      </div>
+      <div class="settings-field">
+        <input type="url" class="settings-input playlist-url" data-key="${key}:url"
+               aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
+               data-focusable value="${pl.url || ''}">
+      </div>
+      ${sourceToggle(enabled, `${key}:toggle`)}
+      <button class="btn btn-danger remove-playlist" data-focusable
+              data-key="${key}:remove">${t('common.remove')}</button>
+    </div>`;
+}
+
+// Builds a detached node from an escaped template through morph(), so an
+// editor row is added without assigning markup to innerHTML.
+function appendRendered(parent: HTMLElement, content: Safe): HTMLElement | null {
+  const holder = document.createElement('div');
+  morph(holder, content);
+  const el = holder.firstElementChild as HTMLElement | null;
+  if (el) parent.appendChild(el);
+  return el;
 }
 
 function withEnabledState(entry: PlaylistEntry, enabled: boolean): PlaylistEntry {
@@ -364,28 +411,29 @@ export function liveCategoriesButtonContent(
 function xtreamCard(pl: Partial<PlaylistEntry>) {
   const liveOutput = normalizeXtreamLiveOutputPreference(pl.xtream?.liveOutput);
   const enabled = pl.enabled !== false;
+  const key = `xtream:${pl.id || ''}`;
   return html`
     <div class="xtream-card ${enabled ? '' : 'source-disabled'}"
-         data-id="${pl.id || ''}" data-source-entry>
+         data-key="${key}" data-id="${pl.id || ''}" data-source-entry>
       <div class="xtream-fields">
         <div class="settings-field">
           <label>${t('settings.label')}</label>
-          <input type="text" class="settings-input xtream-name" data-focusable
+          <input type="text" class="settings-input xtream-name" data-focusable data-key="${key}:name"
                  aria-label="${t('settings.accountLabel')}" placeholder="${t('settings.myProvider')}" value="${pl.name || ''}">
         </div>
         <div class="settings-field wide">
           <label>${t('settings.serverUrl')}</label>
-          <input type="url" class="settings-input xtream-url" data-focusable
+          <input type="url" class="settings-input xtream-url" data-focusable data-key="${key}:url"
                  aria-label="${t('settings.serverUrl')}" placeholder="http://host:port" value="${pl.url || ''}">
         </div>
         <div class="settings-field">
           <label>${t('settings.username')}</label>
-          <input type="text" class="settings-input xtream-username" data-focusable
+          <input type="text" class="settings-input xtream-username" data-focusable data-key="${key}:username"
                  aria-label="${t('settings.username')}" placeholder="username" value="${pl.xtream?.username || ''}">
         </div>
         <div class="settings-field">
           <label>${t('settings.password')}</label>
-          <input type="password" class="settings-input xtream-password" data-focusable
+          <input type="password" class="settings-input xtream-password" data-focusable data-key="${key}:password"
                  aria-label="${t('settings.password')}" placeholder="password" value="${pl.xtream?.password || ''}">
         </div>
         <div class="settings-field xtream-output">
@@ -398,13 +446,16 @@ function xtreamCard(pl: Partial<PlaylistEntry>) {
         </div>
       </div>
       <div class="xtream-card-foot">
-        ${sourceToggle(enabled)}
-        <button class="btn btn-secondary check-xtream" data-focusable>${t('settings.check')}</button>
-        <button class="btn btn-secondary xtream-live-categories" data-focusable>${liveCategoriesButtonContent(
+        ${sourceToggle(enabled, `${key}:toggle`)}
+        <button class="btn btn-secondary check-xtream" data-focusable
+                data-key="${key}:check">${t('settings.check')}</button>
+        <button class="btn btn-secondary xtream-live-categories" data-focusable
+                data-key="${key}:categories">${liveCategoriesButtonContent(
           normalizeLiveCategoryFilter(pl.xtream?.liveCategories),
           pl.id ? StorageService.getLiveCategorySnapshot(pl.id) : null,
         )}</button>
-        <button class="btn btn-danger remove-xtream" data-focusable>${t('common.remove')}</button>
+        <button class="btn btn-danger remove-xtream" data-focusable
+                data-key="${key}:remove">${t('common.remove')}</button>
         <div class="xtream-status"></div>
       </div>
     </div>`;
@@ -424,6 +475,7 @@ function manualEpgSourceRow(
       <div class="manual-epg-source-head">
         <span class="manual-epg-priority">${index + 1}</span>
         <input type="url" class="settings-input manual-epg-url" data-focusable
+               data-key="${key}:url"
                aria-label="${t('settings.xmltvUrl')}" value="${source.url}"
                placeholder="http://host/guide.xml">
         <button class="btn btn-secondary move-epg-earlier" data-key="${key}:earlier"
@@ -574,7 +626,7 @@ export class Settings {
     });
 
     // Mouse/pointer support: clicking a focusable element behaves like remote OK.
-    // Attached once on the persistent container (render() replaces innerHTML).
+    // Attached once on the persistent container, which render() morphs in place.
     // Marked `data-self-activate` so the global click handler skips this subtree
     // (this local handler is the "OK" action).
     this.container.setAttribute('data-self-activate', '');
@@ -593,7 +645,7 @@ export class Settings {
 
     // The global key handler ignores most keys in a text field, so the field
     // owns its ways out. Each sets where the ring lands before the caret goes.
-    // Attached once on the persistent container (render() replaces innerHTML).
+    // Attached once on the persistent container, which render() morphs in place.
     this.container.addEventListener('keydown', (e: KeyboardEvent) => {
       const input = e.target as HTMLInputElement;
       if (input.tagName !== 'INPUT') return;
@@ -774,7 +826,9 @@ export class Settings {
       ? 'parental.statusOn'
       : 'parental.statusOff');
 
-    this.container.innerHTML = String(html`
+    // morph() strips the tint markRow() added, so land() must add it again.
+    this.currentRow = null;
+    morph(this.container, html`
       <div class="settings-view">
         <nav class="settings-sidebar" data-nav-container data-nav-leave-down="#cancel-settings" aria-label="${t('common.settings')}">
           <h2 class="settings-title">${t('common.settings')}</h2>
@@ -809,7 +863,7 @@ export class Settings {
                 <div class="settings-section settings-general-device">
                   <h3 class="settings-section-title">${t('settings.deviceSetup')}</h3>
                   <div class="source-box setup-box-info device-setup-card"
-                       id="setup-info">${t('settings.checkingSetup')}</div>
+                       id="setup-info" data-morph-preserve>${t('settings.checkingSetup')}</div>
                 </div>
               </div>
               <div class="settings-section">
@@ -820,7 +874,7 @@ export class Settings {
                   <button class="btn ${ParentalControlService.configured
                     ? 'btn-secondary'
                     : 'btn-primary'}" ${parentalSupported ? raw('data-focusable') : raw('disabled')}
-                    id="manage-parental-controls">
+                    data-key="manage-parental-controls" id="manage-parental-controls">
                     ${t(ParentalControlService.configured ? 'parental.manage' : 'parental.turnOn')}
                   </button>
                   <div class="settings-item-hint">${t(parentalSupported
@@ -836,9 +890,9 @@ export class Settings {
                 <div class="xtream-entries" id="xtream-entries">
                   ${accounts.length
                     ? html`${accounts.map((pl) => xtreamCard(pl))}`
-                    : html`<div class="empty-hint">${t('settings.noXtream')}</div>`}
+                    : emptyHint('xtream-empty', t('settings.noXtream'))}
                 </div>
-                <button class="btn btn-primary" data-focusable id="add-xtream">${t('settings.addXtream')}</button>
+                <button class="btn btn-primary" data-focusable data-key="add-xtream" id="add-xtream">${t('settings.addXtream')}</button>
                 <div class="settings-item-hint">
                   <strong>${t('settings.streamFormat')}:</strong> ${t('settings.streamFormatHint')}
                 </div>
@@ -851,32 +905,10 @@ export class Settings {
                 <h3 class="settings-section-title">${t('settings.playlists')}</h3>
                 <div class="playlist-entries" id="playlist-entries">
                   ${playlists.length
-                    ? html`
-                      <div class="settings-row playlist-header-row">
-                        <div class="settings-field"><label>${t('settings.name')}</label></div>
-                        <div class="settings-field"><label>${t('settings.url')}</label></div>
-                        <div class="playlist-header-spacer"></div>
-                      </div>
-                      ${playlists.map((pl) => html`
-                      <div class="settings-row ${isSourceEnabled(pl) ? '' : 'source-disabled'}"
-                           data-id="${pl.id}" data-source-entry>
-                        <div class="settings-field">
-                          <input type="text" class="settings-input playlist-name"
-                                 aria-label="${t('settings.playlistName')}" placeholder="${t('settings.myPlaylist')}"
-                                 data-focusable value="${pl.name || ''}">
-                        </div>
-                        <div class="settings-field">
-                          <input type="url" class="settings-input playlist-url"
-                                 aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
-                                 data-focusable value="${pl.url || ''}">
-                        </div>
-                        ${sourceToggle(isSourceEnabled(pl))}
-                        <button class="btn btn-danger remove-playlist" data-focusable>${t('common.remove')}</button>
-                      </div>
-                    `)}`
-                    : html`<div class="empty-hint">${t('settings.noPlaylists')}</div>`}
+                    ? html`${playlistHeaderRow()}${playlists.map((pl) => playlistRow(pl, isSourceEnabled(pl)))}`
+                    : emptyHint('playlist-empty', t('settings.noPlaylists'))}
                 </div>
-                <button class="btn btn-primary" data-focusable id="add-playlist">${t('settings.addPlaylist')}</button>
+                <button class="btn btn-primary" data-focusable data-key="add-playlist" id="add-playlist">${t('settings.addPlaylist')}</button>
               </div>
 
               <div class="settings-section">
@@ -885,7 +917,7 @@ export class Settings {
                   <div class="upload-entries" id="upload-entries">
                     ${uploads.length
                       ? uploads.map((pl) => uploadRow(pl))
-                      : html`<div class="empty-hint">${t('settings.noUploads')}</div>`}
+                      : emptyHint('upload-empty', t('settings.noUploads'))}
                   </div>
                 </div>
               </div>
@@ -895,7 +927,7 @@ export class Settings {
                 ${this.channelHealthPanel()}
                 <div class="settings-item settings-item--action">
                   <div class="settings-item-title">${t('settings.editChannelList')}</div>
-                  <button class="btn btn-secondary" data-focusable id="edit-channel-list"
+                  <button class="btn btn-secondary" data-focusable data-key="edit-channel-list" id="edit-channel-list"
                           aria-label="${t('settings.editChannelList')}">${t('settings.editChannelList')}</button>
                   <div class="settings-item-hint">${t('settings.editChannelListHint')}</div>
                 </div>
@@ -906,7 +938,7 @@ export class Settings {
                 </div>
                 <div class="settings-item settings-item--action">
                   <div class="settings-item-title">${t('settings.resetCustomization')}</div>
-                  <button class="btn btn-danger" data-focusable id="reset-customization"
+                  <button class="btn btn-danger" data-focusable data-key="reset-customization" id="reset-customization"
                           aria-label="${t('settings.resetCustomization')}">${t('settings.resetCustomization')}</button>
                   <div class="settings-item-hint">${t('settings.resetCustomizationHint')}</div>
                 </div>
@@ -927,9 +959,9 @@ export class Settings {
                           index,
                           manualEpgSources.length,
                         ))
-                      : html`<div class="empty-hint">${t('settings.noEpgSources')}</div>`}
+                      : emptyHint('manual-epg-empty', t('settings.noEpgSources'))}
                   </div>
-                  <button class="btn btn-primary" data-focusable id="add-epg-source">
+                  <button class="btn btn-primary" data-focusable data-key="add-epg-source" id="add-epg-source">
                     <span class="btn-add-icon" aria-hidden="true">+</span>${t('settings.addEpgSource')}
                   </button>
                   <div class="settings-item-hint">${t('settings.xmltvUrlsHint')}</div>
@@ -952,7 +984,7 @@ export class Settings {
                 </div>
                 <div class="settings-item settings-item--action">
                   <div class="settings-item-title">${t('reminderManager.title')}</div>
-                  <button class="btn btn-secondary" data-focusable id="manage-reminders">
+                  <button class="btn btn-secondary" data-focusable data-key="manage-reminders" id="manage-reminders">
                     ${t('settings.manageReminders', {
                       count: ReminderService.listManageable().length,
                     })}
@@ -1024,14 +1056,14 @@ export class Settings {
                 <div class="settings-row">
                   <div class="settings-field wide">
                     <label><span class="settings-domain">SubDL.com</span> ${t('settings.apiKey')}</label>
-                    <input type="text" class="settings-input" data-focusable id="subdl-key"
+                    <input type="text" class="settings-input" data-focusable data-key="subdl-key" id="subdl-key"
                            value="${os.subdl.apiKey}" placeholder="api_key">
                   </div>
                 </div>
                 <div class="settings-row">
                   <div class="settings-field wide">
                     <label><span class="settings-domain">Assrt.net</span> ${t('settings.assrtToken')}</label>
-                    <input type="text" class="settings-input" data-focusable id="assrt-key"
+                    <input type="text" class="settings-input" data-focusable data-key="assrt-key" id="assrt-key"
                            value="${os.assrt.apiKey}" placeholder="token">
                     <div class="settings-item-hint">${t('settings.assrtDescription')}</div>
                   </div>
@@ -1039,17 +1071,17 @@ export class Settings {
                 <div class="settings-row">
                   <div class="settings-field">
                     <label><span class="settings-domain">OpenSubtitles.com</span> ${t('settings.apiKey')}</label>
-                    <input type="text" class="settings-input" data-focusable id="os-key"
+                    <input type="text" class="settings-input" data-focusable data-key="os-key" id="os-key"
                            value="${os.opensubtitles.apiKey}" placeholder="api_key">
                   </div>
                   <div class="settings-field">
                     <label>${t('settings.username')}</label>
-                    <input type="text" class="settings-input" data-focusable id="os-user"
+                    <input type="text" class="settings-input" data-focusable data-key="os-user" id="os-user"
                            value="${os.opensubtitles.username}" placeholder="username">
                   </div>
                   <div class="settings-field">
                     <label>${t('settings.password')}</label>
-                    <input type="password" class="settings-input" data-focusable id="os-pass"
+                    <input type="password" class="settings-input" data-focusable data-key="os-pass" id="os-pass"
                            value="${os.opensubtitles.password}" placeholder="password">
                   </div>
                 </div>
@@ -1174,7 +1206,7 @@ export class Settings {
                     </div>
                   </div>
                   ${enabledAccounts.length ? html`
-                    <div class="settings-advanced-row">
+                    <div class="settings-advanced-row" data-key="xtream-catalog-refresh-row">
                       <div class="settings-advanced-group" aria-hidden="true"></div>
                       <div class="settings-advanced-description">
                         <div class="settings-item-title">${t('settings.xtreamCatalogRefreshInterval')}</div>
@@ -1200,40 +1232,41 @@ export class Settings {
                 <h3 class="settings-section-title">${t('settings.dataManagement')}</h3>
                 <div class="settings-item settings-item--action">
                   <div class="settings-item-title">${t('channel.recentlyWatched')}</div>
-                  <button class="btn btn-danger" data-focusable id="clear-recently-watched"
+                  <button class="btn btn-danger" data-focusable data-key="clear-recently-watched" id="clear-recently-watched"
                           aria-label="${t('settings.clearRecentlyWatched')}">${t('settings.clearRecentlyWatched')}</button>
                   <div class="settings-item-hint">
                     ${t('settings.clearRecentDescription')}
                   </div>
                 </div>
                 ${this.watchlistAccount ? html`
-                  <div class="settings-item settings-item--action">
+                  <div class="settings-item settings-item--action" data-key="continue-watching-item">
                     <div class="settings-item-title">${t('catalog.continueWatching')}</div>
-                    <button class="btn btn-danger" data-focusable id="clear-continue-watching"
+                    <button class="btn btn-danger" data-focusable data-key="clear-continue-watching" id="clear-continue-watching"
                             aria-label="${t('settings.clearContinueWatching')}">${t('settings.clearContinueWatching')}</button>
                     <div class="settings-item-hint" id="continue-watching-count-hint" aria-live="polite">
                       ${this.collectionDescription('continue')}
                     </div>
                   </div>
-                  <div class="settings-item settings-item--action">
+                  <div class="settings-item settings-item--action" data-key="watchlist-item">
                     <div class="settings-item-title">${t('common.watchlist')}</div>
-                    <button class="btn btn-danger" data-focusable id="clear-watchlist"
+                    <button class="btn btn-danger" data-focusable data-key="clear-watchlist" id="clear-watchlist"
                             aria-label="${t('settings.clearWatchlist')}">${t('settings.clearWatchlist')}</button>
                     <div class="settings-item-hint" id="watchlist-count-hint" aria-live="polite">
                       ${this.collectionDescription('watchlist')}
                     </div>
                   </div>
                 ` : ''}
-                <div class="cache-usage" id="cache-usage" aria-live="polite">
+                <div class="cache-usage" id="cache-usage" data-key="cache-usage"
+                     data-morph-preserve aria-live="polite">
                   <div class="cache-usage-loading">${t('common.loading')}</div>
                 </div>
-                <div class="settings-maintenance">
-                  <button class="btn btn-secondary" data-focusable id="refresh-data">${t('settings.refreshAll')}</button>
-                  <button class="btn btn-danger" data-focusable id="clear-cache">${t('settings.clearCache')}</button>
+                <div class="settings-maintenance" data-key="settings-maintenance">
+                  <button class="btn btn-secondary" data-focusable data-key="refresh-data" id="refresh-data">${t('settings.refreshAll')}</button>
+                  <button class="btn btn-danger" data-focusable data-key="clear-cache" id="clear-cache">${t('settings.clearCache')}</button>
                 </div>
-                <div class="settings-item settings-item--action settings-reset">
+                <div class="settings-item settings-item--action settings-reset" data-key="settings-reset">
                   <div class="settings-item-title">${t('settings.resetApp')}</div>
-                  <button class="btn btn-danger" data-focusable id="reset-app"
+                  <button class="btn btn-danger" data-focusable data-key="reset-app" id="reset-app"
                           aria-label="${t('settings.resetApp')}">${t('settings.resetApp')}</button>
                   <div class="settings-item-hint">${t('settings.resetAppDescription')}</div>
                 </div>
@@ -1247,12 +1280,13 @@ export class Settings {
 
           <div class="settings-actions" data-nav-container data-nav-straight data-nav-remember
                data-nav-leave-left=".settings-nav-item.active" data-nav-leave-right="">
-            <button class="btn btn-secondary btn-large" data-focusable id="cancel-settings">${t('common.cancel')}</button>
-            <button class="btn btn-primary btn-large" data-focusable id="save-settings">${t('settings.saveApply')}</button>
+            <button class="btn btn-secondary btn-large" data-focusable data-key="cancel-settings" id="cancel-settings">${t('common.cancel')}</button>
+            <button class="btn btn-primary btn-large" data-focusable data-key="save-settings" id="save-settings">${t('settings.saveApply')}</button>
           </div>
         </div>
       </div>
     `);
+    this.discardEdits();
 
     this.enter();
     void this.refreshSetupInfo();
@@ -1261,6 +1295,15 @@ export class Settings {
     // app.ts → subscribeToServiceEvents) and call refreshUploads() directly.
     void this.refreshUploads();
     void this.loadCacheUsage();
+  }
+
+  // A render reopens Settings, which drops unsaved edits. morph() writes the
+  // stored value to the `value` attribute, which a field the user typed in
+  // no longer follows, so its text is put back by hand.
+  private discardEdits(): void {
+    this.container.querySelectorAll('input').forEach((input) => {
+      if (input.value !== input.defaultValue) input.value = input.defaultValue;
+    });
   }
 
   private epgSources(manualSources: ManualEpgSource[], playlists: PlaylistEntry[]): EpgSource[] {
@@ -1343,22 +1386,26 @@ export class Settings {
           ${selected
             ? html`
               <button class="btn btn-secondary epg-offset-step" data-focusable
+                      data-key="epg-offset:earlier"
                       data-offset-delta="-${CONFIG.EPG.OFFSET_STEP_MINUTES}"
                       aria-label="${t('settings.offsetEarlier')}">-</button>
               <button class="btn btn-secondary epg-offset-value" data-focusable
-                      aria-label="${t('settings.offsetReset')}">
+                      data-key="epg-offset:value" aria-label="${t('settings.offsetReset')}">
                 ${formatEpgOffset(offset)}
               </button>
               <button class="btn btn-secondary epg-offset-step" data-focusable
+                      data-key="epg-offset:later"
                       data-offset-delta="${CONFIG.EPG.OFFSET_STEP_MINUTES}"
                       aria-label="${t('settings.offsetLater')}">+</button>
             `
             : html`
-              <button class="btn btn-secondary epg-offset-step" disabled>-</button>
-              <button class="btn btn-secondary epg-offset-value" disabled>
+              <button class="btn btn-secondary epg-offset-step" data-key="epg-offset:earlier"
+                      disabled>-</button>
+              <button class="btn btn-secondary epg-offset-value" data-key="epg-offset:value" disabled>
                 ${formatEpgOffset(0)}
               </button>
-              <button class="btn btn-secondary epg-offset-step" disabled>+</button>
+              <button class="btn btn-secondary epg-offset-step" data-key="epg-offset:later"
+                      disabled>+</button>
             `}
         </div>
       </div>
@@ -2046,8 +2093,9 @@ export class Settings {
   }
 
   // A key names the control by its data-key or id, or else by its place
-  // among its kind under the nearest ancestor with an id. Most of Settings
-  // is rebuilt on every open, and the key finds the new node.
+  // among its kind under the nearest ancestor with an id. Settings' own
+  // controls all carry a data-key, which render()'s morph keeps on the same
+  // node; the other forms cover controls a shared template leaves unkeyed.
   private keyOf(el: HTMLElement): string {
     if (el.dataset.key) return `=${el.dataset.key}`;
     if (el.id) return `#${el.id}`;
@@ -2277,17 +2325,10 @@ export class Settings {
     if (!entries) return;
 
     // First add: replace the empty-hint with the column header row.
-    const emptyHint = entries.querySelector('.empty-hint');
-    if (emptyHint) {
-      emptyHint.remove();
-      const header = document.createElement('div');
-      header.className = 'settings-row playlist-header-row';
-      header.innerHTML = `
-        <div class="settings-field"><label>${t('settings.name')}</label></div>
-        <div class="settings-field"><label>${t('settings.url')}</label></div>
-        <div class="playlist-header-spacer"></div>
-      `;
-      entries.appendChild(header);
+    const hint = entries.querySelector('.empty-hint');
+    if (hint) {
+      hint.remove();
+      appendRendered(entries, playlistHeaderRow());
     }
 
     // Seed a concrete default name so it persists as a real value (a blank name
@@ -2299,25 +2340,12 @@ export class Settings {
       const m = /^Playlist (\d+)$/.exec(inp.value.trim());
       return m ? Math.max(max, parseInt(m[1], 10)) : max;
     }, nameInputs.length) + 1;
-    const row = document.createElement('div');
-    row.className = 'settings-row';
-    row.dataset.id = genPlaylistId();
-    row.setAttribute('data-source-entry', '');
-    row.innerHTML = `
-      <div class="settings-field">
-        <input type="text" class="settings-input playlist-name"
-               aria-label="${t('settings.playlistName')}" placeholder="${t('settings.myPlaylist')}"
-               data-focusable value="${t('settings.playlistDefault', { number: nextNum })}">
-      </div>
-      <div class="settings-field">
-        <input type="url" class="settings-input playlist-url"
-               aria-label="${t('settings.playlistUrl')}" placeholder="https://...m3u"
-               data-focusable value="">
-      </div>
-      ${String(sourceToggle(true))}
-      <button class="btn btn-danger remove-playlist" data-focusable>${t('common.remove')}</button>
-    `;
-    entries.appendChild(row);
+    const row = appendRendered(entries, playlistRow({
+      id: genPlaylistId(),
+      name: t('settings.playlistDefault', { number: nextNum }),
+      url: '',
+    }, true));
+    if (!row) return;
     this.refreshManualEpgScopes();
 
     const newInput = row.querySelector<HTMLElement>('input');
@@ -2422,16 +2450,13 @@ export class Settings {
     entries.querySelector('.empty-hint')?.remove();
     const playlists = this.epgScopePlaylistsFromEditor();
     const index = entries.querySelectorAll('[data-manual-epg-source]').length;
-    const wrap = document.createElement('div');
-    wrap.innerHTML = String(manualEpgSourceRow(
+    const row = appendRendered(entries, manualEpgSourceRow(
       { url: '', playlistIds: [] },
       playlists,
       index,
       index + 1,
     ));
-    const row = wrap.firstElementChild;
     if (!row) return;
-    entries.appendChild(row);
     this.renumberManualEpgSources();
     const input = row.querySelector<HTMLInputElement>('.manual-epg-url');
     if (input) {
@@ -2444,10 +2469,7 @@ export class Settings {
     const entries = $('.manual-epg-sources', this.container);
     button.closest('[data-manual-epg-source]')?.remove();
     if (entries && !entries.querySelector('[data-manual-epg-source]')) {
-      const emptyHint = document.createElement('div');
-      emptyHint.className = 'empty-hint';
-      emptyHint.textContent = t('settings.noEpgSources');
-      entries.appendChild(emptyHint);
+      appendRendered(entries, emptyHint('manual-epg-empty', t('settings.noEpgSources')));
     }
     this.renumberManualEpgSources();
     this.refreshEpgOffsetEditor(
@@ -2545,10 +2567,7 @@ export class Settings {
     if (entries.querySelectorAll('.settings-row:not(.playlist-header-row)').length === 0) {
       const header = entries.querySelector('.playlist-header-row');
       if (header) header.remove();
-      const e = document.createElement('div');
-      e.className = 'empty-hint';
-      e.textContent = t('settings.noPlaylists');
-      entries.appendChild(e);
+      appendRendered(entries, emptyHint('playlist-empty', t('settings.noPlaylists')));
     }
     this.refreshManualEpgScopes();
     this.nav.focusFirst();
@@ -2559,13 +2578,9 @@ export class Settings {
     if (!entries) return;
     entries.querySelector('.empty-hint')?.remove();
 
-    // Build the card off-DOM from the trusted template, then attach it. The
-    // seeded id gives morph/save a stable key from the moment it's created.
-    const tmp = document.createElement('div');
-    tmp.innerHTML = String(xtreamCard({ id: genPlaylistId() }));
-    const card = tmp.firstElementChild as HTMLElement | null;
+    // The seeded id gives morph/save a stable key from the moment it's created.
+    const card = appendRendered(entries, xtreamCard({ id: genPlaylistId() }));
     if (!card) return;
-    entries.appendChild(card);
     this.refreshManualEpgScopes();
 
     const firstInput = card.querySelector<HTMLInputElement>('input');
@@ -2581,10 +2596,7 @@ export class Settings {
     // Remove the card the clicked button sits in (closest), independent of order.
     removeBtn.closest('.xtream-card')?.remove();
     if (entries.querySelectorAll('.xtream-card').length === 0) {
-      const e = document.createElement('div');
-      e.className = 'empty-hint';
-      e.textContent = t('settings.noXtream');
-      entries.appendChild(e);
+      appendRendered(entries, emptyHint('xtream-empty', t('settings.noXtream')));
     }
     this.refreshManualEpgScopes();
     this.nav.focusFirst();
@@ -3001,8 +3013,9 @@ export class Settings {
    * Replace the placeholder text in #setup-info with QR + instructions (or
    * an error when the service is unreachable). Built through `html` so the
    * setup URL — which originates off-device — is escaped, then handed to
-   * `morph()` so the surrounding rendered content stays unaffected and we
-   * never touch innerHTML directly with an interpolated string.
+   * `morph()` so the surrounding rendered content stays unaffected. render()
+   * marks #setup-info `data-morph-preserve`, so a re-render keeps the QR
+   * until this replaces it.
    */
   async refreshSetupInfo(): Promise<void> {
     const el = $('#setup-info', this.container);
@@ -3067,7 +3080,7 @@ export class Settings {
     morph(target, uploads.length
       ? html`${uploads.map((pl) =>
           uploadRow(pl, pending.get(pl.id || pl.url) ?? isSourceEnabled(pl)))}`
-      : html`<div class="empty-hint">${t('settings.noUploads')}</div>`);
+      : emptyHint('upload-empty', t('settings.noUploads')));
     this.refreshManualEpgScopes();
   }
 }

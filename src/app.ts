@@ -941,8 +941,8 @@ class App {
         this.tabBar.setSections(false);
         this.tabBar.setAccounts([], '');
         this.channelList.render();
-        this.showView('settings');
         this.settings.render();
+        this.showView('settings');
         showToast(t('app.welcome'));
         return;
       }
@@ -1091,8 +1091,8 @@ class App {
       log.error('loadData failed:', err);
       // Someone already browsing what arrived keeps their place.
       if (this.userActions === actionsAtStart && this.isCurrentView('channels')) {
-        this.showView('settings');
         this.settings.render();
+        this.showView('settings');
       }
       showToast(t('app.loadFailed'));
     } finally {

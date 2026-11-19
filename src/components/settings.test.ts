@@ -20,6 +20,8 @@ const {
   motionMock,
 } = vi.hoisted(() => {
   const state = {
+    // Message overrides, so a test can feed markup through a translation.
+    messages: {} as Record<string, string>,
     playlists: [] as {
       id?: string;
       name: string;
@@ -244,6 +246,14 @@ vi.mock('../services/reminder-service', () => ({
 }));
 vi.mock('../services/setup-client', () => ({ SetupClient: setupMock }));
 vi.mock('../services/channel-health', () => ({ ChannelHealthService: healthMock }));
+vi.mock('../i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../i18n')>();
+  return {
+    ...actual,
+    t: (key: Parameters<typeof actual.t>[0], params?: Parameters<typeof actual.t>[1]) =>
+      state.messages[key] ?? actual.t(key, params),
+  };
+});
 
 import { Settings, liveCategoriesButtonContent } from './settings';
 import { setLocale } from '../i18n';
@@ -251,6 +261,7 @@ import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { channelKey } from '../utils/channel';
 import { morph } from '../utils/morph';
+import { hide, show } from '../utils/dom';
 import { Focus } from '../navigation/focus-scope';
 import { CONFIG } from '../config';
 import { ParentalControlService } from '../services/parental-control';
@@ -262,6 +273,7 @@ let settings: Settings;
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
+  state.messages = {};
   state.playlists = [];
   state.manualEpgSources = [];
   state.autoPlay = false;
@@ -2903,5 +2915,113 @@ describe('Settings Xtream Live categories', () => {
     expect(storageMock.setLiveCategorySnapshot).not.toHaveBeenCalled();
     click('#save-settings');
     expect(savedXtream()[0].xtream?.liveCategories).toEqual({ mode: 'include', ids: ['c1'] });
+  });
+});
+
+describe('Settings re-render', () => {
+  const XSS = '<img src=x onerror=alert(1)>';
+  const hover = (el: Element) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+  const reopen = () => {
+    container.classList.add('view');
+    hide(container);
+    settings.render();
+    show(container);
+  };
+
+  beforeEach(() => {
+    state.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a', source: 'url' },
+      { id: 'x1', name: 'Bravo', url: 'http://host/b', source: 'xtream', xtream: { username: 'u', password: 'p' } },
+    ];
+    state.manualEpgSources = [{ url: 'http://host/g.xml', playlistIds: [] }];
+  });
+
+  it('keeps every control node, so focus and listeners survive', () => {
+    settings.render();
+    const selectors = [
+      '#save-settings', '.playlist-url', '.xtream-password', '.manual-epg-url',
+      '.theme-swatch', '.settings-nav-item', '#app-language .dropdown-trigger',
+      '#auto-play .toggle-option', '#playlist-entries .source-toggle', '.settings-scroll',
+    ];
+    const before = selectors.map(s => container.querySelector(s));
+    expect(before.every(Boolean)).toBe(true);
+
+    settings.render();
+    expect(selectors.map(s => container.querySelector(s))).toEqual(before);
+    selectors.forEach((s, i) => expect(container.querySelector(s), s).toBe(before[i]));
+  });
+
+  // A render reopens Settings: even the field being typed in shows what is stored.
+  it('drops the text being typed when it renders', () => {
+    settings.render();
+    const url = container.querySelector<HTMLInputElement>('.playlist-url')!;
+    hover(url);
+    settings.handleAction('select');
+    expect(document.activeElement).toBe(url);
+    url.value = 'http://host/typing';
+
+    settings.render();
+    expect(container.querySelector('.playlist-url')).toBe(url);
+    expect(url.value).toBe('http://host/a');
+  });
+
+  it('shows the stored values again when reopened, dropping unsaved edits', () => {
+    settings.render();
+    const name = container.querySelector<HTMLInputElement>('.playlist-name')!;
+    name.value = 'Edited';
+    click('#auto-play [data-value="on"]');
+    click('#add-playlist');
+    click('#add-xtream');
+    expect(container.querySelectorAll('#playlist-entries [data-source-entry]')).toHaveLength(2);
+
+    reopen();
+    expect(container.querySelector('.playlist-name')).toBe(name);
+    expect(name.value).toBe('Alpha');
+    expect(container.querySelector('#auto-play .toggle-option.active')?.getAttribute('data-value'))
+      .toBe('off');
+    expect(container.querySelectorAll('#playlist-entries [data-source-entry]')).toHaveLength(1);
+    expect(container.querySelectorAll('#xtream-entries .xtream-card')).toHaveLength(1);
+  });
+
+  it('follows a stored value that changed since the field was edited', () => {
+    settings.render();
+    const name = container.querySelector<HTMLInputElement>('.playlist-name')!;
+    name.value = 'Edited';
+    reopen();
+    state.playlists = [{ ...state.playlists[0], name: 'Charlie' }, state.playlists[1]];
+    reopen();
+    expect(name.value).toBe('Charlie');
+  });
+
+  it('renders markup in source names and URLs as text everywhere', () => {
+    state.playlists = [
+      { id: 'p1', name: XSS, url: `http://host/a?${XSS}`, source: 'url' },
+      { id: 'x1', name: XSS, url: `http://host/b?${XSS}`, source: 'xtream', xtream: { username: XSS, password: XSS } },
+    ];
+    state.manualEpgSources = [{ url: `http://host/g.xml?${XSS}`, playlistIds: ['p1'] }];
+    settings.render();
+    settings.render();
+    click('#add-epg-source');
+    click('#add-xtream');
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector<HTMLInputElement>('.playlist-name')!.value).toBe(XSS);
+    expect(container.querySelector<HTMLInputElement>('.xtream-name')!.value).toBe(XSS);
+    expect(container.querySelector<HTMLInputElement>('.manual-epg-url')!.value)
+      .toBe(`http://host/g.xml?${XSS}`);
+    const scopes = Array.from(container.querySelectorAll('.manual-epg-source'))
+      .map(row => row.querySelector('[data-playlist-id="p1"]')!.textContent!.trim());
+    expect(scopes).toEqual([XSS, XSS]);
+  });
+
+  it('builds an added playlist row and its header as text, not markup', () => {
+    state.playlists = [];
+    state.messages = { 'settings.name': XSS, 'settings.playlistDefault': XSS };
+    settings.render();
+    click('#add-playlist');
+
+    expect(container.querySelector('#playlist-entries img')).toBeNull();
+    expect(container.querySelector('.playlist-header-row label')!.textContent).toBe(XSS);
+    expect(container.querySelector<HTMLInputElement>('.playlist-name')!.value).toBe(XSS);
   });
 });
