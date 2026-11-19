@@ -336,7 +336,7 @@
 }
 
 .parental-row.focused,
-.parental-pin-actions button:focus {
+.parental-pin-actions button.focused {
   outline: 3px solid var(--focus-ring);
   outline-offset: -3px;
   background: var(--bg-tertiary);

@@ -53,6 +53,13 @@ describe('SubtitleOffsetOverlay', () => {
     expect(onChange).toHaveBeenLastCalledWith(0);
   });
 
+  it('rings its Reset control while open', () => {
+    const { el, overlay } = make();
+    overlay.open(1);
+    Focus.flush();
+    expect(Array.from(el.querySelectorAll('.focused'))).toEqual([el.querySelector('[data-offset-reset]')]);
+  });
+
   it('closes on back', () => {
     const { overlay } = make();
     overlay.open(1);

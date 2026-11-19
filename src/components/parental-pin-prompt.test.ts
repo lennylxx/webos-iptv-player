@@ -180,6 +180,28 @@ describe('ParentalPinPrompt', () => {
     await vi.waitFor(() => expect(parental.verifyManagementPin).toHaveBeenCalledWith('1234'));
   });
 
+  it('rings Cancel by key and by hover, and hides the ring while the field has the caret', () => {
+    const prompt = new ParentalPinPrompt();
+    prompt.showVerify('Verify', vi.fn());
+    const input = document.querySelector<HTMLInputElement>('.parental-pin-input')!;
+    const cancel = document.querySelector<HTMLElement>('[data-pin-action="cancel"]')!;
+    const rings = () => { Focus.flush(); return Array.from(document.querySelectorAll('.focused')); };
+    expect(document.activeElement).toBe(input);
+    expect(rings()).toEqual([]);
+
+    prompt.handleAction('down');
+    expect(document.activeElement).toBe(cancel);
+    expect(rings()).toEqual([cancel]);
+
+    prompt.handleAction('up');
+    expect(document.activeElement).toBe(input);
+    expect(rings()).toEqual([]);
+
+    cancel.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    expect(document.activeElement).toBe(cancel);
+    expect(rings()).toEqual([cancel]);
+  });
+
   it('ignores a PIN check that finishes after Back closed the prompt', async () => {
     let finish: (value: { accepted: boolean; blockedForMs: number }) => void = () => {};
     parental.verifyManagementPin.mockImplementationOnce(() =>

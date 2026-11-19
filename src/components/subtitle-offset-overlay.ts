@@ -48,9 +48,11 @@ export class SubtitleOffsetOverlay {
         restrict: 'self-only',
         when: () => inShownView(el),
         onAction: (action) => this.handleAction(action),
+        defaultKey: () => 'reset',
       });
     }
     Focus.push(this.scope);
+    this.scope.focus('reset', 'key');
   }
 
   close(): void {
@@ -85,7 +87,7 @@ export class SubtitleOffsetOverlay {
         <div class="subs-offset-title">${t('player.subtitleSync')}</div>
         <div class="subs-offset-value">${formatSubtitleOffset(this.seconds)}</div>
         <div class="subs-offset-hint">${t('subtitle.syncHint')}</div>
-        <div class="subs-offset-reset" data-focusable data-offset-reset>${t('subtitle.reset')}</div>
+        <div class="subs-offset-reset" data-focusable data-key="reset" data-offset-reset>${t('subtitle.reset')}</div>
       </div>
     `);
   }

@@ -4,7 +4,7 @@ import { t, tp } from '../i18n';
 import { html, raw } from '../utils/dom';
 import { LOCK_ICON } from './icons';
 import { morph } from '../utils/morph';
-import { Focus, Tier, type FocusScope } from '../navigation/focus-scope';
+import { Focus, Tier, type FocusScope, type Via } from '../navigation/focus-scope';
 import { ParentalControlService } from '../services/parental-control';
 import { createLogger } from '../utils/logger';
 
@@ -30,7 +30,8 @@ export class ParentalPinPrompt {
   private blockedUntil = 0;
   private blockedInMinutes = false;
   private blockTimer: number | null = null;
-  // Registered on the first open; the field and Cancel keep native focus.
+  // Registered on the first open. Cancel wears the scope's ring; the field's
+  // caret stands in for it, so the ring is concealed while the field has it.
   private scope: FocusScope | null = null;
 
   constructor() {
@@ -129,11 +130,11 @@ export class ParentalPinPrompt {
       return;
     }
     if (action === 'up') {
-      this.input()?.focus();
+      this.focusInput();
       return;
     }
     if (action === 'down') {
-      this.cancelButton()?.focus();
+      this.focusCancel('key');
       return;
     }
     if (action === 'select') {
@@ -154,6 +155,7 @@ export class ParentalPinPrompt {
         restrict: 'self-only',
         tier: Tier.critical,
         onAction: (action, event) => this.handleAction(action, event),
+        defaultKey: () => 'cancel',
       });
     }
     this.session++;
@@ -168,7 +170,7 @@ export class ParentalPinPrompt {
       ? ParentalControlService.retryBlockedForMs()
       : 0;
     if (blockedForMs > 0) this.block(blockedForMs);
-    else this.input()?.focus();
+    else this.focusInput();
   }
 
   private block(ms: number): void {
@@ -186,7 +188,7 @@ export class ParentalPinPrompt {
       this.blockedUntil = 0;
       this.error = '';
       this.render();
-      this.input()?.focus();
+      this.focusInput();
       return;
     }
     let nextUpdate = remaining;
@@ -198,7 +200,7 @@ export class ParentalPinPrompt {
       this.error = tp('parental.retryInSeconds', Math.ceil(remaining / 1000));
     }
     this.render();
-    this.cancelButton()?.focus();
+    this.focusCancel('key');
     this.blockTimer = window.setTimeout(() => this.updateBlock(), nextUpdate);
   }
 
@@ -210,6 +212,19 @@ export class ParentalPinPrompt {
 
   private cancelButton(): HTMLElement | null {
     return this.el.querySelector<HTMLElement>('[data-pin-action="cancel"]');
+  }
+
+  // A field that already had the caret fires no focusin to conceal the ring.
+  private focusInput(): void {
+    const input = this.input();
+    input?.focus();
+    if (input && document.activeElement === input) this.scope?.conceal();
+  }
+
+  private focusCancel(via: Via): void {
+    this.cancelButton()?.focus();
+    this.scope?.focus('cancel', via);
+    Focus.flush();
   }
 
   private input(): HTMLInputElement | null {
@@ -249,7 +264,7 @@ export class ParentalPinPrompt {
         </div>
         <div class="parental-pin-error" aria-live="polite">${this.error}</div>
         <div class="parental-pin-actions">
-          <button data-focusable data-pin-action="cancel">${t('common.cancel')}</button>
+          <button data-focusable data-key="cancel" data-pin-action="cancel">${t('common.cancel')}</button>
         </div>
       </div>
     `);
@@ -286,7 +301,7 @@ export class ParentalPinPrompt {
       this.error = '';
       this.clearInput();
       this.render();
-      this.input()?.focus();
+      this.focusInput();
       return;
     }
 
@@ -330,7 +345,7 @@ export class ParentalPinPrompt {
     this.error = message;
     this.clearInput();
     this.render();
-    this.input()?.focus();
+    this.focusInput();
   }
 
   private bindEvents(): void {
@@ -350,6 +365,7 @@ export class ParentalPinPrompt {
     this.el.addEventListener('focusin', (event: FocusEvent) => {
       if ((event.target as HTMLElement).classList.contains('parental-pin-input')) {
         this.updatePinSlots(this.input()?.value.length ?? 0);
+        this.scope?.conceal();
       }
     });
     this.el.addEventListener('focusout', (event: FocusEvent) => {
@@ -364,7 +380,7 @@ export class ParentalPinPrompt {
         void this.submit();
       } else if (event.key === 'ArrowDown') {
         event.preventDefault();
-        this.cancelButton()?.focus();
+        this.focusCancel('key');
       } else if (event.key === 'ArrowUp') {
         // A number field would otherwise step its value and enter a digit.
         event.preventDefault();
@@ -372,6 +388,9 @@ export class ParentalPinPrompt {
         event.preventDefault();
         this.hide();
       }
+    });
+    this.el.addEventListener('nav:hover', (event: Event) => {
+      if ((event.target as HTMLElement).closest('[data-pin-action="cancel"]')) this.focusCancel('pointer');
     });
     this.el.addEventListener('click', (event: MouseEvent) => {
       const button = (event.target as HTMLElement).closest<HTMLElement>('[data-pin-action]');
