@@ -247,8 +247,18 @@ async function auditRings(page: Page, file: string | undefined, title: string): 
   return failures;
 }
 
+// What installRingAudit leaves on `window` for specs that check rings
+// between steps of their own (focus-fuzz.spec.ts).
+export interface RingAuditApi {
+  inspect(input: string): { kind: string | null; input: string; shown: string[]; rings: string[]; active: string };
+  describe(el: Element): string;
+  visible(el: Element): boolean;
+}
+
 function installRingAudit(recordNone: boolean): void {
-  const w = window as unknown as { __ringAudit?: (entry: string) => void; __ringPending?: number };
+  const w = window as unknown as {
+    __ringAudit?: (entry: string) => void; __ringPending?: number; __ringAuditApi?: RingAuditApi;
+  };
   w.__ringPending = 0;
   const PROMPTS = '.confirmation-prompt, .catchup-resume-prompt, .reminder-prompt, '
     + '.parental-pin-prompt, .live-category-picker';
@@ -306,6 +316,7 @@ function installRingAudit(recordNone: boolean): void {
       active: active && active !== document.body ? describe(active) : '',
     };
   };
+  w.__ringAuditApi = { inspect, describe, visible };
   const check = (input: string) => {
     w.__ringPending! += 1;
     const done = () => { w.__ringPending! -= 1; };
@@ -333,7 +344,8 @@ function installRingAudit(recordNone: boolean): void {
       promptSet = set;
       check(set ? 'prompt shown' : 'prompt hidden');
     }
-  }).observe(document.documentElement, {
+  // Init scripts run before the parser creates <html>, so watch the document.
+  }).observe(document, {
     subtree: true, childList: true, attributes: true, attributeFilter: ['class'],
   });
 }
