@@ -54,6 +54,13 @@ export class VirtualScrollGuard {
     });
   }
 
+  // Apply now an offset still waiting for its frame, such as one a hidden
+  // element could not take.
+  flush(element: HTMLElement): void {
+    const expected = this.expected.get(element);
+    if (expected) this.writeOffset(element, expected);
+  }
+
   // A smooth scroll past one viewport outlives the guard's frames and crosses
   // offsets whose window is not rendered, so its later events read as user
   // scrolls that re-window the list and drop the focused row.

@@ -195,6 +195,15 @@ export class ChannelList {
       this.syncScope('pointer');
     });
     this.container.addEventListener('click', () => this.onListFocus(), true);
+    // The rename field keeps every key, so a key typed into it brings back
+    // its row if the wheel scrolled it away meanwhile.
+    this.container.addEventListener('keydown', (e: KeyboardEvent) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement) || !target.classList.contains('edit-text-input')) return;
+      const key = target.closest<HTMLElement>('[data-focusable]')?.dataset.key;
+      const row = key ? this.rowPosition(key) : null;
+      if (row) this.focusRow(row.list, row.position);
+    });
     this.editor = new ChannelListEditor(container, this.nav, {
       render: () => this.render(),
       stepChannelList: (action) => this.stepChannelList(action),
@@ -932,6 +941,11 @@ export class ChannelList {
     const key = this.focusScope.focusKey;
     if (resume && key !== null && this.revealKey(key)) return;
     if (playing >= 0 && this.revealChannel(playing)) return;
+    // The top row, in view: a render while hidden may have scrolled the list
+    // for a row focus no longer holds.
+    if (this.currentGroup !== 'builtin:recently-watched'
+        && this.container.querySelector('.channel-main [data-list-position]')
+        && this.focusRow('channel', 0)) return;
     const entry = this.container.querySelector<HTMLElement>('.channel-main [data-channel-index]');
     if (entry) this.nav.focus(entry);
     else this.nav.focusFirst();
@@ -952,12 +966,15 @@ export class ChannelList {
     const selector = list === 'group'
       ? `[data-group-position="${String(position)}"]`
       : `[data-list-position="${String(position)}"]`;
+    const scroller = this.container.querySelector<HTMLElement>(
+      list === 'group' ? '.group-list' : '.channel-main',
+    );
+    const virtualizer = list === 'group' ? this.groupVirtualizer : this.channelVirtualizer;
+    // A render while the list was hidden leaves an offset only the next frame
+    // applies; judge the row where the list is about to scroll.
+    if (scroller) this.scrollGuard.flush(scroller);
     let row = this.container.querySelector<HTMLElement>(selector);
     if (!row || this.rowVisibility(row, list) !== 'full') {
-      const scroller = this.container.querySelector<HTMLElement>(
-        list === 'group' ? '.group-list' : '.channel-main',
-      );
-      const virtualizer = list === 'group' ? this.groupVirtualizer : this.channelVirtualizer;
       virtualizer.ensureVisible(position, scroller?.clientHeight || CHANNEL_VIEWPORT_FALLBACK);
       // render() reads the group offset back from the DOM.
       if (scroller) this.scrollGuard.syncOffset(scroller, 'vertical', virtualizer.scrollOffset);

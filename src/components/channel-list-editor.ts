@@ -113,6 +113,15 @@ export class ChannelListEditor {
       this.updateEpgPointerHover(target);
       event.stopImmediatePropagation();
     }, true);
+    // An open text field keeps every key, so a hover outside it must not
+    // light another control while the field keeps its caret.
+    this.container.addEventListener('nav:hover', (event: Event) => {
+      if ((!this.renaming && !this.newGroupOpen) || !(event.target instanceof Node)) return;
+      const input = this.container.querySelector<HTMLElement>('.edit-text-input');
+      const region = input?.closest<HTMLElement>('.group-picker, [data-focusable]') ?? input;
+      if (region?.contains(event.target)) return;
+      event.stopImmediatePropagation();
+    }, true);
     this.container.addEventListener('mousedown', (event: MouseEvent) => {
       this.onPointerDown(event);
     });
@@ -145,7 +154,7 @@ export class ChannelListEditor {
     });
     this.container.addEventListener('keydown', (event: KeyboardEvent) => {
       if (!(event.target instanceof HTMLInputElement)) return;
-      if (event.target.classList.contains('epg-mapping-search')
+      if (event.target.matches('.epg-mapping-search, .edit-text-input')
           && (event.key === 'Escape' || event.keyCode === CONFIG.KEYS.ESC
             || event.keyCode === CONFIG.KEYS.BACK)) {
         event.preventDefault();
@@ -297,6 +306,10 @@ export class ChannelListEditor {
   exitEditMode(): void {
     if (!this.editing && !this.favoriteSelection) return;
     const wasEditingChannels = this.editing;
+    // Leaving from the hints returns to the row they acted on, not the top.
+    const focused = this.nav.focused;
+    const returnTo = focused && this.container.contains(focused) && focused.closest('.edit-hints')
+      ? this.editActionTarget : null;
     this.editing = false;
     this.favoriteSelection = null;
     this.grabbed = null;
@@ -322,6 +335,7 @@ export class ChannelListEditor {
       PlaylistService.setIncludeHidden(false);
       this.options.onChannelsChanged();
     }
+    if (returnTo) this.refocus = this.refocusKeyFor(returnTo);
     this.options.render();
   }
 

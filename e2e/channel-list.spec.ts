@@ -1411,3 +1411,112 @@ test('a control hovered while the account menu held the keys lights once it hand
   await expect(page.locator('#view-channels .channel-edit-btn')).not.toHaveClass(/\bfocused\b/);
   await expect(page.locator('#view-channels .focused')).toHaveCount(1);
 });
+
+test('Back from Settings starts at the top row in view after a hover focused a lower one', async ({ page }) => {
+  await routePlaylist(page, longPlaylist(60));
+  await seedPlaylist(page);
+  await page.goto('/');
+  const main = page.locator('#view-channels .channel-main');
+  await expect(main.locator('[data-list-position="0"]')).toBeVisible();
+  // The hidden list re-renders for the hovered row, which sits near its bottom.
+  await hoverCenter(page, '#view-channels [data-list-position="10"]');
+  await expect(main.locator('[data-list-position="10"]')).toHaveClass(/\bfocused\b/);
+  await enterTab(page, 'settings');
+  await expect(page.locator('#view-settings')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await liveLoaded(page);
+  const row0 = main.locator('[data-list-position="0"]');
+  await expect(row0).toHaveClass(/\bfocused\b/);
+  await settleVirtualScroll(page);
+  await expect.poll(async () => {
+    const [r, l] = await Promise.all([row0.boundingBox(), main.boundingBox()]);
+    return !!r && !!l && rowInView(r, l);
+  }).toBe(true);
+});
+
+test('Done from the edit hints returns to the row they acted on, in view', async ({ page }) => {
+  await routePlaylist(page, longPlaylist(60));
+  await seedPlaylist(page);
+  await page.goto('/');
+  await focusFirstChannelRow(page);
+  await enterEditMode(page);
+  const main = page.locator('#view-channels .channel-main');
+  for (let i = 0; i < 11; i++) await page.keyboard.press('ArrowDown');
+  const row = main.locator('[data-list-position="11"]');
+  await expect(row).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('.edit-hints [data-key="edit:yellow"]')).toHaveClass(/\bfocused\b/);
+
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.edit-hints')).toHaveCount(0);
+  await expect(row).toHaveClass(/\bfocused\b/);
+  await settleVirtualScroll(page);
+  await expect.poll(async () => {
+    const [r, l] = await Promise.all([row.boundingBox(), main.boundingBox()]);
+    return !!r && !!l && rowInView(r, l);
+  }).toBe(true);
+});
+
+test('a hover outside the rename box lights nothing while it keeps the caret', async ({ page }) => {
+  await routePlaylist(page, longPlaylist(60));
+  await seedPlaylist(page);
+  await page.goto('/');
+  await focusFirstChannelRow(page);
+  await enterEditMode(page);
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 406, bubbles: true })));
+  const field = page.locator('.edit-text-input');
+  await expect(field).toBeFocused();
+
+  await hoverCenter(page, '#view-channels .edit-hints [data-key="edit:yellow"]');
+  await hoverCenter(page, '#view-channels [data-list-position="3"]');
+  await expect(field).toBeFocused();
+  await expect(page.locator('#view-channels .focused:not(:has(.edit-text-input))')).toHaveCount(0);
+});
+
+test('Escape cancels a rename as Back does', async ({ page }) => {
+  await routePlaylist(page, longPlaylist(60));
+  await seedPlaylist(page);
+  await page.goto('/');
+  await focusFirstChannelRow(page);
+  await enterEditMode(page);
+  const row0 = page.locator('#view-channels .channel-main [data-list-position="0"]');
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 406, bubbles: true })));
+  const field = page.locator('.edit-text-input');
+  await field.fill('Renamed');
+
+  await page.keyboard.press('Escape');
+  await expect(field).toHaveCount(0);
+  await expect(page.locator('.edit-hints')).toBeVisible();
+  await expect(row0.locator('.channel-name')).toHaveText('Ch 1');
+});
+
+test('a key typed into the rename box brings back its row scrolled half away', async ({ page }) => {
+  await routePlaylist(page, longPlaylist(60));
+  await seedPlaylist(page);
+  await page.goto('/');
+  await focusFirstChannelRow(page);
+  await enterEditMode(page);
+  const main = page.locator('#view-channels .channel-main');
+  const row0 = main.locator('[data-list-position="0"]');
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 406, bubbles: true })));
+  const field = page.locator('.edit-text-input');
+  await expect(field).toBeFocused();
+  await settleVirtualScroll(page);
+  await main.evaluate((el) => { el.scrollTop = 40; });
+  await settleVirtualScroll(page);
+  await expect.poll(async () => {
+    const [r, l] = await Promise.all([row0.boundingBox(), main.boundingBox()]);
+    return !!r && !!l && rowInView(r, l);
+  }).toBe(false);
+
+  await page.keyboard.press('ArrowDown');
+  await expect(field).toBeFocused();
+  await expect.poll(async () => {
+    const [r, l] = await Promise.all([row0.boundingBox(), main.boundingBox()]);
+    return !!r && !!l && rowInView(r, l);
+  }).toBe(true);
+});
