@@ -25,7 +25,7 @@ const SAMPLE_ASS = [
 // .srt/.ass URLs serve small bodies.
 async function seedMovies(
   page: import('@playwright/test').Page,
-  opts: { subtitles?: boolean; ass?: boolean; streams?: number } = {},
+  opts: { subtitles?: boolean; ass?: boolean; streams?: number; backdrop?: boolean; name?: string } = {},
 ): Promise<void> {
   await page.route('**/get.php*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U }));
@@ -40,7 +40,7 @@ async function seedMovies(
       const streams = opts.streams
         ? Array.from({ length: opts.streams }, (_, i) => (
           { stream_id: 100 + i, name: `Movie ${String(i)}`, stream_icon: '', container_extension: 'mp4', category_id: '1' }))
-        : [{ stream_id: 10, name: 'Movie One', stream_icon: '', container_extension: 'mp4', category_id: '1' }];
+        : [{ stream_id: 10, name: opts.name ?? 'Movie One', stream_icon: '', container_extension: 'mp4', category_id: '1' }];
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(streams) });
     }
     if (url.includes('get_vod_info')) {
@@ -51,6 +51,7 @@ async function seedMovies(
       if (opts.ass) subs.push({ subtitle_id: '2', title: 'ASS 1', language: 'l2',
         url: 'http://host.example.com:8080/subs/10.ass' });
       if (subs.length) info.subtitles = subs;
+      if (opts.backdrop) info.backdrop_path = ['http://host.example.com:8080/b.jpg'];
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ info }) });
     }
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
@@ -63,6 +64,11 @@ async function seedMovies(
       return route.fulfill({ status: 200, contentType: 'application/x-subrip',
         body: '1\n00:00:01,000 --> 00:00:04,000\nHello\n\n2\n00:00:05,000 --> 00:00:07,000\nWorld\n' });
     });
+  }
+  // A 1x1 PNG, so the backdrop preload succeeds.
+  if (opts.backdrop) {
+    await page.route('**/b.jpg', (route) => route.fulfill({ status: 200, contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64') }));
   }
   // The movie file itself: a small response so play() doesn't hang the test.
   await page.route('**/movie/**', (route) =>
@@ -432,6 +438,46 @@ test('browse Movies, open a detail, and start playback', async ({ page }) => {
   await expect(page.locator('#view-movies')).toBeVisible();
   // The detail screen survives the player round-trip (Movies isn't re-rendered on return).
   await expect(page.locator('#view-movies .detail-plot')).toContainText('A plot.');
+});
+
+test('the tab bar turns transparent over catalog art and solid again in Live', async ({ page }) => {
+  await seedMovies(page, { backdrop: true });
+  await routeLiveManifest(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  const barBackground = () => page.locator('.tab-bar').evaluate((el) => getComputedStyle(el).backgroundImage);
+  expect(await barBackground()).toBe('none');
+
+  await enterTab(page, 'movies');
+  await expect(page.locator('body')).toHaveClass(/tabbar-over-art/);
+  expect(await barBackground()).toContain('gradient');
+
+  await page.locator('.catalog-tile[data-item-id="10"]')
+    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  const backdrop = page.locator('#view-movies .detail-backdrop');
+  await expect(backdrop).toHaveAttribute('style', /b\.jpg/);
+  // The art reaches up under the bar to the top of the screen.
+  expect((await backdrop.boundingBox())!.y).toBe(0);
+  await expect(page.locator('body')).toHaveClass(/tabbar-over-art/);
+
+  await enterTab(page, 'live');
+  await expect(page.locator('body')).not.toHaveClass(/tabbar-over-art/);
+  expect(await barBackground()).toBe('none');
+});
+
+test('a long title at the largest text size stays clear of the tab bar', async ({ page }) => {
+  await seedMovies(page, { backdrop: true, name: 'An Exceptionally Long Movie Title '.repeat(6).trim() });
+  await page.addInitScript(() => { localStorage.setItem('iptv_text_size', JSON.stringify('150')); });
+  await routeLiveManifest(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'movies');
+  await page.locator('.catalog-tile[data-item-id="10"]')
+    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .detail-plot')).toContainText('A plot.');
+  expect((await page.locator('#view-movies .detail-title').boundingBox())!.y).toBeGreaterThanOrEqual(96);
 });
 
 test('Back walks Movies detail -> browse -> Live instead of ejecting', async ({ page }) => {

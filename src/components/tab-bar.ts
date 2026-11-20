@@ -43,6 +43,15 @@ type SectionDef = typeof SECTIONS[number];
 const FULL_SECTIONS: readonly SectionDef[] = SECTIONS;
 const LITE_SECTIONS: readonly SectionDef[] = SECTIONS.filter((s) => !s.xtreamOnly);
 
+// The bar turns transparent while the shown catalog layer has art that
+// reaches up under it.
+export function syncTabBarOverArt(): void {
+  const art = document.querySelector(
+    '.view:not(.hidden) .catalog-layer:not(.catalog-layer-hidden) [data-under-tab-bar]',
+  );
+  document.body.classList.toggle('tabbar-over-art', !!art);
+}
+
 // The section a view belongs to (null for the chromeless player / loading
 // views, which own no tab).
 export function sectionForView(view: string): Section | null {

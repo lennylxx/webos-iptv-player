@@ -28,11 +28,12 @@
 .catalog-loading,
 .catalog-empty { display: flex; align-items: center; justify-content: center; height: 100%; }
 
-.catalog-browse { position: relative; padding: 0; overflow: hidden; }
+/* The hero reaches up under the transparent tab bar (96px). */
+.catalog-browse { position: relative; padding: 0; overflow: visible; }
 
 .catalog-hero {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: -96px; left: 0; right: 0; bottom: 0;
   background-size: cover;
   background-position: center 28%;
   background-color: var(--bg-primary);
@@ -187,18 +188,67 @@
   box-shadow: 0 0 0 6px rgb(var(--catalog-focus-rgb) / 0.25);
 }
 
-.movies-detail { display: flex; gap: 56px; }
-.detail-poster-wrap {
-  width: 360px; height: 540px; flex: 0 0 auto;
-  border-radius: 16px; overflow: hidden; background: var(--catalog-surface);
-}
 .detail-body { flex: 1 1 auto; max-width: 1280px; }
-.detail-title { margin: 0 0 12px; font-size: 56px; font-weight: 700; color: var(--text-primary); }
+.detail-title { margin: 0 0 16px; font-size: 64px; font-weight: 800; line-height: 1.05; color: var(--text-primary); }
+/* Clamp by lines, which scale with the text size, and end on an ellipsis: two
+   for the title, so a long name never pushes the low-anchored copy up under
+   the tab bar, and three for the plot. */
+.detail-title,
+.detail-plot {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.detail-title { -webkit-line-clamp: 2; }
+.detail-plot { -webkit-line-clamp: 3; }
 .detail-meta { font-size: 26px; color: var(--text-secondary); margin-bottom: 24px; }
-.detail-plot { max-width: 1000px; font-size: 28px; line-height: 1.5; color: var(--text-primary); margin: 0 0 24px; }
-.detail-cast { max-width: 1000px; font-size: 24px; color: var(--text-secondary); margin-bottom: 8px; }
+.detail-plot {
+  max-width: 1000px;
+  font-size: 28px; line-height: 1.5; color: var(--text-primary); margin: 0 0 24px;
+}
+.detail-cast {
+  max-width: 1000px; font-size: 22px; color: var(--text-secondary); margin-bottom: 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .detail-label { color: var(--text-primary); font-weight: 600; margin-right: 8px; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.detail-actions + .detail-cast { margin-top: 32px; }
+
+/* A title's art layer fills the view and reaches up under the transparent
+   tab bar (96px): its backdrop, or without one the poster at the right.
+   The copy sits on the scrim; a movie anchors it low-left, and a series'
+   episodes scroll over the fixed art. */
+.detail-backdrop,
+.detail-backdrop-scrim {
+  position: absolute;
+  top: -96px; left: 0; right: 0; bottom: 0;
+}
+.detail-backdrop {
+  background-size: cover;
+  background-position: center top;
+  background-color: var(--bg-primary);
+}
+/* The scrim holds strong under the 1000px copy column (to ~58%) before fading. */
+.detail-backdrop-scrim {
+  background:
+    linear-gradient(90deg, rgb(var(--catalog-hero-scrim-rgb) / 0.95) 0%, rgb(var(--catalog-hero-scrim-rgb) / 0.9) 50%, rgb(var(--catalog-hero-scrim-rgb) / 0.8) 58%, transparent 86%),
+    linear-gradient(0deg, var(--bg-primary) 0%, transparent 45%);
+}
+.detail-poster-art {
+  position: absolute;
+  top: 40px; right: 80px;
+  width: 400px; height: 600px;
+  border-radius: 12px; overflow: hidden;
+  background: var(--catalog-surface);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+.movies-detail { position: relative; padding: 0; overflow: visible; }
+.movies-detail .detail-body {
+  position: absolute;
+  left: 80px; bottom: 60px;
+  width: 1280px; max-width: none;
+}
+.series-detail { position: relative; padding-top: 280px; }
 .detail-btn {
   display: inline-flex; align-items: center; gap: 10px;
   padding: 14px 20px; border-radius: 10px; border: 3px solid transparent;
@@ -271,12 +321,13 @@ button.detail-icon-btn.focused { box-shadow: none; }
   stroke-linejoin: round;
 }
 
-/* Series detail: a compact header (poster + season selector) over an episode list.
-   The whole page scrolls in .catalog-view (like the movie detail), so the header
-   scrolls away with the episodes; the virtualizer treats it as leading size. */
+/* Series detail: a header (copy + season selector) over an episode list. The
+   page scrolls in .catalog-view over the fixed art, so the header scrolls away
+   with the episodes; the virtualizer treats it as leading size. */
 .series-detail { display: block; }
-.series-detail-head { display: flex; gap: 56px; margin-bottom: 32px; }
-.series-detail-poster { width: 260px; height: 390px; }
+/* Tall enough to clear the poster card (40 + 600px) whether or not it shows,
+   so the episodes never move when it comes or goes. */
+.series-detail-head { display: flex; min-height: 352px; margin-bottom: 32px; }
 
 .series-seasons { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
 /* Loading, failure, and no-episode notes take the season row's slot. */

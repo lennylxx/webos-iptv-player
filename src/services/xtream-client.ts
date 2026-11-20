@@ -497,6 +497,7 @@ export function vodItemFrom(s: Record<string, unknown>, accountId: string): VodI
     containerExtension: toStr(s.container_extension),
     ...catalogSortMetadata(s),
     ...listGenre(s),
+    ...listBackdrop(s),
   };
 }
 
@@ -510,7 +511,19 @@ export function seriesItemFrom(s: Record<string, unknown>, accountId: string): S
     categoryId: toStr(s.category_id),
     ...catalogSortMetadata(s, true),
     ...listGenre(s),
+    ...listBackdrop(s),
   };
+}
+
+// Some panels list each title's backdrop; kept only when present, as the
+// catalog cache holds every title.
+function listBackdrop(item: Record<string, unknown>): { backdrop?: string } {
+  const backdrop = firstBackdrop(item.backdrop_path);
+  return backdrop ? { backdrop } : {};
+}
+
+function firstBackdrop(value: unknown): string {
+  return firstNonEmptyString(...(Array.isArray(value) ? value : [value])).trim();
 }
 
 function listGenre(item: Record<string, unknown>): { genre?: string } {
@@ -789,6 +802,7 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         releaseDate: toStr(i.releasedate ?? i.release_date),
         durationSecs: toNumber(i.duration_secs),
         poster: toStr(i.movie_image ?? i.cover_big),
+        backdrop: firstBackdrop(i.backdrop_path),
         subtitles: parseSubtitles(i.subtitles),
         imdbId: toStr(i.imdb_id ?? i.imdb).replace(/^tt/i, ''),
         tmdbId: toStr(i.tmdb_id ?? i.tmdb),
@@ -899,6 +913,7 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
           toNumber(Array.isArray(runTime) ? runTime[0] : runTime),
         ),
         poster: firstNonEmptyString(info.cover, info.movie_image, info.cover_big),
+        backdrop: firstBackdrop(info.backdrop_path),
         rating: firstNonEmptyString(info.rating, info.rating_5based),
         imdbId: firstNonEmptyString(info.imdb_id, info.imdb).replace(/^tt/i, ''),
         tmdbId: firstNonEmptyString(info.tmdb_id, info.tmdb),

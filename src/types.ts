@@ -537,6 +537,7 @@ export interface VodItem {
   addedAt?: number;
   year?: number;
   genre?: string;
+  backdrop?: string;
 }
 
 // A sidecar subtitle file (SRT or WebVTT) delivered alongside an Xtream VOD
@@ -558,6 +559,7 @@ export interface VodInfo {
   releaseDate: string;
   durationSecs: number;
   poster: string;
+  backdrop: string;
   subtitles: SidecarSubtitle[];
   imdbId: string;
   tmdbId: string;
@@ -579,6 +581,7 @@ export interface SeriesItem {
   addedAt?: number;
   year?: number;
   genre?: string;
+  backdrop?: string;
 }
 
 export interface Episode {
@@ -594,6 +597,7 @@ export interface Episode {
 }
 
 export interface SeriesInfo {
+  backdrop: string;
   plot: string;
   cast: string;
   director: string;

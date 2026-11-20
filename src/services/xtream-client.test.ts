@@ -551,6 +551,16 @@ describe('XtreamClient VOD', () => {
     });
   });
 
+  it('keeps a listed backdrop on movies and series', async () => {
+    fetchTextMock.mockResolvedValue(JSON.stringify([
+      { stream_id: 1, series_id: 1, name: 'a', category_id: '1', backdrop_path: ['', ' http://host/b.jpg '] },
+      { stream_id: 2, series_id: 2, name: 'b', category_id: '1', backdrop_path: [] },
+    ]));
+    const client = createXtreamClient(creds);
+    expect((await client.getVodStreams('1')).map(item => item.backdrop)).toEqual(['http://host/b.jpg', undefined]);
+    expect((await client.getSeries('1')).map(item => item.backdrop)).toEqual(['http://host/b.jpg', undefined]);
+  });
+
   it('keeps a listed genre on movies and series', async () => {
     fetchTextMock.mockResolvedValue(JSON.stringify([
       { stream_id: 1, series_id: 1, name: 'a', category_id: '1', genre: ' g1, g2 ' },
@@ -584,9 +594,21 @@ describe('XtreamClient VOD', () => {
     );
     expect(info).toEqual({
       plot: 'A plot', cast: 'Actor', director: 'Dir', genre: 'Drama',
-      releaseDate: '2020-01-01', durationSecs: 5400, poster: 'http://host/p.png', subtitles: [],
+      releaseDate: '2020-01-01', durationSecs: 5400, poster: 'http://host/p.png', backdrop: '', subtitles: [],
       imdbId: '', tmdbId: '', year: 2020,
     });
+  });
+
+  it('takes the first non-empty series backdrop', async () => {
+    fetchTextMock.mockResolvedValueOnce(JSON.stringify({ info: { backdrop_path: ['', 'http://host/b.jpg'] } }));
+    expect((await createXtreamClient(creds).getSeriesInfo('1'))!.backdrop).toBe('http://host/b.jpg');
+  });
+
+  it('takes the first non-empty VOD backdrop from an array or a string', async () => {
+    fetchTextMock.mockResolvedValueOnce(JSON.stringify({ info: { backdrop_path: ['', 'http://host/b.jpg'] } }));
+    expect((await createXtreamClient(creds).getVodInfo('10'))!.backdrop).toBe('http://host/b.jpg');
+    fetchTextMock.mockResolvedValueOnce(JSON.stringify({ info: { backdrop_path: 'http://host/c.jpg' } }));
+    expect((await createXtreamClient(creds).getVodInfo('10'))!.backdrop).toBe('http://host/c.jpg');
   });
 
   it('classifies malformed catalog JSON instead of returning an empty catalog', async () => {
@@ -867,6 +889,7 @@ describe('XtreamClient Series', () => {
       releaseDate: '',
       episodeRunTimeMins: 0,
       poster: '',
+      backdrop: '',
       rating: '',
       imdbId: '',
       tmdbId: '',

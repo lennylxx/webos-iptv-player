@@ -133,11 +133,9 @@ html.q-no-flex-gap .catalog-sort { margin-bottom: 8px; }
 html.q-no-flex-gap .catalog-sort > * { margin-bottom: 16px; margin-right: 16px; }
 html.q-no-flex-gap .catalog-sort .catalog-sort-direction > * + * { margin-left: 10px; }
 html.q-no-flex-gap #view-series [data-rail-key="continue"] .catalog-rail-track > * + * { margin-left: 32px; }
-html.q-no-flex-gap .movies-detail > * + * { margin-left: 56px; }
 html.q-no-flex-gap .detail-actions { margin-bottom: -12px; }
 html.q-no-flex-gap .detail-actions > * { margin-bottom: 12px; margin-right: 12px; }
 html.q-no-flex-gap .detail-btn > * + * { margin-left: 10px; }
-html.q-no-flex-gap .series-detail-head > * + * { margin-left: 56px; }
 html.q-no-flex-gap .series-seasons { margin-bottom: -16px; }
 html.q-no-flex-gap .series-seasons > * { margin-bottom: 16px; margin-right: 16px; }
 html.q-no-flex-gap .series-episode-cell > * + * { margin-left: 16px; }

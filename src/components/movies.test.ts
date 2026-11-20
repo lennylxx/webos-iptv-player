@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Action, PlaylistEntry, ResumeEntry, VodItem, WatchlistEntry, WatchlistKind } from '../types';
 import type { CatalogSortPreference } from '../utils/catalog-sort';
 
@@ -126,6 +126,14 @@ async function openWith(cats = [{ id: '1', name: 'Cat A' }], streams = [vod('10'
 }
 
 describe('Movies browse + grid', () => {
+  it('shows a tile\'s poster alone, with the initial only for a title without one', async () => {
+    await openWith(undefined, [{ ...vod('10', 'Movie One'), poster: 'http://host/p.jpg' }, vod('11', 'Bare')]);
+    const posterTile = container.querySelector('.catalog-tile[data-item-id="10"] .catalog-poster-wrap')!;
+    expect(posterTile.querySelector('img.catalog-poster')?.getAttribute('src')).toBe('http://host/p.jpg');
+    expect(posterTile.querySelector('.catalog-poster-empty')).toBeNull();
+    expect(container.querySelector('.catalog-tile[data-item-id="11"] .catalog-poster-empty')?.textContent).toBe('B');
+  });
+
   describe('collection management', () => {
     function savedTitles(count: number): void {
       watchlistState.entries = Array.from({ length: count }, (_, i) => ({
@@ -504,6 +512,110 @@ describe('Movies browse + grid', () => {
     await openWith([{ id: '1', name: 'Cat A' }], [vod('10', 'Movie One')]);
     expect(container.querySelector('.catalog-rail-title')?.textContent).toContain('Cat A');
     expect(container.querySelector('.catalog-tile[data-item-id="10"]')?.textContent).toContain('Movie One');
+  });
+
+  describe('hero backdrop', () => {
+    const images: Array<{ url: string; onload: (() => void) | null; onerror: (() => void) | null }> = [];
+    const image = (url: string) => images.find((img) => img.url === url);
+    beforeEach(() => {
+      images.length = 0;
+      vi.stubGlobal('Image', class {
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        url = '';
+        set src(value: string) { this.url = value; images.push(this); }
+      });
+    });
+    afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+    const m1 = () => ({ ...vod('10', 'Movie One'), poster: 'http://host/p1.jpg', backdrop: 'http://host/b1.jpg' });
+    const m2 = () => ({ ...vod('11', 'Movie Two'), poster: 'http://host/p2.jpg', backdrop: 'http://host/b2.jpg' });
+    const hover = (id: string) => container.querySelector(`.catalog-tile[data-item-id="${id}"]`)!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+
+    it('swaps the poster for the backdrop once focus has rested and it loads', async () => {
+      vi.useFakeTimers();
+      await openWith([{ id: '1', name: 'Cat A' }], [m1(), m2()]);
+      hover('10');
+      const hero = container.querySelector<HTMLElement>('.catalog-hero')!;
+      expect(hero.style.backgroundImage).toContain('p1.jpg');
+      vi.advanceTimersByTime(400);
+      image('http://host/b1.jpg')!.onload!();
+      expect(hero.style.backgroundImage).toContain('b1.jpg');
+    });
+
+    it('keeps the hero\'s wait running through a re-render of the same hero', async () => {
+      vi.useFakeTimers();
+      const { view } = await openWith([{ id: '1', name: 'Cat A' }], [m1(), m2()]);
+      hover('11');
+      vi.advanceTimersByTime(300);
+      view.refreshPlaybackState();
+      vi.advanceTimersByTime(100);
+      expect(images.map((img) => img.url)).toContain('http://host/b2.jpg');
+    });
+
+    it('starts no backdrop download for a tile focus only passes over', async () => {
+      vi.useFakeTimers();
+      await openWith([{ id: '1', name: 'Cat A' }], [m1(), m2()]);
+      hover('10');
+      vi.advanceTimersByTime(100);
+      hover('11');
+      vi.advanceTimersByTime(400);
+      expect(images.map((img) => img.url)).toEqual(['http://host/b2.jpg']);
+    });
+
+    it('opens a detail on the hero\'s compact backdrop while the original loads', async () => {
+      catalogMock.loadVodInfo.mockReturnValue(new Promise(() => {}));
+      const tmdb = 'https://image.tmdb.org/t/p/original/b.jpg';
+      vi.useFakeTimers();
+      const { view } = await openWith([{ id: '1', name: 'Cat A' }], [m1(), { ...m2(), backdrop: tmdb }]);
+      hover('11');
+      vi.advanceTimersByTime(400);
+      image('https://image.tmdb.org/t/p/w1280/b.jpg')!.onload!();
+      pressKey(view, 'select');
+      const backdrop = () => container.querySelector<HTMLElement>('.detail-backdrop')!.style.backgroundImage;
+      expect(backdrop()).toContain('w1280/b.jpg');
+      image(tmdb)!.onload!();
+      expect(backdrop()).toContain('original/b.jpg');
+    });
+
+    it('keeps the compact backdrop when the original fails', async () => {
+      catalogMock.loadVodInfo.mockResolvedValue(null);
+      const tmdb = 'https://image.tmdb.org/t/p/original/b.jpg';
+      vi.useFakeTimers();
+      const { view } = await openWith([{ id: '1', name: 'Cat A' }],
+        [m1(), { ...m2(), poster: 'http://host/p2.jpg', backdrop: tmdb }]);
+      hover('11');
+      vi.advanceTimersByTime(400);
+      image('https://image.tmdb.org/t/p/w1280/b.jpg')!.onload!();
+      pressKey(view, 'select');
+      await Promise.resolve(); await Promise.resolve();
+      image(tmdb)!.onerror!();
+      image('http://host/p2.jpg')?.onload?.();
+      expect(container.querySelector<HTMLElement>('.detail-backdrop')!.style.backgroundImage).toContain('w1280/b.jpg');
+      expect(container.querySelector('.detail-poster-art')).toBeNull();
+    });
+
+    it('starts no hero backdrop download once a detail has opened', async () => {
+      catalogMock.loadVodInfo.mockReturnValue(new Promise(() => {}));
+      const tmdb = 'https://image.tmdb.org/t/p/original/b.jpg';
+      vi.useFakeTimers();
+      const { view } = await openWith([{ id: '1', name: 'Cat A' }], [m1(), { ...m2(), backdrop: tmdb }]);
+      hover('11');
+      pressKey(view, 'select');
+      vi.advanceTimersByTime(400);
+      expect(images.map((img) => img.url)).not.toContain('https://image.tmdb.org/t/p/w1280/b.jpg');
+    });
+
+    it('does not paint a backdrop that loads after focus moved on', async () => {
+      vi.useFakeTimers();
+      await openWith([{ id: '1', name: 'Cat A' }], [m1(), m2()]);
+      hover('10');
+      vi.advanceTimersByTime(400);
+      hover('11');
+      image('http://host/b1.jpg')!.onload!();
+      expect(container.querySelector<HTMLElement>('.catalog-hero')!.style.backgroundImage).toContain('p2.jpg');
+    });
   });
 
   it('updates the hero title and backdrop to the focused movie', async () => {
@@ -1697,6 +1809,244 @@ describe('Movies browse + grid', () => {
 });
 
 describe('Movies detail', () => {
+  describe('art', () => {
+    const images: Array<{ url: string; onload: (() => void) | null; onerror: (() => void) | null }> = [];
+    const image = (url: string) => images.find((img) => img.url === url)!;
+    beforeEach(() => {
+      images.length = 0;
+      // Fake timers, so no 7s stall timer outlives its test.
+      vi.useFakeTimers();
+      vi.stubGlobal('Image', class {
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        url = '';
+        set src(value: string) { this.url = value; images.push(this); }
+      });
+    });
+    afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+    const backdropStyle = () => container.querySelector<HTMLElement>('.detail-backdrop')!.style.backgroundImage;
+    const posterCard = () => container.querySelector('.detail-poster-art img')?.getAttribute('src') ?? null;
+
+    async function openDetail(backdrop: string, info?: Promise<unknown>) {
+      catalogMock.loadVodInfo.mockReturnValue(info ?? Promise.resolve({
+        plot: 'A plot.', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+        poster: 'http://host/p.jpg', backdrop, subtitles: [], imdbId: '', tmdbId: '', year: 0,
+      }));
+      const opened = await openWith(undefined, [vod('10', 'Movie One')]);
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(opened.view, 'select');
+      await Promise.resolve(); await Promise.resolve();
+      return opened.view;
+    }
+
+    it('renders the copy at once and loads the backdrop before trying the poster', async () => {
+      await openDetail('http://host/b.jpg');
+      expect(container.querySelector('.detail-plot')?.textContent).toBe('A plot.');
+      expect(images.map((img) => img.url)).toEqual(['http://host/b.jpg']);
+
+      image('http://host/b.jpg').onload!();
+      expect(backdropStyle()).toContain('b.jpg');
+      expect(images.map((img) => img.url)).toEqual(['http://host/b.jpg']);
+      expect(container.querySelector('.detail-poster-art')).toBeNull();
+    });
+
+    it('falls back to the poster when the backdrop fails, keeping the page node', async () => {
+      await openDetail('http://host/gone.jpg');
+      const page = container.querySelector('.movies-detail');
+      image('http://host/gone.jpg').onerror!();
+      image('http://host/p.jpg').onload!();
+      expect(posterCard()).toBe('http://host/p.jpg');
+      expect(container.querySelector('.movies-detail')).toBe(page);
+    });
+
+    it('shows no art at all when both images fail', async () => {
+      await openDetail('http://host/gone.jpg');
+      image('http://host/gone.jpg').onerror!();
+      image('http://host/p.jpg').onerror!();
+      expect(backdropStyle()).toBe('');
+      expect(container.querySelector('.detail-poster-art')).toBeNull();
+    });
+
+    it('keeps the listed backdrop when the details name none', async () => {
+      catalogMock.loadVodInfo.mockResolvedValue({
+        plot: 'A plot.', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+        poster: 'http://host/p.jpg', backdrop: '', subtitles: [], imdbId: '', tmdbId: '', year: 0,
+      });
+      const { view } = await openWith(undefined, [{ ...vod('10', 'Movie One'), backdrop: 'http://host/listed.jpg' }]);
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(view, 'select');
+      await Promise.resolve(); await Promise.resolve();
+      image('http://host/listed.jpg').onload!();
+      expect(backdropStyle()).toContain('listed.jpg');
+    });
+
+    it('does not paint another account\'s backdrop for a title with the same id', async () => {
+      const view = await openDetail('http://host/b.jpg');
+      image('http://host/b.jpg').onload!();
+      pressKey(view, 'back');
+      catalogMock.loadVodInfo.mockReturnValue(new Promise(() => {}));
+      await view.open({ ...account, id: 'x2' });
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(view, 'select');
+      await Promise.resolve();
+      expect(backdropStyle()).toBe('');
+    });
+
+    it('waits for the details before trying the poster', async () => {
+      let resolveInfo: (info: unknown) => void = () => {};
+      catalogMock.loadVodInfo.mockReturnValue(new Promise((resolve) => { resolveInfo = resolve; }));
+      const { view } = await openWith(undefined, [{ ...vod('10', 'Movie One'), poster: 'http://host/p.jpg' }]);
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(view, 'select');
+      await Promise.resolve();
+      expect(images).toEqual([]);
+      resolveInfo({
+        plot: 'A plot.', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+        poster: 'http://host/p.jpg', backdrop: 'http://host/b.jpg', subtitles: [], imdbId: '', tmdbId: '', year: 0,
+      });
+      await Promise.resolve(); await Promise.resolve();
+      expect(images.map((img) => img.url)).toEqual(['http://host/b.jpg']);
+    });
+
+    it('tries the poster when the backdrop stalls, and lets a late backdrop replace it', async () => {
+      await openDetail('http://host/slow.jpg');
+      vi.advanceTimersByTime(7000);
+      image('http://host/p.jpg').onload!();
+      expect(posterCard()).toBe('http://host/p.jpg');
+      image('http://host/slow.jpg').onload!();
+      expect(backdropStyle()).toContain('slow.jpg');
+      expect(posterCard()).toBeNull();
+    });
+
+    it('re-renders the detail only for its own art', async () => {
+      catalogMock.loadVodInfo.mockReturnValue(new Promise(() => {}));
+      const { view } = await openWith(undefined,
+        [vod('10', 'Movie One'), { ...vod('11', 'Movie Two'), backdrop: 'http://host/other.jpg' }]);
+      container.querySelector('.catalog-tile[data-item-id="11"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      vi.advanceTimersByTime(400);
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(view, 'select');
+      const render = vi.spyOn(view as unknown as { renderDetail(): void }, 'renderDetail');
+      image('http://host/other.jpg').onload!();
+      expect(render).not.toHaveBeenCalled();
+    });
+
+    it('paints art that loaded while Search covered the detail once it shows again', async () => {
+      const view = await openDetail('http://host/b.jpg');
+      container.classList.add('view', 'hidden');
+      image('http://host/b.jpg').onload!();
+      expect(backdropStyle()).toBe('');
+      container.classList.remove('hidden');
+      view.ensureLoaded(account);
+      expect(backdropStyle()).toContain('b.jpg');
+    });
+
+    it('keeps a working listed backdrop when the details name a broken one, and remembers only what loaded', async () => {
+      catalogMock.loadVodInfo.mockResolvedValue({
+        plot: 'A plot.', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+        poster: 'http://host/p.jpg', backdrop: 'http://host/broken.jpg', subtitles: [], imdbId: '', tmdbId: '', year: 0,
+      });
+      const { view } = await openWith(undefined, [{ ...vod('10', 'Movie One'), backdrop: 'http://host/listed.jpg' }]);
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(view, 'select');
+      await Promise.resolve(); await Promise.resolve();
+      image('http://host/broken.jpg').onerror!();
+      image('http://host/listed.jpg').onload!();
+      expect(backdropStyle()).toContain('listed.jpg');
+      expect(posterCard()).toBeNull();
+    });
+
+    it('retries a failed backdrop when the title is opened again', async () => {
+      const view = await openDetail('http://host/b.jpg');
+      image('http://host/b.jpg').onerror!();
+      pressKey(view, 'back');
+      images.length = 0;
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(view, 'select');
+      await Promise.resolve(); await Promise.resolve();
+      expect(images.map((img) => img.url)).toContain('http://host/b.jpg');
+    });
+
+    it('keeps waiting for the details when a quick reopen outlives the first load', async () => {
+      let rejectFirst: (err: unknown) => void = () => {};
+      catalogMock.loadVodInfo
+        .mockReturnValueOnce(new Promise((_, reject) => { rejectFirst = reject; }))
+        .mockReturnValueOnce(new Promise(() => {}));
+      const movie = { ...vod('10', 'Movie One'), poster: 'http://host/p.jpg' };
+      const { view } = await openWith(undefined, [movie]);
+      const open = () => {
+        container.querySelector('.catalog-tile[data-item-id="10"]')!
+          .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+        pressKey(view, 'select');
+      };
+      open();
+      pressKey(view, 'back');
+      open();
+      rejectFirst(new DOMException('aborted', 'AbortError'));
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      (view as unknown as { renderDetail(): void }).renderDetail();
+      expect(images.map((img) => img.url)).not.toContain('http://host/p.jpg');
+    });
+
+    it('falls back to the listed backdrop when the details\' one stalls', async () => {
+      catalogMock.loadVodInfo.mockResolvedValue({
+        plot: 'A plot.', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+        poster: 'http://host/p.jpg', backdrop: 'http://host/stalled.jpg', subtitles: [], imdbId: '', tmdbId: '', year: 0,
+      });
+      const { view } = await openWith(undefined, [{ ...vod('10', 'Movie One'), backdrop: 'http://host/listed.jpg' }]);
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(view, 'select');
+      await Promise.resolve(); await Promise.resolve();
+      vi.advanceTimersByTime(7000);
+      image('http://host/listed.jpg')!.onload!();
+      expect(backdropStyle()).toContain('listed.jpg');
+    });
+
+    it('keeps a backdrop URL inside its CSS url()', async () => {
+      const url = "http://host/a.jpg');position:fixed;background:red;('";
+      await openDetail(url);
+      image(url).onload!();
+      const backdrop = container.querySelector<HTMLElement>('.detail-backdrop')!;
+      expect(backdrop.style.position).toBe('');
+      expect(backdrop.getAttribute('style')).toContain('a.jpg%27%29');
+    });
+
+    it('loads and paints a backdrop URL with stray whitespace as the same URL', async () => {
+      await openDetail(' http://host/b.jpg\r\n');
+      image('http://host/b.jpg').onload!();
+      expect(backdropStyle()).toBe('url("http://host/b.jpg")');
+    });
+
+    it('does not re-render a hidden view when art loads', async () => {
+      await openDetail('http://host/b.jpg');
+      container.classList.add('view', 'hidden');
+      image('http://host/b.jpg').onload!();
+      expect(backdropStyle()).toBe('');
+    });
+
+    it('paints a reopened title\'s backdrop before its details load', async () => {
+      const view = await openDetail('http://host/b.jpg');
+      image('http://host/b.jpg').onload!();
+      pressKey(view, 'back');
+      catalogMock.loadVodInfo.mockReturnValue(new Promise(() => {}));
+      container.querySelector('.catalog-tile[data-item-id="10"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      pressKey(view, 'select');
+      await Promise.resolve();
+      expect(backdropStyle()).toContain('b.jpg');
+    });
+  });
+
   it('removes only the movie progress and moves focus off the disappearing detail action', async () => {
     storageMock.getResume.mockReturnValue({
       accountId: 'x1', kind: 'vod', itemId: '10', name: 'Title 1', poster: '', ext: 'mp4',

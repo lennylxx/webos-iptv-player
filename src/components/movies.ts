@@ -1,3 +1,4 @@
+import { syncTabBarOverArt } from './tab-bar';
 import type { PlaylistEntry, VodCategory, VodItem, VodInfo, ResumeKind, WatchlistEntry, VodQueueItem } from '../types';
 import { html, raw, Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
@@ -23,6 +24,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
 
   private currentVod: VodItem | null = null;
   private currentInfo: VodInfo | null = null;
+  private infoPending = false;
   private openedFromWatchlist = false;
   private detailController: AbortController | null = null;
 
@@ -42,6 +44,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
   protected itemId(v: VodItem): string { return v.streamId; }
   protected itemName(v: VodItem): string { return v.name; }
   protected itemPoster(v: VodItem): string { return v.poster; }
+  protected itemBackdrop(v: VodItem): string { return v.backdrop ?? ''; }
   protected itemCategoryId(v: VodItem): string { return v.categoryId; }
   protected itemGenre(v: VodItem): string { return v.genre ?? ''; }
   protected clearDetail(): void {
@@ -189,12 +192,15 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     this.currentVod = vod;
     this.enterDetail();
     this.currentInfo = null;
+    this.infoPending = true;
     this.renderDetail();
     try {
       this.currentInfo = await loadVodInfo(account, vod.streamId, signal);
     } catch (err) {
       if (!this.requestFailed('Movie detail load', err, signal)) return;
       this.currentInfo = null;
+    } finally {
+      if (this.detailController?.signal === signal) this.infoPending = false;
     }
     if (this.mode === 'detail' && this.currentVod === vod) this.renderDetail();
   }
@@ -267,15 +273,17 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     const watched = this.watchedIds.has(vod.streamId);
     const hidden = this.hiddenIds.has(vod.streamId);
 
+    const art = this.detailArt(`${a.id}|${vod.streamId}`, poster,
+      this.titleBackdrop(a.id, vod.streamId, info?.backdrop, vod.backdrop), this.infoPending);
+
     morph(this.layer('detail'), html`
-      <div class="catalog-view movies-detail" data-nav-container>
-        <div class="detail-poster-wrap">${this.posterCell(vod.name, poster)}</div>
+      ${this.detailBackdrop(art)}
+      ${this.detailPoster(art)}
+      <div class="catalog-view movies-detail" data-key="detail-scroller" data-nav-container>
         <div class="detail-body">
           <h1 class="detail-title">${vod.name}</h1>
           <div class="detail-meta">${meta.join('  ·  ')}</div>
           ${info?.plot ? html`<p class="detail-plot">${info.plot}</p>` : ''}
-          ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
-          ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
           <div class="detail-actions" data-key="detail-actions" data-nav-container data-nav-straight data-nav-remember
                data-nav-leave-left="" data-nav-leave-right="" data-nav-leave-down="">
             ${saved ? html`
@@ -295,9 +303,12 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
               saved ? this.detailIconButton('remove-resume', REMOVE_ICON, t('catalog.removeContinueWatching'), 'danger') : '',
             ])}
           </div>
+          ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
+          ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
         </div>
       </div>
     `);
+    syncTabBarOverArt();
     this.refreshIconRows();
     this.settleDetailFocus();
   }

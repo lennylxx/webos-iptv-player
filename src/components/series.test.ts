@@ -707,6 +707,27 @@ describe('Series detail', () => {
     expect(toastMock.showToast).toHaveBeenLastCalledWith('Removed from Watchlist');
   });
 
+  it('shows a loaded poster card inside the page, so it scrolls away with the header', async () => {
+    const images: Array<{ url: string; onload: (() => void) | null }> = [];
+    vi.stubGlobal('Image', class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      url = '';
+      set src(value: string) { this.url = value; images.push(this); }
+    });
+    try {
+      catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+      const { view } = await openWith();
+      await openDetail(view);
+      expect(container.querySelector('.detail-poster-art')).toBeNull();
+      images.find((img) => img.url === 'http://host/series.jpg')!.onload!();
+      expect(container.querySelector<HTMLImageElement>('.series-detail .detail-poster-art img')?.src)
+        .toBe('http://host/series.jpg');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('renders a season selector and the first season\'s episodes, and plays from the start', async () => {
     catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
     const { view, handlers } = await openWith();
@@ -719,8 +740,6 @@ describe('Series detail', () => {
       .toContain('Cast Actor 1, Actor 2');
     expect(container.querySelectorAll('.detail-cast')[1]?.textContent)
       .toContain('Director Director 1');
-    expect(container.querySelector<HTMLImageElement>('.series-detail-poster img')?.src)
-      .toBe('http://host/series.jpg');
     expect(container.querySelector('.series-season-btn[data-season="1"]')?.textContent).toContain('Season 1');
     expect(container.querySelector('.series-season-btn[data-season="2"]')).not.toBeNull();
     expect(container.querySelector('.episode-row[data-episode-id="e1"]')?.textContent).toContain('Episode One');

@@ -25,7 +25,7 @@ import { EpgGrid } from './components/epg-grid';
 import { Settings, type SaveAction } from './components/settings';
 import { Sidebar } from './components/sidebar';
 import { PlayerMenu } from './components/player-menu';
-import { TabBar, type Section, sectionForView } from './components/tab-bar';
+import { TabBar, type Section, sectionForView, syncTabBarOverArt } from './components/tab-bar';
 import { Movies } from './components/movies';
 import { Series } from './components/series';
 import { Search } from './components/search';
@@ -1208,6 +1208,7 @@ class App {
       if (key === name) show(el);
       else hide(el);
     }
+    syncTabBarOverArt();
 
     if (name === 'player') {
       if (this.viewStack[this.viewStack.length - 1] !== name) this.viewStack.push(name);

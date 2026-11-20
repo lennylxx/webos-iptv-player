@@ -13,6 +13,26 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Over catalog art the bar turns transparent. Its theme scrim holds behind
+   the labels for bright art, then runs on past the bar's edge, so a list
+   scrolling up under the bar fades out instead of ending on a hard line. */
+body.tabbar-over-art .tab-bar {
+  background: linear-gradient(180deg, rgb(var(--catalog-hero-scrim-rgb) / 0.9) 0%, rgb(var(--catalog-hero-scrim-rgb) / 0.82) 60%, rgb(var(--catalog-hero-scrim-rgb) / 0.66) 100%);
+  /* Under the transparent border the gradient would tile again as a dark line. */
+  background-origin: border-box;
+  border-bottom-color: transparent;
+}
+body.tabbar-over-art .tab-bar::after {
+  content: '';
+  position: absolute;
+  /* From below the 1px border; overlapping it would draw a line. */
+  top: calc(100% + 1px); left: 0; right: 0;
+  z-index: -1; /* under the loading strip on the bar's edge */
+  height: 64px;
+  background: linear-gradient(180deg, rgb(var(--catalog-hero-scrim-rgb) / 0.66), rgb(var(--catalog-hero-scrim-rgb) / 0));
+  pointer-events: none;
+}
+
 /* A playlist still loading fills this strip along the bar's lower edge. */
 .tab-bar-progress {
   position: absolute;

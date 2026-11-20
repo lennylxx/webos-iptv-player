@@ -11,7 +11,9 @@ import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
 import { FocusRing, ringShown } from '../navigation/focus-ring';
 import { InputMode } from '../navigation/input-mode';
-import { html, raw, Safe, withInstantScroll } from '../utils/dom';
+import { cleanUrl, cssUrl, html, inShownView, raw, Safe, withInstantScroll } from '../utils/dom';
+import { syncTabBarOverArt } from './tab-bar';
+import { backdropUrl } from '../utils/artwork';
 import { categoryLockBadge, lockBadge } from './parental-badge';
 import { SORT_ASCENDING_ICON, SORT_DESCENDING_ICON, SEE_ALL_ICON, REMOVE_ICON, CHECK_ICON, TRASH_ICON, PENCIL_ICON, SEARCH_ICON } from './icons';
 import { foldSearchText } from '../utils/channel-search';
@@ -171,6 +173,16 @@ function isScroller(overflow: string): boolean {
 // positions, and focused tile exactly as they were.
 // Subclasses supply the catalog loaders, item accessors, and the detail
 // rendering / playback specifics.
+interface HeroArt { poster: string; backdrop: string }
+// The art a detail shows: its backdrop or its poster card, by title.
+interface DetailArt { title: string; backdrop: string; poster: string }
+// Wait this long for a backdrop before trying the poster, as Chromium has no
+// timeout for a stalled image; a late backdrop still replaces the poster.
+const ART_SLOW_MS = 7000;
+// Focus must rest this long on a tile before its hero backdrop loads, so a
+// fast pass along a rail starts no downloads.
+const HERO_ART_DELAY_MS = 400;
+
 export abstract class CatalogView<C extends { id: string; name: string }, I extends CatalogSortItem> {
   protected nav: SpatialNav;
   protected account: PlaylistEntry | null = null;
@@ -196,6 +208,22 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   protected deepLinkBack: (() => void) | null = null;
   private gridFocusIndex = 0;
   private gridReturnKey: string | null = null;
+  private readonly art = new Map<string, 'loading' | 'loaded' | 'failed'>();
+  // Backdrops still loading after ART_SLOW_MS: the poster is tried meanwhile.
+  private readonly slowArt = new Set<string>();
+  // The art behind the browse hero, so a backdrop that loads later swaps in.
+  private heroArt: HeroArt | null = null;
+  private heroTimer: ReturnType<typeof setTimeout> | null = null;
+  private heroTimerUrl = '';
+  private heldHero: { name: string; background: string; art: HeroArt | null } | null = null;
+  // The art the open detail shows, kept until its replacement has loaded,
+  // and the URLs it waits on, so only their loads re-render it.
+  private detailArtShown: DetailArt | null = null;
+  private detailArtUrls: string[] = [];
+  private detailCandidateUrls: string[] = [];
+  // Each opened title's backdrop by account and id, so reopening it paints the
+  // backdrop before its details load instead of flashing the poster card.
+  private readonly itemBackdrops = new Map<string, string>();
   // The browse tile that opened a grid or detail, refocused on Back.
   private readonly gridVirtualizers = [0, CATALOG_GRID_CAPTION_LINE].map(extra => new VirtualGrid({
     columnStride: CATALOG_GRID_COLUMN_STRIDE,
@@ -434,6 +462,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   protected abstract itemId(item: I): string;
   protected abstract itemName(item: I): string;
   protected abstract itemPoster(item: I): string;
+  protected abstract itemBackdrop(item: I): string;
   protected abstract itemCategoryId(item: I): string;
   protected abstract itemGenre(item: I): string;
   protected abstract itemCount(count: number): string;
@@ -467,12 +496,17 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   protected showLayer(mode: Mode): void {
     if (mode !== this.mode) this.dismissSort(null);
-    if (this.mode === 'browse' && mode !== 'browse') this.leaveBrowse();
+    if (this.mode === 'browse' && mode !== 'browse') {
+      this.leaveBrowse();
+      if (this.heroTimer !== null) clearTimeout(this.heroTimer);
+      this.heroTimer = null;
+    }
     this.mode = mode;
     (Object.keys(this.layers) as Mode[]).forEach((key) => {
       this.layers[key].classList.toggle('catalog-layer-hidden', key !== mode);
     });
     this.nav.setRestrict(this.layers[mode]);
+    syncTabBarOverArt();
   }
 
   // Keys embed provider ids, so compare rather than build a selector from them.
@@ -488,6 +522,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   // Detail entry for subclasses: remembers where browse focus was first.
   protected enterDetail(): void {
+    // A failure may have been a dropped connection: opening a title retries.
+    this.art.forEach((state, url) => { if (state === 'failed') this.art.delete(url); });
     if (this.mode === 'grid') this.gridReturnKey = this.focusedKey();
     this.showLayer('detail');
     // A new item's detail starts on its first button.
@@ -813,6 +849,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   }
 
   deactivate(): void {
+    if (this.heroTimer !== null) clearTimeout(this.heroTimer);
+    this.heroTimer = null;
     this.clearPrompt.hide();
     this.dismissSort(null);
     this.requestController?.abort();
@@ -929,6 +967,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     if (!this.browseStale && this.account?.id === account.id) {
       // Browse may have rendered while hidden, when no rail could be measured.
       this.requestNearRails();
+      this.repaintArt();
       return;
     }
     log.debug(
@@ -1425,7 +1464,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const id = el.dataset.itemId;
     if (id === undefined) return;
     const item = this.findItem(el.dataset.categoryId ?? '', id);
-    if (item) this.updateHero(this.itemName(item), this.itemPoster(item));
+    if (item) this.updateHero(this.itemName(item), this.itemPoster(item), this.itemBackdrop(item));
   }
 
   // A tile flush with the rail's scrollport would clip its focus ring; keep a
@@ -1457,14 +1496,46 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     return true;
   }
 
-  private updateHero(name: string, poster: string): void {
+  private updateHero(name: string, poster: string, backdrop = ''): void {
     const hero = this.layers.browse.querySelector<HTMLElement>('.catalog-hero');
     if (!hero) return;
     const title = this.layers.browse.querySelector<HTMLElement>('.catalog-hero-title');
     if (title) title.textContent = name; // textContent escapes untrusted names
-    // Poster sits inside a CSS url('…') string; percent-encode the characters
-    // that could break out of it (matches renderBrowse's heroBg).
-    const bg = poster ? poster.replace(/["'()\\\s]/g, encodeURIComponent) : '';
+    this.heroArt = { poster, backdrop };
+    const bg = this.heroUrl(this.heroArt);
+    hero.style.backgroundImage = bg ? `url('${bg}')` : 'none';
+  }
+
+  // The hero shows a title's wide backdrop once it has loaded, and its
+  // poster, which its tile has already fetched, until then or if it fails.
+  // The backdrop starts loading only once focus rests on the title.
+  private heroUrl(art: HeroArt): string {
+    const url = this.heroBackdrop(art);
+    // A re-render of the same hero keeps its wait running.
+    if (this.heroTimer === null || this.heroTimerUrl !== url) {
+      if (this.heroTimer !== null) clearTimeout(this.heroTimer);
+      this.heroTimer = null;
+      if (url && !this.art.has(url)) {
+        this.heroTimerUrl = url;
+        this.heroTimer = setTimeout(() => {
+          this.heroTimer = null;
+          this.artState(url);
+        }, HERO_ART_DELAY_MS);
+      }
+    }
+    return cssUrl(url && this.art.get(url) === 'loaded' ? url : art.poster);
+  }
+
+  // The hero always takes the compact 1280px backdrop.
+  private heroBackdrop(art: HeroArt): string {
+    return art.backdrop ? backdropUrl(cleanUrl(art.backdrop), true) : '';
+  }
+
+  // A backdrop loaded for the hero on screen: swap it in for the poster.
+  private refreshHeroArt(): void {
+    const hero = this.layers.browse.querySelector<HTMLElement>('.catalog-hero');
+    if (!hero || !this.heroArt) return;
+    const bg = this.heroUrl(this.heroArt);
     hero.style.backgroundImage = bg ? `url('${bg}')` : 'none';
   }
 
@@ -1814,6 +1885,120 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.renderGrid();
   }
 
+  // A title's backdrop: the first that has not failed of the details' own,
+  // the one that loaded on an earlier open, and the catalog list's. Keyed by
+  // account, as providers reuse ids.
+  protected titleBackdrop(accountId: string, id: string, info: string | undefined, listed: string | undefined): string {
+    const key = `${accountId}|${id}`;
+    const candidates = [info, this.itemBackdrops.get(key), listed].filter((b): b is string => !!b);
+    // A skipped candidate that settles later re-renders the detail too.
+    this.detailCandidateUrls = candidates.map(b => backdropUrl(cleanUrl(b)));
+    // A failed or stalled candidate is skipped, unless its compact copy loaded.
+    const usable = (b: string): boolean => {
+      const url = backdropUrl(cleanUrl(b));
+      return (this.art.get(url) !== 'failed' && !this.slowArt.has(url))
+        || this.art.get(backdropUrl(cleanUrl(b), true)) === 'loaded';
+    };
+    const backdrop = candidates.find(usable) ?? '';
+    if (backdrop && this.art.get(backdropUrl(cleanUrl(backdrop))) === 'loaded') this.itemBackdrops.set(key, backdrop);
+    return backdrop;
+  }
+
+  // The art a detail shows. The copy never waits for it: the backdrop loads
+  // first, and only if it is missing, fails, or stalls is the poster tried
+  // (not while details that may name a backdrop are still loading). Each shows
+  // only once loaded, so a dead link leaves no art rather than a broken image,
+  // and what is on screen stays until its replacement has loaded.
+  protected detailArt(title: string, poster: string, backdrop: string, pending: boolean): DetailArt {
+    const b = backdrop ? backdropUrl(cleanUrl(backdrop)) : '';
+    const p = cleanUrl(poster);
+    this.detailArtUrls = [b, p].filter(Boolean);
+    let next: DetailArt | null = null;
+    const bs = b ? this.artState(b) : 'none';
+    // The hero's compact copy, if it loaded, stands in while the original loads
+    // and stays if the original fails.
+    const compact = b ? backdropUrl(cleanUrl(backdrop), true) : '';
+    if (bs === 'loaded') next = { title, backdrop: b, poster: '' };
+    else if ((bs === 'loading' || bs === 'failed') && compact !== b && this.art.get(compact) === 'loaded') {
+      next = { title, backdrop: compact, poster: '' };
+    }
+    else if ((bs === 'none' || bs === 'failed' || this.slowArt.has(b)) && !pending) {
+      const ps = p ? this.artState(p) : 'none';
+      if (ps === 'loaded') next = { title, backdrop: '', poster: p };
+      else if (ps !== 'loading') next = { title, backdrop: '', poster: '' };
+    }
+    const shown = this.detailArtShown?.title === title ? this.detailArtShown : null;
+    this.detailArtShown = next ?? shown;
+    return this.detailArtShown ?? { title, backdrop: '', poster: '' };
+  }
+
+  // The backdrop layer, outside the scroller: it fills the view and reaches up
+  // under the tab bar. Keyed, so the scroller after it keeps its node while
+  // the poster card comes and goes.
+  protected detailBackdrop(art: DetailArt): Safe {
+    const bg = cssUrl(art.backdrop);
+    return html`
+      ${bg
+        ? html`<div class="detail-backdrop" data-key="detail-backdrop" data-under-tab-bar
+                    style="background-image: url('${bg}')"></div>`
+        : html`<div class="detail-backdrop" data-key="detail-backdrop" data-under-tab-bar></div>`}
+      <div class="detail-backdrop-scrim" data-key="detail-scrim"></div>
+    `;
+  }
+
+  // The poster card at the right.
+  protected detailPoster(art: DetailArt): Safe | '' {
+    return art.poster ? html`
+      <div class="detail-poster-art" data-key="detail-poster"><img class="catalog-poster" src="${art.poster}" alt=""></div>` : '';
+  }
+
+  // A preloaded image settled: show what changed without moving the page.
+  protected onArtSettled(): void { this.renderDetail(); }
+
+  // Art that settled while the view was covered shows once it is shown again.
+  private repaintArt(): void {
+    if (this.mode === 'detail') this.onArtSettled();
+    else if (this.mode === 'browse') this.refreshHeroArt();
+  }
+
+  // Whether an image has loaded, preloading it on first ask. A dead link
+  // shows nothing useful (a CSS background has no error event, an <img> a
+  // broken icon), so art shows only once it has loaded.
+  private artState(url: string): 'none' | 'loading' | 'loaded' | 'failed' {
+    if (!url) return 'none';
+    const known = this.art.get(url);
+    if (known) return known;
+    this.art.set(url, 'loading');
+    const img = new Image();
+    const slow = setTimeout(() => {
+      if (this.art.get(url) !== 'loading') return;
+      this.slowArt.add(url);
+      this.artChanged(url, 'failed');
+    }, ART_SLOW_MS);
+    const settle = (state: 'loaded' | 'failed') => () => {
+      clearTimeout(slow);
+      this.art.set(url, state);
+      this.slowArt.delete(url);
+      this.artChanged(url, state);
+    };
+    img.onload = settle('loaded');
+    img.onerror = settle('failed');
+    img.src = url;
+    return 'loading';
+  }
+
+  // Re-render only for art the shown screen uses; a hidden view (the player
+  // over it) re-renders when it shows again.
+  private artChanged(url: string, state: 'loaded' | 'failed'): void {
+    if (!inShownView(this.layers[this.mode])) return;
+    if (this.mode === 'detail') {
+      if (this.detailArtUrls.indexOf(url) >= 0 || this.detailCandidateUrls.indexOf(url) >= 0) this.onArtSettled();
+    } else if (this.mode === 'browse' && state === 'loaded' && this.heroArt
+        && this.heroBackdrop(this.heroArt) === url) {
+      this.refreshHeroArt();
+    }
+  }
+
   protected posterCell(name: string, poster: string): Safe {
     return poster
       ? html`<img class="catalog-poster" src="${poster}" alt="" loading="lazy" onerror="this.style.display='none'">`
@@ -2047,20 +2232,23 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   // The hero a focused title put up in place of the leading one, which a
   // rail landing re-render keeps whatever the focus rests on.
-  private pickedHero(): { name: string; background: string } | null {
+  private pickedHero(): { name: string; background: string; art: HeroArt | null } | null {
     const hero = this.layers.browse.querySelector<HTMLElement>('.catalog-hero');
     const name = this.layers.browse.querySelector('.catalog-hero-title')?.textContent ?? '';
     if (!hero) return null;
     const leading = this.leadingHero();
     // The section name is what the hero shows before any rail has a title.
     if (name === this.kicker || (leading && name === this.itemName(leading))) return null;
-    return { name, background: hero.style.backgroundImage };
+    return { name, background: hero.style.backgroundImage, art: this.heroArt };
   }
 
-  private restoreHero(picked: { name: string; background: string }): void {
+  private restoreHero(picked: { name: string; background: string; art: HeroArt | null }): void {
     const hero = this.layers.browse.querySelector<HTMLElement>('.catalog-hero');
     const title = this.layers.browse.querySelector<HTMLElement>('.catalog-hero-title');
-    if (hero) hero.style.backgroundImage = picked.background;
+    this.heroArt = picked.art;
+    // Recomputed, so a backdrop that loaded while the view was covered shows.
+    const bg = picked.art ? this.heroUrl(picked.art) : '';
+    if (hero) hero.style.backgroundImage = picked.art ? (bg ? `url('${bg}')` : 'none') : picked.background;
     if (title) title.textContent = picked.name;
   }
 
@@ -2075,7 +2263,14 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const first = railOrder.findIndex(rail => rail.getBoundingClientRect().bottom > top);
     const candidates = first < 0 ? [] : railOrder.slice(first)
       .map(rail => ({ rail, top: rail.getBoundingClientRect().top }));
-    this.renderBrowse(false);
+    // So the hero's backdrop wait runs on instead of restarting for the
+    // leading title in between.
+    this.heldHero = this.pickedHero();
+    try {
+      this.renderBrowse(false);
+    } finally {
+      this.heldHero = null;
+    }
     const held = candidates.find(c => c.rail.isConnected);
     // At the top, a rail added above shows rather than pushing what was there.
     if (!rails || !held || rails.scrollTop === 0) return;
@@ -2178,10 +2373,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const continueRail = this.collectionRail('continue');
     const watchlistRail = this.collectionRail('watchlist');
     const hasContent = this.categories.length > 0 || !!continueRail || !!watchlistRail;
-    // A poster URL sits inside a CSS url('…') string, where the html escaper's
-    // entity encoding is decoded before CSS parses it; percent-encode the
-    // characters that could break out of the string.
-    const heroBg = hero ? this.itemPoster(hero).replace(/["'()\\\s]/g, encodeURIComponent) : '';
+    // A held re-render keeps the title focus put up in place of the leading one.
+    const picked = this.heldHero;
+    this.heroArt = picked?.art
+      ?? (hero ? { poster: this.itemPoster(hero), backdrop: this.itemBackdrop(hero) } : null);
+    const heroBg = this.heroArt ? this.heroUrl(this.heroArt) : '';
+    const heroName = picked?.art ? picked.name : hero ? this.itemName(hero) : this.kicker;
     // Once some categories have no rail, "All Categories" lists every category,
     // rails included, so it is the one complete index of the catalog.
     const moreCats = this.allCategoriesShown() ? this.categories : [];
@@ -2198,12 +2395,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         ${!hasContent
           ? html`<p class="catalog-hint catalog-empty">${this.emptyMessage}</p>`
           : html`
-            <div class="catalog-hero" style="background-image: url('${heroBg}')">
+            <div class="catalog-hero" data-under-tab-bar style="background-image: url('${heroBg}')">
               <div class="catalog-hero-scrim"></div>
             </div>
             <div class="catalog-hero-body">
               <div class="catalog-hero-kicker">${this.kicker}</div>
-              <h1 class="catalog-hero-title">${hero ? this.itemName(hero) : this.kicker}</h1>
+              <h1 class="catalog-hero-title">${heroName}</h1>
             </div>
             <div class="catalog-rails">
               <div class="catalog-rails-spacer"></div>
@@ -2260,6 +2457,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       ).forEach(track => this.scrollGuard.syncOffset(track, 'horizontal', 0));
       this.resetBrowseRailOffsets = false;
     }
+    syncTabBarOverArt();
     if (restoreFocus) this.restoreBrowseFocus();
     this.railsDirty = false;
     this.requestNearRails();

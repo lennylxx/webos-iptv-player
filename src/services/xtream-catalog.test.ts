@@ -335,7 +335,7 @@ describe('xtream-catalog', () => {
 
   it('falls back to stale VOD info when a stale re-fetch returns null', async () => {
     const stale = Date.now() - CONFIG.XTREAM.DEFAULT_CATALOG_REFRESH_INTERVAL_MS - 1;
-    const info = { plot: 'old', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0, poster: '', imdbId: '', tmdbId: '', year: 0 };
+    const info = { plot: 'old', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0, poster: '', backdrop: '', imdbId: '', tmdbId: '', year: 0 };
     cacheStore.set('x1|vod_info|10', { key: 'x1|vod_info|10', timestamp: stale, data: info });
     clientMock.getVodInfo.mockResolvedValue(null);
     expect(await loadVodInfo(account, '10')).toEqual(info);
@@ -343,7 +343,7 @@ describe('xtream-catalog', () => {
   });
 
   it('caches VOD info and skips the write on a null response', async () => {
-    clientMock.getVodInfo.mockResolvedValueOnce({ plot: 'p', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0, poster: '', imdbId: '', tmdbId: '', year: 0 });
+    clientMock.getVodInfo.mockResolvedValueOnce({ plot: 'p', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0, poster: '', backdrop: '', imdbId: '', tmdbId: '', year: 0 });
     const ok = await loadVodInfo(account, '10');
     expect(ok?.plot).toBe('p');
     expect(setCachedCatalog).toHaveBeenCalledWith(

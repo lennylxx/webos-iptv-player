@@ -134,7 +134,9 @@ build constant; `scripts/sync-version.mjs` runs on `npm version`.
 - **Components** (`src/components/`) own a DOM subtree and re-render through
   `morph()` (`src/utils/morph.ts`), a keyed in-place reconciler fed by the
   `html` tagged template. Reused nodes keep listeners, focus, and scroll, so
-  list items carry a stable `data-key`. Build a `Safe` with `` html`…` `` and
+  list items carry a stable `data-key`, and so does any sibling that comes
+  and goes beside a scroller: unkeyed nodes pair in order by tag, so an
+  unkeyed sibling appearing would take the scroller's node. Build a `Safe` with `` html`…` `` and
   pass it to `morph`; bind listeners once (delegated), not per render.
   `Player` delegates media loading and desktop hls.js/mpegts.js/Shaka access
   to `PlayerPipeline` (`player-pipeline.ts`) and audio/subtitle state to
@@ -182,8 +184,9 @@ build constant; `scripts/sync-version.mjs` runs on `npm version`.
   `esbuild.config.mjs`, `vitest.config.ts`, and `src/globals.d.ts`.
 - **XSS safety.** Channel names, program titles, group titles, and logo URLs
   come from untrusted M3U/XMLTV. Always interpolate them through `html`
-  (auto-escapes); wrap only genuinely trusted markup in `raw(...)`. E2E tests
-  guard this.
+  (auto-escapes); wrap only genuinely trusted markup in `raw(...)`. A URL in
+  a CSS `url('…')` also goes through `cssUrl()`: the escaper's entities are
+  decoded before CSS parses the string. E2E tests guard this.
 - **TS strictness.** `strict`, `noUnusedLocals`, `noUnusedParameters`,
   `noImplicitReturns` are on — unused symbols fail `typecheck`/CI.
 - **Tests** are colocated as `*.test.ts`. Vitest defaults to `node`;

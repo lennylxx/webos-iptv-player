@@ -104,6 +104,10 @@ Settings, player OSD) and match it.
 - **Targets:** list rows and buttons are at least ~42px tall, and roomier
   where they hold two lines. Truncate long untrusted names with ellipsis;
   never let them reflow a row.
+- **Clamp by lines, not pixels.** Cap a multi-line block with
+  `-webkit-line-clamp` (with `display: -webkit-box`), which scales with
+  the text size and ends on an ellipsis; a px `max-height` cuts a line in
+  half at every size but 100.
 - **Every language fits.** Labels are translated into many languages, some
   ~40% longer than English. Size buttons and segmented controls so the
   longest translation fits at text size 150, or let them wrap by design —
@@ -178,7 +182,20 @@ broken.
 - **Scrims and gradients come from the theme** (`--catalog-hero-scrim-rgb`
   is light on light themes); never a fixed dark gradient. Text over video
   or artwork needs a scrim, not a text shadow alone. Aim for at least
-  4.5:1 contrast for body text against its real background.
+  4.5:1 contrast for body text against its real background, and measure
+  text over artwork on the brightest plausible image, not a dark fixture;
+  the scrim holds strong under the whole copy column.
+- **Catalog art reaches under the tab bar.** A full-bleed browse hero or
+  detail backdrop extends 96px up and carries `data-under-tab-bar`; while
+  one shows, `syncTabBarOverArt()` (`tab-bar.ts`) turns the bar
+  transparent over a theme scrim. A detail renders its copy at once and
+  never waits for art: it loads the backdrop, then only if that is
+  missing, fails, or stalls the poster (a card at the right of the same
+  layout), and shows each only once loaded, so a dead link leaves no art
+  rather than a broken image or a placeholder initial. Art on screen
+  stays until its replacement has loaded, and the browse hero loads a
+  backdrop only once it has shown for 400ms, so a fast pass along a
+  rail starts no downloads.
 - **Hard-coded `#fff`/`#000` only** for bare controls drawn directly on
   video and for solid status badges — never inside a themed or overlay
   panel.

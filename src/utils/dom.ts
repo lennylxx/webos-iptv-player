@@ -127,6 +127,21 @@ export function afterNextPaint(fallbackMs = 500): Promise<void> {
   });
 }
 
+// A URL as the URL parser reads it for an <img>: outer whitespace and any
+// tab or newline dropped. Kept, CSS would encode them and break the URL.
+export function cleanUrl(url: string): string {
+  return url.trim().replace(/[\t\n\r]/g, '');
+}
+
+// A URL for a CSS url('…') string. In an html`` style attribute the escaper's
+// entities are decoded before CSS parses the value, so percent-encode every
+// character that could end the string or the url() token; encodeURIComponent
+// leaves ', ( and ) alone.
+export function cssUrl(url: string): string {
+  return cleanUrl(url).replace(/["'()\\\s]/g, (c) => (
+    /['()]/.test(c) ? `%${c.charCodeAt(0).toString(16).toUpperCase()}` : encodeURIComponent(c)));
+}
+
 /** A string that is already trusted HTML and must not be re-escaped. */
 export class Safe {
   constructor(readonly value: string) {}

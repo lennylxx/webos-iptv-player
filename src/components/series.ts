@@ -1,3 +1,4 @@
+import { syncTabBarOverArt } from './tab-bar';
 import type { Action, PlaylistEntry, SeriesCategory, SeriesItem, SeriesInfo, Episode, ResumeEntry, ResumeKind, SearchMeta, VodPlayback, VodQueueItem, WatchlistEntry } from '../types';
 import { html, raw, Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
@@ -75,6 +76,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   protected itemId(s: SeriesItem): string { return s.seriesId; }
   protected itemName(s: SeriesItem): string { return s.name; }
   protected itemPoster(s: SeriesItem): string { return s.poster; }
+  protected itemBackdrop(s: SeriesItem): string { return s.backdrop ?? ''; }
   protected itemCategoryId(s: SeriesItem): string { return s.categoryId; }
   protected itemGenre(s: SeriesItem): string { return s.genre ?? ''; }
   protected clearDetail(): void {
@@ -561,6 +563,9 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     `;
   }
 
+  // Art that loads later must not pull the episode list back to the focus.
+  protected override onArtSettled(): void { this.renderDetail(false); }
+
   protected renderDetail(restoreFocus = true): void {
     const series = this.currentSeries;
     const a = this.account;
@@ -604,10 +609,16 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     }
     const episodeRange = this.episodeVirtualizer.getRange(episodes.length, episodeViewport);
 
+    const art = this.detailArt(`${a.id}|${series.seriesId}`, poster,
+      this.titleBackdrop(a.id, series.seriesId, info?.backdrop, series.backdrop), this.detailLoading);
+
+    // The backdrop sits outside the scroller, so the episodes scroll over it;
+    // the poster card scrolls away with the header.
     morph(this.layer('detail'), html`
-      <div class="catalog-view series-detail" data-nav-container>
+      ${this.detailBackdrop(art)}
+      <div class="catalog-view series-detail" data-key="detail-scroller" data-nav-container>
+        ${this.detailPoster(art)}
         <div class="series-detail-head">
-          <div class="detail-poster-wrap series-detail-poster">${this.posterCell(series.name, poster)}</div>
           <div class="detail-body">
             <h1 class="detail-title">${series.name}</h1>
             ${meta.length ? html`<div class="detail-meta">${meta.join('  ·  ')}</div>` : ''}
@@ -678,6 +689,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
         ` : ''}
       </div>
     `);
+    syncTabBarOverArt();
     const measuredSizes = Array.from(
       this.layer('detail').querySelectorAll<HTMLElement>('.series-episode-cell'),
     ).map(cell => ({
@@ -808,9 +820,9 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   }
 
   // Where the episode list starts inside the scrolling detail page, i.e. the
-  // header the virtualizer has to skip before item 0. Both share an
-  // offsetParent (the page is statically positioned), so the difference is the
-  // in-content distance and stays correct while the page is scrolled.
+  // header the virtualizer has to skip before item 0. The page is positioned,
+  // so it is the list's offsetParent and offsetTop is the in-content distance,
+  // which stays correct while the page is scrolled.
   private episodeListStart(
     scroller: HTMLElement | null,
     list: HTMLElement | null,
