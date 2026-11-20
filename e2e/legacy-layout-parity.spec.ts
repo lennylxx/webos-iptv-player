@@ -1,4 +1,4 @@
-import { endHoldingUpNext, enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page, liveLoaded } from './helpers';
+import { endHoldingUpNext, enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page, liveLoaded, settled } from './helpers';
 import { type Browser } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { findGappedLooseText, measureLooseText, newLegacyPage, pixelDiff } from './pixel-parity';
@@ -6,6 +6,22 @@ import { seedXtream } from './fixtures/xtream';
 import { channelKey } from '../src/utils/channel';
 import { type Channel } from '../src/types';
 
+// Every box's layout and scroll position: two equal reads mean nothing is still
+// moving. Transforms are left out, since a looping CSS animation never rests and
+// screenshots finish CSS animation themselves; this waits out scripted motion.
+function layoutOf(p: Page): Promise<string> {
+  return p.evaluate(() => {
+    const els = document.querySelectorAll<HTMLElement>('*');
+    let hash = 0;
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      for (const n of [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight, el.scrollLeft, el.scrollTop]) {
+        hash = (hash * 31 + Math.round(n || 0)) | 0;
+      }
+    }
+    return `${String(els.length)}:${String(hash)}`;
+  });
+}
 
 // Narrows a flex row for a scene so it wraps, through a stylesheet, which a
 // re-render keeps, unlike an inline style.
@@ -1081,9 +1097,8 @@ async function walk(
             toasts.forEach((toast) => toast.classList.remove('visible'));
           })));
       }
-      // Let both settle on the same frame before sampling.
-      await page.waitForTimeout(250);
-      await legacy.page.waitForTimeout(250);
+      // Let both settle before sampling.
+      await Promise.all([page, legacy.page].map((p) => settled(() => layoutOf(p))));
 
       const shot = (p: Page) => p.screenshot({ animations: 'disabled', caret: 'hide' });
       const [modernPng, legacyPng] = await Promise.all([shot(page), shot(legacy.page)]);
@@ -1105,8 +1120,7 @@ async function walk(
       // only a hit that survives a second look counts.
       const tight = await looseTextGaps(page, legacy.page);
       if (tight.length) {
-        await page.waitForTimeout(500);
-        await legacy.page.waitForTimeout(500);
+        await Promise.all([page, legacy.page].map((p) => settled(() => layoutOf(p))));
         const again = await looseTextGaps(page, legacy.page);
         for (const offender of again) {
           const entry = `${screen.name}: ${offender}`;

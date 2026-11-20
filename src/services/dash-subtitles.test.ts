@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DashSubtitles, cueMediaTime, pickWebVttSubtitle } from './dash-subtitles';
 
 describe('DashSubtitles helpers', () => {
@@ -88,6 +88,57 @@ describe('DashSubtitles helpers', () => {
     service.stop();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('polls a live manifest and adds cues from segments that appear later', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+    const mpd = (timeline: string) => `<?xml version="1.0"?><MPD
+      xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic">
+      <Period><AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">
+        <SegmentTemplate media="sub-$Time$.vtt" timescale="1">
+          <SegmentTimeline>${timeline}</SegmentTimeline>
+        </SegmentTemplate>
+        <Representation id="s1"/>
+      </AdaptationSet></Period></MPD>`;
+    let manifest = mpd('<S t="20" d="4"/>');
+    let edge = 24;
+    const vtt: Record<string, string> = {
+      'http://host/sub-20.vtt': 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n',
+      'http://host/sub-24.vtt': 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nBravo\n',
+    };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      url,
+      text: async () => url.endsWith('.mpd') ? manifest : vtt[url],
+    })));
+    vi.stubGlobal('VTTCue', class {
+      constructor(public startTime: number, public endTime: number, public text: string) {}
+    });
+    const cues: Array<{ startTime: number; endTime: number; text: string }> = [];
+    const track = {
+      mode: 'disabled',
+      cues,
+      addCue: (cue: typeof cues[number]) => cues.push(cue),
+      removeCue: (cue: typeof cues[number]) => { cues.splice(cues.indexOf(cue), 1); },
+    };
+    const video = {
+      currentTime: 20,
+      seekable: { length: 1, start: () => 20, end: () => edge },
+      addTextTrack: () => track,
+    } as unknown as HTMLVideoElement;
+    const service = new DashSubtitles();
+
+    await service.start(video, 'http://host/stream.mpd', { lang: 'l1' });
+    expect(cues.map(cue => cue.text)).toEqual(['Alpha']);
+
+    manifest = mpd('<S t="20" d="4"/><S t="24" d="4"/>');
+    edge = 28;
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(cues.map(cue => [cue.text, cue.startTime])).toEqual([['Alpha', 21], ['Bravo', 25]]);
+    service.stop();
   });
 
   it("times segments on another pipeline's clock, waiting for its first position", async () => {

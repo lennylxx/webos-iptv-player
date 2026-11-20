@@ -1,4 +1,4 @@
-import { test, expect, routePlaylist, seedPlaylist, seedPointer, type Page, liveLoaded } from './helpers';
+import { test, expect, routePlaylist, seedPlaylist, seedPointer, type Page, liveLoaded, afterQueuedTasks } from './helpers';
 
 // A channel that declares HTTP headers plays on webOS through
 // luna://com.webos.media/load, borrowing the placeholder <video>'s window.
@@ -424,7 +424,7 @@ test('picking CC on Luna enables the compositor on the Luna mediaId and reads on
 
   await page.evaluate(() => (window as unknown as { __lunaE2EControl: { release(): void } })
     .__lunaE2EControl.release());
-  await page.waitForTimeout(100);
+  await afterQueuedTasks(page);
   await expect(subsRow.locator('.menu-item-value')).toHaveText('Track 1 [CC]');
   probe = await lunaProbe(page);
   expect(callsOf(probe, 'setSubtitleEnable')).toHaveLength(1);

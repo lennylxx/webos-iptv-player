@@ -122,7 +122,7 @@ const {
       getChannelCustomization: vi.fn(() => null),
       setChannelCustomization: vi.fn(),
       clearChannelCustomization: vi.fn(),
-      setPlaylists: vi.fn(),
+      setPlaylists: vi.fn<(playlists: PlaylistEntry[]) => boolean>(() => true),
       setManualEpgSources: vi.fn((sources: ManualEpgSource[]) => {
         state.manualEpgSources = sources.map(source => ({
           ...source,
@@ -163,7 +163,7 @@ const {
       }),
       migrateCatchupEpgOffsets: vi.fn(),
       setLocalePreference: vi.fn(),
-      setOnlineSubtitleConfig: vi.fn((cfg: typeof state.onlineSubtitles) => { state.onlineSubtitles = cfg; }),
+      setOnlineSubtitleConfig: vi.fn((cfg: typeof state.onlineSubtitles) => { state.onlineSubtitles = cfg; return true; }),
       remove: vi.fn(),
       clearRecentlyWatched: vi.fn(),
       clearWatchlist: vi.fn(),
@@ -2854,11 +2854,15 @@ describe('Settings Xtream Live categories', () => {
     picker()!.querySelector<HTMLElement>('[data-category-id="c2"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     Focus.owner()!.handle('yellow');
+    storageMock.setLiveCategorySnapshot.mockClear();
     container.querySelector<HTMLInputElement>('#xtream-entries .xtream-username')!.value = 'u2';
 
     click('#save-settings');
 
     expect(savedXtream()[0].xtream?.liveCategories).toBeUndefined();
+    expect(storageMock.setLiveCategorySnapshot).not.toHaveBeenCalledWith('x1', expect.objectContaining({
+      knownIds: ['c1', 'c2', 'c3'], announcedIds: [],
+    }));
   });
 
   it('keeps the reviewed snapshot when the account is re-pointed before the picker opens', async () => {

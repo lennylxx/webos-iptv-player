@@ -688,6 +688,8 @@ test('the pointer at the right edge opens the VOD player menu', async ({ page })
 });
 
 const [ENTER, RIGHT, BACK, YELLOW] = [13, 39, 461, 405];
+// CONFIG.PLAYER.SEEK_COMMIT_DELAY; src/config.ts needs build-time globals, so it can't be imported here.
+const SEEK_COMMIT_DELAY_MS = 800;
 
 test('VOD Back leaves playback even with the OSD up', async ({ page }) => {
   await startFakeVod(page);
@@ -704,7 +706,7 @@ test('VOD Back drops a pending seek and keeps playing in place', async ({ page }
   expect(dropped).toMatchObject({ osd: true, player: true, currentTime: 0 });
   const osd = page.locator('#player-osd');
   await expect(osd.locator('.osd-scrub')).toHaveCount(0);
-  await page.waitForTimeout(1000); // past the commit delay
+  await page.waitForTimeout(SEEK_COMMIT_DELAY_MS * 2); // well past the commit delay
   expect(await page.locator('#video-player').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
 });
 

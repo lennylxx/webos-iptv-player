@@ -6,6 +6,7 @@ import {
   SAMPLE_M3U,
   enterTab,
   readUserDataStore,
+  settled,
 } from './helpers';
 
 function xmltvDate(date: Date): string {
@@ -525,7 +526,7 @@ test('recent searches drop down over the current view, refill the query, and cle
   await liveLoaded(page);
   await expect(tiles).toHaveCount(2);
   await dropdown.locator('[data-history-clear]').click();
-  await expect(page.locator('.confirmation-overlay')).toHaveCount(0);
+  await expect(page.locator('.confirmation-prompt:not(.hidden)')).toHaveCount(0);
   await expect(dropdown.locator('.search-history-panel')).toBeHidden();
   await liveLoaded(page);
   await expect(input).toBeFocused();
@@ -585,10 +586,9 @@ test('recent searches line up with the search input, not the icon', async ({ pag
   await enterSearch(page);
   const panel = page.locator('.search-history-panel');
   await expect(panel).toBeVisible();
-  await page.waitForTimeout(400);
-  const [panelBox, inputBox] = await Promise.all([
+  const [panelBox, inputBox] = await settled(() => Promise.all([
     panel.boundingBox(), page.locator('.tab-bar-search-input').boundingBox(),
-  ]);
+  ]));
   expect(Math.abs(panelBox!.x - inputBox!.x)).toBeLessThanOrEqual(1);
   expect(Math.abs((panelBox!.x + panelBox!.width) - (inputBox!.x + inputBox!.width))).toBeLessThanOrEqual(1);
 });

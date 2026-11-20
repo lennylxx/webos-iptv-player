@@ -363,6 +363,43 @@ export async function liveLoaded(page: Page): Promise<void> {
   await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
 }
 
+// Reads until two reads apart agree, so a measurement taken after an animation
+// waits for the animation however slow the machine is, instead of a fixed sleep.
+export async function settled<T>(read: () => Promise<T>, sampleMs = 150): Promise<T> {
+  let value = await read();
+  await expect.poll(async () => {
+    const before = JSON.stringify(value);
+    await new Promise((resolve) => setTimeout(resolve, sampleMs));
+    value = await read();
+    return JSON.stringify(value) === before;
+  }).toBe(true);
+  return value;
+}
+
+// Returns once the zero-delay timers already queued (a click's deferred select,
+// a held reply's delivery) and the frame after them have run.
+export async function afterQueuedTasks(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    setTimeout(() => requestAnimationFrame(() => resolve()), 0);
+  }));
+}
+
+// Scrolls at once, even under smooth scrolling, and returns once the app's
+// scroll handler and the frame it schedules have run.
+export async function scrollAndRender(scroller: Locator, top: number): Promise<void> {
+  await scroller.evaluate((el, y) => new Promise<void>((resolve) => {
+    const before = el.scrollTop;
+    // setProperty, since the simulation deletes the style.scrollBehavior reflection.
+    const behavior = el.style.getPropertyValue('scroll-behavior');
+    el.style.setProperty('scroll-behavior', 'auto');
+    el.addEventListener('scroll', () => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    el.scrollTop = y;
+    el.style.setProperty('scroll-behavior', behavior);
+    // Already there, or nothing to scroll: no scroll event will come.
+    if (el.scrollTop === before) resolve();
+  }), top);
+}
+
 // A selected control's fill, border, or inset ring must stand 3:1 apart from
 // an unselected sibling's fill in every theme, or selection is lost at 10 feet.
 // Transitions are off so each theme is read once, never mid-fade from the last.

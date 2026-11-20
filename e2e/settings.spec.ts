@@ -1,6 +1,6 @@
 import {
   liveLoaded,
-  test, expect, type Page, routePlaylist, routeLiveManifest, seedPlaylist, PLAYLIST_URL, enterTab, readUserDataStore,
+  test, expect, type Page, routePlaylist, routeLiveManifest, seedPlaylist, PLAYLIST_URL, enterTab, readUserDataStore, afterQueuedTasks, isChromium53,
 } from './helpers';
 import type { Locator } from '@playwright/test';
 import { seedXtream } from './fixtures/xtream';
@@ -355,7 +355,9 @@ test.describe('Settings navigation', () => {
         supported: typeof document.documentElement.style.scrollBehavior === 'string',
         value: getComputedStyle(element).scrollBehavior,
       }));
-      if (policy.supported) expect(policy.value).toBe(expected);
+      // The simulation removes post-53 CSSOM, so only the attribute is checked there.
+      expect(policy.supported).toBe(!isChromium53());
+      if (!isChromium53()) expect(policy.value).toBe(expected);
     }
   });
 
@@ -1249,7 +1251,7 @@ test.describe('Settings playlists', () => {
       await seedThree(page);
       await openSettings(page);
       await page.locator('.remove-playlist').first().click();
-      await page.waitForTimeout(200);
+      await afterQueuedTasks(page);
       expect(await names(page)).toEqual(['Playlist 2', 'Playlist 4']);
     });
 
@@ -1257,7 +1259,7 @@ test.describe('Settings playlists', () => {
       await seedThree(page);
       await openSettings(page);
       await page.locator('.remove-playlist').nth(1).click();
-      await page.waitForTimeout(200);
+      await afterQueuedTasks(page);
       expect(await names(page)).toEqual(['Playlist 1', 'Playlist 4']);
     });
 
@@ -1268,7 +1270,7 @@ test.describe('Settings playlists', () => {
       await openSettings(page);
       for (let i = 0; i < 3; i++) {
         await page.locator('.remove-playlist').first().click();
-        await page.waitForTimeout(150);
+        await afterQueuedTasks(page);
       }
       await expect(page.locator('.playlist-name')).toHaveCount(0);
       await expect(page.locator('#playlist-entries .empty-hint')).toBeVisible();

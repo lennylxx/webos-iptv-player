@@ -147,7 +147,9 @@ async function expectStopped(page: Page, track: Locator): Promise<number> {
 
 // Inside the edge, the dwell holds the track still before it moves. Hovering
 // a clipped tab may first bring it into view once, so compare two samples
-// taken inside the dwell rather than the position before the move.
+// taken inside the dwell rather than the position before the move. On a
+// machine too slow to sample inside the dwell the probe is skipped rather
+// than flake; edge-scroll.test.ts pins the dwell on a fake clock.
 async function enterEdgeAndDwell(page: Page, track: Locator, side: EdgeSide) {
   const at = await pointAt(page, track, side);
   const arrived = Date.now();

@@ -9,6 +9,8 @@ import {
   routeLiveManifest,
   measureRowTextFit,
   type Page,
+  settled,
+  scrollAndRender,
 } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
@@ -320,11 +322,10 @@ test('returning to a far playing channel keeps it focused under full animation',
   await liveLoaded(page);
 
   // A smooth far jump would pass through windows that drop the focused row.
-  await page.waitForTimeout(1000);
   const focused = page.locator('.channel-main .channel-item.focused');
   await expect(focused).toContainText('Channel 215');
   const list = page.locator('.channel-main');
-  const [row, viewport] = await Promise.all([focused.boundingBox(), list.boundingBox()]);
+  const [row, viewport] = await settled(() => Promise.all([focused.boundingBox(), list.boundingBox()]));
   expect(row!.y).toBeGreaterThanOrEqual(viewport!.y);
   expect(row!.y + row!.height).toBeLessThanOrEqual(viewport!.y + viewport!.height);
 });
@@ -712,8 +713,7 @@ test('Up from the edit actions skips a remembered row scrolled out of view', asy
   for (let i = 0; i < 12; i++) await page.keyboard.press('ArrowDown');
   await expect(page.locator('#view-channels .edit-hints .focused')).toHaveCount(1);
 
-  await main.evaluate((el) => { el.scrollTop = 0; });
-  await page.waitForTimeout(100);
+  await scrollAndRender(main, 0);
   await page.keyboard.press('ArrowUp');
   await expect(main.locator('[data-list-position].focused')).toHaveCount(1);
   await expect(main.locator('[data-list-position="11"]')).not.toHaveClass(/\bfocused\b/);

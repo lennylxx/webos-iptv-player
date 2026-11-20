@@ -9,6 +9,7 @@ import {
   routeLiveManifest,
   routePlaylist,
   seedPlaylist,
+  scrollAndRender,
 } from './helpers';
 import type { Page } from '@playwright/test';
 
@@ -1357,8 +1358,7 @@ test('a re-render keeps a pointer-hidden highlight hidden until the next key sho
 
   await hoverThenLeave(item(2));
   // A small scroll re-renders the virtual list with the row still mounted.
-  await view.locator('[data-parental-list="item"]').evaluate((list) => { list.scrollTop = 20; });
-  await page.waitForTimeout(100);
+  await scrollAndRender(view.locator('[data-parental-list="item"]'), 20);
   await expect(view.locator('.focused')).toHaveCount(0);
 
   await page.keyboard.press('ArrowDown');

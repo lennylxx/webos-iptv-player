@@ -30,10 +30,8 @@ describe('wallToMediaSeconds', () => {
     const newestSubPdt = E0 + 12112 * 1000;
     const cueWall = E0 + 12100 * 1000;
     const anchor = { media: 7896, wallMs: newestSubPdt, src: 'edge' };
-    expect(wallToMediaSeconds(anchor, cueWall)).toBe(7884);          // lands by the playhead
-    // Regression: the old code placed media-clock cues at bare c.start = 12100 — on
-    // the *subtitle* timeline, ~4200s past the video playhead, so they never showed.
-    expect(12100).toBeGreaterThan(7884 + 4000);
+    // Not the bare sub-media 12100, ~4200s past the video playhead.
+    expect(wallToMediaSeconds(anchor, cueWall)).toBe(7884);
   });
 
   it('absorbs a video/subtitle origin offset when getStartDate is available', () => {
@@ -61,15 +59,6 @@ describe('cueKey', () => {
     const half1 = cueKey(E0 + 15720, E0 + 16000, txt); // 15.720 -> 16.000
     const half2 = cueKey(E0 + 16000, E0 + 16920, txt); // 16.000 -> 16.920
     expect(half1).not.toBe(half2); // both survive dedup -> caption shows for its full span
-  });
-
-  it('collapses a true re-add (identical text and timing)', () => {
-    expect(cueKey(E0 + 16000, E0 + 16920, txt)).toBe(cueKey(E0 + 16000, E0 + 16920, txt));
-  });
-
-  it('regression: the old rounded-second key merged the two halves', () => {
-    const oldKey = (wallMs: number) => Math.round(wallMs / 1000) + '|' + txt;
-    expect(oldKey(E0 + 15720)).toBe(oldKey(E0 + 16000)); // collided -> half dropped (the bug)
   });
 });
 
@@ -301,6 +290,47 @@ describe('HlsSubtitles with an external clock', () => {
     expect(display.cues.map(cue => cue.text)).toEqual(['Alpha']);
     subs.stop();
     expect(display.cues).toEqual([]);
+  });
+
+  it('adds a cue re-emitted by the next segment only once', async () => {
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    // Bravo sits between the two Alphas, so the same-text merge cannot hide a duplicate.
+    serve({
+      'http://host/a.m3u8': MASTER,
+      'http://host/s.m3u8': PLAYLIST,
+      'http://host/s0.vtt': 'WEBVTT\n\n00:00:05.000 --> 00:00:07.000\nAlpha\n\n00:00:07.000 --> 00:00:08.000\nBravo\n',
+      'http://host/s1.vtt': CUE_VTT,
+    });
+    const { video, timeline } = placeholder();
+    const subs = new HlsSubtitles();
+
+    await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+
+    expect(timeline.cues.map(c => [c.text, c.startTime, c.endTime])).toEqual([
+      ['Alpha', 509, 511],
+      ['Bravo', 511, 512],
+    ]);
+    subs.stop();
+  });
+
+  it('keeps both halves of a caption clipped at a segment boundary', async () => {
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    // Both halves start within the same rounded second.
+    serve({
+      'http://host/a.m3u8': MASTER,
+      'http://host/s.m3u8': PLAYLIST,
+      'http://host/s0.vtt': 'WEBVTT\n\n00:00:03.720 --> 00:00:04.000\nAlpha\n',
+      'http://host/s1.vtt': 'WEBVTT\n\n00:00:00.000 --> 00:00:00.920\nAlpha\n',
+    });
+    const { video, timeline } = placeholder();
+    const subs = new HlsSubtitles();
+
+    await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+
+    expect(timeline.cues).toHaveLength(1);
+    expect(timeline.cues[0].startTime).toBeCloseTo(507.72, 6);
+    expect(timeline.cues[0].endTime).toBeCloseTo(508.92, 6);
+    subs.stop();
   });
 
   it('logs the subtitle rendition by index, never its playlist URL', async () => {

@@ -189,7 +189,8 @@ test('no flex-gap container separates an element from loose text', async ({ page
 
   const M3U = [
     '#EXTM3U',
-    '#EXTINF:-1 tvg-id="ch1" group-title="News",Channel 1',
+    '#EXTINF:-1 tvg-id="ch1" group-title="News" catchup="default" '
+      + 'catchup-source="http://streams.example.com/catchup.m3u8?start={utc}" catchup-days="7",Channel 1',
     'http://streams.example.com/ch1.m3u8',
   ].join('\n');
   // Relative to now so the aired / airing / upcoming variants all render — the
@@ -220,6 +221,7 @@ test('no flex-gap container separates an element from loose text', async ({ page
       channelKey: (h >>> 0).toString(16).padStart(8, '0'), channelName: 'Channel 1',
       title: 'Later Show', startMs: Date.now() + 7200_000, stopMs: Date.now() + 10800_000,
     }]));
+    localStorage.setItem('iptv_search_history', JSON.stringify(['Channel']));
     // Favorites management only offers its hint bar on a non-empty group.
     localStorage.setItem('iptv_favorites',
       JSON.stringify([(h >>> 0).toString(16).padStart(8, '0')]));
@@ -233,11 +235,24 @@ test('no flex-gap container separates an element from loose text', async ({ page
   };
   await collect();
 
-  for (const section of ['epg', 'settings', 'search', 'live'] as const) {
-    await enterTab(page, section);
-    await page.waitForTimeout(300);
-    await collect();
-  }
+  // Each section is collected only once what it is meant to cover has rendered.
+  await enterTab(page, 'epg');
+  await expect(page.locator('#view-epg .epg-replay-glyph').first()).toBeVisible();
+  await expect(page.locator('#view-epg .live-badge').first()).toBeVisible();
+  await collect();
+  await enterTab(page, 'settings');
+  await expect(page.locator('#view-settings')).toBeVisible();
+  await collect();
+  await enterTab(page, 'search');
+  await expect(page.locator('.search-history-tile').first()).toBeVisible();
+  await collect();
+  await page.locator('.tab-bar-search-input').fill('Channel');
+  await expect(page.locator('#view-search .search-channel-tile').first()).toBeVisible();
+  await expect(page.locator('#view-search .search-program-row').first()).toBeVisible();
+  await collect();
+  await enterTab(page, 'live');
+  await expect(page.locator('#view-channels .channel-item').first()).toBeVisible();
+  await collect();
 
   // The Reminder Manager, then the channel editor: both are full-screen views
   // the section walk never reaches.

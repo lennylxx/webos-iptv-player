@@ -17,7 +17,7 @@ const {
   parseXMLTVMock: vi.fn(),
 }));
 
-vi.mock('./idb-cache', () => ({ getCachedEpg: vi.fn(), setCachedEpg: vi.fn(async () => {}) }));
+vi.mock('./idb-cache', () => ({ getCachedEpg: vi.fn(), setCachedEpg: vi.fn(async () => true) }));
 vi.mock('./storage-service', () => ({
   StorageService: {
     getEpgRefreshIntervalMs: epgRefreshIntervalMock,

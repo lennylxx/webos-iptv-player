@@ -2,6 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
   PLAYLIST_URL, test, expect, enterTab, routeLiveManifest, routePlaylist, seedPlaylist, type Page,
+  afterQueuedTasks, settled,
 } from './helpers';
 
 // A large playlist shows its first channels while the rest still downloads,
@@ -82,6 +83,11 @@ async function serveHeldPlaylist(header = '#EXTM3U', name = 'Channel'): Promise<
       return new Promise<void>(resolve => server.close(() => resolve()));
     },
   };
+}
+
+// Resolves when App finishes handling a playlist load, superseded or not.
+function loadDataEnded(page: Page): Promise<unknown> {
+  return page.waitForEvent('console', (message) => message.text().includes('[App] loadData:'));
 }
 
 async function seedAutoPlay(page: Page): Promise<void> {
@@ -381,8 +387,10 @@ test('a reload started while the channels arrive is not ended by the load it rep
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
 
     // The replaced load finishing must leave the reload's progress and list alone.
+    const replacedDone = loadDataEnded(page);
     playlist.releaseRequest(0);
-    await page.waitForTimeout(1500);
+    await replacedDone;
+    await afterQueuedTasks(page);
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
     await expect(page.locator('.channel-count')).not.toContainText(/6\D?000/);
 
@@ -723,8 +731,7 @@ test('settings applied during a reload leave a due guide refresh for after it', 
     playlist.release();
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
     await expect.poll(() => guideRequests).toBeGreaterThan(0);
-    await page.waitForTimeout(500);
-    const before = guideRequests;
+    const before = await settled(async () => guideRequests);
 
     // The failed guide is due again, but not before the reload is done.
     playlist.silenceNext();
@@ -736,6 +743,12 @@ test('settings applied during a reload leave a due guide refresh for after it', 
     await expect(page.locator('#view-channels')).toBeVisible();
     await page.waitForTimeout(1000);
     expect(guideRequests).toBe(before);
+
+    // The running load owns the guide refresh, so it comes once the reload is done.
+    // (This reload forces one anyway; the check is that the save left it running.)
+    playlist.releaseRequest(1);
+    await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
+    await expect.poll(() => guideRequests).toBeGreaterThan(before);
   } finally {
     await playlist.close();
   }
@@ -755,8 +768,10 @@ test('a Search opened during a reload keeps its loading hint past the load it re
     await page.locator('.tab-bar-search-input').fill('Channel 5999');
     await expect(page.locator('.search-loading-more')).toBeVisible();
 
+    const replacedDone = loadDataEnded(page);
     playlist.releaseRequest(0);
-    await page.waitForTimeout(1500);
+    await replacedDone;
+    await afterQueuedTasks(page);
     await expect(page.locator('.search-loading-more')).toBeVisible();
     await expect(page.locator('#view-search .search-view')).toHaveAttribute('data-search-partial', 'true');
 

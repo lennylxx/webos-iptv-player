@@ -612,7 +612,8 @@ async function passPin(page: Page): Promise<void> {
   for (let i = 0; i < 2; i++) {
     if (!await input.waitFor({ timeout: i ? 1000 : 5000 }).then(() => true, () => false)) return;
     await input.fill('1234');
-    await page.waitForTimeout(300);
+    // The next stage clears the box; a passed PIN closes the prompt.
+    await expect.poll(() => input.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value).join(''))).toBe('');
   }
 }
 

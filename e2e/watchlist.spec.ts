@@ -7,6 +7,7 @@ import {
   enterTab,
   readUserDataStore,
   type Page,
+  settled,
 } from './helpers';
 
 // Resume, Play, and the round title actions share one row and one midline.
@@ -251,8 +252,9 @@ test('keeps pseudo-localized detail actions unclipped, wrapping the round ones w
     return { below: (row.querySelector('.detail-icon-row') as HTMLElement).offsetTop > resume,
       rowLeft: row.getBoundingClientRect().left, circleLeft: circle.left };
   });
-  // Where a row is short of room for the names, it starts a line of its own.
-  if (placed.below) expect(placed.circleLeft).toBeCloseTo(placed.rowLeft, 0);
+  // Pseudo-localized names leave the row short of room, so it starts a line of its own.
+  expect(placed.below).toBe(true);
+  expect(placed.circleLeft).toBeCloseTo(placed.rowLeft, 0);
   await expect(page.locator('#view-movies [data-action="remove-resume"]')).toBeVisible();
 });
 
@@ -364,9 +366,8 @@ test('the pointer moving from a long name to a short one under full animation st
   const watched = await circleCenter(page, 'watched');
   await page.mouse.move(watched.x, watched.y, { steps: 4 });
   await expect(page.locator('#view-movies [data-action="watched"]')).toHaveClass(/focused/);
-  await page.waitForTimeout(400);
   // Resting between the open name and the next circle keeps the name open.
-  const hideBefore = await circleCenter(page, 'hide');
+  const hideBefore = await settled(() => circleCenter(page, 'hide'));
   const between = { x: hideBefore.x - 31 - 6, y: hideBefore.y };
   await page.mouse.move(between.x, between.y, { steps: 2 });
   await page.waitForTimeout(400);
@@ -387,8 +388,7 @@ test('a pointer slipping off a round action keeps its name open long enough to r
   const watched = await circleCenter(page, 'watched');
   await page.mouse.move(watched.x, watched.y, { steps: 3 });
   await expect(page.locator('#view-movies [data-action="watched"]')).toHaveClass(/focused/);
-  await page.waitForTimeout(400);
-  const hide = await circleCenter(page, 'hide');
+  const hide = await settled(() => circleCenter(page, 'hide'));
   // A wobble off the row above the open name.
   await page.mouse.move(hide.x - 120, hide.y - 60, { steps: 2 });
   expect(await circleCenter(page, 'hide')).toEqual(hide);
@@ -432,11 +432,10 @@ test('a focused round action that is on still shows a ring apart from its fill',
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   await expect(page.locator('#view-movies [data-action="watchlist"]')).toHaveClass(/\bfocused\b/);
-  await page.waitForTimeout(400);
-  const colors = await page.locator(circleOf('watchlist')).evaluate((el) => {
+  const colors = await settled(() => page.locator(circleOf('watchlist')).evaluate((el) => {
     const style = getComputedStyle(el);
     return { ring: style.borderTopColor, fill: style.backgroundColor };
-  });
+  }));
   expect(colors.ring).not.toBe(colors.fill);
 });
 
@@ -460,8 +459,13 @@ test('a name still opening when the next one takes focus switches at once', asyn
   await page.keyboard.press('ArrowRight');
   await expect(page.locator('#view-movies [data-action="play"]')).toHaveClass(/focused/);
   await page.waitForTimeout(300);
-  await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('ArrowRight');
+  // One frame apart, so the first name starts opening and the second press still
+  // lands within its slide however slow the machine.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    const press = () => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 39, bubbles: true }));
+    press();
+    requestAnimationFrame(() => { press(); resolve(); });
+  }));
   await expect(page.locator('#view-movies [data-action="watched"]')).toHaveClass(/focused/);
   const widths = await page.evaluate(() => new Promise<number[]>((resolve) => requestAnimationFrame(() =>
     resolve(['watchlist', 'watched'].map((action) =>

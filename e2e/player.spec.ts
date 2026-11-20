@@ -759,7 +759,6 @@ test('the channel panel keeps one ring while its search box has the caret', asyn
   await search.click();
   await expect(search).toBeFocused();
   // The box under the pointer that clicked it is lit.
-  await page.waitForTimeout(100);
   await expect(search).toHaveClass(/focused/);
   await expect(page.locator('.focused')).toHaveCount(1);
 

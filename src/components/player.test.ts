@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi, type Mock } from 'vitest';
 
 const { healthMock, playlistMock } = vi.hoisted(() => ({
   healthMock: {
@@ -1105,6 +1105,25 @@ describe('Player live playback', () => {
 
     expect(playlistMock.getByIndex).not.toHaveBeenCalled();
     expect(healthMock.recordPlaybackFailure).not.toHaveBeenCalled();
+  });
+
+  it('starts the stall watchdog with playback on webOS', async () => {
+    const ua = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Web0S; Linux/SmartTV) Chrome/53.0');
+    onTestFinished(() => ua.mockRestore());
+    Object.defineProperties(video, {
+      paused: { get: () => true, configurable: true },
+      readyState: { value: 0, configurable: true },
+      networkState: { value: 2, configurable: true },
+    });
+    const reload = vi.spyOn(player as unknown as { reloadCurrentStream(): void }, 'reloadCurrentStream')
+      .mockImplementation(() => {});
+    player.play(0);
+    await flush();
+
+    vi.advanceTimersByTime(
+      CONFIG.PLAYER.STALL_POLL_MS * (CONFIG.PLAYER.STALL_FREEZE_TICKS + 1),
+    );
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it('detects a stalled initial load even while autoplay has not unpaused the video', async () => {

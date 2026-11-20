@@ -1162,11 +1162,15 @@ describe('EpgGrid catch-up selection behavior', () => {
     ]);
     grid.render();
     grid.handleAction('right');
-    grid.handleAction('select'); // opens prompt
-    // Now pressing down should NOT move EPG programme focus
+    grid.handleAction('select'); // opens prompt for Morning
     grid.handleAction('down');
-    // Prompt is still visible and EPG focus hasn't moved
-    expect(document.querySelector('.catchup-resume-prompt.hidden')).toBeNull();
+    expect(document.querySelector('.catchup-resume-prompt:not(.hidden)')).not.toBeNull();
+    grid.handleAction('back');
+    expect(document.querySelector('.catchup-resume-prompt:not(.hidden)')).toBeNull();
+    // Had Down moved to Noon Show, OK would play it instead of reopening Morning's prompt.
+    grid.handleAction('select');
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(document.querySelector('.catchup-resume-prompt:not(.hidden)')).not.toBeNull();
   });
 
   it('selecting a completed entry plays from zero without prompt', () => {
