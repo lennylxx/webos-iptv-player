@@ -289,6 +289,21 @@ const catTitle = (i) => `${ADJ[i % ADJ.length]} ${NOUN[(i * 7 + 3 + Math.floor(i
 const hueFor = (i) => (i * 47 + 200) % 360;
 const XT_BASE = 'http://xtream.local:8080';
 const poster = (hue) => `${XT_BASE}/img/p.svg?h=${hue}`;
+const backdrop = (hue) => `${XT_BASE}/img/b.svg?h=${hue}`;
+
+// A title's backdrop: the live preview's dusk skyline (LIVE_PREVIEW_POSTER).
+// Series hue-rotate it by their own hue; movies share one blue grade.
+const MOVIE_BACKDROP = -1;
+function backdropSvg(hue) {
+  const svg = decodeURIComponent(LIVE_PREVIEW_POSTER.slice(LIVE_PREVIEW_POSTER.indexOf(',') + 1));
+  const open = svg.indexOf('>', svg.indexOf('<svg')) + 1;
+  const close = svg.lastIndexOf('</svg>');
+  const body = svg.slice(open, close);
+  const graded = hue === MOVIE_BACKDROP
+    ? `${body}<rect width="1280" height="720" fill="#2f6bff" opacity=".55" style="mix-blend-mode:color"/>`
+    : `<filter id="tint"><feColorMatrix type="hueRotate" values="${hue}"/></filter><g filter="url(#tint)">${body}</g>`;
+  return svg.slice(0, open) + graded + svg.slice(close);
+}
 
 function posterSvg(hue) {
   const h2 = (hue + 45) % 360;
@@ -342,6 +357,7 @@ function playerApiJson(url) {
         plot: PLOTS[n % PLOTS.length], cast: CAST, director: DIRECTORS[n % DIRECTORS.length],
         genre: catName(VOD_CATS, m.category_id), releasedate: `${2014 + (n % 11)}-06-12`,
         duration_secs: 5400 + (n % 4) * 900, movie_image: poster(m.hue), cover_big: poster(m.hue),
+        backdrop_path: [backdrop(MOVIE_BACKDROP)],
       } };
     }
     case 'get_series_categories':
@@ -369,6 +385,7 @@ function playerApiJson(url) {
           releasedate: `${2017 + (n % 8)}-09-18`,
           episode_run_time: [42 + (n % 4) * 6],
           cover: poster(s.hue),
+          backdrop_path: [backdrop(s.hue)],
           rating: `${7 + (n % 3)}.0`,
         },
         episodes: { 1: mkEps(1, 8), 2: mkEps(2, 6) },
@@ -789,9 +806,11 @@ async function setupPage(page, {
       route.fulfill({ status: 200, contentType: 'application/json',
         headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(playerApiJson(route.request().url())) }));
     await page.route('**/img/**', (route) => {
-      const hue = Number(new URL(route.request().url()).searchParams.get('h') || '210');
+      const url = new URL(route.request().url());
+      const hue = Number(url.searchParams.get('h') || '210');
       route.fulfill({ status: 200, contentType: 'image/svg+xml',
-        headers: { 'access-control-allow-origin': '*' }, body: posterSvg(hue) });
+        headers: { 'access-control-allow-origin': '*' },
+        body: url.pathname.endsWith('/b.svg') ? backdropSvg(hue) : posterSvg(hue) });
     });
   }
   // By default abort the played channel's stream — the list/OSD shots don't need

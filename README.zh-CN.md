@@ -32,11 +32,11 @@
 
 | 字幕搜索 | 电影 |
 | --- | --- |
-| ![字幕搜索](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) | ![电影](https://github.com/user-attachments/assets/6d4d65c4-9719-4a2f-93a0-2fff4f8c0b2d) |
+| ![字幕搜索](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) | ![电影](https://github.com/user-attachments/assets/86a8bd7e-fe96-4209-8758-ca5f4714b4a3) |
 
 | 电影详情 | 剧集详情 |
 | --- | --- |
-| ![电影详情](https://github.com/user-attachments/assets/34ede799-10cf-4066-a1f3-c251184e563c) | ![剧集详情](https://github.com/user-attachments/assets/d3efcbf2-befb-46d4-8640-f9dd88dc5e91) |
+| ![电影详情](https://github.com/user-attachments/assets/c3e538a7-75ae-4385-9bfb-6911f8e096f8) | ![剧集详情](https://github.com/user-attachments/assets/6711c082-224b-4c35-a97e-0c1ce9a3917d) |
 
 | 搜索 | 设置 |
 | --- | --- |
