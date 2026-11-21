@@ -589,6 +589,53 @@ test.describe('Guide pointer and keys', () => {
     await expect(page.locator('#view-epg .focused')).toHaveCount(1);
   });
 
+  test('the Red hint goes back to now by pointer and never takes a ring', async ({ page }) => {
+    await openGuide(page);
+    await programmesSettled(page);
+    await page.keyboard.press('ArrowRight');
+    const first = page.locator('#epg-programmes .epg-programme-item[data-prog-idx="0"]');
+    await expect(first).toHaveClass(/\bfocused\b/);
+    const hint = page.locator('#view-epg .epg-hints [data-epg-now]');
+    const idle = await hint.evaluate((el) => getComputedStyle(el).backgroundColor);
+    await hint.hover();
+
+    await expect.poll(() => hint.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(idle);
+    await expect(first).toHaveClass(/\bfocused\b/);
+    await expect(page.locator('#view-epg .focused')).toHaveCount(1);
+
+    await hint.click();
+    expect(await hint.evaluate((el) => el === document.activeElement)).toBe(false);
+    expect(await hint.evaluate((el) => {
+      (el as HTMLElement).focus();
+      const width = getComputedStyle(el).outlineWidth;
+      (el as HTMLElement).blur();
+      return width;
+    })).toBe('0px');
+    const airing = page.locator('#epg-programmes .epg-programme-item[data-prog-idx="24"]');
+    await expect(airing).toHaveClass(/\bfocused\b/);
+    await expect(page.locator('#view-epg')).toBeVisible();
+    await expect(page.locator('#view-player')).toBeHidden();
+    await expect(page.locator('#view-epg .focused')).toHaveCount(1);
+    await page.keyboard.press('ArrowDown');
+    await expect(page.locator('#epg-programmes .epg-programme-item[data-prog-idx="25"]')).toHaveClass(/\bfocused\b/);
+  });
+
+  test('a click that drops the search caret shows what OK does on the hovered programme', async ({ page }) => {
+    await openGuide(page);
+    await programmesSettled(page);
+    const okHint = page.locator('#view-epg .epg-hints .key-ok');
+    await page.locator('#view-epg .epg-search-input').click();
+    const aired = page.locator('#epg-programmes .epg-programme-item').nth(1);
+    await aired.hover();
+    await expect(okHint).toHaveCount(0);
+
+    const hints = (await page.locator('#view-epg .epg-hints').boundingBox())!;
+    await page.mouse.click(hints.x + hints.width - 20, hints.y + hints.height / 2);
+    await expect(page.locator('#view-epg .epg-search-input')).not.toBeFocused();
+    await expect(aired).toHaveClass(/\bfocused\b/);
+    await expect(page.locator('#view-epg .epg-hints')).toContainText('Watch now');
+  });
+
   test('a key that leaves a clipped programme focused brings it into view', async ({ page }) => {
     await openGuide(page);
     await programmesSettled(page);

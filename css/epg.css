@@ -699,3 +699,19 @@
 .epg-programme-item.focused .epg-catchup-badge.watched {
   background: rgba(95, 201, 154, 0.25);
 }
+
+.edit-hints.epg-hints {
+  position: static;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: 47px;
+}
+
+/* The clickable hint keeps the legend's height. */
+.epg-hints .edit-action {
+  margin-top: -8px;
+  margin-bottom: -8px;
+  font-family: inherit;
+  outline: 0;
+  cursor: pointer;
+}

@@ -44,6 +44,8 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
       },
       findChannelId: vi.fn((ch: any) => (state.programmes[ch.name] ? ch.name : null)),
       getSourceUrl: vi.fn(() => 'http://host/epg.xml'),
+      guideRevision: 0,
+      mappingRevision: 0,
       getProgrammesStartingInRange(id: string, from: number, to: number) {
         return (state.programmes[id] ?? [])
           .filter(programme => programme.start.getTime() >= from && programme.start.getTime() < to);
@@ -246,7 +248,8 @@ describe('EpgGrid.render', () => {
 
   it('leaves long descriptions whole for the CSS line clamp', () => {
     const description = 'word '.repeat(60).trim();
-    state.programmes['Chan A'][0] = { ...state.programmes['Chan A'][0], description };
+    const [first, ...rest] = state.programmes['Chan A'];
+    state.programmes['Chan A'] = [{ ...first, description }, ...rest];
     grid.render();
 
     expect(progItems()[0].querySelector('.epg-prog-desc')!.textContent).toBe(description);
@@ -404,7 +407,8 @@ describe('EpgGrid mouse interaction', () => {
 
   it('passes the program catch-up id and its availability check through', () => {
     state.channels = [{ name: 'Chan A', url: 'http://host/a', catchup: 'vod', catchupSource: 'http://host/v/{catchup-id}' }];
-    state.programmes['Chan A'][0] = { ...state.programmes['Chan A'][0], catchupId: 'p1' };
+    const [first, ...rest] = state.programmes['Chan A'];
+    state.programmes['Chan A'] = [{ ...first, catchupId: 'p1' }, ...rest];
     storageMock.getCatchupProgressList.mockReturnValue([]);
     grid.render();
     clickData('data-prog-idx', 0);
@@ -514,11 +518,229 @@ describe('EpgGrid.handleAction', () => {
     expect(channelItems()[1].classList.contains('selected')).toBe(true);
   });
 
-  it('green jumps the date selection back to today', () => {
+  it('shows a channel run through by the D-pad once the selection rests', () => {
+    state.programmes['Chan B'] = [prog(12, 0, 13, 0, 'B Show')];
+    grid.render();
+
+    grid.handleAction('down');
+    expect(channelItems()[1].classList.contains('selected')).toBe(true);
+    expect(channelItems()[0].classList.contains('selected')).toBe(false);
+    expect(progItems()[0].textContent).toContain('Morning');
+
+    vi.advanceTimersByTime(150);
+    expect(progItems()).toHaveLength(1);
+    expect(progItems()[0].textContent).toContain('B Show');
+  });
+
+  it('renders no pane for a channel left by Back before it rested', () => {
+    container.classList.add('view');
+    const render = vi.spyOn(grid, 'render');
+    grid.handleAction('down');
+    grid.deactivateFilters();
+    vi.advanceTimersByTime(150);
+
+    expect(render).not.toHaveBeenCalled();
+  });
+
+  it('renders no hidden Guide when a channel rests, and shows that channel next', () => {
+    state.programmes['Chan B'] = [prog(12, 0, 13, 0, 'B Show')];
+    container.classList.add('view');
+    grid.render();
+    const render = vi.spyOn(grid, 'render');
+    grid.handleAction('down');
+    container.classList.add('hidden');
+    vi.advanceTimersByTime(150);
+    expect(render).not.toHaveBeenCalled();
+
+    container.classList.remove('hidden');
+    grid.render();
+    expect(progItems()[0].textContent).toContain('B Show');
+  });
+
+  it('tunes a channel OK pressed before it rested without rendering its pane', () => {
+    container.classList.add('view');
+    onSelect.mockImplementation(() => container.classList.add('hidden'));
+    const render = vi.spyOn(grid, 'render');
+    grid.handleAction('down');
+    grid.handleAction('select');
+
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
+    expect(render).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(150);
+    expect(render).not.toHaveBeenCalled();
+  });
+
+  it('shows the channel a PIN prompt keeps the Guide on after a quick move and OK', () => {
+    state.programmes['Chan B'] = [prog(12, 0, 13, 0, 'B Show')];
+    container.classList.add('view');
+    grid.render();
+    grid.handleAction('down');
+    grid.handleAction('select');
+
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
+    expect(progItems()).toHaveLength(1);
+    expect(progItems()[0].textContent).toContain('B Show');
+  });
+
+  it('enters the programmes of the channel just moved to', () => {
+    state.programmes['Chan B'] = [prog(12, 0, 13, 0, 'B Show')];
+    grid.render();
+
+    grid.handleAction('down');
+    grid.handleAction('right');
+    Focus.flush();
+
+    expect(container.querySelector('.epg-programme-item.focused')?.textContent).toContain('B Show');
+  });
+
+  it('says in the legend what OK does where the ring rests', () => {
+    const hint = () => container.querySelector('.epg-hints .key-ok')?.parentElement?.textContent?.trim() ?? '';
+    grid.render();
+    expect(hint()).toContain('Watch now');
+    expect(container.querySelector('.epg-hints')?.textContent).toContain('Back to now');
+
+    grid.handleAction('right'); // Morning, aired, no catch-up: OK tunes in live
+    expect(hint()).toContain('Watch now');
+    grid.handleAction('down');
+    grid.handleAction('down'); // Afternoon, upcoming
+    expect(hint()).toContain('Set reminder');
+  });
+
+  it('follows the ring onto a hovered program, and keeps it after a render', () => {
+    const hint = () => container.querySelector('.epg-hints .key-ok')?.parentElement?.textContent?.trim() ?? '';
+    grid.handleAction('right');
+    grid.handleAction('down');
+    grid.handleAction('down'); // Afternoon, upcoming
+    expect(hint()).toContain('Set reminder');
+
+    container.querySelector<HTMLElement>('[data-prog-idx="1"]')!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })); // Noon Show, airing
+    expect(hint()).toContain('Watch now');
+    grid.render();
+    expect(hint()).toContain('Watch now');
+
+    grid.handleAction('select');
+    expect(reminderMock.add).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
+  });
+
+  it('offers no OK in the legend while the search box has the caret, and OK once a click drops it', () => {
+    grid.handleAction('yellow');
+    container.querySelector<HTMLElement>('[data-prog-idx="1"]')!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    expect(container.querySelector('.epg-hints .key-ok')).toBeNull();
+
+    container.querySelector<HTMLInputElement>('.epg-search-input')!.blur();
+    expect(container.querySelector('[data-prog-idx="1"]')!.classList.contains('focused')).toBe(true);
+    expect(container.querySelector('.epg-hints .key-ok')?.parentElement?.textContent).toContain('Watch now');
+  });
+
+  it('offers no OK in the legend for an aired program an Xtream archive lacks', async () => {
+    state.channels[0] = {
+      ...state.channels[0],
+      catchupSource: 'http://host/catchup/{start}',
+      catchupAccountId: 'x1',
+      catchupStreamId: '101',
+    };
+    archiveMock.getCached.mockReturnValue(new Set());
+    archiveMock.load.mockResolvedValue(new Set());
+    archiveMock.isAvailable.mockReturnValue(false);
+    grid.render();
+    grid.handleAction('right'); // Morning, aired
+
+    expect(container.querySelector('.epg-hints .key-ok')).toBeNull();
+    expect(container.querySelector('.epg-hints')?.textContent).toContain('Back to now');
+    grid.handleAction('select');
+    await Promise.resolve();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledWith("This program isn't available for catch-up.");
+  });
+
+  it('offers catch-up in the legend for an aired program the archive holds', () => {
+    state.channels[0] = { ...state.channels[0], catchupSource: 'http://host/c' };
+    grid.render();
+    grid.handleAction('right');
+    expect(container.querySelector('.epg-hints')?.textContent).toContain('Play catch-up');
+  });
+
+  it('red goes back to today and the program airing now', () => {
     clickData('data-day-index', 1);
     expect(dateItems()[1].classList.contains('selected')).toBe(true);
-    grid.handleAction('green');
+    grid.handleAction('red');
+    Focus.flush();
     expect(dateItems()[0].classList.contains('selected')).toBe(true);
+    expect(container.querySelector('.epg-programme-item.focused')?.textContent).toContain('Noon Show');
+  });
+
+  it('red rings the date bar when the channel has no programs today', () => {
+    state.programmes['Chan B'] = [{
+      start: new Date(Y, M, D - 1, 9, 0),
+      stop: new Date(Y, M, D - 1, 10, 0),
+      title: 'Yesterday AM',
+      description: '',
+      category: '',
+      icon: '',
+    }];
+    grid.focusChannel(1);
+    grid.render();
+    clickData('data-day-index', 0);
+    grid.handleAction('down');
+    expect(container.querySelector('.epg-programme-item.focused')?.textContent).toContain('Yesterday AM');
+
+    grid.handleAction('red');
+    Focus.flush();
+    expect(dateItems()[1].classList.contains('selected')).toBe(true);
+    expect(dateItems()[1].classList.contains('focused')).toBe(true);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('goes back to now from a click on the Red hint, which never takes the keys', () => {
+    clickData('data-day-index', 1);
+    const hint = () => container.querySelector<HTMLElement>('.epg-hints [data-epg-now]')!;
+    const before = hint();
+    expect(before.textContent).toContain('Back to now');
+    expect(before.hasAttribute('data-focusable')).toBe(false);
+    expect(before.hasAttribute('data-self-activate')).toBe(true);
+
+    before.focus(); // as a mouse click leaves it
+    before.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    Focus.flush();
+    expect(document.activeElement).not.toBe(before);
+    expect(dateItems()[0].classList.contains('selected')).toBe(true);
+    expect(container.querySelector('.epg-programme-item.focused')?.textContent).toContain('Noon Show');
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(hint()).toBe(before);
+  });
+
+  it('leaves another day where it is on green', () => {
+    clickData('data-day-index', 1);
+    grid.handleAction('green');
+    expect(dateItems()[1].classList.contains('selected')).toBe(true);
+  });
+
+  it('red leaves the search box for the program airing now', () => {
+    grid.handleAction('yellow');
+    const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
+    expect(document.activeElement).toBe(input);
+
+    grid.handleAction('red');
+    Focus.flush();
+    expect(document.activeElement).not.toBe(input);
+    expect(container.querySelector('.epg-programme-item.focused')?.textContent).toContain('Noon Show');
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('red closes the group menu and goes back to now', () => {
+    Focus.install();
+    grid.handleAction('left');
+    expect(container.querySelector('.epg-group-menu')).not.toBeNull();
+
+    grid.handleAction('red');
+    Focus.flush();
+    expect(container.querySelector('.epg-group-menu')).toBeNull();
+    expect(container.querySelector('.epg-programme-item.focused')?.textContent).toContain('Noon Show');
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
   });
 });
 

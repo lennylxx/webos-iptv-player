@@ -146,6 +146,7 @@ a new term after review, add a row here.
 | Video quality options | Auto / Highest / Up to 4K / Up to 1080p / Up to 720p / Lowest | 自动 / 最高画质 / 最高 4K / 最高 1080p / 最高 720p / 最低画质 |
 | Following the setting (menu row) | Default · {value} | 默认 · {value} |
 | A variant (menu row) | {resolution} · {bitrate} Mbps | {resolution} · {bitrate} Mbps |
+| Jump the guide to the current time | Back to now | 回到现在 |
 
 Rejected: 片单 (watchlist), 已看 / 未看 (watched), played / 已播放 (watched), unwatched (not watched), HTTP 标头 (headers), Luna / System player
 (header playback mode), 正在播放 for NOW, 节目单 (guide),

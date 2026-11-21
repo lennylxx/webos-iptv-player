@@ -291,10 +291,10 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 | Right | Open menu; move the seek target forward while the OSD shows on seekable playback (press OK to show it) | Move toward channels | Next pane, day, or Reminder Manager |
 | OK/Enter | Toggle OSD; pause/resume; activate overlay | Select channel | Play channel/program or open Reminder Manager |
 | Back | Back out of sidebar/menu, then hide a paused OSD; stop & return | Exit app (press twice) | Close guide |
-| Red | Open EPG | Open EPG | — |
+| Red | Open EPG | Open EPG | Back to now |
 | Blue | Open settings | Open settings | Open settings |
 | Yellow | Show OSD | Edit channel list | Search guide |
-| Green | Toggle favorite (in sidebar/menu) | Toggle favorite (on focused channel) | Jump to today |
+| Green | Toggle favorite (in sidebar/menu) | Toggle favorite (on focused channel) | — |
 | Play/Pause | Pause/resume playback | — | — |
 | Rewind/Fast-Forward | To oldest / Go to live (live DVR) | — | — |
 | Ch +/- | Channel +/- | Previous/next channel | Jump 10 channels/programs |

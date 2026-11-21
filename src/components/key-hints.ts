@@ -26,6 +26,11 @@ export function keyHint(key: 'red' | 'green' | 'blue', label: string, dataKey: s
   return html`<button class="edit-hint edit-action" data-key="${dataKey}" data-focusable${attributes(attrs)}><span class="edit-key key-${key}"></span><span>${label}</span></button>`;
 }
 
+// A legend key the pointer may also click; it never takes the remote's keys.
+export function clickHint(key: 'red' | 'green' | 'blue', label: string, dataKey: string, attrs: HintAttrs): Safe {
+  return html`<button type="button" class="edit-hint edit-action" data-key="${dataKey}" data-self-activate${attributes(attrs)}><span class="edit-key key-${key}"></span><span>${label}</span></button>`;
+}
+
 export function doneHint(dataKey: string, attrs: HintAttrs): Safe {
   return html`
     <button class="edit-hint edit-action" data-key="${dataKey}" data-focusable${attributes(attrs)}>

@@ -8,7 +8,7 @@ import type {
   ChannelScope,
   Programme,
 } from '../types';
-import { html, inShownView, raw } from '../utils/dom';
+import { html, inShownView, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { channelKey, groupDisplayLabel } from '../utils/channel';
 import { PlaylistService } from '../services/playlist-service';
@@ -22,9 +22,10 @@ import { formatTime, formatDayLabel, displayDayKey, startOfDisplayDay, addDispla
 import { rankByName } from '../utils/channel-search';
 import { CONFIG } from '../config';
 import { bellIcon, CHEVRON_LEFT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
+import { clickHint, okHint } from './key-hints';
 import { channelLockBadge } from './parental-badge';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
-import { VirtualList } from '../utils/virtual-list';
+import { VirtualList, type VirtualRange } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { WorkerListSearch } from '../workers/list-search-client';
 import { isIndexRetryPending } from '../workers/index-retry';
@@ -50,6 +51,13 @@ const KEY_SELECTORS: Record<string, string> = {
   legend: '.epg-reminder-entry',
 };
 
+// Only an Xtream account's archive answers "unavailable", as in Search: on
+// its channels OK replays an aired programme or says so, never tunes live.
+function archiveDecides(channel: Channel, prog: Programme): boolean {
+  return !!channel.catchupAccountId && !!channel.catchupStreamId && hasCatchup(channel)
+    && (!!prog.catchupId || !catchupNeedsId(channel));
+}
+
 type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'legend' | 'programmes';
 type FilterFocus = 'group' | 'search';
 type VisibleChannel = { channel: Channel; globalIndex: number };
@@ -63,6 +71,8 @@ const PROGRAMME_ROW_ESTIMATE = 80;
 const PROGRAMME_WITH_DESCRIPTION_ESTIMATE = 108;
 const VIRTUAL_OVERSCAN = 8;
 const EPG_VIEWPORT_FALLBACK = 900;
+// The programme pane follows a channel once the D-pad rests on it this long.
+const PANE_SETTLE_MS = 150;
 
 export class EpgGrid {
   private container: HTMLElement;
@@ -132,6 +142,19 @@ export class EpgGrid {
   private readonly groupScope: FocusScope;
   private groupScopePushed = false;
   private dateCount = 0;
+  // While the D-pad runs down the channel column, the programme pane keeps
+  // the channel it shows until the selection settles.
+  private paneChannelIdx = -1;
+  private paneTimer: ReturnType<typeof setTimeout> | null = null;
+  private programmesCache: {
+    index: number;
+    epgId: string;
+    day: number;
+    source: Programme[] | null;
+    guide: number;
+    mapping: number;
+    list: Programme[];
+  } | null = null;
 
   constructor(
     container: HTMLElement,
@@ -194,6 +217,7 @@ export class EpgGrid {
   }
 
   focusChannel(channelIndex: number): void {
+    this.releasePane();
     const visible = this.getVisibleChannels();
     this.selectedChannelIdx = visible.some(item => item.globalIndex === channelIndex)
       ? channelIndex
@@ -224,6 +248,7 @@ export class EpgGrid {
   }
 
   deactivateFilters(): void {
+    this.releasePane();
     this.groupOpen = false;
     this.syncGroupScope();
     this.channelSearchGeneration++;
@@ -261,18 +286,60 @@ export class EpgGrid {
   }
 
   private getCurrentProgrammes(): Programme[] {
-    const channel = PlaylistService.channels[this.selectedChannelIdx];
+    const index = this.paneChannel();
+    const channel = PlaylistService.channels[index];
     if (!channel) return [];
     const epgId = EpgService.findChannelId(channel);
     if (!epgId) return [];
     const options = this.getDateOptions();
     const dayStart = options[this.selectedDay];
     if (!dayStart) return [];
-    const dayEnd = addDisplayDays(dayStart, 1).getTime();
     const from = dayStart.getTime();
+    const source = EpgService.getProgrammes(epgId);
+    const cached = this.programmesCache;
+    if (cached && cached.index === index && cached.epgId === epgId && cached.day === from
+        && cached.source === source && cached.guide === EpgService.guideRevision
+        && cached.mapping === EpgService.mappingRevision) {
+      return cached.list;
+    }
+    const dayEnd = addDisplayDays(dayStart, 1).getTime();
     // Bucket each program by the day it STARTS, so one spanning midnight shows
     // on its start day only — not as a stray previous-day entry atop the next day.
-    return EpgService.getProgrammesStartingInRange(epgId, from, dayEnd);
+    const list = EpgService.getProgrammesStartingInRange(epgId, from, dayEnd);
+    this.programmesCache = {
+      index, epgId, day: from, source,
+      guide: EpgService.guideRevision, mapping: EpgService.mappingRevision, list,
+    };
+    return list;
+  }
+
+  private paneChannel(): number {
+    return this.paneTimer !== null ? this.paneChannelIdx : this.selectedChannelIdx;
+  }
+
+  // Moves the channel selection without a render: the row highlight moves
+  // now, the programme pane once the selection settles.
+  private moveChannel(globalIndex: number): void {
+    if (this.paneTimer === null) this.paneChannelIdx = this.selectedChannelIdx;
+    else clearTimeout(this.paneTimer);
+    this.paneTimer = setTimeout(() => {
+      this.paneTimer = null;
+      // A hidden Guide renders the settled channel when it shows again.
+      if (inShownView(this.container)) this.render();
+    }, PANE_SETTLE_MS);
+    const list = this.container.querySelector('#epg-channels');
+    list?.querySelector(`[data-channel-idx="${String(this.selectedChannelIdx)}"]`)?.classList.remove('selected');
+    list?.querySelector(`[data-channel-idx="${String(globalIndex)}"]`)?.classList.add('selected');
+    this.selectedChannelIdx = globalIndex;
+    this.focusProg = 0;
+  }
+
+  // True when a held pane was let go; the caller renders it.
+  private releasePane(): boolean {
+    if (this.paneTimer === null) return false;
+    clearTimeout(this.paneTimer);
+    this.paneTimer = null;
+    return true;
   }
 
   private getVisibleChannels(): VisibleChannel[] {
@@ -376,6 +443,7 @@ export class EpgGrid {
   }
 
   private selectPlaylist(id: string): void {
+    this.releasePane();
     this.selectedPlaylist = id;
     this.selectedGroup = 'builtin:all';
     this.groupOpen = false;
@@ -385,6 +453,7 @@ export class EpgGrid {
   }
 
   private selectGroup(id: ChannelGroupId): void {
+    this.releasePane();
     this.selectedGroup = id;
     this.groupOpen = false;
     const visible = this.getVisibleChannels();
@@ -459,12 +528,13 @@ export class EpgGrid {
     this.groupFocusIdx = Math.max(0, Math.min(this.groupFocusIdx, groups.length - 1));
     const visibleChannels = this.getVisibleChannels();
     if (!visibleChannels.some(item => item.globalIndex === this.selectedChannelIdx)) {
+      this.releasePane();
       this.selectedChannelIdx = visibleChannels[0]?.globalIndex ?? -1;
       this.focusProg = 0;
     }
     if (!showTabs && this.focusCol === 'playlists') this.focusCol = 'filters';
 
-    const channel = PlaylistService.channels[this.selectedChannelIdx];
+    const channel = PlaylistService.channels[this.paneChannel()];
     const dateOptions = this.getDateOptions();
     this.dateCount = dateOptions.length;
     if (dateOptions.length > 0) {
@@ -485,7 +555,7 @@ export class EpgGrid {
       this.programmeSizeKey = '';
     }
     const programmeSizeKey = [
-      this.selectedChannelIdx,
+      this.paneChannel(),
       this.selectedDay,
       programmes.length,
       programmes[0]?.start.getTime() ?? '',
@@ -547,61 +617,10 @@ export class EpgGrid {
       <div class="epg-view">
         <div class="epg-main">
           <div class="epg-channels-pane ${this.focusCol === 'channels' || this.focusCol === 'playlists' || this.focusCol === 'filters' ? 'pane-focused' : ''}">
-            ${showTabs ? html`
-              <div class="playlist-tabs epg-playlist-tabs" id="epg-playlists">
-                <div class="playlist-tab ${!this.selectedPlaylist ? 'active' : ''}"
-                     data-key="epg-tab:"
-                     data-playlist="" data-playlist-index="0" data-hover-target>${t('common.all')}</div>
-                ${tabs.map((tab, i) => html`
-                  <div class="playlist-tab ${tab.id === this.selectedPlaylist ? 'active' : ''}"
-                       data-key="epg-tab:${tab.id}"
-                       data-playlist="${tab.id}" data-playlist-index="${i + 1}" data-hover-target>${tab.name}</div>
-                `)}
-              </div>
-            ` : ''}
+            ${showTabs ? this.playlistTabsMarkup(tabs) : ''}
             <div class="epg-filter-bar">
-              <div class="epg-group-control">
-                <button type="button"
-                        class="epg-filter-control epg-group-button ${this.selectedGroup !== 'builtin:all' ? 'active' : ''}"
-                        data-key="epg-group-button" data-epg-group-toggle data-hover-target
-                        aria-expanded="${this.groupOpen ? 'true' : 'false'}">
-                  <span class="epg-group-button-prefix">${t('common.groups')}:</span>
-                  <span class="epg-group-button-label">${
-                    groups.find(group => group.id === this.selectedGroup)?.label ?? t('common.all')
-                  }</span>
-                  <span class="epg-group-button-arrow">${raw(CHEVRON_LEFT_ICON)}</span>
-                </button>
-                ${this.groupOpen ? html`
-                  <div class="epg-group-menu" data-key="epg-group-menu">
-                    <div class="epg-group-menu-title">${t('common.groups')}</div>
-                    <div class="epg-group-options">
-                      <div class="epg-group-options-spacer"
-                           style="height:${this.groupVirtualizer.getTotalSize(groups.length)}px">
-                      ${groups.slice(groupRange.start, groupRange.end).map((group, offset) => {
-                        const i = groupRange.start + offset;
-                        return html`
-                        <div class="epg-group-option ${group.id === this.selectedGroup ? 'active' : ''}"
-                             data-key="epg-group:${group.id}"
-                             data-epg-group="${group.id}" data-group-index="${i}" data-hover-target
-                             style="top:${this.groupVirtualizer.getItemOffset(i)}px">
-                          <span class="epg-group-option-label">${group.label}</span>
-                          <span class="epg-group-option-count">${group.count}</span>
-                        </div>
-                      `;
-                      })}
-                      </div>
-                    </div>
-                  </div>
-                ` : ''}
-              </div>
-              <label class="epg-search-wrap">
-                <span class="epg-search-icon">${raw(SEARCH_ICON)}</span>
-                <input type="text" class="epg-search-input" data-key="epg-search"
-                       aria-label="${t('search.ariaChannels')}"
-                       data-search-query="${this.channelSearchResultQuery}"
-                       data-search-pending="${this.channelSearchPending ? 'true' : 'false'}"
-                       placeholder="${t('common.search')}" value="${this.searchQuery}">
-              </label>
+              ${this.groupControlMarkup(groups, groupRange)}
+              ${this.searchBoxMarkup()}
             </div>
             <div class="epg-channel-pane-header">
               <span class="epg-channel-pane-count">${tp('channel.count', visibleChannels.length)}</span>
@@ -652,19 +671,7 @@ export class EpgGrid {
                   `;
                 })}
               </div>
-              <div class="epg-legend">
-                <span class="epg-legend-item state-past">
-                  <i class="epg-legend-dot"></i><span>${t('epg.aired')}</span>
-                </span>
-                <span class="epg-legend-item state-future">
-                  <i class="epg-legend-dot"></i><span>${t('epg.upcoming')}</span>
-                </span>
-                <button type="button"
-                        class="epg-legend-item epg-reminder-entry"
-                        data-epg-reminders aria-label="${t('reminderManager.title')}">
-                  ${raw(bellIcon(true))}<span>${t('epg.reminder')}</span>
-                </button>
-              </div>
+              ${this.legendMarkup()}
             </div>
             <div class="epg-programmes-pane ${this.focusCol === 'programmes' ? 'pane-focused' : ''}" id="epg-programmes">
               ${programmes.length === 0
@@ -714,6 +721,7 @@ export class EpgGrid {
                 `
               }
             </div>
+            <div class="edit-hints epg-hints">${this.hintsMarkup()}</div>
           </div>
         </div>
       </div>
@@ -747,6 +755,91 @@ export class EpgGrid {
       return;
     }
     this.syncFocus();
+  }
+
+  private playlistTabsMarkup(tabs: typeof PlaylistService.playlistTabs): Safe {
+    return html`
+              <div class="playlist-tabs epg-playlist-tabs" id="epg-playlists">
+                <div class="playlist-tab ${!this.selectedPlaylist ? 'active' : ''}"
+                     data-key="epg-tab:"
+                     data-playlist="" data-playlist-index="0" data-hover-target>${t('common.all')}</div>
+                ${tabs.map((tab, i) => html`
+                  <div class="playlist-tab ${tab.id === this.selectedPlaylist ? 'active' : ''}"
+                       data-key="epg-tab:${tab.id}"
+                       data-playlist="${tab.id}" data-playlist-index="${i + 1}" data-hover-target>${tab.name}</div>
+                `)}
+              </div>
+            `;
+  }
+
+  private groupControlMarkup(groups: GroupOption[], groupRange: VirtualRange): Safe {
+    return html`
+              <div class="epg-group-control">
+                <button type="button"
+                        class="epg-filter-control epg-group-button ${this.selectedGroup !== 'builtin:all' ? 'active' : ''}"
+                        data-key="epg-group-button" data-epg-group-toggle data-hover-target
+                        aria-expanded="${this.groupOpen ? 'true' : 'false'}">
+                  <span class="epg-group-button-prefix">${t('common.groups')}:</span>
+                  <span class="epg-group-button-label">${
+                    groups.find(group => group.id === this.selectedGroup)?.label ?? t('common.all')
+                  }</span>
+                  <span class="epg-group-button-arrow">${raw(CHEVRON_LEFT_ICON)}</span>
+                </button>
+                ${this.groupOpen ? html`
+                  <div class="epg-group-menu" data-key="epg-group-menu">
+                    <div class="epg-group-menu-title">${t('common.groups')}</div>
+                    <div class="epg-group-options">
+                      <div class="epg-group-options-spacer"
+                           style="height:${this.groupVirtualizer.getTotalSize(groups.length)}px">
+                      ${groups.slice(groupRange.start, groupRange.end).map((group, offset) => {
+                        const i = groupRange.start + offset;
+                        return html`
+                        <div class="epg-group-option ${group.id === this.selectedGroup ? 'active' : ''}"
+                             data-key="epg-group:${group.id}"
+                             data-epg-group="${group.id}" data-group-index="${i}" data-hover-target
+                             style="top:${this.groupVirtualizer.getItemOffset(i)}px">
+                          <span class="epg-group-option-label">${group.label}</span>
+                          <span class="epg-group-option-count">${group.count}</span>
+                        </div>
+                      `;
+                      })}
+                      </div>
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+    `;
+  }
+
+  private searchBoxMarkup(): Safe {
+    return html`
+              <label class="epg-search-wrap">
+                <span class="epg-search-icon">${raw(SEARCH_ICON)}</span>
+                <input type="text" class="epg-search-input" data-key="epg-search"
+                       aria-label="${t('search.ariaChannels')}"
+                       data-search-query="${this.channelSearchResultQuery}"
+                       data-search-pending="${this.channelSearchPending ? 'true' : 'false'}"
+                       placeholder="${t('common.search')}" value="${this.searchQuery}">
+              </label>
+    `;
+  }
+
+  private legendMarkup(): Safe {
+    return html`
+              <div class="epg-legend">
+                <span class="epg-legend-item state-past">
+                  <i class="epg-legend-dot"></i><span>${t('epg.aired')}</span>
+                </span>
+                <span class="epg-legend-item state-future">
+                  <i class="epg-legend-dot"></i><span>${t('epg.upcoming')}</span>
+                </span>
+                <button type="button"
+                        class="epg-legend-item epg-reminder-entry"
+                        data-epg-reminders aria-label="${t('reminderManager.title')}">
+                  ${raw(bellIcon(true))}<span>${t('epg.reminder')}</span>
+                </button>
+              </div>
+    `;
   }
 
   private scheduleProgrammeRowMeasurement(): void {
@@ -823,6 +916,19 @@ export class EpgGrid {
     // reusing nodes across renders, per-render addEventListener would stack up.
     this.container.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
+      const now = target.closest<HTMLElement>('[data-epg-now]');
+      if (now) {
+        this.act('red');
+        this.paint('pointer');
+        // Chromium 53 outlines a clicked button beside the app's ring.
+        now.blur();
+        return;
+      }
+      // A held pane still shows the previous channel; show the right one first.
+      if (this.releasePane()) {
+        this.render();
+        if (target.closest('#epg-programmes')) return;
+      }
       if (target.closest('[data-epg-reminders]')) {
         this.groupOpen = false;
         this.syncGroupScope();
@@ -903,6 +1009,10 @@ export class EpgGrid {
     // modal scope, so no hover behind it arrives here.
     this.container.addEventListener('nav:hover', (e: Event) => {
       const target = e.target as HTMLElement;
+      if (this.releasePane()) {
+        this.render();
+        if (target.closest('#epg-programmes')) return;
+      }
       const groupItem = target.closest<HTMLElement>('[data-epg-group]');
       if (groupItem) {
         this.groupFocusIdx = parseInt(groupItem.dataset.groupIndex!, 10);
@@ -913,6 +1023,7 @@ export class EpgGrid {
       if (!item) return;
       this.lightProgramme(parseInt(item.dataset.progIdx!, 10));
       this.paint('pointer');
+      this.updateHints();
     });
 
     this.container.addEventListener('input', (e: Event) => {
@@ -938,6 +1049,7 @@ export class EpgGrid {
       this.focusCol = 'filters';
       this.filterFocus = 'search';
       if (menuWasOpen) this.render();
+      else this.updateHints();
       this.paint(InputMode.current === 'keys' ? 'key' : 'pointer');
     });
 
@@ -945,6 +1057,7 @@ export class EpgGrid {
     this.container.addEventListener('focusout', (e: FocusEvent) => {
       if (!(e.target as HTMLElement).classList.contains('epg-search-input')) return;
       this.paint(InputMode.current === 'keys' ? 'key' : 'pointer');
+      this.updateHints();
     });
 
     this.container.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -1164,11 +1277,9 @@ export class EpgGrid {
     const channel = PlaylistService.channels[this.selectedChannelIdx];
     const isPast = prog.stop.getTime() <= Date.now();
     const startMs = prog.start.getTime();
-    // Only an Xtream account's archive answers "unavailable", as in Search; any
-    // other aired program that can't be replayed (outside the archive days,
-    // or without the id its URL needs) opens the channel live.
-    if (isPast && channel?.catchupAccountId && channel.catchupStreamId && hasCatchup(channel)
-        && (!!prog.catchupId || !catchupNeedsId(channel))) {
+    // Any other aired program that can't be replayed (outside the archive
+    // days, or without the id its URL needs) opens the channel live.
+    if (isPast && channel && archiveDecides(channel, prog)) {
       const channelIndex = this.selectedChannelIdx;
       await XtreamArchiveService.load(channel);
       if (PlaylistService.channels[channelIndex] !== channel) return;
@@ -1231,9 +1342,54 @@ export class EpgGrid {
     }
     this.act(action, event);
     if (!this.resumePrompt.visible) this.paint('key');
+    // Moves inside the programme list skip the render; the legend follows the keys.
+    this.updateHints();
+  }
+
+  // The legend under the Channel schedule: what OK does where the keys rest,
+  // then the color keys. It follows the ring, hover included.
+  private hintsMarkup(): Safe {
+    const ok = this.okHintLabel();
+    return html`
+      ${ok ? okHint(ok) : ''}
+      ${clickHint('red', t('epg.backToNow'), 'epg-hint-now', { 'data-epg-now': '' })}
+      <span class="edit-hint"><span class="edit-key key-yellow"></span><span>${t('common.search')}</span></span>`;
+  }
+
+  private okHintLabel(): string | null {
+    if (this.searchInputFocused()) return null;
+    if (this.focusCol === 'channels') return this.selectedChannelIdx >= 0 ? t('reminder.watchNow') : null;
+    if (this.focusCol !== 'programmes') return null;
+    const prog = this.getCurrentProgrammes()[this.focusProg];
+    const channel = PlaylistService.channels[this.selectedChannelIdx];
+    return prog && channel ? this.programmeOkLabel(channel, prog) : null;
+  }
+
+  // An archive still loading counts as holding the programme, as OK does.
+  private programmeOkLabel(channel: Channel, prog: Programme): string | null {
+    const now = Date.now();
+    const start = prog.start.getTime();
+    if (start > now) return t(ReminderService.has(channelKey(channel), start) ? 'epg.removeReminder' : 'search.setReminder');
+    if (prog.stop.getTime() > now) return t('reminder.watchNow');
+    if (XtreamArchiveService.isAvailable(channel, start, now, prog.catchupId)) return t('epg.playCatchup');
+    return archiveDecides(channel, prog) ? null : t('reminder.watchNow');
+  }
+
+  private updateHints(): void {
+    const hints = this.container.querySelector<HTMLElement>('.epg-hints');
+    if (hints) morph(hints, this.hintsMarkup());
   }
 
   private act(action: Action, _event?: NumberEvent): void {
+    const settling = this.focusCol === 'channels'
+      && (action === 'up' || action === 'down' || action === 'channel_up' || action === 'channel_down');
+    // OK tunes the channel at once; a pane rendered first would only delay it.
+    const tuning = this.focusCol === 'channels' && action === 'select'
+      && !this.groupOpen && !this.searchInputFocused();
+    const heldPane = tuning && this.releasePane();
+    if (!tuning && !settling && this.releasePane()) this.render();
+    // The legend offers Red under the open group menu too.
+    if (this.groupOpen && action === 'red') this.groupOpen = false;
 
     if (this.groupOpen) {
       const groups = this.getGroupOptions();
@@ -1295,9 +1451,7 @@ export class EpgGrid {
       case 'up':
         if (this.focusCol === 'channels') {
           if (selectedVisibleIdx > 0) {
-            this.selectedChannelIdx = visibleChannels[selectedVisibleIdx - 1].globalIndex;
-            this.focusProg = 0;
-            this.render();
+            this.moveChannel(visibleChannels[selectedVisibleIdx - 1].globalIndex);
           } else {
             this.focusCol = 'filters';
             this.filterFocus = 'group';
@@ -1333,9 +1487,7 @@ export class EpgGrid {
           this.render();
         } else if (this.focusCol === 'channels') {
           if (selectedVisibleIdx >= 0 && selectedVisibleIdx < visibleChannels.length - 1) {
-            this.selectedChannelIdx = visibleChannels[selectedVisibleIdx + 1].globalIndex;
-            this.focusProg = 0;
-            this.render();
+            this.moveChannel(visibleChannels[selectedVisibleIdx + 1].globalIndex);
           }
         } else if ((this.focusCol === 'dates' || this.focusCol === 'legend') && progCount) {
           this.focusCol = 'programmes';
@@ -1410,10 +1562,8 @@ export class EpgGrid {
       case 'channel_up':
         if (this.focusCol === 'channels') {
           const next = Math.max(0, selectedVisibleIdx - 10);
-          if (visibleChannels[next]) {
-            this.selectedChannelIdx = visibleChannels[next].globalIndex;
-            this.focusProg = 0;
-          }
+          if (visibleChannels[next] && next !== selectedVisibleIdx) this.moveChannel(visibleChannels[next].globalIndex);
+          break;
         } else if (this.focusCol === 'programmes') {
           this.lightProgramme(Math.max(0, this.focusProg - 10));
           break;
@@ -1424,10 +1574,8 @@ export class EpgGrid {
       case 'channel_down':
         if (this.focusCol === 'channels') {
           const next = Math.min(visibleChannels.length - 1, selectedVisibleIdx + 10);
-          if (visibleChannels[next]) {
-            this.selectedChannelIdx = visibleChannels[next].globalIndex;
-            this.focusProg = 0;
-          }
+          if (visibleChannels[next] && next !== selectedVisibleIdx) this.moveChannel(visibleChannels[next].globalIndex);
+          break;
         } else if (this.focusCol === 'programmes') {
           this.lightProgramme(Math.min(progCount - 1, this.focusProg + 10));
           break;
@@ -1445,6 +1593,8 @@ export class EpgGrid {
         } else if (this.focusCol === 'channels') {
           if (this.selectedChannelIdx < 0) break;
           this.onChannelSelect(this.selectedChannelIdx, undefined, this.currentScope());
+          // A PIN prompt keeps the Guide up; its pane must not stay on the last channel.
+          if (heldPane && inShownView(this.container)) this.render();
         } else if (this.focusCol === 'programmes') {
           void this.activateFocusedProgramme();
         } else if (this.focusCol === 'dates') {
@@ -1457,11 +1607,18 @@ export class EpgGrid {
         }
         break;
 
-      case 'green':
+      case 'red': {
         this.selectedDay = this.findTodayIndex(this.getDateOptions());
-        this.focusProg = 0;
-        this.render();
+        const programmes = this.getCurrentProgrammes();
+        const now = Date.now();
+        const airing = programmes.findIndex(p => p.stop.getTime() > now);
+        this.focusProg = airing < 0 ? Math.max(0, programmes.length - 1) : airing;
+        if (programmes.length) this.focusCol = 'programmes';
+        else if (this.focusCol === 'programmes') this.focusCol = 'dates';
+        this.blurSearchInput();
+        this.render(true);
         break;
+      }
     }
   }
 }

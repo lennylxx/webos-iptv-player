@@ -385,8 +385,21 @@ class EpgServiceImpl {
     return this.programmesOf(channelId) ?? null;
   }
 
+  private startRangeCache: { key: string; value: { min: number; max: number } | null } | null = null;
+  // Per-channel offset copies come and go without a guide or mapping change.
+  private derivedRevision = 0;
+
   /** Earliest and latest programme start across the guide, without flattening it. */
   getProgrammeStartRange(): { min: number; max: number } | null {
+    // Every guide render asks; the scan walks every channel, so it runs once per guide change.
+    const key = `${this.guideRevisionValue}|${this.mappingRevisionValue}|${this.derivedRevision}`;
+    if (this.startRangeCache?.key === key) return this.startRangeCache.value;
+    const value = this.scanProgrammeStartRange();
+    this.startRangeCache = { key, value };
+    return value;
+  }
+
+  private scanProgrammeStartRange(): { min: number; max: number } | null {
     let min = Infinity;
     let max = -Infinity;
     const visit = (programmes: Programme[], offsetMs: number): void => {
@@ -775,6 +788,7 @@ class EpgServiceImpl {
     const id = `${baseId}::channel:${encodeURIComponent(key)}`;
     const shifted = shiftProgrammes(source, deltaMinutes * 60_000);
     const guideChannel = this.channelOf(baseId);
+    this.derivedRevision++;
     this.derivedEntries.set(id, {
       channel: guideChannel,
       programmes: shifted,
@@ -790,6 +804,7 @@ class EpgServiceImpl {
     derived: { id: string } | undefined,
   ): void {
     if (!derived) return;
+    this.derivedRevision++;
     this.derivedEntries.delete(derived.id);
     this.timeIndexes.delete(derived.id);
     this.derivedOffsets.delete(key);
