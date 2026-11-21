@@ -445,7 +445,8 @@ test('the tab bar turns transparent over catalog art and solid again in Live', a
   await routeLiveManifest(page);
   await page.goto('/');
   await liveLoaded(page);
-  const barBackground = () => page.locator('.tab-bar').evaluate((el) => getComputedStyle(el).backgroundImage);
+  const barBackground = () => page.locator('.tab-bar')
+    .evaluate((el) => getComputedStyle(el, '::after').backgroundImage);
   expect(await barBackground()).toBe('none');
 
   await enterTab(page, 'movies');

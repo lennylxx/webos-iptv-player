@@ -32,11 +32,11 @@
 
 | Subtitle search | Movies |
 | --- | --- |
-| ![Subtitle search](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) | ![Movies](https://github.com/user-attachments/assets/86a8bd7e-fe96-4209-8758-ca5f4714b4a3) |
+| ![Subtitle search](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) | ![Movies](https://github.com/user-attachments/assets/58292e7a-7c64-4eaa-bbb0-0ac4e0bb6486) |
 
 | Movie detail | Series detail |
 | --- | --- |
-| ![Movie detail](https://github.com/user-attachments/assets/c3e538a7-75ae-4385-9bfb-6911f8e096f8) | ![Series detail](https://github.com/user-attachments/assets/6711c082-224b-4c35-a97e-0c1ce9a3917d) |
+| ![Movie detail](https://github.com/user-attachments/assets/87e7dbce-0e70-4619-af1b-62f512c907a0) | ![Series detail](https://github.com/user-attachments/assets/d773b92d-26c0-4b37-893e-95810a146ea6) |
 
 | Search | Settings |
 | --- | --- |

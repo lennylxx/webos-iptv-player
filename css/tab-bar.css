@@ -13,23 +13,29 @@
   border-bottom: 1px solid var(--border);
 }
 
-/* Over catalog art the bar turns transparent. Its theme scrim holds behind
-   the labels for bright art, then runs on past the bar's edge, so a list
-   scrolling up under the bar fades out instead of ending on a hard line. */
+/* Over catalog art the bar turns transparent: one eased theme scrim runs
+   from behind the labels down over the art, so neither the bar's edge nor
+   content clipped at it reads as a line. */
 body.tabbar-over-art .tab-bar {
-  background: linear-gradient(180deg, rgb(var(--catalog-hero-scrim-rgb) / 0.9) 0%, rgb(var(--catalog-hero-scrim-rgb) / 0.82) 60%, rgb(var(--catalog-hero-scrim-rgb) / 0.66) 100%);
-  /* Under the transparent border the gradient would tile again as a dark line. */
-  background-origin: border-box;
+  background: transparent;
   border-bottom-color: transparent;
 }
 body.tabbar-over-art .tab-bar::after {
   content: '';
   position: absolute;
-  /* From below the 1px border; overlapping it would draw a line. */
-  top: calc(100% + 1px); left: 0; right: 0;
-  z-index: -1; /* under the loading strip on the bar's edge */
-  height: 64px;
-  background: linear-gradient(180deg, rgb(var(--catalog-hero-scrim-rgb) / 0.66), rgb(var(--catalog-hero-scrim-rgb) / 0));
+  top: 0; left: 0; right: 0;
+  z-index: -1; /* under the labels and the loading strip */
+  height: 300px;
+  background: linear-gradient(180deg,
+    rgb(var(--catalog-hero-scrim-rgb) / 0.9) 0%,
+    rgb(var(--catalog-hero-scrim-rgb) / 0.82) 16%,
+    rgb(var(--catalog-hero-scrim-rgb) / 0.62) 32%,
+    rgb(var(--catalog-hero-scrim-rgb) / 0.43) 46%,
+    rgb(var(--catalog-hero-scrim-rgb) / 0.27) 60%,
+    rgb(var(--catalog-hero-scrim-rgb) / 0.15) 72%,
+    rgb(var(--catalog-hero-scrim-rgb) / 0.07) 84%,
+    rgb(var(--catalog-hero-scrim-rgb) / 0.02) 93%,
+    rgb(var(--catalog-hero-scrim-rgb) / 0) 100%);
   pointer-events: none;
 }
 
