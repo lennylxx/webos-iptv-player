@@ -4,6 +4,7 @@ import { extFromUrl } from '../utils/url';
 import { getCachedCatalog, setCachedCatalog } from './idb-cache';
 import type { MediaInfo } from '../utils/stream-info';
 import { createLogger } from '../utils/logger';
+import { FetchSession } from '../utils/fetch-session';
 
 const log = createLogger('MediaProbe');
 
@@ -34,42 +35,6 @@ function parserFor(url: string): Parser | null {
   }
 }
 
-// Stream at most `maxBytes` from the response body, then cancel the rest. Keeps a
-// range-ignoring 200 from downloading the whole payload, and releases the
-// connection as soon as we have the header we need.
-async function readCappedPrefix(res: Response, maxBytes: number): Promise<Uint8Array> {
-  const reader = res.body?.getReader();
-  if (!reader) {
-    // No streaming body available (shouldn't happen on webOS/preview) — fall
-    // back to buffering, still clamped to the cap.
-    const buf = new Uint8Array(await res.arrayBuffer());
-    return buf.length > maxBytes ? buf.subarray(0, maxBytes) : buf;
-  }
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  try {
-    while (received < maxBytes) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.length) {
-        chunks.push(value);
-        received += value.length;
-      }
-    }
-  } finally {
-    void reader.cancel().catch(() => {});
-  }
-  const out = new Uint8Array(Math.min(received, maxBytes));
-  let offset = 0;
-  for (const chunk of chunks) {
-    if (offset >= out.length) break;
-    const take = Math.min(chunk.length, out.length - offset);
-    out.set(chunk.subarray(0, take), offset);
-    offset += take;
-  }
-  return out;
-}
-
 // Read up to `maxBytes` from `url` starting at `start`, tolerant of servers that
 // mishandle Range. It sends an open-ended `bytes=start-` (what the media element
 // itself sends, so a strict server can't 416 on an end past EOF) and streams only
@@ -83,18 +48,19 @@ async function fetchRange(
   maxBytes: number,
   acceptFull: boolean,
 ): Promise<{ bytes: Uint8Array; total: number } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT);
+  const session = new FetchSession(url, { timeout: PROBE_TIMEOUT });
   try {
-    const res = await fetch(url, { headers: { Range: `bytes=${start}-` }, signal: controller.signal });
+    const res = await session.open({ headers: { Range: `bytes=${start}-` } });
     if (res.status !== 206 && !(acceptFull && res.status === 200)) return null;
     const contentRange = res.headers.get('Content-Range') ?? '';
     const total = parseInt(contentRange.split('/')[1] ?? '', 10);
-    const bytes = await readCappedPrefix(res, maxBytes);
+    // Only the prefix; close() releases the connection, as a range-ignoring
+    // 200 would otherwise download the whole file.
+    const bytes = await session.readPrefix(maxBytes);
     if (!bytes.length) return null;
     return { bytes, total: Number.isFinite(total) ? total : 0 };
   } finally {
-    clearTimeout(timer);
+    session.close();
   }
 }
 

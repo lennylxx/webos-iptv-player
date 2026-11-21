@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { LegacyAbortController } from '../test/legacy-fetch';
+import { faultFetch } from '../test/fault-fetch';
+import type { Fault } from '../test/fault-plan';
+import { CONFIG } from '../config';
 import type { Channel } from '../types';
 
 const { stored, cacheMock } = vi.hoisted(() => {
@@ -44,6 +48,51 @@ beforeEach(async () => {
 });
 
 describe('ChannelHealthService', () => {
+  // webOS 4's abort can't reach a body read, so the probe's own timeout must end it.
+  it('finishes a check whose stream stalls after its headers on webOS 4', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(() => ({ headers: { 'content-type': 'video/mp2t' }, body: 'G@\u0000\u0010', stallAfterBytes: 1 })));
+    const item = channel('http://host/a');
+
+    let done = false;
+    void ChannelHealthService.checkAll([item]).then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(CONFIG.CHANNEL_HEALTH.TIMEOUT_MS);
+
+    expect(done).toBe(true);
+    expect(ChannelHealthService.getRecord(item)).toMatchObject({ consecutiveFailures: 1 });
+  });
+
+  it.each<[string, Fault, string]>([
+    ['is missing', { status: 404 }, 'http_404'],
+    ['cannot be reached', { networkError: true }, 'network'],
+    ['is cut off partway', { body: 'G@\u0000\u0010G@\u0000\u0010', resetAfterBytes: 0 }, 'network'],
+    ['sends nothing', { body: '' }, 'empty_response'],
+  ])('records why a stream that %s failed its check', async (_name, fault, error) => {
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    vi.stubGlobal('fetch', faultFetch(() => fault));
+    const item = channel('http://host/a');
+
+    await ChannelHealthService.checkAll([item]);
+
+    expect(ChannelHealthService.getRecord(item)).toMatchObject({ consecutiveFailures: 1, error });
+  });
+
+  it('lets Stop end a check whose stream stalls after its headers on webOS 4', async () => {
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    // The caller's controller is the page's; the probe's own one is the polyfill.
+    const stop = new AbortController();
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: 'G@\u0000\u0010', stallAfterBytes: 1 })));
+
+    const checking = ChannelHealthService.checkAll([channel('http://host/a')], { signal: stop.signal });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    stop.abort();
+
+    await expect(checking).resolves.toBeDefined();
+  });
+
   it('marks a stream healthy after receiving media bytes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () =>
       new Response(new Uint8Array([0x47, 0x40, 0x00, 0x10]), {

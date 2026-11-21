@@ -106,6 +106,7 @@ export const CONFIG = {
     SEEK_PREVIEW_WIDTH: 320,    // px; the seek-bar preview frame (and the thumbnail size we ask servers for)
     SEEK_PREVIEW_DEBOUNCE: 150, // ms between preview image requests while the target moves
     SEEK_PREVIEW_FETCH_TIMEOUT: 8000, // ms for a thumbnail manifest or sidecar
+    SUBTITLE_FETCH_TIMEOUT: 10000, // ms for one self-rendered subtitle playlist or segment
     HLS_MAX_RECOVERIES: 3,      // bounded hls.js fatal-error retries before giving up → next channel
     STALL_POLL_MS: 2000,        // native stall watchdog: currentTime poll interval
     STALL_FREEZE_TICKS: 5,      // ~10s frozen before the first in-place reload
@@ -235,6 +236,12 @@ export const CONFIG = {
     FUZZY_FILL: 200,
     DELIVERED_KEEP: 2_000,      // record items kept per group before a new epoch
     HISTORY_MAX_ENTRIES: 10,    // recent searches kept
+  },
+
+  NETWORK: {
+    // A download times out when it makes no progress for its own timeout; this
+    // only bounds one that keeps trickling in.
+    DOWNLOAD_CAP_MS: 15 * 60 * 1000,
   },
 
   CHANNEL_HEALTH: {

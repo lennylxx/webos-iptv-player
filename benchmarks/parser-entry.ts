@@ -1,7 +1,6 @@
 import { parseM3U } from '../src/parsers/m3u-parser';
-import { parseXMLTVWithStats, XMLTVStreamParser } from '../src/parsers/xmltv-parser';
+import { parseXMLTVWithStats } from '../src/parsers/xmltv-parser';
 import { fetchAndParseXMLTV } from '../src/parsers/xmltv-loader';
-import { fetchMaybeGzipText } from '../src/utils/fetch-helper';
 import { appWorkerGeneration } from '../src/workers/app-worker-client';
 import { PlaylistService } from '../src/services/playlist-service';
 
@@ -29,10 +28,6 @@ interface BenchmarkParserApi {
   parseXMLTV(text: string, options?: BenchmarkXMLTVOptions): BenchmarkParseResult;
   loadXMLTV(url: string, options?: BenchmarkXMLTVOptions): Promise<BenchmarkXMLTVLoadResult>;
   profileXMLTV(url: string, options?: BenchmarkXMLTVOptions): Promise<BenchmarkParseResult>;
-  loadXMLTVBuffered(url: string, options?: BenchmarkXMLTVOptions):
-    Promise<BenchmarkXMLTVLoadResult>;
-  profileXMLTVBuffered(url: string, options?: BenchmarkXMLTVOptions):
-    Promise<BenchmarkParseResult>;
   workerRunning(): boolean;
 }
 
@@ -160,44 +155,6 @@ window.__IPTV_BENCHMARK__ = {
       programmes: parsed.stats.programmesKept,
       programmesSeen: parsed.stats.programmesSeen,
       retained: parsed.data,
-    };
-  },
-  async loadXMLTVBuffered(url, options) {
-    const started = performance.now();
-    const text = await fetchMaybeGzipText(url, 120000);
-    const parsed = parseXMLTVWithStats(text, {
-      channelIds: options?.channelIds ? new Set(options.channelIds) : undefined,
-      channelNames: options?.channelNames ? new Set(options.channelNames) : undefined,
-      retainChannelCatalog: options?.retainChannelCatalog,
-    });
-    return {
-      durationMs: performance.now() - started,
-      channels: Object.keys(parsed.data.programmes).length,
-      catalogChannels: Object.keys(parsed.data.channels).length,
-      programmes: parsed.stats.programmesKept,
-      programmesSeen: parsed.stats.programmesSeen,
-      retained: parsed.data,
-    };
-  },
-  async profileXMLTVBuffered(url, options) {
-    const text = await fetchMaybeGzipText(url, 120000);
-    const parser = new XMLTVStreamParser({
-      channelIds: options?.channelIds ? new Set(options.channelIds) : undefined,
-      channelNames: options?.channelNames ? new Set(options.channelNames) : undefined,
-      retainChannelCatalog: options?.retainChannelCatalog,
-    });
-    const chunkSize = 256 * 1024;
-    for (let offset = 0; offset < text.length; offset += chunkSize) {
-      parser.write(text.slice(offset, offset + chunkSize));
-      await new Promise<void>(resolve => setTimeout(resolve, 0));
-    }
-    const data = parser.finish();
-    return {
-      channels: Object.keys(data.programmes).length,
-      catalogChannels: Object.keys(data.channels).length,
-      programmes: parser.stats.programmesKept,
-      programmesSeen: parser.stats.programmesSeen,
-      retained: data,
     };
   },
 };

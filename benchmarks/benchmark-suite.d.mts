@@ -90,7 +90,6 @@ export function runRawParserBenchmarks(
   xmltv: { durationMs: number; bytes: number; channels: number; programmes: number };
   xmltvCatalog?: XMLTVCatalogBenchmark;
   xmltvPipeline?: XMLTVPipelineBenchmark;
-  xmltvPipelineBuffered?: XMLTVPipelineBenchmark;
 };
 
 export interface DerivedIndexBenchmark {
@@ -145,7 +144,6 @@ export interface XMLTVPipelineBenchmarkOptions {
   uncompressedBytes: number;
   channelIds: string[];
   channelNames: string[];
-  buffered?: boolean;
 }
 
 export interface XMLTVPipelineBenchmarkIo {
@@ -173,15 +171,7 @@ export function measureXMLTVPipelineBenchmark(
   io: XMLTVPipelineBenchmarkIo,
 ): Promise<XMLTVPipelineBenchmark>;
 
-export function measureXMLTVPipelineComparison(
-  options: XMLTVPipelineBenchmarkOptions,
-  io: XMLTVPipelineBenchmarkIo,
-): Promise<{
-  buffered: XMLTVPipelineBenchmark;
-  streaming: XMLTVPipelineBenchmark;
-}>;
-
-export function measureHostedXMLTVPipelineComparison(
+export function measureHostedXMLTVPipelineBenchmark(
   options: {
     scale: number;
     deviceIp: string;
@@ -192,10 +182,7 @@ export function measureHostedXMLTVPipelineComparison(
     port?: number;
   },
   io: XMLTVPipelineBenchmarkIo,
-): Promise<{
-  buffered: XMLTVPipelineBenchmark;
-  streaming: XMLTVPipelineBenchmark;
-}>;
+): Promise<XMLTVPipelineBenchmark>;
 
 export function startTvRendererRssSampler(
   appId: string,

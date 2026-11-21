@@ -18,6 +18,7 @@ import type {
 import type { EpgChannel, ParsedEpg, Programme } from '../types';
 import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
+import { FetchSession, progressTimeouts } from '../utils/fetch-session';
 import { yieldToEventLoop } from '../utils/yield';
 
 export type XMLTVLoadResult = XMLTVWorkerResponse;
@@ -320,10 +321,7 @@ async function parsePass(
   emitChunk: (chunk: XMLTVWorkerChunk) => void,
   attempt = 1,
 ): Promise<PassResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  let complete = false;
+  const session = new FetchSession(url, progressTimeouts(timeout));
   let stage = 'fetch';
   let encoding: 'gzip' | 'plain' = 'plain';
   let transport: 'stream' | 'array_buffer' = 'stream';
@@ -332,18 +330,15 @@ async function parsePass(
   let nextProgressBytes = PROGRESS_INTERVAL_BYTES;
   const started = Date.now();
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await session.open();
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     stage = 'read';
-    reader = typeof response.body?.getReader === 'function'
-      ? response.body.getReader()
-      : null;
     const accumulator = new XMLTVAccumulator();
     const parser = new XMLTVStreamParser(options, accumulator);
-    if (!reader) {
+    if (!session.streaming) {
       transport = 'array_buffer';
       stage = 'decode_parse';
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = await session.readAll();
       inputBytes = bytes.length;
       chunks = bytes.length ? 1 : 0;
       encoding = isGzip(bytes) ? 'gzip' : 'plain';
@@ -351,9 +346,10 @@ async function parsePass(
       consumeBytes(bytes, encoding === 'gzip', parser);
     } else {
       let prefix: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+      let complete = false;
       while (prefix.length < 2) {
         stage = 'read';
-        const next = await reader.read();
+        const next = await session.read();
         if (next.done) {
           complete = true;
           break;
@@ -378,7 +374,7 @@ async function parsePass(
       }
       while (!complete) {
         stage = 'read';
-        const next = await reader.read();
+        const next = await session.read();
         if (next.done) {
           complete = true;
           break;
@@ -409,7 +405,7 @@ async function parsePass(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const reason = controller.signal.aborted
+    const reason = session.stopReason
       ? 'timeout'
       : stage === 'fetch' && message.startsWith('HTTP ')
         ? 'http'
@@ -426,8 +422,7 @@ async function parsePass(
       chunks,
     });
   } finally {
-    if (reader && !complete) void reader.cancel().catch(() => {});
-    clearTimeout(timer);
+    session.close();
   }
 
   function emitProgress(): void {

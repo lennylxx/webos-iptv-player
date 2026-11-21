@@ -1,4 +1,5 @@
 import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page, pressAndReadPlayer, liveLoaded } from './helpers';
+import { routeFault } from './fixtures/fault-route';
 import { seedXtream } from './fixtures/xtream';
 
 // Online-subtitle search for Xtream VOD. The player's "Search online…" subtitle
@@ -446,6 +447,31 @@ test('an empty search keeps the box open for a manual retry that finds results',
   await input.press('Enter');
 
   await expect(page.locator('#subtitle-search .subs-row')).toContainText('Manual Hit');
+});
+
+test('a search whose provider fails says nothing was found and keeps the box for a retry', async ({ page }) => {
+  await seedVod(page);
+  await routeFault(page, /\/v1\/sub\/search/, { status: 503, body: 'Service Unavailable' });
+  await startVodPlayback(page);
+  const searched = page.waitForResponse(/\/v1\/sub\/search/);
+  await openSearchOverlay(page);
+  expect((await searched).status()).toBe(503);
+
+  await expect(page.locator('#subtitle-search .subs-status')).toContainText('No subtitles found');
+  await expect(page.locator('.subs-search-input')).toBeVisible();
+});
+
+test('a download whose server fails says so', async ({ page }) => {
+  await seedVod(page);
+  await routeAssrtSearch(page, () => [assrtSub({ id: '401', langDesc: '英', name: 'Release A', downloads: 1 })]);
+  await routeFault(page, /\/v1\/sub\/detail/, { status: 503, body: 'Service Unavailable' });
+  await startVodPlayback(page);
+  await openSearchOverlay(page);
+  await expect(page.locator('#subtitle-search .subs-row')).toContainText('Release A');
+
+  await page.keyboard.press('Enter');
+
+  await expect(page.locator('#subtitle-search .subs-status')).toContainText('Download failed');
 });
 
 test('the overlay is dismissed on a view change (colored-button jump)', async ({ page }) => {

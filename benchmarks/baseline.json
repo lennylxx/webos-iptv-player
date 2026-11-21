@@ -675,27 +675,6 @@
         "channels": 1,
         "programmes": 50000
       },
-      "xmltvPipelineBuffered": {
-        "durationMs": 597.7,
-        "maxFrameGapMs": 16.7,
-        "channels": 300,
-        "catalogChannels": 2000,
-        "programmes": 7500,
-        "programmesSeen": 50000,
-        "memoryScope": "page heap; includes buffered parse and retained result",
-        "transientParseHeapIncluded": true,
-        "compressedBytes": 458693,
-        "uncompressedBytes": 18057979,
-        "samples": 26,
-        "startMemoryMiB": 42.98,
-        "peakMemoryMiB": 65.79,
-        "averageMemoryMiB": 61.9,
-        "peakMemoryDeltaMiB": 22.81,
-        "averageMemoryDeltaMiB": 18.92,
-        "peakV8HeapMiB": 42.6,
-        "peakEmbedderHeapMiB": 2.55,
-        "peakBackingStorageMiB": 20.69
-      },
       "xmltvPipeline": {
         "durationMs": 192.1,
         "maxFrameGapMs": 16.8,

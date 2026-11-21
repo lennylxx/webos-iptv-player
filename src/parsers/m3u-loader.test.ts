@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { LegacyAbortController } from '../test/legacy-fetch';
+import { faultFetch } from '../test/fault-fetch';
 import {
   awaitCatchupClock,
   decodedResponseLength,
@@ -245,6 +247,51 @@ describe('fetchAndParseM3UInWorker', () => {
 
     expect(result.data.channels[0].catchupTimeZone).toBe('UTC');
     expect(result.metrics.catchup?.clock).toBe('ok');
+  });
+
+  // A large playlist on a slow panel arrives for longer than its timeout.
+  it('finishes a playlist that keeps arriving past its timeout', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+    vi.stubGlobal('fetch', faultFetch(() => ({
+      body: '#EXTM3U\n#EXTINF:-1,ch1\nhttp://host/a\n', chunkSize: 13, chunkDelayMs: 600,
+    })));
+
+    const loading = fetchAndParseM3UInWorker({ url: 'http://host/a.m3u', timeout: 1000 });
+    const assertion = expect(loading).resolves.toMatchObject({ data: { channels: [{ name: 'ch1' }] } });
+    await vi.advanceTimersByTimeAsync(3000);
+    await assertion;
+  });
+
+  it('times out a playlist server that never answers', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+    vi.stubGlobal('fetch', faultFetch(() => ({ hang: true })));
+
+    const loading = fetchAndParseM3UInWorker({ url: 'http://host/a.m3u', timeout: 1000 });
+    const assertion = expect(loading).rejects.toMatchObject({ details: { stage: 'fetch', reason: 'timeout' } });
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
+  });
+
+  it('reports a missing playlist as an HTTP failure', async () => {
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    vi.stubGlobal('fetch', faultFetch(() => ({ status: 404, body: 'Not Found' })));
+
+    await expect(fetchAndParseM3UInWorker({ url: 'http://host/a.m3u', timeout: 1000 }))
+      .rejects.toMatchObject({ message: expect.stringContaining('HTTP 404'), details: { reason: 'http' } });
+  });
+
+  it('times out a body that stalls after its headers on webOS 4', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: '#EXTM3U\n#EXTINF:-1,ch1\nhttp://host/a\n', stallAfterBytes: 23 })));
+
+    const loading = fetchAndParseM3UInWorker({ url: 'http://host/a.m3u', timeout: 1000 });
+    const assertion = expect(loading).rejects.toMatchObject({ details: { stage: 'read', reason: 'timeout' } });
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
   });
 
   it('cancels the clock request when the playlist fails', async () => {

@@ -1,7 +1,9 @@
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { gzipSync, strToU8 } from 'fflate';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { LegacyAbortController } from '../test/legacy-fetch';
+import { faultFetch } from '../test/fault-fetch';
 import { fetchAndParseXMLTVInWorker } from './xmltv-loader';
 import { writeHeldValue } from '../workers/held-values';
 import {
@@ -313,6 +315,46 @@ describe('fetchAndParseXMLTV', () => {
     });
 
     expect(guide.channels.ch1.name).toBe('Alpha');
+  });
+
+  it('times out a body that stalls after its headers on webOS 4', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: '<?xml version="1.0"?><tv><channel id="a"></channel></tv>', stallAfterBytes: 41 })));
+
+    const loading = fetchAndParseXMLTVInWorker({ url: 'http://host/a', timeout: 1000, options: {} }, () => undefined);
+    const assertion = expect(loading).rejects.toMatchObject({ details: { stage: 'read', reason: 'timeout' } });
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
+  });
+
+  it('times out a guide server that never answers', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    vi.stubGlobal('fetch', faultFetch(() => ({ hang: true })));
+
+    const loading = fetchAndParseXMLTVInWorker({ url: 'http://host/a', timeout: 1000, options: {} }, () => undefined);
+    const assertion = expect(loading).rejects.toMatchObject({ details: { stage: 'fetch', reason: 'timeout' } });
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
+  });
+
+  it('fails a guide whose connection is cut partway through', async () => {
+    vi.stubGlobal('fetch', faultFetch(() => ({
+      body: '<?xml version="1.0"?><tv><channel id="a"><display-name>A</display-name></channel></tv>',
+      resetAfterBytes: 30,
+    })));
+
+    await expect(fetchAndParseXMLTVInWorker({ url: 'http://host/a', timeout: 30000, options: {} }, () => undefined))
+      .rejects.toMatchObject({ details: { stage: 'read', reason: 'exception', inputBytes: 30 } });
+  });
+
+  it('fails an unreachable guide host before reading anything', async () => {
+    vi.stubGlobal('fetch', faultFetch(() => ({ networkError: true })));
+
+    await expect(fetchAndParseXMLTVInWorker({ url: 'http://host/a', timeout: 30000, options: {} }, () => undefined))
+      .rejects.toMatchObject({ details: { stage: 'fetch', reason: 'exception', inputBytes: 0 } });
   });
 
   it('logs a structured failure without committing a partial result', async () => {

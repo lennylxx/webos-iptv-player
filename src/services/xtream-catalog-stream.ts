@@ -2,6 +2,7 @@ import { JsonArrayStream, JsonArrayStreamError } from '../parsers/json-array-str
 import { holdValue } from '../workers/held-values';
 import { sameCatalogItems } from '../utils/catalog-items';
 import { serializedBytes } from '../utils/serialized-bytes';
+import { FetchSession } from '../utils/fetch-session';
 import type { SeriesItem, VodItem } from '../types';
 import {
   seriesItemFrom,
@@ -47,10 +48,10 @@ export interface XtreamCatalogStreamResponse {
 }
 
 const BATCH_SIZE = 4000;
-const activeStreams = new Map<string, (reason: XtreamRequestErrorCode) => void>();
+const activeStreams = new Map<string, FetchSession>();
 
 export function cancelXtreamCatalogStream(token: string): void {
-  activeStreams.get(token)?.('cancelled');
+  activeStreams.get(token)?.stop('cancelled');
 }
 
 // Orders items like the per-category load: by category, first copy of an id
@@ -106,22 +107,12 @@ export async function streamXtreamCatalogInWorker(
     = () => Promise.resolve(null),
 ): Promise<XtreamCatalogStreamResponse> {
   const started = Date.now();
-  const controller = new AbortController();
-  let abortReason: XtreamRequestErrorCode | null = null;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  const abort = (reason: XtreamRequestErrorCode): void => {
-    if (!abortReason) abortReason = reason;
-    controller.abort();
-    // Chromium 53's polyfilled abort stops only the fetch, not a body read.
-    if (reader) void reader.cancel().catch(() => undefined);
-  };
-  if (request.token) activeStreams.set(request.token, abort);
-  const totalTimer = setTimeout(() => abort('timeout'), request.timeout);
-  let idleTimer = setTimeout(() => abort('timeout'), Math.min(request.headersTimeout, request.timeout));
-  const touch = (): void => {
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => abort('timeout'), request.idleTimeout);
-  };
+  const session = new FetchSession(request.url, {
+    timeout: request.timeout,
+    headersTimeout: request.headersTimeout,
+    idleTimeout: request.idleTimeout,
+  });
+  if (request.token) activeStreams.set(request.token, session);
   let inputBytes = 0;
   let elements = 0;
   let items = 0;
@@ -139,35 +130,22 @@ export async function streamXtreamCatalogInWorker(
   });
   const fail = (failure: XtreamRequestErrorCode): XtreamCatalogStreamResponse =>
     ({ failure, items, inputBytes, elapsedMs: Date.now() - started });
-  let complete = false;
   try {
-    const response = await fetch(request.url, { signal: controller.signal });
-    touch();
-    // Chromium 53's polyfilled abort can't stop a body nobody reads.
-    const discard = (failure: XtreamRequestErrorCode): XtreamCatalogStreamResponse => {
-      void response.body?.cancel().catch(() => undefined);
-      return fail(failure);
-    };
-    if (!response.ok) return discard('request_failed');
+    const response = await session.open();
+    // close() cancels the body of a response left unread.
+    if (!response.ok) return fail('request_failed');
     const declared = Number(response.headers?.get('content-length') || 0);
-    if (declared > request.maxBytes) return discard('too_large');
+    if (declared > request.maxBytes) return fail('too_large');
     const decoder = new TextDecoder('utf-8');
-    reader = typeof response.body?.getReader === 'function' ? response.body.getReader() : null;
-    if (!reader) {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (abortReason) return fail(abortReason);
+    if (!session.streaming) {
+      const bytes = await session.readAll();
       inputBytes = bytes.length;
       if (inputBytes > request.maxBytes) return fail('too_large');
       parser.write(decoder.decode(bytes));
     } else {
       while (true) {
-        const next = await reader.read();
-        if (abortReason) return fail(abortReason);
-        if (next.done) {
-          complete = true;
-          break;
-        }
-        touch();
+        const next = await session.read();
+        if (next.done) break;
         if (!next.value?.length) continue;
         inputBytes += next.value.length;
         if (inputBytes > request.maxBytes) return fail('too_large');
@@ -183,7 +161,7 @@ export async function streamXtreamCatalogInWorker(
     parsed.length = 0;
     if (request.previous) {
       const previous = await previousList(request.previous);
-      if (abortReason) return fail(abortReason);
+      if (session.stopReason) return fail(session.stopReason);
       if (previous && sameCatalogItems(previous as object[], merged)) {
         return { items: merged.length, inputBytes, elapsedMs: Date.now() - started, unchanged: true };
       }
@@ -200,15 +178,12 @@ export async function streamXtreamCatalogInWorker(
       held: { token: holdValue(merged), bytes: serializedBytes(merged) },
     };
   } catch (error) {
-    if (abortReason) return fail(abortReason);
+    if (session.stopReason) return fail(session.stopReason);
     // A cut connection may come back whole; a malformed list won't.
     if (error instanceof JsonArrayStreamError) return fail(error.truncated ? 'request_failed' : 'invalid_json');
     return fail('request_failed');
   } finally {
     if (request.token) activeStreams.delete(request.token);
-    clearTimeout(totalTimer);
-    clearTimeout(idleTimer);
-    if (reader && !complete) void reader.cancel().catch(() => undefined);
-    if (!complete) controller.abort();
+    session.close();
   }
 }

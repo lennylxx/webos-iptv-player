@@ -8,6 +8,7 @@ import {
   createXtreamLiveMatcher,
 } from '../utils/xtream-live-match';
 import { createLogger } from '../utils/logger';
+import { FetchSession, progressTimeouts } from '../utils/fetch-session';
 import { channelExactStreamIdentity } from '../utils/channel-identity';
 import { createGroupNameMatcher, type XtreamGroupNameFilter } from '../utils/xtream-category-filter';
 import { runAppWorkerTask } from '../workers/app-worker-client';
@@ -303,9 +304,7 @@ export async function fetchAndParseM3UInWorker(
         }
       : {}),
   };
-  const controller = new AbortController();
-  const timeoutStarted = Date.now();
-  let timer = setTimeout(() => controller.abort(), request.timeout);
+  const session = new FetchSession(request.url, progressTimeouts(request.timeout));
   // The clock request runs alongside the playlist fetch and stops with it.
   const clockStop = new AbortController();
   let clockSettled: XtreamServerClockResult | null = null;
@@ -314,29 +313,23 @@ export async function fetchAndParseM3UInWorker(
     request.xtreamCatchup,
     clockStop.signal,
   ).then(result => (clockSettled = result));
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  let complete = false;
   let transport: M3UWorkerResponse['metrics']['transport'] = 'stream';
   let stage = 'fetch';
   try {
-    const response = await fetch(request.url, { signal: controller.signal });
+    const response = await session.open();
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     if (catchup) {
       // The clock wait doesn't count against the playlist's own timeout.
-      clearTimeout(timer);
-      const remaining = Math.max(0, request.timeout - (Date.now() - timeoutStarted));
+      const resume = session.pause();
       catchup.clock = (await awaitCatchupClock(clockReady))?.clock ?? null;
-      timer = setTimeout(() => controller.abort(), remaining);
+      resume();
     }
     totalBytes = decodedResponseLength(response.headers);
     stage = 'read';
-    reader = typeof response.body?.getReader === 'function'
-      ? response.body.getReader()
-      : null;
     let data: ParsedPlaylist;
-    if (!reader) {
+    if (!session.streaming) {
       transport = 'array_buffer';
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = await session.readAll();
       inputBytes = bytes.length;
       chunks = bytes.length ? 1 : 0;
       emitM3UProgress();
@@ -347,11 +340,8 @@ export async function fetchAndParseM3UInWorker(
       const decoder = new PlaylistStreamDecoder(text => parser.write(text));
       while (true) {
         stage = 'read';
-        const next = await reader.read();
-        if (next.done) {
-          complete = true;
-          break;
-        }
+        const next = await session.read();
+        if (next.done) break;
         if (!next.value?.length) continue;
         inputBytes += next.value.length;
         chunks++;
@@ -390,7 +380,7 @@ export async function fetchAndParseM3UInWorker(
     const message = error instanceof Error ? error.message : String(error);
     throw new M3UWorkerError(message, {
       stage,
-      reason: controller.signal.aborted
+      reason: session.stopReason
         ? 'timeout'
         : stage === 'fetch' && message.startsWith('HTTP ')
           ? 'http'
@@ -401,8 +391,7 @@ export async function fetchAndParseM3UInWorker(
       elapsedMs: Date.now() - started,
     });
   } finally {
-    if (reader && !complete) void reader.cancel().catch(() => {});
-    clearTimeout(timer);
+    session.close();
     clockStop.abort();
   }
 

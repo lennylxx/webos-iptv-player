@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
+import { LegacyAbortController } from '../test/legacy-fetch';
+import { faultFetch } from '../test/fault-fetch';
 import type { MediaInfo } from '../utils/stream-info';
 
 vi.mock('../parsers/mp4-info', () => ({ parseMp4Info: vi.fn() }));
@@ -154,5 +156,27 @@ describe('probeMedia', () => {
     await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT + 10);
     expect(await pending).toBeNull();
     expect(setCache).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Parameters<typeof faultFetch>[0]]>([
+    ['a missing file', () => ({ status: 404 })],
+    ['a range cut off partway', () => ({ status: 206, body: 'ftypisom', resetAfterBytes: 2 })],
+    ['an unreachable host', () => ({ networkError: true })],
+  ])('returns null and caches nothing for %s', async (_name, routes) => {
+    fetchMock.mockImplementation(faultFetch(routes));
+    expect(await probeMedia('http://host/movie/10.mp4', 'k')).toBeNull();
+    expect(setCache).not.toHaveBeenCalled();
+  });
+
+  // Otherwise the stalled read keeps a second connection to the file open beside playback.
+  it('gives up on a range whose body stalls after its headers on webOS 4', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    fetchMock.mockImplementation(faultFetch(() => ({ status: 206, body: 'ftypisom', stallAfterBytes: 4 })));
+    let result: unknown = 'pending';
+    void probeMedia('http://host/movie/10.mp4', 'k').then(info => { result = info; });
+    await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT + 10);
+    expect(result).toBeNull();
   });
 });

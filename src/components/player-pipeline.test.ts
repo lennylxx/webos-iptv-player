@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { LegacyAbortController } from '../test/legacy-fetch';
+import { faultFetch } from '../test/fault-fetch';
+import type { Fault } from '../test/fault-plan';
 import { CONFIG } from '../config';
 import type { PlayerPipelineOptions } from './player-pipeline';
 import { PlayerPipeline } from './player-pipeline';
@@ -1154,6 +1157,43 @@ describe('PlayerPipeline desktop DASH', () => {
 });
 
 describe('PlayerPipeline manifest loading', () => {
+  it.each<[string, Fault, string]>([
+    ['a missing stream', { status: 404, headers: { 'content-type': 'text/html' } }, ''],
+    ['an unreachable host', { networkError: true }, ''],
+    ['a sniffed body cut off partway', {
+      headers: { 'content-type': 'application/octet-stream' }, body: '#EXTM3U\n#EXT-X-VERSION:3\n', resetAfterBytes: 4,
+    }, ''],
+    ['a stream type the server names', { headers: { 'content-type': 'video/mp2t' }, body: 'G@' }, 'video/mp2t'],
+  ])('classifies %s', async (_name, fault, type) => {
+    vi.stubGlobal('fetch', faultFetch(() => fault));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const internals = new PlayerPipeline(callbacks()) as unknown as {
+      detectContentType(url: string, loadToken: number): Promise<string>;
+    };
+
+    expect(await internals.detectContentType('http://host/a', 1)).toBe(type);
+  });
+
+  // A held read keeps the panel connection that a one-connection account needs to tune.
+  it('stops sniffing a stream type whose body stalls after its headers on webOS 4', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(() => ({
+      headers: { 'content-type': 'application/octet-stream' }, body: '<?xml version="1.0"?>', stallAfterBytes: 5,
+    })));
+    const pipeline = new PlayerPipeline(callbacks());
+    const internals = pipeline as unknown as {
+      detectContentType(url: string, loadToken: number): Promise<string>;
+    };
+
+    let result: string | null = null;
+    void internals.detectContentType('http://host/a', 1).then(ct => { result = ct; });
+    await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.MANIFEST_TIMEOUT);
+
+    expect(result).toBe('');
+  });
+
   it('delivers parsed audio, subtitle, CC, and variant declarations', async () => {
     const manifest = [
       '#EXTM3U',

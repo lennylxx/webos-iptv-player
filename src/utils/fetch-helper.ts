@@ -1,3 +1,5 @@
+import { FetchSession } from './fetch-session';
+
 export type FetchTextErrorCode =
   | 'aborted'
   | 'timeout'
@@ -31,33 +33,66 @@ export type FetchPrefixValidator = (
   complete: boolean,
 ) => FetchPrefixVerdict;
 
+const NULL_BODY_STATUSES = [204, 205];
+
+/** Resolves with the body already read, so the timeout covers it too. */
 export async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
   timeout = 30000
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-
+  const session = new FetchSession(url, { timeout, signal: options.signal ?? undefined });
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await session.open(options);
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    return response;
+    const bytes = await session.readBody();
+    const nullBody = NULL_BODY_STATUSES.indexOf(response.status) >= 0;
+    return new Response(nullBody ? null : bytes as Uint8Array<ArrayBuffer>, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   } finally {
-    clearTimeout(timer);
+    session.close();
+  }
+}
+
+export interface TextResult {
+  ok: boolean;
+  status: number;
+  /** After redirects, to resolve relative URIs against. */
+  url: string;
+  /** Empty for an error status, whose body is not read. */
+  text: string;
+}
+
+export async function fetchTextResult(
+  url: string,
+  timeout: number,
+  init: { headers?: Record<string, string>; signal?: AbortSignal | null } = {},
+): Promise<TextResult> {
+  const session = new FetchSession(url, { timeout, signal: init.signal ?? undefined });
+  try {
+    const response = await session.open(init.headers ? { headers: init.headers } : {});
+    const text = response.ok ? new TextDecoder().decode(await session.readBody()) : '';
+    return { ok: response.ok, status: response.status, url: response.url || url, text };
+  } catch (err) {
+    if (session.stopReason === 'cancelled') throw new FetchTextError('aborted', 'Request was cancelled');
+    if (session.stopReason === 'timeout') throw new FetchTextError('timeout', 'Request timed out');
+    throw err;
+  } finally {
+    session.close();
   }
 }
 
 export async function fetchText(url: string, timeout = 30000): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-
+  const session = new FetchSession(url, { timeout });
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await session.open();
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    return await response.text();
+    return new TextDecoder().decode(await session.readBody());
   } finally {
-    clearTimeout(timer);
+    session.close();
   }
 }
 
@@ -97,17 +132,7 @@ export async function fetchLimitedText(
   signal?: AbortSignal,
   requiredPrefix?: string | readonly string[] | FetchPrefixValidator,
 ): Promise<string> {
-  const controller = new AbortController();
-  let timedOut = false;
-  const abort = () => controller.abort();
-  const onTimeout = () => {
-    timedOut = true;
-    controller.abort();
-  };
-  const timer = setTimeout(onTimeout, timeout);
-  if (signal?.aborted) abort();
-  else signal?.addEventListener('abort', abort);
-
+  const session = new FetchSession(url, { timeout, signal });
   const validator = typeof requiredPrefix === 'function' ? requiredPrefix : null;
   const prefixes: readonly string[] = typeof requiredPrefix === 'string'
     ? [requiredPrefix]
@@ -129,10 +154,8 @@ export async function fetchLimitedText(
       ? validator(bytes, complete)
       : matchPrefixes(Array.from(bytes), prefixes);
 
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  let complete = false;
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await session.open();
     if (!response.ok) {
       throw new FetchTextError(
         'http', `HTTP ${response.status}: ${response.statusText}`, response.status);
@@ -141,10 +164,7 @@ export async function fetchLimitedText(
     if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
       throw new FetchTextError('too_large', `Response exceeds ${maxBytes} bytes`);
     }
-    reader = typeof response.body?.getReader === 'function'
-      ? response.body.getReader()
-      : null;
-    if (!reader) {
+    if (!session.streaming) {
       throw new FetchTextError(
         'too_large',
         'Response size cannot be bounded without a stream reader',
@@ -156,8 +176,8 @@ export async function fetchLimitedText(
     const head: number[] = [];
     let prefixSettled = !hasPrefixCheck;
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) { complete = true; break; }
+      const { done, value } = await session.read();
+      if (done) break;
       if (!value?.length) continue;
       length += value.length;
       if (length > maxBytes) {
@@ -188,44 +208,10 @@ export async function fetchLimitedText(
     return new TextDecoder().decode(bytes);
   } catch (err) {
     if (err instanceof FetchTextError) throw err;
-    if (signal?.aborted) throw new FetchTextError('aborted', 'Request was cancelled');
-    if (timedOut) throw new FetchTextError('timeout', 'Request timed out');
+    if (session.stopReason === 'cancelled') throw new FetchTextError('aborted', 'Request was cancelled');
+    if (session.stopReason === 'timeout') throw new FetchTextError('timeout', 'Request timed out');
     throw err;
   } finally {
-    if (reader && !complete) void reader.cancel().catch(() => {});
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', abort);
+    session.close();
   }
-}
-
-export async function fetchMaybeGzipText(url: string, timeout = 30000): Promise<string> {
-  const response = await fetchWithTimeout(url, {}, timeout);
-  let bytes = new Uint8Array(await response.arrayBuffer());
-
-  if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    const { gunzipSync } = await import('fflate');
-    bytes = gunzipSync(bytes);
-  }
-
-  return new TextDecoder().decode(bytes);
-}
-
-export async function fetchWithRetry(
-  url: string,
-  options: RequestInit = {},
-  retries = 2,
-  timeout = 30000
-): Promise<Response> {
-  let lastError: Error | undefined;
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await fetchWithTimeout(url, options, timeout);
-    } catch (err) {
-      lastError = err as Error;
-      if (i < retries) {
-        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
-      }
-    }
-  }
-  throw lastError;
 }

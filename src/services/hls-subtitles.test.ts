@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, onTestFinished, vi } from 'vitest';
 import { HlsSubtitles, wallToMediaSeconds, newestPdt, oldestPdt, lowPercentile, cueKey, parseMediaPlaylist, pickVideoVariant, planSameTextMerges, isPermanentSubtitleFailure } from './hls-subtitles';
+import { LegacyAbortController } from '../test/legacy-fetch';
+import { faultFetch } from '../test/fault-fetch';
+import { CONFIG } from '../config';
 
 // Synthetic timeline mirroring a live HLS stream: media-time 0 maps to wall clock
 // E0; 4s segments; the playhead trails the live edge. Numbers, no real stream.
@@ -240,11 +243,10 @@ describe('HlsSubtitles with an external clock', () => {
   }
 
   function serve(files: Record<string, string | number>) {
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    vi.stubGlobal('fetch', faultFetch((url) => {
       const body = files[url];
-      if (body === undefined) throw new TypeError('Failed to fetch');
-      const status = typeof body === 'number' ? body : 200;
-      return { ok: status === 200, status, url, text: async () => String(body) };
+      if (body === undefined) return undefined;
+      return typeof body === 'number' ? { status: body } : { body };
     }));
   }
 
@@ -330,6 +332,60 @@ describe('HlsSubtitles with an external clock', () => {
     expect(timeline.cues).toHaveLength(1);
     expect(timeline.cues[0].startTime).toBeCloseTo(507.72, 6);
     expect(timeline.cues[0].endTime).toBeCloseTo(508.92, 6);
+    subs.stop();
+  });
+
+  // On webOS 4 the read would hold a socket the video's own segments may need.
+  it('starts anyway when the subtitle playlist stalls after its headers on webOS 4', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(url =>
+      url === 'http://host/a.m3u8' ? { body: MASTER } : { body: PLAYLIST, stallAfterBytes: 8 }));
+    const subs = new HlsSubtitles();
+
+    let started = false;
+    void subs.start(placeholder().video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 })
+      .then(() => { started = true; });
+    await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.SUBTITLE_FETCH_TIMEOUT);
+
+    expect(started).toBe(true);
+    subs.stop();
+  });
+
+  it('reports a subtitle playlist that never answers once, as transient', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    vi.stubGlobal('fetch', faultFetch({ 'http://host/a.m3u8': { body: MASTER }, 'http://host/s.m3u8': { hang: true } }));
+    const onUnavailable = vi.fn();
+    const subs = new HlsSubtitles();
+
+    void subs.start(placeholder().video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500, onUnavailable });
+    await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.SUBTITLE_FETCH_TIMEOUT * 2);
+
+    expect(onUnavailable.mock.calls).toEqual([['timeout']]);
+    expect(isPermanentSubtitleFailure('timeout')).toBe(false);
+    subs.stop();
+  });
+
+  it('adds nothing for a segment that is not WebVTT', async () => {
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    vi.stubGlobal('fetch', faultFetch({
+      'http://host/a.m3u8': { body: MASTER },
+      'http://host/s.m3u8': { body: PLAYLIST },
+      'http://host/s0.vtt': { body: '<html>error</html>' },
+      'http://host/s1.vtt': { body: '<html>error</html>' },
+    }));
+    const { video, timeline } = placeholder();
+    const onUnavailable = vi.fn();
+    const subs = new HlsSubtitles();
+
+    await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500, onUnavailable });
+
+    expect(timeline.cues).toEqual([]);
+    expect(onUnavailable).not.toHaveBeenCalled();
     subs.stop();
   });
 

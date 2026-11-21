@@ -25,6 +25,7 @@ import { parseAudioRenditions } from '../utils/audio-tracks';
 import { FetchTextError, fetchFailureReason, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
 import { createLogger } from '../utils/logger';
+import { FetchSession } from '../utils/fetch-session';
 import { isWebOS, isWebOS4 } from '../utils/platform';
 import {
   hasLunaHeaders,
@@ -1186,51 +1187,26 @@ export class PlayerPipeline {
   // real signal. Headers are enough, so cancel the body. Returns '' on a
   // CORS/network failure, leaving the caller on its URL heuristic (default HLS).
   private async detectContentType(url: string, loadToken: number): Promise<string> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), CONFIG.PLAYER.MANIFEST_TIMEOUT);
-    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    const session = new FetchSession(url, { timeout: CONFIG.PLAYER.MANIFEST_TIMEOUT });
     try {
-      const res = await fetch(url, { signal: controller.signal });
+      const res = await session.open();
       // An error page's type says nothing about the stream.
-      if (!res.ok) {
-        res.body?.cancel().catch(() => {});
-        return '';
-      }
+      if (!res.ok) return '';
       const ct = (res.headers.get('content-type') || '').toLowerCase();
       const baseType = ct.split(';')[0].trim();
       const sniffBody = baseType === 'application/octet-stream'
         || baseType === 'application/xml'
         || baseType === 'text/xml';
-      if (!sniffBody) {
-        res.body?.cancel().catch(() => {});
-        return ct;
-      }
-      reader = res.body?.getReader() ?? null;
-      if (!reader) return ct;
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      while (length < 4096) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!value?.length) continue;
-        chunks.push(value);
-        length += value.length;
-      }
-      const prefix = new Uint8Array(length);
-      let offset = 0;
-      for (const chunk of chunks) {
-        prefix.set(chunk, offset);
-        offset += chunk.length;
-      }
-      return sniffStreamContentType(ct, prefix);
+      if (!sniffBody || !session.streaming) return ct;
+      return sniffStreamContentType(ct, await session.readPrefix(4096));
     } catch (error) {
       log.warn('Content-type classification failed', 'event=playback.classify.failed',
         this.callbacks.playbackLabel(loadToken),
         error instanceof Error ? error.name : 'Error');
       return '';
     } finally {
-      if (reader) void reader.cancel().catch(() => {});
-      clearTimeout(timer);
+      // Headers are all most streams need; this releases the rest of the body.
+      session.close();
     }
   }
 

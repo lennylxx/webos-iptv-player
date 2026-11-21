@@ -1,21 +1,15 @@
-import { gzipSync, strToU8 } from 'fflate';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from 'vitest';
+import { LegacyAbortController } from '../test/legacy-fetch';
+import { faultFetch } from '../test/fault-fetch';
 import {
   fetchLimitedText,
-  fetchMaybeGzipText,
   fetchText,
   fetchWithTimeout,
-  fetchWithRetry,
 } from './fetch-helper';
 import { mpdOpeningVerdict } from './url';
 
 function okResponse(body = 'body'): Response {
-  return {
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    text: async () => body,
-  } as unknown as Response;
+  return new Response(body, { status: 200, statusText: 'OK' });
 }
 
 beforeEach(() => {
@@ -55,23 +49,53 @@ describe('fetchText / fetchWithTimeout', () => {
       }),
     ));
     const p = fetchWithTimeout('http://x', {}, 5000);
-    const assertion = expect(p).rejects.toThrow('Aborted');
+    const assertion = expect(p).rejects.toMatchObject({ name: 'FetchStopError', reason: 'timeout' });
     await vi.advanceTimersByTimeAsync(5000);
     await assertion;
   });
 
-  it('keeps the fetchText timeout active while reading the response body', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: RequestInit) => ({
-      ok: true,
-      text: () => new Promise<string>((_resolve, reject) => {
-        opts.signal?.addEventListener('abort', () =>
-          reject(new DOMException('Aborted', 'AbortError')));
-      }),
-    } as unknown as Response)));
+  it('gives up on a fetchText server that never answers', async () => {
+    vi.stubGlobal('fetch', faultFetch(() => ({ hang: true })));
     const p = fetchText('http://x', 5000);
-    const assertion = expect(p).rejects.toThrow('Aborted');
+    const assertion = expect(p).rejects.toMatchObject({ reason: 'timeout' });
     await vi.advanceTimersByTimeAsync(5000);
     await assertion;
+  });
+
+  // On webOS 4 abort can't reach a body read, so the timeout must cancel it.
+  it('times out a fetchText body that stalls after its headers on webOS 4', async () => {
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: 'WEBVTT\n\n00:00:01.000', stallAfterBytes: 7 })));
+    const p = fetchText('http://x', 5000);
+    const assertion = expect(p).rejects.toMatchObject({ reason: 'timeout' });
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
+  it('times out a fetchWithTimeout body that stalls after its headers', async () => {
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: '{"data":[]}', stallAfterBytes: 8 })));
+    const p = fetchWithTimeout('http://x', {}, 5000);
+    const assertion = expect(p).rejects.toMatchObject({ reason: 'timeout' });
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
+  it('honors the caller signal, which a timeout signal used to replace', async () => {
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: '{}', stallAfterBytes: 1 })));
+    const caller = new AbortController();
+    const p = fetchWithTimeout('http://x', { signal: caller.signal }, 5000);
+    const assertion = expect(p).rejects.toMatchObject({ reason: 'cancelled' });
+    await vi.advanceTimersByTimeAsync(10);
+    caller.abort();
+    await assertion;
+  });
+
+  it('returns a readable response for a status that carries no body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    expect((await fetchWithTimeout('http://x')).status).toBe(204);
   });
 });
 
@@ -256,6 +280,26 @@ describe('fetchLimitedText', () => {
     await assertion;
   });
 
+  it('times out a body that stalls after its headers on webOS 4', async () => {
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: 'WEBVTT\n\n00:00:01.000', stallAfterBytes: 7 })));
+
+    const pending = fetchLimitedText('http://x', 1024, 5000);
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
+  // A small response trickling in means a broken server; the load behind it must not wait minutes.
+  it('keeps its timeout as a hard total while a response trickles in', async () => {
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: '[1,2,3]', chunkSize: 3, chunkDelayMs: 3000 })));
+    const pending = fetchLimitedText('http://x', 1024, 5000);
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
   it('distinguishes its timeout from an external cancellation', async () => {
     vi.stubGlobal('fetch', vi.fn((_url: string, opts: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
@@ -268,45 +312,5 @@ describe('fetchLimitedText', () => {
     const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
     await vi.advanceTimersByTimeAsync(5000);
     await assertion;
-  });
-});
-
-describe('fetchMaybeGzipText', () => {
-  it('reads an uncompressed UTF-8 response', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('<tv/>')));
-    await expect(fetchMaybeGzipText('http://host/epg.xml')).resolves.toBe('<tv/>');
-  });
-
-  it('decompresses a raw XMLTV .xml.gz response', async () => {
-    const xmltv = '<?xml version="1.0"?><tv><channel id="ch1"/></tv>';
-    const compressed = gzipSync(strToU8(xmltv));
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(compressed)));
-
-    await expect(fetchMaybeGzipText('http://host/guide.xml.gz')).resolves.toBe(xmltv);
-  });
-});
-
-describe('fetchWithRetry', () => {
-  it('retries after a failure and resolves once a call succeeds', async () => {
-    const fetchMock = vi.fn()
-      .mockRejectedValueOnce(new Error('net'))
-      .mockResolvedValueOnce(okResponse('ok'));
-    vi.stubGlobal('fetch', fetchMock);
-
-    const p = fetchWithRetry('http://x', {}, 2);
-    await vi.advanceTimersByTimeAsync(1000); // first backoff
-    await expect(p).resolves.toBeTruthy();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('throws the last error after exhausting retries', async () => {
-    const fetchMock = vi.fn().mockRejectedValue(new Error('always down'));
-    vi.stubGlobal('fetch', fetchMock);
-
-    const p = fetchWithRetry('http://x', {}, 1);
-    const assertion = expect(p).rejects.toThrow('always down');
-    await vi.advanceTimersByTimeAsync(1000); // single backoff between the 2 attempts
-    await assertion;
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

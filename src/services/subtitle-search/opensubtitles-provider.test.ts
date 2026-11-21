@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createOpenSubtitlesProvider } from './opensubtitles-provider';
 
 function res(status: number, body: unknown): Response {
-  return { ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) } as Response;
+  return new Response(JSON.stringify(body), { status });
 }
 
 let token = '';
@@ -42,7 +42,7 @@ describe('opensubtitles provider', () => {
     const spy = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(res(200, { token: 'T1' }))
       .mockResolvedValueOnce(res(200, { link: 'http://host/s.srt' }))
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'CUE' } as Response);
+      .mockResolvedValueOnce(new Response('CUE', { status: 200 }));
     const text = await provider.download({
       providerId: 'opensubtitles', id: '991', language: 'zh-CN', releaseName: 'r',
       fileName: 'sub.srt', format: 'srt', hearingImpaired: false, downloads: 0,
@@ -58,7 +58,7 @@ describe('opensubtitles provider', () => {
       .mockResolvedValueOnce(res(401, { message: 'expired' }))
       .mockResolvedValueOnce(res(200, { token: 'T2' }))
       .mockResolvedValueOnce(res(200, { link: 'http://host/s.srt' }))
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'CUE2' } as Response);
+      .mockResolvedValueOnce(new Response('CUE2', { status: 200 }));
     const text = await provider.download({
       providerId: 'opensubtitles', id: '991', language: 'zh-CN', releaseName: 'r',
       fileName: 'sub.srt', format: 'srt', hearingImpaired: false, downloads: 0,

@@ -23,7 +23,7 @@ import {
   runViewReopenCycle,
   installUniqueGroupFixture,
   installM3USearchFixture,
-  measureHostedXMLTVPipelineComparison,
+  measureHostedXMLTVPipelineBenchmark,
   startTvRendererRssSampler,
   runM3USearchBenchmark,
   assertM3USearchBenchmark,
@@ -594,7 +594,7 @@ async function runTvBenchmark() {
     const retained = summarizeRetainedMemory(beforeReopen.usedSize, reopenHeap);
     assertRetainedMemory(retained);
     const heap = await client.call('Runtime.getHeapUsage');
-    const xmltvPipeline = await measureHostedXMLTVPipelineComparison({
+    parsers.xmltvPipeline = await measureHostedXMLTVPipelineBenchmark({
       scale: SCALE,
       deviceIp: resolveConfiguredDeviceIp(),
       appId: APP_ID,
@@ -607,8 +607,6 @@ async function runTvBenchmark() {
       delay: (milliseconds) =>
         new Promise((resolve) => setTimeout(resolve, milliseconds)),
     });
-    parsers.xmltvPipelineBuffered = xmltvPipeline.buffered;
-    parsers.xmltvPipeline = xmltvPipeline.streaming;
     // Runs last of the in-page work: its multi-megabyte feed would otherwise
     // skew the reopen heap samples measured above.
     parsers.xmltvCatalog = await measureXMLTVCatalogBenchmark(SCALE, {

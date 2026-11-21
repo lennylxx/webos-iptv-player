@@ -1062,7 +1062,6 @@ export function runXMLTVCatalogPass(options) {
 export async function runXMLTVPipelineTimingBenchmark(options) {
     const api = window.__IPTV_BENCHMARK__;
     if (!api) throw new Error('Parser benchmark bundle was not installed');
-    const load = options.buffered ? api.loadXMLTVBuffered : api.loadXMLTV;
     let active = true;
     let frameRequest = 0;
     let previousFrame = performance.now();
@@ -1075,7 +1074,7 @@ export async function runXMLTVPipelineTimingBenchmark(options) {
     frameRequest = requestAnimationFrame(observeFrame);
     let result;
     try {
-      result = await load.call(api, options.url, {
+      result = await api.loadXMLTV(options.url, {
         channelIds: options.channelIds,
         channelNames: options.channelNames,
         retainChannelCatalog: true,
@@ -1099,8 +1098,7 @@ export function startXMLTVPipelineMemoryBenchmark(options) {
     const api = window.__IPTV_BENCHMARK__;
     if (!api) throw new Error('Parser benchmark bundle was not installed');
     window.__IPTV_PIPELINE_MEMORY__ = { done: false, result: null, error: null };
-    const profile = options.buffered ? api.profileXMLTVBuffered : api.profileXMLTV;
-    void profile.call(api, options.url, {
+    void api.profileXMLTV(options.url, {
       channelIds: options.channelIds,
       channelNames: options.channelNames,
       retainChannelCatalog: true,
@@ -1214,23 +1212,16 @@ export async function measureXMLTVPipelineBenchmark(options, io) {
   const mib = (bytes) => Math.round(bytes / 1_048_576 * 100) / 100;
   await io.evaluate(releaseXMLTVPipelineBenchmark);
   await io.collectGarbage();
-  let workerTerminatedAfterIdle;
-  if (!options.buffered) {
-    await io.delay(1100);
-    workerTerminatedAfterIdle = !(await io.evaluate(inspectXMLTVWorkerRunning));
-    if (!workerTerminatedAfterIdle) {
-      throw new Error('XMLTV worker remained active after its idle timeout');
-    }
+  await io.delay(1100);
+  const workerTerminatedAfterIdle = !(await io.evaluate(inspectXMLTVWorkerRunning));
+  if (!workerTerminatedAfterIdle) {
+    throw new Error('XMLTV worker remained active after its idle timeout');
   }
   return {
     ...timed,
-    memoryScope: options.buffered
-      ? 'page heap; includes buffered parse and retained result'
-      : 'page heap; excludes worker transient heap, includes cloned retained result',
-    transientParseHeapIncluded: options.buffered === true,
-    ...(workerTerminatedAfterIdle === undefined
-      ? {}
-      : { workerTerminatedAfterIdle }),
+    memoryScope: 'page heap; excludes worker transient heap, includes cloned retained result',
+    transientParseHeapIncluded: false,
+    workerTerminatedAfterIdle,
     compressedBytes: options.compressedBytes,
     uncompressedBytes: options.uncompressedBytes,
     samples: memorySamples.length,
@@ -1247,16 +1238,6 @@ export async function measureXMLTVPipelineBenchmark(options, io) {
       ...memorySamples.map(sample => sample.backingStorageSize || 0),
     )),
     ...processMemory,
-  };
-}
-
-export async function measureXMLTVPipelineComparison(options, io) {
-  return {
-    buffered: await measureXMLTVPipelineBenchmark(
-      { ...options, buffered: true },
-      io,
-    ),
-    streaming: await measureXMLTVPipelineBenchmark(options, io),
   };
 }
 
@@ -1377,7 +1358,7 @@ export async function startTvRendererRssSampler(appId, intervalMs = 10) {
   };
 }
 
-export async function measureHostedXMLTVPipelineComparison(options, io) {
+export async function measureHostedXMLTVPipelineBenchmark(options, io) {
   const fixture = buildXMLTVPipelineFixture(options.scale);
   const compressed = gzipSync(Buffer.from(fixture.text));
   const server = await startXMLTVBenchmarkServer(
@@ -1397,7 +1378,7 @@ export async function measureHostedXMLTVPipelineComparison(options, io) {
       ...io,
       startProcessMemorySampling: () => startTvRendererRssSampler(options.appId),
     };
-    return await measureXMLTVPipelineComparison(benchmarkOptions, benchmarkIo);
+    return await measureXMLTVPipelineBenchmark(benchmarkOptions, benchmarkIo);
   } finally {
     await server.close();
   }

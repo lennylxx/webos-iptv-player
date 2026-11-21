@@ -5,10 +5,10 @@ import { createAssrtProvider, DEFAULT_ASSRT_TOKEN } from './assrt-provider';
 const provider = createAssrtProvider(() => '');
 
 function jsonResponse(body: unknown): Response {
-  return { ok: true, status: 200, json: async () => body } as Response;
+  return new Response(JSON.stringify(body), { status: 200 });
 }
 function bytesResponse(bytes: Uint8Array): Response {
-  return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer } as Response;
+  return new Response(bytes as Uint8Array<ArrayBuffer>, { status: 200 });
 }
 
 beforeEach(() => { vi.restoreAllMocks(); });

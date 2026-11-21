@@ -2,6 +2,7 @@ import { CONFIG } from '../config';
 import type { Channel, ChannelHealthRecord, ChannelHealthStatus } from '../types';
 import { channelKey } from '../utils/channel';
 import { createLogger } from '../utils/logger';
+import { FetchSession } from '../utils/fetch-session';
 import { expandLiveUrl } from '../utils/catchup-url';
 import { isMpdText } from '../utils/url';
 import {
@@ -96,54 +97,13 @@ async function requestPrefix(
   headers: Record<string, string>,
   signal?: AbortSignal,
 ): Promise<ProbeResponse> {
-  const controller = new AbortController();
-  let timedOut = false;
-  const abort = () => controller.abort();
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, CONFIG.CHANNEL_HEALTH.TIMEOUT_MS);
-  if (signal?.aborted) abort();
-  else signal?.addEventListener('abort', abort);
-
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  const session = new FetchSession(url, { timeout: CONFIG.CHANNEL_HEALTH.TIMEOUT_MS, signal });
   try {
-    const response = await fetch(url, {
+    const response = await session.open({
       headers: { ...headers, Range: `bytes=0-${CONFIG.CHANNEL_HEALTH.MAX_PROBE_BYTES - 1}` },
-      signal: controller.signal,
     });
     if (!response.ok) throw new Error(`http_${response.status}`);
-
-    reader = typeof response.body?.getReader === 'function'
-      ? response.body.getReader()
-      : null;
-    let bytes: Uint8Array;
-    if (reader) {
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      while (length < CONFIG.CHANNEL_HEALTH.MAX_PROBE_BYTES) {
-        const result = await reader.read();
-        if (result.done) break;
-        if (!result.value?.length) continue;
-        const remaining = CONFIG.CHANNEL_HEALTH.MAX_PROBE_BYTES - length;
-        const chunk = result.value.length > remaining
-          ? result.value.slice(0, remaining)
-          : result.value;
-        chunks.push(chunk);
-        length += chunk.length;
-      }
-      bytes = new Uint8Array(length);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.length;
-      }
-    } else {
-      const raw = new Uint8Array(await response.arrayBuffer());
-      bytes = raw.length > CONFIG.CHANNEL_HEALTH.MAX_PROBE_BYTES
-        ? raw.slice(0, CONFIG.CHANNEL_HEALTH.MAX_PROBE_BYTES)
-        : raw;
-    }
+    const bytes = await session.readPrefix(CONFIG.CHANNEL_HEALTH.MAX_PROBE_BYTES);
     if (!bytes.length) throw new Error('empty_response');
     return {
       bytes,
@@ -152,12 +112,10 @@ async function requestPrefix(
     };
   } catch (err) {
     if (signal?.aborted) throw new Error('aborted');
-    if (timedOut) throw new Error('timeout');
+    if (session.stopReason === 'timeout') throw new Error('timeout');
     throw err;
   } finally {
-    if (reader) void reader.cancel().catch(() => {});
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', abort);
+    session.close();
   }
 }
 

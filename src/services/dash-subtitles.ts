@@ -2,6 +2,8 @@ import { parseMpd } from '../parsers/mpd-manifest';
 import type { DashSubtitleSegment, ManifestSubtitle } from '../types';
 import { parseWebVTT } from '../utils/webvtt';
 import { createLogger } from '../utils/logger';
+import { fetchTextResult, type TextResult } from '../utils/fetch-helper';
+import { CONFIG } from '../config';
 import { t } from '../i18n';
 import { WebVttCueTrack } from './webvtt-cue-track';
 
@@ -14,6 +16,7 @@ export class DashSubtitles {
   private cueTrack = new WebVttCueTrack();
   private timer: ReturnType<typeof setInterval> | null = null;
   private seen = new Set<string>();
+  private requests: AbortController | null = null; // aborted on stop(), releasing held reads
   private gen = 0;
   private _active = false;
   private clock: (() => number) | null = null;
@@ -38,6 +41,7 @@ export class DashSubtitles {
   ): Promise<void> {
     this.stop();
     const gen = ++this.gen;
+    this.requests = new AbortController();
     this.video = video;
     this.clock = clock ?? null;
     this.manifestText = manifestText;
@@ -65,6 +69,8 @@ export class DashSubtitles {
   stop(): void {
     this.gen++;
     this._active = false;
+    this.requests?.abort();
+    this.requests = null;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -85,6 +91,14 @@ export class DashSubtitles {
     return this.cueTrack.owns(track);
   }
 
+  // A bounded read: on webOS 4 a stalled body would otherwise hold its socket for good.
+  private fetchText(url: string, headers?: Record<string, string>): Promise<TextResult> {
+    return fetchTextResult(url, CONFIG.PLAYER.SUBTITLE_FETCH_TIMEOUT, {
+      ...(headers ? { headers } : {}),
+      signal: this.requests?.signal,
+    });
+  }
+
   private async loadSubtitle(
     manifestUrl: string,
     want: { name?: string; lang?: string } | undefined,
@@ -93,9 +107,9 @@ export class DashSubtitles {
     let text = this.manifestText;
     let base = manifestUrl;
     if (text === undefined) {
-      const res = await fetch(manifestUrl);
+      const res = await this.fetchText(manifestUrl);
       if (!res.ok) throw new Error(`HTTP ${String(res.status)}`);
-      text = await res.text();
+      text = res.text;
       base = res.url;
     }
     const now = this.now();
@@ -138,11 +152,10 @@ export class DashSubtitles {
       for (const segment of relevant) {
         const key = segment.range ? `${segment.url}|${segment.range}` : segment.url;
         if (this.seen.has(key)) continue;
-        const response = segment.range
-          ? await fetch(segment.url, {
-              headers: { Range: `bytes=${segment.range}` },
-            })
-          : await fetch(segment.url);
+        const response = await this.fetchText(
+          segment.url,
+          segment.range ? { Range: `bytes=${segment.range}` } : undefined,
+        );
         if (!response.ok) {
           if (gen !== this.gen) return;
           // Segments of an MPD only the service could read go out without its
@@ -155,7 +168,7 @@ export class DashSubtitles {
           }
           throw new Error(`HTTP ${String(response.status)}`);
         }
-        const parsed = parseWebVTT(await response.text());
+        const parsed = parseWebVTT(response.text);
         if (gen !== this.gen || !this.cueTrack.current) return;
         this.seen.add(key);
         this.loadedSegment = true;

@@ -1,5 +1,6 @@
 import { parseWebVTT } from '../utils/webvtt';
-import { FetchTextError, fetchFailureReason } from '../utils/fetch-helper';
+import { FetchTextError, fetchFailureReason, fetchTextResult, type TextResult } from '../utils/fetch-helper';
+import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
 import { WebVttCueTrack } from './webvtt-cue-track';
@@ -49,6 +50,7 @@ export class HlsSubtitles {
   private seen = new Set<string>();
   private subsUrl = '';
   private gen = 0;            // bumped on stop(); in-flight async bails when it changes
+  private requests: AbortController | null = null; // aborted on stop(), releasing held reads
   private _active = false;
   private loggedNoAnchor = false; // one-shot: warn once when cues can't be anchored
   private addedKeys = new Map<string, number>(); // dedup repeated cues (key -> cue wall ms)
@@ -87,6 +89,7 @@ export class HlsSubtitles {
   ): Promise<void> {
     this.stop();
     const gen = ++this.gen;
+    this.requests = new AbortController();
     this.video = video;
     this.clock = options.clock ?? null;
     this.clockEdge = null;
@@ -103,9 +106,9 @@ export class HlsSubtitles {
       let masterText = options.masterText;
       let masterBase = masterUrl;
       if (masterText === undefined) {
-        const res = await fetchOk(masterUrl);
+        const res = await this.fetchOk(masterUrl);
         if (gen !== this.gen) return;
-        masterText = await res.text();
+        masterText = res.text;
         masterBase = res.url;
       }
       const rend = pickSubtitleRendition(masterText, want);
@@ -138,6 +141,8 @@ export class HlsSubtitles {
   stop(): void {
     this.gen++;
     this._active = false;
+    this.requests?.abort();
+    this.requests = null;
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
     this.cueTrack.disable();
     this.seen.clear();
@@ -149,9 +154,9 @@ export class HlsSubtitles {
   private async refresh(gen: number): Promise<void> {
     if (gen !== this.gen || !this.video || !this.track) return;
     try {
-      const res = await fetchOk(this.subsUrl);
+      const res = await this.fetchOk(this.subsUrl);
       if (gen !== this.gen || !this.track) return;
-      const pl = parseMediaPlaylist(await res.text());
+      const pl = parseMediaPlaylist(res.text);
       if (pl.unsupported) {
         // fMP4/IMSC or encrypted WebVTT — a text fetch can't decode it, so stop
         // polling and say why (otherwise it silently renders nothing forever).
@@ -183,7 +188,7 @@ export class HlsSubtitles {
         this.seen.add(seg.uri);
         const segMedia = wallToMediaSeconds(anchor, seg.pdtMs);
         if (segMedia < ct - 4) continue; // already played past the playhead — don't fetch it
-        const segRes = await fetch(new URL(seg.uri, base).href);
+        const segRes = await this.fetchText(new URL(seg.uri, base).href);
         if (gen !== this.gen || !this.track) return;
         if (!segRes.ok) {
           // Live CDNs often refuse the newest or oldest segment for a moment; only
@@ -192,8 +197,7 @@ export class HlsSubtitles {
           if (gen !== this.gen) return;
           continue;
         }
-        const vtt = await segRes.text();
-        if (gen !== this.gen || !this.track) return;
+        const vtt = segRes.text;
         const { mapLocal, cues } = parseWebVTT(vtt);
         if (!cues.length) continue;
         // Each cue's wall clock comes from THIS segment's PROGRAM-DATE-TIME (a
@@ -234,6 +238,17 @@ export class HlsSubtitles {
       log.debug('subtitles refresh failed:', e);
       if (gen === this.gen) this.report(fetchFailureReason(e));
     }
+  }
+
+  // A bounded read: on webOS 4 a stalled body would otherwise hold its socket for good.
+  private fetchText(url: string): Promise<TextResult> {
+    return fetchTextResult(url, CONFIG.PLAYER.SUBTITLE_FETCH_TIMEOUT, { signal: this.requests?.signal });
+  }
+
+  private async fetchOk(url: string): Promise<TextResult> {
+    const res = await this.fetchText(url);
+    if (!res.ok) throw new FetchTextError('http', `HTTP ${String(res.status)}`, res.status);
+    return res;
   }
 
   private now(): number {
@@ -345,9 +360,9 @@ export class HlsSubtitles {
     if (this.calibAt && Date.now() - this.calibAt < CALIB_REMEASURE_MS) return;
     this.calibAt = Date.now();
     try {
-      const res = await fetch(this.videoVariantUrl);
+      const res = await this.fetchText(this.videoVariantUrl);
       if (gen !== this.gen || !this.video || !v.seekable.length) return;
-      const segs = parseMediaPlaylist(await res.text()).segs;
+      const segs = parseMediaPlaylist(res.text).segs;
       const oldest = oldestPdt(segs);
       if (oldest == null) {
         this.videoHasNoPdt = true;
@@ -484,13 +499,6 @@ export function isPermanentSubtitleFailure(reason: string): boolean {
     || reason === 'no_pdt' || reason === 'fmp4' || reason === 'encrypted' || reason === 'no_rendition';
 }
 
-async function fetchOk(url: string): Promise<Response> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new FetchTextError('http', `HTTP ${String(res.status)}`, res.status);
-  }
-  return res;
-}
 
 
 /** First video variant playlist URI in a master (any variant — they share one

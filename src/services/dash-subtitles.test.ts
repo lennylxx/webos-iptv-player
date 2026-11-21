@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DashSubtitles, cueMediaTime, pickWebVttSubtitle } from './dash-subtitles';
+import { LegacyAbortController } from '../test/legacy-fetch';
+import { faultFetch } from '../test/fault-fetch';
+import type { Fault } from '../test/fault-plan';
+import { CONFIG } from '../config';
 
 describe('DashSubtitles helpers', () => {
   it('maps segment-local cues onto the DASH media timeline', () => {
@@ -46,12 +50,7 @@ describe('DashSubtitles helpers', () => {
         <Representation id="s1"/>
       </AdaptationSet></Period></MPD>`;
     const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n';
-    const fetchMock = vi.fn(async (url: string) => ({
-      ok: true,
-      status: 200,
-      url,
-      text: async () => url.endsWith('.mpd') ? manifest : vtt,
-    }));
+    const fetchMock = vi.fn(faultFetch(url => ({ body: url.endsWith('.mpd') ? manifest : vtt })));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('VTTCue', class {
       startTime: number;
@@ -82,12 +81,45 @@ describe('DashSubtitles helpers', () => {
 
     await service.start(video, 'http://host/stream.mpd', { lang: 'l1' });
 
-    expect(fetchMock).toHaveBeenCalledWith('http://host/sub-20.vtt');
+    expect(fetchMock).toHaveBeenCalledWith('http://host/sub-20.vtt', expect.anything());
     expect(cues).toEqual([{ startTime: 21, endTime: 22, text: 'Alpha' }]);
     expect(track.mode).toBe('showing');
     service.stop();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('starts anyway when a subtitle segment stalls after its headers on webOS 4', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+    const manifest = `<?xml version="1.0"?><MPD
+      xmlns="urn:mpeg:dash:schema:mpd:2011" type="static">
+      <Period><AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">
+        <SegmentTemplate media="sub-$Time$.vtt" timescale="1">
+          <SegmentTimeline><S t="20" d="4"/></SegmentTimeline>
+        </SegmentTemplate>
+        <Representation id="s1"/>
+      </AdaptationSet></Period></MPD>`;
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    vi.stubGlobal('fetch', faultFetch(url =>
+      url.endsWith('.mpd') ? { body: manifest } : { body: 'WEBVTT\n\n00:00:01.000', stallAfterBytes: 7 }));
+    vi.stubGlobal('VTTCue', class {
+      constructor(public startTime: number, public endTime: number, public text: string) {}
+    });
+    const track = { mode: 'disabled', cues: [], addCue: () => undefined, removeCue: () => undefined };
+    const video = {
+      currentTime: 20,
+      seekable: { length: 1, start: () => 20, end: () => 24 },
+      addTextTrack: () => track,
+    } as unknown as HTMLVideoElement;
+    const service = new DashSubtitles();
+
+    let started = false;
+    void service.start(video, 'http://host/stream.mpd', { lang: 'l1' }).then(() => { started = true; });
+    await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.SUBTITLE_FETCH_TIMEOUT);
+
+    expect(started).toBe(true);
+    service.stop();
   });
 
   it('polls a live manifest and adds cues from segments that appear later', async () => {
@@ -107,12 +139,7 @@ describe('DashSubtitles helpers', () => {
       'http://host/sub-20.vtt': 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n',
       'http://host/sub-24.vtt': 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nBravo\n',
     };
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
-      ok: true,
-      status: 200,
-      url,
-      text: async () => url.endsWith('.mpd') ? manifest : vtt[url],
-    })));
+    vi.stubGlobal('fetch', vi.fn(faultFetch(url => ({ body: url.endsWith('.mpd') ? manifest : vtt[url] }))));
     vi.stubGlobal('VTTCue', class {
       constructor(public startTime: number, public endTime: number, public text: string) {}
     });
@@ -151,14 +178,9 @@ describe('DashSubtitles helpers', () => {
         </SegmentTemplate>
         <Representation id="s1"/>
       </AdaptationSet></Period></MPD>`;
-    const fetchMock = vi.fn(async (url: string) => ({
-      ok: true,
-      status: 200,
-      url,
-      text: async () => url.endsWith('.mpd')
+    const fetchMock = vi.fn(faultFetch(url => ({ body: url.endsWith('.mpd')
         ? manifest
-        : 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n',
-    }));
+        : 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n' })));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('VTTCue', class {
       constructor(
@@ -193,7 +215,7 @@ describe('DashSubtitles helpers', () => {
     const service = new DashSubtitles();
 
     await service.start(video, 'http://host/stream.mpd', { lang: 'l1' }, () => now);
-    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('.vtt'))).toEqual([]);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('.vtt'))).toEqual([]);
 
     now = 21;
     await (service as unknown as {
@@ -201,7 +223,7 @@ describe('DashSubtitles helpers', () => {
     }).refresh('http://host/stream.mpd', { lang: 'l1' },
       (service as unknown as { gen: number }).gen);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://host/sub-20.vtt');
+    expect(fetchMock).toHaveBeenCalledWith('http://host/sub-20.vtt', expect.anything());
     expect(tracks[0].cues).toEqual([expect.objectContaining({ startTime: 21, endTime: 22, text: 'Alpha' })]);
     service.stop();
     vi.useRealTimers();
@@ -226,12 +248,7 @@ describe('DashSubtitles helpers', () => {
           <Representation id="s2"/>
         </AdaptationSet>
       </Period></MPD>`;
-    const fetchMock = vi.fn(async (url: string) => ({
-      ok: true,
-      status: 200,
-      url,
-      text: async () => 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n',
-    }));
+    const fetchMock = vi.fn(faultFetch(() => ({ body: 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n' })));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('VTTCue', class {
       constructor(
@@ -255,7 +272,7 @@ describe('DashSubtitles helpers', () => {
 
     await service.start(video, 'http://host/stream.mpd', { lang: 'l1' }, () => 60, manifest);
 
-    const urls = fetchMock.mock.calls.map(([url]) => url);
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.every(url => url.includes('/kept-'))).toBe(true);
     service.stop();
@@ -273,14 +290,9 @@ describe('DashSubtitles helpers', () => {
         </SegmentList>
         <Representation id="s1"/>
       </AdaptationSet></Period></MPD>`;
-    const fetchMock = vi.fn(async (url: string) => ({
-      ok: true,
-      status: 200,
-      url,
-      text: async () => url.endsWith('.mpd')
+    const fetchMock = vi.fn(faultFetch(url => ({ body: url.endsWith('.mpd')
         ? manifest
-        : 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nAlpha\n',
-    }));
+        : 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nAlpha\n' })));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('VTTCue', class {
       constructor(
@@ -308,9 +320,9 @@ describe('DashSubtitles helpers', () => {
 
     await service.start(video, 'http://host/stream.mpd', { lang: 'l1' });
 
-    expect(fetchMock).toHaveBeenCalledWith('http://host/subs.vtt', {
+    expect(fetchMock).toHaveBeenCalledWith('http://host/subs.vtt', expect.objectContaining({
       headers: { Range: 'bytes=100-199' },
-    });
+    }));
     service.stop();
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -327,14 +339,9 @@ describe('DashSubtitles helpers', () => {
         </SegmentTemplate>
         <Representation id="s1"/>
       </AdaptationSet></Period></MPD>`;
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
-      ok: true,
-      status: 200,
-      url,
-      text: async () => url.endsWith('.mpd')
+    vi.stubGlobal('fetch', vi.fn(faultFetch(url => ({ body: url.endsWith('.mpd')
         ? manifest()
-        : 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nAlpha\n',
-    })));
+        : 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nAlpha\n' }))));
     vi.stubGlobal('VTTCue', class {
       constructor(
         public startTime: number,
@@ -373,5 +380,81 @@ describe('DashSubtitles helpers', () => {
     service.stop();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+});
+
+describe('DashSubtitles over a failing server', () => {
+  const MPD = `<?xml version="1.0"?><MPD
+    xmlns="urn:mpeg:dash:schema:mpd:2011" type="static">
+    <Period><AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">
+      <SegmentTemplate media="sub-$Time$.vtt" timescale="1">
+        <SegmentTimeline><S t="20" d="4"/></SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="s1"/>
+    </AdaptationSet></Period></MPD>`;
+  const VTT = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n';
+  const SEGMENT = 'http://host/sub-20.vtt';
+
+  function harness() {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+    vi.stubGlobal('VTTCue', class {
+      constructor(public startTime: number, public endTime: number, public text: string) {}
+    });
+    const cues: Array<{ text: string }> = [];
+    const track = {
+      mode: 'disabled',
+      cues,
+      addCue: (cue: { text: string }) => cues.push(cue),
+      removeCue: (cue: { text: string }) => { cues.splice(cues.indexOf(cue), 1); },
+    };
+    const video = {
+      currentTime: 20,
+      seekable: { length: 1, start: () => 20, end: () => 24 },
+      addTextTrack: () => track,
+    } as unknown as HTMLVideoElement;
+    return { cues, video, service: new DashSubtitles() };
+  }
+
+  it.each<[string, Fault]>([
+    ['a missing manifest', { status: 404 }],
+    ['an unreachable manifest', { networkError: true }],
+  ])('stays off for %s', async (_name, fault) => {
+    const { cues, video, service } = harness();
+    vi.stubGlobal('fetch', faultFetch({ 'http://host/stream.mpd': fault }));
+
+    await service.start(video, 'http://host/stream.mpd', { lang: 'l1' });
+
+    expect(service.active).toBe(false);
+    expect(cues).toEqual([]);
+  });
+
+  it.each<[string, Fault]>([
+    ['a segment cut off partway', { body: VTT, resetAfterBytes: 5 }],
+    ['a refused segment', { status: 404 }],
+  ])('loads %s again on the next poll', async (_name, first) => {
+    const { cues, video, service } = harness();
+    const onUnavailable = vi.fn();
+    vi.stubGlobal('fetch', faultFetch({ 'http://host/stream.mpd': { body: MPD }, [SEGMENT]: [first, { body: VTT }] }));
+
+    await service.start(video, 'http://host/stream.mpd', { lang: 'l1' }, undefined, undefined, onUnavailable);
+    expect(cues).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2100);
+
+    expect(cues.map(cue => cue.text)).toEqual(['Alpha']);
+    expect(onUnavailable).not.toHaveBeenCalled();
+    service.stop();
+  });
+
+  // Segments of an MPD only the service could read go out without its headers.
+  it('turns off when a service-read MPD has its first segment refused', async () => {
+    const { video, service } = harness();
+    const onUnavailable = vi.fn();
+    vi.stubGlobal('fetch', faultFetch({ [SEGMENT]: { status: 403 } }));
+
+    await service.start(video, 'http://host/stream.mpd', { lang: 'l1' }, undefined, MPD, onUnavailable);
+
+    expect(onUnavailable.mock.calls).toEqual([['segment_http_403']]);
+    expect(service.active).toBe(false);
   });
 });

@@ -29,7 +29,7 @@ import {
   runGroupBenchmark,
   runM3USearchBenchmark,
   runParentalBenchmark,
-  measureXMLTVPipelineComparison,
+  measureXMLTVPipelineBenchmark,
   measureXMLTVCatalogBenchmark,
   runRawParserBenchmarks,
   runBenchmarkSuites,
@@ -296,12 +296,10 @@ test('records 50,000-item application benchmarks', async ({
       delay: (milliseconds: number) =>
         new Promise<void>(resolve => setTimeout(resolve, milliseconds)),
     };
-    const xmltvPipeline = await measureXMLTVPipelineComparison(
+    parsers.xmltvPipeline = await measureXMLTVPipelineBenchmark(
       xmltvPipelineOptions,
       xmltvPipelineIo,
     );
-    parsers.xmltvPipelineBuffered = xmltvPipeline.buffered;
-    parsers.xmltvPipeline = xmltvPipeline.streaming;
     await cdp.send('HeapProfiler.collectGarbage');
     const suites = await page.evaluate(runBenchmarkSuites, {
       keySamples: KEY_SAMPLES,
