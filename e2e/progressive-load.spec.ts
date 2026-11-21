@@ -1,9 +1,8 @@
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
 import {
   PLAYLIST_URL, test, expect, enterTab, routeLiveManifest, routePlaylist, seedPlaylist, type Page,
   afterQueuedTasks, settled,
 } from './helpers';
+import { startFaultServer } from './fixtures/fault-server';
 
 // A large playlist shows its first channels while the rest still downloads,
 // and the remote works on them from the start.
@@ -35,53 +34,23 @@ interface HeldPlaylist {
 }
 
 // Sends the head of the playlist with the full Content-Length, then holds the
-// tail until release().
+// tail until released; once silenced, holds whole responses.
 async function serveHeldPlaylist(header = '#EXTM3U', name = 'Channel'): Promise<HeldPlaylist> {
-  const head = Buffer.from(header + '\n' + channelLines(0, HEAD_CHANNELS, name));
-  const tail = Buffer.from(channelLines(HEAD_CHANNELS, TOTAL_CHANNELS, name));
-  let release!: () => void;
-  const released = new Promise<void>(resolve => (release = resolve));
-  const held: Array<() => void> = [];
-  const responses: http.ServerResponse[] = [];
+  const head = header + '\n' + channelLines(0, HEAD_CHANNELS, name);
+  const body = head + channelLines(HEAD_CHANNELS, TOTAL_CHANNELS, name);
+  const headers = { 'content-type': 'application/x-mpegurl' };
   let silent = false;
-  const server = http.createServer((_req, res) => {
-    responses.push(res);
-    if (silent) {
-      held.push(() => {
-        res.writeHead(200, { 'access-control-allow-origin': '*', 'content-type': 'application/x-mpegurl' });
-        res.end(Buffer.concat([head, tail]));
-      });
-      return;
-    }
-    res.writeHead(200, {
-      'access-control-allow-origin': '*',
-      'content-type': 'application/x-mpegurl',
-      'content-length': String(head.length + tail.length),
-    });
-    res.write(head);
-    let sent = false;
-    const send = () => {
-      if (sent) return;
-      sent = true;
-      res.end(tail);
-    };
-    held.push(send);
-    void released.then(send);
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const port = (server.address() as AddressInfo).port;
+  const server = await startFaultServer(() => silent
+    ? { headers, body, holdHeaders: true }
+    : { headers, body, stallAfterBytes: Buffer.byteLength(head) });
   return {
-    url: `http://127.0.0.1:${String(port)}/big.m3u`,
-    requests: () => held.length,
-    releaseRequest: index => held[index](),
-    release,
+    url: server.url('/big.m3u'),
+    requests: () => server.hits(),
+    releaseRequest: index => server.release(index),
+    release: () => server.release(),
     silenceNext: () => { silent = true; },
-    failRequest: index => responses[index].destroy(),
-    close: () => {
-      release();
-      server.closeAllConnections();
-      return new Promise<void>(resolve => server.close(() => resolve()));
-    },
+    failRequest: index => server.cut(index),
+    close: () => server.close(),
   };
 }
 
