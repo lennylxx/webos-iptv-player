@@ -1407,6 +1407,16 @@ class PlaylistServiceImpl {
     return this.indexMap.get(channel) ?? -1;
   }
 
+  /** The indexes of every channel carrying this per-stream key. */
+  indicesOfKey(key: string): number[] {
+    const indices: number[] = [];
+    for (const channel of this.keyIndex().get(key) ?? []) {
+      const index = this.indexOf(channel);
+      if (index >= 0) indices.push(index);
+    }
+    return indices;
+  }
+
   /** `exactStream` (a channelExactStreamIdentity) picks the entry among
    *  copies that differ only by a token, such as one channel on two accounts;
    *  `stream` (a channelStreamIdentity) picks the entry among channels

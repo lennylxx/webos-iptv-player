@@ -18,6 +18,15 @@ import { ChannelCustomizationService } from './channel-customization';
 import { channelKey } from '../utils/channel';
 import { StorageService } from './storage-service';
 import { catchupNeedsIdUncached } from '../utils/catchup-url';
+import type { SearchGuideSource } from '../workers/tasks';
+import {
+  guideChannelKey,
+  indexGuideChannelName,
+  matchGuideChannel,
+  sourceAppliesToChannel,
+  splitEpgChannelKey,
+  type GuideMatchLookup,
+} from './epg-channel-match';
 
 const log = createLogger('EPG');
 
@@ -30,6 +39,11 @@ interface SourceState {
   mappingIndex?: PreparedEpgMappingSearchEntry[];
   /** Timestamp of the epg-cache record holding `data`'s programme arrays. */
   cacheTimestamp?: number;
+  /**
+   * That record holds `data` exactly, so a Search index built from it under
+   * that timestamp matches what this service shows.
+   */
+  cacheExact?: boolean;
   /** A feed cut off before </tv>: shown, never cached, and replaceable. */
   incomplete?: boolean;
   /** The key of the filter `data` was parsed or narrowed for. */
@@ -139,12 +153,6 @@ interface PreparedEpgMappingSearchEntry {
   fields: string[];
 }
 
-function indexChannelName(index: Map<string, string[]>, name: string, id: string): void {
-  const normalized = name.toLowerCase();
-  const ids = index.get(normalized);
-  if (!ids) index.set(normalized, [id]);
-  else if (!ids.includes(id)) ids.push(id);
-}
 
 // A large guide's names and aliases took the longest task of a warm launch
 // to index at once, so they are indexed a slice at a time. A message task
@@ -160,9 +168,9 @@ async function buildNameIndexSliced(channels: ParsedEpg['channels']): Promise<Ma
     }
     const id = ids[i];
     const channel = channels[id];
-    indexChannelName(index, channel.name, id);
+    indexGuideChannelName(index, channel.name, id);
     const aliases = channel.aliases;
-    if (aliases) for (const alias of aliases) indexChannelName(index, alias, id);
+    if (aliases) for (const alias of aliases) indexGuideChannelName(index, alias, id);
   }
   return index;
 }
@@ -203,18 +211,6 @@ function mappedEpgIdIn(source: EpgSource, channel: Channel): string | null {
   return mapped?.url === source.url ? mapped.id : null;
 }
 
-function splitEpgChannelKey(key: string): { url: string; id: string } | null {
-  const separator = key.indexOf('::');
-  if (separator < 0) return null;
-  try {
-    return {
-      url: decodeURIComponent(key.slice(0, separator)),
-      id: key.slice(separator + 2),
-    };
-  } catch {
-    return null;
-  }
-}
 
 function emptyFilter(mappedIds: string[]): SourceFilter {
   return {
@@ -349,10 +345,6 @@ function carriesCatchupIds(programmes: Programme[]): boolean {
   return carries;
 }
 
-function sourceAppliesToChannel(source: EpgSource, channel: Channel): boolean {
-  return (source.kind === 'manual' && source.playlistIds.length === 0)
-    || source.playlistIds.some((id) => channel.playlistIds.includes(id));
-}
 
 class EpgServiceImpl {
   private indexedSources = new Map<string, IndexedSource>();
@@ -708,6 +700,40 @@ class EpgServiceImpl {
     return records;
   }
 
+  /**
+   * The guide sources for the worker's Search matching, each with the cache
+   * record its loaded guide came from, or null when the worker cannot match
+   * as this service does: no sources, or a loaded guide it cannot read.
+   */
+  searchGuideSources(): SearchGuideSource[] | null {
+    if (!this.sources.length) return null;
+    const sources: SearchGuideSource[] = [];
+    for (const source of this.sources) {
+      const state = this.states.get(source.url);
+      const indexed = this.indexedSources.get(encodeURIComponent(source.url));
+      if (!state && !indexed) {
+        sources.push({ url: source.url, kind: source.kind, playlistIds: source.playlistIds, record: null });
+        continue;
+      }
+      const timestamp = state?.cacheTimestamp;
+      if (!state || indexed?.state !== state || timestamp === undefined || !state.cacheExact) return null;
+      sources.push({
+        url: source.url,
+        kind: source.kind,
+        playlistIds: source.playlistIds,
+        record: { store: 'epg-cache', key: source.url, timestamp },
+      });
+    }
+    return sources;
+  }
+
+  /** The guide channel this service matches for `channel` before any offset, with its programme count. */
+  searchMatchSample(channel: Channel): [string, number] {
+    const override = ChannelCustomizationService.overrideFor(channelKey(channel));
+    const baseId = this.findBaseChannelId(channel, override);
+    return baseId ? [baseId, this.programmesOf(baseId)?.length ?? 0] : ['', 0];
+  }
+
   getSourceOffsetMinutes(channel: Channel): number {
     const override = ChannelCustomizationService.overrideFor(channelKey(channel));
     const baseId = this.findBaseChannelId(channel, override);
@@ -716,37 +742,17 @@ class EpgServiceImpl {
 
   private findBaseChannelId(channel: Channel, override: ChannelOverride | null): string | null {
     if (!this.sources.length) return this.findLegacyChannelId(channel);
-    if (override?.epgChannelId && this.channelOf(override.epgChannelId)) {
-      const mapped = this.splitChannelKey(override.epgChannelId);
-      const source = mapped && this.sources.find(item => item.url === mapped.url);
-      if (source && sourceAppliesToChannel(source, channel)) return override.epgChannelId;
-    }
-    const candidates = this.sources.filter(source => sourceAppliesToChannel(source, channel));
-
-    for (const source of candidates) {
-      if (!channel.id) continue;
-      const key = this.channelKey(source.url, channel.id);
-      if (this.programmesOf(key)?.length) return key;
-    }
-
-    const name = channel.name.toLowerCase();
-    const sourceName = (channel.sourceName ?? '').toLowerCase();
-    if (!name && !sourceName) return null;
-    for (const source of candidates) {
-      const state = this.states.get(source.url);
-      if (!state) continue;
-      const index = this.channelIdsByName.get(source.url);
-      const ids = [
-        ...(index?.get(name) ?? []),
-        ...(sourceName && sourceName !== name ? index?.get(sourceName) ?? [] : []),
-      ];
-      for (const id of ids) {
-        const key = this.channelKey(source.url, id);
-        if (this.programmesOf(key)?.length) return key;
-      }
-    }
-    return null;
+    return matchGuideChannel(channel, override?.epgChannelId, this.matchLookup);
   }
+
+  private readonly matchLookup: GuideMatchLookup = {
+    sources: () => this.sources,
+    hasChannel: key => !!this.channelOf(key),
+    programmeCount: key => this.programmesOf(key)?.length ?? 0,
+    idsByName: (url, name) => (this.states.get(url)
+      ? this.channelIdsByName.get(url)?.get(name) ?? []
+      : undefined),
+  };
 
   private applyChannelOffset(
     channel: Channel,
@@ -979,6 +985,8 @@ class EpgServiceImpl {
       needsRefresh: !hasTzField || !idsCovered || !hasChannelCatalog || !covered,
       catchupIdsKnown: idsCovered,
       cacheTimestamp: cached.timestamp,
+      // A filtered copy may be written back under the same timestamp.
+      cacheExact: !filtered.changed,
       ...(covered && filter ? { filterKey: filter.key } : cached.filter?.key !== undefined
         ? { filterKey: cached.filter.key } : {}),
     }, revision);
@@ -1107,6 +1115,7 @@ class EpgServiceImpl {
         );
         if (stored) {
           state.cacheTimestamp = cachedAt;
+          state.cacheExact = true;
           for (const listener of epgWriteListeners) listener(source.url);
         }
       } else {
@@ -1378,7 +1387,7 @@ class EpgServiceImpl {
   }
 
   private channelKey(url: string, id: string): string {
-    return `${encodeURIComponent(url)}::${id}`;
+    return guideChannelKey(url, id);
   }
 
   private splitChannelKey(key: string): { url: string; id: string } | null {

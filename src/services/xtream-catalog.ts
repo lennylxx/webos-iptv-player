@@ -866,6 +866,7 @@ function syncedRefetch<T extends { categoryId: string }>(
   sync: (categoryIds: string[], signal?: AbortSignal, options?: SyncCatalogOptions) => Promise<SyncedCatalog>,
   fetchCategories: (signal?: AbortSignal) => Promise<Array<{ id: string }>>,
   listRefetch: RefetchList<T>,
+  pageLoadGate?: () => Promise<void>,
 ): RefetchList<T> {
   const key = `${account.id}|${resource}`;
   return async (signal, cached) => {
@@ -878,7 +879,9 @@ function syncedRefetch<T extends { categoryId: string }>(
       fetchCategories,
     );
     if (whole) return whole;
-    // The whole request just failed, so this loads per category.
+    // The whole request just failed, so this loads per category, on this
+    // thread, once the caller lets it.
+    if (pageLoadGate) await pageLoadGate();
     const loaded = cached ? await getCachedCatalog<T[]>(key) : null;
     return listRefetch(signal, loaded ?? undefined);
   };
@@ -888,6 +891,7 @@ function syncedRefetch<T extends { categoryId: string }>(
 export function syncAllVodStreams(
   account: PlaylistEntry,
   signal?: AbortSignal,
+  pageLoadGate?: () => Promise<void>,
 ): Promise<SearchCacheRecord | null> {
   if (typeof Worker === 'undefined') return Promise.resolve(null);
   const client = clientFor(account);
@@ -898,7 +902,7 @@ export function syncAllVodStreams(
       (requestSignal, cached) => fetchWholeCatalog(
         account.id, 'vod_all', requestSignal, client.getVodStreams, client.getVodCategories,
         item => item.streamId, cached?.data,
-      )),
+      ), pageLoadGate),
   );
 }
 
@@ -906,6 +910,7 @@ export function syncAllVodStreams(
 export function syncAllSeries(
   account: PlaylistEntry,
   signal?: AbortSignal,
+  pageLoadGate?: () => Promise<void>,
 ): Promise<SearchCacheRecord | null> {
   if (typeof Worker === 'undefined') return Promise.resolve(null);
   const client = clientFor(account);
@@ -916,6 +921,6 @@ export function syncAllSeries(
       (requestSignal, cached) => fetchWholeCatalog(
         account.id, 'series_all', requestSignal, client.getSeries, client.getSeriesCategories,
         item => item.seriesId, cached?.data,
-      )),
+      ), pageLoadGate),
   );
 }

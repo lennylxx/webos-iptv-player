@@ -187,6 +187,32 @@ export interface SearchCachedProgrammes {
   samples: SearchDocumentSamples;
 }
 
+/** A guide source in priority order; `record` is null while it has no loaded guide. */
+export interface SearchGuideSource {
+  url: string;
+  kind: 'manual' | 'm3u' | 'xtream';
+  playlistIds: string[];
+  record: SearchCacheRecord | null;
+}
+
+/**
+ * Programmes the worker matches to the cached channels itself, as the page's
+ * EpgService would, so the page walks no channel list for them.
+ */
+export interface SearchGuideProgrammes {
+  sources: SearchGuideSource[];
+  /** Saved guide mappings as [channel index, guide channel key]. */
+  mappings: Array<[number, string]>;
+  /** The page's own matches: channel index, guide channel key ('' for none), programme count. */
+  samples: Array<[number, string, number]>;
+}
+
+/** Each matched channel's programme run, in the worker's programme order. */
+export interface SearchProgrammeRuns {
+  channels: Uint32Array;
+  counts: Uint32Array;
+}
+
 /** Name documents read from a catalog-cache record. */
 export interface SearchCachedNames {
   record: SearchCacheRecord;
@@ -237,6 +263,7 @@ export interface SearchIndexRequest {
   chunk?: SearchIndexChunk;
   cachedChannels?: SearchCachedChannels;
   cachedProgrammes?: SearchCachedProgrammes;
+  guideProgrammes?: SearchGuideProgrammes;
   cachedMovies?: SearchCachedNames;
   cachedSeries?: SearchCachedNames;
   catalogMovies?: SearchCatalogRecord;
@@ -256,6 +283,8 @@ export interface SearchIndexResponse {
   persist?: SearchIndexCandidate[];
   /** Source records served from a prepared index vs folded from the record. */
   loaded?: { persisted: number; built: number };
+  /** The runs of a `guideProgrammes` request the worker matched. */
+  programmeRuns?: SearchProgrammeRuns;
 }
 
 /** A built source index, sized for the page's cache reservation. */

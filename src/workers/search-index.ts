@@ -23,6 +23,7 @@ import {
   foldDocuments,
   joinProgrammeRuns,
 } from './search-cache-documents';
+import { matchGuideRuns, type CachedChannelSource } from './search-guide-match';
 import {
   SearchCacheError,
   type CachedRecord,
@@ -53,6 +54,7 @@ import type {
   SearchIndexResponse,
   SearchIndexSource,
   SearchIndexUnresolved,
+  SearchProgrammeRuns,
   SearchPrewarmRequest,
   SearchPrewarmResponse,
   SearchPrewarmSource,
@@ -87,6 +89,9 @@ export class SearchWorkerIndex {
   private channels: PreparedSearchItem<number>[] = [];
   // Folded channel documents, which cached programme documents are joined with.
   private channelDocuments: string[][] = [];
+  // Where the channel documents came from, when the worker read them itself;
+  // guide matching needs the fields behind them.
+  private channelSource: CachedChannelSource | null = null;
   private programmes: PreparedSearchItem<number>[] = [];
   private movies = emptyNames();
   private series = emptyNames();
@@ -187,6 +192,7 @@ export class SearchWorkerIndex {
       this.staging = {};
       this.channels = [];
       this.channelDocuments = [];
+      this.channelSource = null;
       this.programmes = [];
       this.clear('movies');
       this.clear('series');
@@ -199,6 +205,7 @@ export class SearchWorkerIndex {
 
     if (request.chunk && !this.applyChunk(request.chunk)) return { accepted: false };
     if (!request.cachedChannels && !request.cachedProgrammes
+        && !request.guideProgrammes
         && !request.cachedMovies && !request.cachedSeries
         && !request.catalogMovies && !request.catalogSeries) {
       return { accepted: true };
@@ -238,11 +245,14 @@ export class SearchWorkerIndex {
         unresolved.push({ source, reason: failureReason(error) });
       }
     };
-    const { cachedChannels, cachedProgrammes, cachedMovies, cachedSeries } = request;
+    const { cachedChannels, cachedProgrammes, guideProgrammes, cachedMovies, cachedSeries } = request;
+    let programmeRuns: SearchProgrammeRuns | null = null;
     if (cachedChannels) {
       await resolve('channels', async () => {
-        const documents = cachedChannelDocuments(await load(cachedChannels.record), cachedChannels);
+        const index = await load(cachedChannels.record);
+        const documents = cachedChannelDocuments(index, cachedChannels);
         this.channelDocuments = documents;
+        this.channelSource = { index, request: cachedChannels };
         this.channels = prepareFolded(documents);
       });
     }
@@ -267,6 +277,33 @@ export class SearchWorkerIndex {
         });
       }
     }
+    if (guideProgrammes) {
+      const channelSource = this.channelSource;
+      if (unresolved.some(entry => entry.source === 'channels') || !channelSource) {
+        this.clear('programmes');
+        unresolved.push({ source: 'programmes', reason: 'channels_unresolved' });
+      } else {
+        await resolve('programmes', async () => {
+          const guides: Array<SourceIndex | null> = [];
+          for (const source of guideProgrammes.sources) {
+            guides.push(source.record ? await load(source.record) : null);
+          }
+          const matched = matchGuideRuns(channelSource, guideProgrammes, guides);
+          const runs: Array<string[][] | undefined> = [];
+          for (let record = 0; record < matched.records.length; record++) {
+            cachedProgrammeRuns(
+              await load(matched.records[record]),
+              record,
+              matched,
+              this.channelDocuments,
+              runs,
+            );
+          }
+          this.programmes = prepareFolded(joinProgrammeRuns(runs, matched));
+          programmeRuns = { channels: matched.runChannels, counts: matched.runCounts };
+        });
+      }
+    }
     if (cachedMovies) {
       await resolve('movies', async () => {
         const names = foldedNames(cachedNameDocuments(await load(cachedMovies.record), cachedMovies));
@@ -284,6 +321,7 @@ export class SearchWorkerIndex {
     const response: SearchIndexResponse = { accepted: true, loaded };
     if (unresolved.length) response.unresolved = unresolved;
     if (persist.length) response.persist = persist;
+    if (programmeRuns) response.programmeRuns = programmeRuns;
     return response;
   }
 
@@ -609,6 +647,7 @@ export class SearchWorkerIndex {
   }
 
   private setChannels(documents: string[][]): void {
+    this.channelSource = null;
     this.channelDocuments = foldDocuments(documents);
     this.channels = prepareFolded(this.channelDocuments);
   }

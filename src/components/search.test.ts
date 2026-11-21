@@ -43,6 +43,8 @@ const {
     findChannelId: vi.fn((channel: { id: string }) => channel.id),
     getSourceUrl: vi.fn(() => 'http://host/epg.xml'),
     programmeCacheOrigin: vi.fn((): unknown => null),
+    searchGuideSources: vi.fn((): unknown => null),
+    searchMatchSample: vi.fn((): [string, number] => ['', 0]),
   },
   reminderMock: { has: vi.fn(() => false), add: vi.fn(), remove: vi.fn() },
   storageMock: {
@@ -73,6 +75,10 @@ const {
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
 vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
+vi.mock('../services/channel-customization', async importOriginal => ({
+  ...await importOriginal<typeof import('../services/channel-customization')>(),
+  ChannelCustomizationService: { epgMappings: (): Array<[string, string]> => [] },
+}));
 vi.mock('../services/reminder-service', () => ({ ReminderService: reminderMock }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../services/xtream-archive', () => ({ XtreamArchiveService: archiveMock }));
@@ -2402,8 +2408,366 @@ describe('Search', () => {
 
     await openWith();
     expect(persistMock).toHaveBeenCalledWith([
-      expect.objectContaining({ key: 'playlist-cache|offer|4|v1', prefix: 'playlist-cache|offer|' }),
+      expect.objectContaining({ key: 'playlist-cache|offer|4|v2', prefix: 'playlist-cache|offer|' }),
     ]);
+  });
+
+  describe('guide matching in the worker', () => {
+    const url = 'http://host/epg.xml';
+    afterEach(() => {
+      epgMock.searchGuideSources.mockReturnValue(null);
+      epgMock.searchMatchSample.mockReturnValue(['', 0]);
+    });
+    const later = (hours: number): number => Date.now() + hours * 3600000;
+
+    function guideSetup(): { programmes: Record<string, Programme[]> } {
+      const source = [chan('Bravo'), chan('Alpha')];
+      playlistMock.channels = source;
+      const programmes = {
+        Alpha: [prog('Alpha Report', later(1), later(2))],
+        Bravo: [prog('Bravo Morning', later(1), later(2)), prog('Bravo Report', later(2), later(3))],
+      };
+      epgMock.programmes = programmes;
+      cacheMock.records.set('playlist-cache|k', { timestamp: 1, data: { channels: source } });
+      cacheMock.records.set(`epg-cache|${url}`, {
+        timestamp: 2,
+        data: { channels: { Alpha: { name: 'Alpha' }, Bravo: { name: 'Bravo' } }, programmes },
+      });
+      playlistMock.getChannelCacheSource.mockReturnValue({
+        record: { store: 'playlist-cache', key: 'k', timestamp: 1 },
+        length: 2,
+        selection: new Uint32Array([0, 1]),
+      });
+      epgMock.searchGuideSources.mockReturnValue([{
+        url, kind: 'manual', playlistIds: [], record: { store: 'epg-cache', key: url, timestamp: 2 },
+      }]);
+      return { programmes };
+    }
+
+    it('lets the worker match the channels, and looks up only the programmes it shows', async () => {
+      const { programmes } = guideSetup();
+      epgMock.searchMatchSample.mockImplementation(((channel: { id: string }) =>
+        [`${encodeURIComponent(url)}::${channel.id}`, programmes[channel.id].length]) as never);
+      const { view, handlers } = await openWith();
+      const requests = workerMock.run.mock.calls
+        .filter(([task]) => task === 'search.index')
+        .map(([, payload]) => payload as SearchIndexRequest);
+      expect(requests.some(request => request.guideProgrammes)).toBe(true);
+      expect(requests.some(request => request.cachedProgrammes || request.chunk?.source === 'programmes')).toBe(false);
+
+      epgMock.findChannelId.mockClear();
+      await view.setQuery('bravo report');
+      const rows = Array.from(container.querySelectorAll('.search-program-row'));
+      expect(rows.map(row => row.textContent)).toEqual([expect.stringContaining('Bravo Report')]);
+      expect(epgMock.findChannelId.mock.calls.length).toBeLessThanOrEqual(rows.length);
+
+      await view.setQuery('alpha report');
+      const row = container.querySelector<HTMLElement>('.search-program-row')!;
+      expect(row.textContent).toContain('Alpha Report');
+      (view as unknown as { nav: { focus(el: HTMLElement): void } }).nav.focus(row);
+      view.handleAction('select');
+      expect(handlers.onPlayChannel).not.toHaveBeenCalled();
+      expect(reminderMock.add).toHaveBeenCalledWith(expect.objectContaining({ channelName: 'Alpha', title: 'Alpha Report' }));
+    });
+
+    function matchAll(programmes: Record<string, Programme[]>): void {
+      epgMock.searchMatchSample.mockImplementation(((channel: { id: string }) =>
+        [`${encodeURIComponent(url)}::${channel.id}`, programmes[channel.id].length]) as never);
+    }
+
+    it('shows no programme of a newer guide until it is matched again', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const { view } = await openWith();
+      // A guide refresh published; Search has not matched it yet.
+      epgMock.programmes = {
+        ...programmes,
+        Bravo: [prog('Bravo Morning', later(1), later(2)), prog('Bravo Weather', later(2), later(3))],
+      };
+      await view.setQuery('bravo report');
+      expect(container.querySelector('.search-program-row')).toBeNull();
+    });
+
+    it('rebuilds the programmes on the page once a result no longer matches the guide', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const { view } = await openWith();
+      // The shown guide lost a programme the worker indexed, under the same revision.
+      epgMock.published = { ...programmes, Bravo: [prog('Bravo Report', later(2), later(3))] };
+      await view.setQuery('bravo report');
+      expect(diagEvents(warn, 'search.programmes.stale'))
+        .toEqual([expect.stringMatching(/missed=1$/)]);
+      await vi.waitFor(() =>
+        expect(container.querySelector('.search-program-row')?.textContent).toContain('Bravo Report'));
+    });
+
+    it('reopens with a fresh index, matched on the page, after programme results went stale', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const { view } = await openWith();
+      epgMock.published = { ...programmes, Bravo: [prog('Bravo Report', later(2), later(3))] };
+      await view.setQuery('bravo report');
+      expect(diagEvents(warn, 'search.programmes.stale')).toHaveLength(1);
+      // Closed before the page rebuilt the programmes.
+      view.deactivate();
+      workerMock.run.mockClear();
+      await view.open(account);
+      await indexReady(view);
+      expect(diagEvents(info, 'search.index.ready').pop()).not.toContain('mode=reused');
+      const requests = workerMock.run.mock.calls
+        .filter(([task]) => task === 'search.index')
+        .map(([, payload]) => payload as SearchIndexRequest);
+      expect(requests.some(request => request.guideProgrammes)).toBe(false);
+      await view.setQuery('bravo report');
+      expect(container.querySelector('.search-program-row')?.textContent).toContain('Bravo Report');
+    });
+
+    it('searches again once the page rebuilt stale programmes after the catalog settled', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      catalogMock.loadAllVodStreams.mockResolvedValue([]);
+      catalogMock.loadAllSeries.mockResolvedValue([]);
+      const catalog = holdWorkerTask((task, payload) => task === 'search.index'
+        && (payload.chunk?.source === 'movies' || !!payload.cachedMovies));
+      const view = new Search(container, mkHandlers());
+      openViews.push(view);
+      await view.open(account);
+      await vi.waitFor(() => expect(catalog.held).toBe(true));
+      epgMock.published = { ...programmes, Bravo: [prog('Bravo Report', later(2), later(3))] };
+      await view.setQuery('bravo report');
+      // The catalog settles while the page rebuilds the programmes.
+      catalog.release();
+      await vi.waitFor(() =>
+        expect(container.querySelector('.search-program-row')?.textContent).toContain('Bravo Report'));
+      catalog.restore();
+    });
+
+    it('waits for the newest session before a shared catalog load lands on the page', async () => {
+      const view = new Search(container, mkHandlers());
+      const internals = view as unknown as { catalogGate: Promise<unknown>; awaitCatalogGate(): Promise<void> };
+      let first!: () => void;
+      let second!: () => void;
+      internals.catalogGate = new Promise<void>(resolve => { first = resolve; });
+      let passed = false;
+      void internals.awaitCatalogGate().then(() => { passed = true; });
+      internals.catalogGate = new Promise<void>(resolve => { second = resolve; });
+      first();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(passed).toBe(false);
+      second();
+      await vi.waitFor(() => expect(passed).toBe(true));
+    });
+
+    async function staleMiss(): Promise<{ view: Search; programmes: Record<string, Programme[]> }> {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const { view } = await openWith();
+      epgMock.published = { ...programmes, Bravo: [prog('Bravo Report', later(2), later(3))] };
+      await view.setQuery('bravo report');
+      await vi.waitFor(() =>
+        expect(container.querySelector('.search-program-row')?.textContent).toContain('Bravo Report'));
+      return { view, programmes };
+    }
+
+    it('keeps the results when an unchanged playlist lands after programme results went stale', async () => {
+      const { view } = await staleMiss();
+      const open = vi.spyOn(view, 'open');
+      await view.refreshChannels();
+      expect(open).not.toHaveBeenCalled();
+      expect(container.querySelector('.search-program-row')?.textContent).toContain('Bravo Report');
+    });
+
+    it('forgets the stale verdict once the channel list it was for is replaced', async () => {
+      const { view } = await staleMiss();
+      const internals = view as unknown as { pageProgrammesFor: unknown };
+      expect(internals.pageProgrammesFor).not.toBeNull();
+      playlistMock.channels = [...playlistMock.channels];
+      await view.refreshPrograms();
+      expect(internals.pageProgrammesFor).toBeNull();
+    });
+
+    it('settles the programmes when a recovery supersedes the worker match of a reopen', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const { view } = await openWith();
+      view.deactivate();
+      // A newer guide revision: the reopen indexes afresh.
+      epgMock.programmes = { ...programmes };
+      const run = workerMock.run.getMockImplementation()!;
+      let release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      let matching = false;
+      let failed = false;
+      // The worker matches in order; only its answer is slow to come back.
+      workerMock.run.mockImplementation(async (task: string, payload: SearchIndexRequest) => {
+        if (task === 'search.query' && !failed) {
+          failed = true;
+          throw new Error('worker query failed');
+        }
+        const result = await run(task, payload);
+        if (task === 'search.index' && payload.guideProgrammes && !matching) {
+          matching = true;
+          await released;
+        }
+        return result;
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      void view.open(account, 'bravo report');
+      await vi.waitFor(() => expect(failed).toBe(true));
+      release();
+      await indexReady(view);
+      await vi.waitFor(() =>
+        expect(container.querySelector('.search-program-row')?.textContent).toContain('Bravo Report'));
+      workerMock.run.mockImplementation(run);
+    });
+
+    it('carries a recovery on when a newer page program build replaces its own', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const { view } = await openWith();
+      const internals = view as unknown as {
+        workerSession: number;
+        collectProgramIndex(): Promise<boolean>;
+        rebuildWorkerIndex(sessionId: number): Promise<boolean>;
+      };
+      vi.spyOn(internals, 'collectProgramIndex').mockResolvedValueOnce(false);
+      expect(await internals.rebuildWorkerIndex(internals.workerSession)).toBe(true);
+    });
+
+    it('leaves the query to a newer program build that replaced this one', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const { view } = await openWith();
+      await view.setQuery('bravo');
+      const internals = view as unknown as {
+        buildProgramIndex(force: boolean, sessionId: number): Promise<boolean | null>;
+        startQuery(generation: number): Promise<void>;
+      };
+      vi.spyOn(internals, 'buildProgramIndex').mockResolvedValueOnce(null);
+      const query = vi.spyOn(internals, 'startQuery');
+      await view.refreshPrograms();
+      expect(query).not.toHaveBeenCalled();
+    });
+
+    it('lands a catalog fallback on the page only after channels and programs index', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const { view } = await openWith();
+      const internals = view as unknown as {
+        workerSession: number;
+        catalogGate: Promise<unknown>;
+        fallBack(sessionId: number, source: 'movies' | 'series'): Promise<unknown>;
+      };
+      let open!: () => void;
+      internals.catalogGate = new Promise<void>(resolve => { open = resolve; });
+      catalogMock.loadAllVodStreams.mockClear();
+      catalogMock.loadAllVodStreams.mockResolvedValue([vod('10', 'Alpha Movie')]);
+      const landed = internals.fallBack(internals.workerSession, 'movies');
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(catalogMock.loadAllVodStreams).not.toHaveBeenCalled();
+      open();
+      await landed;
+      expect(catalogMock.loadAllVodStreams).toHaveBeenCalled();
+    });
+
+    it('lets two callers that retry a replaced program build both finish', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const { view } = await openWith();
+      const internals = view as unknown as { collectProgramIndex(): Promise<boolean> };
+      // Enough channels that each build takes several frames.
+      playlistMock.channels = Array.from({ length: 20000 }, (_, i) => chan(i % 2 ? 'Alpha' : 'Bravo'));
+      // As a channel repost and a recovery rebuild each retry a build that was replaced.
+      const retrying = async (): Promise<void> => {
+        while (!await internals.collectProgramIndex()) { /* retry */ }
+      };
+      const outcome = await Promise.race([
+        Promise.all([retrying(), retrying()]).then(() => 'done'),
+        new Promise(resolve => setTimeout(() => resolve('stuck'), 8000)),
+      ]);
+      view.deactivate();
+      expect(outcome).toBe('done');
+    });
+
+    it('shows the newest guide when one programme refresh replaces another', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const { view } = await openWith();
+      await view.setQuery('bravo');
+      epgMock.programmes = { ...programmes, Bravo: [prog('Bravo Interim', later(1), later(2))] };
+      const first = view.refreshPrograms();
+      epgMock.programmes = { ...programmes, Bravo: [prog('Bravo Latest', later(1), later(2))] };
+      matchAll(epgMock.programmes);
+      const second = view.refreshPrograms();
+      await Promise.all([first, second]);
+      await vi.waitFor(() => {
+        const rows = Array.from(container.querySelectorAll('.search-program-row')).map(row => row.textContent);
+        expect(rows.some(text => text?.includes('Bravo Latest'))).toBe(true);
+        expect(rows.some(text => text?.includes('Bravo Interim'))).toBe(false);
+      });
+    });
+
+    it('reuses the index on a reopen once the page rebuilt the stale programmes', async () => {
+      const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const { view } = await staleMiss();
+      view.deactivate();
+      await view.open(account);
+      expect(diagEvents(info, 'search.index.ready').pop()).toContain('mode=reused');
+    });
+
+    it('drops a recovery whose page program index Search closed before it was built', async () => {
+      const { programmes } = guideSetup();
+      matchAll(programmes);
+      const { view } = await openWith();
+      const internals = view as unknown as {
+        workerSession: number;
+        workerIndexReady: boolean;
+        rebuildWorkerIndex(sessionId: number): Promise<boolean>;
+      };
+      view.deactivate();
+      expect(await internals.rebuildWorkerIndex(internals.workerSession)).toBe(false);
+      expect(internals.workerIndexReady).toBe(false);
+    });
+
+    it('loads a catalog the worker cannot hold only after channels and programs index', async () => {
+      vi.stubGlobal('Worker', class {});
+      try {
+        const { programmes } = guideSetup();
+        matchAll(programmes);
+        catalogMock.loadAllVodStreams.mockResolvedValue([vod('10', 'Alpha Movie')]);
+        catalogMock.loadAllSeries.mockResolvedValue([]);
+        const held = holdWorkerTask((task, payload) => task === 'search.index' && !!payload.guideProgrammes);
+        const view = new Search(container, mkHandlers());
+        openViews.push(view);
+        void view.open(account, 'alpha');
+        await vi.waitFor(() => expect(held.held).toBe(true));
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect(catalogMock.syncAllVodStreams).toHaveBeenCalled();
+        expect(catalogMock.loadAllVodStreams).not.toHaveBeenCalled();
+        held.release();
+        await indexReady(view);
+        await vi.waitFor(() => expect(container.textContent).toContain('Alpha Movie'));
+        held.restore();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('builds the program index on the page when the worker disagrees with its samples', async () => {
+      guideSetup();
+      epgMock.searchMatchSample.mockReturnValue([`${encodeURIComponent(url)}::Alpha`, 9]);
+      const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const { view } = await openWith();
+      expect(diagEvents(info, 'search.worker.cache.fallback'))
+        .toEqual([expect.stringMatching(/source=programmes reason=sample_mismatch$/)]);
+      await view.setQuery('bravo report');
+      expect(container.querySelector('.search-program-row')?.textContent).toContain('Bravo Report');
+    });
   });
 
   it('posts the documents a stale IndexedDB record cannot provide', async () => {
@@ -2816,6 +3180,7 @@ describe('Search', () => {
     catalogMock.loadAllSeries.mockResolvedValue([]);
     const view = new Search(container, mkHandlers());
     await view.open(account);
+    await vi.waitFor(() => expect(catalogMock.loadAllVodStreams).toHaveBeenCalled());
     const signal = catalogMock.loadAllVodStreams.mock.calls[0][1] as AbortSignal;
 
     view.deactivate();
@@ -2832,6 +3197,7 @@ describe('Search', () => {
     catalogMock.loadAllSeries.mockReturnValue(new Promise(() => undefined));
     const view = new Search(container, mkHandlers());
     await view.open(account);
+    await vi.waitFor(() => expect(catalogMock.loadAllVodStreams).toHaveBeenCalled());
     const signal = catalogMock.loadAllVodStreams.mock.calls[0][1] as AbortSignal;
 
     view.deactivate();

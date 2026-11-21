@@ -23,6 +23,7 @@ export const INTERACTIVE_FLOWS = [
   'xtreamMoviesWarm',
   'searchCold',
   'searchSteady',
+  'searchSteadyWarm',
 ];
 
 export function interactiveBaseFlow(flow) {
@@ -613,6 +614,18 @@ export function installInteractiveProbe(config) {
     const echoed = watch(`${name}Echo`, () => input.value === query);
     await Promise.all([echoed, watch(name, ready)]);
   };
+  const openSearch = async () => {
+    await nextTask();
+    probe.marks.searchClickAt = now();
+    click('[data-section="search"]');
+    await watch('searchInputReady', () => {
+      const input = document.querySelector('.tab-bar-search-input');
+      return !!document.querySelector('.tab-bar-search.expanded')
+        && document.activeElement === input;
+    });
+  };
+  const searchComplete = () => searchSettled(config.needle)
+    && searchView().getAttribute('data-search-partial') === 'false';
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   // Background work after launch (EPG, cache writes, Search prewarm) has gone
   // quiet: true, false on timeout, or null while it is still running.
@@ -671,6 +684,15 @@ export function installInteractiveProbe(config) {
       click('[data-section="movies"]');
       await watch('moviesVisible', moviesReady);
     }
+    // Search caches the whole catalogs and stores every source's index.
+    if (baseFlow === 'searchSteady') {
+      await openSearch();
+      await typeQuery('seedSearch', config.needle, searchComplete);
+      // An open Search holds the Worker, which the quiet check waits out.
+      await nextTask();
+      click('[data-section="live"]');
+      await watch('seedLive', liveReady);
+    }
     probe.seeded = await waitForQuiet()
       && !!probe.events['playlist.cache.write.completed'];
   };
@@ -716,22 +738,14 @@ export function installInteractiveProbe(config) {
       await pressKeysUntilQuiet();
       return;
     }
-    if (config.flow === 'searchSteady') {
+    if (baseFlow === 'searchSteady') {
       probe.marks.settled = await waitForQuiet() ? 1 : 0;
     }
-    await nextTask();
-    probe.marks.searchClickAt = now();
-    click('[data-section="search"]');
-    await watch('searchInputReady', () => {
-      const input = document.querySelector('.tab-bar-search-input');
-      return !!document.querySelector('.tab-bar-search.expanded')
-        && document.activeElement === input;
-    });
+    await openSearch();
     await typeQuery('firstCandidate', config.needle, () =>
       searchSettled(config.needle) && !!searchView().querySelector(SEARCH_RESULTS));
     // Channels and programs answer first; movies and series join once indexed.
-    await watch('allResults', () => searchSettled(config.needle)
-      && searchView().getAttribute('data-search-partial') === 'false');
+    await watch('allResults', searchComplete);
     probe.hits = {
       channels: document.querySelectorAll(
         '#view-search .search-channel-tile',
@@ -946,7 +960,7 @@ export function summarizeInteractiveRun(raw, appRaw) {
     const indexReady = raw.events['search.index.ready'];
     const partial = raw.events['xtream.catalog.partial'];
     run.search = {
-      settled: raw.flow === 'searchSteady' ? m.settled === 1 : undefined,
+      settled: flow === 'searchSteady' ? m.settled === 1 : undefined,
       inputReadyMs: round(m.searchInputReady - m.searchClickAt),
       inputEchoMs: round(m.firstCandidateEcho - m.firstCandidateTypedAt),
       firstCandidateMs: round(m.firstCandidate - m.firstCandidateTypedAt),

@@ -6,11 +6,12 @@ import {
 } from '../services/idb-schema';
 import { foldSearchText } from '../utils/channel-search';
 import { isPackedEpg, unpackEpg } from '../services/epg-cache-codec';
+import { normalizeGuideName } from '../services/epg-channel-match';
 import { SearchCacheError, type CachedRecord } from './search-cache-reader';
 import type { SearchCacheRecord, SearchIndexCandidate } from './tasks';
 
 // Bump whenever the stored layout or the folding it holds changes.
-export const SEARCH_INDEX_FORMAT = 1;
+export const SEARCH_INDEX_FORMAT = 2;
 
 /**
  * The folded search text of one source cache record, in record order and
@@ -31,12 +32,24 @@ export interface SourceIndex {
   /** EPG only: each channel id's programme count, in record order. */
   runIds?: string[];
   runCounts?: Uint32Array;
+  /** EPG only: every guide channel's id, and its name and aliases joined by NAME_SEPARATOR. */
+  channelIds?: string[];
+  channelNames?: string[];
 }
+
+/**
+ * Playlist fields past the two folded search fields, which the worker's
+ * guide matching reads: the tvg id, the uncustomized name in lower case
+ * ('' when that is the folded name), and the playlist ids joined by
+ * NAME_SEPARATOR.
+ */
+export const PLAYLIST_FIELD = { tvgId: 2, lowerName: 3, playlistIds: 4 } as const;
+export const NAME_SEPARATOR = '\u0001';
 
 type Fields = Record<string, unknown>;
 
 const FIELDS: Record<SearchCacheRecord['store'], number> = {
-  [PLAYLIST_STORE]: 2,
+  [PLAYLIST_STORE]: 5,
   [EPG_STORE]: 3,
   [CATALOG_STORE]: 1,
 };
@@ -73,13 +86,22 @@ export function buildSourceIndex(ref: SearchCacheRecord, raw: CachedRecord | nul
   let length = 0;
   let runIds: string[] | undefined;
   let runCounts: number[] | undefined;
+  let channelIds: string[] | undefined;
+  let channelNames: string[] | undefined;
   if (ref.store === PLAYLIST_STORE) {
     const channels = listOf(data && (data as Fields).channels);
     for (const item of channels) {
       const channel = fieldsOf(item);
+      const name = text(channel.sourceName ?? channel.name);
+      const folded = foldSearchText(name);
+      const lower = normalizeGuideName(name);
+      const playlistIds = Array.isArray(channel.playlistIds) ? channel.playlistIds.map(text) : [];
       values.push(
-        foldSearchText(text(channel.sourceName ?? channel.name)),
+        folded,
         foldSearchText(text(channel.sourceGroup ?? channel.group)),
+        typeof channel.id === 'string' ? channel.id : '',
+        lower === folded ? '' : lower,
+        playlistIds.join(NAME_SEPARATOR),
       );
     }
     length = channels.length;
@@ -101,6 +123,16 @@ export function buildSourceIndex(ref: SearchCacheRecord, raw: CachedRecord | nul
       runIds.push(id);
       runCounts.push(list.length);
       length += list.length;
+    }
+    const guideChannels = fieldsOf((data && (data as Fields).channels) ?? {});
+    channelIds = [];
+    channelNames = [];
+    for (const id in guideChannels) {
+      if (!Object.prototype.hasOwnProperty.call(guideChannels, id)) continue;
+      const guideChannel = fieldsOf(guideChannels[id]);
+      const aliases = Array.isArray(guideChannel.aliases) ? guideChannel.aliases.map(text) : [];
+      channelIds.push(id);
+      channelNames.push([text(guideChannel.name)].concat(aliases).join(NAME_SEPARATOR));
     }
   } else {
     const items = listOf(data);
@@ -125,9 +157,11 @@ export function buildSourceIndex(ref: SearchCacheRecord, raw: CachedRecord | nul
     text: values.join(''),
     ends,
   };
-  if (runIds && runCounts) {
+  if (runIds && runCounts && channelIds && channelNames) {
     index.runIds = runIds;
     index.runCounts = new Uint32Array(runCounts);
+    index.channelIds = channelIds;
+    index.channelNames = channelNames;
   }
   return index;
 }
@@ -152,9 +186,11 @@ export function parseSourceIndex(ref: SearchCacheRecord, raw: CachedRecord | nul
     return null;
   }
   if (ref.store === EPG_STORE) {
-    const { runIds, runCounts } = index;
+    const { runIds, runCounts, channelIds, channelNames } = index;
     if (!Array.isArray(runIds) || !(runCounts instanceof Uint32Array)
-        || runIds.length !== runCounts.length) {
+        || runIds.length !== runCounts.length
+        || !Array.isArray(channelIds) || !Array.isArray(channelNames)
+        || channelIds.length !== channelNames.length) {
       return null;
     }
     let total = 0;
@@ -172,7 +208,12 @@ export function parseSourceIndex(ref: SearchCacheRecord, raw: CachedRecord | nul
     fields,
     text: index.text,
     ends: index.ends,
-    ...(ref.store === EPG_STORE ? { runIds: index.runIds, runCounts: index.runCounts } : {}),
+    ...(ref.store === EPG_STORE ? {
+      runIds: index.runIds,
+      runCounts: index.runCounts,
+      channelIds: index.channelIds,
+      channelNames: index.channelNames,
+    } : {}),
   };
 }
 
@@ -196,6 +237,8 @@ export function sourceIndexRecord(index: SourceIndex): CachedRecord {
   if (index.runIds && index.runCounts) {
     record.runIds = index.runIds;
     record.runCounts = index.runCounts;
+    record.channelIds = index.channelIds;
+    record.channelNames = index.channelNames;
   }
   return record;
 }
@@ -206,5 +249,7 @@ export function sourceIndexCandidate(index: SourceIndex): SearchIndexCandidate {
     for (const id of index.runIds) bytes += id.length * 2 + 8;
     bytes += index.runCounts.byteLength;
   }
+  for (const value of index.channelIds ?? []) bytes += value.length * 2 + 8;
+  for (const value of index.channelNames ?? []) bytes += value.length * 2 + 8;
   return { key: index.key, prefix: index.prefix, bytes };
 }

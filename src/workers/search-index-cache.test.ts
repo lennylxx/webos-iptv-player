@@ -11,6 +11,7 @@ import type {
   SearchIndexRequest,
   SearchQueryRequest,
 } from './tasks';
+import { SEARCH_INDEX_FORMAT } from './search-source-index';
 
 interface PostedSources {
   channels?: string[][];
@@ -184,6 +185,55 @@ function cachedRequest(channels: Channel[], selection: Uint32Array): SearchIndex
 describe('SearchWorkerIndex with cached documents', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('matches the cached channels to the guide itself and answers with their programme runs', async () => {
+    const { channels, selection } = displayedChannels();
+    const memory = reader();
+    memory.records.set('epg-cache|http://host/epg', {
+      url: EPG_REF.url,
+      timestamp: 20,
+      data: { channels: { e1: { name: 'Alpha News' }, e3: { name: 'Alpha Kids' } }, programmes },
+    });
+    const index = new SearchWorkerIndex(memory);
+    const guideKey = (id: string): string => `${encodeURIComponent(EPG_REF.url)}::${id}`;
+    const guide = (samples: Array<[number, string, number]>): SearchIndexRequest => ({
+      sessionId: 1,
+      guideProgrammes: {
+        sources: [{
+          url: EPG_REF.url,
+          kind: 'manual',
+          playlistIds: [],
+          record: { store: 'epg-cache', key: EPG_REF.url, timestamp: EPG_REF.timestamp },
+        }],
+        mappings: [],
+        samples,
+      },
+    });
+    index.index({ sessionId: 1, reset: true });
+    const { cachedChannels } = cachedRequest(channels, selection);
+    expect(await index.index({ sessionId: 1, cachedChannels })).toMatchObject({ accepted: true });
+
+    const response = await index.index(guide([[1, guideKey('e1'), 2], [2, '', 0]]));
+    expect(response.unresolved).toBeUndefined();
+    expect(Array.from(response.programmeRuns!.channels)).toEqual([1, 3]);
+    expect(Array.from(response.programmeRuns!.counts)).toEqual([2, 1]);
+    expect((await index.query(query(1, 'evening')))?.programmes.indices).toEqual([1]);
+
+    expect((await index.index(guide([[1, guideKey('e3'), 1]]))).unresolved)
+      .toEqual([{ source: 'programmes', reason: 'sample_mismatch' }]);
+  });
+
+  it('leaves the guide matching to the page when the channels were posted', async () => {
+    const { channels } = displayedChannels();
+    const index = new SearchWorkerIndex(reader());
+    post(index, 1, { channels: postedDocuments(channels) });
+    const response = await index.index({
+      sessionId: 1,
+      guideProgrammes: { sources: [], mappings: [], samples: [] },
+    });
+    expect(response.unresolved).toEqual([{ source: 'programmes', reason: 'channels_unresolved' }]);
+    expect(response.programmeRuns).toBeUndefined();
   });
 
   it('clears failed programmes but keeps the previous catalog until its post lands', async () => {
@@ -501,7 +551,7 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
       },
     });
     expect(response.unresolved).toBeUndefined();
-    expect(response.persist?.map(candidate => candidate.key)).toEqual(['catalog-cache|a|vod_all|31|v1']);
+    expect(response.persist?.map(candidate => candidate.key)).toEqual(['catalog-cache|a|vod_all|31|v2']);
     expect(sourceReads(memory)).toEqual(['read:a|vod_all']);
     expect((await index.query(query(1, 'alpha')))?.movies.indices).toEqual([1]);
   });
@@ -509,7 +559,7 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
   it('ignores a stored index of another format or a broken shape', async () => {
     const memory = reader();
     await persisted(memory);
-    const key = 'catalog-cache|a|vod_all|30|v1';
+    const key = 'catalog-cache|a|vod_all|30|v2';
     const stored = memory.records.get(`search-index-cache|${key}`)!;
     for (const broken of [
       { ...stored, format: 0 },
@@ -582,11 +632,11 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
     expect(await index.persist({
       entries: [
         { key: candidate.key, prefix: candidate.prefix, fields: { expiresAt: 5, bytes: 9 } },
-        { key: 'catalog-cache|other|1|v1', prefix: 'catalog-cache|other|', fields: {} },
+        { key: 'catalog-cache|other|1|v2', prefix: 'catalog-cache|other|', fields: {} },
       ],
     })).toEqual({ written: [candidate.key] });
     expect(memory.records.get(`search-index-cache|${candidate.key}`))
-      .toMatchObject({ key: candidate.key, expiresAt: 5, bytes: 9, format: 1 });
+      .toMatchObject({ key: candidate.key, expiresAt: 5, bytes: 9, format: SEARCH_INDEX_FORMAT });
   });
 
   it('prewarms with the timestamp the cache metadata records', async () => {
@@ -597,7 +647,7 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
     const response = await index.prewarm({
       sources: [{ store: 'catalog-cache', key: 'a|vod_all' }],
     });
-    expect(response.persist.map(candidate => candidate.key)).toEqual(['catalog-cache|a|vod_all|30|v1']);
+    expect(response.persist.map(candidate => candidate.key)).toEqual(['catalog-cache|a|vod_all|30|v2']);
     expect(memory.log).toEqual(['read:entry:catalog-cache:a|vod_all', 'count:search-index-cache', 'read:a|vod_all']);
   });
 

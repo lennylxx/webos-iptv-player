@@ -1257,6 +1257,20 @@ describe('xtream-catalog one-request catalog', () => {
     expect(clientMock.getAllVodStreams).not.toHaveBeenCalled();
   });
 
+  it('loads per category only once the caller lets the page take the work', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    clientMock.syncAllVodStreams.mockRejectedValue(new XtreamRequestError('too_large', 'big'));
+    let open!: () => void;
+    const gate = new Promise<void>(resolve => { open = resolve; });
+    const synced = syncAllVodStreams(account, undefined, () => gate);
+    await settle();
+    expect(clientMock.getVodStreams).not.toHaveBeenCalled();
+    open();
+    expect((await synced)?.key).toBe('x1|vod_all');
+    expect(clientMock.getVodStreams).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('tries the whole request again soon after a timeout', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     clientMock.getAllVodStreams.mockRejectedValueOnce(new XtreamRequestError('timeout', 'slow'));

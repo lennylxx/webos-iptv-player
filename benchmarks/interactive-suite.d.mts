@@ -4,7 +4,8 @@ export type InteractiveFlow =
   | 'xtreamMovies'
   | 'xtreamMoviesWarm'
   | 'searchCold'
-  | 'searchSteady';
+  | 'searchSteady'
+  | 'searchSteadyWarm';
 
 export const INTERACTIVE_FLOWS: InteractiveFlow[];
 

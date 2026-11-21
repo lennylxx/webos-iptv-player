@@ -68,6 +68,7 @@ is a warm one:
 | `m3uWarm`, `xtreamMoviesWarm` | The same relaunch after a seed launch filled the caches |
 | `searchCold` | Search opened at once: input ready, the first candidate for a typed query, then all results once movies and series are indexed (`allResultsMs`) |
 | `searchSteady` | The same after Live is ready |
+| `searchSteadyWarm` | `searchSteady` on a relaunch after a seed launch searched once, so the catalogs and every Search index are cached |
 
 `live.appVisibleMs` records when the app's own UI (the docked tab bar over
 a view) first shows, with or without channel rows; `live.visibleMs` waits
@@ -161,13 +162,13 @@ node benchmarks/compare.mjs --interactive            # compare
 node benchmarks/compare.mjs --interactive --update   # replace this part
 ```
 
-At full scale one run of the six flows takes several minutes on a
+At full scale one run of the seven flows takes several minutes on a
 desktop host, mostly the two Search flows. These variables shrink or change it:
 
 | Variable | Default |
 |---|---|
 | `BENCHMARK_INTERACTIVE_RUNS` | `5` |
-| `BENCHMARK_INTERACTIVE_FLOWS` | `m3u,m3uWarm,xtreamMovies,xtreamMoviesWarm,searchCold,searchSteady` |
+| `BENCHMARK_INTERACTIVE_FLOWS` | `m3u,m3uWarm,xtreamMovies,xtreamMoviesWarm,searchCold,searchSteady,searchSteadyWarm` |
 | `BENCHMARK_INTERACTIVE_NETWORKS` | `unthrottled,50mbps` (also `50mbps-rtt50`, `50mbps-rtt150`) |
 | `BENCHMARK_INTERACTIVE_DEVICE` | `webos4` (or `c5`) |
 | `BENCHMARK_INTERACTIVE_CPU_RATE`, `_IDB_READ_MS`, `_IDB_COMMIT_MS`, `_IDB_FSYNC_MS` | From the device |

@@ -6,6 +6,7 @@ import { channelLockBadge, seriesLockBadge, vodLockBadge } from './parental-badg
 import { morph } from '../utils/morph';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
+import { ChannelCustomizationService } from '../services/channel-customization';
 import { ReminderService } from '../services/reminder-service';
 import { StorageService } from '../services/storage-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
@@ -55,6 +56,7 @@ import type {
   SearchIndexChunk,
   SearchIndexRequest,
   SearchIndexSource,
+  SearchProgrammeRuns,
   SearchQueryRequest,
   SearchQueryResponse,
 } from '../workers/tasks';
@@ -87,6 +89,65 @@ interface ProgramResult {
   channel: Channel;
   channelIndex: number;
   programme: Programme;
+}
+
+interface WorkerPrograms {
+  channels: Channel[];
+  // The guide the worker's programmes came from; results wait for a newer one.
+  guideRevision: number;
+  runChannels: Uint32Array;
+  counts: Uint32Array;
+  // The program index of each run's first programme.
+  starts: Uint32Array;
+  total: number;
+}
+
+function workerPrograms(channels: Channel[], guideRevision: number, runs: SearchProgrammeRuns): WorkerPrograms {
+  const starts = new Uint32Array(runs.counts.length);
+  let total = 0;
+  for (let run = 0; run < runs.counts.length; run++) {
+    starts[run] = total;
+    total += runs.counts[run];
+  }
+  return { channels, guideRevision, runChannels: runs.channels, counts: runs.counts, starts, total };
+}
+
+// The guide this page holds must list the run's programmes as the worker's
+// cache did; a run whose count changed shows none of its programmes.
+function workerProgramAt(runs: WorkerPrograms, index: number): ProgramResult | null {
+  if (index < 0 || index >= runs.total || !runs.starts.length) return null;
+  let low = 0;
+  let high = runs.starts.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (runs.starts[middle] <= index) low = middle;
+    else high = middle - 1;
+  }
+  const channelIndex = runs.runChannels[low];
+  const channel = runs.channels[channelIndex];
+  const id = channel ? EpgService.findChannelId(channel) : null;
+  const programmes = id ? EpgService.getProgrammes(id) : null;
+  if (!programmes || programmes.length !== runs.counts[low]) return null;
+  return { channel, channelIndex, programme: programmes[index - runs.starts[low]] };
+}
+
+// Saved guide mappings by channel index; mappings stay few, so this walks them.
+function channelMappings(): Array<[number, string]> {
+  const mappings: Array<[number, string]> = [];
+  for (const [key, guideKey] of ChannelCustomizationService.epgMappings()) {
+    for (const index of PlaylistService.indicesOfKey(key)) mappings.push([index, guideKey]);
+  }
+  return mappings;
+}
+
+const MATCH_SAMPLES = 16;
+
+function sampleIndices(count: number): number[] {
+  const indices: number[] = [];
+  if (count <= 0) return indices;
+  const step = count <= MATCH_SAMPLES ? 1 : (count - 1) / (MATCH_SAMPLES - 1);
+  for (let i = 0; i < Math.min(count, MATCH_SAMPLES); i++) indices.push(Math.round(i * step));
+  return indices;
 }
 
 function programDocument(result: ProgramResult): string[] {
@@ -159,11 +220,19 @@ type CatalogSourceLoad<T> = { record: SearchCacheRecord; data: null } | { record
 async function loadCatalogSource<T>(
   account: PlaylistEntry,
   signal: AbortSignal,
-  sync: (account: PlaylistEntry, signal: AbortSignal) => Promise<SearchCacheRecord | null>,
+  sync: (
+    account: PlaylistEntry,
+    signal: AbortSignal,
+    pageLoadGate: () => Promise<void>,
+  ) => Promise<SearchCacheRecord | null>,
   load: (account: PlaylistEntry, signal: AbortSignal) => Promise<T[]>,
+  // A list landing on this thread holds it for seconds, so it waits for this.
+  pageLoadGate: () => Promise<void>,
 ): Promise<CatalogSourceLoad<T>> {
-  const record = await sync(account, signal);
-  return record ? { record, data: null } : { record: null, data: await load(account, signal) };
+  const record = await sync(account, signal, pageLoadGate);
+  if (record) return { record, data: null };
+  await pageLoadGate();
+  return { record: null, data: await load(account, signal) };
 }
 
 // Record items the worker sent this epoch, by catalog index.
@@ -209,6 +278,22 @@ export class Search {
   private allSeries: SeriesItem[] = [];
   private programIndex: ProgramResult[] = [];
   private programRuns = new ProgrammeRuns();
+  // Programmes the worker matched to the channels itself; the page then holds
+  // no program index and builds a result only when it is shown.
+  private workerPrograms: WorkerPrograms | null = null;
+  // The worker read this session's channels from the playlist cache, so it
+  // can match them to the guide.
+  private workerChannelsCached = false;
+  // The page program index build in flight, which callers for the same lists join.
+  private programBuild: {
+    generation: number;
+    channels: Channel[];
+    guideRevision: number;
+    done: Promise<boolean>;
+  } | null = null;
+  // The channel list and guide whose worker-matched programmes disagreed
+  // with the guide shown; the page matches them itself while both last.
+  private pageProgrammesFor: { channels: Channel[]; guideRevision: number } | null = null;
   // The catalog-cache selections behind allVod / allSeries, when available.
   private vodCache: SearchCachedNames | null = null;
   private seriesCache: SearchCachedNames | null = null;
@@ -258,6 +343,16 @@ export class Search {
   // Shared by a reopen, so closing Search does not restart the load.
   private catalogLoad: { accountId: string; promise: Promise<CatalogSources> } | null = null;
   private catalogLoading = false;
+  // Settles once this session's channels and programs are indexed.
+  private catalogGate: Promise<unknown> = Promise.resolve();
+  // A catalog load a reopen shares waits for the newest session's gate.
+  private readonly awaitCatalogGate = async (): Promise<void> => {
+    let gate: Promise<unknown>;
+    do {
+      gate = this.catalogGate;
+      await gate;
+    } while (gate !== this.catalogGate);
+  };
   // The generation of the full query that replaces partial results, while in flight.
   private completingPartial: number | null = null;
   // A playlist load is running; refreshChannels() ends it once the load is done.
@@ -382,6 +477,12 @@ export class Search {
     }
 
     const sessionId = ++this.workerSession;
+    if (this.workerPrograms) {
+      // They belong to the previous worker session; the page has no index yet.
+      this.workerPrograms = null;
+      this.indexedChannels = null;
+      this.indexedGuideRevision = null;
+    }
     this.invalidateWorkerIndex();
     this.workerIndexLost = false;
     this.lostSources = null;
@@ -407,12 +508,17 @@ export class Search {
     });
     if (account) {
       this.catalogLoading = true;
-      // A landing catalog holds the UI thread for seconds, so channels and
-      // programs get indexed, and answer, first.
-      const catalogIndexed = primary.then(() => {
+      this.catalogGate = primary;
+      // A list the page loads and posts holds the UI thread for seconds, so
+      // channels and programs get indexed, and answer, first. The worker
+      // loads and reads a catalog record off this thread meanwhile.
+      const ahead = typeof Worker === 'undefined' ? primary : Promise.resolve();
+      const catalogIndexed = ahead.then(() => {
         if (sessionId !== this.workerSession) return false;
         return this.loadCatalog(account).then(async (sources) => {
           if (!await workerReset || sessionId !== this.workerSession) return false;
+          if (!isRecordList(this.allVod) || !isRecordList(this.allSeries)) await primary;
+          if (sessionId !== this.workerSession) return false;
           return this.indexCatalog(sessionId, sources.movies, sources.series);
         });
       });
@@ -441,13 +547,18 @@ export class Search {
     if (!reset || !this.active || sessionId !== this.workerSession) return;
     const channels = PlaylistService.channels;
     const complete = PlaylistService.complete;
-    const postChannels = (): Promise<boolean> => this.postSource(
-      sessionId,
-      'channels',
-      channels.length,
-      index => channelDocument(channels[index]),
-    );
+    let posted = false;
+    const postChannels = (): Promise<boolean> => {
+      posted = true;
+      return this.postSource(
+        sessionId,
+        'channels',
+        channels.length,
+        index => channelDocument(channels[index]),
+      );
+    };
     const cachedChannels = cachedChannelsRequest(channels, PlaylistService.getChannelCacheSource());
+    this.workerChannelsCached = false;
     const channelsIndexed = cachedChannels
       ? await this.indexWorkerFromCache({ sessionId, cachedChannels }, postChannels)
       : await postChannels();
@@ -458,6 +569,7 @@ export class Search {
     if (!this.active || sessionId !== this.workerSession) return;
     this.workerChannels = channels;
     this.workerChannelsComplete = complete;
+    this.workerChannelsCached = !posted;
     this.indexSettled(sessionId, 'channels');
     this.programIndexDone(sessionId, await this.buildProgramIndex(false, sessionId));
   }
@@ -499,15 +611,26 @@ export class Search {
     this.indexedGuideRevision = null;
     if (!this.active) return;
     const sessionId = this.workerSession;
-    // While sources are pending, the last one to settle runs the query.
-    const wasPending = !!this.pendingIndex;
+    // A settle this build caused runs the query itself; otherwise the
+    // results shown may come from the index this build replaced. A build a
+    // newer one replaced leaves the query to that one (#5).
+    let requeried = false;
     try {
-      this.programIndexDone(sessionId, await this.buildProgramIndex(true, sessionId));
+      const indexed = await this.buildProgramIndex(true, sessionId);
+      const settling = this.queryGeneration;
+      this.programIndexDone(sessionId, indexed);
+      requeried = indexed === null || this.queryGeneration !== settling;
+      // A reopen may reuse the worker's index for the guide it now holds.
+      if (indexed && this.workerIndexReady && !this.workerIndexLost && sessionId === this.workerSession
+        && this.indexedChannels === this.workerIndexedChannels) {
+        this.workerIndexedGuideRevision = this.indexedGuideRevision;
+      }
     } catch (error) {
       log.error('Search program index failed', 'event=search.worker.index.failed', 'scope=programmes', error);
       this.indexLost(sessionId, 'error', 'programmes');
     }
-    if (!wasPending && this.active && !this.pendingIndex && this.query.trim()) {
+    if (!requeried && this.active && sessionId === this.workerSession && !this.pendingIndex
+      && this.query.trim()) {
       await this.startQuery(++this.queryGeneration);
     }
   }
@@ -555,6 +678,7 @@ export class Search {
     const channels = PlaylistService.channels;
     const complete = PlaylistService.complete;
     this.invalidateWorkerIndex();
+    this.workerChannelsCached = false;
     const posted = await this.postSource(
       sessionId,
       'channels',
@@ -691,8 +815,8 @@ export class Search {
 
   private async fetchCatalog(account: PlaylistEntry, signal: AbortSignal): Promise<CatalogSources> {
     const [vod, series] = await Promise.all([
-      captureCatalogLoad(loadCatalogSource(account, signal, syncAllVodStreams, loadAllVodStreams)),
-      captureCatalogLoad(loadCatalogSource(account, signal, syncAllSeries, loadAllSeries)),
+      captureCatalogLoad(loadCatalogSource(account, signal, syncAllVodStreams, loadAllVodStreams, this.awaitCatalogGate)),
+      captureCatalogLoad(loadCatalogSource(account, signal, syncAllSeries, loadAllSeries, this.awaitCatalogGate)),
     ]);
     if (signal.aborted || this.account?.id !== account.id
       || this.catalogController?.signal !== signal) return { movies: false, series: false };
@@ -858,7 +982,7 @@ export class Search {
       `session=${String(this.workerSession)}`,
       `mode=${mode}`,
       `channels=${String(PlaylistService.channels.length)}`,
-      `programmes=${String(this.programIndex.length)}`,
+      `programmes=${String(this.programCount())}`,
       `items=${String(this.allVod.length + this.allSeries.length)}`,
       ...fields,
       `catalog=${this.vodRecord || this.seriesRecord ? 'record' : 'list'}`,
@@ -1112,12 +1236,97 @@ export class Search {
   }
 
   private async buildProgramIndex(force: boolean, sessionId: number): Promise<boolean | null> {
+    const matched = await this.matchProgrammesInWorker(sessionId);
+    if (matched !== 'fallback') return matched;
     if (!force
+        && !this.workerPrograms
         && this.indexedChannels === PlaylistService.channels
         && this.indexedGuideRevision === EpgService.guideRevision) {
       return this.indexProgrammes(sessionId);
     }
+    if (!await this.collectProgramIndex()) return null;
+    return this.indexProgrammes(sessionId);
+  }
+
+  // The worker matches the cached channels to the guide and indexes their
+  // programmes, so the page walks no channel. 'fallback': the page builds
+  // the program index itself.
+  private async matchProgrammesInWorker(sessionId: number): Promise<boolean | null | 'fallback'> {
+    const channels = PlaylistService.channels;
+    let verdict = this.pageProgrammesFor;
+    if (verdict && (verdict.channels !== channels || verdict.guideRevision !== EpgService.guideRevision)) {
+      // Its channel list or guide is gone; don't keep the old list alive.
+      this.pageProgrammesFor = verdict = null;
+    }
+    if (verdict || !this.workerChannelsCached || this.workerChannels !== channels || sessionId !== this.workerSession) {
+      return 'fallback';
+    }
+    const sources = EpgService.searchGuideSources();
+    if (!sources) return 'fallback';
     const generation = ++this.programIndexGeneration;
+    const guideRevision = EpgService.guideRevision;
+    const samples = sampleIndices(channels.length).map((index): [number, string, number] => {
+      const [key, count] = EpgService.searchMatchSample(channels[index]);
+      return [index, key, count];
+    });
+    let response;
+    try {
+      response = await runAppWorkerTask('search.index', {
+        sessionId,
+        guideProgrammes: { sources, mappings: channelMappings(), samples },
+      });
+    } catch {
+      return 'fallback';
+    }
+    void persistSearchIndexes(response.persist);
+    if (!this.active || generation !== this.programIndexGeneration) return null;
+    if (!response.accepted || sessionId !== this.workerSession) return false;
+    if (response.loaded) {
+      this.indexStats.persisted += response.loaded.persisted;
+      this.indexStats.built += response.loaded.built;
+    }
+    const runs = response.programmeRuns;
+    if (!runs) {
+      const reason = response.unresolved?.find(entry => entry.source === 'programmes')?.reason ?? 'no_runs';
+      log.info(
+        'Search guide matching unavailable in the worker; matching on the page',
+        'event=search.worker.cache.fallback',
+        `session=${String(sessionId)}`,
+        'source=programmes',
+        `reason=${reason}`,
+      );
+      return 'fallback';
+    }
+    this.workerPrograms = workerPrograms(channels, guideRevision, runs);
+    this.programIndex = [];
+    this.programRuns = new ProgrammeRuns();
+    this.indexedChannels = channels;
+    this.indexedGuideRevision = guideRevision;
+    return true;
+  }
+
+  // Builds the page's own program index; false when a newer build took over.
+  // A caller asking for the same lists joins the build still running, so two
+  // retrying callers never keep replacing each other's build.
+  private collectProgramIndex(): Promise<boolean> {
+    const channels = PlaylistService.channels;
+    const guideRevision = EpgService.guideRevision;
+    const running = this.programBuild;
+    if (running && running.generation === this.programIndexGeneration
+      && running.channels === channels && running.guideRevision === guideRevision) {
+      return running.done;
+    }
+    const generation = ++this.programIndexGeneration;
+    const build = { generation, channels, guideRevision, done: this.buildPageProgramIndex(generation) };
+    this.programBuild = build;
+    const finished = (): void => {
+      if (this.programBuild === build) this.programBuild = null;
+    };
+    build.done.then(finished, finished);
+    return build.done;
+  }
+
+  private async buildPageProgramIndex(generation: number): Promise<boolean> {
     const channels = PlaylistService.channels;
     const guideRevision = EpgService.guideRevision;
     const programs: ProgramResult[] = [];
@@ -1146,13 +1355,56 @@ export class Search {
       }
       return false;
     }, { shouldContinue });
-    if (!collected) return null;
+    if (!collected) return false;
 
     this.programIndex = programs;
     this.programRuns = runs;
+    this.workerPrograms = null;
     this.indexedChannels = channels;
     this.indexedGuideRevision = guideRevision;
-    return this.indexProgrammes(sessionId);
+    return true;
+  }
+
+  // The page ranks or posts programmes itself only on a fallback path.
+  // False when Search closed or a newer build took over meanwhile.
+  private async ensureProgramIndex(): Promise<boolean> {
+    const current = !this.workerPrograms
+      && this.indexedChannels === PlaylistService.channels
+      && this.indexedGuideRevision === EpgService.guideRevision;
+    return current || this.collectProgramIndex();
+  }
+
+  private programCount(): number {
+    return this.workerPrograms ? this.workerPrograms.total : this.programIndex.length;
+  }
+
+  private programsAt(indices: number[]): ProgramResult[] {
+    const runs = this.workerPrograms;
+    if (!runs) return itemsAt(this.programIndex, indices);
+    // A newer guide is being matched; its refresh reruns the query.
+    if (runs.guideRevision !== EpgService.guideRevision) return [];
+    const results: ProgramResult[] = [];
+    for (const index of indices) {
+      const result = workerProgramAt(runs, index);
+      if (result) results.push(result);
+    }
+    const missed = indices.length - results.length;
+    const verdict = this.pageProgrammesFor;
+    if (missed && !(verdict && verdict.channels === runs.channels && verdict.guideRevision === runs.guideRevision)) {
+      // The worker read a guide that differs from the one shown; the page
+      // matches these programmes itself, and a reopen must not reuse them (#1).
+      this.pageProgrammesFor = { channels: runs.channels, guideRevision: runs.guideRevision };
+      // A reopen must not reuse these programmes; this session keeps its index.
+      this.workerIndexedGuideRevision = null;
+      log.warn(
+        'Search programme results did not match the guide; rebuilding them on the page',
+        'event=search.programmes.stale',
+        `session=${String(this.workerSession)}`,
+        `missed=${String(missed)}`,
+      );
+      void this.refreshPrograms();
+    }
+    return results;
   }
 
   private indexProgrammes(sessionId: number): Promise<boolean> {
@@ -1259,7 +1511,9 @@ export class Search {
     try {
       if (this.resynced[source] !== sessionId) {
         this.resynced[source] = sessionId;
-        const record = await (source === 'movies' ? syncAllVodStreams : syncAllSeries)(account, signal);
+        const record = await (source === 'movies' ? syncAllVodStreams : syncAllSeries)(
+          account, signal, this.awaitCatalogGate,
+        );
         if (!current()) return 'replaced';
         const failed = source === 'movies' ? this.vodRecord : this.seriesRecord;
         // The same reference would only fail the same way again.
@@ -1271,6 +1525,9 @@ export class Search {
           return 'synced';
         }
       }
+      // A list landing on this thread waits for the channels and programs.
+      await this.awaitCatalogGate();
+      if (!current()) return 'replaced';
       if (source === 'movies') {
         const data = await loadAllVodStreams(account, signal);
         if (!current()) return 'replaced';
@@ -1516,6 +1773,8 @@ export class Search {
       }
       const movies = this.visibleMovies;
       const series = this.visibleSeries;
+      if (!await this.ensureProgramIndex()) return;
+      if (generation !== this.queryGeneration || sessionId !== this.workerSession || !this.active) return;
       this.applyQueryResponse(this.queryLocally(query), this.allVod, this.allSeries);
       // A record cannot rank here, so the worker's last answer to this query stands.
       if (this.catalogQuery === query) {
@@ -1585,7 +1844,7 @@ export class Search {
   }
 
   private indexedLists(): unknown[] {
-    return [PlaylistService.channels, this.programIndex, this.indexedVod, this.indexedSeries];
+    return [PlaylistService.channels, this.workerPrograms ?? this.programIndex, this.indexedVod, this.indexedSeries];
   }
 
   private async recoverWorkerQuery(
@@ -1677,10 +1936,15 @@ export class Search {
     this.invalidateWorkerIndex();
     this.workerIndexLost = true;
     this.lostSources = null;
+    this.workerChannelsCached = false;
     if (!await this.indexWorker({ sessionId, reset: true })) return false;
     // Any list may be replaced meanwhile, and a newer post of a source may
     // carry an older list: post until the worker holds the current lists,
     // each from this rebuild's own post.
+    // A guide refresh may restart the build; only a close or a new session ends it.
+    let built = await this.ensureProgramIndex();
+    while (!built && this.active && sessionId === this.workerSession) built = await this.ensureProgramIndex();
+    if (!built || sessionId !== this.workerSession) return false;
     const posted: Partial<Record<SearchIndexSource, { list: unknown[]; post?: SourcePost }>> = {};
     let channels: Channel[];
     let channelsComplete = false;
@@ -1729,6 +1993,8 @@ export class Search {
     this.workerChannels = channels;
     this.workerChannelsComplete = channelsComplete;
     this.markWorkerIndexReady(this.account);
+    // A worker match it superseded never settles the programmes itself.
+    if (this.pendingIndex?.programmes) this.indexSettled(sessionId, 'programmes');
     return true;
   }
 
@@ -1738,7 +2004,7 @@ export class Search {
     series: SeriesItem[],
   ): void {
     this.visibleChannels = itemsAt(PlaylistService.channels, response.channels.indices);
-    this.visiblePrograms = itemsAt(this.programIndex, response.programmes.indices);
+    this.visiblePrograms = this.programsAt(response.programmes.indices);
     // An answer from another epoch indexes items this page no longer keeps.
     const kept = response.items?.epoch === this.delivered.epoch ? this.delivered : null;
     this.visibleMovies = isRecordList(vod)
@@ -1793,7 +2059,7 @@ export class Search {
       'scope=unified',
       `session=${String(this.workerSession)}`,
       `channels=${String(PlaylistService.channels.length)}`,
-      `programmes=${String(this.programIndex.length)}`,
+      `programmes=${String(this.programCount())}`,
       `movies=${String(this.allVod.length)}`,
       `series=${String(this.allSeries.length)}`,
     );

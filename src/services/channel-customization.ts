@@ -64,6 +64,16 @@ class ChannelCustomizationServiceImpl {
     return this.record.overrides[key] ?? null;
   }
 
+  /** Every saved guide mapping as [channel key, guide channel key]. */
+  epgMappings(): Array<[string, string]> {
+    const mappings: Array<[string, string]> = [];
+    for (const key in this.record.overrides) {
+      const id = this.record.overrides[key].epgChannelId;
+      if (id) mappings.push([key, id]);
+    }
+    return mappings;
+  }
+
   epgChannelIds(): string[] {
     const ids: string[] = [];
     for (const key in this.record.overrides) {
