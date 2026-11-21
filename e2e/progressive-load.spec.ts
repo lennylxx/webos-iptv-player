@@ -266,8 +266,9 @@ test('a reminder launch tunes its channel instead of an early auto-play', async 
     await expect(page.locator('#view-player')).toBeHidden();
     playlist.releaseRequest(1);
     await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
-    // The last channel never started ahead of the reminder's.
-    expect(tuned.length).toBeGreaterThan(0);
+    // The last channel never started ahead of the reminder's. The OSD can name
+    // the channel before the player requests its stream.
+    await expect.poll(() => tuned.length).toBeGreaterThan(0);
     expect(tuned.filter(url => !url.endsWith('/Channel5.m3u8'))).toEqual([]);
   } finally {
     await playlist.close();

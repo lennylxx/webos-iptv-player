@@ -12,6 +12,7 @@ import {
   SEARCH_M3U,
   pressStepsAndReadPlayer,
   seedPointer,
+  settled,
 } from './helpers';
 
 // The player view: playback start, sidebar, action menu, OSD, and live DVR.
@@ -937,7 +938,7 @@ test('keeps pseudo-localized player menu labels within the panel', async ({ page
   await expect(menu).toBeVisible();
   await expect(menu.locator('.menu-item')).toHaveCount(5);
   await expect(menu.locator('.menu-item').first()).toContainText('[!!');
-  const menuWidth = await menu.evaluate(element => element.getBoundingClientRect().width);
+  const menuWidth = await settled(() => menu.evaluate(element => element.getBoundingClientRect().width));
   expect(menuWidth).toBeGreaterThan(340);
   expect(menuWidth).toBeLessThanOrEqual(440);
   const overflow = await menu.locator('.menu-header h2, .menu-subtitle, .menu-item')
