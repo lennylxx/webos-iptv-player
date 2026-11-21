@@ -357,6 +357,19 @@ describe('fetchAndParseXMLTV', () => {
       .rejects.toMatchObject({ details: { stage: 'fetch', reason: 'exception', inputBytes: 0 } });
   });
 
+  it('holds no cache copy of a guide that ends before its closing tag', async () => {
+    const programme = (h: number) => `<programme channel="a" start="${String(20240601000000 + h * 10000)} +0000" `
+      + `stop="${String(20240601000000 + (h + 1) * 10000)} +0000"><title>T</title></programme>`;
+    vi.stubGlobal('fetch', faultFetch(() => ({ body: `<?xml version="1.0"?><tv><channel id="a"/>${programme(11)}` })));
+
+    const result = await fetchAndParseXMLTVInWorker({
+      url: 'http://host/a', timeout: 30000, options: { nowMs: Date.UTC(2024, 5, 1, 12) }, holdForCache: true,
+    }, () => undefined);
+
+    expect(result.stats).toMatchObject({ incomplete: true, programmesKept: 1 });
+    expect(result.held).toBeUndefined();
+  });
+
   it('logs a structured failure without committing a partial result', async () => {
     vi.stubGlobal('fetch', vi.fn(async () =>
       new Response('', { status: 503, statusText: 'Unavailable' })));

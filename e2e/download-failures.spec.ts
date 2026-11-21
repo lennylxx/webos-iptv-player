@@ -134,3 +134,23 @@ test('a guide cut off mid-download shows none of the programmes that arrived', a
     await guide.close();
   }
 });
+
+test('a refreshed guide that ends before its closing tag keeps the whole one', async ({ page }) => {
+  const cut = GUIDE.slice(0, GUIDE.indexOf('<programme channel="ch1" start="' + GUIDE_DAY(7)));
+  const guide = await startFaultServer({ '/epg.xml': [{ body: GUIDE }, { body: cut }] });
+  try {
+    await openGuide(page, guide.url('/epg.xml'));
+    await expect(page.locator('#epg-programmes')).toContainText('Bravo Show');
+
+    const kept = guideLog(page, 'event=epg.feed.incomplete outcome=kept_previous');
+    await enterTab(page, 'settings');
+    await page.locator('#refresh-data').click();
+    await kept;
+    expect(guide.hits('/epg.xml')).toBe(2);
+
+    await enterTab(page, 'epg');
+    await expect(page.locator('#epg-programmes')).toContainText('Bravo Show');
+  } finally {
+    await guide.close();
+  }
+});

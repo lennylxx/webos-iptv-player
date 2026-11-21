@@ -43,6 +43,8 @@ export interface XMLTVParseStats {
   /** Dropped because `maxProgrammes` was already reached. */
   droppedBudget: number;
   malformed: number;
+  /** The feed ended before its closing </tv>: cut off, or never closed. */
+  incomplete: boolean;
 }
 
 interface ElementRange {
@@ -78,11 +80,13 @@ export class XMLTVStreamParser {
     skippedFilter: 0,
     droppedBudget: 0,
     malformed: 0,
+    incomplete: false,
   };
 
   private buffer = '';
   private cursor = 0;
   private ended = false;
+  private rootClosed = false;
   private readonly channels: Record<string, EpgChannel> = {};
   private readonly programmes: Record<string, Programme[]> = {};
   private readonly lastStartByChannel = new Map<string, number>();
@@ -130,6 +134,7 @@ export class XMLTVStreamParser {
     if (this.ended) throw new Error('XMLTV parser already finished');
     this.ended = true;
     this.drain(true);
+    this.stats.incomplete = !this.rootClosed;
     if (!this.sink) this.sortUnorderedProgrammes();
     this.logStats();
     this.buffer = '';
@@ -212,6 +217,9 @@ export class XMLTVStreamParser {
       if (tagEnd === -1) return this.incomplete(final);
       const name = readTagName(this.buffer, tagStart + 1, tagEnd);
       if (!TARGET_TAGS.has(name)) {
+        // A closing </tv>, or an empty guide's self-closing <tv/>, ends the feed.
+        if (name === 'tv' && (this.buffer.charCodeAt(tagStart + 1) === 47
+          || isSelfClosing(this.buffer, tagStart, tagEnd))) this.rootClosed = true;
         if (name === 'tv' && this.sourceName === undefined) {
           this.sourceName = readAttribute(
             this.buffer,

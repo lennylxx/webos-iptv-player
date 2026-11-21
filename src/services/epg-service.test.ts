@@ -1146,6 +1146,124 @@ describe('EpgService channel pre-filter', () => {
     expect(setCachedEpg).not.toHaveBeenCalled();
   });
 
+  describe('a feed cut off before </tv>', () => {
+    const cutOff = (title: string) => ({
+      data: parsed('a', 'Alpha', title),
+      stats: { channelsKept: 1, programmesSeen: 1, programmesMatched: 1, programmesKept: 1, incomplete: true },
+    }) as never;
+    const nowPlaying = () => EpgService.getNowPlaying(`${encodeURIComponent('http://a')}::a`)?.title;
+
+    it('does not replace the whole guide already loaded', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Whole'));
+      await EpgService.load([source('http://a', ['a'])]);
+      vi.mocked(setCachedEpg).mockClear();
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(cutOff('Partial'));
+
+      await EpgService.refresh(undefined, true);
+
+      expect(nowPlaying()).toBe('Whole');
+      expect(setCachedEpg).not.toHaveBeenCalled();
+      expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+        .toContain('event=epg.feed.incomplete outcome=kept_previous');
+    });
+
+    // A feed that always ends early must still move on from its first fragment.
+    it('replaces a partial guide with a fuller partial one, but not with a smaller one', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(cutOff('First'));
+      await EpgService.load([source('http://a', ['a'])]);
+      const fuller = parsed('a', 'Alpha', 'Fuller');
+      fuller.programmes.a.push(prog({ title: 'Later', start: h(1), stop: h(2) }));
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce({
+        data: fuller,
+        stats: { channelsKept: 1, programmesSeen: 2, programmesMatched: 2, programmesKept: 2, incomplete: true },
+      } as never);
+
+      await EpgService.refresh(undefined, true);
+      expect(nowPlaying()).toBe('Fuller');
+
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(cutOff('Smaller'));
+      await EpgService.refresh(undefined, true);
+      expect(nowPlaying()).toBe('Fuller');
+      expect(setCachedEpg).not.toHaveBeenCalled();
+    });
+
+    it('replaces a whole guide gone stale with a partial one that still has programmes to air', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      parseXMLTVMock.mockReturnValue({
+        channels: { a: { name: 'Alpha', icon: '' } },
+        programmes: { a: [prog({ title: 'Over', start: h(-3), stop: h(-2) })] },
+        tzOffsetMinutes: null,
+      });
+      await EpgService.load([source('http://a', ['a'])]);
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(cutOff('Partial'));
+
+      await EpgService.refresh(undefined, true);
+
+      expect(nowPlaying()).toBe('Partial');
+    });
+
+    it('takes a partial guide parsed for channels the guide in hand was not parsed for', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(getCachedEpg).mockResolvedValueOnce({
+        url: 'http://a', timestamp: NOON, data: parsed('a', 'Alpha', 'Cached'), filter: { ids: ['b'], names: ['bravo'] },
+      });
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(cutOff('Fresh'));
+      const alpha = channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] });
+
+      await EpgService.load([source('http://a', ['a'])], [alpha]);
+
+      expect(EpgService.getNowPlaying(EpgService.findChannelId(alpha)!)?.title).toBe('Fresh');
+    });
+
+    it('fetches a partial guide again only after a pause, unless forced', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      for (let i = 0; i < 3; i++) vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(cutOff('Partial'));
+      await EpgService.load([source('http://a', ['a'])]);
+      expect(EpgService.getNextRefreshDelayMs(6 * 3600_000)).toBe(CONFIG.EPG.INCOMPLETE_RETRY_MS);
+
+      await EpgService.refresh();
+      expect(fetchXmlMock).toHaveBeenCalledTimes(1);
+      await EpgService.refresh(undefined, true);
+      expect(fetchXmlMock).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(Date.now() + CONFIG.EPG.INCOMPLETE_RETRY_MS);
+      await EpgService.refresh();
+      expect(fetchXmlMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('waits before fetching again a feed that ended early and was turned away', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Whole'));
+      await EpgService.load([source('http://a', ['a'])]);
+      // The whole guide is due; the feed now ends early and is turned away.
+      vi.setSystemTime(Date.now() + 6 * 3600_000);
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(cutOff('Partial'));
+      await EpgService.refresh();
+      expect(fetchXmlMock).toHaveBeenCalledTimes(2);
+
+      await EpgService.refresh();
+      expect(fetchXmlMock).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(Date.now() + CONFIG.EPG.INCOMPLETE_RETRY_MS);
+      await EpgService.refresh();
+      expect(fetchXmlMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('shows what arrived when nothing else is loaded, without caching it', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(cutOff('Partial'));
+
+      await EpgService.load([source('http://a', ['a'])]);
+
+      expect(nowPlaying()).toBe('Partial');
+      expect(setCachedEpg).not.toHaveBeenCalled();
+      expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+        .toContain('event=epg.feed.incomplete outcome=partial');
+    });
+  });
+
   it('does not cache a guide the retention ceiling truncated', async () => {
     vi.mocked(parseXMLTVWithStats).mockReturnValueOnce({
       data: parsed('a', 'Alpha', 'Program'),

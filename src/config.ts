@@ -163,6 +163,10 @@ export const CONFIG = {
     CHANNEL_CHANGE_RELOAD_DELAY: 2000,
     // Longest stretch of reading the cached guide before input gets a turn.
     CACHE_DECODE_SLICE_MS: 16,
+    // A guide whose feed ended early is fetched again no sooner than this,
+    // unless forced: a feed that always ends early would otherwise reload on
+    // every Guide visit.
+    INCOMPLETE_RETRY_MS: 30 * 60 * 1000,
   },
 
   // Xtream Movies/Series catalog + resume tuning.

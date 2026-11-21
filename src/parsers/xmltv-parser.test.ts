@@ -15,6 +15,18 @@ function xmltvDate(d: Date): string {
 }
 
 describe('parseXMLTV', () => {
+  it('takes an empty guide that closes itself as complete', () => {
+    expect(parseXMLTVWithStats('<?xml version="1.0"?><tv generator-info-name="g"/>').stats.incomplete).toBe(false);
+  });
+
+  it('marks a feed that ends before its closing </tv> incomplete', () => {
+    const programme = '<programme channel="a" start="20240601110000 +0000" stop="20240601130000 +0000"><title>T</title></programme>';
+    const opts = { nowMs: Date.UTC(2024, 5, 1, 12) };
+    expect(parseXMLTVWithStats(`<tv>${programme}</tv>`, opts).stats.incomplete).toBe(false);
+    const cut = parseXMLTVWithStats(`<tv>${programme}${programme.slice(0, 40)}`, opts);
+    expect(cut.stats).toMatchObject({ incomplete: true, programmesKept: 1 });
+  });
+
   it('reads a human-readable source name from the XMLTV root', () => {
     const result = parseXMLTVWithStats(`<?xml version="1.0"?>
       <tv source-info-name="Guide Alpha" generator-info-name="Generator">

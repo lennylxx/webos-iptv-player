@@ -30,6 +30,12 @@ interface SourceState {
   mappingIndex?: PreparedEpgMappingSearchEntry[];
   /** Timestamp of the epg-cache record holding `data`'s programme arrays. */
   cacheTimestamp?: number;
+  /** A feed cut off before </tv>: shown, never cached, and replaceable. */
+  incomplete?: boolean;
+  /** The key of the filter `data` was parsed or narrowed for. */
+  filterKey?: string;
+  /** A feed that ended early was turned away; refresh no sooner than this unless forced. */
+  retryAfter?: number;
 }
 
 /** Where a channel's programmes live in the epg-cache store. */
@@ -412,8 +418,8 @@ class EpgServiceImpl {
       // An idle source keeps no state; counting it as due re-arms a 0ms timer forever.
       if (this.isIdle(source)) continue;
       const state = this.states.get(source.url);
-      if (!state || state.needsRefresh) return 0;
-      nextDueAt = Math.min(nextDueAt, state.timestamp + intervalMs);
+      if (!state) return 0;
+      nextDueAt = Math.min(nextDueAt, this.refreshDueAt(state, intervalMs));
     }
     return nextDueAt === Number.POSITIVE_INFINITY
       ? intervalMs
@@ -609,9 +615,7 @@ class EpgServiceImpl {
     const sourcesToRefresh = this.sources.filter((source) => {
       if (idle.has(source.url)) return false;
       const state = this.states.get(source.url);
-      return force || !state || state.needsRefresh
-        || (refreshIntervalMs !== null
-          && Date.now() - state.timestamp >= refreshIntervalMs);
+      return force || !state || Date.now() >= this.refreshDueAt(state, refreshIntervalMs);
     });
     if (!sourcesToRefresh.length) return true;
 
@@ -975,6 +979,8 @@ class EpgServiceImpl {
       needsRefresh: !hasTzField || !idsCovered || !hasChannelCatalog || !covered,
       catchupIdsKnown: idsCovered,
       cacheTimestamp: cached.timestamp,
+      ...(covered && filter ? { filterKey: filter.key } : cached.filter?.key !== undefined
+        ? { filterKey: cached.filter.key } : {}),
     }, revision);
     if (!stored) return 'missing';
     const fresh = (refreshIntervalMs === null || age < refreshIntervalMs)
@@ -1046,14 +1052,29 @@ class EpgServiceImpl {
         done();
         return false;
       }
-      // A truncated parse is usable for this session, but it is not the
-      // guide the filter asked for — so it must not settle as the answer.
-      const truncated = stats.droppedBudget > 0;
+      // A feed cut off before </tv> holds only part of the guide, so it replaces
+      // the guide loaded for the same filter only when that one has fewer
+      // programmes still to air: an older fragment, or a whole guide gone stale.
+      const current = this.states.get(source.url);
+      if (stats.incomplete && current && this.hasProgrammes(source.url)
+        && current.filterKey === filter?.key
+        && !this.fuller(result, current)) {
+        log.warn('EPG feed ended early; keeping the previous data', 'event=epg.feed.incomplete',
+          'outcome=kept_previous', `kept=${String(programmeCount)}`);
+        current.retryAfter = Date.now() + CONFIG.EPG.INCOMPLETE_RETRY_MS;
+        done();
+        return false;
+      }
+      // A truncated or cut-off parse is usable for this session, but it is not
+      // the guide the filter asked for — so it must not settle as the answer.
+      const truncated = stats.droppedBudget > 0 || stats.incomplete;
       const state: SourceState = {
         data: result,
         timestamp: Date.now(),
         needsRefresh: truncated,
         catchupIdsKnown: true,
+        ...(stats.incomplete ? { incomplete: true } : {}),
+        ...(filter ? { filterKey: filter.key } : {}),
       };
       if (!await this.setState(source.url, state, revision)) {
         done();
@@ -1062,7 +1083,10 @@ class EpgServiceImpl {
       if (onDataPublished) this.publish(revision, onDataPublished);
       log.info('Loaded', source.url, '|', Object.keys(result.channels).length, 'channels,',
         programmeCount, 'programmes', filter ? `(of ${String(stats.programmesSeen)} seen)` : '');
-      if (truncated) {
+      if (stats.incomplete) {
+        log.warn('EPG feed ended early; partial guide, not cached', 'event=epg.feed.incomplete',
+          'outcome=partial', `kept=${String(programmeCount)}`);
+      } else if (truncated) {
         // Caching it under the full filter would make `covers()` report the
         // gap as covered on the next boot, turning it permanent and silent.
         log.warn(
@@ -1098,6 +1122,32 @@ class EpgServiceImpl {
       // Any path that skipped the cache write lets the worker drop its copy.
       releaseHeldRecord(result);
     }
+  }
+
+  // Whether `next` has more programmes still to air than `current`, or as many
+  // when `current` is itself a partial guide.
+  private fuller(next: ParsedEpg, current: SourceState): boolean {
+    const now = Date.now();
+    const toAir = (data: ParsedEpg): number => {
+      let count = 0;
+      for (const id in data.programmes) {
+        for (const programme of data.programmes[id]) if (programme.stop.getTime() > now) count++;
+      }
+      return count;
+    };
+    const ahead = toAir(next) - toAir(current.data);
+    return current.incomplete ? ahead >= 0 : ahead > 0;
+  }
+
+  // A partial guide waits out INCOMPLETE_RETRY_MS before an unforced refresh.
+  private refreshDueAt(state: SourceState, intervalMs: number | null): number {
+    if (state.retryAfter !== undefined && Date.now() < state.retryAfter) return state.retryAfter;
+    if (state.incomplete) {
+      const retryAt = state.timestamp + CONFIG.EPG.INCOMPLETE_RETRY_MS;
+      return intervalMs === null ? retryAt : Math.min(retryAt, state.timestamp + intervalMs);
+    }
+    if (state.needsRefresh) return 0;
+    return intervalMs === null ? Number.POSITIVE_INFINITY : state.timestamp + intervalMs;
   }
 
   private hasProgrammes(url: string): boolean {

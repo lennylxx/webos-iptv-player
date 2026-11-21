@@ -275,6 +275,7 @@ function deliverGuide(
 ): XMLTVWorkerResponse {
   const cacheable = request.holdForCache
     && response.stats.droppedBudget === 0
+    && !response.stats.incomplete
     && response.stats.programmesKept > 0;
   const packed = packEpg(guide);
   sendBlocks('channels', packed.channels, emitChunk);
