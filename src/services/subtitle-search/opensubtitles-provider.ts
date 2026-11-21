@@ -1,6 +1,6 @@
 import type { SubtitleProvider, SubtitleQuery, OnlineSubtitleResult, SubtitleText } from './types';
 import { formatFromName } from './types';
-import { fetchWithTimeout } from '../../utils/fetch-helper';
+import { FetchTextError, fetchWithTimeout } from '../../utils/fetch-helper';
 import { createLogger } from '../../utils/logger';
 
 const log = createLogger('OpenSubs');
@@ -86,7 +86,10 @@ export function createOpenSubtitlesProvider(cfg: OsProviderConfig): SubtitleProv
       let res: Response;
       try {
         res = await request(token);
-      } catch {
+      } catch (e) {
+        // Only an expired token is worth a fresh login; anything else would just
+        // repeat the wait on a server that is down.
+        if (!(e instanceof FetchTextError) || e.status !== 401) throw e;
         token = await login();
         res = await request(token);
       }

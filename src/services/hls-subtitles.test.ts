@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, onTestFinished, vi } from 
 import { HlsSubtitles, wallToMediaSeconds, newestPdt, oldestPdt, lowPercentile, cueKey, parseMediaPlaylist, pickVideoVariant, planSameTextMerges, isPermanentSubtitleFailure } from './hls-subtitles';
 import { LegacyAbortController } from '../test/legacy-fetch';
 import { faultFetch } from '../test/fault-fetch';
+import type { Fault } from '../test/fault-plan';
 import { CONFIG } from '../config';
 
 // Synthetic timeline mirroring a live HLS stream: media-time 0 maps to wall clock
@@ -351,6 +352,76 @@ describe('HlsSubtitles with an external clock', () => {
     await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.SUBTITLE_FETCH_TIMEOUT);
 
     expect(started).toBe(true);
+    subs.stop();
+  });
+
+  // Live CDNs refuse the newest segment for a moment; its captions must still show.
+  it.each<[string, Fault]>([
+    ['a refused segment', { status: 404 }],
+    ['a segment cut off partway', { body: CUE_VTT, resetAfterBytes: 5 }],
+  ])('loads %s again on the next poll', async (_name, first) => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    vi.stubGlobal('fetch', faultFetch({
+      'http://host/a.m3u8': { body: MASTER },
+      'http://host/s.m3u8': { body: PLAYLIST },
+      'http://host/s0.vtt': { body: 'WEBVTT\n' },
+      'http://host/s1.vtt': [first, { body: CUE_VTT }],
+    }));
+    const { video, timeline } = placeholder();
+    const subs = new HlsSubtitles();
+
+    await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+    expect(timeline.cues).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2100);
+
+    expect(timeline.cues.map(cue => cue.text)).toEqual(['Alpha']);
+    subs.stop();
+  });
+
+  it('stops asking for a segment refused on every attempt', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    const fetch = faultFetch({
+      'http://host/a.m3u8': { body: MASTER },
+      'http://host/s.m3u8': { body: PLAYLIST },
+      'http://host/s0.vtt': { body: 'WEBVTT\n' },
+      'http://host/s1.vtt': { status: 404 },
+    });
+    vi.stubGlobal('fetch', fetch);
+    const subs = new HlsSubtitles();
+
+    await subs.start(placeholder().video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(fetch.calls.filter(call => call.url === 'http://host/s1.vtt')).toHaveLength(3);
+    subs.stop();
+  });
+
+  // On webOS 4 a stopped session's read ends only at its own timeout, after a restart.
+  it('keeps a failed segment of a stopped session out of the next one', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    vi.stubGlobal('VTTCue', FakeVTTCue);
+    vi.stubGlobal('AbortController', LegacyAbortController);
+    const fetch = faultFetch({
+      'http://host/a.m3u8': { body: MASTER },
+      'http://host/s.m3u8': { body: PLAYLIST },
+      'http://host/s0.vtt': { body: 'WEBVTT\n' },
+      'http://host/s1.vtt': [{ body: CUE_VTT, stallAfterBytes: 5 }, { body: CUE_VTT }],
+    });
+    vi.stubGlobal('fetch', fetch);
+    const subs = new HlsSubtitles();
+    const { video } = placeholder();
+
+    void subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+    await vi.advanceTimersByTimeAsync(CONFIG.PLAYER.SUBTITLE_FETCH_TIMEOUT + 4000);
+
+    expect(fetch.calls.filter(call => call.url === 'http://host/s1.vtt')).toHaveLength(2);
     subs.stop();
   });
 

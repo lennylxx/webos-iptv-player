@@ -11,6 +11,7 @@ const POLL_MS = 2000;        // subtitle media playlist target-duration is ~2s
 const WINDOW = 15;           // only the most recent N segments (~30s); playlists can hold hours
 const CUE_RETENTION_S = 30;  // drop cues this far behind the playhead
 const CALIB_REMEASURE_MS = 6000;  // re-sample the reconstructed startDate this often (averaged)
+const SEGMENT_ATTEMPTS = 3;  // a segment refused this often is left alone
 const MERGE_GAP_S = 1.0;          // merge same-text cues within this gap (boundary-split blink/overlap)
 const LIVE_HOLD_BACK_TARGETS = 3; // HLS players start live this many target durations behind the end
 const CLOCK_WAIT_MS = 10000; // an external clock silent this long is worth a diag event
@@ -51,6 +52,7 @@ export class HlsSubtitles {
   private subsUrl = '';
   private gen = 0;            // bumped on stop(); in-flight async bails when it changes
   private requests: AbortController | null = null; // aborted on stop(), releasing held reads
+  private failedSegments = new Map<string, number>(); // segment URI -> failed attempts
   private _active = false;
   private loggedNoAnchor = false; // one-shot: warn once when cues can't be anchored
   private addedKeys = new Map<string, number>(); // dedup repeated cues (key -> cue wall ms)
@@ -146,6 +148,7 @@ export class HlsSubtitles {
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
     this.cueTrack.disable();
     this.seen.clear();
+    this.failedSegments.clear();
     this.addedKeys.clear();
     this.subsUrl = '';
     // Keep the shared cue track so the next start on this element reuses it.
@@ -188,11 +191,18 @@ export class HlsSubtitles {
         this.seen.add(seg.uri);
         const segMedia = wallToMediaSeconds(anchor, seg.pdtMs);
         if (segMedia < ct - 4) continue; // already played past the playhead — don't fetch it
-        const segRes = await this.fetchText(new URL(seg.uri, base).href);
+        let segRes: TextResult;
+        try {
+          segRes = await this.fetchText(new URL(seg.uri, base).href);
+        } catch (e) {
+          if (gen === this.gen) this.retrySegment(seg.uri); // a cut-off segment loads again
+          throw e;
+        }
         if (gen !== this.gen || !this.track) return;
         if (!segRes.ok) {
-          // Live CDNs often refuse the newest or oldest segment for a moment; only
-          // a refused playlist says the rendition is gone.
+          // Live CDNs often refuse the newest or oldest segment for a moment, so it
+          // loads again; only a refused playlist says the rendition is gone.
+          this.retrySegment(seg.uri);
           this.report(`segment_http_${String(segRes.status)}`);
           if (gen !== this.gen) return;
           continue;
@@ -228,6 +238,7 @@ export class HlsSubtitles {
         }
       }
       this.seen = new Set([...this.seen].filter(u => windowUris.has(u))); // bound to the window
+      for (const uri of Array.from(this.failedSegments.keys())) if (!windowUris.has(uri)) this.failedSegments.delete(uri);
       this.pruneKeys();
       if (added) {
         this.shown = true;
@@ -238,6 +249,13 @@ export class HlsSubtitles {
       log.debug('subtitles refresh failed:', e);
       if (gen === this.gen) this.report(fetchFailureReason(e));
     }
+  }
+
+  // Lets the next poll fetch a failed segment again, a few times at most.
+  private retrySegment(uri: string): void {
+    const attempts = (this.failedSegments.get(uri) ?? 0) + 1;
+    this.failedSegments.set(uri, attempts);
+    if (attempts < SEGMENT_ATTEMPTS) this.seen.delete(uri);
   }
 
   // A bounded read: on webOS 4 a stalled body would otherwise hold its socket for good.

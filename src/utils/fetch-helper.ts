@@ -44,7 +44,9 @@ export async function fetchWithTimeout(
   const session = new FetchSession(url, { timeout, signal: options.signal ?? undefined });
   try {
     const response = await session.open(options);
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    if (!response.ok) {
+      throw new FetchTextError('http', `HTTP ${response.status}: ${response.statusText}`, response.status);
+    }
     const bytes = await session.readBody();
     const nullBody = NULL_BODY_STATUSES.indexOf(response.status) >= 0;
     return new Response(nullBody ? null : bytes as Uint8Array<ArrayBuffer>, {
@@ -89,7 +91,9 @@ export async function fetchText(url: string, timeout = 30000): Promise<string> {
   const session = new FetchSession(url, { timeout });
   try {
     const response = await session.open();
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    if (!response.ok) {
+      throw new FetchTextError('http', `HTTP ${response.status}: ${response.statusText}`, response.status);
+    }
     return new TextDecoder().decode(await session.readBody());
   } finally {
     session.close();

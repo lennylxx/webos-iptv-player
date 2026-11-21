@@ -66,4 +66,15 @@ describe('opensubtitles provider', () => {
     expect(text.text).toBe('CUE2');
     expect(token).toBe('T2');
   });
+
+  it('fails a download the server refuses for another reason without logging in again', async () => {
+    token = 'T1';
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(res(503, { message: 'busy' }));
+    await expect(provider.download({
+      providerId: 'opensubtitles', id: '991', language: 'zh-CN', releaseName: 'r',
+      fileName: 'sub.srt', format: 'srt', hearingImpaired: false, downloads: 0,
+    })).rejects.toThrow('HTTP 503');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(token).toBe('T1');
+  });
 });

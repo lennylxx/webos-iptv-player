@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, onTestFinished, vi } from 'vitest';
+import { faultFetch } from '../../test/fault-fetch';
+import type { Fault } from '../../test/fault-plan';
+import { createSubdlProvider } from './subdl-provider';
+import { createAssrtProvider } from './assrt-provider';
+import { createOpenSubtitlesProvider } from './opensubtitles-provider';
+import type { SubtitleProvider } from './types';
 import { StorageService } from '../storage-service';
 import { SubtitleSearchService } from './subtitle-search-service';
 import { CONFIG } from '../../config';
@@ -75,5 +81,46 @@ describe('subtitleSearchService', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('subtitle providers over a failing server', () => {
+  const providers: Array<[string, () => SubtitleProvider]> = [
+    ['subdl', () => createSubdlProvider(() => 'k')],
+    ['assrt', () => createAssrtProvider(() => '')],
+    ['opensubtitles', () => createOpenSubtitlesProvider({
+      getApiKey: () => 'AK',
+      getCredentials: () => ({ username: 'u', password: 'p' }),
+      getToken: () => 'T1',
+      setToken: () => undefined,
+    })],
+  ];
+  const faults: Array<[string, Fault, object]> = [
+    ['fails', { status: 503 }, { name: 'FetchTextError', status: 503 }],
+    ['cannot be reached', { networkError: true }, { name: 'TypeError' }],
+    ['cuts its answer off', { body: '{"subtitles":[{"name":"r"}]}', resetAfterBytes: 6 }, { name: 'TypeError' }],
+    ['never answers', { hang: true }, { name: 'FetchStopError', reason: 'timeout' }],
+  ];
+  const cases = providers.flatMap(([id, make]) =>
+    faults.map(([name, fault, error]) => [id, name, make, fault, error] as const));
+
+  it.each(cases)('%s finds nothing and fails a download when its server %s', async (id, _name, make, fault, error) => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', faultFetch(() => fault));
+    const provider = make();
+
+    let found: unknown = 'pending';
+    void provider.search({ type: 'movie', title: 'Alpha' }).then(results => { found = results; });
+    const download = provider.download({
+      providerId: id as OnlineSubtitleResult['providerId'], id: '1', language: 'l1', releaseName: 'r', fileName: 'f.srt',
+      format: 'srt', hearingImpaired: false, downloads: 0,
+    });
+    const failed = expect(download).rejects.toMatchObject(error);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(found).toEqual([]);
+    await failed;
   });
 });
