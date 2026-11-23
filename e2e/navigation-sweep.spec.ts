@@ -56,6 +56,11 @@ interface Focus {
 
 interface ProbeScreen {
   root: string; focusables: string; columns: Array<[string, string]>;
+  // A surface that paints its own cells (the guide's timeline): `cells` are
+  // its pooled cell nodes, named by their text, or by the `cellRow` beside
+  // them when empty; `ring` is the one element that rings the focused cell;
+  // and the pointer reaches a cell by moving over `surface`.
+  cells?: string; cellRow?: string; ring?: string; surface?: string;
   // [selector, attribute]: the attribute of the first ancestor-or-self an
   // element has matching the selector, tried in order, is its tag.
   tags: Array<[string, string]>;
@@ -106,6 +111,19 @@ function installProbe(): void {
       seen[kind] = (seen[kind] || 0) + 1;
       ids.set(el, `${kind}#${seen[kind] - 1}`);
     }
+    // Pooled cells change node as they scroll, so their text names them.
+    if (s.cells) {
+      const rows = s.cellRow && root ? Array.from(root.querySelectorAll(s.cellRow)) : [];
+      for (const el of els) {
+        if (!el.matches(s.cells)) continue;
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        const r = navBox(el);
+        const mid = (r.top + r.bottom) / 2;
+        const row = rows.find((x) => { const q = navBox(x); return q.top <= mid && q.bottom > mid; });
+        const rowText = row ? (row.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        ids.set(el, `cell:${rowText}|${text}`);
+      }
+    }
     const idOf = (el: Element) => ids.get(el) || pathOf(el, root!);
     return { root, els, idOf };
   };
@@ -115,7 +133,7 @@ function installProbe(): void {
     return `${el.tagName.toLowerCase()}.${Array.from(el.classList).slice(0, 2).join('.')}${
       name ? `[${name}]` : ''}${text ? ` "${text}"` : ''}`;
   };
-  const hiddenWhy = (el: Element): string => {
+  const hiddenWhy = (el: Element, s?: ProbeScreen): string => {
     const r = navBox(el);
     if (r.width <= 0 || r.height <= 0) return 'not laid out';
     if (getComputedStyle(el).visibility === 'hidden') return 'visibility hidden';
@@ -128,6 +146,8 @@ function installProbe(): void {
     if (!hit) return 'nothing at its center';
     if (el.contains(hit)) return '';
     if (hit.contains(el) && getComputedStyle(el).pointerEvents === 'none') return '';
+    // The ring drawn over the focused cell does not cover it.
+    if (s && s.ring && hit.closest(s.ring)) return '';
     return `covered by ${describe(hit)}`;
   };
   const toItem = (s: ProbeScreen, el: Element, id: string): Item => {
@@ -145,7 +165,7 @@ function installProbe(): void {
       box: boxOf(el),
       column: (s.columns.find(([, sel]) => el.closest(sel)) || ['main'])[0],
       group: parent ? pathOf(parent, document.body) : '',
-      hidden: hiddenWhy(el),
+      hidden: hiddenWhy(el, s),
       container: container ? pathOf(container, document.body) : '',
       navigable: r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden',
       tag,
@@ -170,6 +190,19 @@ function installProbe(): void {
       const target = active.closest(s.focusables);
       if (target && els.indexOf(target) >= 0) el = target;
     }
+    // A painted surface rings its focused cell: the cell under the ring.
+    const ring = s.ring ? root.querySelector(s.ring) : null;
+    if (!el && ring && ring.classList.contains('focused') && s.cells) {
+      const rb = navBox(ring);
+      let best = 0;
+      for (const cell of els) {
+        if (!cell.matches(s.cells)) continue;
+        const cb = navBox(cell);
+        const w = Math.min(rb.right, cb.right) - Math.max(rb.left, cb.left);
+        const h = Math.min(rb.bottom, cb.bottom) - Math.max(rb.top, cb.top);
+        if (w > 0 && h > 0 && w * h > best) { best = w * h; el = cell; }
+      }
+    }
     if (!el) {
       for (const lit of Array.from(root.querySelectorAll('.focused'))) {
         const target = lit.closest(s.focusables);
@@ -191,9 +224,18 @@ function installProbe(): void {
     }
   };
   let hovered: Element | null = null;
-  const hover = (el: Element) => {
+  const hover = (el: Element, s: ProbeScreen) => {
     if (hovered && hovered !== el) hovered.dispatchEvent(new CustomEvent('nav:unhover', { bubbles: true }));
     hovered = el;
+    const surface = s.cells && s.surface && el.matches(s.cells) ? document.querySelector(s.surface) : null;
+    if (surface) {
+      // The surface hit-tests the pointer instead of hovering a cell.
+      const r = navBox(el);
+      surface.dispatchEvent(new CustomEvent('nav:pointermove', {
+        bubbles: true, detail: { clientX: (r.left + r.right) / 2, clientY: (r.top + r.bottom) / 2 },
+      }));
+      return;
+    }
     el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
   };
   const probe: Probe = {
@@ -225,7 +267,7 @@ function installProbe(): void {
       if (active && active.tagName === 'INPUT' && document.querySelector(s.root)?.contains(active)) active.blur();
       const away = other !== null ? find(s, other) : null;
       if (away) {
-        hover(away);
+        hover(away, s);
         await settle();
       }
       let target = find(s, id);
@@ -237,14 +279,14 @@ function installProbe(): void {
         target = find(s, id);
       }
       if (!target) return 'gone';
-      if (hiddenWhy(target)) {
+      if (hiddenWhy(target, s)) {
         // Brought on screen first, as a wheel would.
         target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         await settle();
         target = find(s, id);
         if (!target) return 'gone after scrolling into view';
       }
-      hover(target);
+      hover(target, s);
       for (let i = 0; i < 4; i++) {
         await settle();
         const now = focus(s);
@@ -298,7 +340,10 @@ interface Screen extends ProbeScreen {
   followScroll?: boolean;
 }
 
-const probeOf = (s: Screen): ProbeScreen => ({ root: s.root, focusables: s.focusables, columns: s.columns, tags: s.tags });
+const probeOf = (s: Screen): ProbeScreen => ({
+  root: s.root, focusables: s.focusables, columns: s.columns, tags: s.tags,
+  cells: s.cells, cellRow: s.cellRow, ring: s.ring, surface: s.surface,
+});
 
 const readFocus = (page: Page, s: Screen) =>
   page.evaluate((p) => (window as unknown as ProbeWindow).__navProbe.focus(p), probeOf(s));
@@ -555,6 +600,26 @@ const SCREENS: Screen[] = [
       }
     },
   })),
+  {
+    name: 'Guide timeline',
+    root: '#view-epg',
+    // The timeline paints its own cells and one ring over the focused one.
+    focusables: '[data-hover-target]:not(.epg-tl-surface), .epg-search-wrap, [data-epg-reminders], .tl-cell',
+    cells: '.tl-cell',
+    cellRow: '.tl-name',
+    ring: '.epg-tl-focus',
+    surface: '.epg-tl-surface',
+    columns: [['menu', '.epg-group-menu'], ['timeline', '.epg-tl']],
+    tags: [],
+    cross: [],
+    async seed(page) {
+      await page.addInitScript(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));
+    },
+    async open(page) {
+      await openTab(page, 'epg');
+      await expect(page.locator('#view-epg .epg-tl-surface .tl-cell').first()).toBeVisible();
+    },
+  },
   {
     name: 'Theme editor',
     root: '.theme-editor-host',
