@@ -11,7 +11,7 @@
 //   epg-guide.png      three-pane program guide, with catch-up resume markers
 //   epg-catchup-resume.png  the Resume / Start Over / Cancel resume prompt
 //   settings.png       settings incl. LAN setup QR and manual pairing
-//   themes.png         Settings Appearance section with the theme picker
+//   themes.png         theme picker on a custom theme made in the editor
 //   reminder-manager.png  date-grouped upcoming reminders with removal controls
 //   parental-controls.png  lock manager — Live groups on Xtream accounts, Suggested
 //                      adult groups, and a locked group with one channel set separately
@@ -844,7 +844,7 @@ async function setupPage(page, {
 }
 
 // Dispatch a webOS remote keycode (colored buttons aren't real keyboard keys).
-const KEY = { RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406 };
+const KEY = { RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406, BACK: 461 };
 async function remote(page, keyCode) {
   await page.evaluate((kc) => document.dispatchEvent(
     new KeyboardEvent('keydown', { keyCode: kc, bubbles: true })), keyCode);
@@ -1101,10 +1101,34 @@ try {
     const picker = page.locator('.theme-swatch-grid');
     await picker.waitFor({ state: 'attached' });
     await picker.evaluate((el) => el.parentElement?.scrollIntoView({ block: 'start' }));
-    await page.locator('.theme-swatch[data-theme-id="midnight"]').click();
+    // Make a custom theme in the editor: deep teal with a coral accent.
+    await page.locator('[data-theme-new]').click();
+    for (const [seed, hex] of [['accent', 'FF7A59'], ['background', '0B1416']]) {
+      await page.locator(`.theme-editor [data-color-seed="${seed}"]`).click();
+      const input = page.locator('[data-theme-hex]');
+      await input.click();
+      await input.fill(hex);
+      await input.press('Enter');
+      await remote(page, KEY.BACK);
+    }
+    await page.locator('[data-theme-save]').click();
+    await page.locator('.theme-editor-host').waitFor({ state: 'hidden' });
+    await page.locator('.theme-swatch[data-theme-id^="custom-"]').click();
     await picker.waitFor({ state: 'visible' });
     await clearToasts(page);
     await page.waitForTimeout(400);
+    // Start at the second row so the last row, with the OLED and custom
+    // themes, fits whole; the pointer leaves so no swatch shows hover.
+    await page.mouse.move(1900, 1070);
+    await picker.evaluate((el) => {
+      const scroller = el.closest('.settings-scroll');
+      const columns = getComputedStyle(el).gridTemplateColumns.split(' ').length;
+      const row2 = el.children[columns];
+      if (!scroller || !row2) return;
+      scroller.style.scrollBehavior = 'auto';
+      scroller.scrollTop += row2.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12;
+    });
+    await page.waitForTimeout(200);
     await shoot(page, 'themes.png');
     console.log('  themes.png');
     await context.close();

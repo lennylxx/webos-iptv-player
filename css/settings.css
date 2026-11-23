@@ -170,14 +170,18 @@
 }
 
 .settings-general-language {
-  flex: 0 0 50%;
+  flex: 1 1 auto;
 }
 
 .settings-general-device {
-  flex: 0 0 50%;
+  flex: 0 0 auto;
+  /* Fixed to the longest locale and LAN URL so the QR never moves. */
+  width: calc(302px + 536px * var(--font-scale));
+  padding-bottom: 20px;
 }
 
 .settings-general-device > .settings-section-title {
+  margin-bottom: 20px;
   padding-left: 44px;
 }
 
@@ -618,7 +622,7 @@
 }
 
 .device-setup-card {
-  min-height: 214px;
+  min-height: 234px;
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
@@ -631,18 +635,19 @@
 
 .device-setup-card .setup-qr {
   flex: 0 0 auto;
-  width: 188px;
-  height: 188px;
+  width: 234px;
+  height: 234px;
 }
 
 .device-setup-card .setup-instructions {
-  max-width: 560px;
-  font-size: 20px;
+  max-width: 720px;
+  font-size: 24px;
 }
 
 .device-setup-card .setup-url {
   display: block;
-  font-size: 24px;
+  color: var(--text-primary);
+  font-size: 32px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -652,13 +657,13 @@
 }
 
 .device-setup-card .setup-pairing-instruction {
-  margin-top: 14px;
+  margin-top: 2px;
 }
 
 .device-setup-card .setup-pairing-code {
   display: block;
   color: var(--text-primary);
-  font-size: 24px;
+  font-size: 32px;
   font-weight: 600;
 }
 

@@ -20,11 +20,11 @@
 
 | 最近观看 | 节目指南 |
 | --- | --- |
-| ![最近观看](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![节目指南](https://github.com/user-attachments/assets/9928c342-c2fa-46b8-92f1-b5e815f24f19) |
+| ![最近观看](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![节目指南](https://github.com/user-attachments/assets/63eb2cf3-af90-4e47-870c-51a913be2e74) |
 
 | 回看续播 | 频道信息 |
 | --- | --- |
-| ![回看续播](https://github.com/user-attachments/assets/641a72bf-db7e-4757-ac71-c8add5114c7a) | ![频道信息](https://github.com/user-attachments/assets/b6a469ff-8a57-4d8a-895f-48d44963c672) |
+| ![回看续播](https://github.com/user-attachments/assets/cd0ea029-4442-45d5-a2aa-5be8f8866d7a) | ![频道信息](https://github.com/user-attachments/assets/b6a469ff-8a57-4d8a-895f-48d44963c672) |
 
 | 播放浮层 | 字幕 |
 | --- | --- |
@@ -40,11 +40,11 @@
 
 | 搜索 | 设置 |
 | --- | --- |
-| ![搜索](https://github.com/user-attachments/assets/0c6c54e2-6fb3-4fb2-a0da-7f6459815390) | ![设置](https://github.com/user-attachments/assets/8d47b502-ddcf-447f-a6b1-5afbf1b6b9ba) |
+| ![搜索](https://github.com/user-attachments/assets/0c6c54e2-6fb3-4fb2-a0da-7f6459815390) | ![设置](https://github.com/user-attachments/assets/b15ac979-37d9-4877-a50d-9f9c2e6d02d7) |
 
 | 主题选择器 | 节目提醒 |
 | --- | --- |
-| ![主题选择器](https://github.com/user-attachments/assets/2e5ed981-c01b-48ab-a681-9a0ecd6431b8) | ![节目提醒](https://github.com/user-attachments/assets/76ed121f-61eb-4c36-93a9-9aa6abdb0132) |
+| ![主题选择器](https://github.com/user-attachments/assets/56629752-46dd-462e-9640-8cb6f6dd32ce) | ![节目提醒](https://github.com/user-attachments/assets/76ed121f-61eb-4c36-93a9-9aa6abdb0132) |
 
 | 家长控制 | 局域网设置 |
 | --- | --- |

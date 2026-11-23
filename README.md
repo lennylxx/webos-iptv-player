@@ -20,11 +20,11 @@
 
 | Recently watched | Program guide |
 | --- | --- |
-| ![Recently watched](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![Program guide](https://github.com/user-attachments/assets/9928c342-c2fa-46b8-92f1-b5e815f24f19) |
+| ![Recently watched](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![Program guide](https://github.com/user-attachments/assets/63eb2cf3-af90-4e47-870c-51a913be2e74) |
 
 | Catch-up resume | Channel info |
 | --- | --- |
-| ![Catch-up resume](https://github.com/user-attachments/assets/641a72bf-db7e-4757-ac71-c8add5114c7a) | ![Channel info](https://github.com/user-attachments/assets/b6a469ff-8a57-4d8a-895f-48d44963c672) |
+| ![Catch-up resume](https://github.com/user-attachments/assets/cd0ea029-4442-45d5-a2aa-5be8f8866d7a) | ![Channel info](https://github.com/user-attachments/assets/b6a469ff-8a57-4d8a-895f-48d44963c672) |
 
 | Playback overlays | Subtitles |
 | --- | --- |
@@ -40,11 +40,11 @@
 
 | Search | Settings |
 | --- | --- |
-| ![Search](https://github.com/user-attachments/assets/0c6c54e2-6fb3-4fb2-a0da-7f6459815390) | ![Settings](https://github.com/user-attachments/assets/8d47b502-ddcf-447f-a6b1-5afbf1b6b9ba) |
+| ![Search](https://github.com/user-attachments/assets/0c6c54e2-6fb3-4fb2-a0da-7f6459815390) | ![Settings](https://github.com/user-attachments/assets/b15ac979-37d9-4877-a50d-9f9c2e6d02d7) |
 
 | Theme picker | Reminder manager |
 | --- | --- |
-| ![Theme picker](https://github.com/user-attachments/assets/2e5ed981-c01b-48ab-a681-9a0ecd6431b8) | ![Reminder manager](https://github.com/user-attachments/assets/76ed121f-61eb-4c36-93a9-9aa6abdb0132) |
+| ![Theme picker](https://github.com/user-attachments/assets/56629752-46dd-462e-9640-8cb6f6dd32ce) | ![Reminder manager](https://github.com/user-attachments/assets/76ed121f-61eb-4c36-93a9-9aa6abdb0132) |
 
 | Parental controls | LAN setup |
 | --- | --- |
