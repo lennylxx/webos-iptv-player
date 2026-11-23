@@ -1,7 +1,7 @@
 import {
+  foldNonAsciiSearchText,
   isLetterOrNumber,
   splitLetterNumberTokens,
-  stripCombiningDiacritics,
 } from './unicode-text';
 
 const SYNONYM_GROUPS = [
@@ -20,7 +20,7 @@ const ASCII_ONLY = /^[\x00-\x7f]*$/;
 
 function fold(value: string): string {
   if (ASCII_ONLY.test(value)) return value.toLowerCase();
-  return stripCombiningDiacritics(value.normalize('NFD')).toLowerCase();
+  return foldNonAsciiSearchText(value);
 }
 
 function splitFolded(value: string): string[] {

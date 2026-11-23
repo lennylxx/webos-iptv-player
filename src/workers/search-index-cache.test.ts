@@ -551,7 +551,7 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
       },
     });
     expect(response.unresolved).toBeUndefined();
-    expect(response.persist?.map(candidate => candidate.key)).toEqual(['catalog-cache|a|vod_all|31|v2']);
+    expect(response.persist?.map(candidate => candidate.key)).toEqual([`catalog-cache|a|vod_all|31|v${SEARCH_INDEX_FORMAT}`]);
     expect(sourceReads(memory)).toEqual(['read:a|vod_all']);
     expect((await index.query(query(1, 'alpha')))?.movies.indices).toEqual([1]);
   });
@@ -559,7 +559,7 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
   it('ignores a stored index of another format or a broken shape', async () => {
     const memory = reader();
     await persisted(memory);
-    const key = 'catalog-cache|a|vod_all|30|v2';
+    const key = `catalog-cache|a|vod_all|30|v${SEARCH_INDEX_FORMAT}`;
     const stored = memory.records.get(`search-index-cache|${key}`)!;
     for (const broken of [
       { ...stored, format: 0 },
@@ -632,7 +632,7 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
     expect(await index.persist({
       entries: [
         { key: candidate.key, prefix: candidate.prefix, fields: { expiresAt: 5, bytes: 9 } },
-        { key: 'catalog-cache|other|1|v2', prefix: 'catalog-cache|other|', fields: {} },
+        { key: `catalog-cache|other|1|v${SEARCH_INDEX_FORMAT}`, prefix: 'catalog-cache|other|', fields: {} },
       ],
     })).toEqual({ written: [candidate.key] });
     expect(memory.records.get(`search-index-cache|${candidate.key}`))
@@ -647,7 +647,7 @@ describe('SearchWorkerIndex with persisted source indexes', () => {
     const response = await index.prewarm({
       sources: [{ store: 'catalog-cache', key: 'a|vod_all' }],
     });
-    expect(response.persist.map(candidate => candidate.key)).toEqual(['catalog-cache|a|vod_all|30|v2']);
+    expect(response.persist.map(candidate => candidate.key)).toEqual([`catalog-cache|a|vod_all|30|v${SEARCH_INDEX_FORMAT}`]);
     expect(memory.log).toEqual(['read:entry:catalog-cache:a|vod_all', 'count:search-index-cache', 'read:a|vod_all']);
   });
 

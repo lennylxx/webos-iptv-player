@@ -11,7 +11,7 @@ import { SearchCacheError, type CachedRecord } from './search-cache-reader';
 import type { SearchCacheRecord, SearchIndexCandidate } from './tasks';
 
 // Bump whenever the stored layout or the folding it holds changes.
-export const SEARCH_INDEX_FORMAT = 2;
+export const SEARCH_INDEX_FORMAT = 3;
 
 /**
  * The folded search text of one source cache record, in record order and

@@ -128,6 +128,7 @@ import { Search } from './search';
 import { CONFIG } from '../config';
 import { Focus } from '../navigation/focus-scope';
 import { ParentalControlService } from '../services/parental-control';
+import { SEARCH_INDEX_FORMAT } from '../workers/search-source-index';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -2408,7 +2409,7 @@ describe('Search', () => {
 
     await openWith();
     expect(persistMock).toHaveBeenCalledWith([
-      expect.objectContaining({ key: 'playlist-cache|offer|4|v2', prefix: 'playlist-cache|offer|' }),
+      expect.objectContaining({ key: `playlist-cache|offer|4|v${SEARCH_INDEX_FORMAT}`, prefix: 'playlist-cache|offer|' }),
     ]);
   });
 

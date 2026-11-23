@@ -15,6 +15,7 @@ import {
   isLetterNumberWord,
   splitLetterNumberPlusTokens,
   stripDiacritics,
+  unifyArabicLetters,
 } from '../utils/unicode-text';
 import {
   EXTRA_LEXICONS,
@@ -63,17 +64,15 @@ const LANGUAGE_BONUS = 0.5;
 
 // Normalize for matching: strip diacritics ("Fútbol" -> "futbol"), fold
 // letters NFD leaves alone (Polish ł, Turkish ı), unify Arabic
-// alef/hamza/teh-marbuta/alef-maksura variants ("الأطفال" -> "اطفال"), and
+// alef/hamza/teh-marbuta/alef-maksura and Persian kaf/yeh variants
+// ("الأطفال" -> "اطفال"), and
 // lowercase.
 function fold(value: string): string {
   // Printable ASCII has nothing to fold but case; most catalog names are.
   if (/^[\x20-\x7e]*$/.test(value)) return value.toLowerCase();
-  return stripDiacritics(value.normalize('NFD')) // accents + Arabic tashkeel/hamza/madda
+  return stripDiacritics(unifyArabicLetters(value).normalize('NFD')) // accents + Arabic tashkeel/hamza/madda
     .replace(/[łŁ]/gu, 'l')
     .replace(/ı/gu, 'i')
-    .replace(/[آأإٱ]/gu, 'ا')        // آأإٱ -> ا
-    .replace(/ى/gu, 'ي')             // ى -> ي
-    .replace(/ة/gu, 'ه')             // ة -> ه
     .toLowerCase();
 }
 

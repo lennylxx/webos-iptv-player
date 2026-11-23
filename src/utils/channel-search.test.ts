@@ -43,6 +43,50 @@ describe('rankByName', () => {
     expect(names(rankByName(cs, 'news'))).toEqual(['Alpha—News', 'AlphaNews']);
   });
 
+  it.each([
+    ['hamza on alef', 'أخبار', 'اخبار'],
+    ['hamza below alef', 'إسلام', 'اسلام'],
+    ['madda', 'قرآن', 'قران'],
+    ['hamza on waw', 'مؤمن', 'مومن'],
+    ['hamza on yeh', 'رئيس', 'رييس'],
+    ['teh marbuta', 'قناة', 'قناه'],
+    ['alef maksura', 'مصطفى', 'مصطفي'],
+    ['Persian kaf', 'کتب', 'كتب'],
+    ['Persian yeh', 'فارسی', 'فارسي'],
+    ['tashkeel', 'كِتَاب', 'كتاب'],
+    ['tatweel', 'كتـــاب', 'كتاب'],
+    ['presentation forms', 'ﺍﺣﻤﺪ', 'احمد'],
+    ['Persian heh with yeh', 'خانۀ', 'خانه'],
+    ['decomposed Persian heh with yeh', 'خان\u06D5\u0654', 'خانه'],
+    ['isolated tashkeel form', 'كﹶتب', 'كتب'],
+    ['extended Quranic mark', 'ك\u08F0تاب', 'كتاب'],
+    ['lam-alef ligature', 'ﻻعب', 'لاعب'],
+    ['Allah ligature', 'ﷲ', 'الله'],
+    ['standalone hamza mark', 'ا\u0654خبار', 'اخبار'],
+  ])('matches Arabic spelling variants both ways: %s', (_case, stored, typed) => {
+    expect(names(rankByName([ch(stored)], typed))).toEqual([stored]);
+    expect(names(rankByName([ch(typed)], stored))).toEqual([typed]);
+  });
+
+  it('folds basic Arabic in one pass exactly as the NFD path does', () => {
+    // A Latin accent sends the same text down the NFD path; pairs cover a
+    // rule that looks at the next character.
+    const mismatches: string[] = [];
+    for (let first = 0x600; first <= 0x6FF; first++) {
+      for (let second = 0x600; second <= 0x6FF; second++) {
+        const text = String.fromCharCode(first, second);
+        if (foldSearchText(`${text}é`) !== `${foldSearchText(text)}e`) {
+          mismatches.push(`${first.toString(16)} ${second.toString(16)}`);
+        }
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  it('keeps a standalone hamza distinct from alef', () => {
+    expect(rankByName([ch('سماء')], 'سماا')).toEqual([]);
+  });
+
   it('breaks ties by earlier match position', () => {
     const cs = [ch('XXAlpha'), ch('XAlpha')]; // both mid-word; pos 2 vs pos 1
     expect(names(rankByName(cs, 'alpha'))).toEqual(['XAlpha', 'XXAlpha']);
