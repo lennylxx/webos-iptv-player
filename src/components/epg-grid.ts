@@ -14,6 +14,7 @@ import { channelKey, groupDisplayLabel } from '../utils/channel';
 import { PlaylistService } from '../services/playlist-service';
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
+import { themeRevision } from '../services/theme-service';
 import { ReminderService } from '../services/reminder-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
 import { ParentalControlService } from '../services/parental-control';
@@ -962,10 +963,11 @@ export class EpgGrid {
     this.timelineView.detach();
   }
 
-  // Reading the computed style is costly; redo it only when the text size
-  // or the locale changes.
+  // Reading the computed style is costly; redo it only when the text size,
+  // the locale, or the theme (which may set the font, even under one id) changes.
   private applyTimelineStyle(): void {
-    const key = `${document.documentElement.dataset.textSize ?? ''}|${getLocale()}`;
+    const root = document.documentElement.dataset;
+    const key = `${root.textSize ?? ''}|${getLocale()}|${root.theme ?? ''}|${themeRevision()}`;
     if (key === this.timelineStyleKey) return;
     this.timelineStyleKey = key;
     const scale = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();

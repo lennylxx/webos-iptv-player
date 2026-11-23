@@ -8,6 +8,8 @@
     // Anti-FOUC (Flash of Unstyled Content): apply the saved theme before first paint.
     // StorageService JSON-encodes values, so the stored id is a quoted string.
     try { var t = JSON.parse(localStorage.getItem('iptv_theme')); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    // A custom theme's rule, cached by theme-service whenever a theme is applied.
+    try { var c = JSON.parse(localStorage.getItem('iptv_theme_css')); if (c) { var st = document.createElement('style'); st.id = 'custom-theme-rules'; st.textContent = c; document.head.appendChild(st); } } catch (e) {}
     try { var s = JSON.parse(localStorage.getItem('iptv_text_size')); if (s) document.documentElement.dataset.textSize = s; } catch (e) {}
     try { var a = JSON.parse(localStorage.getItem('iptv_animation_mode')); if (a) document.documentElement.dataset.animation = a; } catch (e) {}
   </script>
@@ -27,6 +29,7 @@
   <link rel="stylesheet" href="css/account-switcher.css">
   <link rel="stylesheet" href="css/parental-controls.css">
   <link rel="stylesheet" href="css/live-category-picker.css">
+  <link rel="stylesheet" href="css/theme-editor.css">
   <link rel="stylesheet" href="css/legacy-webos-overrides.css">
 </head>
 <body>

@@ -34,7 +34,7 @@ html:not(.keyboard-nav) .account-avatar:hover {
 }
 
 .account-avatar.focused {
-  box-shadow: 0 0 0 3px var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .account-menu {
@@ -44,7 +44,7 @@ html:not(.keyboard-nav) .account-avatar:hover {
   min-width: 320px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: calc(var(--radius) * 1.25);
   padding: 8px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   z-index: 70;
@@ -55,7 +55,7 @@ html:not(.keyboard-nav) .account-avatar:hover {
   align-items: center;
   gap: 16px;
   padding: 12px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   color: var(--text-secondary);
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;

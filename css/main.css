@@ -34,10 +34,30 @@
   --catalog-stack: var(--text-muted);
   --catalog-stack-near-opacity: 0.7;
   --catalog-stack-far-opacity: 0.4;
-  --focus-ring: var(--accent);
   --radius: 8px;
+  --font-family: -apple-system, 'LG Smart UI', 'Helvetica Neue', Arial, sans-serif;
+  /* Body text weight; a custom theme can make it light. */
+  --font-weight-text: 400;
+  /* Guide timing colors: aired (with replay), on now, and upcoming. */
+  --past: #5fc99a;
+  --past-rgb: 95 201 154;
+  --live: #5fc99a;
+  --live-rgb: 95 201 154;
+  --future: #8c9cf0;
+  --future-rgb: 140 156 240;
+  /* Player overlay glass; custom themes change its opacity. */
+  --overlay-bg: rgba(30, 30, 50, 0.75);
+  --overlay-frosted-bg: rgba(244, 246, 249, 0.85);
   --transition: 0.2s ease;
   --font-scale: 1;
+}
+
+/* Focus follows the accent unless a custom theme sets its own. Declared on
+   every theme root so a swatch tile resolves its own accent. */
+:root,
+[data-theme] {
+  --focus-ring: var(--accent);
+  --focus-glow: var(--accent-glow);
 }
 
 .channel-health-status {
@@ -158,12 +178,29 @@ html, body {
   width: 1920px;
   height: 1080px;
   overflow: hidden;
-  font-family: -apple-system, 'LG Smart UI', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--font-family);
+  font-weight: var(--font-weight-text);
   font-size: 24px;
   line-height: 1.4;
   color: var(--text-primary);
   background: var(--bg-primary);
   -webkit-font-smoothing: antialiased;
+}
+
+/* `bolder` over light text would barely stand out; this is what it gives
+   over regular text. */
+b,
+strong {
+  font-weight: 700;
+}
+
+/* Controls take the text weight too, as they would the 400 they default to;
+   any rule with its own weight still wins. */
+button,
+input,
+textarea,
+select {
+  font-weight: var(--font-weight-text);
 }
 
 .view {
@@ -192,7 +229,7 @@ h3 {
 }
 
 /* Buttons */
-button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry):not(.parental-row):not(.live-category-row) {
+button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry):not(.parental-row):not(.live-category-row):not(.theme-editor-color) {
   transform-origin: center;
   transition:
     transform 160ms ease,
@@ -203,8 +240,8 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
     color var(--transition);
 }
 
-button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry):not(.parental-row):not(.live-category-row):not(.search-icon):not(.catalog-remove-mark):not(.detail-icon-btn):hover,
-button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry):not(.parental-row):not(.live-category-row):not(.search-icon):not(.catalog-remove-mark):not(.detail-icon-btn).focused {
+button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry):not(.parental-row):not(.live-category-row):not(.theme-editor-color):not(.search-icon):not(.catalog-remove-mark):not(.detail-icon-btn):hover,
+button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggle):not(.epg-reminder-entry):not(.parental-row):not(.live-category-row):not(.theme-editor-color):not(.search-icon):not(.catalog-remove-mark):not(.detail-icon-btn).focused {
   transform: scale(1.03);
 }
 
@@ -271,7 +308,7 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   padding: 20px 26px 16px;
   /* Same surface as the player OSD (palette in player.css), which it shares the
      screen with; `[data-overlay]` swaps both to frosted at once. */
-  background: rgba(30, 30, 50, 0.75);
+  background: var(--overlay-bg);
   border: 1px solid rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(16px);
   border-radius: var(--radius);
@@ -462,7 +499,7 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   border-color: var(--focus-ring);
   background: var(--accent-dim);
   color: #fff;
-  box-shadow: 0 0 12px var(--accent-glow);
+  box-shadow: 0 0 12px var(--focus-glow);
 }
 
 .confirmation-title {

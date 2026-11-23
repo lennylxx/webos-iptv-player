@@ -168,7 +168,7 @@
   left: 0;
   width: 4px;
   background: var(--accent);
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 calc(var(--radius) * 0.5) calc(var(--radius) * 0.5) 0;
   content: '';
 }
 
@@ -231,7 +231,7 @@
   color: var(--text-primary);
   background: var(--bg-tertiary);
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 4px var(--accent-glow);
+  box-shadow: 0 0 0 4px var(--focus-glow);
 }
 
 .reminder-manager-clear.focused,

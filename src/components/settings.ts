@@ -34,8 +34,11 @@ import { genPlaylistId, isSourceEnabled } from '../utils/playlist';
 import { channelKey } from '../utils/channel';
 import { formatEpgOffset } from '../utils/epg-offset';
 import { CONFIG } from '../config';
-import { THEMES, OVERLAY_STYLES, TEXT_SIZES, DEFAULT_TEXT_SIZE, type ThemeMeta, type OverlayStyle, type TextSize } from '../config/themes';
-import { previewTheme, applyTextSize } from '../services/theme-service';
+import { THEMES, DEFAULT_THEME, OVERLAY_STYLES, TEXT_SIZES, DEFAULT_TEXT_SIZE, isValidTheme, type OverlayStyle, type TextSize } from '../config/themes';
+import { MAX_CUSTOM_THEMES, type CustomTheme } from '../config/custom-theme';
+import { previewTheme, applyTextSize, installCustomThemes } from '../services/theme-service';
+import { themePreviewMock } from './theme-preview';
+import { ThemeEditor } from './theme-editor';
 import { showToast } from './toast';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import { sourceToggle, toggleGroup } from './toggle-controls';
@@ -134,40 +137,18 @@ function uploadLabel(pl: PlaylistEntry): string {
   return pl.name;
 }
 
-/** One theme swatch tile: a mini mock of the app (tab bar, a focused channel
- *  tile, list rows, status dots) plus the theme name. It carries its own
- *  `data-theme` so every `var(--…)` inside resolves to that theme's colors,
- *  independent of the app's active theme. The mock is decorative (aria-hidden);
- *  the button's aria-label names the theme. */
-function themeSwatch(theme: ThemeMeta, activeId: string): Safe {
+/** One theme swatch tile: a mini mock of the app plus the theme name. It
+ *  carries its own `data-theme` so every `var(--…)` inside resolves to that
+ *  theme's colors, independent of the app's active theme. The button's
+ *  aria-label names the theme; a custom theme's name is user text. */
+const PLUS_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>';
+
+function themeSwatch(theme: { id: string; name: string }, activeId: string): Safe {
   return html`
     <button class="theme-swatch ${theme.id === activeId ? 'active' : ''}" data-focusable
             data-key="theme:${theme.id}"
             data-theme-id="${theme.id}" data-theme="${theme.id}" aria-label="${theme.name} theme">
-      <span class="theme-swatch-preview" aria-hidden="true">
-        <span class="tsp-tabs">
-          <span class="tsp-tab active">${t('nav.live')}</span>
-          <span class="tsp-tab">${t('nav.movies')}</span>
-          <span class="tsp-tab">${t('nav.series')}</span>
-        </span>
-        <span class="tsp-tiles">
-          <span class="tsp-tile focus">ch1</span>
-          <span class="tsp-tile">ch2</span>
-          <span class="tsp-tile">ch3</span>
-        </span>
-        <span class="tsp-rows">
-          <span class="tsp-row">${t('settings.previewChannelOne')}</span>
-          <span class="tsp-row muted">${t('settings.previewChannelTwo')}</span>
-        </span>
-        <span class="tsp-foot">
-          <span class="tsp-epg">${t('settings.previewEpgNow')}</span>
-          <span class="tsp-dots">
-            <span class="tsp-dot dn"></span>
-            <span class="tsp-dot su"></span>
-            <span class="tsp-dot wa"></span>
-          </span>
-        </span>
-      </span>
+      ${themePreviewMock()}
       <span class="theme-swatch-name">${theme.name}</span>
     </button>`;
 }
@@ -568,6 +549,7 @@ export class Settings {
   private storedEpgOffsets: Record<string, number> = {};
   private confirmationPrompt = new ConfirmationPrompt('prompt.settings');
   private liveCategoryPicker = new LiveCategoryPicker();
+  private themeEditor = new ThemeEditor();
   // Picker results waiting for Save, per card id; `account` ties each to the
   // server and username it was chosen for.
   private pendingLiveCategories = new Map<string, {
@@ -1004,9 +986,7 @@ export class Settings {
                 <h3 class="settings-section-title">${t('settings.appearance')}</h3>
                 <div class="settings-item">
                   <div class="settings-item-title">${t('settings.theme')}</div>
-                  <div class="theme-swatch-grid">
-                    ${THEMES.map(t => themeSwatch(t, theme))}
-                  </div>
+                  <div class="theme-picker" data-theme-picker>${this.themePickerContent()}</div>
                 </div>
                 <div class="settings-item">
                   <div class="settings-item-title">${t('settings.overlayGlass')}</div>
@@ -1605,6 +1585,10 @@ export class Settings {
       this.adjustEpgOffset(Number(el.dataset.offsetDelta));
     } else if (el.classList.contains('epg-offset-value')) {
       this.setEpgOffset(0);
+    } else if (el.hasAttribute('data-theme-new')) {
+      this.openThemeEditor(null);
+    } else if (el.dataset.themeAction) {
+      this.themeAction(el.dataset.themeAction);
     } else if (el.classList.contains('theme-swatch')) {
       this.selectThemeSwatch(el);
     } else if (el.id === 'save-settings') {
@@ -1924,12 +1908,13 @@ export class Settings {
   }
 
   get isPromptVisible(): boolean {
-    return this.confirmationPrompt.visible || this.liveCategoryPicker.visible;
+    return this.confirmationPrompt.visible || this.liveCategoryPicker.visible || this.themeEditor.visible;
   }
 
   dismissPrompt(): void {
     this.confirmationPrompt.hide();
     this.liveCategoryPicker.hide();
+    this.themeEditor.hide();
   }
 
   // Live theme preview: focusing (D-pad) or hovering (pointer) a swatch previews
@@ -2290,10 +2275,123 @@ export class Settings {
   private selectThemeSwatch(el: HTMLElement): void {
     const id = el.dataset.themeId;
     if (!id) return;
-    this.container.querySelectorAll('.theme-swatch').forEach(s => s.classList.remove('active'));
-    el.classList.add('active');
     this.selectedTheme = id;
     previewTheme(id);
+    this.renderThemePicker();
+  }
+
+  // The presets, the custom themes, a New theme tile while there is room, and
+  // the actions for the selected theme. A full set keeps Customize visible but
+  // disabled, with the limit spelled out.
+  private themePickerContent(): Safe {
+    const customs = StorageService.getCustomThemes();
+    const selected = this.selectedTheme;
+    const custom = customs.some(theme => theme.id === selected);
+    const full = customs.length >= MAX_CUSTOM_THEMES;
+    return html`
+      <div class="theme-swatch-grid">
+        ${THEMES.map(theme => themeSwatch(theme, selected))}
+        ${customs.map(theme => themeSwatch(theme, selected))}
+        ${full ? '' : html`
+          <button class="theme-swatch theme-swatch-new" data-focusable data-key="theme:new" data-theme-new>
+            <span class="theme-swatch-new-art">
+              ${themePreviewMock()}
+              <span class="theme-swatch-new-icon">${raw(PLUS_ICON)}</span>
+            </span>
+            <span class="theme-swatch-name">${t('theme.new')}</span>
+          </button>`}
+      </div>
+      <div class="theme-actions">
+        ${custom ? html`
+          <button class="btn btn-secondary" data-focusable data-key="theme-action:edit"
+                  data-theme-action="edit">${t('theme.edit')}</button>
+          <button class="btn btn-danger" data-focusable data-key="theme-action:delete"
+                  data-theme-action="delete">${t('common.delete')}</button>`
+        : html`
+          <button class="btn btn-secondary" ${full ? raw('disabled') : raw('data-focusable')}
+                  data-key="theme-action:customize" data-theme-action="customize">${t('theme.customize')}</button>`}
+      </div>
+      ${full && !custom ? html`<div class="settings-item-hint">${tp('theme.limitHint', MAX_CUSTOM_THEMES)}</div>` : ''}`;
+  }
+
+  private renderThemePicker(): void {
+    const host = this.container.querySelector<HTMLElement>('[data-theme-picker]');
+    if (host) morph(host, this.themePickerContent());
+  }
+
+  private focusThemeKey(key: string): void {
+    const el = this.resolveKey(key)
+      ?? this.container.querySelector<HTMLElement>(`[data-key="theme:${this.selectedTheme}"]`);
+    if (el) this.nav.focus(el);
+  }
+
+  private themeAction(action: string): void {
+    const custom = StorageService.getCustomThemes().find(theme => theme.id === this.selectedTheme);
+    if (action === 'customize') this.openThemeEditor(null);
+    else if (action === 'edit' && custom) this.openThemeEditor(custom);
+    else if (action === 'delete' && custom) this.confirmDeleteTheme(custom);
+  }
+
+  private nextThemeName(customs: CustomTheme[]): string {
+    const taken = new Set(customs.map(theme => theme.name));
+    let number = 1;
+    while (taken.has(t('theme.defaultName', { number }))) number++;
+    return t('theme.defaultName', { number });
+  }
+
+  // A new theme starts from the selected preset, or from the selected custom
+  // theme's own base. Saving selects it, pending Save Changes like any swatch.
+  private openThemeEditor(theme: CustomTheme | null): void {
+    const customs = StorageService.getCustomThemes();
+    if (!theme && customs.length >= MAX_CUSTOM_THEMES) return;
+    const selectedCustom = customs.find(custom => custom.id === this.selectedTheme);
+    const base = selectedCustom?.base ?? (isValidTheme(this.selectedTheme) ? this.selectedTheme : DEFAULT_THEME);
+    let returnKey = this.focusScope.focusKey ?? `theme:${this.selectedTheme}`;
+    this.themeEditor.open({
+      theme,
+      base,
+      // An edited theme left unnamed keeps its own name.
+      defaultName: theme ? theme.name : this.nextThemeName(customs),
+      onSave: saved => {
+        const list = StorageService.getCustomThemes();
+        const index = list.findIndex(item => item.id === saved.id);
+        if (index >= 0) list[index] = saved;
+        else list.push(saved);
+        if (!StorageService.setCustomThemes(list)) {
+          log.warn('Custom theme not stored', 'event=theme.custom.save_failed', `count=${String(list.length)}`);
+          showToast(t('theme.saveFailed'));
+          return false;
+        }
+        installCustomThemes();
+        this.selectedTheme = saved.id;
+        previewTheme(saved.id);
+        this.renderThemePicker();
+        returnKey = `theme:${saved.id}`;
+        showToast(t('theme.saved'));
+        return true;
+      },
+      onClose: () => this.focusThemeKey(returnKey),
+    });
+  }
+
+  private confirmDeleteTheme(theme: CustomTheme): void {
+    this.confirmationPrompt.show({
+      title: t('theme.deleteTitle', { name: theme.name }),
+      message: t('theme.deleteMessage'),
+      confirmLabel: t('common.delete'),
+      cancelLabel: t('common.cancel'),
+      onConfirm: () => {
+        StorageService.setCustomThemes(StorageService.getCustomThemes().filter(item => item.id !== theme.id));
+        // A deleted theme can't stay applied; its base takes over.
+        if (StorageService.getTheme() === theme.id) StorageService.setTheme(theme.base);
+        if (this.selectedTheme === theme.id) this.selectedTheme = theme.base;
+        installCustomThemes();
+        previewTheme(this.selectedTheme);
+        this.renderThemePicker();
+        this.focusThemeKey(`theme:${this.selectedTheme}`);
+      },
+      onCancel: () => {},
+    });
   }
 
   // Opening moves focus to the active option, or the first one when the stored

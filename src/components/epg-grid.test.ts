@@ -90,6 +90,10 @@ const { storageMock } = vi.hoisted(() => ({
     getCatchupProgressList: vi.fn((): CatchupProgressEntry[] => []),
     clearCatchupProgress: vi.fn(),
     getGuideLayout: vi.fn((): GuideLayout => 'schedule'),
+    getCustomThemes: vi.fn(() => []),
+    getTheme: vi.fn(() => 'midnight'),
+    getThemeCss: vi.fn(() => ''),
+    setThemeCss: vi.fn(),
   },
 }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
@@ -113,6 +117,7 @@ vi.mock('../workers/app-worker-client', async () => {
 
 import { EpgGrid } from './epg-grid';
 import { TimelineView } from './epg-timeline-view';
+import { installCustomThemes } from '../services/theme-service';
 import { setLocale } from '../i18n';
 import { Focus } from '../navigation/focus-scope';
 import { setInputMode } from '../navigation/input-mode';
@@ -2213,6 +2218,17 @@ describe('EpgGrid timeline layout', () => {
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600);
     grid.handleAction('down');
     expect(draw).toHaveBeenCalledOnce();
+  });
+
+  it('reads the timeline font again when a custom theme changes under the same id', () => {
+    const style = vi.spyOn(TimelineView.prototype, 'setStyle');
+    grid.render();
+    style.mockClear();
+    grid.render();
+    expect(style).not.toHaveBeenCalled();
+    installCustomThemes();
+    grid.render();
+    expect(style).toHaveBeenCalledOnce();
   });
 
   it('keeps the row the wheel moved to while the pointer only jitters', () => {

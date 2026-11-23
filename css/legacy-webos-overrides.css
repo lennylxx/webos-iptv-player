@@ -184,6 +184,6 @@ html.q-scroll-end-padding .catalog-category-rail::after { content: none; }
      predates :focus-within (60), and unguarded it would stack a second
      glow ring. */
   .epg-mapping-search:focus {
-    box-shadow: 0 0 0 3px var(--accent-glow);
+    box-shadow: 0 0 0 3px var(--focus-glow);
   }
 }

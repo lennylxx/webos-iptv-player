@@ -1,0 +1,423 @@
+/* Custom theme editor: a full-screen Settings overlay. The list edits the
+   theme's choices; the preview pane renders them in the draft theme. */
+.theme-editor {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1100;
+}
+
+.theme-editor.hidden {
+  display: none;
+}
+
+.theme-editor-host {
+  position: relative;
+  z-index: 0;
+  height: 100%;
+}
+
+.theme-editor-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 42px 54px 32px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+.theme-editor-header {
+  flex: 0 0 auto;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The heading spans the settings column, so Save ends where the rows do,
+   at the line between the column and the preview: the list's 1000px less
+   its 8px focus bleed and 16px scrollbar gutter. */
+.theme-editor-heading {
+  display: flex;
+  align-items: center;
+  width: 976px;
+}
+
+.theme-editor-heading .btn {
+  min-width: 180px;
+  height: 54px;
+  margin-left: auto;
+}
+
+.theme-editor-header h2 {
+  margin: 0;
+  color: var(--accent);
+  font-size: 40px;
+}
+
+.theme-editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The padding and negative margin keep focus rings clear of the scroll edge. */
+.theme-editor-list {
+  flex: 0 0 1000px;
+  margin-left: -8px;
+  padding: 8px 16px 8px 8px;
+  overflow-y: auto;
+}
+
+.settings-input.theme-editor-name {
+  width: 520px;
+}
+
+.theme-editor-group {
+  margin: 28px 0 8px;
+  color: var(--text-muted);
+  font-size: 20px;
+}
+
+.theme-editor-row {
+  display: flex;
+  align-items: center;
+  min-height: 58px;
+  padding: 0 16px;
+}
+
+.theme-editor-row + .theme-editor-row {
+  margin-top: 4px;
+}
+
+.theme-editor-label {
+  flex: 0 0 auto;
+  width: calc(300px * var(--font-scale));
+  padding-right: 16px;
+  box-sizing: border-box;
+  color: var(--text-primary);
+  font-size: 24px;
+}
+
+/* A color row opens the picker; it takes the quiet row focus. */
+.theme-editor-color {
+  width: 100%;
+  box-sizing: border-box;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+}
+
+.theme-editor-color.focused {
+  border-color: transparent !important;
+  background: rgb(var(--accent-rgb) / 0.1);
+  box-shadow: inset 3px 0 0 var(--focus-ring) !important;
+}
+
+.theme-editor-dot {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  margin-right: 14px;
+  box-sizing: border-box;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+}
+
+.theme-editor-hex {
+  color: var(--text-secondary);
+  font-size: 22px;
+}
+
+.theme-editor-chevron {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.theme-editor-chevron svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.theme-editor-side {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 60px;
+  padding-top: 8px;
+}
+
+.theme-editor-preview {
+  width: 720px;
+  padding-bottom: 24px;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* The swatch mock at twice its size: 360px of mock fills the pane. */
+.theme-editor-preview .theme-swatch-preview {
+  width: 360px;
+  box-sizing: border-box;
+  zoom: 2;
+}
+
+.theme-editor-epg {
+  display: flex;
+  gap: 8px;
+  margin: 0 28px;
+  font-size: 20px;
+}
+
+.theme-editor-epg span {
+  position: relative;
+  flex: 1 1 0;
+  height: 56px;
+  padding: 0 14px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  line-height: 56px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--bg-tertiary);
+  border-left: 4px solid var(--past);
+  border-radius: var(--radius);
+}
+
+.theme-editor-epg .live {
+  color: var(--text-primary);
+  background: rgb(var(--live-rgb) / 0.14);
+  border-left-color: var(--live);
+}
+
+.theme-editor-epg .live i {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  height: 4px;
+  background: var(--live);
+}
+
+.theme-editor-epg .future {
+  border-left-color: var(--future);
+}
+
+.theme-editor-status {
+  display: flex;
+  align-items: center;
+  max-width: 720px;
+  margin-top: 20px;
+  color: var(--text-secondary);
+  font-size: 20px;
+}
+
+.theme-editor-status svg {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-right: 10px;
+  color: var(--warning);
+}
+
+.edit-hints.theme-editor-hints {
+  position: static;
+  flex: 0 0 auto;
+  margin: 18px -54px -32px;
+  padding: 12px 54px;
+}
+
+/* The color picker: a dialog over the editor, styled like the prompts. */
+.theme-color-picker {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 1;
+}
+
+.theme-color-picker.hidden {
+  display: none;
+}
+
+.confirmation-dialog.theme-picker-dialog {
+  width: 900px;
+  max-width: none;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+/* Twelve hues to a row; margins, not gap, so wrapped rows need no fallback. */
+.theme-picker-grid {
+  display: flex;
+  flex-wrap: wrap;
+  width: 756px;
+  margin: 8px 0 20px;
+}
+
+.theme-picker-cell {
+  width: 52px;
+  height: 52px;
+  margin: 0 12px 12px 0;
+  padding: 0;
+  box-sizing: border-box;
+  cursor: pointer;
+  border: 3px solid transparent;
+  border-radius: 50%;
+}
+
+.theme-picker-cell:nth-child(12n) {
+  margin-right: 0;
+}
+
+/* Selected reads as a gap ring inside the swatch; focus adds the outer ring. */
+.theme-picker-cell.active {
+  box-shadow: inset 0 0 0 3px var(--bg-card);
+}
+
+.theme-picker-step {
+  display: flex;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.theme-picker-step-label {
+  width: calc(160px * var(--font-scale));
+  color: var(--text-secondary);
+  font-size: 22px;
+}
+
+.theme-picker-step .toggle-option {
+  min-width: 64px;
+}
+
+.theme-picker-step-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 110px;
+  color: var(--text-primary);
+  font-size: 24px;
+}
+
+.theme-picker-hex {
+  display: flex;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.theme-picker-current {
+  flex: 0 0 auto;
+  width: 54px;
+  height: 54px;
+  margin-right: 16px;
+  box-sizing: border-box;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.theme-picker-hex .settings-input {
+  width: 240px;
+  margin-right: 20px;
+}
+
+.theme-picker-hint {
+  color: var(--text-muted);
+  font-size: 20px;
+}
+
+/* Previews the player overlay's opacity and blur over the mock. */
+.theme-editor-preview {
+  position: relative;
+  font-family: var(--font-family);
+  font-weight: var(--font-weight-text);
+}
+
+.theme-editor-glass {
+  position: absolute;
+  top: 96px;
+  right: 28px;
+  display: flex;
+  gap: 16px;
+  padding: 14px 24px;
+  color: #e8e8e8;
+  font-size: 22px;
+  background: var(--overlay-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: calc(var(--radius) * 1.5);
+  backdrop-filter: blur(16px);
+}
+
+[data-overlay="frosted"] .theme-editor-glass {
+  color: #1f2430;
+  background: var(--overlay-frosted-bg);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.theme-editor-glass.no-blur {
+  backdrop-filter: none;
+}
+
+/* A change outlines the part of the preview it restyles. Opacity only, so
+   the pulse stays cheap on the TV. The outline needs a positioned target;
+   the glass chip and guide blocks already are, and keep their own. */
+.theme-editor-preview .tsp-tabs,
+.theme-editor-preview .tsp-tiles,
+.theme-editor-preview .tsp-tile,
+.theme-editor-preview .tsp-rows {
+  position: relative;
+}
+
+.theme-editor-flash::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  bottom: -6px;
+  left: -6px;
+  border: 3px solid var(--text-primary);
+  border-radius: var(--radius);
+  pointer-events: none;
+  opacity: 0;
+  animation: theme-editor-flash 700ms ease-out;
+}
+
+.theme-editor-preview.theme-editor-flash::after {
+  top: 4px;
+  right: 4px;
+  bottom: 4px;
+  left: 4px;
+}
+
+@keyframes theme-editor-flash {
+  0%,
+  30% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* The mock is zoomed 2x, so its outline is drawn at half size. */
+.theme-swatch-preview .theme-editor-flash::after {
+  top: -3px;
+  right: -3px;
+  bottom: -3px;
+  left: -3px;
+  border-width: 1.5px;
+}

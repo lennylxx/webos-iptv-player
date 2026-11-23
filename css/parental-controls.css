@@ -468,7 +468,7 @@
 
 .parental-pin-slots span.active {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  box-shadow: 0 0 0 3px var(--focus-glow);
 }
 
 .parental-pin-input:disabled + .parental-pin-slots {

@@ -154,7 +154,7 @@ html:not(.keyboard-nav) .tab-bar-item:hover {
   color: var(--text-primary);
   font-family: inherit;
   font-size: 26px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   transition: width 260ms ease, opacity 200ms ease, padding 260ms ease, margin 260ms ease;
 }
 
@@ -196,7 +196,7 @@ html:not(.keyboard-nav) .search-icon:hover,
 .search-icon.focused {
   background: var(--bg-tertiary);
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px var(--accent-glow);
+  box-shadow: 0 0 0 3px var(--focus-glow), 0 0 20px var(--focus-glow);
 }
 
 /* The text tabs' active underline, shown while the circle is not; a straight

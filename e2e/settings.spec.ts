@@ -717,7 +717,7 @@ test.describe('Settings navigation', () => {
     }
   });
 
-  test('lays out the 17 theme swatches five per row', async ({ page }) => {
+  test('lays out the 17 theme swatches and the New theme tile five per row', async ({ page }) => {
     await page.goto('/');
     await page.locator('[data-settings-target="appearance"]').click();
 
@@ -730,7 +730,77 @@ test.describe('Settings navigation', () => {
       return Array.from(rows.values());
     });
 
-    expect(rowCounts).toEqual([5, 5, 5, 2]);
+    expect(rowCounts).toEqual([5, 5, 5, 3]);
+
+    // The plus sits centered over the tile's art on every engine.
+    const tile = page.locator('[data-theme-new]');
+    const art = await tile.locator('.theme-swatch-new-art').boundingBox();
+    const plus = await tile.locator('.theme-swatch-new-icon svg').boundingBox();
+    expect(Math.abs((plus!.x + plus!.width / 2) - (art!.x + art!.width / 2))).toBeLessThan(1);
+    expect(Math.abs((plus!.y + plus!.height / 2) - (art!.y + art!.height / 2))).toBeLessThan(1);
+  });
+
+  test('makes a custom theme with the remote and keeps it from first paint', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('[data-settings-target="appearance"]').click();
+    await page.locator('[data-theme-new]').click();
+    await page.mouse.move(1, 1);
+    const editor = page.locator('.theme-editor');
+    const accentRow = editor.locator('[data-color-seed="accent"]');
+    await expect(accentRow).toHaveClass(/focused/);
+
+    await page.keyboard.press('Enter');
+    const picker = page.locator('.theme-color-picker');
+    await expect(picker).toBeVisible();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    const chosen = await picker.locator('.theme-picker-cell.active').getAttribute('data-color');
+    expect(chosen).toMatch(/^#[0-9a-f]{6}$/);
+    await page.keyboard.press('Escape');
+    await expect(picker).toBeHidden();
+    await expect(accentRow).toHaveClass(/focused/);
+    await expect(accentRow.locator('.theme-editor-hex')).toHaveText(chosen!.toUpperCase());
+
+    // Only the preview pane takes the draft; the app keeps its theme.
+    const accentOf = (selector: string) => page.locator(selector).first()
+      .evaluate(el => getComputedStyle(el).getPropertyValue('--accent').trim());
+    const draftAccent = await accentOf('.theme-editor-preview');
+    expect(draftAccent).not.toBe(await accentOf('html'));
+
+    await editor.locator('[data-theme-save]').click();
+    await expect(editor).toBeHidden();
+    // The swatch the closed editor uncovered under the pointer previews until it moves.
+    await page.mouse.move(1, 1);
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toMatch(/^custom-[a-z0-9]+$/);
+    const id = await page.evaluate(() => document.documentElement.dataset.theme);
+    expect(await accentOf('html')).toBe(draftAccent);
+    // A reopened editor starts again from its top, wherever the last one scrolled.
+    await page.locator('[data-theme-action="edit"]').click();
+    const list = editor.locator('.theme-editor-list');
+    await list.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await page.keyboard.press('Escape');
+    await expect(editor).toBeHidden();
+    await page.locator('[data-theme-action="edit"]').click();
+    expect(await list.evaluate(el => el.scrollTop)).toBe(0);
+    await page.keyboard.press('Escape');
+    await expect(editor).toBeHidden();
+    await page.locator('#save-settings').click();
+
+    await page.reload();
+    await expect(page.locator('#custom-theme-rules')).toBeAttached();
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe(id);
+    expect(await accentOf('html')).toBe(draftAccent);
+  });
+
+  test('outlines a changed choice in the preview without moving it', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('[data-settings-target="appearance"]').click();
+    await page.locator('[data-theme-new]').click();
+    const glass = page.locator('.theme-editor-glass');
+    const before = await glass.boundingBox();
+    await page.locator('#te-overlayOpacity [data-value="100"]').click();
+    await expect(glass).toHaveClass(/theme-editor-flash/);
+    expect(await glass.boundingBox()).toEqual(before);
   });
 
   test('selects and saves Local proxy for HTTP headers', async ({ page }) => {

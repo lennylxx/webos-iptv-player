@@ -96,7 +96,7 @@
 }
 
 .catalog-grid-title { margin: 0 0 24px; font-size: 44px; font-weight: 700; color: var(--text-primary); }
-.catalog-grid-count { margin-left: 20px; font-size: 26px; font-weight: 400; color: var(--text-secondary); }
+.catalog-grid-count { margin-left: 20px; font-size: 26px; font-weight: var(--font-weight-text); color: var(--text-secondary); }
 .catalog-sort {
   display: flex;
   flex-wrap: wrap;
@@ -132,7 +132,7 @@
 .catalog-poster-wrap {
   position: relative;
   width: 220px; height: 330px;
-  border-radius: 12px; overflow: hidden;
+  border-radius: calc(var(--radius) * 1.5); overflow: hidden;
   background: var(--catalog-surface);
 }
 .catalog-poster { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -148,7 +148,7 @@
 .catalog-tile-stack::after {
   content: '';
   position: absolute; left: 0; z-index: -1;
-  border-radius: 12px;
+  border-radius: calc(var(--radius) * 1.5);
   background: var(--catalog-stack);
 }
 .catalog-tile-stack::before { top: 12px; width: 228px; height: 306px; opacity: var(--catalog-stack-near-opacity); }
@@ -178,7 +178,7 @@
 .catalog-cat {
   width: 300px; height: 120px; flex: 0 0 auto;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 12px; background: var(--catalog-surface); border: 3px solid transparent;
+  border-radius: calc(var(--radius) * 1.5); background: var(--catalog-surface); border: 3px solid transparent;
   font-size: 26px; color: var(--text-primary); text-align: center; padding: 0 16px;
   box-sizing: border-box;
 }
@@ -238,7 +238,7 @@
   position: absolute;
   top: 40px; right: 80px;
   width: 400px; height: 600px;
-  border-radius: 12px; overflow: hidden;
+  border-radius: calc(var(--radius) * 1.5); overflow: hidden;
   background: var(--catalog-surface);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 }
@@ -251,7 +251,7 @@
 .series-detail { position: relative; padding-top: 280px; }
 .detail-btn {
   display: inline-flex; align-items: center; gap: 10px;
-  padding: 14px 20px; border-radius: 10px; border: 3px solid transparent;
+  padding: 14px 20px; border-radius: calc(var(--radius) * 1.25); border: 3px solid transparent;
   background: var(--catalog-control); color: var(--text-primary); font-size: 24px; font-weight: 600;
   white-space: nowrap; cursor: pointer;
 }
@@ -260,7 +260,7 @@
 .detail-btn.focused { border-color: var(--text-primary); }
 .detail-btn-icon { display: inline-flex; width: 28px; height: 28px; flex: 0 0 auto; }
 .detail-btn-icon svg { width: 100%; height: 100%; }
-.detail-btn-code { font-weight: 400; }
+.detail-btn-code { font-weight: var(--font-weight-text); }
 .detail-btn-primary { position: relative; overflow: hidden; }
 .detail-btn-progress {
   position: absolute; left: 0; right: 0; bottom: 0; height: 5px;
@@ -299,7 +299,7 @@ button.detail-icon-btn.focused { box-shadow: none; }
 .detail-icon-btn.on .detail-icon-circle { border-color: var(--accent); background: var(--accent-dim); color: #fff; }
 .detail-icon-btn.focused .detail-icon-circle {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px var(--accent-glow);
+  box-shadow: 0 0 0 3px var(--focus-glow), 0 0 20px var(--focus-glow);
 }
 /* The ring's accent would vanish into an on circle's accent border. */
 .detail-icon-btn.on.focused .detail-icon-circle { border-color: var(--text-primary); }
@@ -334,7 +334,7 @@ button.detail-icon-btn.focused { box-shadow: none; }
 .series-detail-head .catalog-hint { margin-top: 24px; font-size: 26px; }
 .series-episodes .catalog-hint { font-size: 26px; }
 .series-season-btn {
-  padding: 12px 28px; border-radius: 10px; border: 3px solid transparent;
+  padding: 12px 28px; border-radius: calc(var(--radius) * 1.25); border: 3px solid transparent;
   background: var(--catalog-control); color: var(--text-primary); font-size: 26px; font-weight: 600; cursor: pointer;
 }
 .series-season-btn.active { border-color: var(--accent); background: var(--accent-dim); color: #fff; }
@@ -346,7 +346,7 @@ button.detail-icon-btn.focused { box-shadow: none; }
 .series-episode-cell { position: absolute; left: 0; right: 0; display: flex; align-items: stretch; gap: 16px; }
 .series-episode-cell .episode-row { flex: 1 1 auto; min-width: 0; }
 .episode-mark {
-  flex: 0 0 auto; width: 88px; padding: 0; border-radius: 12px; border: 3px solid transparent;
+  flex: 0 0 auto; width: 88px; padding: 0; border-radius: calc(var(--radius) * 1.5); border: 3px solid transparent;
   background: var(--catalog-surface); color: var(--text-secondary); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
@@ -356,14 +356,14 @@ button.detail-icon-btn.focused { box-shadow: none; }
   box-sizing: border-box; width: 44px; height: 44px; padding: 9px;
   border-radius: 50%; background: var(--accent-dim); color: #fff;
 }
-.episode-mark.focused { border-color: var(--accent, #3ea6ff); }
+.episode-mark.focused { border-color: var(--focus-ring); }
 .episode-row {
   box-sizing: border-box;
   display: flex; gap: 20px; align-items: flex-start;
-  padding: 20px 24px; border-radius: 12px; background: var(--catalog-surface);
+  padding: 20px 24px; border-radius: calc(var(--radius) * 1.5); background: var(--catalog-surface);
   border: 3px solid transparent; cursor: pointer;
 }
-.episode-row.focused { border-color: var(--accent, #3ea6ff); }
+.episode-row.focused { border-color: var(--focus-ring); }
 .episode-badge { display: inline-flex; width: 32px; height: 32px; flex: 0 0 auto; color: var(--text-secondary); margin-top: 4px; }
 .episode-badge svg { width: 100%; height: 100%; }
 .episode-body { flex: 1 1 auto; min-width: 0; }
@@ -372,7 +372,7 @@ button.detail-icon-btn.focused { box-shadow: none; }
 .episode-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .episode-resume {
   font-size: 20px; font-weight: 600; color: #fff;
-  background: var(--accent-dim); border-radius: 6px; padding: 2px 12px;
+  background: var(--accent-dim); border-radius: calc(var(--radius) * 0.75); padding: 2px 12px;
 }
 .episode-meta { font-size: 22px; color: var(--text-secondary); margin-top: 6px; }
 .episode-plot {
@@ -471,7 +471,7 @@ button.detail-icon-btn.focused { box-shadow: none; }
 .catalog-watched-badge svg { display: block; width: 100%; height: 100%; }
 .episode-watched {
   font-size: 20px; font-weight: 600; color: var(--text-secondary);
-  background: var(--catalog-control); border-radius: 6px; padding: 2px 12px;
+  background: var(--catalog-control); border-radius: calc(var(--radius) * 0.75); padding: 2px 12px;
 }
 
 /* Category grid filters share the sort row. Each label wraps with its control,

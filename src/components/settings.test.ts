@@ -6,6 +6,7 @@ import type { VideoQuality } from '../utils/video-quality';
 import type { XtreamAccountInfo, XtreamLiveCategory } from '../services/xtream-client';
 import type { ChannelHealthService, ChannelHealthSummary } from '../services/channel-health';
 import type { ServiceInfo } from '../services/setup-client';
+import type { CustomTheme } from '../config/custom-theme';
 
 const {
   state,
@@ -40,6 +41,7 @@ const {
     livePreview: false,
     animationMode: 'reduced' as AnimationMode,
     theme: 'midnight' as string,
+    customThemes: [] as CustomTheme[],
     overlayStyle: 'dark' as string,
     textSize: '100' as string,
     tzMode: 'device' as TzMode,
@@ -82,7 +84,11 @@ const {
         quotaBytes: null,
       })),
     },
-    themeMock: { previewTheme: vi.fn(), applyTheme: vi.fn(), initTheme: vi.fn(), applyTextSize: vi.fn()     },
+    themeMock: {
+      previewTheme: vi.fn(), applyTheme: vi.fn(), initTheme: vi.fn(), applyTextSize: vi.fn(),
+      installCustomThemes: vi.fn(), setDraftTheme: vi.fn(), readPresetVars: vi.fn(() => ({})),
+      DRAFT_THEME_ID: 'custom-draft',
+    },
     motionMock: {
       applyAnimationMode: vi.fn(),
     },
@@ -96,6 +102,8 @@ const {
       getLivePreview: vi.fn(() => state.livePreview),
       getAnimationMode: vi.fn(() => state.animationMode),
       getTheme: vi.fn(() => state.theme),
+      getCustomThemes: vi.fn(() => state.customThemes.map(theme => ({ ...theme }))),
+      setCustomThemes: vi.fn((themes: CustomTheme[]) => { state.customThemes = themes; return true; }),
       getOverlayStyle: vi.fn(() => state.overlayStyle),
       getTextSize: vi.fn(() => state.textSize),
       getTzMode: vi.fn(() => state.tzMode),
@@ -282,6 +290,7 @@ beforeEach(() => {
   state.livePreview = false;
   state.animationMode = 'reduced';
   state.theme = 'midnight';
+  state.customThemes = [];
   state.overlayStyle = 'dark';
   state.textSize = '100';
   state.liveReconnectAttempts = 3;
@@ -1124,7 +1133,7 @@ describe('Settings theme picker', () => {
   beforeEach(() => settings.render());
 
   it('renders a swatch per registered theme with the saved theme active', () => {
-    expect(container.querySelectorAll('.theme-swatch')).toHaveLength(17);
+    expect(container.querySelectorAll('.theme-swatch[data-theme-id]')).toHaveLength(17);
     expect(container.querySelector('.theme-swatch.active')!.getAttribute('data-theme-id')).toBe('midnight');
   });
 
@@ -1174,6 +1183,183 @@ describe('Settings theme picker', () => {
     expect(storageMock.setTheme).not.toHaveBeenCalled();
     click('#save-settings');
     expect(storageMock.setTheme).toHaveBeenCalledWith('vintage-amber');
+  });
+
+  const customTheme = (n: number, base = 'ember'): CustomTheme => ({
+    id: `custom-t${n}`,
+    name: `Theme ${n}`,
+    base,
+    seeds: {
+      mode: 'dark', accent: '#336699', background: '#101010', elevation: 1, highContrast: false,
+      focus: 'accent', glow: 1, radius: 8, font: 'default', weight: 'regular', overlayOpacity: 75, overlayBlur: true,
+      past: '#5fc99a', live: '#5fc99a', future: '#8c9cf0',
+    },
+    vars: { '--accent': '#336699' },
+  });
+  const bodyClick = (selector: string) => document.querySelector<HTMLElement>(selector)!
+    .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+  it('lists custom themes after the presets, then a New theme tile', () => {
+    state.customThemes = [customTheme(1)];
+    settings.render();
+    const keys = Array.from(container.querySelectorAll<HTMLElement>('.theme-swatch')).map(el => el.dataset.key);
+    expect(keys.slice(-2)).toEqual(['theme:custom-t1', 'theme:new']);
+    expect(container.querySelector('[data-theme-id="custom-t1"]')!.getAttribute('data-theme')).toBe('custom-t1');
+    expect(container.querySelector('[data-theme-action="customize"]')!.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('keeps Customize visible but disabled with the limit explained once three themes exist', () => {
+    state.customThemes = [customTheme(1), customTheme(2), customTheme(3)];
+    settings.render();
+    expect(container.querySelector('[data-theme-new]')).toBeNull();
+    const customize = container.querySelector<HTMLButtonElement>('[data-theme-action="customize"]')!;
+    expect(customize.disabled).toBe(true);
+    expect(customize.hasAttribute('data-focusable')).toBe(false);
+    expect(container.querySelector('[data-theme-picker] .settings-item-hint')!.textContent)
+      .toBe('You can keep up to 3 custom themes. Delete one to make another.');
+  });
+
+  it('offers Edit and Delete for a selected custom theme', () => {
+    state.customThemes = [customTheme(1)];
+    settings.render();
+    click('.theme-swatch[data-theme-id="custom-t1"]');
+    expect(themeMock.previewTheme).toHaveBeenLastCalledWith('custom-t1');
+    const actions = Array.from(container.querySelectorAll<HTMLElement>('[data-theme-action]')).map(el => el.dataset.themeAction);
+    expect(actions).toEqual(['edit', 'delete']);
+  });
+
+  it('saves a customized preset as a new theme and selects it pending Save Changes', () => {
+    click('.theme-swatch[data-theme-id="arctic"]');
+    click('[data-theme-action="customize"]');
+    expect(themeMock.readPresetVars).toHaveBeenCalledWith('arctic');
+    expect(document.querySelector<HTMLInputElement>('[data-theme-name]')!.value).toBe('My theme 1');
+    bodyClick('#te-radius [data-value="16"]');
+    expect(themeMock.setDraftTheme).toHaveBeenLastCalledWith(expect.objectContaining({ '--radius': '16px' }));
+    bodyClick('[data-theme-save]');
+    expect(state.customThemes).toHaveLength(1);
+    const [saved] = state.customThemes;
+    expect(saved).toMatchObject({ name: 'My theme 1', base: 'arctic', seeds: { radius: 16 } });
+    expect(saved.vars['--radius']).toBe('16px');
+    expect(themeMock.installCustomThemes).toHaveBeenCalled();
+    expect(themeMock.previewTheme).toHaveBeenLastCalledWith(saved.id);
+    expect(container.querySelector('.theme-swatch.active')!.getAttribute('data-theme-id')).toBe(saved.id);
+    expect(storageMock.setTheme).not.toHaveBeenCalled();
+    expect(document.querySelector('.theme-editor')!.classList.contains('hidden')).toBe(true);
+  });
+
+  it('asks before discarding an edited theme', () => {
+    state.customThemes = [customTheme(1)];
+    settings.render();
+    click('.theme-swatch[data-theme-id="custom-t1"]');
+    click('[data-theme-action="edit"]');
+    bodyClick('#te-glow [data-value="2"]');
+    Focus.owner()!.handle('back');
+    expect(document.querySelector('.confirmation-title')?.textContent).toBe('Discard changes?');
+    bodyClick('.confirmation-btn.danger');
+    expect(document.querySelector('.theme-editor')!.classList.contains('hidden')).toBe(true);
+    expect(state.customThemes[0].seeds.glow).toBe(1);
+  });
+
+  const typeInto = (selector: string, text: string) => {
+    const input = document.querySelector<HTMLInputElement>(selector)!;
+    input.focus();
+    input.value = text;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return input;
+  };
+  const press = (input: HTMLElement, key: string) =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+
+  it('shows the next default name after a typed name was saved', () => {
+    click('[data-theme-action="customize"]');
+    press(typeInto('[data-theme-name]', 'Alpha'), 'Enter');
+    bodyClick('[data-theme-save]');
+    expect(state.customThemes[0].name).toBe('Alpha');
+    click('[data-theme-new]');
+    expect(document.querySelector<HTMLInputElement>('[data-theme-name]')!.value).toBe('My theme 1');
+    bodyClick('[data-theme-save]');
+    expect(state.customThemes[1].name).toBe('My theme 1');
+  });
+
+  it('reverts a typed color code on Back and shows each picked color in the field', () => {
+    click('[data-theme-action="customize"]');
+    bodyClick('[data-color-seed="accent"]');
+    const before = document.querySelector<HTMLElement>('[data-color-seed="accent"] .theme-editor-hex')!.textContent;
+    press(typeInto('[data-theme-hex]', '00ff00'), 'Escape');
+    expect(document.querySelector<HTMLElement>('[data-color-seed="accent"] .theme-editor-hex')!.textContent).toBe(before);
+    expect(document.querySelector<HTMLInputElement>('[data-theme-hex]')!.value).toBe(before);
+
+    press(typeInto('[data-theme-hex]', '00ff00'), 'Enter');
+    expect(document.querySelector<HTMLElement>('[data-color-seed="accent"] .theme-editor-hex')!.textContent).toBe('#00FF00');
+    const cell = document.querySelector<HTMLElement>('.theme-picker-cell')!;
+    bodyClick('.theme-picker-cell');
+    expect(document.querySelector<HTMLInputElement>('[data-theme-hex]')!.value).toBe(cell.dataset.color!.toUpperCase());
+  });
+
+  it('keeps the editor open and the selection unchanged when the theme cannot be stored', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    storageMock.setCustomThemes.mockReturnValueOnce(false);
+    click('[data-theme-action="customize"]');
+    bodyClick('[data-theme-save]');
+    expect(toastMock.showToast).toHaveBeenCalledWith('The theme could not be saved because storage is full.');
+    expect(toastMock.showToast).not.toHaveBeenCalledWith('Theme saved');
+    expect(themeMock.installCustomThemes).not.toHaveBeenCalled();
+    expect(container.querySelector('.theme-swatch.active')!.getAttribute('data-theme-id')).toBe('midnight');
+    expect(document.querySelector('.theme-editor')!.classList.contains('hidden')).toBe(false);
+    expect(warn.mock.calls.some(call => call.includes('event=theme.custom.save_failed'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('previews the overlay blur choice', () => {
+    click('[data-theme-action="customize"]');
+    expect(document.querySelector('.theme-editor-glass')!.classList.contains('no-blur')).toBe(false);
+    bodyClick('#te-overlayBlur [data-value="false"]');
+    expect(document.querySelector('.theme-editor-glass')!.classList.contains('no-blur')).toBe(true);
+  });
+
+  it('asks before a new base replaces edited choices, and keeps them on Cancel', () => {
+    click('[data-theme-action="customize"]');
+    bodyClick('#te-radius [data-value="16"]');
+    bodyClick('#te-base [data-dropdown-trigger]');
+    bodyClick('#te-base [data-dropdown-value="ember"]');
+    expect(document.querySelector('.confirmation-title')?.textContent).toBe('Discard changes?');
+    bodyClick('.confirmation-btn:not(.danger)');
+    expect(document.querySelector<HTMLElement>('#te-base')!.dataset.value).toBe('midnight');
+    expect(document.querySelector('#te-radius .toggle-option.active')!.getAttribute('data-value')).toBe('16');
+
+    bodyClick('#te-base [data-dropdown-trigger]');
+    bodyClick('#te-base [data-dropdown-value="ember"]');
+    bodyClick('.confirmation-btn.danger');
+    expect(themeMock.readPresetVars).toHaveBeenLastCalledWith('ember');
+    expect(document.querySelector('#te-radius .toggle-option.active')!.getAttribute('data-value')).toBe('8');
+  });
+
+  it('keeps an edited theme\'s own name when its name is cleared', () => {
+    state.customThemes = [customTheme(1)];
+    settings.render();
+    click('.theme-swatch[data-theme-id="custom-t1"]');
+    click('[data-theme-action="edit"]');
+    press(typeInto('[data-theme-name]', '  '), 'Enter');
+    bodyClick('[data-theme-save]');
+    expect(state.customThemes[0].name).toBe('Theme 1');
+  });
+
+  it('does nothing to the draft preview while the editor was never opened', () => {
+    settings.dismissPrompt();
+    expect(themeMock.setDraftTheme).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the base preset when the applied custom theme is deleted', () => {
+    state.customThemes = [customTheme(1, 'ember'), customTheme(2)];
+    state.theme = 'custom-t1';
+    settings.render();
+    click('[data-theme-action="delete"]');
+    expect(document.querySelector('.confirmation-title')?.textContent).toBe('Delete "Theme 1"?');
+    bodyClick('.confirmation-btn.danger');
+    expect(state.customThemes.map(theme => theme.id)).toEqual(['custom-t2']);
+    expect(storageMock.setTheme).toHaveBeenCalledWith('ember');
+    expect(themeMock.previewTheme).toHaveBeenLastCalledWith('ember');
+    expect(container.querySelector('.theme-swatch.active')!.getAttribute('data-theme-id')).toBe('ember');
   });
 
   it('reflects the saved overlay style on the toggle', () => {

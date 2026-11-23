@@ -24,10 +24,10 @@
   color: var(--text-primary);
   background: var(--catalog-surface);
   border: 3px solid var(--catalog-control);
-  border-radius: 12px;
+  border-radius: calc(var(--radius) * 1.5);
   outline: none;
 }
-.search-input.focused { border-color: var(--accent, #3ea6ff); }
+.search-input.focused { border-color: var(--focus-ring); }
 .search-results { display: block; }
 .search-empty { margin-top: 40px; }
 /* Movies and series are still loading under the channel and program results. */
@@ -86,7 +86,7 @@
   min-height: 72px;
   padding: 12px 20px;
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--catalog-surface);
   cursor: pointer;
 }
@@ -123,7 +123,7 @@
 .search-program-action {
   flex: none;
   padding: 8px 14px;
-  border-radius: 6px;
+  border-radius: calc(var(--radius) * 0.75);
   font-size: 20px;
   color: var(--text-primary);
   background: var(--catalog-control);
@@ -157,7 +157,7 @@
   background: rgb(var(--catalog-hero-scrim-rgb) / 0.82);
   backdrop-filter: blur(24px);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: calc(var(--radius) * 1.5);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
 /* Fades in once the search box has slid open (a display toggle restarts it). */

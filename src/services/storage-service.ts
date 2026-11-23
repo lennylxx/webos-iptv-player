@@ -1,5 +1,6 @@
 import { CONFIG } from '../config';
-import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
+import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, isValidTheme, type OverlayStyle, type TextSize } from '../config/themes';
+import { MAX_CUSTOM_THEMES, sanitizeCustomThemes, type CustomTheme } from '../config/custom-theme';
 import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelResumeEntry, ChannelCustomization, ChannelCycleMode, GuideLayout, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { isCatalogSort, isCatalogSortDirection, type CatalogSortPreference } from '../utils/catalog-sort';
@@ -1140,6 +1141,25 @@ export const StorageService = {
   },
   setTheme(id: string): void {
     set('theme', id);
+  },
+
+  // User-made themes (at most MAX_CUSTOM_THEMES), each with its compiled
+  // variables so boot applies it without recompiling. Read back sanitized:
+  // the first-paint script injects these values into a stylesheet.
+  getCustomThemes(): CustomTheme[] {
+    return sanitizeCustomThemes(get<unknown>('custom_themes', []), isValidTheme);
+  },
+  // The applied custom theme's rule, for the first-paint script in index.html.
+  getThemeCss(): string {
+    return get<string>('theme_css', '');
+  },
+  setThemeCss(css: string): void {
+    set('theme_css', css);
+  },
+
+  /** False when storage refused the write (quota). */
+  setCustomThemes(themes: CustomTheme[]): boolean {
+    return set('custom_themes', themes.slice(0, MAX_CUSTOM_THEMES));
   },
 
   // App-wide text size (see src/config/themes.ts). Default = default (100%).

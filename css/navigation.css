@@ -6,7 +6,7 @@
 
 [data-focusable].focused {
   border-color: var(--focus-ring) !important;
-  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px var(--accent-glow);
+  box-shadow: 0 0 0 3px var(--focus-glow), 0 0 20px var(--focus-glow);
   z-index: 10;
 }
 
@@ -18,7 +18,7 @@
 
 .btn.focused {
   background: var(--accent-dim);
-  border-color: var(--accent);
+  border-color: var(--focus-ring);
   color: white;
 }
 
@@ -33,12 +33,12 @@
 }
 
 .settings-input.focused {
-  border-color: var(--accent) !important;
+  border-color: var(--focus-ring) !important;
   background: var(--bg-primary);
 }
 
 .epg-programme.focused {
   background: var(--accent-dim) !important;
-  border-color: var(--accent) !important;
+  border-color: var(--focus-ring) !important;
   z-index: 10;
 }
