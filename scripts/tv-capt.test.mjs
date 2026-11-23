@@ -98,7 +98,7 @@ const dirs = [];
 
 // Fake ssh prompts until a control connection exists, like real ssh:
 // a key passphrase when -i is given, otherwise a login password.
-function fakeBin({ auth, secret, refused = false }) {
+function fakeBin({ auth, secret, refused = false, rejectPty = false }) {
   const dir = mkdtempSync(join(tmpdir(), 'tv-sh-test-'));
   dirs.push(dir);
   const details = auth === 'key'
@@ -126,6 +126,16 @@ if [ ! -f "$master" ]; then
 fi
 for last; do :; done
 [ "$last" = true ] && exit 0
+${rejectPty ? `
+case " $* " in
+  *" -T "*)
+    printf '$ '
+    IFS= read -r line
+    [ "$line" = 'exit 7' ] || exit 99
+    exit 7
+    ;;
+  *) printf 'PTY allocation request failed\\n'; exit 255 ;;
+esac` : ''}
 touch "${dir}/ran"
 echo '@node-major|16'
 `);
@@ -150,6 +160,28 @@ describe.skipIf(!hasExpect)('tv.sh run', () => {
     const result = run(fakeBin({ auth, secret: 'correct' }));
     expect(result.status).toBe(0);
     expect(result.stdout.replace(/\r/g, '')).toBe('@node-major|16\n');
+  });
+
+  it('forwards shell input and exit status after a PTY refusal', () => {
+    const dir = fakeBin({ auth: 'key', secret: 'correct', rejectPty: true });
+    const result = spawnSync('expect', [], {
+      input: `
+        set timeout 5
+        spawn -noecho $env(TV_TEST_SCRIPT) shell
+        expect {
+          -re {\\$ $} { send -- "exit 7\\r" }
+          timeout { exit 98 }
+          eof { exit [lindex [wait] 3] }
+        }
+        expect eof
+        exit [lindex [wait] 3]
+      `,
+      encoding: 'utf8',
+      timeout: 10000,
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TV_DEVICE: '', TV_TEST_SCRIPT: tvSh },
+    });
+    expect(result.stdout + result.stderr).toContain('remote PTY unavailable');
+    expect(result.status).toBe(7);
   });
 
   it('stops before running the command when authentication fails', () => {

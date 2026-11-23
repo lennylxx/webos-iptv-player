@@ -25,6 +25,7 @@ import {
 } from './cdp-client.mjs';
 import { enableCdpLogs, normalizeCdpLogEvent, subscribeCdpLogs } from './cdp-logs.mjs';
 import { formatOptions, parseArgs } from './cli-args.mjs';
+import { palmbusCommand } from './tv-handle.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const TV_SCRIPT = join(SCRIPT_DIR, 'tv.sh');
@@ -951,7 +952,16 @@ function lookupTvMac(ip) {
 const CONTROL_PORTS = [3000, 3001];
 const SSH_CLOSED = 'the TV is on but its SSH port is closed; check Developer Mode';
 
-const POWER_COMMAND = "luna-send -n 1 -f luna://com.webos.service.tvpower/power/getPowerState '{}'";
+// luna-send is root-only and luna-send-pub is denied /power.
+const POWER_COMMAND = palmbusCommand(`
+LUNA_HANDLE
+  .call("luna://com.webos.service.tvpower/power/getPowerState", "{}")
+  .on("response", function(message) {
+    console.log(message.payload());
+    process.exit(0);
+  });
+setTimeout(function() { process.exit(1); }, 5000);
+`);
 
 export function parsePowerState(output) {
   const text = String(output);

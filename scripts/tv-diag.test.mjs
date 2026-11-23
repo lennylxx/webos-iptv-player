@@ -215,7 +215,7 @@ describe('ares-inspect lifecycle', () => {
           expect(args[1]).toContain('MemAvailable');
           expect(args[1]).toContain('dmesg');
           expect(args[1]).toContain('com.webos.memorymanager/getCurrentMemState');
-          expect(args[1]).toContain('new pb.Handle');
+          expect(args[1]).toContain('new palmbus.Handle("",true)');
           return child;
         },
         timeoutMs: 1000,
@@ -399,7 +399,7 @@ exit 23
     }
   });
 
-  it('reads the rotated and current service log from the TV temp root', () => {
+  it('reads the rotated and current service log from storage shared with the TV service', () => {
     let command = '';
     const result = readServiceLog({
       execFile: (_file, args) => {
@@ -409,10 +409,10 @@ exit 23
       },
     });
 
-    expect(command).toContain('temp_root=/media/developer/temp');
-    expect(command).toContain('temp_root=/tmp');
+    expect(command).toContain('log_dir=/media/internal');
+    expect(command).toContain('log_dir=/tmp');
     expect(command).toContain('if [ -e "$log" ] || [ -e "$log.1" ]; then cat "$log.1" "$log"');
-    expect(command).toContain('log="$temp_root/com.lennylxx.iptv.service.log"');
+    expect(command).toContain('log="$log_dir/com.lennylxx.iptv.service.log"');
     expect(result).toEqual({ lines: ['line 1', 'line 2'], error: '' });
     expect(readServiceLog({
       execFile: () => { throw Object.assign(new Error('x'), { stderr: 'tv.sh: connection timed out\n' }); },

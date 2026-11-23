@@ -22,10 +22,10 @@ type LogSink = Pick<
 >;
 type LogTarget = { [level: string]: unknown };
 
-// The developer shell reads this file; scripts/tv-logs.mjs and
-// scripts/tv-diag.mjs mirror the rule.
+// On webOS 26, the service jail does not see /media/developer/temp and
+// has a private /tmp. /media/internal is shared with the developer shell.
 export function serviceLogDir(nodeVersion: string): string {
-  return Number(nodeVersion.split('.')[0]) >= 20 ? '/media/developer/temp' : '/tmp';
+  return Number(nodeVersion.split('.')[0]) >= 20 ? '/media/internal' : '/tmp';
 }
 
 // The file is world-readable, and playlist URLs carry credentials in their

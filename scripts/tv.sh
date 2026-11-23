@@ -102,7 +102,7 @@ export TV_KEY="$key_path" TV_PORT="$port" TV_HOST="$user@$ip" \
        TV_CONTROL_PATH="/tmp/webos-tv-%C"
 
 run_transport() {
-  expect <<'EOF'
+  expect -f /dev/fd/3 3<<'EOF'
 set command_timeout $env(TV_TIMEOUT)
 if {$command_timeout == 0} { set command_timeout -1 }
 set timeout [expr {$command_timeout < 0 ? 120 : $command_timeout}]
@@ -120,7 +120,8 @@ lappend opts -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 
 # Authenticate silently first so prompts never reach stdout; the command
 # then reuses the control connection without prompting.
-if {!$interactive} {
+proc authenticate {opts} {
+  global env timeout
   log_user 0
   spawn -noecho ssh -p $env(TV_PORT) {*}$opts $env(TV_HOST) true
   expect {
@@ -149,8 +150,10 @@ if {!$interactive} {
     exit [lindex $auth 3]
   }
   log_user 1
-  set timeout $command_timeout
 }
+
+authenticate $opts
+if {!$interactive} { set timeout $command_timeout }
 
 if {$mode eq "push" || $mode eq "pull"} {
   set args [list scp -P $env(TV_PORT) {*}$opts]
@@ -176,6 +179,19 @@ spawn -noecho {*}$args
 set ready 0
 set seen_output 0
 expect {
+  -re {PTY allocation request failed[^\r\n]*\r?\n} {
+    if {!$interactive} { exp_continue }
+    close
+    catch wait
+    puts stderr "tv.sh: remote PTY unavailable; using a shell without job control"
+    if {[catch {exec ssh -T -p $env(TV_PORT) {*}$opts $env(TV_HOST) {exec sh -i} <@stdin >@stdout 2>@stderr} message details]} {
+      set error_code [dict get $details -errorcode]
+      if {[lindex $error_code 0] eq "CHILDSTATUS"} { exit [lindex $error_code 2] }
+      puts stderr "tv.sh: $message"
+      exit 1
+    }
+    exit 0
+  }
   -re {__TV_REBOOT_REQUESTED__} {
     if {$env(TV_EXPECT_DISCONNECT) eq "1"} {
       set expected_disconnect 1
@@ -227,9 +243,7 @@ expect {
   eof {}
 }
 
-if {$ready} {
-  interact
-}
+if {$ready} { interact }
 catch wait result
 set status [lindex $result 3]
 if {$expected_disconnect && $status == 255} {
@@ -263,29 +277,15 @@ case "$action" in
   reboot)
     [ $# -eq 0 ] || { echo "usage: tv.sh reboot" >&2; exit 2; }
     export TV_MODE="run" TV_EXPECT_DISCONNECT="1"
-    TV_CMD=$(cat <<'EOF'
-NODE_PATH=/usr/lib/node_modules:/usr/lib/nodejs node -e '
-var Module=require("module"),originalLoad=Module._load;
-function noop(){}
-function logger(){return{log:noop,info:noop,warning:noop,error:noop};}
-var pmloglib={log:noop,info:noop,warning:noop,error:noop,Console:logger,Context:logger};
-Module._load=function(request,parent,isMain){
-  if(request==="pmloglib")return pmloglib;
-  return originalLoad.apply(this,arguments);
-};
-function createHandle(pb){
-  try{return new pb.Handle("");}
-  catch(singleArgumentError){return new pb.Handle("",true);}
-}
-var pb=require("palmbus"),handle=createHandle(pb);
-handle.call(
+    TV_CMD=$(node "$(dirname "$0")/tv-handle.mjs" <<'EOF'
+LUNA_HANDLE.call(
   "luna://com.webos.service.sleep/shutdown/machineReboot",
   JSON.stringify({reason:"remoteKey"})
 );
 console.log("__TV_REBOOT_REQUESTED__");
-setTimeout(function(){process.exit(0);},3000);'
+setTimeout(function(){process.exit(0);},3000);
 EOF
-)
+) || exit 1
     export TV_CMD
     echo "Rebooting TV..."
     run_transport

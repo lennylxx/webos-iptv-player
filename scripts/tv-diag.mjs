@@ -17,6 +17,8 @@ import {
   subscribeCdpLogs,
 } from './cdp-logs.mjs';
 import { formatOptions, parseArgs } from './cli-args.mjs';
+import { palmbusCommand } from './tv-handle.mjs';
+import { SERVICE_LOG_PATH } from './tv-logs.mjs';
 
 const DEFAULT_APP_ID = 'com.lennylxx.iptv';
 const DEFAULT_PORT = 9998;
@@ -112,11 +114,6 @@ combined. Reports stay local and are never uploaded.`;
 
 const PREVIEW_BYTES = 2048;
 const SERVICE_LOG_LINES = 500;
-// Mirrors serviceLogDir() in bundled-service/src/service-log.ts.
-const SERVICE_LOG_TEMP_ROOT = [
-  'node_major=$(node -e \'process.stdout.write(process.versions.node.split(".")[0])\')',
-  'if [ "$node_major" -ge 20 ]; then temp_root=/media/developer/temp; else temp_root=/tmp; fi',
-].join('; ');
 const NO_SERVICE_LOG = '__IPTV_NO_SERVICE_LOG__';
 const PLAYLIST_PROBE_TIMEOUT_MS = 5000;
 const SINGLE_CONNECTION_SKIP_REASON = 'xtream-max-connections-at-most-one';
@@ -919,26 +916,9 @@ export { inspectorWebSocketUrl, startAresInspector };
 
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 
-const memoryManagerProbeScript = `
-var Module=require("module"),originalLoad=Module._load;
-function noop(){}
-function logger(){return{log:noop,info:noop,warning:noop,error:noop};}
-var pmloglib={log:noop,info:noop,warning:noop,error:noop,Console:logger,Context:logger};
-Module._load=function(request,parent,isMain){
-  if(request==="pmloglib")return pmloglib;
-  return originalLoad.apply(this,arguments);
-};
-function createHandle(pb){
-  var major=Number(String(process.versions.node||"0").split(".")[0]);
-  if(major>=20){
-    try{return new pb.Handle("");}
-    catch(singleArgumentError){return new pb.Handle("",true);}
-  }
-  return new pb.Handle("",true);
-}
+const memoryManagerProbeBody = `
 var phase=process.argv[1]||"unknown";
-var pb=require("palmbus"),handle=createHandle(pb);
-handle.call("luna://com.webos.memorymanager/getCurrentMemState","{}")
+LUNA_HANDLE.call("luna://com.webos.memorymanager/getCurrentMemState","{}")
 .on("response",function(message){
   var result;
   try{result=JSON.parse(message.payload());}catch(error){result={};}
@@ -949,7 +929,7 @@ handle.call("luna://com.webos.memorymanager/getCurrentMemState","{}")
   process.exit(0);
 });
 setTimeout(function(){process.exit(1);},3000);
-`.trim();
+`;
 
 const nativeMetricCommand = (durationMs, appId) => {
   const durationSeconds = Math.max(1, Math.round(durationMs / 1000));
@@ -969,7 +949,7 @@ const nativeMetricCommand = (durationMs, appId) => {
     'esac',
     '}',
     'sample_memory_manager() {',
-    `NODE_PATH=/usr/lib/node_modules:/usr/lib/nodejs node -e ${shellQuote(memoryManagerProbeScript)} "$1" 2>/dev/null`,
+    `${palmbusCommand(memoryManagerProbeBody, ['"$1"'])} 2>/dev/null`,
     'status=$?',
     'if [ "$status" -ne 0 ]; then printf "@mm|%s||||0\\n" "$1"; fi',
     '}',
@@ -1464,8 +1444,7 @@ export function runNativeProbe(url, { execFile = execFileSync } = {}) {
 
 export function readServiceLog({ execFile = execFileSync } = {}) {
   const command = [
-    SERVICE_LOG_TEMP_ROOT,
-    'log="$temp_root/com.lennylxx.iptv.service.log"',
+    SERVICE_LOG_PATH,
     'if [ -e "$log" ] || [ -e "$log.1" ]; then'
       + ` cat "$log.1" "$log" 2>/dev/null | tail -n ${String(SERVICE_LOG_LINES)};`
       + ` else echo ${NO_SERVICE_LOG}; fi`,

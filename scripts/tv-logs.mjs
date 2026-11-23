@@ -26,9 +26,10 @@ const DEFAULT_APP_ID = 'com.lennylxx.iptv';
 const DEFAULT_PORT = 9998;
 const DEFAULT_SECONDS = 0;
 // Mirrors serviceLogDir() in bundled-service/src/service-log.ts.
-const SERVICE_LOG_TEMP_ROOT = [
+export const SERVICE_LOG_PATH = [
   'node_major=$(node -e \'process.stdout.write(process.versions.node.split(".")[0])\')',
-  'if [ "$node_major" -ge 20 ]; then temp_root=/media/developer/temp; else temp_root=/tmp; fi',
+  'if [ "$node_major" -ge 20 ]; then log_dir=/media/internal; else log_dir=/tmp; fi',
+  'log="$log_dir/com.lennylxx.iptv.service.log"',
 ].join('; ');
 
 const usage = 'Usage: tv-logs.mjs [--app <id>] [--port '
@@ -96,8 +97,7 @@ function parseLogsArgs(argv) {
 export function serviceLogCommand({ history, seconds }) {
   const tail = `tail -n ${history ? '+1' : '0'} -F "$log" 2>/dev/null`;
   return [
-    SERVICE_LOG_TEMP_ROOT,
-    'log="$temp_root/com.lennylxx.iptv.service.log"',
+    SERVICE_LOG_PATH,
     '[ -e "$log" ] || echo "tv-logs: waiting for $log; has the service started?" >&2',
     ...(history ? ['cat "$log.1" 2>/dev/null'] : []),
     // webOS 4 busybox may lack a positional `timeout`; stop tail by hand.

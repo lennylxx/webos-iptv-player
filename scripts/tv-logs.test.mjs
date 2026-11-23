@@ -5,7 +5,9 @@ describe('tv-logs --service', () => {
   it('follows only new lines by default', () => {
     const command = serviceLogCommand({ history: false, seconds: 0 });
 
-    expect(command).toContain('log="$temp_root/com.lennylxx.iptv.service.log"');
+    expect(command).toContain('log_dir=/media/internal');
+    expect(command).toContain('log_dir=/tmp');
+    expect(command).toContain('log="$log_dir/com.lennylxx.iptv.service.log"');
     expect(command).toContain('tail -n 0 -F "$log"');
     expect(command).not.toContain('cat "$log.1"');
     expect(command).not.toContain('kill');

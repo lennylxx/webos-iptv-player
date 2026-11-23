@@ -44,8 +44,8 @@ describe('service log', () => {
   it('writes where the developer shell looks for each Node major', () => {
     expect(serviceLogDir('0.12.2')).toBe('/tmp');
     expect(serviceLogDir('16.20.2')).toBe('/tmp');
-    expect(serviceLogDir('20.12.2')).toBe('/media/developer/temp');
-    expect(serviceLogDir('22.1.0')).toBe('/media/developer/temp');
+    expect(serviceLogDir('20.12.2')).toBe('/media/internal');
+    expect(serviceLogDir('22.1.0')).toBe('/media/internal');
   });
 
   it('keeps logger lines and every warning, skipping framework chatter', () => {

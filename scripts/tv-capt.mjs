@@ -2,6 +2,7 @@
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -10,6 +11,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { formatOptions, parseArgs } from './cli-args.mjs';
+import { REMOTE_NODE_PATH, expandPalmbus } from './tv-handle.mjs';
 
 const METHODS = new Map([
   ['blended', 'BLENDED'],
@@ -92,7 +94,6 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const TV_SCRIPT = join(SCRIPT_DIR, 'tv.sh');
 const REMOTE_HELPER = join(SCRIPT_DIR, 'tv-capt-remote.js');
 const REMOTE_NAME_PREFIX = 'webos-iptv-capt-';
-const REMOTE_NODE_PATH = '/usr/lib/node_modules:/usr/lib/nodejs';
 const timestamp = (now = new Date()) => {
   const part = (value) => String(value).padStart(2, '0');
   return [
@@ -311,7 +312,10 @@ export async function runCapture(options) {
   let localTemporary = null;
 
   try {
-    runTv(['push', REMOTE_HELPER, remoteHelper]);
+    localTemporary = mkdtempSync(join(tmpdir(), 'webos-tv-capt-'));
+    const localHelper = join(localTemporary, 'helper.js');
+    writeFileSync(localHelper, expandPalmbus(readFileSync(REMOTE_HELPER, 'utf8')));
+    runTv(['push', localHelper, remoteHelper]);
     runTv(['run', `mkdir ${shellQuote(remoteDirectory)}`]);
 
     if (options.mode === 'screenshot') {
@@ -340,7 +344,6 @@ export async function runCapture(options) {
     }
 
     checkFfmpeg();
-    localTemporary = mkdtempSync(join(tmpdir(), 'webos-tv-capt-'));
     const framesDirectory = join(localTemporary, 'frames');
     mkdirSync(framesDirectory);
     const timing = await streamRecording({

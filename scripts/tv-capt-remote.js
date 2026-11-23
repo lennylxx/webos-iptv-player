@@ -1,28 +1,8 @@
-var Module = require("module");
+// Runs on the TV; tv-capt expands the Luna handle macro before pushing it.
 var fs = require("fs");
-var originalLoad = Module._load;
 var nodeMajor = Number(String(process.versions.node || "0").split(".")[0]);
 var temporaryRoot = nodeMajor >= 20 ? "/media/developer/temp" : "/tmp";
 var temporaryPrefix = temporaryRoot + "/webos-iptv-capt-";
-
-function noop() {}
-function logger() {
-  return { log: noop, info: noop, warning: noop, error: noop };
-}
-
-var pmloglib = {
-  log: noop,
-  info: noop,
-  warning: noop,
-  error: noop,
-  Console: logger,
-  Context: logger
-};
-
-Module._load = function(request, parent, isMain) {
-  if (request === "pmloglib") return pmloglib;
-  return originalLoad.apply(this, arguments);
-};
 
 function fail(message) {
   console.error("tv-capt: " + message);
@@ -44,18 +24,6 @@ function safePath(value) {
     fail("unsafe output path");
   }
   return value;
-}
-
-function createBus() {
-  var palmbus = require("palmbus");
-  if (nodeMajor >= 20) {
-    try {
-      return new palmbus.Handle("");
-    } catch (singleArgumentError) {
-      return new palmbus.Handle("", true);
-    }
-  }
-  return new palmbus.Handle("", true);
 }
 
 function capture(bus, request, callback) {
@@ -120,7 +88,7 @@ function padFrame(index) {
 
 function screenshot(args) {
   if (args.length !== 5) fail("invalid screenshot arguments");
-  var bus = createBus();
+  var bus = LUNA_HANDLE;
   capture(bus, request(args[0], args[1], args[2], args[3], args[4]),
     function(error, response) {
       if (error) fail(error.message);
@@ -143,7 +111,7 @@ function record(args) {
       && delivery !== "discard") {
     fail("invalid delivery mode");
   }
-  var bus = createBus();
+  var bus = LUNA_HANDLE;
   var captureHandle = null;
   var capturePath = directory + "/current.jpg";
   var startedAt = Date.now();
