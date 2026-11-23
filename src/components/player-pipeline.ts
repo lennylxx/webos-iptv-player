@@ -242,6 +242,8 @@ export interface PlayerPipelineOptions {
   onStepRestarted?: () => void;
   /** The current load's proxy session expired under it. */
   onProxyExpired?: () => void;
+  /** Places the Luna picture itself when true, as the aspect fallback does. */
+  onLunaDisplay?: () => boolean;
 }
 
 // Node's HTTP client sends no User-Agent of its own, and many origins refuse
@@ -1504,6 +1506,7 @@ export class PlayerPipeline {
       onAudioTracks: () => {
         if (this.luna === luna) this.callbacks.onAudioTracksUpdated();
       },
+      onDisplay: (): boolean => this.luna === luna && (this.callbacks.onLunaDisplay?.() ?? false),
     });
     this.luna = luna;
     this.lunaUrl = url;

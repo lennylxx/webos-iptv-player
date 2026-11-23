@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { anonymousLunaCall, registerAspectService, type AspectLunaMsg, type LunaCall } from './service';
+import { anonymousLunaCall, registerAspectService, type AspectLunaMsg, type LunaCall, type LunaReply } from './service';
 
 const APP_ID = 'com.example.app';
+const SETTINGS = 'luna://com.webos.settingsservice/setSystemSettings';
 
 function setup(call: LunaCall | null) {
   let handler: ((msg: AspectLunaMsg) => void) | null = null;
@@ -31,6 +32,32 @@ describe('setAspectRatio', () => {
     expect(respond).toHaveBeenCalledWith({ returnValue: true, value: 'allDirZoom' });
   });
 
+  it('falls back after settings denial, pairs the crop inputs, and remembers the route', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const call = vi.fn<LunaCall>((uri, _payload, done) => {
+      if (uri === SETTINGS) done({ returnValue: false, errorText: 'Access denied' });
+      else if (uri.endsWith('/getStatus')) done({ returnValue: true, video: [{
+        appId: APP_ID, context: 'media1', connected: true, width: 1280, height: 720,
+      }] });
+      else done({ returnValue: true });
+      return () => {};
+    });
+    const send = setup(call);
+    expect(send(APP_ID, { value: 'allDirZoom', mediaId: 'media1' }))
+      .toHaveBeenCalledWith({ returnValue: true, value: 'allDirZoom', backend: 'videooutput' });
+    expect(call.mock.calls[2][1]).toMatchObject({
+      context: 'media1', originalInput: { x: 0, y: 0, width: 1280, height: 720 },
+      sourceInput: { x: 160, y: 90, width: 960, height: 540 },
+    });
+    send(APP_ID, { value: '4x3', mediaId: 'media1' });
+    expect(call.mock.calls.filter(([uri]) => uri.includes('settingsservice'))).toHaveLength(1);
+    expect(call.mock.calls[4][1]).toMatchObject({
+      displayOutput: { x: 240, y: 0, width: 1440, height: 1080 },
+    });
+    expect(warn.mock.calls.filter(args => args.join(' ').includes('event=player.aspect.fallback backend=videooutput reason=settings_denied')))
+      .toHaveLength(1);
+  });
+
   it('answers only the app and only an offered value', () => {
     const call = vi.fn<LunaCall>(() => () => {});
     const send = setup(call);
@@ -43,13 +70,91 @@ describe('setAspectRatio', () => {
     expect(call).not.toHaveBeenCalled();
   });
 
-  it('names a settingsservice refusal', () => {
+  it('waits for the media after a refusal, but fails a write settingsservice merely could not do', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const respond = setup((_uri, _payload, done) => {
-      done({ returnValue: false, errorText: 'Access denied' });
+    const call = vi.fn<LunaCall>((_uri, payload, done) => {
+      const value = (payload.settings as { arcPerApp: string }).arcPerApp;
+      done({ returnValue: false, errorText: value === '4x3' ? 'Internal error' : 'Access denied' });
       return () => {};
-    })(APP_ID, { value: '4x3' });
-    expect(respond.mock.calls[0][0]).toMatchObject({ returnValue: false, errorCode: 'settings_denied' });
+    });
+    const send = setup(call);
+    expect(send(APP_ID, { value: '4x3' }).mock.calls[0][0])
+      .toMatchObject({ returnValue: false, errorCode: 'settings_failed' });
+    expect(send(APP_ID, { value: '16x9' }).mock.calls[0][0])
+      .toEqual({ returnValue: false, errorCode: 'video_pending', errorText: 'The video is not ready',
+        backend: 'videooutput' });
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps trying settingsservice after a broken bus or a timeout', () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const replies: (LunaReply | null)[] = [{ returnValue: false, errorCode: 'bus_error', errorText: 'Access denied' }, null];
+    const call = vi.fn<LunaCall>((_uri, _payload, done) => {
+      const reply = replies.shift();
+      if (reply) done(reply);
+      return () => {};
+    });
+    const send = setup(call);
+    expect(send(APP_ID, { value: '4x3', mediaId: 'm1' }).mock.calls[0][0]).toMatchObject({ errorCode: 'bus_error' });
+    const timedOut = send(APP_ID, { value: '4x3', mediaId: 'm1' });
+    vi.advanceTimersByTime(5000);
+    expect(timedOut.mock.calls[0][0]).toEqual({ returnValue: false, errorCode: 'timeout',
+      errorText: 'Aspect ratio request did not answer' });
+    send(APP_ID, { value: '4x3', mediaId: 'm1' });
+    expect(call.mock.calls.map(([uri]) => uri)).toEqual(Array(3).fill(SETTINGS));
+  });
+
+  it('touches only the app\'s own connected media', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const call = vi.fn<LunaCall>((uri, _payload, done) => {
+      if (uri === SETTINGS) done({ returnValue: false, errorText: 'Access denied' });
+      else if (uri.endsWith('/getStatus')) done({ returnValue: true, video: [
+        { appId: 'com.example.other', context: 'm1', connected: true, width: 1920, height: 1080 },
+        { appId: APP_ID, context: 'm0', connected: true, width: 1920, height: 1080 },
+        { appId: APP_ID, context: 'm1', connected: false, width: 1920, height: 1080 },
+      ] });
+      else done({ returnValue: true });
+      return () => {};
+    });
+    expect(setup(call)(APP_ID, { value: 'allDirZoom', mediaId: 'm1' }).mock.calls[0][0])
+      .toMatchObject({ errorCode: 'video_pending', backend: 'videooutput' });
+    expect(call.mock.calls.some(([uri]) => uri.endsWith('/setDisplayWindow'))).toBe(false);
+  });
+
+  it('reports a refused video window, and times out a videooutput step', () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cancel = vi.fn();
+    let hang = false;
+    const call = vi.fn<LunaCall>((uri, _payload, done) => {
+      if (uri === SETTINGS) done({ returnValue: false, errorText: 'Access denied' });
+      else if (uri.endsWith('/getStatus')) {
+        if (hang) return cancel;
+        done({ returnValue: true, video: [{ appId: APP_ID, context: 'm1', connected: true, width: 1280, height: 720 }] });
+      } else done({ returnValue: false, errorCode: 102, errorText: 'Not supported' });
+      return () => {};
+    });
+    const send = setup(call);
+    expect(send(APP_ID, { value: '4x3', mediaId: 'm1' }).mock.calls[0][0]).toEqual({
+      returnValue: false, errorCode: 'video_failed', errorText: 'Not supported', backend: 'videooutput' });
+    hang = true;
+    const timedOut = send(APP_ID, { value: '4x3', mediaId: 'm1' });
+    const next = send(APP_ID, { value: 'original', mediaId: 'm1' });
+    vi.advanceTimersByTime(5000);
+    expect(cancel).toHaveBeenCalled();
+    expect(timedOut.mock.calls[0][0]).toMatchObject({ errorCode: 'timeout', backend: 'videooutput' });
+    expect(next).not.toHaveBeenCalled();
+    expect(call.mock.calls.filter(([uri]) => uri.endsWith('/getStatus'))).toHaveLength(3);
+  });
+
+  it('rejects a malformed media id or display', () => {
+    const call = vi.fn<LunaCall>(() => () => {});
+    const send = setup(call);
+    expect(send(APP_ID, { value: '4x3', mediaId: 7 }).mock.calls[0][0]).toMatchObject({ errorCode: 'bad_display' });
+    expect(send(APP_ID, { value: '4x3', display: { x: 1920, y: 0, width: 10, height: 10 } }).mock.calls[0][0])
+      .toMatchObject({ errorCode: 'bad_display' });
+    expect(call).not.toHaveBeenCalled();
   });
 
   it('reports a broken bus as bus_error, then writes on a fresh handle', () => {
@@ -189,6 +294,29 @@ describe('anonymousLunaCall', () => {
       [{ returnValue: false, errorCode: 'bus_error', errorText: 'Invalid Luna response' }],
       [{ returnValue: true }],
     ]);
+    expect(handles).toBe(2);
+  });
+
+  it.each(['null', '[]', '7', '"ok"'])('reports a non-object %s reply as bus_error without throwing', (body) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let handles = 0;
+    const cancel = vi.fn();
+    class Handle {
+      constructor() { handles++; }
+      call() {
+        const payload = handles === 1 ? body : '{"returnValue":true}';
+        return {
+          addListener: (_event: string, listener: (m: { payload(): string }) => void) =>
+            listener({ payload: () => payload }),
+          cancel,
+        };
+      }
+    }
+    const send = setup(anonymousLunaCall({ Handle }));
+    expect(send(APP_ID, { value: '4x3' }).mock.calls[0][0])
+      .toEqual({ returnValue: false, errorCode: 'bus_error', errorText: 'Invalid Luna response' });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(send(APP_ID, { value: '4x3' })).toHaveBeenCalledWith({ returnValue: true, value: '4x3' });
     expect(handles).toBe(2);
   });
 

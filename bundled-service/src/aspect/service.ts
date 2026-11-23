@@ -2,15 +2,19 @@
  * Aspect ratio feature — webOS service integration. Registers
  * setAspectRatio, which only the app itself may call. The TV keeps a picture
  * aspect ratio per app (settingsservice category aspectRatio, key arcPerApp);
- * the web app's own identity is denied that service, so it asks here.
+ * the web app's own identity is denied that service, so it asks here. Where
+ * settingsservice refuses the key to every identity, the service crops and
+ * places the app's own media through videooutput instead.
  */
 
 import { appMethod, lunaFailure, type AppMsg, type LunaRegistry, type Respond } from '../luna-reply';
 import { createLogger } from '../logger';
+import { findAppVideo, videoDisplay, videoWindow, type VideoDisplay } from './videooutput';
 
 const log = createLogger('aspect');
 
 const SETTINGS_URI = 'luna://com.webos.settingsservice/setSystemSettings';
+const VIDEO_URI = 'luna://com.webos.service.videooutput/';
 // The arcPerApp values the TV lists as visible that the app offers.
 const VALUES = ['original', '16x9', '4x3', 'allDirZoom'];
 const TIMEOUT_MS = 5000;
@@ -21,6 +25,7 @@ export interface LunaReply {
   returnValue?: boolean;
   errorCode?: unknown;
   errorText?: unknown;
+  video?: unknown;
 }
 
 // Sends one Luna request and answers once with its parsed payload; the
@@ -31,7 +36,7 @@ export type LunaCall = (
   done: (reply: LunaReply) => void,
 ) => () => void;
 
-export type AspectLunaMsg = AppMsg<{ value?: unknown }>;
+export type AspectLunaMsg = AppMsg<{ value?: unknown; mediaId?: unknown; display?: unknown }>;
 
 interface PalmbusRequest {
   addListener(event: 'response', listener: (message: { payload(): string }) => void): void;
@@ -87,16 +92,19 @@ export function anonymousLunaCall(palmbus?: PalmbusModule): LunaCall | null {
       used = handle;
       request = handle.call(uri, JSON.stringify(payload));
       request.addListener('response', (message) => {
-        let reply: LunaReply;
+        let reply: unknown;
         try {
-          reply = JSON.parse(message.payload()) as LunaReply;
+          reply = JSON.parse(message.payload());
         } catch {
+          reply = null;
+        }
+        if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) {
           drop();
           done({ returnValue: false, errorCode: BUS_ERROR, errorText: 'Invalid Luna response' });
           return;
         }
         cancel();
-        done(reply);
+        done(reply as LunaReply);
       });
     } catch (e) {
       drop();
@@ -111,7 +119,16 @@ export function anonymousLunaCall(palmbus?: PalmbusModule): LunaCall | null {
 
 interface Job {
   value: string;
+  mediaId: string;
+  display: VideoDisplay;
   respond: Respond;
+}
+
+// settingsservice refusing the key, as opposed to failing to answer.
+const SETTINGS_REFUSED = /denied|not permitted|not allowed|unknown method|not supported|unsupported/i;
+
+function replyText(reply: LunaReply, fallback: string): string {
+  return typeof reply.errorText === 'string' && reply.errorText ? reply.errorText : fallback;
 }
 
 export function registerAspectService(service: LunaRegistry<AspectLunaMsg>, appId: string, call: LunaCall | null): void {
@@ -119,6 +136,8 @@ export function registerAspectService(service: LunaRegistry<AspectLunaMsg>, appI
   // write must not land after a newer one.
   let busy = false;
   let waiting: Job | null = null;
+  // Set once settingsservice refuses the key; kept for the service's life.
+  let useVideoOutput = false;
 
   const finish = (): void => {
     busy = false;
@@ -131,29 +150,81 @@ export function registerAspectService(service: LunaRegistry<AspectLunaMsg>, appI
     busy = true;
     let settled = false;
     let cancel: (() => void) | null = null;
-    const timer = setTimeout(() => {
+    // Each step's answer counts only while that step is the current one.
+    let step = 0;
+    const complete = (result: unknown): void => {
       if (settled) return;
       settled = true;
-      if (cancel) cancel();
-      log.warn('setAspectRatio outcome=failed reason=timeout');
-      job.respond(lunaFailure('timeout', 'settingsservice did not answer'));
+      clearTimeout(timer);
+      job.respond(result);
       finish();
+    };
+    const fail = (reason: string, text: string, video: boolean): void => {
+      log.warn('setAspectRatio outcome=failed reason=' + reason);
+      complete(video ? lunaFailure(reason, text, { backend: 'videooutput' }) : lunaFailure(reason, text));
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      if (cancel) cancel();
+      fail('timeout', 'Aspect ratio request did not answer', useVideoOutput);
     }, TIMEOUT_MS);
-    cancel = call!(SETTINGS_URI,
-      { category: 'aspectRatio', app_id: appId, settings: { arcPerApp: job.value } }, (reply) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (reply && reply.returnValue === true) {
-          job.respond({ returnValue: true, value: job.value });
-        } else {
-          const text = reply && typeof reply.errorText === 'string' ? reply.errorText : '';
-          const reason = reply && reply.errorCode === BUS_ERROR ? BUS_ERROR
-            : /denied/i.test(text) ? 'settings_denied' : 'settings_failed';
-          log.warn('setAspectRatio outcome=failed reason=' + reason);
-          job.respond(lunaFailure(reason, text || 'setSystemSettings failed'));
+    const request = (uri: string, parameters: Record<string, unknown>, done: (reply: LunaReply) => void): void => {
+      const current = ++step;
+      cancel = null;
+      const handle = call!(uri, parameters, reply => {
+        if (settled || current !== step) return;
+        cancel = null;
+        done(reply);
+      });
+      if (!settled && current === step) cancel = handle;
+    };
+    const videoFailure = (reply: LunaReply, text: string): void => {
+      fail(reply.errorCode === BUS_ERROR ? BUS_ERROR : 'video_failed', replyText(reply, text), true);
+    };
+    // Expected until the app's media is connected; the app retries then.
+    const pending = (): void => complete(lunaFailure('video_pending', 'The video is not ready', {
+      backend: 'videooutput',
+    }));
+    const applyVideo = (): void => {
+      if (!job.mediaId) {
+        pending();
+        return;
+      }
+      request(VIDEO_URI + 'getStatus', {}, reply => {
+        if (reply.returnValue !== true) {
+          videoFailure(reply, 'Video status request failed');
+          return;
         }
-        finish();
+        const video = findAppVideo(reply.video, appId, job.mediaId);
+        if (!video) {
+          pending();
+          return;
+        }
+        request(VIDEO_URI + 'display/setDisplayWindow', videoWindow(video, job.value, job.display), result => {
+          if (result.returnValue === true) complete({ returnValue: true, value: job.value, backend: 'videooutput' });
+          else videoFailure(result, 'Video window request failed');
+        });
+      });
+    };
+    if (useVideoOutput) {
+      applyVideo();
+      return;
+    }
+    request(SETTINGS_URI,
+      { category: 'aspectRatio', app_id: appId, settings: { arcPerApp: job.value } }, reply => {
+        if (reply.returnValue === true) {
+          complete({ returnValue: true, value: job.value });
+          return;
+        }
+        const text = replyText(reply, '');
+        if (reply.errorCode === BUS_ERROR || !SETTINGS_REFUSED.test(text)) {
+          fail(reply.errorCode === BUS_ERROR ? BUS_ERROR : 'settings_failed', text || 'setSystemSettings failed', false);
+          return;
+        }
+        useVideoOutput = true;
+        log.warn('Aspect ratio fallback', 'event=player.aspect.fallback', 'backend=videooutput',
+          'reason=' + (/denied|not permitted|not allowed/i.test(text) ? 'settings_denied' : 'settings_unsupported'));
+        applyVideo();
       });
   };
 
@@ -168,7 +239,13 @@ export function registerAspectService(service: LunaRegistry<AspectLunaMsg>, appI
       respond(lunaFailure('no_bus', 'Luna bus unavailable'));
       return;
     }
-    const job: Job = { value: value, respond: respond };
+    const mediaId = payload.mediaId;
+    const display = videoDisplay(payload.display);
+    if ((mediaId !== undefined && (typeof mediaId !== 'string' || !mediaId || mediaId.length > 128)) || !display) {
+      respond(lunaFailure('bad_display', 'Invalid video or display'));
+      return;
+    }
+    const job: Job = { value: value, mediaId: typeof mediaId === 'string' ? mediaId : '', display: display, respond: respond };
     if (!busy) {
       run(job);
       return;

@@ -54,6 +54,8 @@ export interface LunaMediaElementOptions {
   onPlaybackError?: (code: number) => boolean;
   /** Called when the audio list or its selection changes, once loaded. */
   onAudioTracks?: () => void;
+  /** True when the caller placed the picture itself; skips setDisplayWindow. */
+  onDisplay?: () => boolean;
 }
 
 /** An audio rendition as UMS lists it; `index` is what selectTrack takes. */
@@ -500,6 +502,11 @@ export class LunaMediaElement {
   }
 
   private applyDisplay(): void {
+    if (this.options.onDisplay?.()) {
+      // The caller moved the picture, so the last direct placement is stale.
+      this.appliedDisplay = '';
+      return;
+    }
     const mediaId = this.lunaMediaId;
     // The live preview re-lays out every second; resend only a moved picture.
     const key = `${mediaId} ${JSON.stringify(this.display)}`;

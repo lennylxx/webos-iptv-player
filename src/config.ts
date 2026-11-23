@@ -83,6 +83,10 @@ export const CONFIG = {
     PROXY_FIRST_OPEN_TIMEOUT: 8000,
     // Longer than the service's own 5 s settingsservice wait, so its answer wins.
     ASPECT_RATIO_TIMEOUT: 7000,
+    // Per load: retries of a videooutput write that found no connected media
+    // or failed.
+    ASPECT_RATIO_RETRY_MS: 1000,
+    ASPECT_RATIO_RETRIES: 3,
     // Under the service's 2-minute idle expiry, so a paused player keeps its session.
     PROXY_TOUCH_INTERVAL: 45000,
     // A channel with HTTP headers starts no further step after this long, so

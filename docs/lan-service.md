@@ -45,7 +45,7 @@ Luna (called by the app's LAN/reminder/manifest clients and by Activity Manager)
 | `openProxy` | no | Open a loopback proxy session that sends a stream's HTTP headers; app-only. |
 | `touchProxy` | no | Keep a loopback proxy session alive and report its last upstream status; app-only. |
 | `closeProxy` | no | End a loopback proxy session; app-only. |
-| `setAspectRatio` | no | Set the TV's picture aspect ratio for the app (settingsservice `arcPerApp`); app-only. |
+| `setAspectRatio` | no | Set the TV's picture aspect ratio for the app (settingsservice `arcPerApp`, or videooutput where that is refused); app-only. |
 
 HTTP (called by phones, and by the app for reconcile):
 
@@ -259,9 +259,9 @@ Tuning in replaces a ratio the user set in the TV's menu only on a
 channel with a remembered ratio, or while `iptv_aspect_dirty` is set,
 when it writes `original` once; the app cannot read `arcPerApp` to tell.
 Reset App keeps `iptv_aspect_dirty`, since the TV keeps the ratio.
-After a `denied`, `bad_value`, `no_bus`, `settings_denied`, or
-`settings_failed` failure, tuning in stops writing for the session (the
-flag stays) until a menu pick succeeds; a tune-in made meanwhile is
+On the settingsservice route, after a `denied`, `bad_value`, `no_bus`,
+or `settings_failed` failure, tuning in stops writing for the session
+(the flag stays) until a menu pick succeeds; a tune-in made meanwhile is
 applied once that pick succeeds. Any other failure (`timeout`,
 `superseded`, `bus_error`, an unreachable service, or another Luna
 error) is retried on the next tune-in. The app gives up on a request the
@@ -269,17 +269,92 @@ service has not answered in 7 s and treats it as `timeout`. Failures are
 logged as `event=player.aspect_failed reason=…` once per reason per
 session.
 
+### videooutput fallback
+
+webOS 26+ refuses `arcPerApp` to every identity, the anonymous handle
+included, while still answering other settingsservice keys. When
+settingsservice answers a write with a refusal (`Access denied`, not
+permitted or allowed, an unknown method, or not supported), the service
+logs `event=player.aspect.fallback backend=videooutput
+reason=settings_denied|settings_unsupported` once and, for the rest of its
+life, sends every write to `com.webos.service.videooutput` on the same
+anonymous handle instead; the TV is never probed by version. A timeout, a
+broken bus, or a malformed reply is not a refusal: it fails that write
+and the next one tries settingsservice again.
+
+videooutput shapes one media at a time, so the app sends its current media
+and picture box with each write: `mediaId` is the media's own id (a Luna
+pipeline's id on the Luna path), and `display` is `"full"` or the preview
+box in the app's 1920x1080 space. The service reads `getStatus` before
+each write and acts only on the connected video whose `appId` is the app's
+and whose `context` is exactly that `mediaId`; it never touches another
+app's video or a global sink. The source size comes from that status row,
+not from the page. It then sends `display/setDisplayWindow` with `context`:
+
+| Menu | Request |
+|---|---|
+| Auto | `fullScreen: true`, or the preview box as `displayOutput`; no input rectangles, which drops an earlier crop |
+| 16:9, 4:3 | `displayOutput` the largest centered 16:9 or 4:3 box inside the picture's box, `fullScreen: false`, both inputs the full source |
+| Zoom | The Auto picture enlarged by a third: `sourceInput` the centered part of the source that still fits the box (even pixels), `originalInput` the full source; full screen when that fills the screen, else a centered `displayOutput` |
+
+`originalInput` and `sourceInput` are always sent together, since
+videooutput rejects either one alone. The fallback's zoom amount is fixed;
+the TV menu's zoom strength applies only to the settingsservice route.
+
+The app (`src/services/aspect-ratio.ts`) keeps both routes. On the
+settingsservice route nothing changes: the value persists across media and
+`iptv_aspect_dirty` behaves as above. Once a reply carries
+`backend: "videooutput"`, the app instead writes the channel's ratio
+again for each new media once it reaches its metadata (or starts playing),
+on every source size change, and on every preview or full-screen layout
+change, skipping a write identical to the last one sent. Each of these
+writes only after the page has painted the change (two animation frames;
+a burst of changes restarts the wait and writes the latest picture once):
+the TV moves the picture to the video's new box or source size after the
+paint, with the native and the Luna path alike, and drops any crop as it
+does, so an earlier write would be undone. Until then a menu pick or any
+other write uses the picture as last painted. An Auto media the
+app never cropped is left alone. While the app owns a media's window, the
+Luna path's own `setDisplayWindow` placement is skipped, so routine
+layouts cannot undo the crop, and once the app gives the window back the
+next placement is always sent; the legacy route keeps that placement
+unchanged. A videooutput write never sets `iptv_aspect_dirty`, since the
+TV setting was not written.
+
+A write that reaches the service before the media is connected answers
+`video_pending` with `backend: "videooutput"`. That is expected, not a
+failure: a menu pick shows no toast, nothing is logged, and the app writes
+again when the media is ready. Any other failure on this route
+(`video_failed` when videooutput refuses the window or the status read,
+`bus_error`, `timeout`) is logged once per reason and toasted on a menu
+pick. A pending or failed write keeps its place as the last one sent, so a
+routine relayout (the live preview's runs every second) does not resend
+it; instead the app retries it at most three times, a second apart. The
+media's `loadedmetadata` or `playing` event sends a write that missed once
+more with fresh retries, and so does a menu pick; a write that landed is
+not resent. A different media, size, box, or mode writes at once,
+including one that changed, or a new load that started, while the first
+reply was still to say which route the service takes. A new
+load drops the retries left, and a videooutput reply for the last load's
+media no longer counts toward the new one.
+
 ### Service queue
 
 The service writes one value at a time: a request that arrives while one
 is in flight waits, a newer one replaces it (the replaced one answers
-`superseded`), and a write settingsservice has not answered in 5 s is
-canceled before the next goes out. A palmbus handle that throws
-(`bus_error`) or lets a write time out is dropped, and the next write
-builds a new one. Request: `{ "value": "allDirZoom" }`;
-reply: `{ "returnValue": true, "value": … }` or `returnValue: false`
-with `errorCode` `denied`, `bad_value`, `no_bus`, `timeout`,
-`superseded`, `bus_error`, `settings_denied`, or `settings_failed`.
+`superseded`), and a write not answered in 5 s, across all of its
+settingsservice and videooutput steps, is canceled before the next goes
+out; a late answer to a canceled step is ignored. A palmbus handle that
+throws, answers with anything but a JSON object (both `bus_error`), or
+lets a write time out is dropped, and the next write builds a new one. Request: `{ "value": "allDirZoom" }`, optionally
+with `"mediaId": "m1"` and `"display": "full"` or
+`{ "x": 960, "y": 100, "width": 800, "height": 450 }` (rounded and
+clipped to the 1920x1080 canvas); reply: `{ "returnValue": true,
+"value": … }` (plus `"backend": "videooutput"` on that route) or
+`returnValue: false` with `errorCode` `denied`, `bad_value`,
+`bad_display`, `no_bus`, `timeout`, `superseded`, `bus_error`,
+`settings_failed`, `video_pending`, or `video_failed`. A reply from the
+videooutput route, success or failure, carries `backend: "videooutput"`.
 
 ## Event-driven updates
 

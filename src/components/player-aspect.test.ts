@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { Channel, VodPlayback } from '../types';
+import type { AspectRatio } from '../services/aspect-ratio';
 import type { LunaRequestOptions } from '../services/luna';
 
 const { pipeline, tracks, osd, playlist, health, saved, dirty, requests } = vi.hoisted(() => ({
@@ -72,6 +73,7 @@ vi.mock('../services/media-probe', () => ({ probeMedia: vi.fn().mockResolvedValu
 vi.mock('./toast', () => ({ showToast: vi.fn() }));
 
 import { Player } from './player';
+import { PlayerPipeline, type PlayerPipelineOptions } from './player-pipeline';
 import { StorageService } from '../services/storage-service';
 import { showToast } from './toast';
 import { channelKey } from '../utils/channel';
@@ -234,5 +236,153 @@ describe('Player aspect ratio on webOS', () => {
     expect(player.getAspectRatio()).toBe('auto');
     player.playVod(episode('e2'));
     expect(player.getAspectRatio()).toBe('zoom');
+  });
+
+  describe('on the videooutput route', () => {
+    let frames: Map<number, FrameRequestCallback>;
+    let frameId: number;
+    const nextFrame = () => {
+      const run = [...frames.values()];
+      frames.clear();
+      for (const frame of run) frame(0);
+    };
+    const painted = () => { nextFrame(); nextFrame(); };
+    const video = () => document.querySelector('video') as HTMLVideoElement & { mediaId?: string };
+    const size = (width: number, height: number) => {
+      Object.defineProperty(video(), 'videoWidth', { configurable: true, get: () => width });
+      Object.defineProperty(video(), 'videoHeight', { configurable: true, get: () => height });
+    };
+    const ready = (mediaId: string) => {
+      video().mediaId = mediaId;
+      video().dispatchEvent(new Event('loadedmetadata'));
+      painted();
+    };
+    const params = () => aspectWrites().map(r => r.options.parameters);
+    const pending = (index: number) => aspectWrites()[index].options.onFailure?.(
+      { returnValue: false, errorCode: 'video_pending' as unknown as number, backend: 'videooutput' } as never);
+    const landed = (index: number) => aspectWrites()[index].options.onSuccess?.(
+      { returnValue: true, backend: 'videooutput' } as never);
+    const lunaDisplay = () => (vi.mocked(PlayerPipeline).mock.calls[0][0] as PlayerPipelineOptions).onLunaDisplay!;
+    const slot = { left: 480.2, top: 50, width: 400, height: 225 } as DOMRect;
+    const cropped = (mode: AspectRatio) => {
+      saved[channelKey(channels[0])] = mode;
+      size(1280, 720);
+      player.play(0);
+      pending(0);
+      ready('m1');
+      landed(1);
+    };
+
+    beforeEach(() => {
+      frames = new Map();
+      frameId = 0;
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation(frame => {
+        frames.set(++frameId, frame);
+        return frameId;
+      });
+      vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id); });
+      vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(960);
+    });
+
+    it('crops each new media once ready, never the outgoing one', () => {
+      saved[channelKey(channels[0])] = 'zoom';
+      saved[channelKey(channels[1])] = '4x3';
+      player.play(0);
+      pending(0);
+      expect(lunaDisplay()()).toBe(false);
+      video().mediaId = 'm1';
+      video().dispatchEvent(new Event('loadedmetadata'));
+      nextFrame();
+      expect(lunaDisplay()()).toBe(false);
+      nextFrame();
+      expect(params()[1]).toEqual({ value: 'allDirZoom', mediaId: 'm1', display: 'full' });
+      landed(1);
+      expect(lunaDisplay()()).toBe(true);
+
+      player.play(1);
+      expect(aspectWrites()).toHaveLength(2);
+      ready('m2');
+      expect(params()[2]).toEqual({ value: '4x3', mediaId: 'm2', display: 'full' });
+    });
+
+    it('writes a missed crop again once the media starts playing, even amid a resize', () => {
+      saved[channelKey(channels[0])] = 'zoom';
+      player.play(0);
+      pending(0);
+      ready('m1');
+      pending(1);
+      video().dispatchEvent(new Event('resize'));
+      painted();
+      expect(aspectWrites()).toHaveLength(2);
+      video().dispatchEvent(new Event('playing'));
+      video().dispatchEvent(new Event('resize'));
+      painted();
+      expect(params()[2]).toEqual({ value: 'allDirZoom', mediaId: 'm1', display: 'full' });
+    });
+
+    it('crops a resized source once the page painted its new size', () => {
+      cropped('zoom');
+      size(960, 720);
+      video().dispatchEvent(new Event('resize'));
+      expect(lunaDisplay()()).toBe(true);
+      player.setVideoDisplay(null);
+      nextFrame();
+      expect(aspectWrites()).toHaveLength(2);
+      nextFrame();
+      expect(params()[2]).toEqual({ value: 'allDirZoom', mediaId: 'm1', display: 'full' });
+    });
+
+    it('places a cropped preview inside its slot once the page painted it', () => {
+      cropped('16x9');
+      player.setVideoDisplay(slot);
+      expect(lunaDisplay()()).toBe(true);
+      nextFrame();
+      expect(aspectWrites()).toHaveLength(2);
+      nextFrame();
+      expect(params()[2]).toEqual({ value: '16x9', mediaId: 'm1',
+        display: { x: 960, y: 100, width: 800, height: 450 } });
+      player.setVideoDisplay(slot);
+      painted();
+      expect(aspectWrites()).toHaveLength(3);
+    });
+
+    it('writes a relayout and a resize together once, after the later of them', () => {
+      cropped('16x9');
+      player.setVideoDisplay(slot);
+      nextFrame();
+      size(960, 720);
+      video().dispatchEvent(new Event('resize'));
+      nextFrame();
+      expect(aspectWrites()).toHaveLength(2);
+      painted();
+      expect(params().slice(2)).toEqual([{ value: '16x9', mediaId: 'm1',
+        display: { x: 960, y: 100, width: 800, height: 450 } }]);
+    });
+
+    it('writes only the last of several relayouts in one frame', () => {
+      cropped('16x9');
+      player.setVideoDisplay(slot);
+      player.setVideoDisplay(null);
+      painted();
+      expect(aspectWrites()).toHaveLength(2);
+      player.setVideoDisplay(slot);
+      nextFrame();
+      player.setVideoDisplay(null);
+      painted();
+      expect(aspectWrites()).toHaveLength(2);
+    });
+
+    it('drops a change still waiting for its frame once a full-screen load starts', () => {
+      saved[channelKey(channels[1])] = '16x9';
+      cropped('16x9');
+      player.setVideoDisplay(slot);
+      size(960, 720);
+      video().dispatchEvent(new Event('resize'));
+      player.play(1);
+      painted();
+      expect(aspectWrites()).toHaveLength(2);
+      ready('m2');
+      expect(params().slice(2)).toEqual([{ value: '16x9', mediaId: 'm2', display: 'full' }]);
+    });
   });
 });

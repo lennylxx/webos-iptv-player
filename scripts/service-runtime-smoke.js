@@ -250,6 +250,41 @@ function aspectSmoke() {
       !replies[0].returnValue || !replies[1].returnValue || replies[2].errorCode !== 'bad_value') {
     throw new Error('setAspectRatio: ' + JSON.stringify({ handles: handles, sent: sent, replies: replies }));
   }
+  aspectFallbackSmoke(aspect);
+}
+
+// A settingsservice refusal moves to videooutput for the app's own media.
+function aspectFallbackSmoke(aspect) {
+  var sent = [];
+  var bodies = {
+    'luna://com.webos.settingsservice/setSystemSettings': '{"returnValue":false,"errorText":"Access denied"}',
+    'luna://com.webos.service.videooutput/getStatus': JSON.stringify({ returnValue: true, video: [
+      { appId: 'com.example.app', context: 'm1', connected: true, width: 1920, height: 1080 }] }),
+    'luna://com.webos.service.videooutput/display/setDisplayWindow': '{"returnValue":true}',
+  };
+  function Handle() {}
+  Handle.prototype.call = function (uri, payload) {
+    sent.push([uri, JSON.parse(payload)]);
+    return {
+      addListener: function (event, listener) {
+        listener({ payload: function () { return bodies[uri]; } });
+      },
+      cancel: function () {},
+    };
+  };
+  var handler = null;
+  aspect.registerAspectService({
+    register: function (name, h) { if (name === 'setAspectRatio') handler = h; },
+  }, 'com.example.app', aspect.anonymousLunaCall({ Handle: Handle }));
+  var replies = [];
+  handler({ sender: 'com.example.app', payload: { value: 'allDirZoom', mediaId: 'm1' },
+    respond: function (r) { replies.push(r); } });
+  var window = sent[2] && sent[2][1];
+  if (sent.length !== 3 || !replies[0].returnValue || replies[0].backend !== 'videooutput' ||
+      !window || window.context !== 'm1' || window.sourceInput.x !== 240 || window.sourceInput.height !== 810 ||
+      window.originalInput.width !== 1920) {
+    throw new Error('setAspectRatio fallback: ' + JSON.stringify({ sent: sent, replies: replies }));
+  }
 }
 
 // The log tee on the real runtime: file mode, line format, and rotation.

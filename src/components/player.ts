@@ -41,6 +41,7 @@ import {
 import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { TvAspectRatio, type AspectRatio } from '../services/aspect-ratio';
+import type { LunaDisplay } from '../services/luna-media';
 import { qualityRule, tierIndex, type QualityOverride, type QualityTier } from '../utils/video-quality';
 import type { QualityMenuState } from './player-menu';
 import { CONFIG } from '../config';
@@ -191,10 +192,26 @@ export class Player {
   private liveVolume = 1;
   private previewMuteOverride: boolean | null = null;
   private aspectRatio: AspectRatio = 'auto';
+  // The picture as the page last painted it, which is where the TV placed
+  // it: the current load reached its metadata, its size, and its box.
+  private aspectReady = false;
+  private aspectSize = [0, 0];
+  private aspectDisplay: LunaDisplay = 'full';
+  // Where the layout puts the picture next.
+  private aspectTarget: LunaDisplay = 'full';
+  private aspectFrame = 0;
+  private aspectPendingReady = false;
   // The TV ignores CSS on its video plane; it scales the picture itself.
   private tvAspect = isWebOS() ? new TvAspectRatio(undefined, {
     get: () => StorageService.getAspectDirty(),
     set: dirty => StorageService.setAspectDirty(dirty),
+  }, () => {
+    // webOS names the element's media; a Luna element names its pipeline's.
+    const video = this.videoEl as (HTMLVideoElement & { mediaId?: unknown }) | null;
+    const mediaId = this.aspectReady ? video?.mediaId : undefined;
+    return video && typeof mediaId === 'string' && mediaId
+      ? { mediaId, width: this.aspectSize[0], height: this.aspectSize[1], display: this.aspectDisplay }
+      : null;
   }) : null;
   // Relayouts the CSS emulation; on webOS the TV scales the picture, and a
   // relayout would reach the outgoing Luna pipeline.
@@ -271,6 +288,7 @@ export class Player {
         this.startupWatchdog.start();
       },
       onProxyExpired: () => this.onError(),
+      onLunaDisplay: () => this.tvAspect?.reapply() ?? false,
     });
     this.tracks = new PlayerTracks(this.pipeline, {
       getVideoElement: () => this.videoEl,
@@ -403,6 +421,7 @@ export class Player {
       this.startupWatchdog.start();
     });
     onCurrent('loadedmetadata', () => {
+      this.scheduleAspect(true);
       update();
       log.info('loadedmetadata', this.videoLabel(el), el.videoWidth + 'x' + el.videoHeight,
         this.mediaState(el), '| pendingResume:', this.pendingResumeSecs);
@@ -437,6 +456,7 @@ export class Player {
     // Intrinsic size changes mid-stream (ABR up/down-switch) so the OSD pills
     // (resolution, and on hls.js the codec/HDR/fps) reflect the live variant.
     onCurrent('resize', () => {
+      this.scheduleAspect(false);
       if (this.osd.isVisible()) this.osd.render();
     });
     // Some platforms populate audio/text tracks asynchronously, after loadedmetadata.
@@ -456,6 +476,7 @@ export class Player {
       if (!el.paused) this.userPaused = false;
     });
     onCurrent('playing', () => {
+      this.scheduleAspect(true);
       this.startupPending = false;
       this.notePlayed();
       this.pipeline.notePlaying();
@@ -1294,6 +1315,7 @@ export class Player {
 
   stop(): void {
     this.aspectSession++;
+    this.resetAspect();
     if (this.liveSessionActive) this.rememberLiveAudio();
     this.liveSessionActive = false;
     this.livePreviewMode = false;
@@ -1504,6 +1526,11 @@ export class Player {
   }
 
   private loadStream(url: string, extras: Record<string, string> | null, opts?: PipelineLoadOptions): void {
+    this.resetAspect();
+    if (!this.livePreviewMode) {
+      this.aspectTarget = 'full';
+      this.aspectDisplay = 'full';
+    }
     if (!opts?.reload) {
       this.proxyReopened = false;
       this.channelPlayed = false;
@@ -1768,17 +1795,65 @@ export class Player {
   setVideoDisplay(rect: Rectangle | null): void {
     if (!rect) {
       this.pipeline.setLunaDisplay('full');
+      this.placeAspect('full');
       return;
     }
     // setDisplayWindow takes the 1920x1080 app space.
     const scale = window.innerWidth > 0
       ? CONFIG.PLAYER.LUNA_MEDIA_DISPLAY_WIDTH / window.innerWidth : 1;
-    this.pipeline.setLunaDisplay({
+    const display = {
       x: rect.left * scale,
       y: rect.top * scale,
       width: rect.width * scale,
       height: rect.height * scale,
+    };
+    this.pipeline.setLunaDisplay(display);
+    this.placeAspect({
+      x: Math.round(display.x), y: Math.round(display.y),
+      width: Math.round(display.width), height: Math.round(display.height),
     });
+  }
+
+  private placeAspect(display: LunaDisplay): void {
+    if (JSON.stringify(display) === JSON.stringify(this.aspectTarget)) {
+      this.tvAspect?.reapply();
+      return;
+    }
+    this.aspectTarget = display;
+    this.scheduleAspect(false);
+  }
+
+  // The TV moves the picture to the video's new box or size, dropping any
+  // crop, once the page paints it: a crop waits until that frame is past.
+  // Each change restarts the wait, and the latest picture is what is written.
+  private scheduleAspect(ready: boolean): void {
+    if (!this.tvAspect) return;
+    if (ready) this.aspectPendingReady = true;
+    this.cancelAspectFrame();
+    this.aspectFrame = requestAnimationFrame(() => {
+      this.aspectFrame = requestAnimationFrame(() => {
+        this.aspectFrame = 0;
+        const video = this.videoEl;
+        const resend = this.aspectPendingReady;
+        this.aspectPendingReady = false;
+        if (resend) this.aspectReady = true;
+        this.aspectSize = video ? [video.videoWidth, video.videoHeight] : [0, 0];
+        this.aspectDisplay = this.aspectTarget;
+        this.tvAspect?.reapply(resend);
+      });
+    });
+  }
+
+  private cancelAspectFrame(): void {
+    if (this.aspectFrame) cancelAnimationFrame(this.aspectFrame);
+    this.aspectFrame = 0;
+  }
+
+  private resetAspect(): void {
+    this.aspectReady = false;
+    this.aspectPendingReady = false;
+    this.cancelAspectFrame();
+    this.tvAspect?.reset();
   }
 
   exitLivePreview(): void {

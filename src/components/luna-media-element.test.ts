@@ -177,6 +177,41 @@ describe('LunaMediaElement', () => {
     expect(media.setDisplayWindow).toHaveBeenCalledTimes(4);
   });
 
+  it('leaves the picture to a caller that placed it', async () => {
+    let owned = true;
+    const element = new LunaMediaElement(video, {
+      uri: 'http://host/a.m3u8', headers: { Referer: 'http://host/' }, label: 'session=1 load=1',
+      onFallback: vi.fn(), onDisplay: () => owned,
+    });
+    element.start();
+    await flush();
+    onEvent({ loadCompleted: true });
+    element.setDisplay({ x: 1, y: 2, width: 640, height: 360 });
+    expect(media.setDisplayWindow).not.toHaveBeenCalled();
+
+    owned = false;
+    element.setDisplay('full');
+    expect(media.setDisplayWindow).toHaveBeenCalledWith('lm1', 'full');
+  });
+
+  it('places a rect again after the caller placed the picture elsewhere', async () => {
+    let owned = false;
+    const element = new LunaMediaElement(video, {
+      uri: 'http://host/a.m3u8', headers: { Referer: 'http://host/' }, label: 'session=1 load=1',
+      onFallback: vi.fn(), onDisplay: () => owned,
+    });
+    element.start();
+    await flush();
+    onEvent({ loadCompleted: true });
+    const rect = { x: 1, y: 2, width: 640, height: 360 };
+    element.setDisplay(rect);
+    owned = true;
+    element.setDisplay('full');
+    owned = false;
+    element.setDisplay(rect);
+    expect(media.setDisplayWindow.mock.calls).toEqual([['lm1', 'full'], ['lm1', rect], ['lm1', rect]]);
+  });
+
   it('logs a display window that keeps failing once per load', async () => {
     const { element } = start();
     await flush();
