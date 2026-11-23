@@ -700,6 +700,268 @@
   background: rgba(95, 201, 154, 0.25);
 }
 
+/* Timeline layout: TimelineView shows channels and programs in one surface;
+   an element over it carries the focus ring. */
+.epg-tl-toolbar {
+  position: relative;
+  /* Above the ruler's corner and the details, so the open group menu is too. */
+  z-index: 4;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The playlist tabs, then the group filter and search, stacked as in the
+   Channel schedule's channel pane, so switching layouts keeps them still. */
+.epg-tl-controls {
+  width: 480px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+}
+
+/* Beside the filter row, as tall as it. */
+.epg-tl-toolbar .epg-legend {
+  height: 56px;
+  margin-left: auto;
+}
+
+.epg-tl {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.epg-tl-surface {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+.epg-tl-focus {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  box-sizing: border-box;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  pointer-events: none;
+}
+
+.epg-tl-focus.focused {
+  border-color: var(--focus-ring);
+  background: rgb(var(--accent-rgb) / 0.16);
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px var(--accent-glow);
+}
+
+.epg-no-channels.epg-tl-empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 40%;
+  text-align: center;
+}
+
+.epg-view--timeline {
+  position: relative;
+}
+
+.epg-tl-detail:empty {
+  display: none;
+}
+
+/* Split as the columns above: the programme's time over the channel column,
+   whose panel and border run on to the bottom, and what it is over the cells. */
+.epg-tl-detail {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+}
+
+.epg-tl-when {
+  flex: 0 0 480px;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 16px 12px 16px var(--tl-name-left, 78px);
+  border-right: 1px solid var(--border);
+}
+
+.epg-tl-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 30px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.epg-tl-range .epg-replay-glyph {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.epg-tl-when-sub {
+  margin-top: 6px;
+  overflow: hidden;
+  font-size: 20px;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Its text starts where the cells' titles do. */
+.epg-tl-what {
+  flex: 1;
+  min-width: 0;
+  padding: 18px 14px;
+}
+
+.epg-tl-no-info {
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.epg-tl-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.epg-tl-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epg-tl-title .epg-bell-glyph {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.epg-tl-desc {
+  margin-top: 10px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+/* Says what OK does on the focused program; its cell has no room for it. */
+.epg-tl-hint {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.epg-tl-hint .edit-hint {
+  font-size: 20px;
+}
+
+.epg-tl-hint .edit-key.key-ok {
+  font-size: 16px;
+}
+
+/* The channel count over the channel column, as the schedule's pane header. */
+.epg-tl-count {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  pointer-events: none;
+}
+
+/* On the ruler, at the timeline's edge toward the present; the ruler hides
+   the times under it. */
+.epg-tl-now-slot {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+/* Not centered with a transform: the buttons' hover scale replaces it. */
+.epg-tl-now-slot .epg-now-pill.is-earlier {
+  margin-left: 484px;
+}
+
+.epg-tl-now-slot .epg-now-pill.is-later {
+  margin-right: 4px;
+  margin-left: auto;
+}
+
+.epg-now-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px 4px 10px;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  pointer-events: auto;
+  white-space: nowrap;
+}
+
+.epg-now-pill:hover {
+  color: var(--text-primary);
+  background: var(--bg-card);
+}
+
+.epg-now-arrow {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+}
+
+.epg-now-arrow svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+}
+
 .edit-hints.epg-hints {
   position: static;
   flex-shrink: 0;
@@ -711,7 +973,308 @@
 .epg-hints .edit-action {
   margin-top: -8px;
   margin-bottom: -8px;
-  font-family: inherit;
   outline: 0;
   cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+}
+
+/* Pointer hover only: under the D-pad the ring belongs to the focused item. */
+html:not(.keyboard-nav) .epg-hints .edit-action:hover {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px var(--accent-glow);
+}
+
+/* TimelineView. Only the root, the ruler, and the viewport clip; rows and
+   cells contain size and layout but not paint, and their text comes
+   pre-fitted, so no cell adds a clip for the compositor to re-layerize. */
+.tl-root {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: var(--tl-font);
+  contain: strict;
+}
+
+.tl-ruler {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: var(--tl-ruler-h);
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  contain: size layout style;
+}
+
+.tl-ruler-day {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Right-aligned next to the cells, the channel count on its left. */
+  width: 468px;
+  text-align: right;
+  margin-top: -2px;
+  line-height: var(--tl-ruler-h);
+  font-size: var(--tl-f-ruler);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.tl-ruler-label {
+  position: absolute;
+  top: 0;
+  line-height: var(--tl-ruler-h);
+  font-size: var(--tl-f-ruler);
+  margin-top: -6px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.tl-ruler-label.is-day {
+  color: var(--text-primary);
+}
+
+.tl-ruler-tick {
+  position: absolute;
+  bottom: -1px;
+  width: 2px;
+  height: 12px;
+  background: var(--border);
+}
+
+.tl-ruler-now {
+  position: absolute;
+  bottom: -1px;
+  width: 0;
+  height: 0;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 10px solid var(--danger);
+}
+
+.tl-viewport {
+  position: absolute;
+  left: 0;
+  top: var(--tl-ruler-h);
+  width: 1920px;
+  overflow: hidden;
+  contain: strict;
+}
+
+.tl-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 0;
+  will-change: transform;
+}
+
+/* The channel column's panel and right border, as the Channel schedule's pane. */
+.tl-column {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 480px;
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+}
+
+/* The focused channel, as the schedule's selected channel. */
+.tl-band {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 479px;
+  height: calc(var(--tl-row-h) - 1px);
+  background: rgb(var(--accent-rgb) / 0.12);
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+
+.tl-now-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--danger);
+}
+
+.tl-row {
+  position: absolute;
+  left: 0;
+  width: 1920px;
+  height: var(--tl-row-h);
+  contain: size layout style;
+}
+
+.tl-row::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.tl-num,
+.tl-name,
+.tl-title,
+.tl-time {
+  position: absolute;
+  white-space: nowrap;
+}
+
+.tl-num,
+.tl-name {
+  top: -1px;
+  line-height: var(--tl-row-h);
+}
+
+/* Number and name sit as in .epg-channel-item: 18px padding, a number
+   column of at least 44px, a 16px gap (TimelineView sets the widths). */
+.tl-num {
+  left: 18px;
+  width: var(--tl-num-w, 44px);
+  text-align: right;
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.tl-num.is-focused {
+  color: var(--accent);
+}
+
+.tl-name {
+  left: var(--tl-name-left, 78px);
+  font-size: 20px;
+  font-weight: 400;
+}
+
+.tl-name.is-focused {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tl-cell {
+  position: absolute;
+  top: 4px;
+  height: var(--tl-cell-h);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+}
+
+.tl-cell.is-aired,
+.tl-cell.is-empty {
+  background: var(--bg-secondary);
+}
+
+.tl-cell.is-live {
+  background-image: linear-gradient(rgba(95, 201, 154, 0.14), rgba(95, 201, 154, 0.14));
+}
+
+.tl-cell.clip-l {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.tl-cell.clip-r {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.tl-cell.has-bar::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: var(--future);
+}
+
+.tl-cell.is-aired.has-bar::before {
+  background: var(--past);
+}
+
+.tl-cell.is-live.has-bar::before {
+  background: var(--live);
+}
+
+.tl-title {
+  left: 14px;
+  top: var(--tl-title-top);
+  line-height: var(--tl-title-line);
+  font-size: var(--tl-f-title);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.tl-cell.no-time .tl-title {
+  top: var(--tl-mid-top);
+}
+
+.tl-cell.is-aired .tl-title {
+  color: var(--text-secondary);
+}
+
+.tl-cell.is-empty .tl-title {
+  top: var(--tl-mid-top);
+  font-size: var(--tl-f-empty);
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.tl-time {
+  left: 14px;
+  top: var(--tl-time-top);
+  line-height: var(--tl-time-line);
+  font-size: var(--tl-f-time);
+  color: var(--text-muted);
+}
+
+.tl-cell.narrow .tl-title,
+.tl-cell.narrow .tl-time {
+  left: 8px;
+}
+
+.tl-replay {
+  position: relative;
+  top: var(--tl-replay-top);
+  float: left;
+  width: var(--tl-replay);
+  height: var(--tl-replay);
+  margin-right: 6px;
+  color: var(--past);
+}
+
+.tl-bell {
+  position: absolute;
+  right: 14px;
+  top: var(--tl-icon-top);
+  width: var(--tl-icon);
+  height: var(--tl-icon);
+  color: var(--warning);
+}
+
+.tl-cell.narrow .tl-bell {
+  right: 8px;
+}
+
+.tl-prog {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--live);
 }

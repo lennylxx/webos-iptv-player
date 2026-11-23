@@ -61,7 +61,7 @@
 
 **Live TV & on-demand**
 
-- **Program guide (EPG)** — three-pane guide with an auto-derived date range, per-source time correction, and caching for instant reopen
+- **Program guide (EPG)** — a channel schedule or a multi-channel timeline, with an auto-derived date range, per-source time correction, and caching for instant reopen
 - **Channel health** — check live streams and mark them as healthy, suspect, or unavailable
 - **Reminders** — flag an upcoming program and get notified at air time, even with the app closed, to tune straight in
 - **Recently Watched** — return to recent live channels or resume partially watched catch-up programs
@@ -270,6 +270,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Upload Playlists** — lists playlists uploaded through Device Setup, with controls to temporarily disable or remove each upload. New uploads appear automatically through Luna push.
 - **Channels** — check live-stream health; reorder, hide, rename, regroup, manually map entries to XMLTV channels, or correct one channel's EPG time; show hidden channels or reset customizations.
 - **Manual XMLTV sources** — add several program guide URLs, prioritized from top to bottom, and apply each to all playlists or to specific ones. Guide URLs are also discovered automatically from `url-tvg`, `x-tvg-url`, or `tvg-url` in M3U playlists.
+- **Program guide layout** — **Channel schedule** shows one channel's programs for the day; **Timeline** shows many channels side by side.
 - **EPG time zone** — show guide times in the TV's **Device** time zone or the guide **Feed** time zone.
 - **EPG time correction** — adjust each source independently in 15-minute steps.
 - **Program reminders** — open the date-grouped Reminder Manager to review or remove upcoming reminders.
@@ -299,6 +300,8 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 | Rewind/Fast-Forward | To oldest / Go to live (live DVR) | — | — |
 | Ch +/- | Channel +/- | Previous/next channel | Jump 10 channels/programs |
 | 0-9 | Direct channel entry | Direct channel entry | — |
+
+In the Timeline layout, Up/Down change channels and keep the time, Left/Right step between programs and turn the page by half hours, Ch +/- page through channels, and Red — or the **Back to now** pill on the time ruler once you page away — jumps back to now. Yellow searches the guide as in the Channel schedule layout, filtering the timeline's channels by name.
 
 Movies, Series, Search, Settings, and Reminder Manager use standard D-pad
 navigation; **Back** returns to the previous view.

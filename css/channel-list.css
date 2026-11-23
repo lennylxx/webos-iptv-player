@@ -520,6 +520,7 @@
 
 .edit-action {
   padding: 6px 8px;
+  font-family: inherit;
   background: transparent;
   border: 2px solid transparent;
   border-radius: var(--radius);

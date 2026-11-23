@@ -25,7 +25,12 @@ Procedural workflows live in `.agents/skills/` (open Agent Skills format;
 - Modern *APIs* silently break webOS 4. `npm run lint` and the build gate
   must pass; never change the esbuild `chrome53` target without reason.
 - Render with `morph()` + the `html` template — never `innerHTML =`.
-  Interpolate untrusted M3U/XMLTV text only through `html`.
+  Interpolate untrusted M3U/XMLTV text only through `html`. The one
+  exception is the Timeline view (`epg-timeline-view.ts`): inside its
+  `data-morph-preserve` surface it keeps pooled nodes and writes
+  `Text.data`, classes, and transforms directly for TV performance. Its
+  one-time DOM still comes from `html`, and untrusted text reaches it
+  only through `Text.data`.
 - Every bug fix ships with a regression test that fails without the fix.
 - Add a `tv.sh diag` event only when a bug report could not show the
   failure without it; no event beats a noisy one.

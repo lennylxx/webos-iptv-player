@@ -51,10 +51,39 @@ function indexOfChannelKey(channels: Channel[], chKey: string): number {
 class ReminderServiceImpl {
   private _devMode = false;
   private scheduledConcealed = new Map<string, boolean>();
+  private changeListeners: Array<() => void> = [];
+  private _revision = 0;
 
   setDevMode(v: boolean): void { this._devMode = v; }
 
   get devMode(): boolean { return this._devMode; }
+
+  // Changes whenever the stored reminders do.
+  get revision(): number { return this._revision; }
+
+  onChange(listener: () => void): () => void {
+    this.changeListeners.push(listener);
+    return () => {
+      this.changeListeners = this.changeListeners.filter(item => item !== listener);
+    };
+  }
+
+  private save(list: Reminder[]): void {
+    StorageService.setReminders(list);
+    this._revision++;
+  }
+
+  // Runs once the schedules match the stored list, so a failing listener
+  // can never leave an alarm behind.
+  private notifyChange(): void {
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch {
+        log.warn('Reminder listener failed', 'event=reminder.listener.failed');
+      }
+    }
+  }
 
   list(): Reminder[] {
     return StorageService.getReminders();
@@ -75,20 +104,22 @@ class ReminderServiceImpl {
     if (this.has(reminder.channelKey, reminder.startMs)) return;
     const list = this.list();
     list.push(reminder);
-    StorageService.setReminders(list);
+    this.save(list);
     log.info(
       'Reminder added',
       'event=reminder.added',
       new Date(reminder.startMs).toISOString(),
     );
     this.schedule(reminder);
+    this.notifyChange();
   }
 
   remove(chKey: string, startMs: number): void {
     const list = this.list();
     const removed = list.filter(r => r.channelKey === chKey && r.startMs === startMs);
-    StorageService.setReminders(list.filter(r => !removed.includes(r)));
+    this.save(list.filter(r => !removed.includes(r)));
     for (const reminder of removed) this.cancelSchedule(reminder.channelKey, startMs);
+    this.notifyChange();
     if (removed.length) {
       log.info(
         'Reminder removed',
@@ -100,10 +131,11 @@ class ReminderServiceImpl {
 
   clearAll(): void {
     const reminders = this.list();
-    StorageService.setReminders([]);
+    this.save([]);
     for (const reminder of reminders) {
       this.cancelSchedule(reminder.channelKey, reminder.startMs);
     }
+    this.notifyChange();
     if (reminders.length) {
       log.info(
         'Reminders cleared',
@@ -118,7 +150,8 @@ class ReminderServiceImpl {
     const r = list.find(x => x.channelKey === chKey && x.startMs === startMs);
     if (!r) return;
     r.answered = true;
-    StorageService.setReminders(list);
+    this.save(list);
+    this.notifyChange();
   }
 
   resolveChannelIndex(chKey: string): number {
@@ -198,7 +231,7 @@ class ReminderServiceImpl {
       if (existing.answered && !reminder.answered) deduped[existingIndex] = reminder;
     }
 
-    StorageService.setReminders(deduped);
+    this.save(deduped);
     for (const reminder of deduped) {
       const key = `${reminder.channelKey}|${reminder.startMs}`;
       if (!touchedKeys.has(key)) continue;
@@ -208,6 +241,7 @@ class ReminderServiceImpl {
         this.cancelSchedule(reminder.channelKey, reminder.startMs);
       }
     }
+    this.notifyChange();
   }
 
   /** The launch param names a reminder's channel to tune. */
@@ -250,10 +284,11 @@ class ReminderServiceImpl {
     const kept = list.filter(r => now < r.stopMs
       && (!complete || this.channelExists(r.channelKey) || this.unavailableForNow(r)));
     if (kept.length !== list.length) {
-      StorageService.setReminders(kept);
+      this.save(kept);
       for (const r of list) {
         if (!kept.includes(r)) this.cancelSchedule(r.channelKey, r.startMs);
       }
+      this.notifyChange();
     }
     for (const r of kept) {
       if (complete && !this.channelExists(r.channelKey)) {

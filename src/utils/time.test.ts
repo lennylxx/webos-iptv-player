@@ -13,6 +13,7 @@ import {
   isNow,
   getProgress,
   setDisplayTz,
+  startOfDisplayHalfHour,
 } from './time';
 
 // Display state is module-global; keep tests in the default 'device' mode.
@@ -81,6 +82,13 @@ describe('feed time mode', () => {
     expect(displayDayKey(dayStart)).toBe('2024-03-10');
   });
 
+  it('startOfDisplayHalfHour floors to the feed wall clock, even off the hour', () => {
+    setDisplayTz('feed', 345);
+    // 10:20 at +0545 floors to 10:00 at +0545 == 04:15 UTC.
+    expect(startOfDisplayHalfHour(Date.parse('2024-03-10T04:35:00Z'))).toBe(Date.parse('2024-03-10T04:15:00Z'));
+    expect(formatTime(new Date(startOfDisplayHalfHour(Date.parse('2024-03-10T04:50:00Z'))))).toBe('10:30');
+  });
+
   it('falls back to device rendering when no feed offset is known', () => {
     setDisplayTz('feed', null);
     // With no offset, feed mode must render exactly as the device would.
@@ -90,6 +98,32 @@ describe('feed time mode', () => {
     expect(displayDayKey(d)).toBe(
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
     );
+  });
+});
+
+describe('startOfDisplayHalfHour in device mode', () => {
+  let savedTz: string | undefined;
+  beforeEach(() => { savedTz = process.env.TZ; });
+  afterEach(() => {
+    if (savedTz === undefined) delete process.env.TZ;
+    else process.env.TZ = savedTz;
+  });
+  const floor = (iso: string): string => new Date(startOfDisplayHalfHour(Date.parse(iso))).toISOString();
+
+  it('floors each occurrence of a repeated DST hour on its own', () => {
+    process.env.TZ = 'America/New_York';
+    expect(floor('2024-11-03T05:40:00Z')).toBe('2024-11-03T05:30:00.000Z');
+    expect(floor('2024-11-03T06:40:00Z')).toBe('2024-11-03T06:30:00.000Z');
+    expect(floor('2024-11-03T06:10:00Z')).toBe('2024-11-03T06:00:00.000Z');
+    expect(floor('2024-03-10T07:10:00Z')).toBe('2024-03-10T07:00:00.000Z');
+    expect(floor('2024-03-10T06:59:00Z')).toBe('2024-03-10T06:30:00.000Z');
+  });
+
+  it('lands on :00 and :30 in zones off the hour', () => {
+    process.env.TZ = 'Asia/Kathmandu';
+    expect(floor('2024-03-10T04:35:00Z')).toBe('2024-03-10T04:15:00.000Z');
+    process.env.TZ = 'Asia/Kolkata';
+    expect(floor('2024-03-10T04:35:00Z')).toBe('2024-03-10T04:30:00.000Z');
   });
 });
 

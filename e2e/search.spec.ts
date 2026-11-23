@@ -296,6 +296,29 @@ test('program search shows XMLTV metadata and toggles a future reminder', async 
     (await readUserDataStore(page, 'reminders')).length).toBe(1);
 });
 
+test('a reminder set in Search shows in the timeline guide it returns to', async ({ page }) => {
+  await seedSearch(page);
+  await page.addInitScript(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'epg');
+  const detail = page.locator('#view-epg .epg-tl-detail');
+  await expect(detail).toContainText('Future Report');
+  await expect(detail.locator('.epg-bell-glyph.set')).toHaveCount(0);
+
+  await enterSearch(page);
+  await page.locator('.tab-bar-search-input').fill('report');
+  const result = page.locator('#view-search .search-program-row');
+  await result.click();
+  await expect(result).toContainText('Reminder set');
+  await expect.poll(async () => {
+    await pressBack(page);
+    return page.locator('#view-epg').isVisible();
+  }).toBe(true);
+
+  await expect(detail.locator('.epg-bell-glyph.set')).toHaveCount(1);
+});
+
 test('a movie search result deep-links into its Movies detail and Back returns to Search', async ({ page }) => {
   await seedSearch(page);
   await routeLiveManifest(page);

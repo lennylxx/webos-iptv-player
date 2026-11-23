@@ -1347,6 +1347,9 @@ class App {
     const details = this.searchDetailViews.size;
     this.searchDetailViews.clear();
     this.showView(rv);
+    // Search can set reminders and the guide can learn its time zone while
+    // hidden; the guide repaints only what changed.
+    if (rv === 'epg') this.epgGrid.render();
     if (reopen) this[reopen].leaveDeepLink();
     const account = this.activeXtreamAccount();
     log.debug(

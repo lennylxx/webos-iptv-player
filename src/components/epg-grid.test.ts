@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
-import type { CatchupProgressEntry } from '../types';
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi, type Mock } from 'vitest';
+import type { CatchupProgressEntry, GuideLayout } from '../types';
 
 const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
   const state = {
@@ -46,6 +46,10 @@ const { state, playlistMock, epgMock, archiveMock } = vi.hoisted(() => {
       getSourceUrl: vi.fn(() => 'http://host/epg.xml'),
       guideRevision: 0,
       mappingRevision: 0,
+      getProgrammesIntersectingRange(id: string, from: number, to: number) {
+        return (state.programmes[id] ?? [])
+          .filter(programme => programme.stop.getTime() > from && programme.start.getTime() < to);
+      },
       getProgrammesStartingInRange(id: string, from: number, to: number) {
         return (state.programmes[id] ?? [])
           .filter(programme => programme.start.getTime() >= from && programme.start.getTime() < to);
@@ -64,7 +68,18 @@ vi.mock('../services/epg-service', () => ({ EpgService: epgMock }));
 vi.mock('../services/xtream-archive', () => ({ XtreamArchiveService: archiveMock }));
 
 const { reminderMock, toastMock } = vi.hoisted(() => ({
-  reminderMock: { has: vi.fn(() => false), add: vi.fn(), remove: vi.fn() },
+  reminderMock: {
+    has: vi.fn(() => false),
+    list: vi.fn((): Array<{ channelKey: string; startMs: number }> => []),
+    add: vi.fn(),
+    remove: vi.fn(),
+    revision: 0,
+    listeners: [] as Array<() => void>,
+    onChange(listener: () => void) {
+      this.listeners.push(listener);
+      return () => { this.listeners = this.listeners.filter(item => item !== listener); };
+    },
+  },
   toastMock: vi.fn(),
 }));
 vi.mock('../services/reminder-service', () => ({ ReminderService: reminderMock }));
@@ -74,6 +89,7 @@ const { storageMock } = vi.hoisted(() => ({
   storageMock: {
     getCatchupProgressList: vi.fn((): CatchupProgressEntry[] => []),
     clearCatchupProgress: vi.fn(),
+    getGuideLayout: vi.fn((): GuideLayout => 'schedule'),
   },
 }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
@@ -96,10 +112,14 @@ vi.mock('../workers/app-worker-client', async () => {
 });
 
 import { EpgGrid } from './epg-grid';
+import { TimelineView } from './epg-timeline-view';
 import { setLocale } from '../i18n';
 import { Focus } from '../navigation/focus-scope';
 import { setInputMode } from '../navigation/input-mode';
 import { CONFIG } from '../config';
+import { channelKey } from '../utils/channel';
+import { ParentalControlService } from '../services/parental-control';
+import { installEdgeScroll } from '../navigation/edge-scroll';
 
 const Y = 2024, M = 5, D = 15; // Sat Jun 15 2024, 12:00 local = "now"
 
@@ -145,6 +165,7 @@ beforeEach(() => {
     ],
   };
   vi.clearAllMocks();
+  reminderMock.listeners.length = 0;
   workerMock.failIndexes = false;
   archiveMock.getCached.mockReturnValue(null);
   archiveMock.load.mockResolvedValue(null);
@@ -600,7 +621,7 @@ describe('EpgGrid.handleAction', () => {
     expect(container.querySelector('.epg-hints')?.textContent).toContain('Back to now');
 
     grid.handleAction('right'); // Morning, aired, no catch-up: OK tunes in live
-    expect(hint()).toContain('Watch now');
+    expect(hint()).toContain('Watch live');
     grid.handleAction('down');
     grid.handleAction('down'); // Afternoon, upcoming
     expect(hint()).toContain('Set reminder');
@@ -1469,6 +1490,58 @@ describe('EpgGrid non-catchup channel selection', () => {
     });
   });
 
+  describe('EpgGrid archive check of an aired program', () => {
+    let loaded!: (value: Set<number> | null) => void;
+    beforeEach(() => {
+      state.channels = [{
+        name: 'Chan A',
+        url: 'http://host/a',
+        catchupSource: 'http://host/catchup/{start}',
+        catchupAccountId: 'x1',
+        catchupStreamId: '101',
+      }];
+      archiveMock.getCached.mockReturnValue(undefined);
+      archiveMock.load.mockReturnValue(new Promise(resolve => {
+        loaded = (value) => {
+          archiveMock.getCached.mockReturnValue(value);
+          resolve(value);
+        };
+      }));
+      container.classList.add('view');
+      grid.render();
+      grid.handleAction('right');
+      grid.handleAction('select'); // Morning, aired; its archive is still loading
+    });
+
+    it('plays nothing when the focus moved to another program during the check', async () => {
+      grid.handleAction('down'); // Noon Show
+      loaded(null);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('shows no resume prompt once the Guide was left during the check', async () => {
+      const startMs = new Date(Y, M, D, 10, 0).getTime();
+      storageMock.getCatchupProgressList.mockReturnValue([
+        { channelKey: 'ck1', progStart: startMs, progEnd: startMs + 3600000, position: 300, duration: 3600, updatedAt: 0, completed: false },
+      ]);
+      container.classList.add('hidden');
+      loaded(null);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(document.querySelector('.catchup-resume-prompt:not(.hidden)')).toBeNull();
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('plays the checked program when the focus stayed', async () => {
+      loaded(null);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onSelect).toHaveBeenCalledWith(0, expect.objectContaining({ title: 'Morning' }), expect.anything());
+    });
+  });
+
   it('selecting a past programme on a non-catchup channel passes no CatchupInfo', () => {
     grid.handleAction('right'); // focus programmes
     grid.handleAction('select'); // Morning (past)
@@ -1597,5 +1670,1084 @@ describe('EpgGrid click pointer activation', () => {
     expect(measure).not.toHaveBeenCalled();
     vi.advanceTimersToNextFrame();
     expect(measure).toHaveBeenCalledOnce();
+  });
+});
+
+describe('EpgGrid timeline layout', () => {
+  const elementRect = Element.prototype.getBoundingClientRect;
+  const rect = (width: number, height: number): DOMRect => ({
+    x: 0, y: 0, width, height, top: 0, left: 0, right: width, bottom: height, toJSON: () => ({}),
+  });
+  const detail = () => container.querySelector('.epg-tl-detail')?.textContent?.replace(/\s+/g, ' ') ?? '';
+  // The focused row's channel: the details name the programme, not the channel.
+  const focusedChannel = () => {
+    const g = grid as unknown as { timelineRows(): { channel: { name: string } }[]; timeline: { row: number } };
+    return g.timelineRows()[g.timeline.row]?.channel.name ?? '';
+  };
+
+  beforeEach(() => {
+    storageMock.getGuideLayout.mockReturnValue('timeline');
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('epg-tl-surface') ? rect(1920, 744) : elementRect.call(this);
+    });
+    grid.render(true);
+    Focus.flush();
+  });
+
+  it('shows the guide in one surface and opens on the program airing now', () => {
+    expect(container.querySelector('.epg-tl-surface .tl-row')).not.toBeNull();
+    expect(container.querySelector('.epg-channel-list')).toBeNull();
+    expect(detail()).toContain('Noon Show');
+    expect(container.querySelector('.epg-tl-focus')?.classList.contains('focused')).toBe(true);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('moves between programs and channels with the D-pad', () => {
+    grid.handleAction('right');
+    expect(detail()).toContain('Afternoon');
+
+    grid.handleAction('down');
+    expect(focusedChannel()).toBe('Chan B');
+    expect(detail()).toContain('No information');
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('hands the keys to the group filter above the first channel', () => {
+    grid.handleAction('up');
+    Focus.flush();
+
+    expect(container.querySelector('.epg-group-button.focused')).not.toBeNull();
+    expect(container.querySelector('.epg-tl-focus.focused')).toBeNull();
+  });
+
+  it('plays the channel for the program airing now', () => {
+    grid.handleAction('select');
+
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
+  });
+
+  it('red leaves the search box for the program airing now', () => {
+    grid.handleAction('right');
+    grid.handleAction('yellow');
+    const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
+    expect(document.activeElement).toBe(input);
+
+    grid.handleAction('red');
+    Focus.flush();
+    expect(document.activeElement).not.toBe(input);
+    expect(detail()).toContain('Noon Show');
+    expect(container.querySelector('.epg-tl-focus')?.classList.contains('focused')).toBe(true);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('red closes the group menu and goes back to now', () => {
+    Focus.install();
+    grid.handleAction('right');
+    grid.handleAction('up');
+    grid.handleAction('select');
+    expect(container.querySelector('.epg-group-menu')).not.toBeNull();
+
+    grid.handleAction('red');
+    Focus.flush();
+    expect(container.querySelector('.epg-group-menu')).toBeNull();
+    expect(detail()).toContain('Noon Show');
+    expect(container.querySelector('.epg-tl-focus')?.classList.contains('focused')).toBe(true);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('offers no OK in the details for an aired program an Xtream archive lacks', async () => {
+    state.channels = [{
+      ...state.channels[0],
+      catchupSource: 'http://host/catchup/{start}',
+      catchupAccountId: 'x1',
+      catchupStreamId: '101',
+    }, state.channels[1]];
+    archiveMock.getCached.mockReturnValue(new Set());
+    archiveMock.load.mockResolvedValue(new Set());
+    archiveMock.isAvailable.mockReturnValue(false);
+    grid.render();
+    grid.handleAction('left'); // Morning, aired
+    expect(detail()).toContain('Morning');
+    expect(container.querySelector('.epg-tl-detail .epg-tl-hint')).toBeNull();
+    grid.handleAction('select');
+    await Promise.resolve();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledWith("This program isn't available for catch-up.");
+  });
+
+  it('offers a way back to now once the page left it', () => {
+    expect(container.querySelector('.epg-now-pill')).toBeNull();
+
+    grid.handleAction('right');
+    grid.handleAction('right');
+    expect(detail()).toContain('Tomorrow AM');
+    const pill = container.querySelector<HTMLElement>('.epg-now-pill.is-earlier');
+    expect(pill?.textContent).toContain('Back to now');
+
+    pill!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    Focus.flush();
+    expect(detail()).toContain('Noon Show');
+    expect(container.querySelector('.epg-now-pill')).toBeNull();
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('tells what OK does to the focused program, and only while the timeline has the keys', () => {
+    grid.handleAction('right');
+    const hint = () => container.querySelector('.epg-tl-detail .epg-tl-hint')?.textContent ?? '';
+    expect(container.querySelector('.epg-tl-detail .epg-bell-glyph.unset')).not.toBeNull();
+    expect(hint()).toContain('Set reminder');
+
+    reminderMock.list.mockReturnValue([{ channelKey: channelKey(state.channels[0]), startMs: new Date(Y, M, D, 13, 0).getTime() }]);
+    reminderMock.revision++;
+    grid.render();
+    expect(container.querySelector('.epg-tl-detail .epg-bell-glyph.set')).not.toBeNull();
+    expect(hint()).toContain('Remove reminder');
+
+    grid.handleAction('left');
+    expect(container.querySelector('.epg-tl-detail .epg-bell-glyph')).toBeNull();
+    expect(hint()).toContain('Watch now');
+
+    grid.handleAction('down'); // Chan B has no programs; OK still tunes it in
+    expect(hint()).toContain('Watch live');
+    grid.handleAction('up');
+
+    grid.handleAction('right');
+    grid.handleAction('up');
+    expect(container.querySelector('.epg-tl-detail .epg-tl-hint')).toBeNull();
+  });
+
+  it('tells that OK replays an aired program with catch-up', () => {
+    state.channels = [{ ...state.channels[0], catchupSource: 'http://host/c' }];
+    grid.render();
+    grid.handleAction('left');
+    expect(detail()).toContain('Morning');
+    expect(container.querySelector('.epg-tl-detail .epg-tl-hint')?.textContent).toContain('Play catch-up');
+  });
+
+  it('gives the rows the room a program without a description leaves', () => {
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (!this.classList.contains('epg-tl-detail')) return 0;
+      return this.querySelector('.epg-tl-desc') ? 168 : 104;
+    });
+    const timeline = (grid as unknown as { timeline: { visibleRows(): number } }).timeline;
+    grid.render();
+    expect(timeline.visibleRows()).toBe(7);
+
+    grid.handleAction('down'); // Chan B has no programs, so no description
+    expect(focusedChannel()).toBe('Chan B');
+    expect(timeline.visibleRows()).toBe(8);
+
+    grid.handleAction('up');
+    expect(timeline.visibleRows()).toBe(7);
+  });
+
+  it('sets a reminder for an upcoming program picked by pointer', () => {
+    // 13:00 sits a third of the way along the 12:00-15:00 page; row one is below the ruler.
+    container.querySelector('.epg-tl-surface')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 1100, clientY: 90 }));
+
+    expect(detail()).toContain('Afternoon');
+    expect(reminderMock.add).toHaveBeenCalledWith(expect.objectContaining({ title: 'Afternoon' }));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  const surface = () => container.querySelector<HTMLElement>('.epg-tl-surface')!;
+  const fire = (type: string, detail: object) =>
+    surface().dispatchEvent(new CustomEvent(type, { bubbles: true, cancelable: true, detail }));
+  const spyDraw = () => {
+    const draw = vi.spyOn(TimelineView.prototype, 'draw').mockReturnValue(false);
+    grid.render();
+    draw.mockClear();
+    return draw;
+  };
+
+  it('plays a channel with no guide live on OK', () => {
+    grid.handleAction('down');
+    grid.handleAction('select');
+
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
+  });
+
+  it('tunes the channel clicked in the channel column, not its focused program', () => {
+    grid.handleAction('right');
+    expect(detail()).toContain('Afternoon');
+
+    surface().dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 200, clientY: 90 }));
+
+    expect(reminderMock.add).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, { group: 'builtin:all', playlist: undefined });
+  });
+
+  const searchInput = () => container.querySelector<HTMLInputElement>('.epg-search-input')!;
+  const typeQuery = async (value: string) => {
+    const input = searchInput();
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => expect(searchInput().dataset.searchPending).toBe('false'));
+    Focus.flush();
+  };
+  const leaveSearch = (key: string) => {
+    searchInput().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    Focus.flush();
+  };
+  const rowCount = () => (grid as unknown as { timelineRows: () => unknown[] }).timelineRows().length;
+  const ringOn = (selector: string) => {
+    expect(container.querySelector(`${selector}.focused`)).not.toBeNull();
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  };
+
+  it('opens on the playing channel among the searched ones, else on the first match', async () => {
+    storageMock.getGuideLayout.mockReturnValue('schedule');
+    grid.render();
+    await typeQuery('Chan');
+    storageMock.getGuideLayout.mockReturnValue('timeline');
+    grid.focusChannel(1);
+    grid.render(true);
+    expect(focusedChannel()).toBe('Chan B');
+
+    await typeQuery('Chan A');
+    grid.focusChannel(1);
+    grid.render(true);
+    expect(focusedChannel()).toBe('Chan A');
+    expect(rowCount()).toBe(1);
+  });
+
+  it('puts the search box after the group filter in the toolbar', () => {
+    const filters = container.querySelector('.epg-tl-toolbar .epg-tl-filters')!;
+    expect(Array.from(filters.children).map(el => el.className))
+      .toEqual(['epg-group-control', 'epg-search-wrap']);
+    expect(filters.querySelector('.epg-search-input')?.getAttribute('data-key')).toBe('epg-search');
+  });
+
+  it('filters the timeline rows by channel name while the caret stays in the box', async () => {
+    grid.handleAction('yellow');
+    await typeQuery('Chan B');
+
+    expect(rowCount()).toBe(1);
+    expect(focusedChannel()).toBe('Chan B');
+    expect(document.activeElement).toBe(searchInput());
+    ringOn('.epg-search-wrap');
+  });
+
+  it.each(['Enter', 'ArrowDown'])('leaves the search box with %s on the first match airing now', async (key) => {
+    grid.handleAction('down');
+    grid.handleAction('yellow');
+    await typeQuery('Chan');
+    expect(focusedChannel()).toBe('Chan B');
+
+    leaveSearch(key);
+
+    expect(document.activeElement).not.toBe(searchInput());
+    expect(detail()).toContain('Noon Show');
+    ringOn('.epg-tl-focus');
+  });
+
+  it('repaints once per keystroke and once per result, hit-testing the new rows', async () => {
+    const draw = spyDraw();
+    grid.handleAction('yellow');
+    await typeQuery('Chan B');
+    vi.advanceTimersToNextFrame();
+    expect(draw).toHaveBeenCalledTimes(2);
+
+    surface().dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 1100, clientY: 90 }));
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
+  });
+
+  it('opens the search box with Yellow from the timeline', () => {
+    grid.handleAction('yellow');
+    Focus.flush();
+
+    expect(document.activeElement).toBe(searchInput());
+    ringOn('.epg-search-wrap');
+  });
+
+  it('keeps the caret and shows the empty state when nothing matches', async () => {
+    grid.handleAction('yellow');
+    searchInput().value = 'zz';
+    searchInput().dispatchEvent(new Event('input', { bubbles: true }));
+    Focus.flush();
+    expect(document.activeElement).toBe(searchInput());
+    ringOn('.epg-search-wrap');
+
+    await typeQuery('zzz');
+
+    expect(container.querySelector('.epg-tl-empty')?.textContent).toBe('No channels found');
+    expect(document.activeElement).toBe(searchInput());
+    ringOn('.epg-search-wrap');
+  });
+
+  it('restores every row on clearing the query, keeping the selected channel', async () => {
+    grid.handleAction('down');
+    grid.handleAction('yellow');
+    await typeQuery('Chan B');
+    await typeQuery('');
+
+    expect(rowCount()).toBe(2);
+    expect(focusedChannel()).toBe('Chan B');
+    leaveSearch('Escape');
+    ringOn('.epg-search-wrap');
+  });
+
+  it('walks the toolbar: the tabs above the filters, then search and the reminders beside them', () => {
+    state.playlistTabs = [{ id: 'p1', name: 'Playlist 1' }, { id: 'p2', name: 'Playlist 2' }];
+    grid.handleAction('up');
+    Focus.flush();
+    ringOn('.epg-group-button');
+
+    grid.handleAction('up');
+    Focus.flush();
+    ringOn('.playlist-tab');
+    grid.handleAction('right');
+    grid.handleAction('right');
+    grid.handleAction('right');
+    Focus.flush();
+    ringOn('.playlist-tab[data-playlist="p2"]');
+    grid.handleAction('down');
+    Focus.flush();
+    ringOn('.epg-group-button');
+
+    grid.handleAction('right');
+    Focus.flush();
+    ringOn('.epg-search-wrap');
+    grid.handleAction('right');
+    Focus.flush();
+    ringOn('.epg-reminder-entry');
+    grid.handleAction('left');
+    grid.handleAction('select');
+    Focus.flush();
+    expect(document.activeElement).toBe(searchInput());
+    ringOn('.epg-search-wrap');
+  });
+
+  it('counts the channels over the channel column, following the group filter', () => {
+    const count = () => container.querySelector('.epg-tl-count')?.textContent?.trim();
+    expect(count()).toBe('2 channels');
+
+    grid.handleAction('up');
+    grid.handleAction('select');
+    Array.from(container.querySelectorAll<HTMLElement>('[data-epg-group]'))
+      .find(option => option.textContent?.includes('Sports'))!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(count()).toBe('1 channel');
+  });
+
+  it('hands the keys to the group filter when no channel is left', () => {
+    state.channels = [];
+    grid.render();
+    Focus.flush();
+
+    expect(container.querySelector('.epg-group-button.focused')).not.toBeNull();
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+    grid.handleAction('down');
+    Focus.flush();
+    expect(container.querySelector('.epg-group-button.focused')).not.toBeNull();
+  });
+
+  const catchupRows = (count: number) => {
+    state.channels = Array.from({ length: count }, (_, i) => ({
+      name: i ? `ch${String(i + 1)}` : 'Chan A',
+      url: `http://host/${String(i + 1)}`,
+      catchupSource: 'http://host/catchup/{start}',
+      catchupAccountId: 'acc1',
+      catchupStreamId: `s${String(i + 1)}`,
+    }));
+    archiveMock.getCached.mockReturnValue(undefined);
+    const loads: Array<(value: Set<number> | null) => void> = [];
+    archiveMock.load.mockImplementation(() => new Promise(resolve => { loads.push(resolve); }));
+    return loads;
+  };
+
+  it('asks for the archive of the row the focus rests on, not every row passed', () => {
+    catchupRows(4);
+    grid.render();
+    vi.advanceTimersByTime(150);
+    archiveMock.load.mockClear();
+
+    for (let i = 0; i < 3; i++) {
+      grid.handleAction('down');
+      vi.advanceTimersByTime(50);
+    }
+    expect(archiveMock.load).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(150);
+
+    expect(archiveMock.load).toHaveBeenCalledOnce();
+    expect(archiveMock.load).toHaveBeenCalledWith(state.channels[3]);
+  });
+
+  it('repaints replay marks once an archive loads, though the focus moved on', async () => {
+    const loads = catchupRows(2);
+    const draw = spyDraw();
+    vi.advanceTimersByTime(150);
+    grid.handleAction('down');
+    vi.advanceTimersByTime(150);
+    expect(loads).toHaveLength(2);
+    vi.advanceTimersToNextFrame();
+    draw.mockClear();
+
+    loads[0](new Set());
+    await Promise.resolve();
+    await Promise.resolve();
+    vi.advanceTimersToNextFrame();
+
+    expect(draw).toHaveBeenCalledOnce();
+  });
+
+  it('moves the now line of a Guide shown again without a render', () => {
+    const draw = spyDraw();
+    container.classList.add('view', 'hidden');
+    vi.advanceTimersByTime(61000);
+    vi.advanceTimersToNextFrame();
+    expect(draw).not.toHaveBeenCalled();
+
+    container.classList.remove('hidden');
+    vi.advanceTimersByTime(60000);
+    vi.advanceTimersToNextFrame();
+
+    expect(draw).toHaveBeenCalled();
+  });
+
+  it('steps one row for a wheel over the details, leaving the group menu to scroll', () => {
+    state.channels = [0, 1, 2, 3, 4, 5].map(i => ({ name: `ch${String(i + 1)}`, url: `http://host/${String(i + 1)}` }));
+    grid.render();
+    vi.advanceTimersByTime(1000);
+    const wheel = (el: Element) => el.dispatchEvent(new CustomEvent('nav:wheel', {
+      bubbles: true, cancelable: true, detail: { step: true, deltaY: 100 },
+    }));
+
+    expect(wheel(container.querySelector('.epg-tl-detail')!)).toBe(false);
+    expect(focusedChannel()).toBe('ch2');
+
+    grid.handleAction('up');
+    grid.handleAction('up');
+    grid.handleAction('select');
+    expect(wheel(container.querySelector('.epg-group-options')!)).toBe(true);
+  });
+
+  it('reads the reminder list once for a whole page of bells', () => {
+    state.channels = Array.from({ length: 8 }, (_, i) => ({ name: `ch${String(i + 1)}`, url: `http://host/${String(i + 1)}` }));
+    state.programmes = Object.fromEntries(state.channels.map(channel => [channel.name,
+      Array.from({ length: 12 }, (_, i) => prog(12 + Math.floor(i / 4), (i % 4) * 15, 12 + Math.floor((i + 1) / 4), ((i + 1) % 4) * 15, `P${String(i)}`))]));
+    reminderMock.list.mockReturnValue([{ channelKey: channelKey(state.channels[0] as never), startMs: new Date(Y, M, D, 12, 15).getTime() }]);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, {
+      get: (_target, name) => (name === 'measureText' ? () => ({ width: 10 }) : () => undefined),
+      set: () => true,
+    }) as CanvasRenderingContext2D);
+    reminderMock.revision++;
+    grid.render();
+    grid.handleAction('right');
+
+    expect(detail()).toContain('P1');
+    expect(container.querySelector('.epg-tl-detail .epg-bell-glyph.set')).not.toBeNull();
+    expect(reminderMock.list).toHaveBeenCalledOnce();
+    expect(reminderMock.has).not.toHaveBeenCalled();
+  });
+
+  it('lets go of the timeline once the schedule layout replaces it', () => {
+    const held = grid as unknown as {
+      timelineDrawnHost: unknown; timelineFrame: unknown; timelineTick: unknown; requestTimelineFrame(): void;
+    };
+    const detach = vi.spyOn(TimelineView.prototype, 'detach');
+    held.requestTimelineFrame();
+    expect(held.timelineDrawnHost).not.toBeNull();
+    expect(held.timelineFrame).not.toBeNull();
+
+    storageMock.getGuideLayout.mockReturnValue('schedule');
+    grid.render();
+
+    expect(held.timelineDrawnHost).toBeNull();
+    expect(detach).toHaveBeenCalled();
+    expect(held.timelineFrame).toBeNull();
+    expect(held.timelineTick).toBeNull();
+  });
+
+  it('draws again and keeps the minute moving once the timeline comes back', () => {
+    const draw = spyDraw();
+    storageMock.getGuideLayout.mockReturnValue('schedule');
+    grid.render();
+    expect(draw).not.toHaveBeenCalled();
+
+    storageMock.getGuideLayout.mockReturnValue('timeline');
+    grid.render();
+    expect(draw).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(61_000);
+    expect(draw).toHaveBeenCalledTimes(2);
+  });
+
+  it('red from the toolbar brings the ring down to the program airing now', () => {
+    grid.handleAction('right');
+    grid.handleAction('up');
+    Focus.flush();
+    expect(container.querySelector('.epg-group-button.focused')).not.toBeNull();
+
+    grid.handleAction('red');
+    Focus.flush();
+
+    expect(detail()).toContain('Noon Show');
+    expect(container.querySelector('.epg-tl-focus.focused')).not.toBeNull();
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('repaints when a reminder changes elsewhere', () => {
+    const draw = spyDraw();
+    reminderMock.has.mockReturnValue(true);
+    reminderMock.revision++;
+    for (const listener of reminderMock.listeners) listener();
+    vi.advanceTimersToNextFrame();
+
+    expect(draw).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the timeline while the group menu moves, drawing it again only at a new size', () => {
+    const draw = spyDraw();
+    const style = vi.spyOn(TimelineView.prototype, 'setStyle');
+    grid.handleAction('up');
+    grid.handleAction('select');
+    grid.handleAction('down');
+    expect(draw).not.toHaveBeenCalled();
+    expect(style).not.toHaveBeenCalled();
+
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600);
+    grid.handleAction('down');
+    expect(draw).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the row the wheel moved to while the pointer only jitters', () => {
+    vi.advanceTimersByTime(1000);
+    Focus.pointer(1100, 90);
+    fire('nav:wheel', { deltaY: 100 });
+    expect(focusedChannel()).toBe('Chan B');
+
+    fire('nav:pointermove', { clientX: 1104, clientY: 94 });
+    expect(focusedChannel()).toBe('Chan B');
+
+    fire('nav:pointermove', { clientX: 1150, clientY: 90 });
+    expect(focusedChannel()).toBe('Chan A');
+  });
+
+  it('drops the OK hint while the search box has the caret, and shows it once the caret leaves', () => {
+    const hint = () => container.querySelector('.epg-tl-detail .epg-tl-hint')?.textContent ?? '';
+    expect(hint()).toContain('Watch now');
+    const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
+    input.focus();
+    expect(hint()).toBe('');
+
+    fire('nav:pointermove', { clientX: 1100, clientY: 90 });
+    expect(detail()).toContain('Afternoon');
+    expect(hint()).toBe('');
+
+    input.blur();
+    expect(hint()).toContain('Set reminder');
+  });
+
+  it('red leaves the search box after the pointer moved the timeline under its caret', () => {
+    grid.handleAction('yellow');
+    const input = searchInput();
+    expect(document.activeElement).toBe(input);
+    fire('nav:pointermove', { clientX: 1100, clientY: 90 });
+    expect(detail()).toContain('Afternoon');
+
+    grid.handleAction('red');
+    Focus.flush();
+
+    expect(document.activeElement).not.toBe(input);
+    expect(detail()).toContain('Noon Show');
+    ringOn('.epg-tl-focus');
+  });
+
+  it('drops the way back to now once the clock walks into the page', () => {
+    (grid as unknown as { timeline: { edgeStep(axis: 'x', direction: number): boolean } }).timeline.edgeStep('x', 1);
+    grid.render();
+    expect(container.querySelector('.epg-tl-now-slot .epg-now-pill.is-earlier')).not.toBeNull();
+
+    // Past 12:30, the start of the 12:30-15:30 page.
+    vi.advanceTimersByTime(31 * 60000);
+
+    expect(container.querySelector('.epg-now-pill')).toBeNull();
+  });
+
+  it('shows the channels of another group in rows it already drew', () => {
+    const draw = TimelineView.prototype.draw;
+    if (vi.isMockFunction(draw)) draw.mockRestore();
+    // A layout switch lets go of the host an earlier stand-in drew into.
+    storageMock.getGuideLayout.mockReturnValue('schedule');
+    grid.render();
+    storageMock.getGuideLayout.mockReturnValue('timeline');
+    grid.render();
+    const names = () => Array.from(container.querySelectorAll<HTMLElement>('.tl-row'))
+      .filter(row => row.style.visibility !== 'hidden')
+      .map(row => `${row.querySelector('.tl-num')?.textContent ?? ''} ${row.querySelector('.tl-name')?.textContent ?? ''}`);
+    expect(names()).toEqual(['1 Chan A', '2 Chan B']);
+
+    grid.handleAction('up');
+    grid.handleAction('select');
+    const sports = Array.from(container.querySelectorAll<HTMLElement>('[data-epg-group]'))
+      .find(option => option.textContent?.includes('Sports'))!;
+    sports.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(names()).toEqual(['2 Chan B']);
+  });
+
+  it('acts on the ringed row when the wheel that moved it is pressed', () => {
+    vi.advanceTimersByTime(1000);
+    Focus.pointer(1100, 90);
+    fire('nav:wheel', { deltaY: 100 });
+    expect(focusedChannel()).toBe('Chan B');
+
+    surface().dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 1103, clientY: 93 }));
+
+    expect(reminderMock.add).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith(1, undefined, { group: 'builtin:all', playlist: undefined });
+  });
+
+  it('acts on the row under the pointer once it really moved after the wheel', () => {
+    vi.advanceTimersByTime(1000);
+    Focus.pointer(1100, 90);
+    fire('nav:wheel', { deltaY: 100 });
+
+    surface().dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 1100, clientY: 130 }));
+
+    expect(detail()).toContain('Afternoon');
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  // A stand-in Element.animate with full animation; each call's animation
+  // reports the currentTime the test sets on it.
+  const stubAnimate = () => {
+    const runs: { cancel: Mock<() => void>; currentTime: number | null }[] = [];
+    const animate = vi.fn<(frames: Keyframe[], options: KeyframeAnimationOptions) => Animation>(() => {
+      const run = { cancel: vi.fn<() => void>(), currentTime: null as number | null };
+      runs.push(run);
+      return run as unknown as Animation;
+    });
+    Object.defineProperty(HTMLElement.prototype, 'animate', { value: animate, configurable: true });
+    document.documentElement.setAttribute('data-animation', 'full');
+    return {
+      animate,
+      runs,
+      restore: () => {
+        document.documentElement.removeAttribute('data-animation');
+        delete (HTMLElement.prototype as { animate?: unknown }).animate;
+      },
+    };
+  };
+  const translateOf = (transform: unknown) =>
+    (/translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(String(transform)) ?? []).slice(1).map(Number);
+  const ring = () => container.querySelector<HTMLElement>('.epg-tl-focus')!;
+
+  it('moves the ring once per key, after the details settle the rows', () => {
+    state.channels = Array.from({ length: 8 }, (_, i) => ({ name: `ch${String(i + 1)}`, url: `http://host/${String(i + 1)}` }));
+    state.programmes = { ch7: [prog(11, 30, 12, 30, 'Seventh')] };
+    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(800);
+    const detailHeight = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (!this.classList.contains('epg-tl-detail')) return 0;
+      return this.querySelector('.epg-tl-desc') ? 250 : 104;
+    });
+    const { animate, restore } = stubAnimate();
+    try {
+      grid.render();
+      for (let i = 0; i < 5; i++) grid.handleAction('down');
+      const timeline = (grid as unknown as { timeline: { scrollGoal: number } }).timeline;
+      expect(timeline.scrollGoal).toBe(0);
+      const from = translateOf(ring().style.transform);
+      animate.mockClear();
+
+      grid.handleAction('down'); // ch7's description grows the details over its row
+      expect(timeline.scrollGoal).toBeGreaterThan(0);
+      expect(animate).toHaveBeenCalledOnce();
+      const [frames] = animate.mock.calls[0];
+      expect(translateOf(frames[0].transform)).toEqual(from);
+      expect(translateOf(frames[1].transform)).toEqual(translateOf(ring().style.transform));
+    } finally {
+      restore();
+      height.mockRestore();
+      detailHeight.mockRestore();
+    }
+  });
+
+  it('does not fly the ring in from where it was when the Guide opens again', () => {
+    const { animate, restore } = stubAnimate();
+    try {
+      grid.handleAction('right');
+      expect(animate).toHaveBeenCalledOnce();
+
+      grid.focusChannel(0);
+      grid.render(true);
+
+      expect(detail()).toContain('Noon Show');
+      expect(animate).toHaveBeenCalledOnce();
+    } finally {
+      restore();
+    }
+  });
+
+  it('changes a ring size more than twice over at once, sliding only its place', () => {
+    const { animate, restore } = stubAnimate();
+    try {
+      grid.handleAction('down'); // Chan B has no programs: its ring spans the page
+      const [frames] = animate.mock.calls[0];
+      expect(String(frames[0].transform)).not.toContain('scale');
+      expect(translateOf(frames[1].transform)).toEqual(translateOf(ring().style.transform));
+    } finally {
+      restore();
+    }
+  });
+
+  it('starts a quick repeat from where the ring shows, part way through its slide', () => {
+    const { animate, runs, restore } = stubAnimate();
+    try {
+      const noon = translateOf(ring().style.transform)[0];
+      grid.handleAction('right');
+      const afternoon = translateOf(ring().style.transform)[0];
+      runs[0].currentTime = 80;
+      grid.handleAction('left');
+
+      expect(animate).toHaveBeenCalledTimes(2);
+      const x = translateOf(animate.mock.calls[1][0][0].transform)[0];
+      expect(x).toBeGreaterThan(noon);
+      expect(x).toBeLessThan(afternoon);
+      expect(runs[0].cancel).toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('shows the parental lock of a locked channel in its row, not again in the details', () => {
+    const enabled = vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    const lockState = vi.spyOn(ParentalControlService, 'lockState').mockReturnValue('locked');
+    onTestFinished(() => { enabled.mockRestore(); lockState.mockRestore(); });
+    const draw = TimelineView.prototype.draw;
+    if (vi.isMockFunction(draw)) draw.mockRestore();
+    storageMock.getGuideLayout.mockReturnValue('schedule');
+    grid.render();
+    storageMock.getGuideLayout.mockReturnValue('timeline');
+    grid.render();
+
+    expect(container.querySelector('.tl-row .tl-name .lock-badge.is-locked')).not.toBeNull();
+    expect(container.querySelector('.epg-tl-detail .lock-badge')).toBeNull();
+  });
+
+  it('slides and resizes the ring together with full animation', () => {
+    const animate = vi.fn<(frames: Keyframe[], options: KeyframeAnimationOptions) => Animation>()
+      .mockReturnValue({ cancel: vi.fn() } as unknown as Animation);
+    Object.defineProperty(HTMLElement.prototype, 'animate', { value: animate, configurable: true });
+    document.documentElement.setAttribute('data-animation', 'full');
+    try {
+      const ring = container.querySelector<HTMLElement>('.epg-tl-focus')!;
+      const before = ring.style.width;
+      grid.handleAction('right');
+
+      expect(ring.style.width).not.toBe(before);
+      expect(animate).toHaveBeenCalledOnce();
+      const [frames] = animate.mock.calls[0];
+      expect(String(frames[0].transform)).toMatch(new RegExp(`scale\\(${parseFloat(before) / parseFloat(ring.style.width)}, 1\\)`));
+      expect(frames[1].transform).toBe(ring.style.transform.replace(/\s+/g, ' '));
+    } finally {
+      document.documentElement.removeAttribute('data-animation');
+      delete (HTMLElement.prototype as { animate?: unknown }).animate;
+    }
+  });
+
+  // Edge scrolling over the timeline, as key-handler installs it, with the
+  // pointer resting where `rest` puts it.
+  const edgeScrolling = () => {
+    vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => window.setTimeout(() => fn(performance.now()), 16));
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => window.clearTimeout(id));
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => surface() });
+    setInputMode('pointer');
+    const dispose = installEdgeScroll(() => {});
+    onTestFinished(() => {
+      dispose();
+      vi.unstubAllGlobals();
+      delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+    });
+    let screen = 0;
+    return (x: number, y: number) => {
+      screen++;
+      Focus.pointer(x, y);
+      surface().dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y, screenX: screen, screenY: screen }));
+    };
+  };
+  const timelineOf = () => (grid as unknown as {
+    timeline: { windowStartMs: number; scrollGoal: number; row: number };
+  }).timeline;
+
+  it('pages forward while the pointer rests at the right edge of the cells, until it moves away', () => {
+    const rest = edgeScrolling();
+    rest(1000, 120);
+    const start = timelineOf().windowStartMs;
+    rest(1890, 120);
+    vi.advanceTimersByTime(CONFIG.NAVIGATION.EDGE_SCROLL_DWELL_MS + 100);
+
+    const paged = timelineOf().windowStartMs;
+    expect(paged).toBeGreaterThan(start);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+    rest(1000, 120);
+    vi.advanceTimersByTime(1000);
+    expect(timelineOf().windowStartMs).toBe(paged);
+  });
+
+  it('scrolls the rows while the pointer rests at their foot, the ring following it', () => {
+    state.channels = Array.from({ length: 20 }, (_, i) => ({ name: `ch${String(i + 1)}`, url: `http://host/${String(i + 1)}` }));
+    grid.render();
+    const rest = edgeScrolling();
+    rest(1000, 400);
+    rest(1000, 730);
+    vi.advanceTimersByTime(CONFIG.NAVIGATION.EDGE_SCROLL_DWELL_MS + 600);
+
+    const timeline = timelineOf();
+    expect(timeline.scrollGoal).toBeGreaterThanOrEqual(160);
+    expect(focusedChannel()).toBe(`ch${String(timeline.row + 1)}`);
+    expect(timeline.row).toBeGreaterThan(Math.floor((730 - 52) / 80));
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  const hourly = (count: number, withDescription = (_i: number) => true) => {
+    state.channels = Array.from({ length: count }, (_, i) => ({ name: `ch${String(i + 1)}`, url: `http://host/${String(i + 1)}` }));
+    state.programmes = Object.fromEntries(state.channels.map((channel, i) => [channel.name,
+      [10, 11, 12, 13, 14, 15].map(h => ({ ...prog(h, 0, h + 1, 0, `P${String(h)}`), description: withDescription(i) ? 'd' : '' }))]));
+    grid.render();
+  };
+  // The focused row's place in the rows' view, from the ring.
+  const ringTop = () => parseFloat(/translate\([^,]+, ([-\d.]+)px\)/.exec(ring().style.transform)?.[1] ?? 'NaN');
+
+  it('keeps the focus on a shown row while the rows edge-scroll under a gap between cells', () => {
+    hourly(30);
+    const rest = edgeScrolling();
+    // 13:00 is where the cells of every row leave a gap.
+    const gap = Math.round(480 + 1440 / 3);
+    rest(gap, 400);
+    rest(gap, 730);
+    vi.advanceTimersByTime(CONFIG.NAVIGATION.EDGE_SCROLL_DWELL_MS + 1500);
+
+    expect(timelineOf().scrollGoal).toBeGreaterThan(0);
+    expect(ringTop()).toBeGreaterThanOrEqual(52);
+    expect(ringTop() + 72).toBeLessThanOrEqual(744);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('holds the details height while the rows edge-scroll, and lets it fit again after', () => {
+    hourly(30, i => i % 2 === 0);
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (!this.classList.contains('epg-tl-detail')) return 0;
+      if (this.style.height) return parseFloat(this.style.height);
+      return this.querySelector('.epg-tl-desc') ? 168 : 104;
+    });
+    onTestFinished(() => height.mockRestore());
+    grid.render();
+    const rest = edgeScrolling();
+    // ch1's description makes the details 168 tall: the rows end at 576.
+    rest(1000, 300);
+    rest(1000, 560);
+    vi.advanceTimersByTime(CONFIG.NAVIGATION.EDGE_SCROLL_DWELL_MS + 2000);
+
+    const detailEl = container.querySelector<HTMLElement>('.epg-tl-detail')!;
+    expect(detailEl.style.height).toBe('168px');
+    expect(timelineOf().scrollGoal).toBeGreaterThanOrEqual(3 * 80);
+    rest(1000, 300);
+    vi.advanceTimersByTime(100);
+    expect(detailEl.style.height).toBe('');
+  });
+
+  it('shows a lock as soon as the parental state changes', () => {
+    const enabled = vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    const lockState = vi.spyOn(ParentalControlService, 'lockState').mockReturnValue(null);
+    onTestFinished(() => { enabled.mockRestore(); lockState.mockRestore(); });
+    const draw = TimelineView.prototype.draw;
+    if (vi.isMockFunction(draw)) draw.mockRestore();
+    storageMock.getGuideLayout.mockReturnValue('schedule');
+    grid.render();
+    storageMock.getGuideLayout.mockReturnValue('timeline');
+    grid.render();
+    expect(container.querySelector('.tl-row .lock-badge')).toBeNull();
+
+    lockState.mockReturnValue('locked');
+    (ParentalControlService as unknown as { listeners: Set<(changed: boolean) => void> }).listeners
+      .forEach(listener => listener(false));
+    vi.advanceTimersToNextFrame();
+
+    expect(container.querySelector('.tl-row .tl-name .lock-badge.is-locked')).not.toBeNull();
+  });
+
+  it('pages into the past from the left edge only once paged away from the present', () => {
+    const rest = edgeScrolling();
+    const present = timelineOf().windowStartMs;
+    rest(1000, 120);
+    rest(500, 120);
+    vi.advanceTimersByTime(2000);
+    expect(timelineOf().windowStartMs).toBe(present);
+
+    rest(1000, 120);
+    rest(1890, 120);
+    vi.advanceTimersByTime(CONFIG.NAVIGATION.EDGE_SCROLL_DWELL_MS + 50);
+    expect(timelineOf().windowStartMs).toBeGreaterThan(present);
+    rest(1000, 120);
+    rest(500, 120);
+    vi.advanceTimersByTime(2000);
+    expect(timelineOf().windowStartMs).toBe(present);
+  });
+
+  it('pages forward with the pointer pushed against the right edge of the screen', () => {
+    const rest = edgeScrolling();
+    const start = timelineOf().windowStartMs;
+    rest(1000, 120);
+    rest(1915, 120);
+    vi.advanceTimersByTime(CONFIG.NAVIGATION.EDGE_SCROLL_DWELL_MS + 100);
+    expect(timelineOf().windowStartMs).toBeGreaterThan(start);
+  });
+
+  it('steps rows at about two a second at first and never more than eight', () => {
+    state.channels = Array.from({ length: 200 }, (_, i) => ({ name: `ch${String(i + 1)}`, url: `http://host/${String(i + 1)}` }));
+    grid.render();
+    const rest = edgeScrolling();
+    const rows = () => timelineOf().scrollGoal / 80;
+    rest(1000, 400);
+    rest(1000, 730);
+    vi.advanceTimersByTime(CONFIG.NAVIGATION.EDGE_SCROLL_DWELL_MS + 1000);
+    expect(rows()).toBeGreaterThanOrEqual(2);
+    expect(rows()).toBeLessThanOrEqual(4);
+
+    vi.advanceTimersByTime(CONFIG.NAVIGATION.EDGE_SCROLL_RAMP_MS);
+    const ramped = rows();
+    vi.advanceTimersByTime(1000);
+    expect(rows() - ramped).toBeGreaterThanOrEqual(7);
+    expect(rows() - ramped).toBeLessThanOrEqual(9);
+  });
+
+  it('follows the clock to the next present page, its left edge staying shut under a resting pointer', () => {
+    const rest = edgeScrolling();
+    rest(1000, 120);
+    rest(500, 120);
+    vi.advanceTimersByTime(2000);
+    expect(timelineOf().windowStartMs).toBe(new Date(Y, M, D, 12, 0).getTime());
+
+    vi.advanceTimersByTime(31 * 60000);
+
+    expect(timelineOf().windowStartMs).toBe(new Date(Y, M, D, 12, 30).getTime());
+    // Noon Show ended at 12:30; the focus moves on to what comes next.
+    expect(detail()).toContain('Afternoon');
+  });
+
+  it('leaves the archive lookup alone on a key that moves nothing', () => {
+    grid.handleAction('left'); // Morning, the first program
+    vi.advanceTimersByTime(1000);
+    const schedule = vi.spyOn(EpgGrid.prototype as unknown as { scheduleArchiveLoad: () => void }, 'scheduleArchiveLoad');
+    onTestFinished(() => schedule.mockRestore());
+
+    grid.handleAction('left');
+
+    expect(detail()).toContain('Morning');
+    expect(schedule).not.toHaveBeenCalled();
+  });
+
+  it('never edge-scrolls from the ruler', () => {
+    const rest = edgeScrolling();
+    const start = timelineOf().windowStartMs;
+    rest(1830, 20);
+    vi.advanceTimersByTime(2000);
+    expect(timelineOf().windowStartMs).toBe(start);
+  });
+
+  it('splits the details: the time over the channel column, the programme over the cells', () => {
+    const when = () => container.querySelector('.epg-tl-detail .epg-tl-when')?.textContent?.replace(/\s+/g, ' ').trim();
+    const what = () => container.querySelector('.epg-tl-detail .epg-tl-what')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    expect(when()).toBe('11:30 – 12:30 Sat 06/15 · 1h 0m');
+    expect(what()).toContain('Noon Show');
+    expect(what()).toContain('Noon Show description');
+    expect(detail()).not.toContain('Chan A');
+
+    grid.handleAction('down'); // Chan B has no programs
+    expect(when()).toBe('');
+    expect(what()).toContain('No information');
+    expect(detail()).not.toContain('Chan B');
+  });
+
+  it('sizes the number column again for a new row list only', () => {
+    const zeros: string[] = [];
+    const measure = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, {
+      get: (_target, name) => (name === 'measureText'
+        ? (text: string) => { if (/^0+$/.test(text)) zeros.push(text); return { width: 10 * text.length }; }
+        : () => undefined),
+      set: () => true,
+    }) as CanvasRenderingContext2D);
+    onTestFinished(() => { measure.mockRestore(); });
+    state.channels = Array.from({ length: 30 }, (_, i) => ({
+      name: `ch${String(i + 1)}`, group: i < 5 ? 'News' : 'Sports', url: `http://host/${String(i + 1)}`,
+    }));
+    grid.render();
+    const source = (timelineOf() as unknown as { source: { row(index: number): unknown } }).source;
+    const row = vi.spyOn(source, 'row');
+    zeros.length = 0;
+
+    vi.advanceTimersByTime(60000);
+    reminderMock.revision++;
+    grid.render();
+    epgMock.guideRevision++;
+    grid.render();
+    expect(zeros).toEqual([]);
+    expect(row.mock.calls.every(([index]) => index < 12)).toBe(true);
+
+    container.querySelector<HTMLElement>('[data-epg-group-toggle]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    container.querySelector<HTMLElement>('[data-epg-group="source:News"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(zeros).toEqual(['0']);
+  });
+
+  it('starts the details where a widened number column moves the names', () => {
+    const measure = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, {
+      get: (_target, name) => (name === 'measureText' ? () => ({ width: 100 }) : () => undefined),
+      set: () => true,
+    }) as CanvasRenderingContext2D);
+    onTestFinished(() => { measure.mockRestore(); });
+    state.channels = state.channels.slice();
+    grid.render();
+
+    expect(container.style.getPropertyValue('--tl-name-left')).toBe('136px');
+    expect(container.querySelector<HTMLElement>('.epg-tl-when')!.style.paddingLeft).toBe('');
+  });
+
+  it('offers to watch live from an aired programme without catch-up or a row without programs', () => {
+    const hint = () => container.querySelector('.epg-tl-detail .epg-tl-hint')?.textContent?.trim() ?? '';
+    expect(hint()).toContain('Watch now'); // Noon Show, airing
+    grid.handleAction('left'); // Morning, aired
+    expect(hint()).toContain('Watch live');
+    grid.handleAction('down'); // Chan B has no programs
+    expect(hint()).toContain('Watch live');
+  });
+
+  it('marks a replayable aired programme by its time', () => {
+    state.channels = [{ ...state.channels[0], catchupSource: 'http://host/c' }];
+    grid.render();
+    grid.handleAction('left'); // Morning, aired
+    expect(container.querySelector('.epg-tl-detail .epg-tl-when .epg-replay-glyph')).not.toBeNull();
+  });
+
+  it('claims the wheel over the timeline only, leaving the toolbar its own', () => {
+    vi.advanceTimersByTime(1000);
+    const wheel = (el: Element) => el.dispatchEvent(new CustomEvent('nav:wheel', {
+      bubbles: true, cancelable: true, detail: { step: true, deltaY: 100 },
+    }));
+    for (const selector of ['.epg-search-wrap', '.epg-group-button', '.epg-legend']) {
+      expect(wheel(container.querySelector(selector)!), selector).toBe(true);
+    }
+    expect(focusedChannel()).toBe('Chan A');
+    expect(wheel(surface())).toBe(false);
+    expect(focusedChannel()).toBe('Chan B');
+  });
+
+  it('leaves the wheel to a modal prompt', () => {
+    const prompt = document.createElement('div');
+    document.body.appendChild(prompt);
+    const modal = Focus.register({ id: 'test.prompt', root: prompt, restrict: 'self-only' });
+    Focus.push(modal);
+    vi.advanceTimersByTime(1000);
+    fire('nav:wheel', { deltaY: 100 });
+    Focus.pop(modal);
+
+    expect(focusedChannel()).toBe('Chan A');
   });
 });

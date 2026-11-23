@@ -620,6 +620,27 @@ test.describe('Guide pointer and keys', () => {
     await expect(page.locator('#epg-programmes .epg-programme-item[data-prog-idx="25"]')).toHaveClass(/\bfocused\b/);
   });
 
+  test('the Red hint drops its hover ring once the D-pad takes over', async ({ page }) => {
+    await openGuide(page);
+    await programmesSettled(page);
+    await page.keyboard.press('ArrowRight');
+    const hint = page.locator('#view-epg .epg-hints [data-epg-now]');
+    const ring = () => hint.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return `${style.borderTopColor}|${style.boxShadow}`;
+    });
+    const idle = await ring();
+    // The first move only seeds the pointer; the next ones hand it over.
+    const box = (await hint.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y - 40);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 });
+    await expect.poll(ring).not.toBe(idle);
+
+    await page.keyboard.press('ArrowDown');
+    await expect.poll(ring).toBe(idle);
+    await expect(page.locator('#view-epg .focused')).toHaveCount(1);
+  });
+
   test('a click that drops the search caret shows what OK does on the hovered programme', async ({ page }) => {
     await openGuide(page);
     await programmesSettled(page);
@@ -633,7 +654,7 @@ test.describe('Guide pointer and keys', () => {
     await page.mouse.click(hints.x + hints.width - 20, hints.y + hints.height / 2);
     await expect(page.locator('#view-epg .epg-search-input')).not.toBeFocused();
     await expect(aired).toHaveClass(/\bfocused\b/);
-    await expect(page.locator('#view-epg .epg-hints')).toContainText('Watch now');
+    await expect(page.locator('#view-epg .epg-hints')).toContainText('Watch live');
   });
 
   test('a key that leaves a clipped programme focused brings it into view', async ({ page }) => {
@@ -833,4 +854,380 @@ test.describe('Guide pointer and keys', () => {
     await expect(page.locator('#epg-programmes .epg-programme-item')).toHaveCount(1);
     await expect.poll(inView).toBe(true);
   });
+});
+
+async function openTimelineGuide(page: Page): Promise<void> {
+  await routePlaylist(page);
+  await seedPlaylist(page);
+  await page.addInitScript(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));
+  await page.clock.setFixedTime(new Date('2024-03-09T12:10:00Z'));
+  await page.route('**/guide.xml', route => route.fulfill({
+    status: 200,
+    contentType: 'application/xml',
+    body: `<?xml version="1.0" encoding="UTF-8"?><tv>
+<channel id="one"><display-name>Channel One</display-name></channel>
+<channel id="two"><display-name>Channel Two</display-name></channel>
+<programme channel="one" start="20240309110000 +0000" stop="20240309123000 +0000"><title>Show One</title></programme>
+<programme channel="one" start="20240309123000 +0000" stop="20240309133000 +0000"><title>Show Two</title></programme>
+<programme channel="one" start="20240309133000 +0000" stop="20240309150000 +0000"><title>Show Three</title></programme>
+<programme channel="one" start="20240309150000 +0000" stop="20240309160000 +0000"><title>Show Five</title></programme>
+<programme channel="two" start="20240309090000 +0000" stop="20240309120000 +0000"><title>Show Early</title></programme>
+<programme channel="two" start="20240309120000 +0000" stop="20240309140000 +0000"><title>Show Four</title></programme>
+</tv>`,
+  }));
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'epg');
+  await expect(page.locator('.epg-tl-surface')).toBeVisible();
+}
+
+test('the timeline guide follows the remote, the pointer, and the wheel', async ({ page }) => {
+  await openTimelineGuide(page);
+  await expect(page.locator('.epg-tl-count')).toHaveText(/\b2 channels\b/);
+  const surface = page.locator('.epg-tl-surface');
+  const detail = page.locator('.epg-tl-detail');
+  await expect(detail).toContainText('Show One');
+
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('.epg-tl-focus')).toHaveClass(/focused/);
+  await page.keyboard.press('ArrowRight');
+  await expect(detail).toContainText('Show Two');
+  await page.keyboard.press('ArrowDown');
+  await expect(detail).toContainText('Show Four');
+  await expect(page.locator('.focused')).toHaveCount(1);
+
+  // The 12:00-15:00 page spans the timeline's 1440px from x=480; row one sits under a 52px ruler.
+  const box = (await surface.boundingBox())!;
+  const xAt = (minutes: number) => box.x + 480 + (minutes / 180) * 1440;
+  await page.mouse.move(xAt(120), box.y + 52 + 40);
+  await expect(detail).toContainText('Show Three');
+  await expect(page.locator('.focused')).toHaveCount(1);
+
+  await page.mouse.wheel(0, 120);
+  await expect(detail).toContainText('Show Four');
+
+  // A press of the wheel would act on the ring; a real move takes the pointer's row back.
+  await page.mouse.move(xAt(130), box.y + 52 + 40);
+  await expect(detail).toContainText('Show Three');
+  await page.mouse.click(xAt(130), box.y + 52 + 40);
+  await expect(page.locator('.toast')).toContainText('Reminder set');
+});
+
+test('the timeline guide searches channels and goes down to the first match', async ({ page }) => {
+  await openTimelineGuide(page);
+  const detail = page.locator('.epg-tl-detail');
+  await expect(detail).toContainText('Show One');
+
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowRight');
+  const input = page.locator('.epg-tl-toolbar .epg-search-input');
+  await expect(page.locator('.epg-tl-toolbar .epg-search-wrap')).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+  await expect(input).toBeFocused();
+  await page.keyboard.type('Two');
+  await expect(input).toHaveAttribute('data-search-pending', 'false');
+  await expect(page.locator('.focused')).toHaveCount(1);
+
+  await page.keyboard.press('ArrowDown');
+  await expect(input).not.toBeFocused();
+  await expect(detail).toContainText('Show Four');
+  await expect(page.locator('.tl-name.is-focused:visible')).toHaveText('Channel Two');
+  await expect(page.locator('.epg-tl-focus')).toHaveClass(/focused/);
+  await expect(page.locator('.focused')).toHaveCount(1);
+});
+
+// The pill sits at the cells' edge toward now, every ruler time under it is
+// hidden, and every other one shows.
+async function expectNowPillAtEdge(page: Page, side: 'earlier' | 'later'): Promise<void> {
+  const pill = page.locator(`.epg-now-pill.is-${side}`);
+  await expect(pill).toBeVisible();
+  const box = (await pill.boundingBox())!;
+  const surface = (await page.locator('.epg-tl-surface').boundingBox())!;
+  if (side === 'earlier') expect(Math.abs(box.x - (surface.x + 484))).toBeLessThanOrEqual(1);
+  else expect(Math.abs(box.x + box.width - (surface.x + 1920 - 4))).toBeLessThanOrEqual(1);
+  expect(await pill.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await pill.hover();
+  await expect.poll(() => pill.evaluate(el => getComputedStyle(el).transform)).toContain('1.03');
+  const hovered = (await pill.boundingBox())!;
+  expect(Math.abs(hovered.y + hovered.height / 2 - (box.y + box.height / 2))).toBeLessThanOrEqual(1);
+  await expect.poll(async () => {
+    let hidden = 0;
+    for (const label of await page.locator('.tl-ruler-label').all()) {
+      const r = (await label.boundingBox())!;
+      const under = r.x < box.x + box.width && r.x + r.width > box.x;
+      if (under === await label.isVisible()) return `"${await label.textContent()}" under=${String(under)}`;
+      if (under) hidden++;
+    }
+    return hidden > 0 ? 'ok' : 'nothing hidden';
+  }).toBe('ok');
+}
+
+test('the timeline guide puts Back to now on the ruler edge toward now, hiding only the times under it', async ({ page }) => {
+  await openTimelineGuide(page);
+  const detail = page.locator('.epg-tl-detail');
+  const labels = page.locator('.tl-ruler-label');
+  await page.keyboard.press('ArrowDown');
+  for (const title of ['Show Two', 'Show Three', 'Show Five']) {
+    await page.keyboard.press('ArrowRight');
+    await expect(detail).toContainText(title);
+  }
+  await expectNowPillAtEdge(page, 'earlier');
+
+  await page.locator('.epg-now-pill').click();
+  await expect(detail).toContainText('Show One');
+  await expect(page.locator('.epg-now-pill')).toHaveCount(0);
+  for (const label of await labels.all()) await expect(label).toBeVisible();
+  await expect(page.locator('.epg-tl-focus')).toHaveClass(/focused/);
+  await expect(page.locator('.focused')).toHaveCount(1);
+
+  await page.keyboard.press('ArrowDown');
+  await expect(detail).toContainText('Show Four');
+  await page.keyboard.press('ArrowLeft');
+  await expect(detail).toContainText('Show Early');
+  await expectNowPillAtEdge(page, 'later');
+
+  await page.evaluate(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
+  await expect(page.locator('.epg-now-pill')).toHaveCount(0);
+  for (const label of await labels.all()) await expect(label).toBeVisible();
+});
+
+test('the timeline guide fits the whole Back to now in a long language at the largest text size', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_locale', JSON.stringify('ru'));
+    localStorage.setItem('iptv_text_size', JSON.stringify('150'));
+  });
+  await openTimelineGuide(page);
+  await page.keyboard.press('ArrowDown');
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+  await expectNowPillAtEdge(page, 'earlier');
+});
+
+test('the timeline details split under the channel column and the cells', async ({ page }) => {
+  await openTimelineGuide(page);
+  const surface = (await page.locator('.epg-tl-surface').boundingBox())!;
+  const viewport = page.viewportSize()!;
+  const box = async (selector: string) => (await page.locator(selector).boundingBox())!;
+  const detail = await box('.epg-tl-detail');
+  const when = await box('.epg-tl-detail .epg-tl-when');
+  const column = await box('.tl-column');
+
+  expect(Math.abs(detail.x - surface.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(detail.x + detail.width - viewport.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(when.width - 480)).toBeLessThanOrEqual(1);
+  expect(Math.abs(column.y + column.height - viewport.height)).toBeLessThanOrEqual(1);
+  await expect(page.locator('.epg-tl-detail .epg-tl-when')).toContainText('11:00 – 12:30');
+  await expect(page.locator('.epg-tl-detail')).not.toContainText('Channel One');
+  // The time starts where the channel names do, the programme where a cell's title does.
+  const range = await box('.epg-tl-detail .epg-tl-range');
+  const name = await box('.tl-name.is-focused:visible');
+  expect(Math.abs(range.x - name.x)).toBeLessThanOrEqual(1);
+  const title = await box('.epg-tl-detail .epg-tl-what .epg-tl-title');
+  expect(Math.abs(title.x - (surface.x + 494))).toBeLessThanOrEqual(1);
+  const hint = await box('.epg-tl-detail .epg-tl-hint');
+  expect(Math.abs(hint.x + hint.width - (viewport.width - 14))).toBeLessThanOrEqual(1);
+});
+
+test('the open group menu shows over the timeline ruler corner', async ({ page }) => {
+  await openTimelineGuide(page);
+  const count = (await page.locator('.epg-tl-count').boundingBox())!;
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.epg-group-button')).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.epg-group-menu')).toBeVisible();
+
+  // The count ignores the pointer; let hit-testing see it to compare paint order.
+  await page.locator('.epg-tl-count').evaluate((el: HTMLElement) => { el.style.pointerEvents = 'auto'; });
+  expect(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.epg-group-menu'),
+    { x: count.x + count.width / 2, y: count.y + count.height / 2 })).toBe(true);
+});
+
+test('the timeline details align with the channel names a long number moves on', async ({ page }) => {
+  const channels = Array.from({ length: 1000 }, (_, i) => `#EXTINF:-1,ch${String(i + 1)}\nhttp://host/${String(i)}.m3u8`);
+  await routePlaylist(page, `#EXTM3U\n${channels.join('\n')}`);
+  await seedPlaylist(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline'));
+    localStorage.setItem('iptv_text_size', JSON.stringify('150'));
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'epg');
+  await expect(page.locator('.tl-name.is-focused:visible')).toHaveText('ch1');
+
+  const starts = () => page.evaluate(() => {
+    const when = document.querySelector<HTMLElement>('.epg-tl-when')!;
+    const name = Array.from(document.querySelectorAll<HTMLElement>('.tl-name.is-focused'))
+      .find(el => el.offsetParent && getComputedStyle(el.parentElement!).visibility !== 'hidden')!;
+    return {
+      when: when.getBoundingClientRect().left + parseFloat(getComputedStyle(when).paddingLeft),
+      name: name.getBoundingClientRect().left,
+    };
+  });
+  // Four digits at 150% outgrow the 44px number column.
+  const open = await starts();
+  expect(open.name).toBeGreaterThan(78 + 4);
+  expect(open.when).toBe(open.name);
+
+  // Three-digit results narrow the column again, the details with it.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('ch9');
+  await expect(page.locator('.epg-tl-count')).toHaveText(/\b111 channels\b/);
+  const found = await starts();
+  expect(found.name).toBeLessThan(open.name);
+  expect(found.when).toBe(found.name);
+});
+
+test('the timeline guide shows no details strip without a channel', async ({ page }) => {
+  await openTimelineGuide(page);
+  await expect(page.locator('.epg-tl-detail')).toBeVisible();
+
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('zzz');
+  await expect(page.locator('.epg-tl-empty')).toBeVisible();
+  await expect(page.locator('.epg-tl-detail')).toBeHidden();
+});
+
+// `count` URL playlists of one channel each, opening the Guide in `layout`.
+async function openGuideWithPlaylists(page: Page, count: number, layout: 'timeline' | 'schedule', textSize = '100') {
+  await page.route('**/p*.m3u', (route) => {
+    const index = /p(\d+)\.m3u/.exec(route.request().url())?.[1] ?? '0';
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/x-mpegurl',
+      body: `#EXTM3U\n#EXTINF:-1,Channel ${index}\nhttp://streams.example.com/${index}.m3u8`,
+    });
+  });
+  await page.addInitScript(({ count, layout, textSize }) => {
+    localStorage.setItem('iptv_playlists', JSON.stringify(Array.from({ length: count }, (_, i) =>
+      ({ id: `p${String(i)}`, name: `A rather long playlist name ${String(i)}`, url: `http://host/p${String(i)}.m3u` }))));
+    // A test may switch the layout and reload.
+    if (!localStorage.getItem('iptv_guide_layout')) localStorage.setItem('iptv_guide_layout', JSON.stringify(layout));
+    localStorage.setItem('iptv_text_size', JSON.stringify(textSize));
+  }, { count, layout, textSize });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'epg');
+}
+
+test('the timeline puts the playlist tabs above its filters, where the schedule layout has them', async ({ page }) => {
+  const boxes = async () => {
+    const box = async (selector: string) => (await page.locator(`#view-epg ${selector}`).boundingBox())!;
+    return { tabs: await box('.epg-playlist-tabs'), group: await box('.epg-group-button'), search: await box('.epg-search-wrap') };
+  };
+  await openGuideWithPlaylists(page, 2, 'schedule');
+  await expect(page.locator('#view-epg .epg-channel-item').first()).toBeVisible();
+  const schedule = await boxes();
+  await page.evaluate(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));
+  await page.reload();
+  await liveLoaded(page);
+  await enterTab(page, 'epg');
+  await expect(page.locator('.epg-tl-surface')).toBeVisible();
+  const timeline = await boxes();
+
+  expect(timeline.tabs.y + timeline.tabs.height).toBeLessThanOrEqual(timeline.group.y);
+  for (const key of ['tabs', 'group', 'search'] as const) {
+    for (const side of ['x', 'y', 'width', 'height'] as const) {
+      expect(Math.abs(timeline[key][side] - schedule[key][side]), `${key} ${side}`).toBeLessThanOrEqual(1);
+    }
+  }
+
+  // Up from the group filter reaches the tabs, Down comes back.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.epg-group-button')).toHaveClass(/focused/);
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('#view-epg .playlist-tab.active')).toHaveClass(/focused/);
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('.epg-group-button')).toHaveClass(/focused/);
+  await expect(page.locator('.focused')).toHaveCount(1);
+});
+
+test('the timeline toolbar scrolls many playlist tabs at the largest text size', async ({ page }) => {
+  await openGuideWithPlaylists(page, 10, 'timeline', '150');
+  const tabs = page.locator('.epg-tl-toolbar .epg-playlist-tabs');
+  await expect(tabs.locator('.playlist-tab')).toHaveCount(11);
+
+  const viewport = page.viewportSize()!;
+  for (const selector of ['.epg-group-button', '.epg-search-wrap', '.epg-reminder-entry']) {
+    const box = (await page.locator(`.epg-tl-toolbar ${selector}`).boundingBox())!;
+    expect(box.x + box.width, `${selector} stays on screen`).toBeLessThanOrEqual(viewport.width);
+  }
+  expect(await tabs.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+
+  // The keys reach the last tab, which scrolls into the strip.
+  // The first key only shows the ring that the pointer's tab click hid.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.epg-group-button')).toHaveClass(/focused/);
+  await page.keyboard.press('ArrowUp');
+  for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowRight');
+  const last = tabs.locator('.playlist-tab').last();
+  await expect(last).toHaveClass(/focused/);
+  await expect.poll(async () => {
+    const strip = (await tabs.boundingBox())!;
+    const box = (await last.boundingBox())!;
+    return box.x >= strip.x - 1 && box.x + box.width <= strip.x + strip.width + 1;
+  }).toBe(true);
+  await expect(page.locator('.focused')).toHaveCount(1);
+});
+
+test('the timeline pages and scrolls while the pointer rests at its edges, and stops when it leaves', async ({ page }) => {
+  const channels = Array.from({ length: 20 }, (_, i) =>
+    `#EXTINF:-1 tvg-id="c${String(i + 1)}",Channel ${String(i + 1)}\nhttp://streams.example.com/${String(i + 1)}.m3u8`);
+  await routePlaylist(page, ['#EXTM3U url-tvg="http://epg.example.com/guide.xml"', ...channels].join('\n'));
+  // Hourly programs from six hours back to a day ahead, so there are pages to turn.
+  const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
+  const hour = Math.floor(Date.now() / 3600_000) * 3600_000;
+  const programmes = Array.from({ length: 20 }, (_, c) => Array.from({ length: 30 }, (_, h) =>
+    `<programme channel="c${String(c + 1)}" start="${stamp(hour + (h - 6) * 3600_000)}" stop="${stamp(hour + (h - 5) * 3600_000)}"><title>Show ${String(h)}</title></programme>`).join('')).join('');
+  await page.route('**/guide.xml', route => route.fulfill({
+    status: 200, contentType: 'application/xml', body: `<?xml version="1.0" encoding="UTF-8"?><tv>${programmes}</tv>`,
+  }));
+  await seedPlaylist(page);
+  await page.addInitScript(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'epg');
+  const surface = page.locator('.epg-tl-surface');
+  await expect(page.locator('.tl-row').first()).toBeVisible();
+  const box = (await surface.boundingBox())!;
+  const firstTime = page.locator('.tl-ruler-label').first();
+  const layer = page.locator('.tl-layer');
+  const transform = () => layer.evaluate(el => el.style.transform);
+  // Reads until two reads 400 ms apart agree, then checks nothing moves on.
+  const expectStill = async (read: () => Promise<string | null>) => {
+    let last: string | null = null;
+    await expect.poll(async () => {
+      const now = await read();
+      const still = now === last;
+      last = now;
+      return still;
+    }, { intervals: [400], timeout: 5000 }).toBe(true);
+    await page.waitForTimeout(800);
+    expect(await read()).toBe(last);
+  };
+
+  const start = await firstTime.textContent();
+  await page.mouse.move(box.x + 1000, box.y + 120, { steps: 4 });
+  await page.mouse.move(box.x + 1890, box.y + 120, { steps: 4 });
+  await expect.poll(() => firstTime.textContent(), { timeout: 5000 }).not.toBe(start);
+  await page.mouse.move(box.x + 1000, box.y + 120, { steps: 4 });
+  await expectStill(() => firstTime.textContent());
+
+  const top = await transform();
+  const rowsBottom = (await page.locator('.epg-tl-detail').boundingBox())!.y;
+  await page.mouse.move(box.x + 1000, rowsBottom - 10, { steps: 4 });
+  await expect.poll(transform, { timeout: 5000 }).not.toBe(top);
+  await page.mouse.move(box.x + 1000, box.y + 300, { steps: 4 });
+  await expectStill(transform);
+  await expect(page.locator('.focused')).toHaveCount(1);
 });

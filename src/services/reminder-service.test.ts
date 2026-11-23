@@ -56,6 +56,21 @@ describe('ReminderService store', () => {
     expect(ReminderService.has(keyA, 1000)).toBe(false);
   });
 
+  it('announces every change to the stored reminders', () => {
+    const listener = vi.fn();
+    const unsubscribe = ReminderService.onChange(listener);
+    const before = ReminderService.revision;
+    ReminderService.add(rem());
+    ReminderService.remove(keyA, 1000);
+    ReminderService.add(rem());
+    ReminderService.clearAll();
+    unsubscribe();
+    ReminderService.add(rem());
+
+    expect(listener).toHaveBeenCalledTimes(4);
+    expect(ReminderService.revision).toBe(before + 5);
+  });
+
   it('resolves a channelKey to its playlist index (-1 if gone)', () => {
     expect(ReminderService.resolveChannelIndex(keyA)).toBe(0);
     expect(ReminderService.resolveChannelIndex('nope')).toBe(-1);
@@ -378,6 +393,31 @@ describe('ReminderService scheduling', () => {
       'event=reminder.cancel.failed',
       'reason=request_failed',
     );
+  });
+
+  it('updates the schedule even when a change listener throws', () => {
+    const request = mockLuna();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const later = vi.fn();
+    const unsubscribe = ReminderService.onChange(() => { throw new Error('boom'); });
+    const unsubscribeLater = ReminderService.onChange(later);
+    try {
+      ReminderService.add(rem({ startMs: 5000 }));
+      expect(request).toHaveBeenCalledTimes(1);
+      ReminderService.remove(keyA, 5000);
+      expect(request).toHaveBeenCalledWith('luna://com.webos.service.activitymanager',
+        expect.objectContaining({ method: 'cancel', parameters: { activityName: `iptvReminder-${keyA}-5000` } }));
+      expect(later).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledWith(
+        '[Reminder]',
+        'Reminder listener failed',
+        'event=reminder.listener.failed',
+      );
+    } finally {
+      unsubscribe();
+      unsubscribeLater();
+    }
   });
 
   it('clears all reminders and cancels every activity', () => {

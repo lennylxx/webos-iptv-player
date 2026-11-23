@@ -444,7 +444,7 @@ export const KeyHandler = {
       // A surface that handles the wheel itself cancels nav:wheel.
       const at = e.target instanceof Element ? e.target : document;
       const claimed = !at.dispatchEvent(new CustomEvent('nav:wheel', {
-        bubbles: true, cancelable: true, detail: { step: !scrolls },
+        bubbles: true, cancelable: true, detail: { step: !scrolls, deltaY: e.deltaY },
       }));
       if (claimed || scrolls) return;
       e.preventDefault();

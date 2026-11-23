@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
-import type { Channel, ChannelCycleMode, ManualEpgSource, PlaylistEntry, TzMode, XtreamLiveCategorySnapshot } from '../types';
+import type { Channel, ChannelCycleMode, GuideLayout, ManualEpgSource, PlaylistEntry, TzMode, XtreamLiveCategorySnapshot } from '../types';
 import type { AnimationMode } from '../services/motion-service';
 import type { VideoQuality } from '../utils/video-quality';
 import type { XtreamAccountInfo, XtreamLiveCategory } from '../services/xtream-client';
@@ -99,6 +99,7 @@ const {
       getOverlayStyle: vi.fn(() => state.overlayStyle),
       getTextSize: vi.fn(() => state.textSize),
       getTzMode: vi.fn(() => state.tzMode),
+      getGuideLayout: vi.fn((): GuideLayout => 'schedule'),
       getChannelCycleMode: vi.fn(() => state.channelCycleMode),
       getLiveReconnectAttempts: vi.fn(() => state.liveReconnectAttempts),
       getHeaderPlayback: vi.fn(() => state.headerPlayback),
@@ -137,6 +138,7 @@ const {
       setOverlayStyle: vi.fn((s: string) => { state.overlayStyle = s; }),
       setTextSize: vi.fn((s: string) => { state.textSize = s; }),
       setTzMode: vi.fn(),
+      setGuideLayout: vi.fn(),
       setChannelCycleMode: vi.fn((m: ChannelCycleMode) => { state.channelCycleMode = m; }),
       setHeaderPlayback: vi.fn((mode: 'off' | 'luna' | 'proxy') => { state.headerPlayback = mode; }),
       setVideoQuality: vi.fn((quality: VideoQuality) => { state.videoQuality = quality; }),
@@ -1732,6 +1734,15 @@ describe('Settings.save', () => {
     click('#save-settings');
     expect(storageMock.setTzMode).toHaveBeenCalledWith('feed');
     expect(onSave).toHaveBeenCalledWith('apply'); // no re-fetch
+  });
+
+  it('saves the guide layout as a display-only change', () => {
+    state.playlists = [{ id: 'p1', name: 'P', url: 'http://p' }];
+    settings.render();
+    click('#guide-layout [data-value="timeline"]');
+    click('#save-settings');
+    expect(storageMock.setGuideLayout).toHaveBeenCalledWith('timeline');
+    expect(onSave).toHaveBeenCalledWith('apply');
   });
 
   it('persists the selected app language as a display-only change', () => {

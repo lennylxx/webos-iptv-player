@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { CONFIG } from '../config';
 import { html } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { edgeScrollSpeed, installEdgeScroll } from './edge-scroll';
+import { edgeScrollSpeed, installEdgeScroll, recheckEdgeScroll, setEdgeScroller, type EdgeAxis } from './edge-scroll';
 import { Focus, Tier, type FocusScope } from './focus-scope';
 import { setInputMode } from './input-mode';
 
@@ -485,3 +485,99 @@ describe('pointer edge scrolling', () => {
     expectStopped();
   });
 });
+
+describe('custom edge scrollers', () => {
+  // A scroller with a bottom edge that has `room` steps left.
+  const custom = (room: number) => {
+    const steps: [EdgeAxis, number][] = [];
+    const start = vi.fn<() => void>();
+    setEdgeScroller(track, {
+      edgeAt: (_x, py, atEnd) => (py >= 280 && (atEnd || steps.length < room) ? { axis: 'y', direction: 1 } : null),
+      scroll: (axis, direction) => {
+        if (steps.length >= room) return 'end';
+        steps.push([axis, direction]);
+        return 'moved';
+      },
+      start,
+    });
+    return { steps, start };
+  };
+
+  it('drives a registered scroller from its own edges, not scrollLeft', () => {
+    const { steps, start } = custom(3);
+    move(500, 290);
+    wait(N.EDGE_SCROLL_DWELL_MS - 20);
+    expect(steps).toEqual([]);
+    wait(100);
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(steps[0]).toEqual(['y', 1]);
+    expect(scrolled).toHaveBeenCalledWith(track);
+    expect(track.scrollLeft).toBe(0);
+    wait(800);
+    expect(steps).toHaveLength(3);
+  });
+
+  it('stops a registered scroller as the pointer leaves its edge', () => {
+    const { steps } = custom(1000);
+    move(500, 290);
+    wait();
+    expect(steps.length).toBeGreaterThan(0);
+    move(500, 200);
+    const count = steps.length;
+    wait(800);
+    expect(steps).toHaveLength(count);
+  });
+
+  it('starts a run with its dwell when an edge opens under a resting pointer, once rechecked', () => {
+    let open = false;
+    let steps = 0;
+    setEdgeScroller(track, {
+      // A backward edge: a forward one parks and polls for growth by itself.
+      edgeAt: (_x, py, atEnd) => (py >= 280 && (open || atEnd) ? { axis: 'y', direction: -1 } : null),
+      scroll: () => {
+        steps++;
+        return 'moved';
+      },
+    });
+    move(500, 290);
+    wait(800);
+    expect(steps).toBe(0);
+
+    open = true;
+    wait(800);
+    expect(steps).toBe(0);
+    recheckEdgeScroll();
+    wait(N.EDGE_SCROLL_DWELL_MS - 20);
+    expect(steps).toBe(0);
+    wait(100);
+    expect(steps).toBeGreaterThan(0);
+  });
+
+  it('starts nothing on a recheck after a click stopped the run under a resting pointer', () => {
+    const { steps } = custom(1000);
+    move(500, 290);
+    wait();
+    expect(steps.length).toBeGreaterThan(0);
+
+    track.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 500, clientY: 290 }));
+    const count = steps.length;
+    wait(60_000);
+    recheckEdgeScroll();
+    wait(1000);
+    expect(steps).toHaveLength(count);
+  });
+});
+
+describe('rechecking native tracks', () => {
+  it('leaves a track a click stopped still on a recheck', () => {
+    start();
+    track.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+    const offset = track.scrollLeft;
+    wait(60_000);
+    recheckEdgeScroll();
+    wait(1000);
+    expect(track.scrollLeft).toBe(offset);
+  });
+});
+

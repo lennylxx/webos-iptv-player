@@ -16,10 +16,18 @@ const WEEKDAY_KEYS = [
 // loaded, or for a feed whose timestamps carry none).
 let tzMode: TzMode = 'device';
 let feedOffsetMin: number | null = null;
+let tzRevision = 0;
 
 export function setDisplayTz(mode: TzMode, offsetMin: number | null): void {
+  if (mode === tzMode && offsetMin === feedOffsetMin) return;
   tzMode = mode;
   feedOffsetMin = offsetMin;
+  tzRevision++;
+}
+
+// Changes whenever the display time zone does, so cached labels can tell.
+export function displayTzRevision(): number {
+  return tzRevision;
 }
 
 // Resolved mode after the feed→device fallback.
@@ -110,6 +118,18 @@ export function startOfDisplayDay(date: Date): Date {
   const d = new Date(date.getTime());
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+// Start of the display half-hour containing `ms` (a +5:45 zone still lands on :00/:30).
+export function startOfDisplayHalfHour(ms: number): number {
+  if (activeMode() === 'feed') {
+    const shifted = ms + feedOffsetMin! * 60000;
+    return shifted - (((shifted % 1800000) + 1800000) % 1800000) - feedOffsetMin! * 60000;
+  }
+  // Floors with the instant's own offset: setMinutes would resolve a repeated
+  // DST hour to its first occurrence.
+  const local = ms - new Date(ms).getTimezoneOffset() * 60000;
+  return ms - (((local % 1800000) + 1800000) % 1800000);
 }
 
 // `date` shifted by `n` display-days (n may be negative), as an absolute Date.

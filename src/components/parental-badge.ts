@@ -16,9 +16,13 @@ export function lockBadge(state: ParentalLockState): string {
     state === 'locked' ? LOCK_ICON : UNLOCK_ICON}</span>`;
 }
 
+export function channelLockState(channel: Channel): ParentalLockState {
+  if (!ParentalControlService.enabled) return null;
+  return ParentalControlService.lockState(liveParentalRequest(channel));
+}
+
 export function channelLockBadge(channel: Channel): string {
-  if (!ParentalControlService.enabled) return '';
-  return lockBadge(ParentalControlService.lockState(liveParentalRequest(channel)));
+  return lockBadge(channelLockState(channel));
 }
 
 // `playlist` narrows to one source; '' covers every playlist holding the group.

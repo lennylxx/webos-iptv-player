@@ -69,6 +69,17 @@ test('yellow enters edit mode and shows the color-key hints; yellow again leaves
   await expect(page.locator('.edit-hints')).toHaveCount(0);
 });
 
+test('the edit toolbar buttons use the app font, like the hints beside them', async ({ page }) => {
+  await boot(page);
+  await key(page, YELLOW);
+  const fonts = await page.locator('.edit-hints').evaluate(toolbar => ({
+    label: getComputedStyle(toolbar.querySelector('span.edit-hint')!).fontFamily,
+    buttons: Array.from(toolbar.querySelectorAll('button.edit-action'), b => getComputedStyle(b).fontFamily),
+  }));
+  expect(fonts.buttons.length).toBeGreaterThan(0);
+  for (const font of fonts.buttons) expect(font).toBe(fonts.label);
+});
+
 test('the edit toolbar fits every locale with both EPG actions', async ({ page }) => {
   await boot(page);
   const locales = ['en', 'de', 'es', 'fr', 'it', 'pt-BR', 'ru', 'uk', 'zh-CN'];

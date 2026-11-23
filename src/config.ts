@@ -50,6 +50,10 @@ export const CONFIG = {
     EDGE_SCROLL_MIN_SPEED_PX_PER_SECOND: 600,
     EDGE_SCROLL_MAX_SPEED_PX_PER_SECOND: 2400,
     EDGE_SCROLL_RAMP_MS: 2500,
+    // The Guide's timeline edge-scrolls in steps, a row or a half hour,
+    // slow enough to stop on the one wanted, on the same ramp.
+    TIMELINE_EDGE_MIN_STEPS_PER_SECOND: 2,
+    TIMELINE_EDGE_MAX_STEPS_PER_SECOND: 8,
     // A track that reached its end under a resting pointer may still grow,
     // such as search results loading more: watch it this long to resume.
     EDGE_SCROLL_PARK_MS: 3000,

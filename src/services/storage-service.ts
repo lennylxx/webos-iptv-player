@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
+import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelCustomization, ChannelCycleMode, GuideLayout, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { isCatalogSort, isCatalogSortDirection, type CatalogSortPreference } from '../utils/catalog-sort';
 import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
@@ -1055,6 +1055,13 @@ export const StorageService = {
   },
   setLivePreview(val: boolean): void {
     set('live_preview', val);
+  },
+
+  getGuideLayout(): GuideLayout {
+    return get<unknown>('guide_layout', 'schedule') === 'timeline' ? 'timeline' : 'schedule';
+  },
+  setGuideLayout(val: GuideLayout): void {
+    set('guide_layout', val);
   },
 
   getAnimationMode(): AnimationMode {

@@ -16,14 +16,32 @@ import { EpgService } from '../services/epg-service';
 import { StorageService } from '../services/storage-service';
 import { ReminderService } from '../services/reminder-service';
 import { XtreamArchiveService } from '../services/xtream-archive';
+import { ParentalControlService } from '../services/parental-control';
 import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { showToast } from './toast';
-import { formatTime, formatDayLabel, displayDayKey, startOfDisplayDay, addDisplayDays, formatDuration } from '../utils/time';
+import {
+  formatTime,
+  formatDayLabel,
+  displayDayKey,
+  displayTzRevision,
+  startOfDisplayDay,
+  addDisplayDays,
+  formatDuration,
+} from '../utils/time';
+import {
+  GuideTimeline,
+  type MoveResult,
+  type PointResult,
+  type Rect,
+  type TimelineMove,
+  type TimelineSource,
+} from './epg-timeline';
+import { TimelineView } from './epg-timeline-view';
 import { rankByName } from '../utils/channel-search';
 import { CONFIG } from '../config';
-import { bellIcon, CHEVRON_LEFT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
+import { bellIcon, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
 import { clickHint, okHint } from './key-hints';
-import { channelLockBadge } from './parental-badge';
+import { channelLockBadge, channelLockState } from './parental-badge';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { VirtualList, type VirtualRange } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
@@ -34,8 +52,11 @@ import { catchupNeedsId, hasCatchup } from '../utils/catchup-url';
 import { liveBadge } from './live-badge';
 import { Focus, Tier, type FocusScope, type Via } from '../navigation/focus-scope';
 import { InputMode } from '../navigation/input-mode';
+import { recheckEdgeScroll, setEdgeScroller, type EdgeAxis, type EdgeScroller, type EdgeStep } from '../navigation/edge-scroll';
 
 const log = createLogger('EpgGrid');
+// One empty list, so a pending search keeps the timeline's rows revision still.
+const NO_CHANNELS: VisibleChannel[] = [];
 
 function keyIndex(key: string, prefix: string): number {
   return key.indexOf(prefix) === 0 ? Number(key.slice(prefix.length)) : -1;
@@ -49,7 +70,27 @@ const KEY_SELECTORS: Record<string, string> = {
   'filter:group': '.epg-group-button',
   'filter:search': '.epg-search-wrap',
   legend: '.epg-reminder-entry',
+  tl: '.epg-tl-focus',
 };
+
+const RING_MS = 160;
+
+function sameRect(a: Rect | null, b: Rect | null): boolean {
+  return a === b || (!!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
+}
+
+// CSS ease-out, cubic-bezier(0, 0, 0.58, 1), at time fraction t.
+function easeOut(t: number): number {
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 20; i++) {
+    const u = (lo + hi) / 2;
+    if (3 * (1 - u) * u * u * 0.58 + u * u * u < t) lo = u;
+    else hi = u;
+  }
+  const u = (lo + hi) / 2;
+  return 3 * (1 - u) * u * u + u * u * u;
+}
 
 // Only an Xtream account's archive answers "unavailable", as in Search: on
 // its channels OK replays an aired programme or says so, never tunes live.
@@ -58,7 +99,7 @@ function archiveDecides(channel: Channel, prog: Programme): boolean {
     && (!!prog.catchupId || !catchupNeedsId(channel));
 }
 
-type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'legend' | 'programmes';
+type FocusCol = 'playlists' | 'filters' | 'channels' | 'dates' | 'legend' | 'programmes' | 'timeline';
 type FilterFocus = 'group' | 'search';
 type VisibleChannel = { channel: Channel; globalIndex: number };
 type GroupOption = { id: ChannelGroupId; label: string; count: number };
@@ -71,8 +112,19 @@ const PROGRAMME_ROW_ESTIMATE = 80;
 const PROGRAMME_WITH_DESCRIPTION_ESTIMATE = 108;
 const VIRTUAL_OVERSCAN = 8;
 const EPG_VIEWPORT_FALLBACK = 900;
+const TIMELINE_HEIGHT_FALLBACK = 744;
+const WHEEL_STEP_MS = 80;
+const WHEEL_POINTER_SLOP = 8;
 // The programme pane follows a channel once the D-pad rests on it this long.
 const PANE_SETTLE_MS = 150;
+const TIMELINE_MOVES: Partial<Record<Action, TimelineMove>> = {
+  up: 'up',
+  down: 'down',
+  left: 'left',
+  right: 'right',
+  channel_up: 'page-up',
+  channel_down: 'page-down',
+};
 
 export class EpgGrid {
   private container: HTMLElement;
@@ -92,7 +144,8 @@ export class EpgGrid {
   private focusCol: FocusCol = 'channels';
   private focusProg = 0;
   private resumePrompt = new CatchupResumePrompt('prompt.epg');
-  private archiveLoadingKey = '';
+  private archiveLoading = new Set<string>();
+  private archiveTimer: ReturnType<typeof setTimeout> | null = null;
   private loadingChannels = false;
   private readonly channelVirtualizer = new VirtualList({
     itemSize: CHANNEL_ROW_SIZE,
@@ -155,6 +208,45 @@ export class EpgGrid {
     mapping: number;
     list: Programme[];
   } | null = null;
+  private readonly timeline: GuideTimeline;
+  private readonly timelineView: TimelineView;
+  private timelineLayout = false;
+  private timelineReady = false;
+  private timelineRowsRef: VisibleChannel[] | null = null;
+  private timelineRowsRev = 0;
+  private timelineMaxNumber: { rows: VisibleChannel[]; max: number } | null = null;
+  private timelineMarksRev = 0;
+  private timelineHeight = TIMELINE_HEIGHT_FALLBACK;
+  private timelineDetailHeight = 0;
+  private timelineFrame: number | null = null;
+  private timelineDrawnKey = '';
+  private timelineDrawnStamp = '';
+  private timelineDrawnHost: HTMLElement | null = null;
+  private ringRect: Rect | null = null;
+  private ringAnimation: Animation | null = null;
+  private ringMotion: { from: Rect; to: Rect; scaled: boolean } | null = null;
+  // Pixels of edge scroll not yet taken as a step; below zero, a run that
+  // takes its first step at once.
+  private edgeCarry = -1;
+  // The details' height held while an edge scroll runs, so the rows and the
+  // edge under the pointer stay put; null otherwise.
+  private detailFrozen: number | null = null;
+  private readonly edgeScroller: EdgeScroller = {
+    edgeAt: (x, y, atEnd) => this.timelineEdgeAt(x, y, atEnd),
+    scroll: (axis, direction, _px, ramp, ms) => this.edgeScrollTimeline(axis, direction, ramp, ms),
+    start: () => {
+      this.edgeCarry = -1;
+      this.freezeDetail();
+    },
+    stop: () => this.releaseDetail(),
+  };
+  private nowPillBox: { key: string; left: number; width: number } | null = null;
+  private timelineStyleKey = '';
+  private wheelPointer: { x: number; y: number } | null = null;
+  private edgeTzRev = -1;
+  private timelineTick: ReturnType<typeof setTimeout> | null = null;
+  private reminderKeys: { revision: number; keys: Set<string> } | null = null;
+  private lastWheelAt = 0;
 
   constructor(
     container: HTMLElement,
@@ -195,6 +287,15 @@ export class EpgGrid {
           () => this.groupOption(index), this.groupVirtualizer, index);
       },
     });
+    this.timeline = new GuideTimeline(this.timelineSource());
+    this.timelineView = new TimelineView(this.timeline, this.container);
+    // The Reminder Manager or a fired alert may drop a bell the timeline shows.
+    ReminderService.onChange(() => this.refreshTimelineMarks());
+    // A parental lock or unlock changes the rows' lock badges.
+    ParentalControlService.subscribe(() => {
+      this.timelineMarksRev++;
+      this.refreshTimelineMarks();
+    });
     this.bindEvents();
   }
   // While a load has shown nothing yet, the empty guide says so.
@@ -214,6 +315,8 @@ export class EpgGrid {
     this.dayInitialized = false;
     this.selectedDay = 0;
     this.focusProg = 0;
+    this.timelineReady = false;
+    this.clearRing();
   }
 
   focusChannel(channelIndex: number): void {
@@ -225,6 +328,8 @@ export class EpgGrid {
     this.focusCol = 'channels';
     this.focusProg = 0;
     this.groupOpen = false;
+    this.timelineReady = false;
+    this.clearRing();
     this.syncGroupScope();
   }
 
@@ -249,6 +354,7 @@ export class EpgGrid {
 
   deactivateFilters(): void {
     this.releasePane();
+    this.cancelArchiveLoad();
     this.groupOpen = false;
     this.syncGroupScope();
     this.channelSearchGeneration++;
@@ -373,8 +479,8 @@ export class EpgGrid {
     if (!query) return this.visibleChannels;
     return this.channelSearchResultSource === this.visibleChannels
         && this.channelSearchResultQuery === query
-      ? this.channelSearchResults ?? []
-      : [];
+      ? this.channelSearchResults ?? NO_CHANNELS
+      : NO_CHANNELS;
   }
 
   private async updateChannelSearch(generation: number): Promise<void> {
@@ -493,7 +599,8 @@ export class EpgGrid {
   private exitSearchToChannels(): void {
     const visible = this.getVisibleChannels();
     this.focusCol = visible.length ? 'channels' : 'filters';
-    if (visible.length && this.selectedChannelIdx < 0) {
+    // The timeline lands on the first match, at the program airing at its anchor.
+    if (visible.length && (this.selectedChannelIdx < 0 || this.timelineLayout)) {
       this.selectedChannelIdx = visible[0].globalIndex;
     }
     this.container.querySelector<HTMLInputElement>('.epg-search-input')?.blur();
@@ -526,13 +633,24 @@ export class EpgGrid {
       this.selectedGroup = 'builtin:all';
     }
     this.groupFocusIdx = Math.max(0, Math.min(this.groupFocusIdx, groups.length - 1));
+    this.timelineLayout = StorageService.getGuideLayout() === 'timeline';
     const visibleChannels = this.getVisibleChannels();
-    if (!visibleChannels.some(item => item.globalIndex === this.selectedChannelIdx)) {
+    // The timeline keeps its channel through a pending search, so the results
+    // land on it again when it still matches.
+    const holdSelection = this.timelineLayout && this.channelSearchPending;
+    if (!holdSelection && !visibleChannels.some(item => item.globalIndex === this.selectedChannelIdx)) {
       this.releasePane();
       this.selectedChannelIdx = visibleChannels[0]?.globalIndex ?? -1;
       this.focusProg = 0;
     }
     if (!showTabs && this.focusCol === 'playlists') this.focusCol = 'filters';
+    if (this.timelineLayout) {
+      this.renderTimeline(tabs, groups, placeFocus);
+      return;
+    }
+    if (this.focusCol === 'timeline') this.focusCol = 'channels';
+    this.cancelArchiveLoad();
+    this.releaseTimeline();
 
     const channel = PlaylistService.channels[this.paneChannel()];
     const dateOptions = this.getDateOptions();
@@ -614,7 +732,7 @@ export class EpgGrid {
     }
 
     morph(this.container, html`
-      <div class="epg-view">
+      <div class="epg-view" data-key="epg-schedule">
         <div class="epg-main">
           <div class="epg-channels-pane ${this.focusCol === 'channels' || this.focusCol === 'playlists' || this.focusCol === 'filters' ? 'pane-focused' : ''}">
             ${showTabs ? this.playlistTabsMarkup(tabs) : ''}
@@ -757,9 +875,710 @@ export class EpgGrid {
     this.syncFocus();
   }
 
+  // ---- timeline layout ----
+  // Channels and programmes share one layer so they scroll as one.
+
+  private timelineRows(): VisibleChannel[] {
+    return this.getVisibleChannels();
+  }
+
+  private noteTimelineRows(): void {
+    const rows = this.timelineRows();
+    if (rows !== this.timelineRowsRef) {
+      this.timelineRowsRef = rows;
+      this.timelineRowsRev++;
+    }
+  }
+
+  private timelineSource(): TimelineSource {
+    return {
+      rowCount: () => this.timelineRows().length,
+      row: (index) => {
+        const item = this.timelineRows()[index];
+        return { number: item.globalIndex + 1, name: item.channel.name, lock: channelLockState(item.channel) };
+      },
+      programmes: (index, from, to) => {
+        const item = this.timelineRows()[index];
+        const epgId = item ? EpgService.findChannelId(item.channel) : null;
+        return epgId ? EpgService.getProgrammesIntersectingRange(epgId, from, to) : [];
+      },
+      revision: () => {
+        this.noteTimelineRows();
+        return `${this.timelineRowsRev}|${this.timelineMarksRev}|${ReminderService.revision}|${EpgService.guideRevision}`
+          + `|${EpgService.mappingRevision}|${Math.floor(Date.now() / 60000)}`;
+      },
+      rowsKey: () => {
+        this.noteTimelineRows();
+        return String(this.timelineRowsRev);
+      },
+      maxNumber: () => {
+        const rows = this.timelineRows();
+        if (this.timelineMaxNumber?.rows !== rows) {
+          let max = 0;
+          for (const item of rows) max = Math.max(max, item.globalIndex + 1);
+          this.timelineMaxNumber = { rows, max };
+        }
+        return this.timelineMaxNumber.max;
+      },
+      bounds: () => EpgService.getProgrammeStartRange(),
+      marks: (index, programme, now) => {
+        const channel = this.timelineRows()[index]?.channel;
+        const start = programme.start.getTime();
+        if (!channel) return { reminder: false, replay: false };
+        return {
+          reminder: start > now && this.hasReminder(channel, start),
+          replay: programme.stop.getTime() <= now
+            && XtreamArchiveService.isAvailable(channel, start, now, programme.catchupId),
+        };
+      },
+    };
+  }
+
+  // A page of cells asks about every future programme; one read of the list serves them all.
+  private hasReminder(channel: Channel, startMs: number): boolean {
+    const revision = ReminderService.revision;
+    if (this.reminderKeys?.revision !== revision) {
+      const keys = new Set<string>();
+      for (const r of ReminderService.list()) keys.add(`${r.channelKey}|${String(r.startMs)}`);
+      this.reminderKeys = { revision, keys };
+    }
+    return this.reminderKeys.keys.has(`${channelKey(channel)}|${String(startMs)}`);
+  }
+
+  // The schedule layout drops the timeline's nodes; holding them would keep them alive.
+  private releaseTimeline(): void {
+    if (this.timelineFrame !== null) {
+      cancelAnimationFrame(this.timelineFrame);
+      this.timelineFrame = null;
+    }
+    if (this.timelineTick !== null) {
+      clearTimeout(this.timelineTick);
+      this.timelineTick = null;
+    }
+    this.timelineDrawnHost = null;
+    this.timelineDrawnStamp = '';
+    this.detailFrozen = null;
+    this.clearRing();
+    this.timelineView.detach();
+  }
+
+  // Reading the computed style is costly; redo it only when the text size
+  // or the locale changes.
+  private applyTimelineStyle(): void {
+    const key = `${document.documentElement.dataset.textSize ?? ''}|${getLocale()}`;
+    if (key === this.timelineStyleKey) return;
+    this.timelineStyleKey = key;
+    const scale = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();
+    this.timeline.setFontScale(parseFloat(scale) || 1);
+    this.timelineView.setStyle({
+      fontFamily: getComputedStyle(this.container).fontFamily || 'sans-serif',
+      emptyLabel: t('epg.noInfo'),
+    });
+  }
+
+  private renderTimeline(
+    tabs: typeof PlaylistService.playlistTabs,
+    groups: GroupOption[],
+    placeFocus: boolean,
+  ): void {
+    if (this.focusCol === 'channels' || this.focusCol === 'dates' || this.focusCol === 'programmes') {
+      this.focusCol = 'timeline';
+    }
+    const showTabs = tabs.length > 1;
+    const rows = this.timelineRows();
+    // An empty timeline has no ring; the group filter keeps the keys unless
+    // a running search will fill it.
+    if (!rows.length && this.focusCol === 'timeline' && !this.channelSearchPending) {
+      this.focusCol = 'filters';
+      this.filterFocus = 'group';
+    }
+    this.applyTimelineStyle();
+    this.timeline.setHeight(this.timelineViewHeight());
+    const rowIndex = rows.findIndex(item => item.globalIndex === this.selectedChannelIdx);
+    if (!this.timelineReady) {
+      this.timeline.reset(Date.now());
+      this.timeline.setRow(Math.max(0, rowIndex));
+      this.timelineReady = true;
+    } else if (rowIndex >= 0 && rowIndex !== this.timeline.row) {
+      this.timeline.setRow(rowIndex);
+    } else {
+      this.timeline.sync();
+    }
+    const focused = rows[this.timeline.row];
+    if (focused) this.selectedChannelIdx = focused.globalIndex;
+    else if (!this.channelSearchPending) this.selectedChannelIdx = -1;
+    this.scheduleArchiveLoad();
+
+    const previousGroupList = this.container.querySelector<HTMLElement>('.epg-group-options');
+    if (previousGroupList) this.groupVirtualizer.setScrollOffset(previousGroupList.scrollTop);
+    const groupViewport = previousGroupList?.clientHeight || 400;
+    if (this.groupOpen && placeFocus) this.groupVirtualizer.ensureVisible(this.groupFocusIdx, groupViewport);
+    const groupRange = this.groupVirtualizer.getRange(groups.length, groupViewport);
+
+    morph(this.container, html`
+      <div class="epg-view epg-view--timeline" data-key="epg-timeline">
+        <div class="epg-tl-toolbar">
+          <div class="epg-tl-controls">
+            ${showTabs ? this.playlistTabsMarkup(tabs) : ''}
+            <div class="epg-filter-bar epg-tl-filters">
+              ${this.groupControlMarkup(groups, groupRange)}
+              ${this.searchBoxMarkup()}
+            </div>
+          </div>
+          ${this.legendMarkup()}
+        </div>
+        <div class="epg-tl">
+          <div class="epg-tl-surface" data-key="tl-surface" data-hover-target data-edge-scroll data-morph-preserve></div>
+          <div class="epg-tl-focus" data-key="tl" style="${this.focusStyle()}"></div>
+          <div class="epg-tl-count" data-key="tl-count" style="height:${this.timeline.rulerHeight}px">
+            <span class="epg-channel-pane-count">${tp('channel.count', rows.length)}</span>
+          </div>
+          <div class="epg-tl-now-slot" data-key="tl-now" style="height:${this.timeline.rulerHeight}px">${this.nowPillMarkup()}</div>
+          ${rows.length ? '' : html`<div class="epg-no-channels epg-tl-empty">${
+            t(this.loadingChannels ? 'app.loadingChannels' : 'channel.empty')
+          }</div>`}
+        </div>
+        <div class="epg-tl-detail" style="${this.detailFrozen === null ? '' : `height: ${this.detailFrozen}px`}">${
+          this.detailMarkup()}</div>
+      </div>
+    `);
+
+    const height = this.container.querySelector<HTMLElement>('.epg-tl')?.clientHeight ?? 0;
+    if (height > 0) this.timelineHeight = height;
+    this.coverRulerLabels();
+    this.fitTimelineToDetail();
+    this.applyTimelineStyle();
+    const host = this.timelineHost();
+    if (host) setEdgeScroller(host, this.edgeScroller);
+    // A new display time zone moves the present page, which may open the left edge.
+    if (displayTzRevision() !== this.edgeTzRev) {
+      this.edgeTzRev = displayTzRevision();
+      recheckEdgeScroll();
+    }
+    if (host && (host !== this.timelineDrawnHost || this.timelineStamp() !== this.timelineDrawnStamp)) {
+      this.drawTimeline();
+    } else if (this.timelineTick === null) {
+      this.scheduleTimelineTick(Date.now());
+    }
+    const groupList = this.container.querySelector<HTMLElement>('.epg-group-options');
+    if (previousGroupList && groupList) {
+      this.scrollGuard.syncOffset(groupList, 'vertical', this.groupVirtualizer.scrollOffset);
+    }
+    this.syncFocus();
+  }
+
+  private timelineViewHeight(): number {
+    return Math.max(0, this.timelineHeight - this.timelineDetailHeight);
+  }
+
+  // The details cover the rows' foot; the rows keep their box.
+  private fitTimelineToDetail(): void {
+    const detail = this.container.querySelector<HTMLElement>('.epg-tl-detail');
+    this.timelineDetailHeight = detail?.offsetHeight ?? 0;
+    this.timeline.setHeight(this.timelineViewHeight());
+    this.placeTimelineFocus();
+  }
+
+  private refreshTimelineDetail(): void {
+    const detail = this.container.querySelector<HTMLElement>('.epg-tl-detail');
+    if (!detail) return;
+    morph(detail, this.detailMarkup());
+    const before = this.timeline.paintKey();
+    this.fitTimelineToDetail();
+    if (this.timeline.paintKey() !== before) this.requestTimelineFrame();
+  }
+
+  private timelineHost(): HTMLElement | null {
+    return this.container.querySelector<HTMLElement>('.epg-tl-surface');
+  }
+
+  private focusStyle(): string {
+    const rect = this.roundedFocusRect();
+    if (!rect) return 'display: none';
+    return `transform: translate(${rect.x}px, ${rect.y}px); width: ${rect.w}px; height: ${rect.h}px`;
+  }
+
+  // With full animation the ring slides from where it shows to its new place,
+  // as a transform alone: animating width and height would lay out and
+  // repaint its glow every frame. It starts at its old size only when that is
+  // within half to twice the new one; a larger scale would smear the border
+  // and glow, so the size then changes at once.
+  private placeTimelineFocus(): void {
+    const ring = this.container.querySelector<HTMLElement>('.epg-tl-focus');
+    if (!ring) return;
+    const to = this.roundedFocusRect();
+    if (sameRect(to, this.ringRect)) {
+      this.writeRing(ring);
+      return;
+    }
+    const from = this.ringVisualRect();
+    this.writeRing(ring);
+    this.ringRect = to;
+    this.ringAnimation?.cancel();
+    this.ringAnimation = null;
+    this.ringMotion = null;
+    if (!from || !to || !inShownView(this.container) || typeof ring.animate !== 'function'
+        || document.documentElement.getAttribute('data-animation') !== 'full') return;
+    const sx = from.w / to.w;
+    const sy = from.h / to.h;
+    const scaled = sx >= 0.5 && sx <= 2 && sy >= 0.5 && sy <= 2;
+    this.ringMotion = { from, to, scaled };
+    this.ringAnimation = ring.animate([
+      { transform: `translate(${from.x}px, ${from.y}px)${scaled ? ` scale(${sx}, ${sy})` : ''}` },
+      { transform: `translate(${to.x}px, ${to.y}px)` },
+    ], { duration: RING_MS, easing: 'ease-out' });
+  }
+
+  private writeRing(ring: HTMLElement): void {
+    const style = this.focusStyle();
+    if (ring.getAttribute('style') !== style) ring.setAttribute('style', style);
+  }
+
+  // Where the ring shows now: on a fast repeat, part way through its slide.
+  private ringVisualRect(): Rect | null {
+    const motion = this.ringMotion;
+    const at = this.ringAnimation?.currentTime;
+    if (!motion || typeof at !== 'number' || at >= RING_MS) return this.ringRect;
+    const e = easeOut(Math.max(0, at) / RING_MS);
+    const mix = (a: number, b: number) => a + (b - a) * e;
+    const { from, to } = motion;
+    return {
+      x: mix(from.x, to.x),
+      y: mix(from.y, to.y),
+      w: motion.scaled ? mix(from.w, to.w) : to.w,
+      h: motion.scaled ? mix(from.h, to.h) : to.h,
+    };
+  }
+
+  private clearRing(): void {
+    this.ringAnimation?.cancel();
+    this.ringAnimation = null;
+    this.ringMotion = null;
+    this.ringRect = null;
+  }
+
+  private roundedFocusRect(): Rect | null {
+    const rect = this.timeline.focusRect();
+    if (!rect) return null;
+    return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
+  }
+
+  // The focused programme's time over the channel column, its title, OK
+  // hint, and description over the cells. A row without one says so on the
+  // right and leaves the left empty, as it has no time to show.
+  private detailMarkup(): Safe {
+    const item = this.timelineRows()[this.timeline.row];
+    if (!item) return html``;
+    // While the search box has the caret, OK leaves it rather than acting here.
+    const keys = this.focusCol === 'timeline' && !this.searchInputFocused();
+    const p = this.timeline.focusedProgramme();
+    const when = (content: Safe | string) => html`
+      <div class="epg-tl-when">${content}</div>`;
+    if (!p) {
+      return html`
+        ${when('')}
+        <div class="epg-tl-what">
+          <div class="epg-tl-title">
+            <span class="epg-tl-title-text epg-tl-no-info">${t('epg.noInfo')}</span>
+            ${keys ? html`<span class="epg-tl-hint">${okHint(t('epg.watchLive'))}</span>` : ''}
+          </div>
+        </div>`;
+    }
+    const now = Date.now();
+    const start = p.start.getTime();
+    const stop = p.stop.getTime();
+    const live = start <= now && now < stop;
+    const upcoming = start > now;
+    const day = formatDayLabel(p.start);
+    const reminder = upcoming && this.hasReminder(item.channel, start);
+    const replay = stop <= now && XtreamArchiveService.isAvailable(item.channel, start, now, p.catchupId);
+    const ok = keys ? this.programmeOkLabel(item.channel, p) : null;
+    return html`
+      ${when(html`
+        <div class="epg-tl-range">
+          <span>${formatTime(p.start)} – ${formatTime(p.stop)}</span>
+          ${replay ? raw(REPLAY_ICON) : ''}
+        </div>
+        <div class="epg-tl-when-sub">${day.weekday} ${day.date} · ${formatDuration(stop - start)}</div>`)}
+      <div class="epg-tl-what">
+        <div class="epg-tl-title">
+          ${live ? liveBadge() : ''}
+          <span class="epg-tl-title-text">${p.title}</span>
+          ${upcoming ? raw(bellIcon(reminder)) : ''}
+          ${ok ? html`<span class="epg-tl-hint">${okHint(ok)}</span>` : ''}
+        </div>
+        ${p.description ? html`<div class="epg-tl-desc">${p.description}</div>` : ''}
+      </div>`;
+  }
+
+
+  private timelineStamp(): string {
+    return `${this.timelineStyleKey}|${this.timeline.paintKey()}`;
+  }
+
+  private drawTimeline(): void {
+    if (this.timelineFrame !== null) {
+      cancelAnimationFrame(this.timelineFrame);
+      this.timelineFrame = null;
+    }
+    const host = this.timelineHost();
+    if (!host) return;
+    this.timelineDrawnKey = `${this.timeline.row}|${this.timeline.windowStartMs}`;
+    const now = Date.now();
+    const animating = this.timelineView.draw(host, now, performance.now());
+    this.timelineDrawnHost = host;
+    this.timelineDrawnStamp = this.timelineStamp();
+    if (animating) this.requestTimelineFrame();
+    this.scheduleTimelineTick(now);
+  }
+
+  // The now line and the airing states move once a minute while the timeline shows.
+  private scheduleTimelineTick(now: number): void {
+    if (this.timelineTick !== null) clearTimeout(this.timelineTick);
+    this.timelineTick = setTimeout(() => this.tickTimeline(), 60000 - (now % 60000) + 50);
+  }
+
+  private requestTimelineFrame(): void {
+    if (this.timelineFrame !== null) return;
+    this.timelineFrame = requestAnimationFrame(() => {
+      this.timelineFrame = null;
+      this.drawTimeline();
+    });
+  }
+
+  // A key or the pointer moved the timeline's focus: shift the ring and
+  // refresh the details and the rows. The rows are written before the
+  // details' height is read, so one layout serves both and the frame itself
+  // lays nothing out.
+  private afterTimelineMove(): void {
+    const item = this.timelineRows()[this.timeline.row];
+    this.selectedChannelIdx = item ? item.globalIndex : -1;
+    // The ring's new box goes in with the rows, so the details' height read
+    // below lays out both; its slide starts once that height is settled.
+    const ring = this.container.querySelector<HTMLElement>('.epg-tl-focus');
+    if (ring) this.writeRing(ring);
+    this.placeNowPill();
+    const detail = this.container.querySelector<HTMLElement>('.epg-tl-detail');
+    if (detail) morph(detail, this.detailMarkup());
+    const key = `${this.timeline.row}|${this.timeline.windowStartMs}`;
+    if (key !== this.timelineDrawnKey || this.timeline.isAnimating()) this.drawTimeline();
+    const before = this.timeline.paintKey();
+    this.fitTimelineToDetail();
+    if (this.timeline.paintKey() !== before) this.requestTimelineFrame();
+    this.scheduleArchiveLoad();
+  }
+
+  // A held D-pad must not ask the server about every channel it passes.
+  private scheduleArchiveLoad(): void {
+    if (this.archiveTimer !== null) clearTimeout(this.archiveTimer);
+    this.archiveTimer = setTimeout(() => {
+      this.archiveTimer = null;
+      if (!this.timelineLayout || !inShownView(this.container)) return;
+      this.loadArchiveAvailability(this.timelineRows()[this.timeline.row]?.channel);
+    }, PANE_SETTLE_MS);
+  }
+
+  private cancelArchiveLoad(): void {
+    if (this.archiveTimer === null) return;
+    clearTimeout(this.archiveTimer);
+    this.archiveTimer = null;
+  }
+
+  private refreshTimelineMarks(): void {
+    if (!this.timelineLayout || !inShownView(this.container) || !this.timelineHost()) return;
+    this.requestTimelineFrame();
+    this.placeNowPill();
+    this.refreshTimelineDetail();
+  }
+
+  // Which way the present lies once the page has left it, else null.
+  private nowSide(): 'earlier' | 'later' | null {
+    const now = Date.now();
+    const start = this.timeline.windowStartMs;
+    if (now < start) return 'earlier';
+    if (now >= start + this.timeline.spanMs) return 'later';
+    return null;
+  }
+
+  // Shown on the ruler, at the edge toward the present, while the page is away
+  // from it; Red does the same.
+  private nowPillMarkup(): Safe {
+    const side = this.nowSide();
+    return side ? this.nowPill(side) : html``;
+  }
+
+  // The way back to the present; its arrow points toward it.
+  private nowPill(side: 'earlier' | 'later'): Safe {
+    return html`
+      <button type="button" class="epg-now-pill is-${side}" data-epg-now data-self-activate>
+        ${side === 'earlier' ? html`<span class="epg-now-arrow">${raw(CHEVRON_LEFT_ICON)}</span>` : ''}
+        <span class="edit-key key-red"></span>
+        <span>${t('epg.backToNow')}</span>
+        ${side === 'later' ? html`<span class="epg-now-arrow">${raw(CHEVRON_RIGHT_ICON)}</span>` : ''}
+      </button>`;
+  }
+
+  private placeNowPill(): void {
+    const slot = this.container.querySelector<HTMLElement>('.epg-tl-now-slot');
+    if (!slot) return;
+    morph(slot, this.nowPillMarkup());
+    this.coverRulerLabels();
+  }
+
+  // The ruler hides the times under the pill. Its box is read only when its
+  // side, the text size, or the language changes.
+  private coverRulerLabels(): void {
+    const pill = this.container.querySelector<HTMLElement>('.epg-tl-now-slot .epg-now-pill');
+    let cover: [number, number] | null = null;
+    if (pill) {
+      const key = `${pill.className}|${this.timelineStyleKey}`;
+      if (this.nowPillBox?.key !== key) this.nowPillBox = { key, left: pill.offsetLeft, width: pill.offsetWidth };
+      cover = [this.nowPillBox.left, this.nowPillBox.left + this.nowPillBox.width];
+    }
+    if (this.timelineView.setCover(cover)) this.requestTimelineFrame();
+  }
+
+  // While hidden the tick keeps re-arming, so a Guide shown again without a
+  // render (as on leaving Search) still moves its now line.
+  private tickTimeline(): void {
+    this.timelineTick = null;
+    if (!this.timelineLayout) return;
+    if (!inShownView(this.container) || !this.timelineHost()) {
+      this.scheduleTimelineTick(Date.now());
+      return;
+    }
+    this.timeline.followClock();
+    this.requestTimelineFrame();
+    this.placeNowPill();
+    this.refreshTimelineDetail();
+    // A page left behind by the clock may open its left edge under a resting pointer.
+    recheckEdgeScroll();
+  }
+
+  private timelinePointerBlocked(): boolean {
+    const owner = Focus.owner();
+    return this.groupOpen || this.resumePrompt.visible || (!!owner && owner !== this.focusScope && owner.modal);
+  }
+
+  private pointTimeline(clientX: number, clientY: number): PointResult {
+    if (this.timelinePointerBlocked()) return null;
+    const host = this.timelineHost();
+    if (!host) return null;
+    const r = host.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const result = this.timeline.pointAt(
+      (clientX - r.left) * (this.timeline.width / r.width),
+      (clientY - r.top) * (this.timelineHeight / r.height),
+    );
+    if (result === null || (result === 'same' && this.focusCol === 'timeline')) return result;
+    this.focusCol = 'timeline';
+    this.afterTimelineMove();
+    this.paint('pointer');
+    return result;
+  }
+
+  // The pointer resting by an edge of the rows scrolls them a row at a step;
+  // by the cells' left or right edge, it pages a half hour at a step. The
+  // ruler and Back to now are no edge.
+  private timelineEdgeAt(x: number, y: number, atEnd: boolean): { axis: EdgeAxis; direction: number } | null {
+    if (!this.timelineLayout || !inShownView(this.container) || this.timelinePointerBlocked()) return null;
+    const host = this.timelineHost();
+    const r = host?.getBoundingClientRect();
+    if (!r || !r.width || !r.height) return null;
+    const tl = this.timeline;
+    const px = (x - r.left) * (tl.width / r.width);
+    const py = (y - r.top) * (this.timelineHeight / r.height);
+    const top = tl.rulerHeight;
+    const bottom = tl.viewHeight;
+    if (py < top || py >= bottom || px < 0 || px >= tl.cellsRight) return null;
+    const zone = CONFIG.NAVIGATION.EDGE_SCROLL_ZONE_PX;
+    // Half a row, so most of the first and last rows stay free to point at.
+    const rowZone = Math.min(zone, tl.rowHeight / 2);
+    let edge: { axis: EdgeAxis; direction: number } | null = null;
+    if (px >= tl.cellsRight - zone) edge = { axis: 'x', direction: 1 };
+    else if (py < top + rowZone) edge = { axis: 'y', direction: -1 };
+    else if (py >= bottom - rowZone) edge = { axis: 'y', direction: 1 };
+    else if (px >= tl.cellsLeft && px < tl.cellsLeft + zone) edge = { axis: 'x', direction: -1 };
+    if (!edge || atEnd || tl.canEdgeStep(edge.axis, edge.direction)) return edge;
+    return null;
+  }
+
+  // Steps at the timeline's own rate, eased from its slowest to its fastest
+  // with the run, the first step once the dwell is over. A row step focuses
+  // the row under the pointer, so the focus never scrolls out of view; the
+  // ring then follows the pointer as on a hover.
+  private edgeScrollTimeline(axis: EdgeAxis, direction: number, ramp: number, ms: number): EdgeStep {
+    const tl = this.timeline;
+    if (!tl.canEdgeStep(axis, direction)) return 'end';
+    const N = CONFIG.NAVIGATION;
+    const rate = N.TIMELINE_EDGE_MIN_STEPS_PER_SECOND
+      + (N.TIMELINE_EDGE_MAX_STEPS_PER_SECOND - N.TIMELINE_EDGE_MIN_STEPS_PER_SECOND) * ramp;
+    this.edgeCarry = (this.edgeCarry < 0 ? 1 : this.edgeCarry) + rate * ms / 1000;
+    if (this.edgeCarry < 1) return 'still';
+    while (this.edgeCarry >= 1 && tl.edgeStep(axis, direction)) this.edgeCarry -= 1;
+    this.edgeCarry = Math.min(this.edgeCarry, 1);
+    const point = Focus.pointerPosition();
+    const host = this.timelineHost();
+    let rowMoved = false;
+    if (axis === 'y' && point && host) {
+      const r = host.getBoundingClientRect();
+      if (r.height) rowMoved = tl.focusRowAt((point.y - r.top) * (this.timelineHeight / r.height));
+    }
+    const hit = point ? this.pointTimeline(point.x, point.y) : null;
+    if (hit !== 'changed') {
+      if (rowMoved) this.focusCol = 'timeline';
+      this.afterTimelineMove();
+      if (rowMoved) this.paint('pointer');
+    }
+    if (this.timelineStamp() !== this.timelineDrawnStamp) this.drawTimeline();
+    return 'moved';
+  }
+
+  private freezeDetail(): void {
+    const detail = this.container.querySelector<HTMLElement>('.epg-tl-detail');
+    if (!detail || this.detailFrozen !== null) return;
+    this.detailFrozen = detail.offsetHeight;
+    detail.style.height = `${this.detailFrozen}px`;
+  }
+
+  // Lets the details fit their program again, scrolling the rows only if
+  // they then cover the focused one.
+  private releaseDetail(): void {
+    if (this.detailFrozen === null) return;
+    this.detailFrozen = null;
+    const detail = this.container.querySelector<HTMLElement>('.epg-tl-detail');
+    if (!detail) return;
+    detail.style.height = '';
+    const before = this.timeline.paintKey();
+    this.fitTimelineToDetail();
+    if (this.timeline.paintKey() !== before) this.requestTimelineFrame();
+  }
+
+  // A click on the channel column, or on a row with no guide, tunes the channel.
+  private clickTimeline(clientX: number, clientY: number): void {
+    // A press of the wheel that just moved the ring acts on the ring, not on
+    // the row the wheel left under the pointer.
+    const from = this.wheelPointer;
+    if (from && this.focusCol === 'timeline' && !this.timelinePointerBlocked()
+        && Math.abs(clientX - from.x) <= WHEEL_POINTER_SLOP && Math.abs(clientY - from.y) <= WHEEL_POINTER_SLOP) {
+      if (this.timeline.focusedProgramme()) void this.activateFocusedProgramme();
+      else this.playChannelLive();
+      return;
+    }
+    this.wheelPointer = null;
+    if (this.pointTimeline(clientX, clientY) === null) return;
+    const r = this.timelineHost()!.getBoundingClientRect();
+    const x = (clientX - r.left) * (this.timeline.width / r.width);
+    if (x >= this.timeline.cellsLeft && this.timeline.focusedProgramme()) void this.activateFocusedProgramme();
+    else this.playChannelLive();
+  }
+
+  private playChannelLive(): void {
+    if (this.selectedChannelIdx < 0) return;
+    this.onChannelSelect(this.selectedChannelIdx, undefined, this.currentScope());
+  }
+
+  // After the wheel moved the focus, a resting pointer's jitter must not
+  // take it back; only a real move hit-tests again.
+  private hoverTimeline(clientX: number, clientY: number): void {
+    const from = this.wheelPointer;
+    if (from) {
+      if (Math.abs(clientX - from.x) <= WHEEL_POINTER_SLOP && Math.abs(clientY - from.y) <= WHEEL_POINTER_SLOP) return;
+      this.wheelPointer = null;
+    }
+    this.pointTimeline(clientX, clientY);
+  }
+
+  private actTimeline(action: Action): void {
+    // Wherever the keys rest, Red leaves the search box for the present.
+    if (action === 'red') {
+      this.timeline.move('now', false);
+      if (this.timelineRows().length) this.focusCol = 'timeline';
+      this.blurSearchInput();
+      this.render();
+      return;
+    }
+    if (this.focusCol === 'timeline') {
+      if (action === 'select') {
+        if (this.timeline.focusedProgramme()) void this.activateFocusedProgramme();
+        else this.playChannelLive();
+        return;
+      }
+      const dir = TIMELINE_MOVES[action];
+      if (!dir) return;
+      const animate = document.documentElement.getAttribute('data-animation') === 'full';
+      const result: MoveResult = this.timeline.move(dir, animate);
+      if (result === 'none') return;
+      if (result === 'leave-up') {
+        this.focusCol = 'filters';
+        this.filterFocus = 'group';
+        this.render();
+        return;
+      }
+      this.afterTimelineMove();
+      return;
+    }
+    const tabs = PlaylistService.playlistTabs;
+    const showTabs = tabs.length > 1;
+    const tabIds = ['', ...tabs.map(tab => tab.id)];
+    // The tabs row sits above the filters, as in the schedule layout.
+    switch (action) {
+      case 'up':
+        if (this.focusCol === 'filters' && showTabs) {
+          this.playlistFocusIdx = Math.max(0, tabIds.indexOf(this.selectedPlaylist));
+          this.focusCol = 'playlists';
+          this.render();
+        } else {
+          this.onRevealTabBar?.();
+        }
+        break;
+      case 'down':
+        if (this.focusCol === 'playlists') {
+          this.focusCol = 'filters';
+          this.filterFocus = 'group';
+          this.render();
+        } else if (this.timelineRows().length) {
+          this.focusCol = 'timeline';
+          this.render();
+        }
+        break;
+      case 'left':
+        if (this.focusCol === 'playlists') {
+          if (this.playlistFocusIdx > 0) this.playlistFocusIdx--;
+        } else if (this.focusCol === 'filters') {
+          if (this.filterFocus === 'search') this.filterFocus = 'group';
+        } else if (this.focusCol === 'legend') {
+          this.focusCol = 'filters';
+          this.filterFocus = 'search';
+        }
+        this.render();
+        break;
+      case 'right':
+        if (this.focusCol === 'playlists') {
+          if (this.playlistFocusIdx < tabIds.length - 1) this.playlistFocusIdx++;
+        } else if (this.focusCol === 'filters') {
+          if (this.filterFocus === 'group') this.filterFocus = 'search';
+          else this.focusCol = 'legend';
+        }
+        this.render();
+        break;
+      case 'select':
+        if (this.focusCol === 'playlists') {
+          this.selectPlaylist(tabIds[this.playlistFocusIdx] ?? '');
+          this.render();
+        } else if (this.focusCol === 'filters') {
+          if (this.filterFocus === 'search') this.openSearchInput();
+          else this.openGroupMenu();
+        } else if (this.focusCol === 'legend') {
+          this.onManageReminders?.();
+        }
+        break;
+    }
+  }
+
   private playlistTabsMarkup(tabs: typeof PlaylistService.playlistTabs): Safe {
     return html`
-              <div class="playlist-tabs epg-playlist-tabs" id="epg-playlists">
+              <div class="playlist-tabs epg-playlist-tabs" id="epg-playlists" data-edge-scroll>
                 <div class="playlist-tab ${!this.selectedPlaylist ? 'active' : ''}"
                      data-key="epg-tab:"
                      data-playlist="" data-playlist-index="0" data-hover-target>${t('common.all')}</div>
@@ -929,6 +1748,15 @@ export class EpgGrid {
         this.render();
         if (target.closest('#epg-programmes')) return;
       }
+      if (this.timelineLayout && target.classList.contains('epg-tl-surface')) {
+        if (this.groupOpen) {
+          this.groupOpen = false;
+          this.render();
+          return;
+        }
+        this.clickTimeline(e.clientX, e.clientY);
+        return;
+      }
       if (target.closest('[data-epg-reminders]')) {
         this.groupOpen = false;
         this.syncGroupScope();
@@ -1013,6 +1841,11 @@ export class EpgGrid {
         this.render();
         if (target.closest('#epg-programmes')) return;
       }
+      if (this.timelineLayout && target.classList.contains('epg-tl-surface')) {
+        const point = Focus.pointerPosition();
+        if (point) this.hoverTimeline(point.x, point.y);
+        return;
+      }
       const groupItem = target.closest<HTMLElement>('[data-epg-group]');
       if (groupItem) {
         this.groupFocusIdx = parseInt(groupItem.dataset.groupIndex!, 10);
@@ -1024,6 +1857,35 @@ export class EpgGrid {
       this.lightProgramme(parseInt(item.dataset.progIdx!, 10));
       this.paint('pointer');
       this.updateHints();
+    });
+
+    // The timeline is one hover target, so it hit-tests every move.
+    this.container.addEventListener('nav:pointermove', (e: Event) => {
+      if (!this.timelineLayout || !(e.target as HTMLElement).classList?.contains('epg-tl-surface')) return;
+      const { clientX, clientY } = (e as CustomEvent<{ clientX: number; clientY: number }>).detail;
+      this.hoverTimeline(clientX, clientY);
+    });
+
+    // Over the timeline the wheel steps one row instead of paging as
+    // Channel Up/Down; the group menu scrolls natively.
+    this.container.addEventListener('nav:wheel', (e: Event) => {
+      const target = e.target as HTMLElement;
+      // The rows and their details only; the toolbar above keeps the wheel as in the schedule layout.
+      if (!this.timelineLayout || !target.closest?.('.epg-tl, .epg-tl-detail')) return;
+      e.preventDefault();
+      const { deltaY } = (e as CustomEvent<{ deltaY?: number }>).detail ?? {};
+      const owner = Focus.owner();
+      if (!deltaY || this.groupOpen || this.resumePrompt.visible
+          || (owner && owner !== this.focusScope && owner.modal)) return;
+      const now = performance.now();
+      if (now - this.lastWheelAt < WHEEL_STEP_MS) return;
+      this.lastWheelAt = now;
+      const animate = document.documentElement.getAttribute('data-animation') === 'full';
+      if (this.timeline.move(deltaY > 0 ? 'down' : 'up', animate) !== 'moved') return;
+      this.wheelPointer = Focus.pointerPosition();
+      this.focusCol = 'timeline';
+      this.afterTimelineMove();
+      this.paint(InputMode.current === 'keys' ? 'key' : 'pointer');
     });
 
     this.container.addEventListener('input', (e: Event) => {
@@ -1123,6 +1985,8 @@ export class EpgGrid {
       case 'legend': return 'legend';
       case 'programmes':
         return this.focusProg < this.programmeCount ? `prog:${String(this.focusProg)}` : null;
+      case 'timeline':
+        return this.timelineRows().length ? 'tl' : null;
     }
   }
 
@@ -1144,6 +2008,7 @@ export class EpgGrid {
   }
 
   private revealGridKey(key: string): boolean | null {
+    if (key === 'tl') return null;
     const prog = keyIndex(key, 'prog:');
     if (prog >= 0) {
       return this.revealRow(this.container.querySelector<HTMLElement>('.epg-programmes-pane'),
@@ -1230,28 +2095,30 @@ export class EpgGrid {
     if (!channel?.catchupAccountId || !channel.catchupStreamId) return;
     if (XtreamArchiveService.getCached(channel) !== undefined) return;
     const key = `${channel.catchupAccountId}:${channel.catchupStreamId}`;
-    if (this.archiveLoadingKey === key) return;
-    this.archiveLoadingKey = key;
+    if (this.archiveLoading.has(key)) return;
+    this.archiveLoading.add(key);
     void XtreamArchiveService.load(channel).then(() => {
-      if (this.archiveLoadingKey !== key) return;
-      this.archiveLoadingKey = '';
+      this.archiveLoading.delete(key);
+      // The timeline paints replay marks on every row, not only the selected one.
+      this.timelineMarksRev++;
+      if (this.timelineLayout) {
+        this.refreshTimelineMarks();
+        return;
+      }
       const selected = PlaylistService.channels[this.selectedChannelIdx];
       if (selected?.catchupAccountId === channel.catchupAccountId &&
           selected.catchupStreamId === channel.catchupStreamId) {
         this.render();
       }
-    });
+    }, () => { this.archiveLoading.delete(key); });
   }
 
-  private playSelectedProgramme(resumeSecs?: number): void {
-    const programmes = this.getCurrentProgrammes();
-    const prog = programmes[this.focusProg];
-    if (!prog) return;
+  private playProgramme(channelIndex: number, prog: Programme, resumeSecs?: number): void {
     const now = Math.floor(Date.now() / 1000);
     const progStart = Math.floor(prog.start.getTime() / 1000);
     const progStop = Math.floor(prog.stop.getTime() / 1000);
 
-    const channel = PlaylistService.channels[this.selectedChannelIdx];
+    const channel = PlaylistService.channels[channelIndex];
     let catchup: CatchupInfo | undefined;
     if (progStop <= now && channel &&
         XtreamArchiveService.isAvailable(channel, prog.start.getTime(), Date.now(), prog.catchupId)) {
@@ -1266,24 +2133,34 @@ export class EpgGrid {
         resumeSecs,
       };
     }
-    this.onChannelSelect(this.selectedChannelIdx, catchup, this.currentScope());
+    this.onChannelSelect(channelIndex, catchup, this.currentScope());
+  }
+
+  private focusedProgramme(): Programme | undefined {
+    if (this.timelineLayout) return this.timeline.focusedProgramme() ?? undefined;
+    return this.getCurrentProgrammes()[this.focusProg];
   }
 
   private async activateFocusedProgramme(): Promise<void> {
-    const prog = this.getCurrentProgrammes()[this.focusProg];
+    const prog = this.focusedProgramme();
     if (!prog) return;
     if (prog.start.getTime() > Date.now()) { this.toggleReminder(); return; }
 
-    const channel = PlaylistService.channels[this.selectedChannelIdx];
+    const channelIndex = this.selectedChannelIdx;
+    const focusCol = this.focusCol;
+    const channel = PlaylistService.channels[channelIndex];
     const isPast = prog.stop.getTime() <= Date.now();
     const startMs = prog.start.getTime();
     // Any other aired program that can't be replayed (outside the archive
     // days, or without the id its URL needs) opens the channel live.
     if (isPast && channel && archiveDecides(channel, prog)) {
-      const channelIndex = this.selectedChannelIdx;
       await XtreamArchiveService.load(channel);
-      if (PlaylistService.channels[channelIndex] !== channel) return;
+      if (PlaylistService.channels[channelIndex] !== channel || !inShownView(this.container)) return;
+      this.timelineMarksRev++;
       this.render();
+      // A key pressed during the wait moved on; OK no longer means this program.
+      if (this.selectedChannelIdx !== channelIndex || this.focusCol !== focusCol
+          || this.focusedProgramme()?.start.getTime() !== startMs) return;
       if (!XtreamArchiveService.isAvailable(channel, startMs, Date.now(), prog.catchupId)) {
         showToast(t('epg.catchupUnavailable'));
         return;
@@ -1297,10 +2174,10 @@ export class EpgGrid {
       if (entry && !entry.completed) {
         // Partial entry — show resume prompt
         this.resumePrompt.show(prog.title, entry.position, {
-          onResume: () => { this.playSelectedProgramme(entry.position); },
+          onResume: () => { this.playProgramme(channelIndex, prog, entry.position); },
           onStartOver: () => {
             StorageService.clearCatchupProgress(chKey, startMs);
-            this.playSelectedProgramme();
+            this.playProgramme(channelIndex, prog);
           },
           onCancel: () => { /* leave EPG unchanged */ },
         });
@@ -1308,11 +2185,11 @@ export class EpgGrid {
       }
       // Completed or untouched — play from start (no prompt)
     }
-    this.playSelectedProgramme();
+    this.playProgramme(channelIndex, prog);
   }
 
   private toggleReminder(): void {
-    const prog = this.getCurrentProgrammes()[this.focusProg];
+    const prog = this.focusedProgramme();
     const channel = PlaylistService.channels[this.selectedChannelIdx];
     if (!prog || !channel) return;
     const chKey = channelKey(channel);
@@ -1343,7 +2220,7 @@ export class EpgGrid {
     this.act(action, event);
     if (!this.resumePrompt.visible) this.paint('key');
     // Moves inside the programme list skip the render; the legend follows the keys.
-    this.updateHints();
+    if (!this.timelineLayout) this.updateHints();
   }
 
   // The legend under the Channel schedule: what OK does where the keys rest,
@@ -1369,26 +2246,30 @@ export class EpgGrid {
   private programmeOkLabel(channel: Channel, prog: Programme): string | null {
     const now = Date.now();
     const start = prog.start.getTime();
-    if (start > now) return t(ReminderService.has(channelKey(channel), start) ? 'epg.removeReminder' : 'search.setReminder');
+    if (start > now) return t(this.hasReminder(channel, start) ? 'epg.removeReminder' : 'search.setReminder');
     if (prog.stop.getTime() > now) return t('reminder.watchNow');
     if (XtreamArchiveService.isAvailable(channel, start, now, prog.catchupId)) return t('epg.playCatchup');
-    return archiveDecides(channel, prog) ? null : t('reminder.watchNow');
+    return archiveDecides(channel, prog) ? null : t('epg.watchLive');
   }
 
   private updateHints(): void {
+    if (this.timelineLayout) {
+      this.refreshTimelineDetail();
+      return;
+    }
     const hints = this.container.querySelector<HTMLElement>('.epg-hints');
     if (hints) morph(hints, this.hintsMarkup());
   }
 
   private act(action: Action, _event?: NumberEvent): void {
-    const settling = this.focusCol === 'channels'
+    const settling = !this.timelineLayout && this.focusCol === 'channels'
       && (action === 'up' || action === 'down' || action === 'channel_up' || action === 'channel_down');
     // OK tunes the channel at once; a pane rendered first would only delay it.
-    const tuning = this.focusCol === 'channels' && action === 'select'
+    const tuning = !this.timelineLayout && this.focusCol === 'channels' && action === 'select'
       && !this.groupOpen && !this.searchInputFocused();
     const heldPane = tuning && this.releasePane();
     if (!tuning && !settling && this.releasePane()) this.render();
-    // The legend offers Red under the open group menu too.
+    // Red goes back to now from under the open group menu too.
     if (this.groupOpen && action === 'red') this.groupOpen = false;
 
     if (this.groupOpen) {
@@ -1429,6 +2310,7 @@ export class EpgGrid {
 
     if (action === 'back' && this.searchInputFocused()) {
       this.focusCol = 'filters';
+      this.filterFocus = 'search';
       this.container.querySelector<HTMLInputElement>('.epg-search-input')?.blur();
       this.render();
       return;
@@ -1437,6 +2319,11 @@ export class EpgGrid {
     // Channel Up/Down pass through the search box; a programme hovered while
     // typing must not move unseen behind the caret.
     if ((action === 'channel_up' || action === 'channel_down') && this.searchInputFocused()) return;
+
+    if (this.timelineLayout) {
+      this.actTimeline(action);
+      return;
+    }
 
     const tabs = PlaylistService.playlistTabs;
     const showTabs = tabs.length > 1;

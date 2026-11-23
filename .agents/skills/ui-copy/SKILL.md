@@ -146,17 +146,24 @@ a new term after review, add a row here.
 | Video quality options | Auto / Highest / Up to 4K / Up to 1080p / Up to 720p / Lowest | 自动 / 最高画质 / 最高 4K / 最高 1080p / 最高 720p / 最低画质 |
 | Following the setting (menu row) | Default · {value} | 默认 · {value} |
 | A variant (menu row) | {resolution} · {bitrate} Mbps | {resolution} · {bitrate} Mbps |
+| Guide layout setting | Program guide layout | 节目指南布局 |
+| Guide layouts | Channel schedule / Timeline | 频道节目单 / 时间轴 |
+| Empty guide slot | No information | 暂无节目信息 |
 | Jump the guide to the current time | Back to now | 回到现在 |
+| Tune a channel live from an aired program without catch-up or a row without program info | Watch live | 观看直播 |
 
 Rejected: 片单 (watchlist), 已看 / 未看 (watched), played / 已播放 (watched), unwatched (not watched), HTTP 标头 (headers), Luna / System player
-(header playback mode), 正在播放 for NOW, 节目单 (guide),
+(header playback mode), 正在播放 for NOW, 节目单 (guide; 频道节目单 names
+one channel's schedule),
 全局频道 / "Global" for all channels, "programme",
 Ascending / Descending / 升序 / 降序 / Asc / Desc and 最旧 (sort
 direction),
 "Exception" / 例外 (set separately), "Mixed" / 混合 (partly locked),
 宽高比 (aspect ratio), 原始 / 满屏 / 填充 (aspect modes),
 清晰度 (video quality), Data saver / 省流量 and Prefer highest / Prefer
-lowest (quality options).
+lowest (quality options), List / Grid / 列表 / 网格, Single channel /
+Channel grid, Full guide, and three-pane (guide layouts), Go live /
+Tune in / 返回直播 / 收看直播 (watch live).
 
 ## Checks
 

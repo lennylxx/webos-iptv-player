@@ -1,4 +1,4 @@
-import type { Action, ChannelCycleMode, EpgSource, ManualEpgSource, NavDirection, PlaylistEntry, TzMode, XtreamLiveCategoryFilter, XtreamLiveCategorySnapshot } from '../types';
+import type { Action, ChannelCycleMode, EpgSource, GuideLayout, ManualEpgSource, NavDirection, PlaylistEntry, TzMode, XtreamLiveCategoryFilter, XtreamLiveCategorySnapshot } from '../types';
 import { $, $$, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
@@ -798,6 +798,7 @@ export class Settings {
     const videoQuality = StorageService.getVideoQuality();
     const showHidden = StorageService.getShowHiddenChannels();
     const feedTime = StorageService.getTzMode() === 'feed';
+    const guideLayout = StorageService.getGuideLayout();
     const tzOffset = StorageService.getEpgTzOffset();
     const os = StorageService.getOnlineSubtitleConfig();
     const theme = StorageService.getTheme();
@@ -965,6 +966,11 @@ export class Settings {
                     <span class="btn-add-icon" aria-hidden="true">+</span>${t('settings.addEpgSource')}
                   </button>
                   <div class="settings-item-hint">${t('settings.xmltvUrlsHint')}</div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.guideLayout')}</div>
+                  ${toggleGroup('guide-layout', [{ value: 'schedule', label: t('settings.guideLayoutSchedule') }, { value: 'timeline', label: t('settings.guideLayoutTimeline') }], guideLayout)}
+                  <div class="settings-item-hint">${t('settings.guideLayoutHint')}</div>
                 </div>
                 <div class="settings-item">
                   <div class="settings-item-title">${t('settings.timeZone')}</div>
@@ -2881,6 +2887,9 @@ export class Settings {
     }
 
     this.saveShowHidden();
+
+    const guideLayoutBtn = $('#guide-layout .toggle-option.active', this.container);
+    if (guideLayoutBtn?.dataset.value) StorageService.setGuideLayout(guideLayoutBtn.dataset.value as GuideLayout);
 
     const tzModeBtn = $('#tz-mode .toggle-option.active', this.container);
     if (tzModeBtn?.dataset.value) StorageService.setTzMode(tzModeBtn.dataset.value as TzMode);

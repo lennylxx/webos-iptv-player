@@ -3,13 +3,85 @@ import { withInstantScroll } from '../utils/dom';
 import { Focus, Tier, type FocusScope } from './focus-scope';
 import { InputMode } from './input-mode';
 
+export type EdgeAxis = 'x' | 'y';
+export type EdgeStep = 'moved' | 'still' | 'end';
+
+// What a [data-edge-scroll] track scrolls. A native scroller is its own; a
+// view that pages its content itself, such as the Guide's timeline, registers
+// one with setEdgeScroller.
+export interface EdgeScroller {
+  // The edge the pointer rests on, or null; atEnd keeps an edge that can go no further.
+  edgeAt(x: number, y: number, atEnd: boolean): { axis: EdgeAxis; direction: number } | null;
+  // Moves along the edge by px, the native scroll for this frame, or by
+  // its own measure of the frame's ms at the run's ramp (0 to 1): 'end'
+  // when it could not move, 'still' when it has yet to.
+  scroll(axis: EdgeAxis, direction: number, px: number, ramp: number, ms: number): EdgeStep;
+  // A run begins at an edge, its dwell included, and ends.
+  start?(): void;
+  stop?(): void;
+}
+
 interface Edge {
   track: HTMLElement;
   owner: FocusScope;
+  axis: EdgeAxis;
   direction: number;
 }
 
 const N = CONFIG.NAVIGATION;
+const scrollers = new WeakMap<HTMLElement, EdgeScroller>();
+
+export function setEdgeScroller(track: HTMLElement, scroller: EdgeScroller): void {
+  scrollers.set(track, scroller);
+}
+
+let recheck: (() => void) | null = null;
+
+// A registered scroller's edge can open under a resting pointer, as the
+// timeline's past does once the clock moves on; this looks again, starting
+// a run with its dwell. Only a move or this starts one.
+export function recheckEdgeScroll(): void {
+  recheck?.();
+}
+
+function trackBox(track: HTMLElement): { left: number; right: number; top: number; bottom: number } {
+  const box = track.getBoundingClientRect();
+  return {
+    left: Math.max(0, box.left + track.clientLeft),
+    right: Math.min(window.innerWidth, box.left + track.clientLeft + track.clientWidth),
+    top: Math.max(0, box.top + track.clientTop),
+    bottom: Math.min(window.innerHeight, box.top + track.clientTop + track.clientHeight),
+  };
+}
+
+// A native row scroller, through its scrollLeft.
+function nativeScroller(track: HTMLElement): EdgeScroller {
+  return {
+    edgeAt: (x, y, atEnd) => {
+      const max = track.scrollWidth - track.clientWidth;
+      if (max <= 1) return null;
+      const { left, right, top, bottom } = trackBox(track);
+      if (y < top || y >= bottom) return null;
+      const zone = Math.min(N.EDGE_SCROLL_ZONE_PX, (right - left) / 3);
+      const direction = x < left + zone ? -1 : x >= right - zone ? 1 : 0;
+      if (!direction || (!atEnd && (direction < 0 ? track.scrollLeft <= 0 : track.scrollLeft >= max - 1))) return null;
+      return { axis: 'x', direction };
+    },
+    scroll: (_axis, direction, px) => {
+      const before = track.scrollLeft;
+      const max = track.scrollWidth - track.clientWidth;
+      if (direction < 0 ? before <= 0 : before >= max - 1) return 'end';
+      const offset = Math.max(0, Math.min(max, before + direction * px));
+      // Direct manipulation must not queue CSS smooth scrolls on every frame.
+      withInstantScroll([track], () => { track.scrollLeft = offset; });
+      return track.scrollLeft !== before ? 'moved' : 'still';
+    },
+  };
+}
+
+function scrollerOf(track: HTMLElement): EdgeScroller {
+  return scrollers.get(track) ?? nativeScroller(track);
+}
 
 export function edgeScrollTrackAt(root: HTMLElement, x: number, y: number): HTMLElement | null {
   const hit = document.elementFromPoint(x, y);
@@ -34,10 +106,15 @@ export function edgeScrollTrackAt(root: HTMLElement, x: number, y: number): HTML
   return null;
 }
 
-export function edgeScrollSpeed(scrollingMs: number): number {
+// How far the run has eased from its slowest to its fastest, 0 to 1.
+export function edgeScrollRamp(scrollingMs: number): number {
   const t = Math.max(0, Math.min(1, scrollingMs / N.EDGE_SCROLL_RAMP_MS));
+  return t * t;
+}
+
+export function edgeScrollSpeed(scrollingMs: number): number {
   const min = N.EDGE_SCROLL_MIN_SPEED_PX_PER_SECOND;
-  return min + (N.EDGE_SCROLL_MAX_SPEED_PX_PER_SECOND - min) * t * t;
+  return min + (N.EDGE_SCROLL_MAX_SPEED_PX_PER_SECOND - min) * edgeScrollRamp(scrollingMs);
 }
 
 export function installEdgeScroll(
@@ -55,6 +132,9 @@ export function installEdgeScroll(
   let parkedAt = 0;
   let parkedRan = 0;
   let handed = false;
+  // An edge the resting pointer is on that could not step yet, as the
+  // timeline's past from its present page; only it may start on a recheck.
+  let dormant: Edge | null = null;
 
   const unpark = (): void => {
     if (parkTimer !== null) clearTimeout(parkTimer);
@@ -63,12 +143,14 @@ export function installEdgeScroll(
   };
 
   const stop = (): void => {
-    const wasActive = edge !== null;
+    const was = edge;
     unpark();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     edge = null;
-    if (wasActive) onStop();
+    if (!was) return;
+    scrollerOf(was.track).stop?.();
+    onStop();
   };
 
   const edgeAtPointer = (atEnd = false): Edge | null => {
@@ -81,22 +163,12 @@ export function installEdgeScroll(
     if (!point || !owner || !root) return null;
     const track = edgeScrollTrackAt(root, point.x, point.y);
     if (!track) return null;
-    const max = track.scrollWidth - track.clientWidth;
-    if (max <= 1) return null;
-    const box = track.getBoundingClientRect();
-    const left = Math.max(0, box.left + track.clientLeft);
-    const right = Math.min(window.innerWidth, box.left + track.clientLeft + track.clientWidth);
-    const top = Math.max(0, box.top + track.clientTop);
-    const bottom = Math.min(window.innerHeight, box.top + track.clientTop + track.clientHeight);
-    if (point.y < top || point.y >= bottom) return null;
-    const zone = Math.min(N.EDGE_SCROLL_ZONE_PX, (right - left) / 3);
-    const direction = point.x < left + zone ? -1 : point.x >= right - zone ? 1 : 0;
-    if (!direction || (!atEnd && (direction < 0 ? track.scrollLeft <= 0 : track.scrollLeft >= max - 1))) return null;
-    return { track, owner, direction };
+    const at = scrollerOf(track).edgeAt(point.x, point.y, atEnd);
+    return at ? { track, owner, axis: at.axis, direction: at.direction } : null;
   };
 
-  const sameEdge = (a: Edge | null, b: Edge | null): boolean =>
-    !!a && !!b && a.track === b.track && a.owner === b.owner && a.direction === b.direction;
+  const sameEdge = (a: Edge | null, b: Edge | null): boolean => !!a && !!b && a.track === b.track
+    && a.owner === b.owner && a.axis === b.axis && a.direction === b.direction;
 
   const tick = (now: number): void => {
     frame = null;
@@ -105,26 +177,27 @@ export function installEdgeScroll(
       return;
     }
     if (now - enteredAt >= N.EDGE_SCROLL_DWELL_MS) {
-      // Direct manipulation must not queue CSS smooth scrolls on every frame.
       // A rAF timestamp may precede the clock read that started the run.
       const elapsed = Math.max(0, Math.min(now - lastFrame, 50));
       const track = edge.track;
-      const before = track.scrollLeft;
-      const max = track.scrollWidth - track.clientWidth;
-      if (edge.direction < 0 ? before <= 0 : before >= max - 1) {
+      const ran = now - enteredAt - N.EDGE_SCROLL_DWELL_MS;
+      const step = scrollerOf(track).scroll(
+        edge.axis,
+        edge.direction,
+        edgeScrollSpeed(ran) * elapsed / 1000,
+        edgeScrollRamp(ran),
+        elapsed,
+      );
+      if (step === 'end') {
         const end = edge;
         const ran = performance.now() - enteredAt;
         stop();
+        dormant = end;
         // Only content loading after the end can grow a track.
         if (end.direction > 0) park(end, ran);
         return;
       }
-      const offset = Math.max(0, Math.min(
-        max,
-        before + edge.direction * edgeScrollSpeed(now - enteredAt - N.EDGE_SCROLL_DWELL_MS) * elapsed / 1000,
-      ));
-      withInstantScroll([track], () => { track.scrollLeft = offset; });
-      if (track.scrollLeft !== before) {
+      if (step === 'moved') {
         if (!handed && Focus.owner() !== edge.owner) {
           handed = true;
           track.dispatchEvent(new CustomEvent('nav:edge-scroll', { bubbles: true }));
@@ -138,6 +211,7 @@ export function installEdgeScroll(
 
   const begin = (next: Edge, since: number): void => {
     edge = next;
+    scrollerOf(next.track).start?.();
     handed = false;
     enteredAt = since;
     lastFrame = performance.now();
@@ -180,12 +254,13 @@ export function installEdgeScroll(
     // Content moving beneath a resting cursor fires synthetic mousemoves.
     if (!moved) return;
     if (event.buttons) {
-      stop();
+      halt();
       return;
     }
     const next = edgeAtPointer();
     if (sameEdge(edge, next)) return;
     const end = next ? null : edgeAtPointer(true);
+    dormant = end;
     // The run reaching its end parks from its own frame, keeping its speed.
     if (sameEdge(edge, end)) return;
     if (parked && sameEdge(parked, next ?? end)) {
@@ -198,37 +273,50 @@ export function installEdgeScroll(
     if (!next) return;
     begin(next, performance.now());
   };
+  recheck = (): void => {
+    if (edge || parked || !dormant) return;
+    const next = edgeAtPointer();
+    if (!sameEdge(dormant, next)) return;
+    dormant = null;
+    begin(next as Edge, performance.now());
+  };
+  // The user stopped it: nothing starts again until the pointer really moves.
+  const halt = (): void => {
+    dormant = null;
+    stop();
+  };
   const onKey = (event: KeyboardEvent): void => {
-    if (event.keyCode !== CONFIG.KEYS.CURSOR_SHOW) stop();
+    if (event.keyCode !== CONFIG.KEYS.CURSOR_SHOW) halt();
   };
   const onCursor = (event: Event): void => {
-    if ((event as CustomEvent<{ visibility?: boolean } | null>).detail?.visibility === false) stop();
+    if ((event as CustomEvent<{ visibility?: boolean } | null>).detail?.visibility === false) halt();
   };
   const unsubscribe = InputMode.onChange(mode => {
-    if (mode === 'keys') stop();
+    if (mode === 'keys') halt();
   });
 
   document.addEventListener('mousemove', onMove, true);
   document.addEventListener('keydown', onKey, true);
-  document.addEventListener('mousedown', stop, true);
-  document.addEventListener('click', stop, true);
-  document.addEventListener('wheel', stop, true);
+  document.addEventListener('mousedown', halt, true);
+  document.addEventListener('click', halt, true);
+  document.addEventListener('wheel', halt, true);
   document.addEventListener('cursorStateChange', onCursor);
-  document.addEventListener('visibilitychange', stop);
-  document.documentElement.addEventListener('mouseleave', stop);
-  window.addEventListener('blur', stop);
+  document.addEventListener('visibilitychange', halt);
+  document.documentElement.addEventListener('mouseleave', halt);
+  window.addEventListener('blur', halt);
 
   return () => {
     stop();
+    recheck = null;
     unsubscribe();
     document.removeEventListener('mousemove', onMove, true);
     document.removeEventListener('keydown', onKey, true);
-    document.removeEventListener('mousedown', stop, true);
-    document.removeEventListener('click', stop, true);
-    document.removeEventListener('wheel', stop, true);
+    document.removeEventListener('mousedown', halt, true);
+    document.removeEventListener('click', halt, true);
+    document.removeEventListener('wheel', halt, true);
     document.removeEventListener('cursorStateChange', onCursor);
-    document.removeEventListener('visibilitychange', stop);
-    document.documentElement.removeEventListener('mouseleave', stop);
-    window.removeEventListener('blur', stop);
+    document.removeEventListener('visibilitychange', halt);
+    document.documentElement.removeEventListener('mouseleave', halt);
+    window.removeEventListener('blur', halt);
   };
 }
