@@ -529,6 +529,28 @@ const M3U_SCREENS: Screen[] = [
     },
   },
   {
+    // The layout is read at boot, so it arrives through a reload. No later
+    // screen opens the guide.
+    name: 'guide-timeline',
+    budget: 0,
+    go: async (p) => {
+      await p.evaluate(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));
+      await p.reload();
+      await liveLoaded(p);
+      await enterTab(p, 'epg');
+      await expect(p.locator('.epg-tl-surface')).toBeVisible();
+    },
+  },
+  {
+    // The keys put the ring on a program cell of the pooled surface.
+    name: 'guide-timeline-focus',
+    budget: 0,
+    go: async (p) => {
+      await p.keyboard.press('ArrowDown');
+      await expect(p.locator('.epg-tl-focus')).toHaveClass(/focused/);
+    },
+  },
+  {
     // A due reminder prompts at boot, so this one arrives through a reload.
     name: 'reminder-prompt',
     budget: 0,
