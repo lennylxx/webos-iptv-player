@@ -22,6 +22,8 @@ export interface PlayerOsdSnapshot {
   channel: Channel | null;
   channelNumber: number;
   catchup: CatchupInfo | null;
+  /** A playlist channel playing a movie file of known length. */
+  movieFile: boolean;
   vodTitle: string | null;
   /** An episode's "S1 E2 · Title" under its series name in vodTitle. */
   vodDetail: string;
@@ -264,6 +266,13 @@ export class PlayerOsd {
           ${catchup.description ? html`<div class="osd-description">${catchup.description}</div>` : ''}
         </div>
       `;
+    } else if (state.movieFile && state.playback) {
+      const { position, duration, paused } = state.playback;
+      programmeHtml = html`
+        <div class="osd-programme">
+          ${this.positionRow(Math.min(position, duration), duration, paused, state.scrub)}
+        </div>
+      `;
     } else if (state.nowPlaying || state.dvr) {
       // Live playback. Show EPG programme info, and a DVR timeshift bar when the
       // stream exposes a usable seekable window.
@@ -363,6 +372,13 @@ export class PlayerOsd {
       this.render();
       return;
     }
+    // A movie file's length can arrive after the OSD opened; a message such
+    // as "Resyncing…" stays up until playback replaces it.
+    if (!this.message && !state.catchup && !state.dvr
+        && state.movieFile !== !!$('[data-seekbar]', this.container)) {
+      this.render();
+      return;
+    }
     if (state.dvr) {
       this.setProgress(state.dvr.fraction);
       const behind = $('.osd-dvr-behind', this.container);
@@ -376,7 +392,7 @@ export class PlayerOsd {
       this.updateScrub(state.scrub);
       return;
     }
-    if (!state.catchup) return;
+    if (!state.catchup && !state.movieFile) return;
     this.updateScrub(state.scrub);
     if (!Number.isFinite(playback.duration) || playback.duration <= 0) return;
     this.setProgress(Math.min(playback.position, playback.duration) / playback.duration);

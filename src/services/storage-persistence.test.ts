@@ -9,6 +9,7 @@ import type {
   ResumeEntry,
   WatchlistEntry,
 } from '../types';
+import { CONFIG } from '../config';
 import { loadUserRecords } from './idb-user-data';
 import { StorageService } from './storage-service';
 
@@ -398,6 +399,44 @@ describe('StorageService IndexedDB migration', () => {
       .filter(key => key.startsWith('mark:'));
     expect(keys.sort()).toEqual(['mark:x1|episode|e1', 'mark:x1|episode|e3', 'mark:x1|series|s1', 'mark:x1|vod|m1']);
     expect(Relaunched.catalogMarkIds('x1', 'episode', 'watched')).toEqual(new Set(['e1', 'e3']));
+    await Relaunched.clearUserData();
+  });
+
+  it('persists movie-file resume points, moves fallback ones in, and trims the oldest', async () => {
+    localStorage.clear();
+    vi.resetModules();
+    const { StorageService: First } = await import('./storage-service');
+    await First.init();
+    await First.clearUserData();
+    await First.init();
+    const point = (chKey: string, updatedAt: number) =>
+      ({ channelKey: chKey, position: 600, duration: 1800, updatedAt });
+    for (let i = 0; i < CONFIG.PLAYER.MOVIE_FILE_RESUME_MAX_ITEMS; i++) {
+      First.setChannelResume(point(`ch${String(i)}`, 1000 + i));
+    }
+    First.setChannelResume(point('ch-done', 1));
+    First.setChannelResume({ ...point('ch-done', 2), position: 1790 });
+    await First.flush();
+    localStorage.setItem('iptv_channel_resume', JSON.stringify({ 'ch-new': point('ch-new', 5000) }));
+
+    vi.resetModules();
+    const { StorageService: Relaunched } = await import('./storage-service');
+    await Relaunched.init();
+    expect(Relaunched.getChannelResume('ch-new')?.position).toBe(600);
+    expect(Relaunched.getChannelResume('ch1')?.position).toBe(600);
+    expect(Relaunched.getChannelResume('ch0')).toBeNull();
+    expect(Relaunched.getChannelResume('ch-done')).toBeNull();
+    expect(localStorage.getItem('iptv_channel_resume')).toBeNull();
+    await Relaunched.flush();
+    const keys = (await loadUserRecords('playback-progress')).map(item => item.key)
+      .filter(key => key.startsWith('channel-resume:'));
+    expect(keys).toHaveLength(CONFIG.PLAYER.MOVIE_FILE_RESUME_MAX_ITEMS);
+    expect(keys).not.toContain('channel-resume:ch0');
+
+    Relaunched.clearRecentlyWatched();
+    await Relaunched.flush();
+    expect((await loadUserRecords('playback-progress')).map(item => item.key)
+      .filter(key => key.startsWith('channel-resume:'))).toEqual([]);
     await Relaunched.clearUserData();
   });
 

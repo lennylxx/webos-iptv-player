@@ -39,6 +39,7 @@ function snapshot(overrides: Partial<PlayerOsdSnapshot> = {}): PlayerOsdSnapshot
     channel: CHANNEL,
     channelNumber: 1,
     catchup: null,
+    movieFile: false,
     vodTitle: null,
     vodDetail: '',
     upNextSeconds: 0,
@@ -232,6 +233,32 @@ describe('PlayerOsd', () => {
     osd.refreshProgress();
     expect(container.querySelector<HTMLElement>('.osd-progress-bar')?.style.width).toBe('75%');
     expect(container.querySelector('.osd-dvr-behind')?.textContent).toBe('-0:15');
+  });
+
+  it('switches an open Live OSD to a movie file\'s seek bar once its length is known', () => {
+    state = snapshot({ playback: playback(NaN, 0) });
+    osd.show();
+    expect(container.querySelector('[data-seekbar]')).toBeNull();
+
+    state = { ...state, playback: playback(600, 150), movieFile: true };
+    osd.refreshProgress();
+    expect(container.querySelector('[data-seekbar]')).not.toBeNull();
+    expect(container.querySelector('[data-playpause]')).not.toBeNull();
+    expect(container.querySelector('.osd-time-end')?.textContent).toBe('10:00');
+    expect(container.querySelector<HTMLElement>('.osd-progress-bar')?.style.width).toBe('25%');
+
+    state = { ...state, playback: playback(600, 300) };
+    osd.refreshProgress();
+    expect(container.querySelector<HTMLElement>('.osd-progress-bar')?.style.width).toBe('50%');
+    expect(container.querySelector('.osd-time-current')?.textContent).toBe('5:00');
+  });
+
+  it('keeps a message over a movie file until playback renders the OSD', () => {
+    state = snapshot({ playback: playback(600, 150), movieFile: true });
+    osd.show();
+    osd.updateMessage('Resyncing');
+    osd.refreshProgress();
+    expect(container.querySelector('.osd-message')?.textContent).toBe('Resyncing');
   });
 
   it('marks a pending seek target with its time, jump, and preview tile', () => {

@@ -48,7 +48,7 @@ import { CONFIG } from '../config';
 import { StallWatchdog, type StallProbe, type StallRecovery } from '../utils/stall-watchdog';
 import { StartupWatchdog, type StartupFailure, type StartupProbe } from '../utils/startup-watchdog';
 import { resolutionBadge, hdrLabel, frameRateLabel, pickVariant, codecName, audioSummary, subtitleSummary, type StreamVariant, type MediaInfo } from '../utils/stream-info';
-import { extFromUrl, diagnosticStreamUrl, streamUrlMime } from '../utils/url';
+import { extFromUrl, diagnosticStreamUrl, isMovieFileUrl, streamUrlMime } from '../utils/url';
 import { isWebOS } from '../utils/platform';
 import { InputMode } from '../navigation/input-mode';
 import { KeyHandler } from '../navigation/key-handler';
@@ -139,6 +139,10 @@ export class Player {
   // reset to Date.now() on every new catch-up session so the first checkpoint
   // fires CHECKPOINT_INTERVAL after tune-in, not immediately.
   private catchupCheckpointAt = 0;
+  // The playing channel's URL names a movie file (see isMovieFile()).
+  private movieFile = false;
+  // That file reached its end; its element's pipeline is terminal on webOS.
+  private movieEnded = false;
   // Position (seconds) saved from the video element before suspend() destroys it.
   // play() consumes this to restore the position on resume; -1 = not pending.
   private catchupSuspendPos = -1;
@@ -429,7 +433,7 @@ export class Player {
         this.logVodTracks(el);
         this.vodTracksLatePending = true;
       }
-      if ((this.vod || this.catchupInfo || this.lunaRestore || this.reopenResume) && this.pendingResumeSecs > 0 && Number.isFinite(el.duration) && el.duration > 0) {
+      if ((this.vod || this.catchupInfo || this.movieFile || this.lunaRestore || this.reopenResume) && this.pendingResumeSecs > 0 && Number.isFinite(el.duration) && el.duration > 0) {
         const target = Math.min(this.pendingResumeSecs, el.duration - 1);
         log.info('resume seek', this.videoLabel(el), '| requested:', this.pendingResumeSecs,
           '| target:', target, '| duration:', el.duration);
@@ -540,6 +544,7 @@ export class Player {
       this.playbackRate.reapply();
       this.reconcilePendingSeek(el, true);
       if (this.catchupInfo) this.saveCatchupProgress();
+      this.saveChannelResume();
       this.refreshProgress();
     });
     onCurrent('ended', () => {
@@ -634,6 +639,7 @@ export class Player {
         );
         this.saveCatchupProgress();
       }
+      this.saveChannelResume();
       // A proxied stream reopens its session on resume, a finite one where it
       // was, and a paused one paused again.
       if (this.pipeline.isLunaActive() || this.lunaRestore || this.pipeline.isProxied()) {
@@ -871,7 +877,23 @@ export class Player {
     this.saveCatchupProgress();
   }
 
+  // A fresh element, as an ended pipeline on webOS cannot play again.
+  private restartMovieFile(at: number): void {
+    const channel = this.currentChannel;
+    if (!channel) return;
+    this.movieEnded = false;
+    this.pendingResumeSecs = at;
+    this.pendingSeekTarget = null;
+    this.userPaused = false;
+    this.recreateVideoEl();
+    this.videoEl?.classList.add('active');
+    this.loadStream(this.resolveStreamUrl(channel, null), channel.extras,
+      { headers: channelHttpHeaders(channel) });
+    this.showOSD();
+  }
+
   private startPlaybackGeneration(): void {
+    this.movieEnded = false;
     this.dropScrub();
     this.hoverFraction = null;
     this.cancelLiveHistoryTimer();
@@ -953,6 +975,7 @@ export class Player {
     // Skip when resuming from suspend: catchupSuspendPos >= 0 means the element is fresh
     // (currentTime=0) and we already saved the real position in suspend().
     if (this.catchupSuspendPos < 0) this.saveCatchupProgress();
+    this.saveChannelResume();
 
     // Determine resume position: prefer the pre-suspend position if available, else the
     // position requested by the caller (CatchupInfo.resumeSecs). Reset for live channels.
@@ -970,6 +993,10 @@ export class Player {
     this.lunaResume = null;
     if (this.lunaRestore && this.lunaRestore.position > 0) {
       this.pendingResumeSecs = this.lunaRestore.position;
+    }
+    this.movieFile = !catchup && isMovieFileUrl(channel.url);
+    if (this.movieFile && !this.pendingResumeSecs) {
+      this.pendingResumeSecs = StorageService.getChannelResume(channelKey(channel))?.position ?? 0;
     }
 
     log.info('play index', channelIndex, '|', channel.name, catchup ? '(catchup)' : '');
@@ -1074,6 +1101,7 @@ export class Player {
   }
 
   private playVodResolved(v: VodPlayback): void {
+    this.saveChannelResume();
     this.clearSkipTimer();
     if (this.liveSessionActive) this.rememberLiveAudio();
     this.playbackActive = true;
@@ -1086,6 +1114,7 @@ export class Player {
     this.startPlaybackGeneration();
     log.info('playVod', v.title, '| resume', v.resumeSecs);
     this.saveCatchupProgress(); // save any active catch-up before switching to VOD
+    this.movieFile = false;
     this.currentChannel = null;
     this.currentIndex = -1;
     this.currentScope = null;
@@ -1174,6 +1203,21 @@ export class Player {
     }, ch.catchupDays);
   }
 
+  private saveChannelResume(): void {
+    const ch = this.currentChannel;
+    const el = this.videoEl;
+    if (!ch || !el || !this.isMovieFile()) return;
+    const key = channelKey(ch);
+    // Browsing past a file in the live preview does not start a resume point.
+    if (this.livePreviewMode && !StorageService.getChannelResume(key)) return;
+    StorageService.setChannelResume({
+      channelKey: key,
+      position: this.pendingSeekTarget ?? (el.currentTime || 0),
+      duration: el.duration,
+      updatedAt: Date.now(),
+    });
+  }
+
   private handleVodAction(action: Action): void {
     if (this.tracks.handleAction(action)) return;
     if (this.upNextTimer) {
@@ -1260,7 +1304,7 @@ export class Player {
     if (this.catchupInfo && this.catchupUnbounded) {
       this.catchupOffset = Math.min(this.playbackPosition(), this.catchupDuration());
       this.pendingResumeSecs = 0;
-    } else if (this.catchupInfo) {
+    } else if (this.catchupInfo || this.isMovieFile()) {
       const position = this.playbackPosition();
       if (position > 0) this.pendingResumeSecs = Math.max(this.pendingResumeSecs, position);
     }
@@ -1297,6 +1341,14 @@ export class Player {
       v.onBack();
       return;
     }
+    if (this.isMovieFile()) {
+      // Its end drops the resume point; the OSD stays up while paused, so OK
+      // plays it again.
+      this.saveChannelResume();
+      this.movieEnded = true;
+      this.showOSD();
+      return;
+    }
     if (this.catchupInfo && this.currentChannel) {
       log.info('catch-up ended — resuming live');
       this.saveCatchupProgress({ completed: true });
@@ -1314,6 +1366,8 @@ export class Player {
   }
 
   stop(): void {
+    // Before the live-preview flag clears, which decides whether it may save.
+    this.saveChannelResume();
     this.aspectSession++;
     this.resetAspect();
     if (this.liveSessionActive) this.rememberLiveAudio();
@@ -1330,6 +1384,7 @@ export class Player {
     this.clearSkipTimer();
     if (this.vod) this.saveVodResume();
     this.saveCatchupProgress(); // save before the video element is torn down
+    this.movieFile = false;
     this.releaseStream();
     if (this.videoEl) {
       this.videoEl.pause();
@@ -1913,7 +1968,19 @@ export class Player {
     if (this.vod) return Number.isFinite(v.duration) && v.duration > 0;
     if (this.catchupInfo && this.catchupUnbounded) return this.catchupDuration() > 0;
     if (this.catchupInfo) return Number.isFinite(v.duration) && v.duration > 0;
-    return this.isLiveDvr();
+    return this.isMovieFile() || this.isLiveDvr();
+  }
+
+  // A playlist channel playing one movie file seeks like VOD once its length
+  // is known; a live stream is never named as one, and the length cap keeps
+  // out one that reports a placeholder duration anyway.
+  private isMovieFile(): boolean {
+    const v = this.videoEl;
+    // A file URL that serves HLS or DASH plays through an MSE library, whose
+    // live streams can report a growing finite duration.
+    return this.movieFile && !this.catchupInfo && !!v && !this.pipeline.isMseActive()
+      && Number.isFinite(v.duration) && v.duration > 0
+      && v.duration <= CONFIG.PLAYER.MOVIE_FILE_MAX_DURATION;
   }
 
   /** The [min, max] media time a seek may land on: the DVR window's playable
@@ -2002,7 +2069,8 @@ export class Player {
 
   private seekLogContext(): { kind: string; from: number; win: DvrWindow | null } {
     const win = this.liveDvrWindow();
-    const kind = win ? 'dvr' : this.vod ? 'vod' : this.catchupInfo ? 'catchup' : 'live';
+    const kind = win ? 'dvr' : this.vod ? 'vod' : this.catchupInfo ? 'catchup'
+      : this.isMovieFile() ? 'file' : 'live';
     const from = this.catchupUnbounded ? this.playbackPosition() : this.videoEl?.currentTime ?? 0;
     return { kind, from, win };
   }
@@ -2026,6 +2094,11 @@ export class Player {
     const v = this.videoEl;
     if (!v) return null;
     this.dropScrub();
+    if (this.movieEnded) {
+      const target = Math.max(0, Math.min(v.duration - CONFIG.PLAYER.SEEK_END_PAD, time));
+      this.restartMovieFile(target);
+      return target;
+    }
     const win = this.liveDvrWindow();
     if (win) {
       // Live DVR: seeking near the end snaps to the live edge (a small pad back
@@ -2098,11 +2171,11 @@ export class Player {
    *  catch-up/VOD decode. A small backward seek is the only thing that re-locks
    *  A/V on webOS — it flushes the native pipeline and re-fetches the segment — so
    *  it costs a ~2s rebuffer, masked by a "Resyncing…" message that clears on the
-   *  next `playing`. Catch-up / VOD only. */
+   *  next `playing`. Catch-up, VOD, and movie files only. */
   resyncAV(): void {
     const v = this.videoEl;
     if (!v) return;
-    if (!(this.vod || this.catchupInfo)) return;               // catch-up / VOD only
+    if (!(this.vod || this.catchupInfo || this.isMovieFile())) return;
     if (!Number.isFinite(v.duration) || v.duration <= 0) return;
     if (this.resyncing || v.seeking) return;                   // debounce repeat presses
     this.resyncing = true;
@@ -2126,6 +2199,10 @@ export class Player {
   private pauseToggle(): void {
     const v = this.videoEl;
     if (!v) return;
+    if (this.movieEnded) {
+      this.restartMovieFile(0);
+      return;
+    }
     if (v.paused) {
       const win = this.liveDvrWindow();
       if (win && v.currentTime < win.start) {
@@ -2138,6 +2215,7 @@ export class Player {
       this.userPaused = true;
       v.pause?.();
       if (this.catchupInfo) this.saveCatchupProgress();
+      this.saveChannelResume();
       if (this.isLiveDvr()) this.startDvrPauseTick();
     }
     if (this.osd.isVisible()) {
@@ -2168,11 +2246,12 @@ export class Player {
     if (!v) return;
     // Throttled periodic catch-up checkpoint — runs regardless of OSD visibility
     // so progress is saved even when the OSD has auto-hidden.
-    if (this.catchupInfo) {
+    if (this.catchupInfo || this.movieFile) {
       const now = Date.now();
       if (now - this.catchupCheckpointAt >= CONFIG.CATCHUP.CHECKPOINT_INTERVAL) {
         this.catchupCheckpointAt = now;
         this.saveCatchupProgress();
+        this.saveChannelResume();
       }
     }
     this.osd.refreshProgress();
@@ -2234,6 +2313,7 @@ export class Player {
       channel,
       channelNumber: this.currentIndexAnchor + 1,
       catchup: this.catchupInfo,
+      movieFile: this.isMovieFile(),
       vodTitle: this.vod ? vodHeading(this.vod).title : null,
       vodDetail: this.vod ? vodHeading(this.vod).detail : '',
       upNextSeconds: this.upNextSeconds,
@@ -2271,7 +2351,7 @@ export class Player {
     if (target === null && hover !== null && v) {
       if (win) target = win.start + hover * win.length;
       // A live stream between DVR windows (mid-reload) has nothing to preview.
-      else if ((this.vod || this.catchupInfo) && Number.isFinite(duration) && duration > 0) {
+      else if ((this.vod || this.catchupInfo || this.isMovieFile()) && Number.isFinite(duration) && duration > 0) {
         target = hover * duration;
       }
     }
@@ -2298,7 +2378,7 @@ export class Player {
     if (this.previewUrl === this.streamUrl || !this.streamUrl) return;
     // A live stream whose DVR window has not filled in yet (e.g. right after a
     // reload) must not pin a source built without one.
-    if (!this.vod && !this.catchupInfo && !win) return;
+    if (!this.vod && !this.catchupInfo && !win && !this.isMovieFile()) return;
     this.previewUrl = this.streamUrl;
     const catchup = this.catchupInfo;
     this.preview.start({

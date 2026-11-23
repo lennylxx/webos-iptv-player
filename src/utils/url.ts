@@ -23,6 +23,25 @@ export function containerMime(url: string): string {
   }
 }
 
+// Older webOS versions reject these container MIME declarations before the
+// native pipeline inspects the file, so a stream served as one plays with its
+// type sniffed, as containerMime() leaves a VOD URL.
+const SNIFFED_CONTAINER_MIMES = [
+  'video/x-matroska', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/avi',
+];
+
+export function nativeSourceMime(mime: string): string {
+  return SNIFFED_CONTAINER_MIMES.indexOf(mime) >= 0 ? '' : mime;
+}
+
+// A single movie file, which a live stream never is, so a playlist channel
+// that names one seeks like VOD. `.ts` is out: live streams use it too.
+const MOVIE_FILE_EXTENSIONS = ['mp4', 'm4v', 'mkv', 'avi', 'mov', 'webm'];
+
+export function isMovieFileUrl(url: string): boolean {
+  return MOVIE_FILE_EXTENSIONS.indexOf(extFromUrl(url)) >= 0;
+}
+
 // Identifies the route a stream URL belongs to, for the probed-MIME cache. A
 // provider serves one container per route, so the first path segment is enough —
 // except that the same route can serve a different container per requested format

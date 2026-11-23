@@ -139,6 +139,7 @@ origin, so object-store names do not repeat the `iptv_` prefix.
 | `playback-progress` | `resume:<account-id>\|<vod-or-episode>\|<item-id>` | `expiresAt`, `updatedAt` | Position, duration, title/poster/extension snapshot, optional autoplay queue and Watchlist owner |
 | `playback-progress` | `mark:<account-id>\|<vod-series-or-episode>\|<item-id>` | `updatedAt` | A movie, series, or episode the viewer watched, or a movie or series they hid; a series is watched while every episode it lists is, derived again whenever its detail opens or an episode mark changes rather than kept as the source of truth; a title with neither mark has no record |
 | `playback-progress` | `catchup:<channel-key>\|<program-start>` | `expiresAt`, `updatedAt` | EPG source URL, program start/stop, title/description/icon snapshot, position, completion, update time, and computed expiry |
+| `playback-progress` | `channel-resume:<channel-key>` | `updatedAt` | Position, duration, and update time for a playlist channel that plays a movie file; capped to the newest 50 |
 | `recently-watched` | `live:<channel-key>` | `updatedAt` | Channel key and last-confirmed watch time; capped to 30 live entries |
 | `online-sub-picks` | `pick:<account-id>\|<vod-or-episode>\|<item-id>` | None | Provider id, provider result id, display name, language, and subtitle format |
 

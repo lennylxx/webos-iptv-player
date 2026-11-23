@@ -117,6 +117,45 @@ describe('PlayerPipeline webOS stream MIME cache', () => {
     },
   );
 
+  it.each([
+    ['a probed', null],
+    ['a cached', 'video/x-matroska'],
+  ])('omits the source type for %s Matroska Content-Type', async (_label, cached) => {
+    cacheMocks.getCachedStreamMime.mockResolvedValue(cached);
+    cacheMocks.setCachedStreamMime.mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('', { headers: { 'content-type': 'video/x-matroska' } }),
+    ));
+    const { PlayerPipeline } = await import('./player-pipeline');
+    const pipeline = new PlayerPipeline(callbacks());
+    const video = videoElement();
+    pipeline.setVideoElement(video);
+
+    pipeline.load('http://host/movies/m1.mkv', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    const source = video.querySelector('source');
+    expect(source?.src).toBe('http://host/movies/m1.mkv');
+    expect(source?.hasAttribute('type')).toBe(false);
+  });
+
+  it('keeps the source type for a probed MP4 Content-Type', async () => {
+    cacheMocks.getCachedStreamMime.mockResolvedValue(null);
+    cacheMocks.setCachedStreamMime.mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('', { headers: { 'content-type': 'video/mp4' } }),
+    ));
+    const { PlayerPipeline } = await import('./player-pipeline');
+    const pipeline = new PlayerPipeline(callbacks());
+    const video = videoElement();
+    pipeline.setVideoElement(video);
+
+    pipeline.load('http://host/movies/m1.mp4', null);
+
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(video.querySelector('source')?.getAttribute('type')).toBe('video/mp4');
+  });
+
   it('plays an ambiguous route from the IndexedDB MIME cache without probing', async () => {
     cacheMocks.getCachedStreamMime.mockResolvedValue('video/mp2t');
     const fetchMock = vi.fn();

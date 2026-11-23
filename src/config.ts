@@ -111,6 +111,10 @@ export const CONFIG = {
     // Keys stop a seek target short of the end, so a held Right never
     // finishes a movie or drops a catch-up back to live.
     SEEK_END_PAD: 2, // seconds
+    // A playlist channel naming a movie file seeks only below this length;
+    // a longer one is a live stream reporting a placeholder duration.
+    MOVIE_FILE_MAX_DURATION: 24 * 60 * 60, // seconds
+    MOVIE_FILE_RESUME_MAX_ITEMS: 50,       // resume points kept for playlist movie files
     SEEK_PREVIEW_WIDTH: 320,    // px; the seek-bar preview frame (and the thumbnail size we ask servers for)
     SEEK_PREVIEW_DEBOUNCE: 150, // ms between preview image requests while the target moves
     SEEK_PREVIEW_FETCH_TIMEOUT: 8000, // ms for a thumbnail manifest or sidecar

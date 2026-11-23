@@ -29,6 +29,7 @@ vi.mock('../services/storage-service', () => ({
     removeWatchlist: vi.fn(),
     getPickedOnlineSub: vi.fn(), setPickedOnlineSub: vi.fn(),
     setCatchupProgress: vi.fn(), getCatchupProgress: vi.fn(), clearCatchupProgress: vi.fn(),
+    getChannelResume: vi.fn(() => null), setChannelResume: vi.fn(),
     touchRecentlyWatchedLive: vi.fn(),
     getSubtitleOffset: vi.fn(() => 0), setSubtitleOffset: vi.fn(),
     getAspectRatio: vi.fn(() => 'auto'), setAspectRatio: vi.fn(),
@@ -1045,6 +1046,163 @@ describe('Player catch-up completion', () => {
     expect(container.querySelector('video')!.src).toContain('/play/'); // live URL on the fresh element
     expect(player.canSeek()).toBe(false); // live, not seekable
     expect(onPlaybackChanged).toHaveBeenLastCalledWith(0, null);
+  });
+});
+
+describe('Player playlist movie files', () => {
+  const MOVIE = {
+    ...CHANNEL_NO_CATCHUP, catchup: '', catchupSource: '', url: 'http://host/movies/m1.mkv?token=t1',
+  };
+
+  beforeEach(() => {
+    playlistMock.getByIndex.mockReturnValue(MOVIE);
+    vi.mocked(StorageService.getChannelResume).mockReturnValue(null);
+    vi.mocked(StorageService.setChannelResume).mockClear();
+    video = fakeVideo(1800);
+    player.init(video);
+  });
+
+  it('seeks and pauses like VOD', () => {
+    player.play(0);
+    expect(player.canSeek()).toBe(true);
+    expect(container.querySelector('[data-seekbar]')).not.toBeNull();
+    expect(container.querySelector('.osd-time-end')!.textContent).toBe('30:00');
+
+    press('right', 3);
+    commitSeek();
+    expect(video.currentTime).toBe(30);
+    expect(elapsed()).toBe('0:30');
+
+    player.handleAction('select');
+    expect(video.paused).toBe(true);
+  });
+
+  it.each([
+    ['a live-format URL', 'http://host/live/c1.ts', 1800],
+    ['an extensionless URL', 'http://host/play/c1', 1800],
+    ['a placeholder length', 'http://host/movies/m1.mp4', 2 ** 32],
+  ])('stays live for %s', (_label, url, duration) => {
+    playlistMock.getByIndex.mockReturnValue({ ...MOVIE, url });
+    video = fakeVideo(duration);
+    player.init(video);
+    player.play(0);
+    expect(player.canSeek()).toBe(false);
+    expect(container.querySelector('[data-seekbar]')).toBeNull();
+  });
+
+  it('stays live when the file URL plays through an MSE library', () => {
+    const pipeline = (player as unknown as { pipeline: { isMseActive(): boolean } }).pipeline;
+    vi.spyOn(pipeline, 'isMseActive').mockReturnValue(true);
+    player.play(0);
+    expect(player.canSeek()).toBe(false);
+    expect(container.querySelector('[data-seekbar]')).toBeNull();
+  });
+
+  it('drops the point at the end and keeps the OSD up to play it again', () => {
+    player.play(0);
+    player.hideOSD();
+    video.currentTime = 1800;
+    video.pause();
+    video.dispatchEvent(new Event('ended'));
+    expect(StorageService.setChannelResume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ position: 1800, duration: 1800 }));
+    expect(container.querySelector('#player-osd')!.classList.contains('hidden')).toBe(false);
+    expect(player.canSeek()).toBe(true);
+  });
+
+  // An ended pipeline stays terminal on webOS, so playing again needs a fresh element.
+  describe('after the end', () => {
+    let ended: HTMLVideoElement;
+    beforeEach(() => {
+      HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+      HTMLMediaElement.prototype.pause = vi.fn();
+      HTMLMediaElement.prototype.load = vi.fn();
+      ended = document.createElement('video');
+      Object.defineProperty(ended, 'duration', { value: 1800, configurable: true });
+      Object.defineProperty(ended, 'paused', { get: () => true, configurable: true });
+      Object.defineProperty(ended, 'currentTime', { value: 1800, writable: true, configurable: true });
+      container.appendChild(ended);
+      player.init(ended);
+      player.play(0);
+      ended.dispatchEvent(new Event('ended'));
+    });
+    const fresh = () => container.querySelector('video')!;
+
+    it('OK plays the file again from the start on a fresh element', async () => {
+      player.handleAction('select');
+      await flush();
+      expect(fresh()).not.toBe(ended);
+      expect(fresh().src).toContain('/movies/m1.mkv');
+      Object.defineProperty(fresh(), 'duration', { value: 1800, configurable: true });
+      fresh().dispatchEvent(new Event('loadedmetadata'));
+      expect(fresh().currentTime).toBe(0);
+    });
+
+    it('a seek plays the file again from its target on a fresh element', async () => {
+      player.handleAction('left');
+      commitSeek();
+      await flush();
+      expect(fresh()).not.toBe(ended);
+      Object.defineProperty(fresh(), 'duration', { value: 1800, configurable: true });
+      fresh().dispatchEvent(new Event('loadedmetadata'));
+      expect(fresh().currentTime).toBeGreaterThan(1700);
+      expect(fresh().currentTime).toBeLessThan(1800);
+    });
+  });
+
+  it('starts no point when the live preview stops', () => {
+    player.enterLivePreview();
+    player.play(0);
+    video.currentTime = 120;
+    player.stop();
+    expect(StorageService.setChannelResume).not.toHaveBeenCalled();
+  });
+
+  it('starts no point while browsing in the live preview, but keeps one up to date', () => {
+    player.enterLivePreview();
+    player.play(0);
+    video.currentTime = 120;
+    vi.advanceTimersByTime(CONFIG.CATCHUP.CHECKPOINT_INTERVAL);
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(StorageService.setChannelResume).not.toHaveBeenCalled();
+
+    vi.mocked(StorageService.getChannelResume).mockReturnValue({
+      channelKey: channelKey(MOVIE), position: 60, duration: 1800, updatedAt: 1,
+    });
+    vi.advanceTimersByTime(CONFIG.CATCHUP.CHECKPOINT_INTERVAL);
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(StorageService.setChannelResume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ position: 120 }));
+  });
+
+  it('resumes where the file was left and saves the new point on stop', () => {
+    vi.mocked(StorageService.getChannelResume).mockReturnValue({
+      channelKey: channelKey(MOVIE), position: 600, duration: 1800, updatedAt: 1,
+    });
+    player.play(0);
+    video.dispatchEvent(new Event('loadedmetadata'));
+    expect(video.currentTime).toBe(600);
+
+    press('right', 3);
+    commitSeek();
+    player.stop();
+    expect(StorageService.setChannelResume).toHaveBeenLastCalledWith(expect.objectContaining({
+      channelKey: channelKey(MOVIE), position: 630, duration: 1800,
+    }));
+  });
+
+  it('saves the point when paused and when switching channels', () => {
+    player.play(0);
+    video.currentTime = 120;
+    player.handleAction('select');
+    expect(StorageService.setChannelResume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ position: 120 }));
+
+    video.currentTime = 150;
+    playlistMock.getByIndex.mockReturnValue(CHANNEL);
+    player.play(1);
+    expect(StorageService.setChannelResume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ channelKey: channelKey(MOVIE), position: 150 }));
   });
 });
 

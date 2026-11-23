@@ -539,7 +539,7 @@ describe('StorageService', () => {
   });
 });
 
-import type { CatchupProgressEntry, ResumeEntry, WatchlistEntry } from '../types';
+import type { CatchupProgressEntry, ChannelResumeEntry, ResumeEntry, WatchlistEntry } from '../types';
 
 const resume = (over: Partial<ResumeEntry>): ResumeEntry => ({
   accountId: 'x1', kind: 'vod', itemId: '10', name: 'Movie One', poster: '', ext: 'mp4',
@@ -923,6 +923,48 @@ describe('StorageService resume store', () => {
     StorageService.setPickedOnlineSub('acc', 'vod', 'm1', { providerId: 'subdl', id: '9', name: 'Alpha', lang: 'l1', format: 'srt' });
     expect(StorageService.getPickedOnlineSub('acc', 'vod', 'm1')).toMatchObject({ id: '9', format: 'srt' });
     expect(StorageService.getPickedOnlineSub('acc', 'vod', 'zzz')).toBeNull();
+  });
+});
+
+describe('StorageService movie-file resume store', () => {
+  beforeEach(() => { localStorage.clear(); });
+
+  const point = (over: Partial<ChannelResumeEntry> = {}): ChannelResumeEntry =>
+    ({ channelKey: 'ck1', position: 600, duration: 1800, updatedAt: 1000, ...over });
+
+  it('round-trips a point per channel', () => {
+    StorageService.setChannelResume(point());
+    expect(StorageService.getChannelResume('ck1')).toEqual(point());
+    expect(StorageService.getChannelResume('ck2')).toBeNull();
+  });
+
+  it('drops the stored point near either end', () => {
+    StorageService.setChannelResume(point());
+    StorageService.setChannelResume(point({ position: CONFIG.CATCHUP.RESUME_MIN_SECS - 1 }));
+    expect(StorageService.getChannelResume('ck1')).toBeNull();
+    StorageService.setChannelResume(point());
+    StorageService.setChannelResume(point({ position: 1800 - CONFIG.CATCHUP.FINISH_PAD }));
+    expect(StorageService.getChannelResume('ck1')).toBeNull();
+  });
+
+  it('is cleared with Recently Watched', () => {
+    StorageService.setChannelResume(point());
+    StorageService.clearRecentlyWatched();
+    expect(StorageService.getChannelResume('ck1')).toBeNull();
+  });
+
+  it('keeps the newest points, evicting the oldest', () => {
+    const max = CONFIG.PLAYER.MOVIE_FILE_RESUME_MAX_ITEMS;
+    for (let i = 0; i < max; i++) {
+      StorageService.setChannelResume(point({ channelKey: `ch${String(i)}`, updatedAt: 1000 + i }));
+    }
+    // Rewriting one at the cap evicts nothing.
+    StorageService.setChannelResume(point({ channelKey: 'ch0', updatedAt: 1 }));
+    expect(StorageService.getChannelResume('ch0')).not.toBeNull();
+    StorageService.setChannelResume(point({ channelKey: 'ch-new', updatedAt: 5000 }));
+    expect(StorageService.getChannelResume('ch-new')).not.toBeNull();
+    expect(StorageService.getChannelResume('ch0')).toBeNull();
+    expect(StorageService.getChannelResume('ch1')).not.toBeNull();
   });
 });
 

@@ -65,6 +65,7 @@
 - **Channel health** — check live streams and mark them as healthy, suspect, or unavailable
 - **Reminders** — flag an upcoming program and get notified at air time, even with the app closed, to tune straight in
 - **Recently Watched** — return to recent live channels or resume partially watched catch-up programs
+- **Playlist movie files** — a playlist channel whose URL names a movie file (`.mp4`, `.mkv`, …) seeks like VOD and resumes where you left it
 - **Live preview** — keep live playback beside the channel list while browsing, with program info and quick controls
 - **Movies & Series** — browse an Xtream account's VOD catalogs, with Continue Watching and account-scoped Watchlist rails
 - **Catalog sorting** — sort Movies and Series by name, date added, rating, or year in either direction; each section remembers its choice

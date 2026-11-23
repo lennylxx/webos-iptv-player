@@ -1,8 +1,9 @@
 # Seeking and seek-bar previews
 
-On catch-up, live DVR, and VOD playback, Left and Right on the remote do not
-seek at once. Each press moves a **pending target** on the seek bar, and the
-player seeks once, after the presses settle. A bubble above the target shows
+On catch-up, live DVR, and VOD playback, and on a playlist channel whose URL
+names a movie file (`.mp4`, `.m4v`, `.mkv`, `.avi`, `.mov`, or `.webm`), Left
+and Right on the remote do not seek at once. Each press moves a **pending
+target** on the seek bar, and the player seeks once, after the presses settle. A bubble above the target shows
 its time, the jump from the current position, and a preview frame when the
 source offers one.
 
@@ -43,7 +44,8 @@ source, since the server may not have made it yet. Track-based sources (HLS,
 DASH, WebVTT) are skipped on a live DVR window, whose media time does not map
 to wall-clock time. Xtream movies and
 episodes are plain files with no preview source, so they show the time
-bubble only.
+bubble only. A playlist movie file has no wall-clock time either, so only a
+`.vtt` `seek_preview` applies to it.
 
 ### The `seek_preview` attribute
 

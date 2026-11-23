@@ -692,6 +692,14 @@ export interface CatchupProgressEntry {
   completed: boolean;  // true once the programme has been watched to the end
 }
 
+/** Resume point for a playlist channel that plays a single movie file. */
+export interface ChannelResumeEntry {
+  channelKey: string;
+  position: number;    // seconds into the file
+  duration: number;    // seconds
+  updatedAt: number;   // epoch ms
+}
+
 export interface RecentlyWatchedLiveEntry {
   channelKey: string;
   updatedAt: number;

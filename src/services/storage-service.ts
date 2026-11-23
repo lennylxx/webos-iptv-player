@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelCustomization, ChannelCycleMode, GuideLayout, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
+import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelResumeEntry, ChannelCustomization, ChannelCycleMode, GuideLayout, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { isCatalogSort, isCatalogSortDirection, type CatalogSortPreference } from '../utils/catalog-sort';
 import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
@@ -56,6 +56,7 @@ interface UserDataState {
   marks: Record<string, CatalogMark>;
   onlineSubPicks: Record<string, PickedOnlineSub>;
   catchupProgress: Record<string, StoredCatchup>;
+  channelResume: Record<string, ChannelResumeEntry>;
   recentlyWatchedLive: RecentlyWatchedLiveEntry[];
   parentalControl: ParentalControlConfig | null;
   liveCategorySnapshots: Record<string, XtreamLiveCategorySnapshot>;
@@ -218,6 +219,25 @@ function catchupKey(entry: Pick<CatchupProgressEntry, 'channelKey' | 'progStart'
   return `catchup:${entry.channelKey}|${entry.progStart}`;
 }
 
+function channelResumeKey(chKey: string): string {
+  return `channel-resume:${chKey}`;
+}
+
+// Drops the oldest entries over the cap; `keepKey`, the entry just written,
+// is never the one evicted.
+function trimChannelResume(all: Record<string, ChannelResumeEntry>, keepKey?: string): string[] {
+  const keys = Object.keys(all);
+  if (keys.length <= CONFIG.PLAYER.MOVIE_FILE_RESUME_MAX_ITEMS) return [];
+  keys.sort((a, b) => {
+    if (a === keepKey) return -1;
+    if (b === keepKey) return 1;
+    return all[b].updatedAt - all[a].updatedAt || (a < b ? -1 : a > b ? 1 : 0);
+  });
+  const removed = keys.slice(CONFIG.PLAYER.MOVIE_FILE_RESUME_MAX_ITEMS);
+  for (const key of removed) delete all[key];
+  return removed;
+}
+
 function pickedSubKey(accountId: string, kind: ResumeKind, itemId: string): string {
   return `pick:${accountId}|${kind}|${itemId}`;
 }
@@ -282,6 +302,10 @@ function allUserRecords(data: UserDataState): Parameters<typeof replaceAllUserDa
       }),
       ...Object.keys(data.marks).map(key =>
         record(markKey(data.marks[key]), data.marks[key], { updatedAt: data.marks[key].updatedAt })),
+      ...Object.keys(data.channelResume).map(key =>
+        record(channelResumeKey(key), data.channelResume[key], {
+          updatedAt: data.channelResume[key].updatedAt,
+        })),
     ],
     'recently-watched': data.recentlyWatchedLive.map(entry =>
       record(`live:${entry.channelKey}`, entry, { updatedAt: entry.updatedAt })),
@@ -418,6 +442,14 @@ function fallbackRecords(key: string, value: unknown): {
           record(markKey(marks[item]), marks[item], { updatedAt: marks[item].updatedAt })),
       };
     }
+    case 'channel_resume': {
+      const entries = value as Record<string, ChannelResumeEntry>;
+      return {
+        store: 'playback-progress',
+        records: Object.keys(entries).map(item =>
+          record(channelResumeKey(item), entries[item], { updatedAt: entries[item].updatedAt })),
+      };
+    }
     case 'recently_watched_live':
       return {
         store: 'recently-watched',
@@ -436,7 +468,7 @@ async function loadUserDataState(): Promise<UserDataState> {
   const channelState = records['channel-state'];
   const watchlist = records.watchlist as UserDataRecord<WatchlistEntry>[];
   const progress = records['playback-progress'] as
-    UserDataRecord<ResumeEntry | StoredCatchup>[];
+    UserDataRecord<ResumeEntry | StoredCatchup | ChannelResumeEntry>[];
   const recentlyWatched = records['recently-watched'] as
     UserDataRecord<RecentlyWatchedLiveEntry>[];
   const onlineSubPicks = records['online-sub-picks'] as
@@ -458,6 +490,7 @@ async function loadUserDataState(): Promise<UserDataState> {
     marks: {},
     onlineSubPicks: {},
     catchupProgress: {},
+    channelResume: {},
     recentlyWatchedLive: recentlyWatched.map(item => item.value),
     parentalControl: parentalControl.find(item => item.key === 'config')?.value ?? null,
     liveCategorySnapshots: {},
@@ -507,6 +540,9 @@ async function loadUserDataState(): Promise<UserDataState> {
       data.catchupProgress[`${entry.channelKey}|${entry.progStart}`] = entry;
     } else if (item.key.startsWith('mark:')) {
       data.marks[item.key.slice(5)] = item.value as CatalogMark;
+    } else if (item.key.startsWith('channel-resume:')) {
+      const entry = item.value as ChannelResumeEntry;
+      data.channelResume[entry.channelKey] = entry;
     }
   }
   for (const item of onlineSubPicks) {
@@ -533,6 +569,7 @@ async function initUserData(): Promise<void> {
     ['catchup_progress', {}],
     ['recently_watched_live', []],
     ['catalog_marks', {}],
+    ['channel_resume', {}],
   ];
   const pending = [];
   for (let index = 0; index < fallbackKeys.length; index++) {
@@ -558,6 +595,10 @@ async function initUserData(): Promise<void> {
   remove('parental_control');
   const trimmed = trimResume(loadedUserData.resume);
   if (trimmed.length) persistUserChanges('playback-progress', [], trimmed.map(resumeKey));
+  const trimmedChannels = trimChannelResume(loadedUserData.channelResume);
+  if (trimmedChannels.length) {
+    persistUserChanges('playback-progress', [], trimmedChannels.map(channelResumeKey));
+  }
   userData = loadedUserData;
 }
 
@@ -1722,6 +1763,41 @@ export const StorageService = {
     return result.sort((a, b) => b.updatedAt - a.updatedAt);
   },
 
+  // Resume points for playlist channels that play a movie file.
+  getChannelResume(chKey: string): ChannelResumeEntry | null {
+    const all = userData
+      ? userData.channelResume
+      : get<Record<string, ChannelResumeEntry>>('channel_resume', {});
+    const entry = all[chKey];
+    return entry ? cloneValue(entry) : null;
+  },
+  // A point near either end drops the stored one: the next play starts over.
+  setChannelResume(entry: ChannelResumeEntry): void {
+    const key = entry.channelKey;
+    const drop = entry.position < CONFIG.CATCHUP.RESUME_MIN_SECS
+      || (entry.duration > 0 && entry.position >= entry.duration - CONFIG.CATCHUP.FINISH_PAD);
+    const all = userData
+      ? userData.channelResume
+      : get<Record<string, ChannelResumeEntry>>('channel_resume', {});
+    let evicted: string[] = [];
+    if (drop) {
+      if (!all[key]) return;
+      delete all[key];
+    } else {
+      all[key] = cloneValue(entry);
+      evicted = trimChannelResume(all, key);
+    }
+    if (!userData) {
+      set('channel_resume', all);
+      return;
+    }
+    persistUserChanges(
+      'playback-progress',
+      drop ? [] : [record(channelResumeKey(key), entry, { updatedAt: entry.updatedAt })],
+      [...(drop ? [channelResumeKey(key)] : []), ...evicted.map(channelResumeKey)],
+    );
+  },
+
   getSearchHistory(): string[] {
     const stored = get<unknown>('search_history', []);
     if (!Array.isArray(stored)) return [];
@@ -1767,15 +1843,18 @@ export const StorageService = {
     if (!userData) {
       remove('recently_watched_live');
       remove('catchup_progress');
+      remove('channel_resume');
       return;
     }
     const recentKeys = userData.recentlyWatchedLive.map(entry => `live:${entry.channelKey}`);
     const catchupKeys = Object.keys(userData.catchupProgress)
       .map(key => catchupKey(userData!.catchupProgress[key]));
+    const channelResumeKeys = Object.keys(userData.channelResume).map(channelResumeKey);
     userData.recentlyWatchedLive = [];
     userData.catchupProgress = {};
+    userData.channelResume = {};
     persistUserChanges('recently-watched', [], recentKeys);
-    persistUserChanges('playback-progress', [], catchupKeys);
+    persistUserChanges('playback-progress', [], [...catchupKeys, ...channelResumeKeys]);
   },
 
 };

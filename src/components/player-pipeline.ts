@@ -45,6 +45,7 @@ import type { MseEngine, PipelineStreamInfo } from './mse/engine';
 import { createShakaEngine, shakaQualityTiers, shakaRestrictions, type ShakaPlayerLike } from './mse/shaka-engine';
 import {
   containerMime,
+  nativeSourceMime,
   sniffStreamContentType,
   isMpdText,
   mpdOpeningVerdict,
@@ -1609,7 +1610,7 @@ export class PlayerPipeline {
       this.playNativeDash(url);
       return;
     }
-    this.playNative(url, mime);
+    this.playNative(url, nativeSourceMime(mime));
   }
 
   // A Video quality that limits the variants reads them before the TV loads
