@@ -2521,6 +2521,25 @@ describe('EpgGrid timeline layout', () => {
     expect(container.querySelectorAll('.focused')).toHaveLength(1);
   });
 
+  it('scrolls tall rows under the pointer for the wheel, keeping the focus there through a jitter', () => {
+    state.channels = Array.from({ length: 20 }, (_, i) => ({ name: `ch${String(i + 1)}`, url: `http://host/${String(i + 1)}` }));
+    grid.render();
+    setInputMode('pointer');
+    vi.advanceTimersByTime(1000);
+    const timeline = timelineOf();
+    // Row five sits under y=400, below the 52px ruler.
+    for (let i = 0; i < 3; i++) {
+      fire('nav:wheel', { deltaY: 100, clientX: 1000, clientY: 400 });
+      vi.advanceTimersByTime(200);
+    }
+    expect(timeline.scrollGoal).toBe(240);
+    expect(focusedChannel()).toBe('ch8');
+
+    fire('nav:pointermove', { clientX: 1020, clientY: 410 });
+    expect(focusedChannel()).toBe('ch8');
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
   const hourly = (count: number, withDescription = (_i: number) => true) => {
     state.channels = Array.from({ length: count }, (_, i) => ({ name: `ch${String(i + 1)}`, url: `http://host/${String(i + 1)}` }));
     state.programmes = Object.fromEntries(state.channels.map((channel, i) => [channel.name,

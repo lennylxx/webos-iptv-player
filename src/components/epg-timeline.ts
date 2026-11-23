@@ -307,6 +307,11 @@ export class GuideTimeline {
     return true;
   }
 
+  // Whether the rows are taller than the view, so they scroll at all.
+  rowsOverflow(): boolean {
+    return this.maxScroll() > 0;
+  }
+
   // Focuses the wholly shown row nearest the view's y, at the anchor's
   // programme; true when the row changed.
   focusRowAt(y: number): boolean {

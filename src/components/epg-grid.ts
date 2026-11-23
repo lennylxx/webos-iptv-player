@@ -1419,12 +1419,17 @@ export class EpgGrid {
     if (this.edgeCarry < 1) return 'still';
     while (this.edgeCarry >= 1 && tl.edgeStep(axis, direction)) this.edgeCarry -= 1;
     this.edgeCarry = Math.min(this.edgeCarry, 1);
-    const point = Focus.pointerPosition();
+    this.followPointerAfterScroll(Focus.pointerPosition(), axis === 'y');
+    return 'moved';
+  }
+
+  // The rows or the page moved under a resting pointer: focus what is now under it.
+  private followPointerAfterScroll(point: { x: number; y: number } | null, rows: boolean): void {
     const host = this.timelineHost();
     let rowMoved = false;
-    if (axis === 'y' && point && host) {
+    if (rows && point && host) {
       const r = host.getBoundingClientRect();
-      if (r.height) rowMoved = tl.focusRowAt((point.y - r.top) * (this.timelineHeight / r.height));
+      if (r.height) rowMoved = this.timeline.focusRowAt((point.y - r.top) * (this.timelineHeight / r.height));
     }
     const hit = point ? this.pointTimeline(point.x, point.y) : null;
     if (hit !== 'changed') {
@@ -1433,7 +1438,16 @@ export class EpgGrid {
       if (rowMoved) this.paint('pointer');
     }
     if (this.timelineStamp() !== this.timelineDrawnStamp) this.drawTimeline();
-    return 'moved';
+  }
+
+  // Whether the point lies over the rows, below the ruler.
+  private overTimelineRows(point: { x: number; y: number }): boolean {
+    const r = this.timelineHost()?.getBoundingClientRect();
+    if (!r || !r.width || !r.height) return false;
+    const tl = this.timeline;
+    const px = (point.x - r.left) * (tl.width / r.width);
+    const py = (point.y - r.top) * (this.timelineHeight / r.height);
+    return px >= 0 && px < tl.cellsRight && py >= tl.rulerHeight && py < tl.viewHeight;
   }
 
   private freezeDetail(): void {
@@ -1869,19 +1883,28 @@ export class EpgGrid {
     });
 
     // Over the timeline the wheel steps one row instead of paging as
-    // Channel Up/Down; the group menu scrolls natively.
+    // Channel Up/Down; the group menu scrolls natively. Over rows taller
+    // than the view, the wheel scrolls them under the pointer instead, as
+    // the schedule's list scrolls, so the focus stays under the pointer.
     this.container.addEventListener('nav:wheel', (e: Event) => {
       const target = e.target as HTMLElement;
       // The rows and their details only; the toolbar above keeps the wheel as in the schedule layout.
       if (!this.timelineLayout || !target.closest?.('.epg-tl, .epg-tl-detail')) return;
       e.preventDefault();
-      const { deltaY } = (e as CustomEvent<{ deltaY?: number }>).detail ?? {};
+      const { deltaY, clientX, clientY } = (e as CustomEvent<{ deltaY?: number; clientX?: number; clientY?: number }>).detail ?? {};
       const owner = Focus.owner();
       if (!deltaY || this.groupOpen || this.resumePrompt.visible
           || (owner && owner !== this.focusScope && owner.modal)) return;
       const now = performance.now();
       if (now - this.lastWheelAt < WHEEL_STEP_MS) return;
       this.lastWheelAt = now;
+      const point = typeof clientX === 'number' && typeof clientY === 'number'
+        ? { x: clientX, y: clientY } : Focus.pointerPosition();
+      if (InputMode.current !== 'keys' && point && this.timeline.rowsOverflow() && this.overTimelineRows(point)) {
+        this.wheelPointer = null;
+        if (this.timeline.edgeStep('y', deltaY > 0 ? 1 : -1)) this.followPointerAfterScroll(point, true);
+        return;
+      }
       const animate = document.documentElement.getAttribute('data-animation') === 'full';
       if (this.timeline.move(deltaY > 0 ? 'down' : 'up', animate) !== 'moved') return;
       this.wheelPointer = Focus.pointerPosition();
