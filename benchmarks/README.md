@@ -30,8 +30,10 @@ npm run benchmark
 
 `BENCHMARK_TOLERANCE` controls the comparison allowance and defaults to 15%.
 `BENCHMARK_ABSOLUTE_TOLERANCE_MS` defaults to 3ms, preventing tiny navigation
-metrics from failing on insignificant scheduler jitter. The larger of the
-percentage and absolute allowances is used.
+metrics from failing on insignificant scheduler jitter. Frame metrics
+(`*.frame.*`, `*FrameMs`, `*FrameGapMs`) move in whole frames, so
+`BENCHMARK_FRAME_TOLERANCE_MS` (default 17ms) lets one missed frame pass.
+The larger of the percentage and absolute allowances is used.
 The comparator rejects mismatched scale, CPU rate, browser, schema version, or
 sample counts instead of comparing incompatible reports.
 
@@ -201,6 +203,7 @@ device, Worker throttle mode, fixture, run count, or network list.
 | EPG open, search, and mapping | Red-key-to-visible and red-key-to-first-frame latency, the longest Long Task during that transition, channel-search query distributions, and manual mapping query distributions over a 50,000-channel guide |
 | EPG Channel List | 50,000 channels, bounded DOM/extent, and navigation distribution under `epg.channelList` |
 | EPG Program List | 50,000 programs for one channel, bounded DOM/extent, and navigation distribution under `epg.programList` |
+| EPG Timeline | The Timeline layout over its own guide under `epg.timeline`: Red-key-to-visible and first-frame latency, the longest Long Task during the open, bounded pooled rows, cells, and Guide DOM nodes, and D-pad distributions for row moves within the page and scrolling down and up, programme moves within the page and paging the window right and left, Channel Down/Up pages of rows, and Red back to now |
 | Groups | Repeated All/large/small switching plus a separate 50,000-unique-group reload covering Channel List, Sidebar, and EPG group navigation |
 | Movies | Category load, 50,000-item grid load, DOM size, and navigation |
 | Series | Category/grid/detail load, grid navigation, and episode navigation |
@@ -220,6 +223,23 @@ Structural assertions independently require every virtualized collection to
 retain a bounded DOM window and the full scale-derived scroll extent.
 Large extents use JavaScript-style digit separators, for example
 `"3_600_000px"`, instead of browser-generated scientific notation.
+
+`epg.timeline` reloads the app after Parental Controls with
+`iptv_guide_layout` set to `"timeline"` and a guide of its own for the same
+50,000 channels: programmes from two hours before the present half hour to
+six after on every channel, 30 to 120 minutes long, and on the first 32 rows
+30-minute programmes from 18 hours before to 22 after, so the 3-hour window
+pages through filled rows. The original guide is restored before the M3U
+Search reload. Every sample checks that its key did what it is filed under:
+`rows.inPage` alternates Down and Up without scrolling, `rows.scrollDown` and
+`rows.scrollUp` scroll the rows on every key, `programmes.inPage` alternates
+Right and Left within the page, `programmes.pageRight` and
+`programmes.pageLeft` turn the page on every key, `channelDown` and
+`channelUp` move a page of rows, and `now` presses Red after Left turned the
+page back. Like every suite, it runs with the default `reduced` animation
+setting, so the focus ring moves without its `full`-mode slide. The open's
+first frame and longest Long Task, the handler and frame p95 of every
+distribution, and the Guide's DOM node count are regression-gated.
 
 Xtream Search uses broad and no-match query shapes:
 

@@ -5,6 +5,7 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import {
   assertGroupBenchmarkScale,
+  assertGuideTimelineBenchmark,
   assertColdLoadBenchmark,
   assertM3USearchBenchmark,
   assertParentalBenchmark,
@@ -18,6 +19,7 @@ import {
   cleanupBenchmarkFixture,
   installBenchmarkFixture,
   installColdLoadFixture,
+  installGuideTimelineFixture,
   installM3USearchFixture,
   installUniqueGroupFixture,
   inspectPointerBenchmark,
@@ -26,7 +28,9 @@ import {
   waitForStartupSettled,
   preparePointerBenchmark,
   rebuildBenchmarkDatabase,
+  restoreGuideTimelineFixture,
   runGroupBenchmark,
+  runGuideTimelineBenchmark,
   runM3USearchBenchmark,
   runParentalBenchmark,
   measureXMLTVPipelineBenchmark,
@@ -336,6 +340,24 @@ test('records 50,000-item application benchmarks', async ({
     const parental = await runDesktopParentalBenchmark(page);
     assertParentalBenchmark(parental, SCALE);
     suites.parental = parental;
+    // The Timeline swaps in its own guide, so it runs on a reload of its own
+    // after the suites that use the main guide and restores that guide after.
+    const timelineGuide = await page.evaluate(installGuideTimelineFixture, {
+      epgUrl: FIXTURE.epgUrl,
+    });
+    await page.reload();
+    await page.evaluate(waitForPlaylistLoaded, PLAYLIST_LOADED);
+    // A name-matched channel's programme in Live means the guide is restored.
+    await page.locator('#view-channels .channel-item[data-channel-index="2"] .channel-now')
+      .waitFor({ timeout: PLAYLIST_LOADED.timeoutMs });
+    await page.evaluate(waitForStartupSettled, {});
+    const timeline = await page.evaluate(runGuideTimelineBenchmark, { keySamples: KEY_SAMPLES });
+    assertGuideTimelineBenchmark(timeline, SCALE);
+    (suites.epg as Record<string, unknown>).timeline = {
+      ...timeline,
+      programmesInGuide: timelineGuide.programmes,
+    };
+    await page.evaluate(restoreGuideTimelineFixture, timelineGuide.original);
     await page.evaluate(installM3USearchFixture);
     await page.reload();
     await page.evaluate(waitForPlaylistLoaded, PLAYLIST_LOADED);

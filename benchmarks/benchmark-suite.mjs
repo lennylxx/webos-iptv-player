@@ -1973,6 +1973,334 @@ export async function runGroupBenchmark(options) {
   return { channelList, sidebar, epg };
 }
 
+// The Timeline needs programmes around the present on every row, which the
+// main guide lacks: it times only one channel's day and a channel's three
+// dates. This swaps in a timeline-shaped guide for the same 50,000 channels,
+// matched by id or name: programmes from two hours before the present half
+// hour to six after on every channel, lasting 30, 60, 90, or 120 minutes,
+// and on the first rows 30-minute programmes from 18 hours before to 22
+// after, so the window pages through filled rows. It returns the original
+// record for restoreGuideTimelineFixture.
+export async function installGuideTimelineFixture(options) {
+  const halfHour = 30 * 60_000;
+  const present = Math.floor(Date.now() / halfHour) * halfHour;
+  const pagingRows = 32;
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open('iptv');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+  const requestValue = (request) => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const readTx = db.transaction(['playlist-cache', 'epg-cache'], 'readonly');
+  const playlistStore = readTx.objectStore('playlist-cache');
+  const [cached, chunks, original] = await Promise.all([
+    requestValue(playlistStore.get('combined-v5')),
+    requestValue(playlistStore.getAll(IDBKeyRange.bound('combined-v5#', 'combined-v5#\uffff'))),
+    requestValue(readTx.objectStore('epg-cache').get(options.epgUrl)),
+  ]);
+  const channels = cached && cached.data && cached.data.chunkCount === chunks.length
+    ? [].concat(...chunks.map(chunk => chunk.channels))
+    : [];
+  if (!channels.length || channels.length !== cached.data.channelCount || !original) {
+    db.close();
+    throw new Error('The Timeline guide needs the channel and guide fixtures');
+  }
+  const packBlocks = (entries, perBlock, weight) => {
+    const blocks = [];
+    let block = [];
+    let count = 0;
+    for (const entry of entries) {
+      block.push(...entry);
+      count += weight(entry);
+      if (count >= perBlock) {
+        blocks.push(JSON.stringify(block));
+        block = [];
+        count = 0;
+      }
+    }
+    if (block.length) blocks.push(JSON.stringify(block));
+    return blocks;
+  };
+  const guideChannels = [];
+  const guideProgrammes = [];
+  let programmes = 0;
+  channels.forEach((channel, index) => {
+    const id = channel.id || `tl-${String(index)}`;
+    guideChannels.push([id, channel.name, '', null]);
+    const paging = index < pagingRows;
+    const length = paging ? halfHour : halfHour * (1 + (index % 4));
+    const from = paging ? present - 36 * halfHour : present - 4 * halfHour;
+    const to = paging ? present + 44 * halfHour : present + 12 * halfHour;
+    const flat = [];
+    for (let start = from, slot = 0; start < to; start += length, slot++) {
+      flat.push(
+        start,
+        start + length,
+        `Show ${String(index)}-${String(slot)}`,
+        `Synthetic episode ${String(slot)}`,
+        '',
+        '',
+      );
+      programmes++;
+    }
+    guideProgrammes.push([id, flat]);
+  });
+  const timestamp = Date.now();
+  const tx = db.transaction('epg-cache', 'readwrite');
+  tx.objectStore('epg-cache').put({
+    ...original,
+    timestamp,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    lastAccessedAt: timestamp,
+    data: {
+      format: original.data.format,
+      meta: original.data.meta,
+      channels: packBlocks(guideChannels, 500, () => 1),
+      programmes: packBlocks(guideProgrammes, 500, (entry) => entry[1].length / 6),
+    },
+  });
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+  localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline'));
+  return { original, channels: channels.length, programmes };
+}
+
+export async function restoreGuideTimelineFixture(original) {
+  localStorage.removeItem('iptv_guide_layout');
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open('iptv');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+  const tx = db.transaction('epg-cache', 'readwrite');
+  tx.objectStore('epg-cache').put(original);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+}
+
+// Expects Live shown over installGuideTimelineFixture. Every sample checks
+// that its key did what it is filed under: a row move, a scroll of the rows,
+// a programme move within the page, a page turn, a page of rows, or a return
+// to the present page.
+export async function runGuideTimelineBenchmark(options) {
+  const round = (value) => Math.round(value * 10) / 10;
+  const distribution = (values) => {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const sum = values.reduce((total, value) => total + value, 0);
+    return {
+      p50: round(sorted[Math.floor(sorted.length * 0.5)] || 0),
+      p95: round(sorted[Math.min(
+        sorted.length - 1,
+        Math.floor(sorted.length * 0.95),
+      )] || 0),
+      max: round(sorted[sorted.length - 1] || 0),
+      mean: round(sum / Math.max(1, values.length)),
+    };
+  };
+  const waitFor = async (selector, timeout = 30_000) => {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      const element = document.querySelector(selector);
+      if (element && !element.classList.contains('hidden')) return element;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Timed out waiting for ${selector}`);
+  };
+  const key = (name, code) => {
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      key: name,
+      keyCode: code,
+      bubbles: true,
+    }));
+  };
+  const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  const KEYS = {
+    down: ['ArrowDown', 40],
+    up: ['ArrowUp', 38],
+    left: ['ArrowLeft', 37],
+    right: ['ArrowRight', 39],
+    channelDown: ['PageDown', 34],
+    channelUp: ['PageUp', 33],
+    red: ['', 403],
+  };
+  const press = async (move) => {
+    key(...KEYS[move]);
+    await frame();
+  };
+  const state = () => {
+    const ring = document.querySelector('#view-epg .epg-tl-focus')?.getBoundingClientRect();
+    return {
+      x: ring ? Math.round(ring.left) : NaN,
+      y: ring ? Math.round(ring.top) : NaN,
+      row: document.querySelector('#view-epg .tl-name.is-focused')?.textContent || '',
+      page: Array.from(
+        document.querySelectorAll('#view-epg .tl-ruler-day, #view-epg .tl-ruler-label'),
+        (label) => label.textContent,
+      ).join('|'),
+    };
+  };
+  const did = {
+    row: (a, b) => a.y !== b.y && a.row !== b.row && a.page === b.page,
+    scroll: (a, b) => a.y === b.y && a.row !== b.row && a.page === b.page,
+    cell: (a, b) => a.x !== b.x && a.y === b.y && a.row === b.row && a.page === b.page,
+    page: (a, b) => a.page !== b.page && a.row === b.row,
+    rows: (a, b) => a.row !== b.row && a.page === b.page,
+    now: (a, b) => a.page !== b.page && a.row === b.row,
+  };
+  // `moves` names each sample's key; `prepare` runs unmeasured before it.
+  const measure = async (label, moves, kind, prepare) => {
+    const handlerValues = [];
+    const frameValues = [];
+    for (let index = 0; index < moves.length; index++) {
+      if (prepare) await prepare();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const before = state();
+      const started = performance.now();
+      key(...KEYS[moves[index]]);
+      handlerValues.push(performance.now() - started);
+      await new Promise((resolve) => requestAnimationFrame(() => {
+        frameValues.push(performance.now() - started);
+        resolve();
+      }));
+      const after = state();
+      if (!did[kind](before, after)) {
+        throw new Error(
+          `Timeline ${label} sample ${String(index + 1)} (${moves[index]}) did not `
+            + `${kind}: ${JSON.stringify({ before, after })}`,
+        );
+      }
+    }
+    return {
+      ...distribution(handlerValues),
+      frame: distribution(frameValues),
+      framesOver50Ms: frameValues.filter(value => value > 50).length,
+    };
+  };
+  // Presses `move` unmeasured until one does `kind`.
+  const pressUntil = async (move, kind, limit = 50) => {
+    for (let index = 0; index < limit; index++) {
+      const before = state();
+      await press(move);
+      if (did[kind](before, state())) return;
+    }
+    throw new Error(`Timeline ${move} never did ${kind}`);
+  };
+  const samples = (moves) =>
+    Array.from({ length: options.keySamples }, (_, index) => moves[index % moves.length]);
+
+  const longTasks = [];
+  let observer = null;
+  if (typeof PerformanceObserver !== 'undefined') {
+    try {
+      observer = new PerformanceObserver((list) => {
+        list.getEntries().forEach((entry) => longTasks.push({
+          startTime: entry.startTime,
+          duration: entry.duration,
+        }));
+      });
+      observer.observe({ entryTypes: ['longtask'] });
+    } catch {
+      observer = null;
+    }
+  }
+  const started = performance.now();
+  key(...KEYS.red);
+  await waitFor('#view-epg .tl-row');
+  const openMs = round(performance.now() - started);
+  await frame();
+  const finished = performance.now();
+  const firstFrameMs = round(finished - started);
+  if (observer) {
+    observer.takeRecords().forEach((entry) => longTasks.push({
+      startTime: entry.startTime,
+      duration: entry.duration,
+    }));
+    observer.disconnect();
+  }
+  const openTasks = longTasks.filter(entry =>
+    entry.startTime < finished && entry.startTime + entry.duration > started);
+  const maxLongTaskMs = round(openTasks.length
+    ? Math.max(...openTasks.map(entry => entry.duration))
+    : 0);
+  if (!document.querySelector('#view-epg .epg-view--timeline')) {
+    throw new Error('The Guide did not open in the Timeline layout');
+  }
+  if (!document.querySelector('#view-epg .tl-cell')) {
+    throw new Error('The Timeline opened without programmes');
+  }
+  const openedOn = state().row;
+
+  const rowsInPage = await measure('row', samples(['down', 'up']), 'row');
+  const cellsInPage = await measure('programme', samples(['right', 'left']), 'cell');
+  await pressUntil('right', 'page');
+  const pageRight = await measure('page right', samples(['right']), 'page');
+  // Left turns the present page back first; on a later page it is harmless.
+  const now = await measure('now', samples(['red']), 'now', () => press('left'));
+  const pageLeft = await measure('page left', samples(['left']), 'page');
+  await press('red');
+  await pressUntil('down', 'scroll');
+  const scrollDown = await measure('scroll down', samples(['down']), 'scroll');
+  for (let index = 0; index < 3; index++) await press('down');
+  await pressUntil('up', 'scroll');
+  const scrollUp = await measure('scroll up', samples(['up']), 'scroll');
+  const channelDown = await measure('channel down', samples(['channelDown']), 'rows');
+  const channelUp = await measure('channel up', samples(['channelUp']), 'rows');
+
+  const surface = document.querySelector('#view-epg .epg-tl-surface');
+  const rows = surface ? Array.from(surface.querySelectorAll('.tl-row')) : [];
+  const count = document.querySelector('#view-epg .epg-tl-count')?.textContent || '';
+  const report = {
+    openMs,
+    firstFrameMs,
+    maxLongTaskMs,
+    openedOn,
+    channels: Number(count.replace(/\D/g, '')),
+    rendered: rows.length,
+    shownRows: rows.filter(row => row.style.visibility !== 'hidden').length,
+    cells: surface ? surface.querySelectorAll('.tl-cell').length : 0,
+    nodes: document.getElementById('view-epg').getElementsByTagName('*').length,
+    rows: { inPage: rowsInPage, scrollDown, scrollUp },
+    programmes: { inPage: cellsInPage, pageRight, pageLeft },
+    channelDown,
+    channelUp,
+    now,
+  };
+  key('Backspace', 461);
+  await waitFor('#view-channels:not(.hidden)');
+  return report;
+}
+
+export function assertGuideTimelineBenchmark(report, scale) {
+  if (report.channels !== scale) {
+    throw new Error(`Timeline counted ${String(report.channels)} channels; expected ${String(scale)}`);
+  }
+  if (report.openedOn !== 'Channel 0') {
+    throw new Error(`Timeline opened on ${report.openedOn}; expected Channel 0`);
+  }
+  // About nine rows show at 1080p; the pool keeps one more on each side.
+  if (!(report.shownRows > 0 && report.rendered < 30)) {
+    throw new Error(`Timeline mounted ${String(report.rendered)} rows; expected 1-29`);
+  }
+  if (!(report.cells > report.shownRows && report.cells < 400)) {
+    throw new Error(`Timeline mounted ${String(report.cells)} cells; expected 1 per row, under 400`);
+  }
+  if (!(report.nodes > 0 && report.nodes < 3000)) {
+    throw new Error(`The Timeline Guide holds ${String(report.nodes)} nodes; expected under 3000`);
+  }
+}
+
 // Expects the Parental Controls manager open on the Live source. VOD category
 // index 6 is the fixture's category 13, which holds every movie.
 export async function runParentalBenchmark(options) {

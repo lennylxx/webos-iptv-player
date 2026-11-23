@@ -14,6 +14,7 @@ const baselinePath = path.join(root, 'benchmarks', `${tv ? 'tv-' : ''}baseline.j
 const update = process.argv.includes('--update');
 const tolerance = Number(process.env.BENCHMARK_TOLERANCE ?? '0.15');
 const absoluteToleranceMs = Number(process.env.BENCHMARK_ABSOLUTE_TOLERANCE_MS ?? '3');
+const frameToleranceMs = Number(process.env.BENCHMARK_FRAME_TOLERANCE_MS ?? '17');
 const interactiveAbsoluteToleranceMs = Number(
   process.env.BENCHMARK_INTERACTIVE_ABSOLUTE_TOLERANCE_MS ?? '100',
 );
@@ -22,6 +23,9 @@ if (!Number.isFinite(tolerance) || tolerance < 0) {
 }
 if (!Number.isFinite(absoluteToleranceMs) || absoluteToleranceMs < 0) {
   throw new Error('BENCHMARK_ABSOLUTE_TOLERANCE_MS must be a non-negative number');
+}
+if (!Number.isFinite(frameToleranceMs) || frameToleranceMs < 0) {
+  throw new Error('BENCHMARK_FRAME_TOLERANCE_MS must be a non-negative number');
 }
 if (!Number.isFinite(interactiveAbsoluteToleranceMs) || interactiveAbsoluteToleranceMs < 0) {
   throw new Error('BENCHMARK_INTERACTIVE_ABSOLUTE_TOLERANCE_MS must be a non-negative number');
@@ -72,10 +76,14 @@ const heapAllowanceMiB = 8;
 const isInteractive = metricPath => metricPath.startsWith('interactive.');
 const isCount = metricPath => isInteractive(metricPath) && metricPath.includes('.idb.');
 const isHeap = metricPath => isInteractive(metricPath) && metricPath.includes('.heap.');
+// A frame time moves in whole frames, so one missed vsync is not a regression.
+const isFrame = metricPath => !isInteractive(metricPath)
+  && /\.frame\.|FrameMs$|FrameGapMs$/.test(metricPath);
 // Cold launches jitter by tens of milliseconds, so a 3ms floor would be noise.
 const allowance = metricPath => {
   if (isCount(metricPath)) return countAllowance;
   if (isHeap(metricPath)) return heapAllowanceMiB;
+  if (isFrame(metricPath)) return frameToleranceMs;
   return isInteractive(metricPath) ? interactiveAbsoluteToleranceMs : absoluteToleranceMs;
 };
 
@@ -101,6 +109,21 @@ const performanceMetricPaths = [
   'epg.channelList.frame.p95',
   'epg.programList.p95',
   'epg.programList.frame.p95',
+  'epg.timeline.firstFrameMs',
+  'epg.timeline.maxLongTaskMs',
+  ...[
+    'rows.inPage',
+    'rows.scrollDown',
+    'rows.scrollUp',
+    'programmes.inPage',
+    'programmes.pageRight',
+    'programmes.pageLeft',
+    'channelDown',
+    'channelUp',
+    'now',
+  ].flatMap(keys => [`epg.timeline.${keys}.p95`, `epg.timeline.${keys}.frame.p95`]),
+  // A node count, gated by the same allowance, so a pool that stops recycling shows.
+  'epg.timeline.nodes',
   'movies.navigation.p95',
   'movies.navigation.frame.p95',
   'series.navigation.p95',
@@ -223,6 +246,7 @@ for (const field of compatibilityFields) {
 let failed = false;
 console.log(`Allowed regression: ${(tolerance * 100).toFixed(0)}%`);
 console.log(`Minimum absolute allowance: ${absoluteToleranceMs.toFixed(1)}ms`);
+console.log(`Minimum frame allowance: ${frameToleranceMs.toFixed(1)}ms`);
 if (interactiveMetricPaths.length) {
   console.log(`Minimum interactive allowance: ${interactiveAbsoluteToleranceMs.toFixed(1)}ms`);
 }

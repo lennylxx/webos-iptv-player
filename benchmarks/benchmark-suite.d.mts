@@ -256,6 +256,44 @@ export function runGroupBenchmark(
   options: { keySamples: number },
 ): Promise<Record<string, any>>;
 
+export function installGuideTimelineFixture(
+  options: { epgUrl: string },
+): Promise<{ original: unknown; channels: number; programmes: number }>;
+
+export function restoreGuideTimelineFixture(original: unknown): Promise<void>;
+
+export interface KeyDistribution {
+  p50: number;
+  p95: number;
+  max: number;
+  mean: number;
+  frame: { p50: number; p95: number; max: number; mean: number };
+  framesOver50Ms: number;
+}
+
+export interface GuideTimelineBenchmark {
+  openMs: number;
+  firstFrameMs: number;
+  maxLongTaskMs: number;
+  openedOn: string;
+  channels: number;
+  rendered: number;
+  shownRows: number;
+  cells: number;
+  nodes: number;
+  rows: { inPage: KeyDistribution; scrollDown: KeyDistribution; scrollUp: KeyDistribution };
+  programmes: { inPage: KeyDistribution; pageRight: KeyDistribution; pageLeft: KeyDistribution };
+  channelDown: KeyDistribution;
+  channelUp: KeyDistribution;
+  now: KeyDistribution;
+}
+
+export function runGuideTimelineBenchmark(
+  options: { keySamples: number },
+): Promise<GuideTimelineBenchmark>;
+
+export function assertGuideTimelineBenchmark(report: GuideTimelineBenchmark, scale: number): void;
+
 export function summarizeRetainedMemory(
   beforeBytes: number,
   cycleBytes: number[],
