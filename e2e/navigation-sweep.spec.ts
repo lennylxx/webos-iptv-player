@@ -556,6 +556,38 @@ const SCREENS: Screen[] = [
     },
   })),
   {
+    name: 'Theme editor',
+    root: '.theme-editor-host',
+    focusables: '[data-focusable]',
+    columns: [['heading', '.theme-editor-heading'], ['list', '.theme-editor-list']],
+    tags: [],
+    cross: [],
+    followScroll: true,
+    async open(page) {
+      await openTab(page, 'settings');
+      await page.locator('#view-settings .settings-nav-item[data-settings-target="appearance"]').click();
+      await page.locator('[data-theme-new]').click();
+      await page.mouse.move(1, 1);
+      await expect(page.locator('.theme-editor [data-color-seed="accent"]')).toHaveClass(/focused/);
+    },
+  },
+  {
+    name: 'Theme color picker',
+    root: '.theme-color-picker',
+    focusables: '[data-focusable]',
+    columns: [['palette', '.theme-picker-grid'], ['fine', '.theme-picker-dialog']],
+    tags: [],
+    cross: [],
+    async open(page) {
+      await openTab(page, 'settings');
+      await page.locator('#view-settings .settings-nav-item[data-settings-target="appearance"]').click();
+      await page.locator('[data-theme-new]').click();
+      await page.mouse.move(1, 1);
+      await page.keyboard.press('Enter');
+      await expect(page.locator('.theme-color-picker .theme-picker-cell').first()).toHaveClass(/focused/);
+    },
+  },
+  {
     ...SEARCH,
     name: 'Search',
     async open(page) {

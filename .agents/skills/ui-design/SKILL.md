@@ -126,10 +126,30 @@ broken.
   moves geometrically within it and crosses regions predictably. Add
   `data-nav-enter="last-focused"` when re-entering a region should return
   to where the user left it (rails, lists, menus).
+- **State how a container moves; don't patch geometry.** Plain geometry
+  lets Left at a row's start jump to the row above. Declare the rule on
+  the container instead (`src/navigation/spatial-nav.ts`):
+  - `data-nav-straight`: Left and Right stay on the line; Up and Down step
+    line by line to the nearest element across. Use it on every list,
+    form, or grid of rows: settings-style label/control rows, a palette
+    grid, a sidebar, an action row.
+  - `data-nav-remember`: the opposite key returns to where focus came
+    from, while it still lies that way.
+  - `data-nav-leave-{up|down|left|right}=".selector"`: where that key
+    leaves the container; an empty value keeps focus in place.
+  - `data-nav-enter="first"`: enter a nested row at its first element.
+  - `data-nav-rect`: measure a target by its first child, so a label
+    sliding out beside it doesn't move it.
+- **Every new screen or overlay joins the navigation sweep.** Add it to
+  `SCREENS` in `e2e/navigation-sweep.spec.ts`: each arrow key from what it
+  shows must stay on screen, keep Left/Right on the line, change line on
+  Up/Down, and reach everything. Fix what it reports with the attributes
+  above, not by listing it in `KNOWN_FAILING`.
 - **Styling.** Focus is the **`.focused` class**, not `:focus` or
   `:focus-visible` (Chromium 53, and the remote never moves DOM focus).
-  The base ring lives in `css/navigation.css`: `--focus-ring` border plus an
-  `--accent-glow` shadow. Extend it per component; don't reinvent it, and
+  The base ring lives in `css/navigation.css`: `--focus-ring` border plus a
+  `--focus-glow` shadow (a custom theme may set both apart from the
+  accent). Extend it per component; don't reinvent it, and
   match the focus color and shape used elsewhere.
 - **One ring, on the visual target.** A card frames its poster, not poster
   plus caption, with no gap between ring and image; override the global
@@ -331,7 +351,10 @@ Run this before calling a UI change done; fix or justify every miss.
       frames only the visual target, isn't clipped, and doesn't shift
       layout.
 - [ ] Focus order follows the visual grid; initial focus and Back are
-      sensible; containers use `data-nav-enter` where re-entry matters.
+      sensible; containers use `data-nav-enter` where re-entry matters,
+      and rows declare `data-nav-straight` instead of relying on geometry.
+- [ ] A new screen or overlay is in `e2e/navigation-sweep.spec.ts` and
+      passes it.
 - [ ] Selection is distinct from focus and doesn't depend on it.
 - [ ] Works with D-pad alone and with the Magic Remote pointer; hover
       clears on leave and never changes the legend.

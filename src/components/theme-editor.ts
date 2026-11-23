@@ -374,13 +374,15 @@ export class ThemeEditor {
     morph(this.view, html`
       <div class="theme-editor-view">
         <header class="theme-editor-header">
-          <div class="theme-editor-heading">
+          <div class="theme-editor-heading" data-nav-container data-nav-straight
+               data-nav-leave-left="" data-nav-leave-right="">
             <h2>${this.options?.theme ? t('theme.editTitle') : t('theme.new')}</h2>
             <button class="btn btn-primary" data-focusable data-key="te-save" data-theme-save>${t('common.save')}</button>
           </div>
         </header>
         <div class="theme-editor-body">
-          <div class="theme-editor-list" data-nav-container>
+          <div class="theme-editor-list" data-nav-container data-nav-straight
+               data-nav-leave-left="" data-nav-leave-right="">
             ${row(t('settings.name'), html`
               <input type="text" class="settings-input theme-editor-name" data-focusable data-key="te-name"
                      data-theme-name maxlength="${MAX_THEME_NAME}" value="${this.name}">`)}
@@ -652,13 +654,15 @@ export class ThemeEditor {
     morph(this.picker, html`
       <div class="confirmation-dialog theme-picker-dialog">
         <div class="confirmation-title">${SEED_LABEL[seed]()}</div>
-        <div class="theme-picker-grid" data-nav-container>
+        <div class="theme-picker-grid" data-nav-container data-nav-straight
+             data-nav-leave-left="" data-nav-leave-right="">
           ${cells.map((cell, index) => html`
             <button class="theme-picker-cell ${cell === value ? 'active' : ''}" data-focusable
                     data-key="cell:${index}" data-color="${cell}" style="background:${cell}"
                     aria-label="${cell.toUpperCase()}"></button>`)}
         </div>
-        <div class="theme-picker-fine" data-nav-container>
+        <div class="theme-picker-fine" data-nav-container data-nav-straight
+             data-nav-leave-left="" data-nav-leave-right="">
         ${step('h', t('theme.hue'), `${Math.round(this.hsl.h)}°`, 5)}
         ${step('s', t('theme.saturation'), `${Math.round(this.hsl.s * 100)}%`, 2)}
         ${step('l', t('theme.lightness'), `${Math.round(this.hsl.l * 100)}%`, 2)}
