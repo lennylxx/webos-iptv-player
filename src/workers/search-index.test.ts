@@ -172,4 +172,36 @@ describe('SearchWorkerIndex', () => {
       chunk: { source: 'series', start: 1, total: 2, names: ['Alpha 2'] },
     })).toEqual({ accepted: false });
   });
+
+  it('appends matches of the alternatives and the transliteration after the query\'s own', () => {
+    const index = new SearchWorkerIndex();
+    post(index, 1, {
+      channels: [['Bravo Quix', 'Sport'], ['Alpha Zorb', 'Sport'], ['Шорка', 'Sport']],
+      programmes: [['Quix Night', 'Sport']],
+      movies: ['Quix Movie', 'Zorb Movie'],
+      series: [],
+    });
+    const response = query(index, {
+      sessionId: 1, query: 'zorb', limit: 10, includeCatalog: true, alternatives: ['quix'],
+    });
+    expect(response?.channels.indices).toEqual([1, 0]);
+    expect(response?.movies.indices).toEqual([1, 0]);
+    expect(response?.programmes.indices).toEqual([0]);
+    expect(response?.expanded).toEqual(['quix']);
+
+    expect(query(index, { sessionId: 1, query: 'shorka', limit: 10, includeCatalog: true })?.channels.indices).toEqual([]);
+    const shorka = query(index, { sessionId: 1, query: 'shorka', limit: 10, includeCatalog: true, settled: true });
+    expect(shorka?.channels.indices).toEqual([2]);
+    expect(shorka?.expanded).toEqual(['шорка']);
+    expect(query(index, { sessionId: 1, query: 'shorka', limit: 10, includeCatalog: true })?.moreWhenSettled).toBe(true);
+    expect(shorka?.moreWhenSettled).toBeUndefined();
+    expect(query(index, { sessionId: 1, query: 'zorb', limit: 10, includeCatalog: true })?.expanded).toBeUndefined();
+  });
+
+  it('says a settled ranking adds nothing for a Latin query when no list uses Cyrillic', () => {
+    const index = new SearchWorkerIndex();
+    post(index, 1, { channels: [['Alpha', 'News']], programmes: [['Bravo Report', 'News']], movies: [], series: [] });
+    expect(query(index, { sessionId: 1, query: 'zorb', limit: 10, includeCatalog: true })?.moreWhenSettled).toBeUndefined();
+    expect(query(index, { sessionId: 1, query: 'kids', limit: 10, includeCatalog: true })?.moreWhenSettled).toBe(true);
+  });
 });

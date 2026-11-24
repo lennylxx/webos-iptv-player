@@ -32,6 +32,26 @@
 .search-empty { margin-top: 40px; }
 /* Movies and series are still loading under the channel and program results. */
 .search-loading-more { margin-top: 12px; }
+/* Names what else was searched in a band below the results, outside the
+   scroller, which gives the band its bottom padding: it shows wherever focus
+   is and covers no result. */
+.search-view.search-view-hinted {
+  height: calc(100% - 64px * var(--font-scale));
+  padding-bottom: 0;
+}
+/* Sized like the app's bottom legend bars (.edit-hints.catalog-manage-hints),
+   growing with the text size. */
+.catalog-hint.search-expanded {
+  position: absolute;
+  left: 80px;
+  right: 80px;
+  bottom: 0;
+  height: calc(64px * var(--font-scale));
+  line-height: calc(64px * var(--font-scale));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 .search-virtual-section { margin-bottom: 28px; }
 

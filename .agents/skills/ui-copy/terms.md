@@ -67,6 +67,8 @@ a new term after review, add a row here.
 | Daily cap hit during a task | Daily AI limit reached. Translation paused. | 已达到每日 AI 上限，翻译已暂停。 |
 | AI-picked EPG mapping row (badge) | AI suggestion | AI 推荐 |
 | Rule-based similar guide channels (caption) | Similar names | 相似名称 |
+| AI-suggested search terms on top of built-in multilingual matching (setting) | AI-enhanced multilingual search | AI 增强多语言搜索 |
+| Results an expanded query added (Search) | Including results for {terms} | 还包括以下内容的结果：{terms} |
 
 ## Rejected wordings
 
@@ -82,6 +84,8 @@ Never reintroduce these for the concept named.
 | EPG view | 节目单 (频道节目单 names one channel's schedule) | 节目指南 |
 | All channels | 全局频道 / "Global" | — |
 | Spelling | "programme" | program |
+| AI multilingual search setting | Multilingual search (implies off = no multilingual matching), Multilingual search with AI / AI multilingual search / AI 多语言搜索, AI search suggestions / AI 搜索建议 (autocomplete), Search in other languages, Smart search, AI query expansion | AI-enhanced multilingual search / AI 增强多语言搜索 |
+| Expanded-query results line | Also searched: …, Showing results for … | Including results for … |
 | Sort direction | Ascending / Descending / 升序 / 降序 / Asc / Desc, 最旧 | A–Z / Newest / Highest, 最早 |
 | Set separately | "Exception" / 例外 | Set separately / 单独设置 |
 | Partly locked | "Mixed" / 混合 | Partly locked / 部分锁定 |

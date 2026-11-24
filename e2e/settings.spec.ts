@@ -1989,3 +1989,40 @@ test.describe('Settings phone setup card', () => {
     expect(layout.centerOffset).toBe(0);
   });
 });
+
+test.describe('Settings multilingual search', () => {
+  const ringIn = (page: Page) => page.evaluate(() => {
+    const ring = document.querySelector('#view-settings .focused');
+    return ring?.closest('[id]')?.id ?? null;
+  });
+
+  test('the D-pad reaches the toggle from the daily limits, turns it on, and leaves it again', async ({ page }) => {
+    await seedPlaylist(page);
+    await routePlaylist(page);
+    await routeLiveManifest(page);
+    await page.goto('/');
+    await liveLoaded(page);
+    await enterTab(page, 'settings');
+    const limit = page.locator('#ai-daily-tokens');
+    await limit.scrollIntoViewIfNeeded();
+    await limit.hover();
+
+    await page.keyboard.press('ArrowDown');
+    expect(await ringIn(page)).toBe('ai-search-expansion');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#ai-search-expansion .toggle-option.active')).toHaveAttribute('data-value', 'on');
+    await expect.poll(() => rings(page)).toHaveLength(1);
+
+    await page.keyboard.press('ArrowDown');
+    expect(await ringIn(page)).not.toBe('ai-search-expansion');
+    await page.keyboard.press('ArrowUp');
+    expect(await ringIn(page)).toBe('ai-search-expansion');
+    await page.keyboard.press('ArrowUp');
+    expect(await ringIn(page)).toBe('ai-daily-tokens');
+
+    await page.locator('#save-settings').click();
+    await expect.poll(() => page.evaluate(() =>
+      JSON.parse(localStorage.getItem('iptv_llm') || '{}').features?.['search-expansion'])).toBe(true);
+  });
+});

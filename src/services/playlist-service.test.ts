@@ -2029,6 +2029,12 @@ describe('PlaylistService.searchLocalRanked', () => {
     expect(localSearchResults('char').map(c => c.name)).toEqual(['Charlie']);
   });
 
+  it('finds a script in any searched field, also after the list grows in place', () => {
+    expect(PlaylistService.localSearchHasScript('cyrillic')).toBe(false);
+    PlaylistService.channels.push(channel({ name: 'Delta', group: 'Шорка', playlistIds: ['P1'] }));
+    expect(PlaylistService.localSearchHasScript('cyrillic')).toBe(true);
+  });
+
   it('builds the local fallback index only when search is used', () => {
     const internals = PlaylistService as unknown as {
       channelSearchIndex: unknown[];

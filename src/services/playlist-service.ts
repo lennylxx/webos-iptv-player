@@ -27,7 +27,9 @@ import {
   channelStreamKey,
 } from '../utils/channel';
 import { createXtreamLiveStreamIdResolver } from '../utils/xtream-live-match';
+import type { SearchScript } from '../utils/transliterate';
 import {
+  preparedHaveScript,
   prepareSearchItem,
   rankPreparedTopK,
   type PreparedSearchItem,
@@ -1365,18 +1367,25 @@ class PlaylistServiceImpl {
       : this.channelsByGroup.get(sourceGroup)?.length ?? 0;
   }
 
+  /** Whether the searched channel fields use a script, as the search worker checks them. */
+  localSearchHasScript(script: SearchScript): boolean {
+    this.ensureLocalSearchIndexes();
+    return preparedHaveScript(this.channelSearchIndex, script);
+  }
+
   searchLocalRanked(
     query: string,
     limit: number,
     playlist?: string,
     fuzzyFill?: number,
+    multilingual = false,
   ): RankedSearchResult<Channel> {
     if (!query.trim()) return { items: [] };
     this.ensureLocalSearchIndexes();
     const index = playlist
       ? this.channelSearchByPlaylist.get(playlist) ?? []
       : this.channelSearchIndex;
-    return rankPreparedTopK(index, query, limit, fuzzyFill);
+    return rankPreparedTopK(index, query, limit, fuzzyFill, multilingual);
   }
 
   getPlaylistIdsForGroup(group: ChannelGroupId): string[] {

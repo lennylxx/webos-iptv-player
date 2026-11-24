@@ -1,6 +1,13 @@
+import type { SearchScript } from '../utils/transliterate';
 import {
+  expandedQueries,
+  hasMultilingualSynonyms,
+  transliterates,
   foldSearchText,
+  namesHaveScript,
+  preparedHaveScript,
   prepareFoldedSearchItem,
+  rankExpanded,
   rankPreparedNamesTopK,
   rankPreparedTopK,
   type PreparedNameSearchIndex,
@@ -654,20 +661,35 @@ export class SearchWorkerIndex {
 
   private runQuery(request: SearchQueryRequest): SearchQueryResponse | null {
     if (request.sessionId !== this.sessionId) return null;
+    const expanded = new Set<string>();
+    const fields = (index: PreparedSearchItem<number>[]): SearchRankedIndices =>
+      rankedFields(index, request, expanded);
+    const names = (index: PreparedNameSearchIndex<number>): SearchRankedIndices =>
+      rankedNames(index, request, expanded);
     const response: SearchQueryResponse = {
-      channels: rankedFields(this.channels, request.query, request.limit),
-      programmes: request.includeProgrammes === false
-        ? emptyResult()
-        : rankedFields(this.programmes, request.query, request.limit),
-      movies: request.includeCatalog
-        ? rankedNames(this.movies, request.query, request.limit)
-        : emptyResult(),
-      series: request.includeCatalog
-        ? rankedNames(this.series, request.query, request.limit)
-        : emptyResult(),
+      channels: fields(this.channels),
+      programmes: request.includeProgrammes === false ? emptyResult() : fields(this.programmes),
+      movies: request.includeCatalog ? names(this.movies) : emptyResult(),
+      series: request.includeCatalog ? names(this.series) : emptyResult(),
     };
+    if (expanded.size) response.expanded = setValues(expanded);
+    if (!request.settled && this.settlingAdds(request)) response.moreWhenSettled = true;
     if (this.movieItems || this.seriesItems) response.items = this.deliver(request, response);
     return response;
+  }
+
+  // Whether the settled ranking would try more: a genre word's translations,
+  // or a spelling in a script some searched list uses.
+  private settlingAdds(request: SearchQueryRequest): boolean {
+    if (hasMultilingualSynonyms(request.query)) return true;
+    const lists: Array<(script: SearchScript) => boolean> = [
+      script => preparedHaveScript(this.channels, script),
+      script => preparedHaveScript(this.programmes, script),
+    ];
+    if (request.includeCatalog) {
+      lists.push(script => namesHaveScript(this.movies, script), script => namesHaveScript(this.series, script));
+    }
+    return lists.some(hasTarget => transliterates(request.query, hasTarget));
   }
 
   // Sends each ranked record item once per epoch. The page counts what it
@@ -731,18 +753,48 @@ function foldedNames(values: string[]): PreparedNameSearchIndex<number> {
 
 function rankedFields(
   index: PreparedSearchItem<number>[],
-  query: string,
-  limit: number,
+  request: SearchQueryRequest,
+  expanded: Set<string>,
 ): SearchRankedIndices {
-  return { indices: rankPreparedTopK(index, query, limit, CONFIG.SEARCH.FUZZY_FILL).items };
+  const queries = expandedQueries(
+    request.query,
+    request.alternatives,
+    request.settled ? script => preparedHaveScript(index, script) : null,
+  );
+  return {
+    indices: rankExpanded(
+      queries,
+      request.limit,
+      query => rankPreparedTopK(index, query, request.limit, CONFIG.SEARCH.FUZZY_FILL, request.settled).items,
+      expanded,
+    ),
+  };
 }
 
 function rankedNames(
   index: PreparedNameSearchIndex<number>,
-  query: string,
-  limit: number,
+  request: SearchQueryRequest,
+  expanded: Set<string>,
 ): SearchRankedIndices {
-  return { indices: rankPreparedNamesTopK(index, query, limit).items };
+  const queries = expandedQueries(
+    request.query,
+    request.alternatives,
+    request.settled ? script => namesHaveScript(index, script) : null,
+  );
+  return {
+    indices: rankExpanded(
+      queries,
+      request.limit,
+      query => rankPreparedNamesTopK(index, query, request.limit).items,
+      expanded,
+    ),
+  };
+}
+
+function setValues(values: Set<string>): string[] {
+  const list: string[] = [];
+  values.forEach(value => list.push(value));
+  return list;
 }
 
 function emptyNames(): PreparedNameSearchIndex<number> {

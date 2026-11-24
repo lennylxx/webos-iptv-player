@@ -3,6 +3,10 @@ import { describe, it, expect, vi } from 'vitest';
 import type { Channel } from '../types';
 import { stripCombiningDiacritics } from './unicode-text';
 import {
+  expandedQueries,
+  hasMultilingualSynonyms,
+  preparedHaveScript,
+  rankExpanded,
   foldSearchText,
   prepareSearchItems,
   prepareNameSearchItems,
@@ -156,6 +160,25 @@ describe('rankChannels', () => {
     expect(names(rankChannels(channels, 'cartoons'))).toEqual(['Bravo']);
   });
 
+  it('matches genre words across the UI languages once the query settles, accents folded', () => {
+    const channels = [ch('Alpha'), ch('Bravo'), ch('Charlie'), ch('Delta')];
+    channels[0].group = 'Fútbol';
+    channels[1].group = 'Мультфильмы';
+    channels[2].group = '纪录片';
+    channels[3].group = 'Nachrichten';
+    const prepared = prepareSearchItems(channels, item => [item.name, item.group]);
+    const settled = (query: string) => names(rankPreparedTopK(prepared, query, 10, 10, true).items);
+    expect(settled('football')).toEqual(['Alpha']);
+    expect(settled('futebol')).toEqual(['Alpha']);
+    expect(settled('kids')).toEqual(['Bravo']);
+    expect(settled('documentary')).toEqual(['Charlie']);
+    expect(settled('новини')).toEqual(['Delta']);
+    // While typing, only the English words are tried.
+    expect(names(rankChannels(channels, 'football'))).toEqual([]);
+    expect(hasMultilingualSynonyms('show me kids channels')).toBe(true);
+    expect(hasMultilingualSynonyms('alpha')).toBe(false);
+  });
+
   it('tolerates a one-character typo and adjacent transposition', () => {
     expect(names(rankChannels([ch('Alpha'), ch('Bravo')], 'alhpa'))).toEqual(['Alpha']);
     expect(names(rankChannels([ch('Alpha'), ch('Bravo')], 'brvo'))).toEqual(['Bravo']);
@@ -237,5 +260,28 @@ describe('foldSearchText', () => {
   it('still strips accents from non-ASCII text', () => {
     expect(foldSearchText('Caf\u00c9 Ni\u00f1o')).toBe('cafe nino');
     expect(foldSearchText('A\u0301B')).toBe('ab');
+  });
+});
+
+describe('expanded search queries', () => {
+  it('adds the transliteration only when the items use the other script, then the alternatives', () => {
+    expect(expandedQueries('shorka', ['Zorbel', 'SHORKA', 'zorbel'], () => true)).toEqual(['shorka', 'шорка', 'Zorbel']);
+    expect(expandedQueries('shorka', undefined, script => script === 'latin')).toEqual(['shorka']);
+    expect(expandedQueries('shorka', ['quix'], null)).toEqual(['shorka', 'quix']);
+  });
+
+  it('looks for a script again once a list grows in place', () => {
+    const items = prepareSearchItems([{ name: 'Alpha' }], item => [item.name]);
+    expect(preparedHaveScript(items, 'cyrillic')).toBe(false);
+    items.push(...prepareSearchItems([{ name: 'Шорка' }], item => [item.name]));
+    expect(preparedHaveScript(items, 'cyrillic')).toBe(true);
+  });
+
+  it('keeps every match of the query first; others only fill the slots left', () => {
+    const results: Record<string, string[]> = { q: ['ch2', 'ch1'], a1: ['ch1', 'ch3'], a2: ['ch4', 'ch5'], a3: ['ch6'] };
+    const contributed = new Set<string>();
+    expect(rankExpanded(['q', 'a1', 'a2', 'a3'], 4, query => results[query], contributed))
+      .toEqual(['ch2', 'ch1', 'ch3', 'ch4']);
+    expect([...contributed]).toEqual(['a1', 'a2']);
   });
 });

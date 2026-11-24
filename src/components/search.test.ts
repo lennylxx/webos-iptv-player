@@ -14,7 +14,9 @@ const {
   workerMock,
   cacheMock,
   persistMock,
+  llmMock,
 } = vi.hoisted(() => ({
+  llmMock: { isReady: vi.fn(() => false), run: vi.fn() },
   persistMock: vi.fn(async (_candidates?: Array<{ key: string; prefix: string }>) => undefined),
   catalogMock: {
     getSearchCatalogExpiresAt: vi.fn(),
@@ -28,6 +30,7 @@ const {
     channels: [] as unknown[],
     complete: true,
     indexOf: vi.fn((_channel: { name: string }) => 0),
+    localSearchHasScript: vi.fn((_script: string) => false),
     getChannelCacheSource: vi.fn((): unknown => null),
   },
   epgMock: {
@@ -83,6 +86,7 @@ vi.mock('../services/reminder-service', () => ({ ReminderService: reminderMock }
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../services/xtream-archive', () => ({ XtreamArchiveService: archiveMock }));
 vi.mock('./toast', () => ({ showToast: toastMock }));
+vi.mock('../services/llm/llm-service', () => ({ LlmService: llmMock }));
 vi.mock('../services/search-index-store', () => ({ persistSearchIndexes: persistMock }));
 vi.mock('../services/idb-cache', async importOriginal => ({
   ...await importOriginal<typeof import('../services/idb-cache')>(),
@@ -129,6 +133,7 @@ import { CONFIG } from '../config';
 import { Focus } from '../navigation/focus-scope';
 import { ParentalControlService } from '../services/parental-control';
 import { SEARCH_INDEX_FORMAT } from '../workers/search-source-index';
+import { resetSearchExpansionForTests } from '../services/search-expansion';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -159,6 +164,8 @@ beforeEach(() => {
   epgMock.programmes = {};
   epgMock.findChannelId.mockImplementation((channel: { id: string }) => channel.id);
   reminderMock.has.mockReturnValue(false);
+  llmMock.isReady.mockReturnValue(false);
+  resetSearchExpansionForTests();
   storageMock.getCatchupProgressList.mockReturnValue([]);
   archiveMock.load.mockResolvedValue(null);
   archiveMock.isAvailable.mockImplementation((channel: { catchupSource?: string }) => !!channel.catchupSource);
@@ -536,6 +543,88 @@ describe('Search', () => {
       .toEqual([expect.not.stringContaining('mode=reused')]);
     info.mockRestore();
     expect(container.textContent).toContain('Bravo');
+  });
+
+  it('appends the matches of AI alternatives after the query\'s own and says what else it searched', async () => {
+    playlistMock.channels = [chan('Bravo Quix'), chan('Alpha Zorb')];
+    llmMock.isReady.mockReturnValue(true);
+    llmMock.run.mockResolvedValue({
+      value: { alternatives: [{ text: 'quix', lang: 'l1', kind: 'translation' }] }, dropped: 0, cached: false,
+    });
+    const { view } = await openWith();
+    await view.setQuery('zorb');
+    expect(container.textContent).toContain('Alpha Zorb');
+    expect(container.textContent).not.toContain('Bravo Quix');
+    expect(container.querySelector('.search-expanded')).toBeNull();
+
+    await vi.waitFor(() => expect(container.querySelector('.search-expanded')?.textContent).toContain('quix'), { timeout: 3000 });
+    const text = container.querySelector('.search-results')?.textContent ?? '';
+    expect(text.indexOf('Alpha Zorb')).toBeLessThan(text.indexOf('Bravo Quix'));
+    expect(JSON.parse((llmMock.run.mock.calls[0][0] as { user: string }).user)).toEqual({ query: 'zorb' });
+
+    // A new query drops the hint until its own alternatives arrive.
+    await view.setQuery('alpha');
+    expect(container.querySelector('.search-expanded')).toBeNull();
+  });
+
+  it('applies AI alternatives that arrive after a case or trailing-space change to the query', async () => {
+    playlistMock.channels = [chan('Bravo Quix'), chan('Alpha Zorb')];
+    llmMock.isReady.mockReturnValue(true);
+    llmMock.run.mockResolvedValue({
+      value: { alternatives: [{ text: 'quix', lang: 'l1', kind: 'translation' }] }, dropped: 0, cached: false,
+    });
+    const { view } = await openWith();
+    await view.setQuery('zorb');
+    await view.setQuery('Zorb ');
+    await vi.waitFor(() => expect(container.textContent).toContain('Bravo Quix'), { timeout: 3000 });
+    expect(llmMock.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps in place the result focused when the rerank lands, not when it started', async () => {
+    playlistMock.channels = [chan('Quix TV')];
+    llmMock.isReady.mockReturnValue(true);
+    llmMock.run.mockResolvedValue({
+      value: { alternatives: [{ text: 'quix', lang: 'l1', kind: 'translation' }] }, dropped: 0, cached: false,
+    });
+    const { view } = await openWith({ vod: [vod('10', 'Zorb One'), vod('11', 'Zorb Two')] });
+    Focus.setBase(() => view.focusScope);
+    document.documentElement.classList.add('keyboard-nav');
+    await view.setQuery('zorb');
+    const nav = (view as unknown as { nav: { focus(el: HTMLElement): void } }).nav;
+    nav.focus(container.querySelector<HTMLElement>('.catalog-tile[data-stream-id="10"]')!);
+    Focus.flush();
+    const hold = holdWorkerTask((task, payload) =>
+      task === 'search.query' && !!(payload as unknown as SearchQueryRequest).alternatives);
+    const keep = vi.spyOn(view as unknown as { keepFocusAnchor(anchor: { key: string }): void }, 'keepFocusAnchor');
+    try {
+      await vi.waitFor(() => expect(hold.held).toBe(true), { timeout: 3000 });
+      view.handleAction('right');
+      Focus.flush();
+      hold.release();
+      await vi.waitFor(() => expect(container.textContent).toContain('Quix TV'));
+      expect(keep).toHaveBeenCalledWith(expect.objectContaining({ key: 'v:11' }));
+    } finally {
+      hold.restore();
+      document.documentElement.classList.remove('keyboard-nav');
+    }
+  });
+
+  it('runs the settled ranking when typing settled while the first ranking still ran', async () => {
+    playlistMock.channels = [chan('Шорка')];
+    const { view } = await openWith();
+    const hold = holdWorkerTask(task => task === 'search.query');
+    try {
+      const first = view.setQuery('shorka');
+      await vi.waitFor(() => expect(hold.held).toBe(true));
+      await new Promise(resolve => setTimeout(resolve, CONFIG.SEARCH.EXPANSION_DELAY_MS + 50));
+      hold.release();
+      await first;
+      await vi.waitFor(() => expect(container.textContent).toContain('Шорка'), { timeout: 3000 });
+      expect(workerMock.run.mock.calls.some(([task, payload]) =>
+        task === 'search.query' && (payload as SearchQueryRequest).settled)).toBe(true);
+    } finally {
+      hold.restore();
+    }
   });
 
   it('finds the channels a load finished while Search was open', async () => {
@@ -1762,7 +1851,7 @@ describe('Search', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       await view.setQuery('alpha');
-      expect(searchLocalRanked).toHaveBeenCalledWith('alpha', CONFIG.SEARCH.RESULTS, undefined, CONFIG.SEARCH.FUZZY_FILL);
+      expect(searchLocalRanked).toHaveBeenCalledWith('alpha', CONFIG.SEARCH.RESULTS, undefined, CONFIG.SEARCH.FUZZY_FILL, false);
       expect(container.querySelector('.search-program-row')?.textContent).toContain('Alhpa');
     } finally {
       workerMock.run.mockImplementation(originalRun);
@@ -3383,6 +3472,36 @@ describe('Search with worker-held catalog records', () => {
     movie.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     view.handleAction('select');
     expect(handlers.onOpenMovie).toHaveBeenCalledWith(account, expect.objectContaining({ streamId: '10' }));
+  });
+
+  it('keeps the worker\'s record results when AI alternatives arrive while ranking falls back to the page', async () => {
+    syncRecords([vod('10', 'Zorb Movie')]);
+    Object.assign(playlistMock, { searchLocalRanked: vi.fn(() => ({ items: [] })) });
+    llmMock.isReady.mockReturnValue(true);
+    llmMock.run.mockResolvedValue({
+      value: { alternatives: [{ text: 'quix', lang: 'l1', kind: 'translation' }] }, dropped: 0, cached: false,
+    });
+    const { view } = await openWith();
+    await view.setQuery('zorb');
+    expect(container.textContent).toContain('Zorb Movie');
+
+    // The worker is lost and cannot be rebuilt before the alternatives arrive.
+    workerMock.restart();
+    const originalRun = workerMock.run.getMockImplementation()!;
+    workerMock.run.mockImplementation(async (task: string, payload: SearchIndexRequest) => {
+      if (task === 'search.index' && payload.reset) throw new Error('App worker failed');
+      return originalRun(task, payload);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await vi.waitFor(() => expect(diagEvents(warn, 'search.worker.fallback.used')).toHaveLength(1), { timeout: 3000 });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(container.textContent).toContain('Zorb Movie');
+    } finally {
+      workerMock.run.mockImplementation(originalRun);
+    }
   });
 
   it('sends the parental rules with the record, so the worker leaves hidden items out', async () => {

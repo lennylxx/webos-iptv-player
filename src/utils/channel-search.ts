@@ -3,15 +3,65 @@ import {
   isLetterOrNumber,
   splitLetterNumberTokens,
 } from './unicode-text';
+import { hasScript, transliterateQuery, type SearchScript } from './transliterate';
 
-const SYNONYM_GROUPS = [
-  ['sports', 'sport', 'footy', 'football', 'soccer', 'athletics'],
-  ['kids', 'kid', 'children', 'child', 'cartoons', 'cartoon', 'animation', 'animated'],
-  ['news', 'headlines', 'current affairs'],
-  ['movies', 'movie', 'films', 'film', 'cinema'],
-  ['music', 'songs', 'song', 'concerts', 'concert'],
-  ['documentaries', 'documentary', 'docs', 'history', 'nature'],
-] as const;
+// Genre words in English and the UI languages; folded once at load. Only a
+// settled query tries the translations, which multiply each fuzzy pass's cost.
+const SYNONYM_GROUPS: ReadonlyArray<{ english: readonly string[]; translated: readonly string[] }> = [
+  {
+    english: [
+      'sports', 'sport', 'footy', 'football', 'soccer', 'athletics',
+    ],
+    translated: [
+      'fußball', 'fussball', 'deportes', 'deporte', 'fútbol', 'calcio', 'esporte', 'esportes',
+      'futebol', 'спорт', 'футбол', 'spor', 'futbol', '体育', '足球',
+    ],
+  },
+  {
+    english: [
+      'kids', 'kid', 'children', 'child', 'cartoons', 'cartoon', 'animation', 'animated',
+    ],
+    translated: [
+      'kinder', 'zeichentrick', 'infantil', 'niños', 'dibujos', 'enfants', 'jeunesse', 'dessins',
+      'bambini', 'cartoni', 'dzieci', 'bajki', 'crianças', 'desenhos', 'детский', 'детям',
+      'мультфильмы', 'мульт', 'çocuk', 'дитячий', 'дітям', 'мультфільми', '少儿', '儿童', '动画', '卡通',
+    ],
+  },
+  {
+    english: ['news', 'headlines', 'current affairs'],
+    translated: [
+      'nachrichten', 'noticias', 'infos', 'actualités', 'notizie', 'telegiornale', 'wiadomości',
+      'informacje', 'notícias', 'jornal', 'новости', 'haber', 'haberler', 'новини', '新闻',
+    ],
+  },
+  {
+    english: [
+      'movies', 'movie', 'films', 'film', 'cinema',
+    ],
+    translated: [
+      'filme', 'kino', 'películas', 'película', 'cine', 'cinéma', 'filmy', 'filmes', 'фильмы',
+      'кино', 'filmler', 'sinema', 'фільми', 'кіно', '电影',
+    ],
+  },
+  {
+    english: [
+      'music', 'songs', 'song', 'concerts', 'concert',
+    ],
+    translated: [
+      'musik', 'música', 'musique', 'musica', 'muzyka', 'музыка', 'müzik', 'музика', '音乐',
+    ],
+  },
+  {
+    english: [
+      'documentaries', 'documentary', 'docs', 'history', 'nature',
+    ],
+    translated: [
+      'dokumentation', 'doku', 'documentales', 'documental', 'documentaires', 'documentaire',
+      'documentari', 'documentario', 'dokumenty', 'dokumentalne', 'documentários', 'documentário',
+      'документальные', 'документальный', 'belgesel', 'документальні', 'документальний', '纪录片',
+    ],
+  },
+];
 
 const STOP_WORDS = new Set(['find', 'me', 'show', 'watch', 'for', 'please', 'channel', 'channels', 'program', 'programs']);
 
@@ -37,11 +87,39 @@ function queryTokens(query: string): string[] {
   return meaningful.length ? meaningful : all;
 }
 
-function variants(token: string): string[] {
-  for (const group of SYNONYM_GROUPS) {
-    if ((group as readonly string[]).includes(token)) return [token, ...group.filter(value => value !== token)];
+let synonymGroups: { english: Map<string, string[]>; all: Map<string, string[]> } | null = null;
+
+function groupMap(multilingual: boolean): Map<string, string[]> {
+  const byWord = new Map<string, string[]>();
+  SYNONYM_GROUPS.forEach(({ english, translated }) => {
+    const group: string[] = [];
+    for (const word of multilingual ? english.concat(translated) : english) {
+      const folded = fold(word);
+      if (group.indexOf(folded) < 0) group.push(folded);
+    }
+    for (const word of group) if (!byWord.has(word)) byWord.set(word, group);
+  });
+  return byWord;
+}
+
+function synonymsByWord(multilingual: boolean): Map<string, string[]> {
+  if (!synonymGroups) {
+    synonymGroups = {
+      english: groupMap(false),
+      all: groupMap(true),
+    };
   }
-  return [token];
+  return multilingual ? synonymGroups.all : synonymGroups.english;
+}
+
+function variants(token: string, multilingual: boolean): string[] {
+  const group = synonymsByWord(multilingual).get(token);
+  return group ? [token, ...group.filter(value => value !== token)] : [token];
+}
+
+/** Whether a query has a genre word the UI languages translate, which a settled ranking tries. */
+export function hasMultilingualSynonyms(query: string): boolean {
+  return queryTokens(query).some(token => variants(token, true).length > variants(token, false).length);
 }
 
 function withinOneEdit(a: string, b: string): boolean {
@@ -80,13 +158,12 @@ function withinOneEdit(a: string, b: string): boolean {
 }
 
 function tokenScore(
-  queryToken: string,
+  expanded: string[],
   fieldTokens: string[],
   start: number,
   end: number,
 ): number | null {
   let best: number | null = null;
-  const expanded = variants(queryToken);
   for (let variantIndex = 0; variantIndex < expanded.length; variantIndex++) {
     const variant = expanded[variantIndex];
     for (let tokenIndex = start; tokenIndex < end; tokenIndex++) {
@@ -199,7 +276,7 @@ function directScore<T>(
 
 function fuzzyScore<T>(
   prepared: PreparedSearchItem<T>,
-  terms: string[],
+  terms: string[][],
 ): number | null {
   let total = 10000;
   for (const term of terms) {
@@ -277,10 +354,12 @@ export function rankPreparedTopK<T>(
   query: string,
   limit: number,
   fuzzyFill = limit,
+  multilingual = false,
 ): RankedSearchResult<T> {
   const q = fold(query.trim());
-  const terms = queryTokens(query);
-  if (!q || !terms.length || limit <= 0) return { items: [] };
+  const tokens = queryTokens(query);
+  if (!q || !tokens.length || limit <= 0) return { items: [] };
+  const terms = tokens.map(token => variants(token, multilingual));
   const heap = new BoundedHeap<ScoredSearchItem<T>>(limit, compareScored);
   const directMatches = new Uint8Array(items.length);
   let matches = 0;
@@ -330,6 +409,84 @@ export function rankPreparedNamesTopK<T>(
     });
   }
   return { items: heap.sorted().map(value => value.item) };
+}
+
+const scriptMemo = new WeakMap<object, { size: number; known: Partial<Record<SearchScript, boolean>> }>();
+
+// Whether a list uses a script, worked out once per list and length, since a
+// list may grow in place.
+function memoScript(key: { length: number }, script: SearchScript, scan: () => boolean): boolean {
+  let entry = scriptMemo.get(key);
+  if (!entry || entry.size !== key.length) scriptMemo.set(key, entry = { size: key.length, known: {} });
+  const cached = entry.known[script];
+  if (cached !== undefined) return cached;
+  return (entry.known[script] = scan());
+}
+
+export function preparedHaveScript<T>(items: PreparedSearchItem<T>[], script: SearchScript): boolean {
+  return memoScript(items, script, () => items.some(item => item.values.some(value => hasScript(value, script))));
+}
+
+export function namesHaveScript<T>(index: PreparedNameSearchIndex<T>, script: SearchScript): boolean {
+  return memoScript(index.values, script, () => index.values.some(value => hasScript(value, script)));
+}
+
+/**
+ * The query, then its transliterations the searched items' scripts can match
+ * (none without `hasTarget`), then the alternatives, without repeats once folded.
+ */
+export function expandedQueries(
+  query: string,
+  alternatives: readonly string[] | undefined,
+  hasTarget: ((script: SearchScript) => boolean) | null,
+): string[] {
+  const queries = [query];
+  const seen = new Set([fold(query.trim())]);
+  const add = (value: string): void => {
+    const folded = fold(value.trim());
+    if (!folded || seen.has(folded)) return;
+    seen.add(folded);
+    queries.push(value);
+  };
+  if (hasTarget) {
+    for (const other of transliterateQuery(fold(query.trim()))) {
+      if (hasTarget(other.script)) add(other.text);
+    }
+  }
+  if (alternatives) alternatives.forEach(add);
+  return queries;
+}
+
+/** Whether the query has a spelling in another script that the searched items use. */
+export function transliterates(query: string, hasTarget: (script: SearchScript) => boolean): boolean {
+  return transliterateQuery(fold(query.trim())).some(other => hasTarget(other.script));
+}
+
+/**
+ * Ranks the first query as usual; each further query only fills the slots
+ * left, so its matches follow every match of the queries before it. Adds the
+ * further queries that placed an item to `contributed`.
+ */
+export function rankExpanded<T>(
+  queries: readonly string[],
+  limit: number,
+  rank: (query: string) => T[],
+  contributed?: Set<string>,
+): T[] {
+  const items = rank(queries[0]).slice(0, limit);
+  if (queries.length < 2) return items;
+  const seen = new Set(items);
+  for (let i = 1; i < queries.length && items.length < limit; i++) {
+    const before = items.length;
+    for (const item of rank(queries[i])) {
+      if (items.length >= limit) break;
+      if (seen.has(item)) continue;
+      seen.add(item);
+      items.push(item);
+    }
+    if (contributed && items.length > before) contributed.add(queries[i]);
+  }
+  return items;
 }
 
 export function rankPrepared<T>(items: PreparedSearchItem<T>[], query: string): T[] {

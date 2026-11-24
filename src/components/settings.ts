@@ -30,6 +30,7 @@ import { createXtreamClient } from '../services/xtream-client';
 import type { SettingsChanges } from '../services/setup-client';
 import { LlmService } from '../services/llm/llm-service';
 import { LlmError } from '../services/llm/client';
+import { SEARCH_EXPANSION_FEATURE } from '../services/search-expansion';
 import {
   completeServerUrl,
   DEFAULT_CONTEXT_TOKENS,
@@ -1208,6 +1209,11 @@ export class Settings {
                   ${dropdown('ai-daily-tokens', aiCountOptions(AI_TOKEN_LIMITS, ai.dailyTokenCap, true), String(ai.dailyTokenCap))}
                   <div class="settings-item-hint">${t('settings.aiLimitsHint')}</div>
                   <div class="settings-item-hint" id="ai-usage">${aiUsageText()}</div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.aiSearchExpansion')}</div>
+                  ${toggleGroup('ai-search-expansion', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], ai.features[SEARCH_EXPANSION_FEATURE] === true ? 'on' : 'off')}
+                  <div class="settings-item-hint">${t('settings.aiSearchExpansionHint')}</div>
                 </div>
               </div>
             </div>
@@ -2932,6 +2938,7 @@ export class Settings {
       return raw === undefined ? fallback : Number(raw);
     };
     const enabled = $('#ai-enabled .toggle-option.active', this.container)?.getAttribute('data-value');
+    const searchExpansion = $('#ai-search-expansion .toggle-option.active', this.container)?.getAttribute('data-value');
     const next: LlmConfig = {
       ...stored,
       enabled: enabled === undefined || enabled === null ? stored.enabled : enabled === 'on',
@@ -2943,6 +2950,9 @@ export class Settings {
       detectedContextTokens: this.aiDetectedContext ?? stored.detectedContextTokens,
       dailyRequestCap: choice('ai-daily-requests', stored.dailyRequestCap),
       dailyTokenCap: choice('ai-daily-tokens', stored.dailyTokenCap),
+      features: searchExpansion
+        ? { ...stored.features, [SEARCH_EXPANSION_FEATURE]: searchExpansion === 'on' }
+        : stored.features,
     };
     const signature = endpointSignature(next);
     // A test of these exact values replaces what an earlier detection saved.

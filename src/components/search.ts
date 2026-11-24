@@ -1,6 +1,7 @@
 import type { Action, CatchupInfo, Channel, PlaylistEntry, Programme, VodItem, SeriesItem } from '../types';
 import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { Focus, type FocusScope } from '../navigation/focus-scope';
+import { InputMode } from '../navigation/input-mode';
 import { html, raw } from '../utils/dom';
 import { channelLockBadge, seriesLockBadge, vodLockBadge } from './parental-badge';
 import { morph } from '../utils/morph';
@@ -22,11 +23,19 @@ import {
 } from '../services/xtream-catalog';
 import { sameCatalogConcealment } from '../utils/catalog-concealment';
 import {
+  expandedQueries,
+  hasMultilingualSynonyms,
+  transliterates,
+  namesHaveScript,
   prepareNameSearchItems,
   prepareSearchItems,
+  preparedHaveScript,
+  rankExpanded,
   rankPreparedNamesTopK,
   rankPreparedTopK,
 } from '../utils/channel-search';
+import { SearchQueryExpansion } from './search-query-expansion';
+import { expansionQuery } from '../services/search-expansion';
 import { channelKey } from '../utils/channel';
 import { formatDayLabel, formatTime } from '../utils/time';
 import { showToast } from './toast';
@@ -327,6 +336,18 @@ export class Search {
   private queryFrame: number | null = null;
   private queryGeneration = 0;
   private queryPending = false;
+  private readonly expansion = new SearchQueryExpansion(
+    (key: string) => this.applyExpansion(key),
+    (key: string) => this.moreWhenSettled === key,
+  );
+  // The other queries that added the results shown.
+  private expandedTerms: string[] = [];
+  // The normalized query whose settled ranking the worker said would try more.
+  private moreWhenSettled: string | null = null;
+  // The query generation an expansion reranks: its sections keep their order
+  // and its render keeps the focused result in place.
+  private expansionGeneration = -1;
+  private sectionOrder: string[] = [];
   // Down/Enter handed focus over before the results existed; focus them once a query renders.
   private focusPending = false;
   private focusWaitingInBox = false;
@@ -579,6 +600,7 @@ export class Search {
     this.focusPending = false;
     this.cancelScheduledQuery();
     this.query = query;
+    this.expansion.plan(query);
     if (!query.trim()) {
       this.clearResults();
       this.render();
@@ -590,6 +612,7 @@ export class Search {
   scheduleQuery(query: string): void {
     this.focusPending = false;
     this.query = query;
+    this.expansion.plan(query);
     const generation = ++this.queryGeneration;
     if (this.queryFrame !== null) cancelAnimationFrame(this.queryFrame);
     if (!query.trim()) {
@@ -754,6 +777,7 @@ export class Search {
 
   deactivate(): void {
     this.active = false;
+    this.expansion.cancel();
     this.abortRecordFallback();
     this.focusPending = false;
     this.programIndexGeneration++;
@@ -1664,6 +1688,43 @@ export class Search {
     return posts;
   }
 
+  // Typing settled or AI alternatives arrived for the query shown: rank it
+  // again, which only appends results and sections, so focus stays.
+  private applyExpansion(key: string): void {
+    if (!this.active || expansionQuery(this.query) !== key) return;
+    const preserveOffsets = !this.queryPending;
+    this.cancelScheduledQuery();
+    this.expansionGeneration = this.queryGeneration;
+    void this.startQuery(this.queryGeneration, preserveOffsets);
+  }
+
+  // Where the focused result sits, when the keys drive a ring shown in the results.
+  private focusAnchor(): { key: string; top: number } | null {
+    if (Focus.owner() !== this.focusScope || InputMode.current !== 'keys' || this.focusScope.concealed) return null;
+    const focused = this.nav.focused;
+    const key = focused && this.container.contains(focused) ? focused.getAttribute('data-key') : null;
+    return key && focused ? { key, top: focused.getBoundingClientRect().top } : null;
+  }
+
+  // Chromium 53 has no scroll anchoring: scroll a focused result that results
+  // added above it pushed down back to where it was, when the view is
+  // scrolled already or the result would leave it, and keep it above the hint.
+  private keepFocusAnchor(anchor: { key: string; top: number }): void {
+    const view = this.container.querySelector<HTMLElement>('.search-view');
+    const moved = Array.prototype.filter.call(
+      this.container.querySelectorAll('[data-key]'),
+      (el: Element) => el.getAttribute('data-key') === anchor.key,
+    )[0] as HTMLElement | undefined;
+    if (!view || !moved) return;
+    const box = moved.getBoundingClientRect();
+    const bottom = view.getBoundingClientRect().bottom;
+    const shift = box.top - anchor.top;
+    if (shift && (view.scrollTop > 0 || box.bottom > bottom)) view.scrollTop += shift;
+    // The hint's band can take the room the result sat in.
+    const below = moved.getBoundingClientRect().bottom - bottom;
+    if (below > 0) view.scrollTop += below;
+  }
+
   private startQuery(generation: number, preserveOffsets = false): Promise<void> {
     return this.runWorkerQuery(generation, preserveOffsets).catch(error => {
       log.error(
@@ -1788,37 +1849,73 @@ export class Search {
     // The latest query's results are the fullest; no older partial one is pending.
     if (generation === this.queryGeneration) this.completingPartial = null;
     if (!preserveOffsets) this.resetVirtualOffsets();
+    // Measured right before the render, so a key pressed while it ranked counts.
+    const anchor = generation === this.expansionGeneration ? this.focusAnchor() : null;
     this.render();
+    if (anchor) this.keepFocusAnchor(anchor);
     this.applyPendingFocus();
+    // Typing settled while this unsettled ranking ran, so the settled one the
+    // pause asked for found no answer to check yet: run it now.
+    const settledKey = this.moreWhenSettled;
+    if (settledKey !== null && this.expansion.settledOn(query)) {
+      void Promise.resolve().then(() => this.applyExpansion(settledKey));
+    }
   }
 
   private queryLocally(query: string): SearchQueryResponse {
     const { RESULTS, FUZZY_FILL } = CONFIG.SEARCH;
-    const channels = PlaylistService.searchLocalRanked(query, RESULTS, undefined, FUZZY_FILL);
-    const programmes = rankPreparedTopK(
-      prepareSearchItems(this.programIndex, programDocument),
-      query,
+    const alternatives = this.expansion.alternativesFor(query);
+    const settled = this.expansion.settledOn(query);
+    const expanded = new Set<string>();
+    const channels = rankExpanded(
+      expandedQueries(query, alternatives, settled ? script => PlaylistService.localSearchHasScript(script) : null),
       RESULTS,
-      FUZZY_FILL,
+      q => PlaylistService.searchLocalRanked(q, RESULTS, undefined, FUZZY_FILL, settled).items,
+      expanded,
     );
-    const movies = this.account
-      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allVod), query, RESULTS)
-      : { items: [] };
-    const series = this.account
-      ? rankPreparedNamesTopK(prepareNameSearchItems(this.allSeries), query, RESULTS)
-      : { items: [] };
-    return {
-      channels: { indices: channels.items.map(channel => PlaylistService.indexOf(channel)) },
-      programmes: { indices: indicesOf(this.programIndex, programmes.items) },
-      movies: { indices: indicesOf(this.allVod, movies.items) },
-      series: { indices: indicesOf(this.allSeries, series.items) },
+    const programs = prepareSearchItems(this.programIndex, programDocument);
+    const programmes = rankExpanded(
+      expandedQueries(query, alternatives, settled ? script => preparedHaveScript(programs, script) : null),
+      RESULTS,
+      q => rankPreparedTopK(programs, q, RESULTS, FUZZY_FILL, settled).items,
+      expanded,
+    );
+    const names = <T extends { name: string }>(items: T[]): T[] => {
+      if (!this.account) return [];
+      const index = prepareNameSearchItems(items);
+      return rankExpanded(
+        expandedQueries(query, alternatives, settled ? script => namesHaveScript(index, script) : null),
+        RESULTS,
+        q => rankPreparedNamesTopK(index, q, RESULTS).items,
+        expanded,
+      );
     };
+    const response: SearchQueryResponse = {
+      channels: { indices: channels.map(channel => PlaylistService.indexOf(channel)) },
+      programmes: { indices: indicesOf(this.programIndex, programmes) },
+      movies: { indices: indicesOf(this.allVod, names(this.allVod)) },
+      series: { indices: indicesOf(this.allSeries, names(this.allSeries)) },
+    };
+    if (expanded.size) {
+      response.expanded = [];
+      expanded.forEach(term => response.expanded?.push(term));
+    }
+    if (!settled && (hasMultilingualSynonyms(query)
+        || transliterates(query, script => PlaylistService.localSearchHasScript(script))
+        || transliterates(query, script => preparedHaveScript(programs, script)))) {
+      response.moreWhenSettled = true;
+    }
+    return response;
   }
+
 
   private queryRequest(request: SearchQueryRequest): SearchQueryRequest {
     // Every worker numbers its epochs from the start, so another worker's
     // epoch could match the kept one by chance.
     if (appWorkerGeneration() !== this.deliveredWorker) this.delivered = deliveredItems(-1);
+    const alternatives = this.expansion.alternativesFor(request.query);
+    if (alternatives) request.alternatives = alternatives;
+    if (this.expansion.settledOn(request.query)) request.settled = true;
     const kept = this.delivered;
     const cap = CONFIG.SEARCH.DELIVERED_KEEP;
     // -1 past the cap: the worker starts a new epoch, so the page drops the
@@ -2005,6 +2102,8 @@ export class Search {
   ): void {
     this.visibleChannels = itemsAt(PlaylistService.channels, response.channels.indices);
     this.visiblePrograms = this.programsAt(response.programmes.indices);
+    this.expandedTerms = response.expanded ?? [];
+    this.moreWhenSettled = response.moreWhenSettled ? expansionQuery(this.query) : null;
     // An answer from another epoch indexes items this page no longer keeps.
     const kept = response.items?.epoch === this.delivered.epoch ? this.delivered : null;
     this.visibleMovies = isRecordList(vod)
@@ -2017,6 +2116,9 @@ export class Search {
 
   private clearResults(): void {
     this.catalogQuery = null;
+    this.moreWhenSettled = null;
+    this.expandedTerms = [];
+    this.sectionOrder = [];
     this.visibleChannels = [];
     this.visiblePrograms = [];
     this.visibleMovies = [];
@@ -2206,6 +2308,39 @@ export class Search {
     // compact rows so their metadata remains readable.
     const partial = this.partialIndex();
     const moreComing = partial || this.channelsArriving();
+    const sectionsShown = (): Array<ReturnType<typeof html>> => {
+      const sections: Record<string, ReturnType<typeof html>> = {};
+      if (this.visibleChannels.length) {
+        sections['channels-rail'] = this.virtualRail(
+          t('common.channels'),
+          'channels-rail',
+          this.visibleChannels,
+          this.channelRailVirtualizer,
+          (ch) => this.channelTile(ch),
+        );
+      }
+      if (programSection) sections.programmes = programSection;
+      if (this.visibleMovies.length) {
+        sections.movies = this.virtualRail(
+          t('common.movies'),
+          'movies',
+          this.visibleMovies,
+          this.movieVirtualizer,
+          (v) => this.movieTile(v),
+        );
+      }
+      if (this.visibleSeries.length) {
+        sections.series = this.virtualRail(
+          t('common.series'),
+          'series',
+          this.visibleSeries,
+          this.seriesVirtualizer,
+          (s) => this.seriesTile(s),
+        );
+      }
+      this.placeSections(Object.keys(sections));
+      return this.sectionOrder.map(key => sections[key]);
+    };
     const resultsBody = !q
       ? html``
       : this.pendingIndex && (!partial || (!hasResults && !this.queryPending))
@@ -2216,48 +2351,39 @@ export class Search {
         ? html`<p class="catalog-hint search-loading-more">${t('common.loading')}</p>`
         : !hasResults
         ? html`<p class="catalog-hint search-empty">${t('search.empty')}</p>`
-        : html`
-            ${this.visibleChannels.length
-              ? this.virtualRail(
-                  t('common.channels'),
-                  'channels-rail',
-                  this.visibleChannels,
-                  this.channelRailVirtualizer,
-                  (ch) => this.channelTile(ch),
-                )
-              : ''}
-            ${programSection}
-            ${this.visibleMovies.length
-              ? this.virtualRail(
-                  t('common.movies'),
-                  'movies',
-                  this.visibleMovies,
-                  this.movieVirtualizer,
-                  (v) => this.movieTile(v),
-                )
-              : ''}
-            ${this.visibleSeries.length
-              ? this.virtualRail(
-                  t('common.series'),
-                  'series',
-                  this.visibleSeries,
-                  this.seriesVirtualizer,
-                  (s) => this.seriesTile(s),
-                )
-              : ''}
-          `;
+        : html`${sectionsShown()}`;
 
+    const hinted = !!q && hasResults && !this.queryPending && this.expandedTerms.length > 0;
     // The query box lives in the tab bar; this view renders results only.
     morph(this.container, html`
-      <div class="search-view" data-nav-container data-search-query="${q}"
+      <div class="search-view ${hinted ? 'search-view-hinted' : ''}" data-nav-container data-search-query="${q}"
            data-search-pending="${this.queryPending ? 'true' : 'false'}"
            data-search-partial="${moreComing ? 'true' : 'false'}">
         <div class="search-results">${resultsBody}${moreComing && q && hasResults && !this.queryPending
           ? html`<p class="catalog-hint search-loading-more">${t('common.loading')}</p>`
           : ''}</div>
       </div>
+      ${hinted
+        ? html`<p class="catalog-hint search-expanded" data-key="search-expanded">${t('search.includingResults', {
+          terms: this.expandedTerms.join(t('common.listSeparator')),
+        })}</p>`
+        : ''}
     `);
     this.restoreVirtualOffsets();
+  }
+
+  private static readonly SECTION_ORDER = ['channels-rail', 'programmes', 'movies', 'series'];
+
+  // Sections keep their place while an expansion reranks the query; one it
+  // adds comes after them, so nothing appears above focus.
+  private placeSections(present: string[]): void {
+    const fresh = Search.SECTION_ORDER.filter(key => present.indexOf(key) >= 0);
+    if (this.queryGeneration !== this.expansionGeneration) {
+      this.sectionOrder = fresh;
+      return;
+    }
+    const kept = this.sectionOrder.filter(key => present.indexOf(key) >= 0);
+    this.sectionOrder = kept.concat(fresh.filter(key => kept.indexOf(key) < 0));
   }
 
   private createVirtualizer(

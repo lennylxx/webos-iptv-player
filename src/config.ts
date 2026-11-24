@@ -252,6 +252,9 @@ export const CONFIG = {
     FUZZY_FILL: 200,
     DELIVERED_KEEP: 2_000,      // record items kept per group before a new epoch
     HISTORY_MAX_ENTRIES: 10,    // recent searches kept
+    // AI query expansion waits for typing to pause this long.
+    EXPANSION_DELAY_MS: 700,
+    EXPANSION_MAX: 6,           // AI alternatives kept per query
   },
 
   NETWORK: {

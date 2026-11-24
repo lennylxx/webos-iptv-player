@@ -335,6 +335,11 @@ export interface SearchQueryRequest {
   includeCatalog: boolean;
   // False while the page still builds its program list.
   includeProgrammes?: boolean;
+  // AI alternatives of the query, which only fill slots its own matches left.
+  alternatives?: string[];
+  // Typing paused on the query: also rank its other-script spellings and
+  // translated genre words, which cost a keystroke too much.
+  settled?: boolean;
   /** The catalog items the page kept from earlier answers. */
   delivered?: SearchDeliveredCount;
 }
@@ -365,6 +370,10 @@ export interface SearchQueryResponse {
   movies: SearchRankedIndices;
   series: SearchRankedIndices;
   items?: SearchDeliveredItems;
+  // The other queries (transliteration, alternatives) that added a result.
+  expanded?: string[];
+  // An unsettled query whose settled ranking would try more.
+  moreWhenSettled?: boolean;
 }
 
 export interface ListSearchIndexRequest {

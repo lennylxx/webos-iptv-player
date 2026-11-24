@@ -948,3 +948,265 @@ test('Left and Right keep a recent search on its line', async ({ page }) => {
   await page.keyboard.press('ArrowRight');
   await expect(tiles.nth(lineStarts[1] - 1)).toHaveClass(/\bfocused\b/);
 });
+
+// An OpenAI-compatible server at http://ai.test/v1 that offers `alternatives`
+// for every query (or fails), recording the user messages it was sent.
+async function routeSearchAi(
+  page: import('@playwright/test').Page,
+  alternatives: string[] | null,
+  features: Record<string, boolean> = { 'search-expansion': true },
+): Promise<string[]> {
+  await page.addInitScript((enabled) => {
+    localStorage.setItem('iptv_llm', JSON.stringify({
+      enabled: true,
+      baseUrl: 'http://ai.test/v1',
+      model: 'm1',
+      features: enabled,
+      capabilities: {
+        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
+        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
+      },
+    }));
+  }, features);
+  const sent: string[] = [];
+  await page.route('http://ai.test/v1/chat/completions', (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const body = JSON.parse(route.request().postData() || '{}') as { messages: Array<{ role: string; content: string }> };
+    sent.push(body.messages.find(m => m.role === 'user')?.content || '');
+    if (!alternatives) return route.fulfill({ status: 500, headers: cors, body: 'down' });
+    const content = JSON.stringify({ alternatives: alternatives.map(text => ({ text, lang: 'l1', kind: 'translation' })) });
+    return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
+      body: JSON.stringify({ choices: [{ message: { content } }] }) });
+  });
+  return sent;
+}
+
+test('AI alternatives append results after the exact matches without moving focus', async ({ page }) => {
+  await seedSearch(page);
+  await routeLiveManifest(page);
+  const sent = await routeSearchAi(page, ['series']);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+
+  await page.locator('.tab-bar-search-input').fill('movie');
+  const movie = page.locator('#view-search .catalog-tile[data-stream-id="10"]');
+  await expect(movie).toContainText('Movie One');
+  await page.locator('.tab-bar-search-input').press('ArrowDown');
+  const focused = page.locator('#view-search .focused');
+  await expect(focused).toHaveCount(1);
+  const key = await focused.getAttribute('data-key');
+
+  const hint = page.locator('#view-search .search-expanded');
+  await expect(hint).toContainText('series');
+  await expect(hint).toBeInViewport({ ratio: 1 });
+  await expect(page.locator('#view-search .catalog-tile[data-series-id="1"]')).toContainText('Series One');
+  await expect(focused).toHaveAttribute('data-key', key ?? '');
+  expect(sent).toEqual([JSON.stringify({ query: 'movie' })]);
+});
+
+test('a failing AI server leaves the search results as they were', async ({ page }) => {
+  await seedSearch(page);
+  await routeLiveManifest(page);
+  const sent = await routeSearchAi(page, null);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+
+  await page.locator('.tab-bar-search-input').fill('movie');
+  await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toContainText('Movie One');
+  await expect.poll(() => sent.length).toBeGreaterThan(0);
+  await page.waitForTimeout(300);
+  await expect(page.locator('#view-search .search-expanded')).toHaveCount(0);
+  await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toContainText('Movie One');
+});
+
+test('search sends nothing to the AI server until Search in other languages is on', async ({ page }) => {
+  await seedSearch(page);
+  await routeLiveManifest(page);
+  const sent = await routeSearchAi(page, ['series'], {});
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  await page.locator('.tab-bar-search-input').fill('movie');
+  await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toContainText('Movie One');
+  await page.waitForTimeout(1000);
+  expect(sent).toEqual([]);
+
+  await enterTab(page, 'settings');
+  await page.locator('#ai-search-expansion .toggle-option[data-value="on"]').click();
+  await page.locator('#save-settings').click();
+  await expect.poll(() => page.evaluate(() =>
+    JSON.parse(localStorage.getItem('iptv_llm') || '{}').features?.['search-expansion'])).toBe(true);
+});
+
+test('a Cyrillic query finds a channel written in Latin letters without AI', async ({ page }) => {
+  await seedSearch(page);
+  await routeLiveManifest(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  await page.locator('.tab-bar-search-input').fill('чаннел');
+  await expect(page.locator('#view-search .catalog-tile[data-channel-index="0"]')).toContainText('Channel One');
+  await expect(page.locator('#view-search .search-expanded')).toContainText('channel');
+});
+
+// One channel and its guide: "zorb" finds the movie and one program; "quix"
+// (the AI alternative) adds the channel and five more of its programs.
+async function seedGrowingResults(page: import('@playwright/test').Page, zorbChannel = false): Promise<void> {
+  await seedSearch(page);
+  await routeLiveManifest(page);
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const titles = ['Zorb Report', 'Quix Report 1', 'Quix Report 2', 'Quix Report 3', 'Quix Report 4', 'Quix Report 5'];
+  const programmes = titles.map((title, i) => {
+    const from = new Date(start.getTime() + i * 30 * 60 * 1000);
+    const to = new Date(from.getTime() + 30 * 60 * 1000);
+    return `<programme channel="q1" start="${xmltvDate(from)}" stop="${xmltvDate(to)}"><title>${title}</title></programme>`;
+  }).join('');
+  await page.route('**/get.php*', (route) => route.fulfill({
+    status: 200, contentType: 'application/x-mpegurl',
+    body: '#EXTM3U\n#EXTINF:-1 tvg-id="q1" group-title="News",Alpha\nhttp://streams.example.com/q1.m3u8\n'
+      + '#EXTINF:-1 group-title="News",Quix TV\nhttp://streams.example.com/q2.m3u8'
+      + (zorbChannel ? '\n#EXTINF:-1 group-title="News",Zorb TV\nhttp://streams.example.com/q3.m3u8' : ''),
+  }));
+  await page.route('**/xmltv.php*', (route) => route.fulfill({
+    status: 200, contentType: 'application/xml',
+    body: `<tv><channel id="q1"><display-name>Alpha</display-name></channel>${programmes}</tv>`,
+  }));
+  await page.route('**/player_api.php*', (route) => {
+    const url = route.request().url();
+    if (!url.includes('get_vod_streams')) return route.fallback();
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([
+      { stream_id: 10, name: 'Zorb Movie', stream_icon: '', container_extension: 'mp4', category_id: '1' },
+    ]) });
+  });
+}
+
+const searchScrollTop = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => document.querySelector<HTMLElement>('#view-search .search-view')?.scrollTop ?? -1);
+
+test('a section AI alternatives add goes after the shown ones, in view, and focus stays put', async ({ page }) => {
+  await seedGrowingResults(page);
+  await routeSearchAi(page, ['quix']);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+
+  await page.locator('.tab-bar-search-input').fill('zorb');
+  await expect(page.locator('#view-search .search-program-row')).toHaveCount(1);
+  await page.locator('.tab-bar-search-input').press('ArrowDown');
+  const focused = page.locator('#view-search .focused');
+  await expect(focused).toHaveCount(1);
+  const key = await focused.getAttribute('data-key');
+  const before = (await focused.boundingBox())?.y;
+
+  const channel = page.locator('#view-search .catalog-tile[data-channel-index]');
+  await expect(channel).toHaveCount(1);
+  await expect(focused).toHaveAttribute('data-key', key ?? '');
+  expect(Math.abs(((await focused.boundingBox())?.y ?? 0) - (before ?? 0))).toBeLessThan(2);
+  const titles = await page.locator('#view-search .catalog-rail-title').allTextContents();
+  expect(titles[titles.length - 1]).toBe('Channels');
+  expect(await searchScrollTop(page)).toBe(0);
+  await expect(page.locator('#view-search .search-expanded')).toBeInViewport({ ratio: 1 });
+
+  // The new section is reachable from focus.
+  for (let i = 0; i < 12 && !(await channel.evaluate(el => el.classList.contains('focused'))); i++) {
+    await page.keyboard.press('ArrowDown');
+  }
+  await expect(channel).toHaveClass(/focused/);
+  await expect(channel).toBeInViewport();
+});
+
+test('a focused movie that programs added above would push off screen stays put', async ({ page }) => {
+  await seedGrowingResults(page, true);
+  await routeSearchAi(page, ['quix']);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+
+  await page.locator('.tab-bar-search-input').fill('zorb');
+  const movie = page.locator('#view-search .catalog-tile[data-stream-id="10"]');
+  await expect(movie).toBeVisible();
+  await page.locator('.tab-bar-search-input').press('ArrowDown');
+  for (let i = 0; i < 4 && !(await movie.evaluate(el => el.classList.contains('focused'))); i++) {
+    await page.keyboard.press('ArrowDown');
+  }
+  await expect(movie).toHaveClass(/focused/);
+  const before = (await movie.boundingBox())?.y;
+
+  await expect(page.locator('#view-search .search-program-row')).toHaveCount(6);
+  await expect(movie).toHaveClass(/focused/);
+  // At most lifted clear of the hint's band below the results, never pushed down.
+  const after = await movie.boundingBox();
+  const band = await page.locator('#view-search .search-expanded').boundingBox();
+  expect(after!.y).toBeLessThanOrEqual(before ?? 0);
+  expect((before ?? 0) - after!.y).toBeLessThanOrEqual(band!.height);
+  expect(after!.y + after!.height).toBeLessThanOrEqual(band!.y);
+});
+
+test('results growing while focus is back in the search box do not scroll the view', async ({ page }) => {
+  await seedGrowingResults(page, true);
+  await routeSearchAi(page, ['quix']);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('zorb');
+  const movie = page.locator('#view-search .catalog-tile[data-stream-id="10"]');
+  await expect(movie).toBeVisible();
+  await input.press('ArrowDown');
+  for (let i = 0; i < 4 && !(await movie.evaluate(el => el.classList.contains('focused'))); i++) {
+    await page.keyboard.press('ArrowDown');
+  }
+  await expect(movie).toHaveClass(/focused/);
+  for (let i = 0; i < 4 && !(await input.evaluate(el => el === document.activeElement)); i++) {
+    await page.keyboard.press('ArrowUp');
+  }
+  await expect(input).toBeFocused();
+
+  await expect(page.locator('#view-search .search-program-row')).toHaveCount(6);
+  await expect(page.locator('#view-search .search-expanded')).toBeVisible();
+  expect(await searchScrollTop(page)).toBe(0);
+});
+
+test('results growing under the pointer do not scroll the view', async ({ page }) => {
+  await seedGrowingResults(page, true);
+  await routeSearchAi(page, ['quix']);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+
+  await page.locator('.tab-bar-search-input').fill('zorb');
+  const movie = page.locator('#view-search .catalog-tile[data-stream-id="10"]');
+  await expect(movie).toBeVisible();
+  await movie.hover();
+  await expect(page.locator('#view-search .search-program-row')).toHaveCount(6);
+  await expect(page.locator('#view-search .search-expanded')).toBeVisible();
+  expect(await searchScrollTop(page)).toBe(0);
+});
+
+test('a long list of AI alternatives stays on one line', async ({ page }) => {
+  await seedSearch(page);
+  await routeLiveManifest(page);
+  await routeSearchAi(page, Array.from({ length: 6 }, (_, i) => `series${'x'.repeat(40)}${i}`));
+  await page.route('**/player_api.php*', async (route) => {
+    if (!route.request().url().includes('get_series')) return route.fallback();
+    if (route.request().url().includes('get_series_')) return route.fallback();
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(
+      Array.from({ length: 6 }, (_, i) => ({ series_id: i + 1, name: `Series${'x'.repeat(40)}${i}`, cover: '', category_id: '1' })),
+    ) });
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  await page.locator('.tab-bar-search-input').fill('movie');
+  const hint = page.locator('#view-search .search-expanded');
+  await expect(hint).toBeVisible();
+  const box = await hint.evaluate((el) => ({
+    oneLine: el.scrollHeight <= el.clientHeight,
+    clipped: el.scrollWidth > el.clientWidth,
+  }));
+  expect(box).toEqual({ oneLine: true, clipped: true });
+});
