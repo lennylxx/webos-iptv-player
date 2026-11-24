@@ -404,6 +404,27 @@ export interface MappingSearchQueryRequest {
   sessionId: number;
   query: string;
   selectedId: string;
+  // With nothing but the selected entry containing the query, answer with up
+  // to this many entries whose names are most alike it.
+  similarLimit?: number;
+}
+
+export interface MappingRankedIndices extends SearchRankedIndices {
+  // The indices are names alike the query, not ones containing it.
+  similar?: boolean;
+}
+
+export interface MappingSimilarRequest {
+  owner: string;
+  sessionId: number;
+  name: string;
+  limit: number;
+}
+
+export interface MappingSimilarResponse {
+  indices: number[];
+  // The best entry has the same name, tags and spelling aside.
+  sameName: boolean;
 }
 
 export interface AppWorkerTasks {
@@ -480,7 +501,11 @@ export interface AppWorkerTasks {
   };
   'mapping-search.query': {
     request: MappingSearchQueryRequest;
-    response: SearchRankedIndices | null;
+    response: MappingRankedIndices | null;
+  };
+  'mapping-search.similar': {
+    request: MappingSimilarRequest;
+    response: MappingSimilarResponse | null;
   };
   'mapping-search.release': {
     request: ScopedSearchReleaseRequest;

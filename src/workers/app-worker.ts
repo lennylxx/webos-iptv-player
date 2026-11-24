@@ -43,6 +43,7 @@ const handlers: WorkerTaskHandlers<AppWorkerTasks> = {
   'list-search.release': request => scopedSearchIndex.releaseList(request),
   'mapping-search.index': request => scopedSearchIndex.indexMapping(request),
   'mapping-search.query': request => scopedSearchIndex.queryMapping(request),
+  'mapping-search.similar': request => scopedSearchIndex.similarMapping(request),
   'mapping-search.release': request => scopedSearchIndex.releaseMapping(request),
 };
 

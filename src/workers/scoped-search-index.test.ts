@@ -100,6 +100,29 @@ describe('ScopedSearchIndex', () => {
     })?.indices).toEqual([0, 1]);
   });
 
+  it('answers a mapping search nothing contains with similar names after the selected one', () => {
+    const index = new ScopedSearchIndex();
+    const doc = (id: string, name: string) => ({ id, channelId: id, name, fields: [id, name.toLowerCase()], sourceIndex: 0 });
+    index.indexMapping({
+      owner: 'mapping',
+      sessionId: 5,
+      documents: [doc('g1', 'Delta Sports'), doc('g2', 'Al-pha HD'), doc('g3', 'Al-pha Two')],
+    });
+    const query = (text: string, selectedId: string, similarLimit?: number) =>
+      index.queryMapping({ owner: 'mapping', sessionId: 5, query: text, selectedId, similarLimit });
+
+    expect(query('alpha', '')).toEqual({ indices: [] });
+    expect(query('alpha', '', 5)).toEqual({ indices: [1, 2], similar: true });
+    expect(query('alpha', 'g1', 5)).toEqual({ indices: [0, 1, 2], similar: true });
+    expect(query('al-pha', 'g1', 5)).toEqual({ indices: [0, 1, 2] });
+    expect(query('zzzz', '', 5)).toEqual({ indices: [], similar: false });
+
+    expect(index.similarMapping({ owner: 'mapping', sessionId: 5, name: 'UK: AL-PHA hd', limit: 1 }))
+      .toEqual({ indices: [1], sameName: true });
+    expect(index.similarMapping({ owner: 'mapping', sessionId: 5, name: 'Alpha Three', limit: 5 })?.sameName).toBe(false);
+    expect(index.similarMapping({ owner: 'mapping', sessionId: 6, name: 'Alpha', limit: 5 })).toBeNull();
+  });
+
   it('releases only the matching mapping session', () => {
     const index = new ScopedSearchIndex();
     index.indexMapping({

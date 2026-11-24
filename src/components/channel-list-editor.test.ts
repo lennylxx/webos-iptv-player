@@ -53,6 +53,10 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
         sourceName: string;
       }>),
       getMappingSearchEntries: vi.fn(),
+      getSimilarMappingCandidates: vi.fn((_channel: Channel, _name: string, _limit: number, _skipId?: string) => ({
+        candidates: [] as Array<{ id: string; channelId: string; name: string; sourceName: string }>,
+        sameName: false,
+      })),
     },
     storageMock: {
       getFavorites: () => data.favorites,
@@ -88,6 +92,15 @@ vi.mock('../services/channel-health', () => ({
   ChannelHealthService: { getRecord: () => null },
 }));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
+const { aiMock } = vi.hoisted(() => ({
+  aiMock: { ready: false, suggest: vi.fn() },
+}));
+vi.mock('../services/llm/llm-service', () => ({ LlmService: { isReady: () => aiMock.ready } }));
+vi.mock('../services/epg-ai-match', () => ({
+  EPG_MATCH_CANDIDATES: 30,
+  EPG_MATCH_FEATURE: 'epg-match',
+  suggestGuideMatches: aiMock.suggest,
+}));
 const { workerMock } = vi.hoisted(() => ({ workerMock: { failIndexes: false } }));
 vi.mock('../workers/app-worker-client', async () => {
   const { ScopedSearchIndex } = await import('../workers/scoped-search-index');
@@ -101,6 +114,9 @@ vi.mock('../workers/app-worker-client', async () => {
       }
       if (task === 'mapping-search.query') {
         return Promise.resolve(index.queryMapping(payload));
+      }
+      if (task === 'mapping-search.similar') {
+        return Promise.resolve(index.similarMapping(payload));
       }
       if (task === 'mapping-search.release') {
         return Promise.resolve(index.releaseMapping(payload));
@@ -204,6 +220,10 @@ beforeEach(() => {
   epgMock.getSourceOffsetMinutes.mockReturnValue(0);
   epgMock.getLocalMappingCandidates.mockReset();
   epgMock.getLocalMappingCandidates.mockReturnValue([]);
+  epgMock.getSimilarMappingCandidates.mockReset();
+  epgMock.getSimilarMappingCandidates.mockReturnValue({ candidates: [], sameName: false });
+  aiMock.ready = false;
+  aiMock.suggest.mockReset();
   epgMock.getMappingSearchEntries.mockReset();
   epgMock.getMappingSearchEntries.mockImplementation((channel: Channel) =>
     epgMock.getLocalMappingCandidates(channel, '').map(candidate => ({
@@ -1005,6 +1025,292 @@ describe('ChannelList edit mode', () => {
     heightMock.mockRestore();
 
     expect(expandedCount).toBeGreaterThan(compactCount);
+  });
+
+  describe('EPG suggestions', () => {
+    const guide = (id: string, name: string) => ({ id: `g::${id}`, channelId: id, name, sourceName: 'Guide' });
+
+    // Guide entries whose ids and names don't contain the channel name "Alpha".
+    function useGuide(...entries: Array<ReturnType<typeof guide>>): void {
+      epgMock.getLocalMappingCandidates.mockReturnValue(entries);
+      epgMock.getMappingSearchEntries.mockImplementation(() => entries.map(entry => ({
+        ...entry,
+        fields: [entry.channelId, entry.name.toLowerCase()],
+        sourceIndex: 0,
+      })));
+    }
+
+    async function openPicker(): Promise<void> {
+      enterEdit();
+      hover(channelItems()[0]);
+      list.handleAction('select');
+      hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+      list.handleAction('select');
+      await waitForEpgSearch();
+    }
+
+    function rows(): string[] {
+      return Array.from(container.querySelectorAll<HTMLElement>('.epg-mapping-option'))
+        .sort((a, b) => Number(a.dataset.epgPosition) - Number(b.dataset.epgPosition))
+        .map(row => row.querySelector('.epg-mapping-name')?.textContent ?? row.textContent!.trim());
+    }
+
+    function topOf(selector: string): number {
+      return parseFloat(container.querySelector<HTMLElement>(selector)!.style.top);
+    }
+
+    async function type(text: string): Promise<void> {
+      const input = container.querySelector<HTMLInputElement>('.epg-mapping-search')!;
+      input.value = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await waitForEpgSearch();
+    }
+
+    it('lists similar names under a caption when no guide channel contains the search', async () => {
+      useGuide(guide('g1', 'Al-pha HD'), guide('g2', 'Delta Sports'));
+      await openPicker();
+
+      expect(rows()).toEqual(['Automatic matching', 'Al-pha HD']);
+      const caption = container.querySelector<HTMLElement>('.epg-mapping-caption')!;
+      expect(caption.textContent).toBe('Similar names');
+      expect(topOf('[data-epg-position="1"]') - topOf('.epg-mapping-caption')).toBe(40);
+      expect(container.querySelector('.epg-mapping-empty')).toBeNull();
+
+      await type('Al-pha');
+      expect(container.querySelector('.epg-mapping-caption')).toBeNull();
+      await type('Al pha');
+      expect(rows()).toEqual(['Automatic matching', 'Al-pha HD']);
+      expect(container.querySelector('.epg-mapping-caption')).not.toBeNull();
+    });
+
+    it('lists similar names after the current mapping, which alone contains nothing typed', async () => {
+      useGuide(guide('g1', 'Al-pha HD'), guide('g2', 'Delta Sports'));
+      ChannelCustomizationService.setEpgChannel(channelKey(data.channels[0]), 'g::g2');
+      await openPicker();
+
+      expect(rows()).toEqual(['Automatic matching', 'Delta Sports', 'Al-pha HD']);
+      expect(topOf('[data-epg-position="2"]') - topOf('.epg-mapping-caption')).toBe(40);
+    });
+
+    it('puts AI picks first with a badge, the caption after them, without a second copy below', async () => {
+      aiMock.ready = true;
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      useGuide(guide('g1', 'Al-pha One'), guide('g2', 'Al-pha Two'));
+      aiMock.suggest.mockResolvedValue(['g::g2']);
+      await openPicker();
+
+      await vi.waitFor(() => expect(container.querySelector('.epg-mapping-ai')).not.toBeNull());
+      expect(rows()).toEqual(['Automatic matching', 'Al-pha Two', 'Al-pha One']);
+      expect(container.querySelector('[data-epg-position="1"] .epg-mapping-ai')?.textContent).toBe('AI suggestion');
+      expect(container.querySelectorAll('.epg-mapping-ai')).toHaveLength(1);
+      expect(topOf('[data-epg-position="2"]') - topOf('.epg-mapping-caption')).toBe(40);
+      expect(aiMock.suggest).toHaveBeenCalledWith({ name: 'Alpha', group: 'News' }, expect.any(Array), expect.any(AbortSignal));
+      expect(log.mock.calls.map(args => args.join(' ')).join('\n'))
+        .toMatch(/event=epg\.match\.ai outcome=found candidates=2 picks=1/);
+
+      // Picks belong to the search the picker opened with.
+      await type('Al-pha O');
+      expect(container.querySelector('.epg-mapping-ai')).toBeNull();
+      await type('Alpha');
+      expect(container.querySelector('.epg-mapping-ai')).not.toBeNull();
+
+      hover(container.querySelector<HTMLElement>('[data-epg-position="1"]')!);
+      list.handleAction('select');
+      expect(ChannelCustomizationService.overrideFor(channelKey(data.channels[0]))?.epgChannelId).toBe('g::g2');
+    });
+
+    function deferAiAnswer(): (ids: string[]) => void {
+      let answer: (ids: string[]) => void = () => {};
+      aiMock.ready = true;
+      aiMock.suggest.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+      return (ids) => answer(ids);
+    }
+
+    const tenAlike = () => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => guide(`g${n}`, `Al-pha ${n}`));
+
+    it('keeps the focused row in place as picks arrive', async () => {
+      const answer = deferAiAnswer();
+      useGuide(...tenAlike());
+      await openPicker();
+      await vi.waitFor(() => expect(aiMock.suggest).toHaveBeenCalled());
+      for (let i = 0; i < 7; i++) list.handleAction('down');
+      expect((document.activeElement as HTMLElement | null)?.dataset.epgChannel).toBe('g::g6');
+      const scroller = container.querySelector<HTMLElement>('.epg-mapping-list')!;
+      expect(scroller.scrollTop).toBeGreaterThan(0);
+      const screenTop = (): number => topOf('[data-epg-channel="g::g6"]') - scroller.scrollTop;
+      const top = screenTop();
+
+      answer(['g::g9']);
+      await vi.waitFor(() => expect(container.querySelector('.epg-mapping-ai')).not.toBeNull());
+
+      expect((document.activeElement as HTMLElement | null)?.dataset.epgChannel).toBe('g::g6');
+      expect(screenTop()).toBe(top);
+    });
+
+    it('scrolls no further than the list when picks arrive above a short list', async () => {
+      const answer = deferAiAnswer();
+      useGuide(guide('g1', 'Al-pha One'), guide('g2', 'Al-pha Two'));
+      await openPicker();
+      await vi.waitFor(() => expect(aiMock.suggest).toHaveBeenCalled());
+      list.handleAction('down');
+      list.handleAction('down');
+      expect((document.activeElement as HTMLElement | null)?.dataset.epgChannel).toBe('g::g1');
+
+      answer(['g::g2']);
+      await vi.waitFor(() => expect(container.querySelector('.epg-mapping-ai')).not.toBeNull());
+
+      expect((document.activeElement as HTMLElement | null)?.dataset.epgChannel).toBe('g::g1');
+      expect(container.querySelector<HTMLElement>('.epg-mapping-list')!.scrollTop).toBe(0);
+    });
+
+    it('keeps the first row in view in place when picks arrive while the search has focus', async () => {
+      const answer = deferAiAnswer();
+      useGuide(...tenAlike());
+      await openPicker();
+      await vi.waitFor(() => expect(aiMock.suggest).toHaveBeenCalled());
+      const scroller = container.querySelector<HTMLElement>('.epg-mapping-list')!;
+      scroller.scrollTop = 200;
+      scroller.dispatchEvent(new Event('scroll'));
+      // Rows start at 0, 112 (after the caption), 184, 256: g3 is the first wholly in view.
+      const screenTop = (): number => topOf('[data-epg-channel="g::g3"]') - scroller.scrollTop;
+      const top = screenTop();
+
+      answer(['g::g8']);
+      await vi.waitFor(() => expect(container.querySelector('.epg-mapping-ai')).not.toBeNull());
+
+      expect(document.activeElement?.classList.contains('epg-mapping-search')).toBe(true);
+      expect(screenTop()).toBe(top);
+    });
+
+    it('asks the page for no similar names for AI while the worker waits to index again', async () => {
+      aiMock.ready = true;
+      const { WorkerMappingSearch } = await import('../workers/mapping-search-client');
+      const { IndexRetryPendingError } = await import('../workers/index-retry');
+      const similar = vi.spyOn(WorkerMappingSearch.prototype, 'similar')
+        .mockRejectedValue(new IndexRetryPendingError('retry pending'));
+      try {
+        useGuide(guide('g1', 'Al-pha One'));
+        await openPicker();
+        await Promise.resolve();
+
+        expect(similar).toHaveBeenCalled();
+        expect(epgMock.getSimilarMappingCandidates).not.toHaveBeenCalled();
+        expect(aiMock.suggest).not.toHaveBeenCalled();
+      } finally {
+        similar.mockRestore();
+      }
+    });
+
+    it('keeps a focused row below the caption in place when a lower pick moves the caption', async () => {
+      aiMock.ready = true;
+      let answer: (ids: string[]) => void = () => {};
+      aiMock.suggest.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+      useGuide(...tenAlike());
+      await openPicker();
+      await vi.waitFor(() => expect(aiMock.suggest).toHaveBeenCalled());
+      list.handleAction('down');
+      list.handleAction('down');
+      list.handleAction('down');
+      expect((document.activeElement as HTMLElement | null)?.dataset.epgChannel).toBe('g::g2');
+      const scroller = container.querySelector<HTMLElement>('.epg-mapping-list')!;
+      const screenTop = (): number => topOf('[data-epg-channel="g::g2"]') - scroller.scrollTop;
+      const top = screenTop();
+
+      answer(['g::g4']);
+      await vi.waitFor(() => expect(container.querySelector('.epg-mapping-ai')).not.toBeNull());
+
+      expect((document.activeElement as HTMLElement | null)?.dataset.epgChannel).toBe('g::g2');
+      expect(screenTop()).toBe(top);
+    });
+
+    it('keeps wheel-scrolled focus on a row wholly on screen below the caption', async () => {
+      useGuide(...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => guide(`g${n}`, `Al-pha ${n}`)));
+      await openPicker();
+      for (let i = 0; i < 10; i++) list.handleAction('down');
+      const scroller = container.querySelector<HTMLElement>('.epg-mapping-list')!;
+
+      scroller.scrollTop = 100;
+      scroller.dispatchEvent(new Event('scroll'));
+
+      // Rows start at 0, 112 (after the caption), 184, … 400, 472: row 6 ends below 520.
+      await vi.waitFor(() => expect((document.activeElement as HTMLElement | null)?.dataset.epgPosition).toBe('5'));
+    });
+
+    it('lists no similar names on the page while the worker waits to index again', async () => {
+      workerMock.failIndexes = true;
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      useGuide(guide('g1', 'Al-pha One'));
+      // The page's own search finds nothing containing the text.
+      epgMock.getLocalMappingCandidates.mockReturnValue([]);
+      epgMock.getSimilarMappingCandidates.mockReturnValue({ candidates: [guide('g1', 'Al-pha One')], sameName: false });
+      try {
+        await openPicker();
+        expect(epgMock.getSimilarMappingCandidates).toHaveBeenCalledTimes(1);
+        await type('Al pha');
+        await type('Al ph');
+        expect(epgMock.getSimilarMappingCandidates).toHaveBeenCalledTimes(1);
+      } finally {
+        workerMock.failIndexes = false;
+      }
+    });
+
+    it('asks no AI model when a guide channel already has the name, tags aside', async () => {
+      aiMock.ready = true;
+      useGuide(guide('g1', 'UK: ALPHA HD'), guide('g2', 'Al-pha One'));
+      await openPicker();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(aiMock.suggest).not.toHaveBeenCalled();
+    });
+
+    it('drops picks that answer after the picker closed, even when it reopened', async () => {
+      aiMock.ready = true;
+      const answers: Array<(ids: string[]) => void> = [];
+      aiMock.suggest.mockImplementation(() => new Promise((resolve) => { answers.push(resolve); }));
+      useGuide(guide('g1', 'Al-pha One'));
+      await openPicker();
+      await vi.waitFor(() => expect(answers).toHaveLength(1));
+      const signal = aiMock.suggest.mock.calls[0][2] as AbortSignal;
+
+      list.handleBack();
+      expect(signal.aborted).toBe(true);
+      hover(container.querySelector<HTMLElement>('[data-epg-action]')!);
+      list.handleAction('select');
+      await waitForEpgSearch();
+      await vi.waitFor(() => expect(answers).toHaveLength(2));
+      answers[0](['g::g1']);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(container.querySelector('.epg-mapping-ai')).toBeNull();
+    });
+
+    it('drops a pick whose guide channel went away', async () => {
+      aiMock.ready = true;
+      aiMock.suggest.mockResolvedValue(['g::g2']);
+      useGuide(guide('g1', 'Al-pha One'), guide('g2', 'Al-pha Two'));
+      await openPicker();
+      await vi.waitFor(() => expect(container.querySelector('.epg-mapping-ai')).not.toBeNull());
+
+      useGuide(guide('g1', 'Al-pha One'));
+      epgMock.mappingRevision++;
+      list.render();
+      await waitForEpgSearch();
+
+      expect(container.querySelector('.epg-mapping-ai')).toBeNull();
+      expect(rows()).toEqual(['Automatic matching', 'Al-pha One']);
+    });
+
+    it('records a failed request and keeps the similar names', async () => {
+      aiMock.ready = true;
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { LlmError } = await import('../services/llm/client');
+      aiMock.suggest.mockRejectedValue(new LlmError('quota', 'HTTP 429', 429));
+      useGuide(guide('g1', 'Al-pha One'));
+      await openPicker();
+
+      await vi.waitFor(() => expect(warn.mock.calls.map(args => args.join(' ')).join('\n'))
+        .toMatch(/event=epg\.match\.ai outcome=failed reason=quota candidates=1 picks=0/));
+      expect(rows()).toEqual(['Automatic matching', 'Al-pha One']);
+    });
   });
 
   it('keeps an empty EPG search focused when the pointer crosses candidates', async () => {

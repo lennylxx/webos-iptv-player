@@ -97,6 +97,8 @@ export const UK_MESSAGES = {
   'channel.editEpgSearch': 'Пошук каналів XMLTV',
   'channel.editEpgAutomatic': 'Автоматичне зіставлення',
   'channel.editEpgEmpty': 'Відповідних каналів XMLTV не знайдено.',
+  'channel.editEpgAiSuggestion': 'Запропоновано ШІ',
+  'channel.editEpgSimilar': 'Схожі назви',
   'channel.editEpgOffsetFollowSource': 'Як у джерелі ({offset})',
   'channel.editEpgOffsetHint': 'Натискання ліворуч або праворуч зсуває час телепрограми цього каналу на 15 хвилин. Середня кнопка повертає коригування джерела.',
   'channel.editEpgOffsetUnavailable': 'Для цього каналу немає даних EPG. Спочатку виконайте зіставлення.',

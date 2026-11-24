@@ -6,6 +6,7 @@ import type {
   ParsedEpg,
   Programme,
 } from '../types';
+import { nameShape, rankSimilar, SAME_NAME, type NameShape } from './epg-guide-similarity';
 import { fetchAndParseXMLTV } from '../parsers/xmltv-loader';
 import { createLogger } from '../utils/logger';
 import { EpgTimeIndex } from '../utils/epg-time-index';
@@ -153,6 +154,17 @@ interface PreparedEpgMappingSearchEntry {
   fields: string[];
 }
 
+
+// Name shapes per guide entry's fields, which the mapping index keeps between calls.
+const shapeCache = typeof WeakMap === 'function' ? new WeakMap<string[], NameShape[]>() : null;
+
+function fieldShapes(fields: string[]): NameShape[] {
+  const known = shapeCache?.get(fields);
+  if (known) return known;
+  const shapes = fields.map(nameShape);
+  shapeCache?.set(fields, shapes);
+  return shapes;
+}
 
 // A large guide's names and aliases took the longest task of a warm launch
 // to index at once, so they are indexed a slice at a time. A message task
@@ -843,6 +855,34 @@ class EpgServiceImpl {
       }
     }
     return entries;
+  }
+
+  /**
+   * Guide channels whose names are most alike `name`, best first, and whether
+   * the best has the same name. The mapping-search worker answers this; the
+   * page only when the worker fails.
+   */
+  getSimilarMappingCandidates(
+    channel: Channel,
+    name: string,
+    limit: number,
+    skipId = '',
+  ): { candidates: EpgMappingCandidate[]; sameName: boolean } {
+    const entries = this.getMappingSearchEntries(channel);
+    const ranked = rankSimilar(
+      entries.length,
+      index => fieldShapes(entries[index].fields),
+      name,
+      limit,
+      skipId ? index => entries[index].id === skipId : undefined,
+    );
+    return {
+      candidates: ranked.map(({ index }) => {
+        const entry = entries[index];
+        return { id: entry.id, channelId: entry.channelId, name: entry.name, sourceName: entry.sourceName };
+      }),
+      sameName: ranked.length > 0 && ranked[0].score >= SAME_NAME,
+    };
   }
 
   getLocalMappingCandidates(

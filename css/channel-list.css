@@ -735,6 +735,29 @@
   font-size: 16px;
 }
 
+/* Heads the similar names inside the list, in the room their first row leaves. */
+.epg-mapping-caption {
+  position: absolute;
+  right: 0;
+  left: 0;
+  padding: 12px 16px 0;
+  color: var(--text-secondary);
+  font-size: 18px;
+}
+
+/* An AI pick still waits for the user, so it takes the accent, not a status color. */
+.epg-mapping-ai {
+  display: inline-block;
+  margin-right: 10px;
+  padding: 2px 8px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: calc(var(--radius) * 0.5);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .epg-mapping-empty {
   position: absolute;
   top: 78px;

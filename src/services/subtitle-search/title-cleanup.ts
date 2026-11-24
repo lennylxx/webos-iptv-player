@@ -9,19 +9,19 @@ export interface CleanTitle {
 
 // Language and country codes providers put around a title. Only these count
 // as tags, so a title word such as "QXZ:" or "[QRZ]" stays.
-const CODES = [
+export const LANGUAGE_CODES = [
   'EN', 'ENG', 'FR', 'FRA', 'FRE', 'DE', 'GER', 'DEU', 'UK', 'US', 'USA', 'IT', 'ITA', 'ES', 'ESP', 'SPA',
   'PT', 'POR', 'BR', 'NL', 'AR', 'ARA', 'TR', 'TUR', 'PL', 'POL', 'RU', 'RUS', 'GR', 'RO', 'HU', 'CZ', 'SK',
   'SE', 'SW', 'NO', 'DK', 'FI', 'IN', 'HI', 'JP', 'JA', 'KR', 'KO', 'CN', 'ZH', 'TW', 'HK', 'AL', 'BG', 'HR',
   'RS', 'SR', 'SI', 'UA', 'IR', 'FA', 'IL', 'HE', 'VN', 'TH', 'ID', 'MY', 'PH', 'LAT', 'MX', 'CA', 'AU', 'NZ',
   'IE', 'BE', 'CH', 'AT', 'SA', 'AE', 'EG', 'MA', 'PK', 'BD', 'KU', 'EXYU', 'MULTI',
 ];
-const CODE = `(?:${CODES.join('|')})(?:[-_/ ](?:${CODES.join('|')}))?`;
+const CODE = `(?:${LANGUAGE_CODES.join('|')})(?:[-_/ ](?:${LANGUAGE_CODES.join('|')}))?`;
 // "|EN|", "[FR]", "(DE)" in any case; bare "EN - " or "UK: " only in capitals.
-const LEADING_TAG = new RegExp(`^\\s*(?:[|[(]\\s*${CODE}\\s*[|\\])]|(?:${CODES.join('|')})\\s*[-:|](?=\\s))\\s*`, 'i');
-const LEADING_BARE = new RegExp(`^\\s*(?:${CODES.join('|')})\\s*[-:|](?=\\s)`);
+const LEADING_TAG = new RegExp(`^\\s*(?:[|[(]\\s*${CODE}\\s*[|\\])]|(?:${LANGUAGE_CODES.join('|')})\\s*[-:|](?=\\s))\\s*`, 'i');
+const LEADING_BARE = new RegExp(`^\\s*(?:${LANGUAGE_CODES.join('|')})\\s*[-:|](?=\\s)`);
 const TRAILING_TAG = new RegExp(`\\s*[|[(]\\s*${CODE}\\s*[|\\])]\\s*$`, 'i');
-const TRAILING_BARE = new RegExp(`\\s[-:|]\\s*(?:${CODES.join('|')})\\s*$`);
+const TRAILING_BARE = new RegExp(`\\s[-:|]\\s*(?:${LANGUAGE_CODES.join('|')})\\s*$`);
 
 // Release tags. Word-like ones count only in capitals ("Dual", "Multi" and
 // "HD Alpha" are titles); the rest in any case.

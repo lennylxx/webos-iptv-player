@@ -94,6 +94,8 @@ export const ZH_CN_MESSAGES = {
   'channel.editEpgSearch': '搜索 XMLTV 频道',
   'channel.editEpgAutomatic': '自动匹配',
   'channel.editEpgEmpty': '没有匹配的 XMLTV 频道。',
+  'channel.editEpgAiSuggestion': 'AI 推荐',
+  'channel.editEpgSimilar': '相似名称',
   'channel.editEpgOffsetFollowSource': '跟随来源（{offset}）',
   'channel.editEpgOffsetHint': '左右键每次将该频道的 EPG 时间前后调整 15 分钟。选择中间按钮可恢复跟随来源校正。',
   'channel.editEpgOffsetUnavailable': '该频道没有可用的 EPG 数据，请先完成映射。',

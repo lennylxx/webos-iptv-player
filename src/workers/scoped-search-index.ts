@@ -6,12 +6,16 @@ import {
   type PreparedNameSearchIndex,
   type PreparedSearchItem,
 } from '../utils/channel-search';
+import { nameShape, rankSimilar, SAME_NAME, type NameShape } from '../services/epg-guide-similarity';
 import type {
   ListSearchIndexRequest,
   ListSearchQueryRequest,
   MappingSearchDocument,
   MappingSearchIndexRequest,
+  MappingRankedIndices,
   MappingSearchQueryRequest,
+  MappingSimilarRequest,
+  MappingSimilarResponse,
   ScopedSearchReleaseRequest,
   SearchIndexResponse,
   SearchRankedIndices,
@@ -33,6 +37,8 @@ interface ListState {
 
 interface PreparedMappingDocument extends MappingSearchDocument {
   normalizedFields: string[];
+  // Built on the first similarity search, so a picker that never needs one pays nothing.
+  shapes?: NameShape[];
 }
 
 interface MappingState {
@@ -103,7 +109,7 @@ export class ScopedSearchIndex {
     return { accepted: true };
   }
 
-  queryMapping(request: MappingSearchQueryRequest): SearchRankedIndices | null {
+  queryMapping(request: MappingSearchQueryRequest): MappingRankedIndices | null {
     const state = this.mappings.get(request.owner);
     if (!state || state.sessionId !== request.sessionId) return null;
     const normalized = request.query.trim().toLowerCase();
@@ -140,9 +146,42 @@ export class ScopedSearchIndex {
       return a.score - b.score || left.name.localeCompare(right.name)
         || left.channelId.localeCompare(right.channelId);
     });
+    const contains = scored.some(item => state.documents[item.index].id !== request.selectedId);
+    if (!contains && normalized && request.similarLimit) {
+      // Nothing but the current pick contains the query: list the most alike
+      // names after the current pick.
+      const selected = scored.map(item => item.index);
+      const similar = this.rankSimilarDocuments(state, request.query, request.similarLimit, request.selectedId);
+      return { indices: selected.concat(similar.map(item => item.index)), similar: similar.length > 0 };
+    }
     return {
       indices: scored.map(item => item.index),
     };
+  }
+
+  similarMapping(request: MappingSimilarRequest): MappingSimilarResponse | null {
+    const state = this.mappings.get(request.owner);
+    if (!state || state.sessionId !== request.sessionId) return null;
+    const ranked = this.rankSimilarDocuments(state, request.name, request.limit, '');
+    return {
+      indices: ranked.map(item => item.index),
+      sameName: ranked.length > 0 && ranked[0].score >= SAME_NAME,
+    };
+  }
+
+  private rankSimilarDocuments(state: MappingState, name: string, limit: number, skipId: string) {
+    const documents = state.documents;
+    return rankSimilar(
+      documents.length,
+      (index) => {
+        const document = documents[index];
+        if (!document.shapes) document.shapes = document.fields.map(nameShape);
+        return document.shapes;
+      },
+      name,
+      limit,
+      skipId ? index => documents[index].id === skipId : undefined,
+    );
   }
 
   releaseMapping(request: ScopedSearchReleaseRequest): SearchIndexResponse {

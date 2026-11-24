@@ -21,7 +21,7 @@ export const DEFAULT_CONTEXT_TOKENS = 16000;
 
 // Features the user starts by hand; the AI switch alone turns them on.
 // Features that run on their own need their own toggle in `features`.
-const ON_DEMAND_FEATURES = ['subtitle-translation', 'subtitle-title'];
+const ON_DEMAND_FEATURES = ['subtitle-translation', 'subtitle-title', 'epg-match'];
 
 export function featureEnabled(config: LlmConfig, feature: string): boolean {
   return config.features[feature] === true || ON_DEMAND_FEATURES.indexOf(feature) >= 0;

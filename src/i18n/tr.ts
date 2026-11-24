@@ -94,6 +94,8 @@ export const TR_MESSAGES = {
   'channel.editEpgSearch': 'XMLTV kanallarında ara',
   'channel.editEpgAutomatic': 'Otomatik eşleştirme',
   'channel.editEpgEmpty': 'Eşleşen XMLTV kanalı yok.',
+  'channel.editEpgAiSuggestion': 'Yapay zeka önerisi',
+  'channel.editEpgSimilar': 'Benzer adlar',
   'channel.editEpgOffsetFollowSource': 'Kaynağı kullan ({offset})',
   'channel.editEpgOffsetHint': 'Sol veya Sağ, bu kanalın EPG saatini 15 dakika kaydırır. Kaynak düzeltmesini kullanmak için ortadaki düğmeyi seçin.',
   'channel.editEpgOffsetUnavailable': 'Bu kanal için EPG verisi yok. Önce eşleştirin.',

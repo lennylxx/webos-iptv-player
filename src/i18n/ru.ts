@@ -97,6 +97,8 @@ export const RU_MESSAGES = {
   'channel.editEpgSearch': 'Поиск каналов XMLTV',
   'channel.editEpgAutomatic': 'Автоматическое сопоставление',
   'channel.editEpgEmpty': 'Подходящие каналы XMLTV не найдены.',
+  'channel.editEpgAiSuggestion': 'Предложено ИИ',
+  'channel.editEpgSimilar': 'Похожие названия',
   'channel.editEpgOffsetFollowSource': 'Как в источнике ({offset})',
   'channel.editEpgOffsetHint': 'Нажатие влево или вправо сдвигает время телепрограммы этого канала на 15 минут. Средняя кнопка возвращает коррекцию источника.',
   'channel.editEpgOffsetUnavailable': 'Для этого канала нет данных EPG. Сначала выполните привязку.',

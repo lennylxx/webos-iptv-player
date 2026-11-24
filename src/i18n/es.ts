@@ -95,6 +95,8 @@ export const ES_MESSAGES = {
   'channel.editEpgSearch': 'Buscar canales XMLTV',
   'channel.editEpgAutomatic': 'Asignación automática',
   'channel.editEpgEmpty': 'No hay canales XMLTV que coincidan.',
+  'channel.editEpgAiSuggestion': 'Sugerencia de IA',
+  'channel.editEpgSimilar': 'Nombres similares',
   'channel.editEpgOffsetFollowSource': 'Seguir fuente ({offset})',
   'channel.editEpgOffsetHint': 'Las teclas Izquierda y Derecha desplazan 15 minutos los horarios EPG de este canal. Selecciona el botón central para seguir la corrección de la fuente.',
   'channel.editEpgOffsetUnavailable': 'No hay datos EPG disponibles para este canal. Asígnalo primero.',

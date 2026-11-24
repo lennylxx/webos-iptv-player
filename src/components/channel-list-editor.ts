@@ -21,8 +21,18 @@ import { WorkerMappingSearch } from '../workers/mapping-search-client';
 import { isIndexRetryPending } from '../workers/index-retry';
 import { createLogger } from '../utils/logger';
 import { Focus } from '../navigation/focus-scope';
+import { LlmError } from '../services/llm/client';
+import { LlmService } from '../services/llm/llm-service';
+import { EPG_MATCH_CANDIDATES, EPG_MATCH_FEATURE, suggestGuideMatches } from '../services/epg-ai-match';
 
 const log = createLogger('ChannelEditor');
+
+// The similar names listed when no guide channel contains the search.
+const EPG_SIMILAR_LIMIT = 50;
+// Room above the first similar name for the "Similar names" caption.
+const EPG_CAPTION_HEIGHT = 40;
+
+type PickerCandidate = EpgMappingCandidate & { ai?: boolean };
 
 type EditTarget = { kind: 'channel'; key: string } | { kind: 'group'; key: string };
 type DragCandidate = { target: EditTarget; x: number; y: number };
@@ -62,7 +72,16 @@ export class ChannelListEditor {
   private epgPickerChannel: Channel | null = null;
   private epgOffsetFor: string | null = null;
   private epgQuery = '';
-  private epgCandidates: EpgMappingCandidate[] = [];
+  private epgCandidates: PickerCandidate[] = [];
+  // The list shows names alike the search because none contains it.
+  private epgSimilar = false;
+  // The search the picker opened with; AI picks show only under it.
+  private epgDefaultQuery = '';
+  private epgAiPicks: EpgMappingCandidate[] = [];
+  private epgAiAbort: AbortController | null = null;
+  private epgSelectedId = '';
+  // The row count and caption row the virtualizer's sizes were set for.
+  private epgItemShape = '';
   private epgMappingEntries: EpgMappingSearchEntry[] = [];
   private epgCandidateRevision = -1;
   private epgSearchGeneration = 0;
@@ -75,7 +94,6 @@ export class ChannelListEditor {
   private epgFocusPosition = -1;
   private epgKeyboardVisible = false;
   private readonly epgVirtualizer = new VirtualList({
-    itemSize: EPG_OPTION_HEIGHT,
     overscan: EPG_OVERSCAN,
     fallbackViewportSize: EPG_VIEWPORT_HEIGHT,
   });
@@ -207,15 +225,17 @@ export class ChannelListEditor {
       if (this.epgFocusPosition >= 0) {
         const itemCount = this.epgCandidates.length + 1;
         const viewportHeight = target.clientHeight || EPG_VIEWPORT_HEIGHT;
+        this.syncEpgItemSizes();
+        // Rows whole on screen; the caption makes one row start lower.
         const firstVisible = Math.min(
           itemCount - 1,
-          Math.ceil(target.scrollTop / EPG_OPTION_HEIGHT),
+          this.firstEpgRowFrom(target.scrollTop),
         );
         const lastVisible = Math.max(
           firstVisible,
           Math.min(
             itemCount - 1,
-            Math.floor((target.scrollTop + viewportHeight) / EPG_OPTION_HEIGHT) - 1,
+            this.firstEpgRowFrom(target.scrollTop + viewportHeight - EPG_OPTION_HEIGHT + 1) - 1,
           ),
         );
         this.epgFocusPosition = Math.max(
@@ -1106,7 +1126,9 @@ export class ChannelListEditor {
     this.epgPickerFor = target.key;
     this.epgPickerChannel = channel;
     this.epgQuery = channel.sourceName ?? channel.name;
+    this.epgDefaultQuery = this.epgQuery;
     this.startEpgSearch(channel);
+    void this.requestEpgAiPicks(channel, target.key);
     this.epgFocusPosition = -1;
     this.epgKeyboardVisible = false;
     this.epgVirtualizer.setScrollOffset(0);
@@ -1208,6 +1230,11 @@ export class ChannelListEditor {
     const generation = ++this.epgSearchGeneration;
     this.epgPickerChannel = channel;
     this.epgMappingEntries = EpgService.getMappingSearchEntries(channel);
+    if (this.epgAiPicks.length) {
+      // A guide that changed under the picker may have lost a pick's channel.
+      const ids = this.epgMappingEntries.map(entry => entry.id);
+      this.epgAiPicks = this.epgAiPicks.filter(pick => ids.indexOf(pick.id) >= 0);
+    }
     this.epgCandidates = [];
     this.epgSearchPending = true;
     this.epgSearchResultQuery = '';
@@ -1221,16 +1248,14 @@ export class ChannelListEditor {
     const channel = this.epgPickerChannel;
     if (!key || !channel) return;
     const query = this.epgQuery;
+    const selectedId = ChannelCustomizationService.overrideFor(key)?.epgChannelId ?? '';
+    const similarLimit = query.trim() ? EPG_SIMILAR_LIMIT : 0;
     try {
-      const candidates = await this.epgSearch.query(
-        this.epgMappingEntries,
-        query,
-        ChannelCustomizationService.overrideFor(key)?.epgChannelId ?? '',
-      );
+      const result = await this.epgSearch.queryWithSimilar(this.epgMappingEntries, query, selectedId, similarLimit);
       if (generation !== this.epgSearchGeneration
           || key !== this.epgPickerFor
           || query !== this.epgQuery) return;
-      this.epgCandidates = candidates;
+      this.setEpgCandidates(query, result.items, result.similar, selectedId);
     } catch (error) {
       if (generation !== this.epgSearchGeneration || key !== this.epgPickerFor) return;
       if (!isIndexRetryPending(error)) {
@@ -1242,7 +1267,16 @@ export class ChannelListEditor {
           error,
         );
       }
-      this.epgCandidates = EpgService.getLocalMappingCandidates(channel, query);
+      let list = EpgService.getLocalMappingCandidates(channel, query);
+      let similar = false;
+      // While the worker waits to index again, every keystroke lands here;
+      // scoring the whole guide on the page each time would stall typing.
+      if (similarLimit && !isIndexRetryPending(error) && list.every(candidate => candidate.id === selectedId)) {
+        const alike = EpgService.getSimilarMappingCandidates(channel, query, similarLimit, selectedId).candidates;
+        list = list.concat(alike);
+        similar = alike.length > 0;
+      }
+      this.setEpgCandidates(query, list, similar, selectedId);
     }
     this.epgSearchPending = false;
     this.epgSearchResultQuery = query;
@@ -1256,17 +1290,144 @@ export class ChannelListEditor {
         ? -1
         : Math.min(this.epgCandidates.length, next);
     }
-    if (this.epgFocusPosition >= 0) {
-      const list = this.container.querySelector<HTMLElement>('.epg-mapping-list');
-      this.epgVirtualizer.ensureVisible(
-        this.epgFocusPosition,
-        list?.clientHeight || EPG_VIEWPORT_HEIGHT,
-      );
+    this.revealEpgFocus();
+    this.options.render();
+  }
+
+  private revealEpgFocus(): void {
+    if (this.epgFocusPosition < 0) return;
+    this.syncEpgItemSizes();
+    const list = this.container.querySelector<HTMLElement>('.epg-mapping-list');
+    this.epgVirtualizer.ensureVisible(this.epgFocusPosition, list?.clientHeight || EPG_VIEWPORT_HEIGHT);
+  }
+
+  // `similar`: the list holds names alike the search after the current pick,
+  // because nothing else contains it. AI picks lead the list under the search
+  // the picker opened with.
+  private setEpgCandidates(query: string, list: EpgMappingCandidate[], similar: boolean, selectedId: string): void {
+    this.epgSimilar = similar;
+    this.epgSelectedId = selectedId;
+    this.epgCandidates = this.withAiPicks(list, query);
+  }
+
+  private withAiPicks(list: EpgMappingCandidate[], query: string): PickerCandidate[] {
+    if (!this.epgAiPicks.length || query !== this.epgDefaultQuery) return list;
+    const ids = this.epgAiPicks.map(pick => pick.id);
+    return this.epgAiPicks.map((pick): PickerCandidate => ({ ...pick, ai: true }))
+      .concat(list.filter(candidate => ids.indexOf(candidate.id) < 0));
+  }
+
+  // The candidate index of the first similar name, which the caption heads; -1 for none.
+  private epgSimilarStart(): number {
+    if (!this.epgSimilar) return -1;
+    return this.epgCandidates.findIndex(candidate => !candidate.ai && candidate.id !== this.epgSelectedId);
+  }
+
+  // Rows are one height, but the first similar name also makes room above it for the caption.
+  private syncEpgItemSizes(): void {
+    const count = this.epgCandidates.length + 1;
+    const captionAt = this.epgSimilarStart() + 1;
+    const shape = `${String(count)}:${String(captionAt)}`;
+    if (shape === this.epgItemShape) return;
+    this.epgItemShape = shape;
+    const sizes: number[] = [];
+    for (let position = 0; position < count; position++) {
+      sizes.push(EPG_OPTION_HEIGHT + (captionAt > 0 && position === captionAt ? EPG_CAPTION_HEIGHT : 0));
     }
+    this.epgVirtualizer.setItemSizes(sizes);
+  }
+
+  // Where row `position` starts: its caption, if it has one, sits above it.
+  private epgRowTop(position: number): number {
+    const captionAt = this.epgSimilarStart() + 1;
+    return this.epgVirtualizer.getItemOffset(position) + (captionAt > 0 && position === captionAt ? EPG_CAPTION_HEIGHT : 0);
+  }
+
+  // The first row that starts at or below `offset`.
+  private firstEpgRowFrom(offset: number): number {
+    let low = 0;
+    let high = this.epgCandidates.length + 1;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (this.epgRowTop(middle) < offset) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  }
+
+  // Asks the AI model which of the most alike guide channels is this one,
+  // unless one already has the channel's name.
+  private async requestEpgAiPicks(channel: Channel, key: string): Promise<void> {
+    this.epgAiPicks = [];
+    if (!LlmService.isReady(EPG_MATCH_FEATURE)) return;
+    const name = channel.sourceName ?? channel.name;
+    const entries = this.epgMappingEntries;
+    let similar: EpgMappingCandidate[];
+    let sameName: boolean;
+    try {
+      const result = await this.epgSearch.similar(entries, name, EPG_MATCH_CANDIDATES);
+      similar = result.items;
+      sameName = result.sameName;
+    } catch (error) {
+      if (this.epgPickerFor !== key || this.epgMappingEntries !== entries) return;
+      // Scoring the whole guide on the page stalls the TV; wait for the worker.
+      if (isIndexRetryPending(error)) return;
+      const result = EpgService.getSimilarMappingCandidates(channel, name, EPG_MATCH_CANDIDATES);
+      similar = result.candidates;
+      sameName = result.sameName;
+    }
+    if (this.epgPickerFor !== key || this.epgMappingEntries !== entries) return;
+    if (!similar.length || sameName) return;
+    const abort = new AbortController();
+    this.epgAiAbort = abort;
+    let ids: string[];
+    try {
+      ids = await suggestGuideMatches({ name, group: channel.group }, similar, abort.signal);
+    } catch (error) {
+      if (abort.signal.aborted || this.epgPickerFor !== key) return;
+      const reason = error instanceof LlmError ? error.reason : 'network';
+      log.warn('AI EPG match failed', 'event=epg.match.ai', 'outcome=failed', `reason=${reason}`,
+        `candidates=${similar.length}`, 'picks=0');
+      return;
+    }
+    if (abort.signal.aborted || this.epgPickerFor !== key) return;
+    this.epgAiAbort = null;
+    log.info('AI EPG match', 'event=epg.match.ai', `outcome=${ids.length ? 'found' : 'none'}`,
+      `candidates=${similar.length}`, `picks=${ids.length}`);
+    // The guide may have changed while the model answered.
+    if (!ids.length || this.epgMappingEntries !== entries) return;
+    this.epgAiPicks = ids.map(id => similar.filter(candidate => candidate.id === id)[0]);
+    if (this.epgSearchPending) return;
+    // Keep the focused row, or with focus in the search box the first row
+    // in view, where it is on screen as the picks join the top.
+    const before = this.epgFocusPosition;
+    this.syncEpgItemSizes();
+    const scrollOffset = this.epgVirtualizer.scrollOffset;
+    const anchor = before > 0 ? before : scrollOffset > 0 ? this.firstEpgRowFrom(scrollOffset) : 0;
+    const anchorId = anchor > 0 ? this.epgCandidates[anchor - 1]?.id : undefined;
+    const topBefore = anchor > 0 ? this.epgRowTop(anchor) : 0;
+    this.epgCandidates = this.withAiPicks(this.epgCandidates.filter(candidate => !candidate.ai), this.epgQuery);
+    if (anchorId !== undefined) {
+      const index = this.epgCandidates.findIndex(candidate => candidate.id === anchorId);
+      if (index >= 0) {
+        this.syncEpgItemSizes();
+        if (before > 0) this.epgFocusPosition = index + 1;
+        const list = this.container.querySelector<HTMLElement>('.epg-mapping-list');
+        const viewportHeight = list?.clientHeight || EPG_VIEWPORT_HEIGHT;
+        const maxOffset = Math.max(0, this.epgVirtualizer.getTotalSize(this.epgCandidates.length + 1) - viewportHeight);
+        const shift = this.epgRowTop(index + 1) - topBefore;
+        this.epgVirtualizer.setScrollOffset(Math.min(scrollOffset + shift, maxOffset));
+      }
+    }
+    this.revealEpgFocus();
     this.options.render();
   }
 
   private releaseEpgSearch(): void {
+    this.epgAiAbort?.abort();
+    this.epgAiAbort = null;
+    this.epgAiPicks = [];
+    this.epgSimilar = false;
     this.epgSearchGeneration++;
     this.epgMappingEntries = [];
     this.epgSearchPending = false;
@@ -1291,11 +1452,7 @@ export class ChannelListEditor {
       return;
     }
     this.epgFocusPosition = Math.min(itemCount - 1, next);
-    const list = this.container.querySelector<HTMLElement>('.epg-mapping-list');
-    this.epgVirtualizer.ensureVisible(
-      this.epgFocusPosition,
-      list?.clientHeight || EPG_VIEWPORT_HEIGHT,
-    );
+    this.revealEpgFocus();
     this.options.render();
   }
 
@@ -1329,6 +1486,9 @@ export class ChannelListEditor {
     const current = ChannelCustomizationService.overrideFor(key)?.epgChannelId ?? '';
     const candidates = this.epgCandidates;
     const itemCount = candidates.length + 1;
+    this.syncEpgItemSizes();
+    // The caption sits in the room the first similar name's row makes above it.
+    const captionAt = this.epgSimilarStart() + 1;
     const previousList = this.container.querySelector<HTMLElement>('.epg-mapping-list');
     const viewportHeight = previousList?.clientHeight || EPG_VIEWPORT_HEIGHT;
     const range = this.epgVirtualizer.getRange(itemCount, viewportHeight);
@@ -1365,17 +1525,27 @@ export class ChannelListEditor {
                 </div>
               `
               : ''}
+            ${captionAt > 0 && captionAt >= range.start && captionAt < range.end
+              ? html`<div class="epg-mapping-caption" data-key="epg-similar"
+                     style="top:${this.epgVirtualizer.getItemOffset(captionAt)}px">${
+                t('channel.editEpgSimilar')
+              }</div>`
+              : ''}
             ${candidates.slice(candidateStart, candidateEnd).map((candidate, offset) => {
               const position = candidateStart + offset + 1;
+              const top = this.epgVirtualizer.getItemOffset(position)
+                + (position === captionAt ? EPG_CAPTION_HEIGHT : 0);
               return html`
                 <div class="group-picker-option epg-mapping-option ${
                   candidate.id === current ? 'active' : ''
-                }" style="top:${this.epgVirtualizer.getItemOffset(position)}px"
+                }" style="top:${top}px"
                      data-key="epg:${candidate.id}" data-focusable
                      tabindex="-1" data-epg-position="${position}"
                      data-epg-channel="${candidate.id}">
                   <span class="epg-mapping-name">${candidate.name}</span>
-                  <span class="epg-mapping-meta">${candidate.channelId} - ${
+                  <span class="epg-mapping-meta">${candidate.ai
+                    ? html`<span class="epg-mapping-ai">${t('channel.editEpgAiSuggestion')}</span>`
+                    : ''}${candidate.channelId} - ${
                     candidate.sourceName
                   }</span>
                 </div>

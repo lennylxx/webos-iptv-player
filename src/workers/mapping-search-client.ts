@@ -17,9 +17,38 @@ export class WorkerMappingSearch<T extends MappingSearchDocument> {
 
   constructor(private readonly owner: string) {}
 
+  /** Entries whose names are most alike `name`, best first, and whether the best has the same name. */
+  async similar(source: T[], name: string, limit: number): Promise<{ items: T[]; sameName: boolean }> {
+    await this.ensureIndex(source);
+    const result = await runAppWorkerTask('mapping-search.similar', {
+      owner: this.owner,
+      sessionId: this.sessionId,
+      name,
+      limit,
+    });
+    if (!result) throw new Error(`Mapping search index unavailable: ${this.owner}`);
+    return {
+      items: result.indices.map(index => source[index]).filter(item => item !== undefined),
+      sameName: result.sameName,
+    };
+  }
+
   async query(source: T[], query: string, selectedId: string): Promise<T[]> {
+    return (await this.queryWithSimilar(source, query, selectedId, 0)).items;
+  }
+
+  /**
+   * Like `query`; with nothing but the selected entry containing `query`, up
+   * to `similarLimit` entries with the most alike names follow it.
+   */
+  async queryWithSimilar(
+    source: T[],
+    query: string,
+    selectedId: string,
+    similarLimit: number,
+  ): Promise<{ items: T[]; similar: boolean }> {
     const indexed = await this.ensureIndex(source);
-    let result = await this.runQuery(query, selectedId);
+    let result = await this.runQuery(query, selectedId, similarLimit);
     if (!result && source !== this.source) {
       // A newer query switched lists, or a release dropped this one: indexing
       // this list again would replace the newer index and fail that query.
@@ -37,7 +66,7 @@ export class WorkerMappingSearch<T extends MappingSearchDocument> {
       // retry delay rather than the whole list on every query.
       if (this.indexPromise === indexed.attempt) this.indexPromise = null;
       await this.ensureIndex(source);
-      result = await this.runQuery(query, selectedId);
+      result = await this.runQuery(query, selectedId, similarLimit);
       if (result) {
         log.info(
           'Mapping search index recovery completed',
@@ -58,7 +87,10 @@ export class WorkerMappingSearch<T extends MappingSearchDocument> {
       );
       throw new Error(`Mapping search index unavailable: ${this.owner}`);
     }
-    return result.indices.map(index => source[index]).filter(item => item !== undefined);
+    return {
+      items: result.indices.map(index => source[index]).filter(item => item !== undefined),
+      similar: result.similar === true,
+    };
   }
 
   release(): void {
@@ -152,13 +184,14 @@ export class WorkerMappingSearch<T extends MappingSearchDocument> {
     return accepted;
   }
 
-  private async runQuery(query: string, selectedId: string) {
+  private async runQuery(query: string, selectedId: string, similarLimit: number) {
     try {
       return await runAppWorkerTask('mapping-search.query', {
         owner: this.owner,
         sessionId: this.sessionId,
         query,
         selectedId,
+        similarLimit,
       });
     } catch (error) {
       log.error(

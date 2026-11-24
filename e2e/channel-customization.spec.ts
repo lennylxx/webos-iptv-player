@@ -516,6 +516,71 @@ ${guideChannels}
   }
 });
 
+test('the EPG picker lists similar names and an AI suggestion when no name contains the search', async ({ page }) => {
+  const playlist = SEARCH_M3U.replace('#EXTM3U', '#EXTM3U url-tvg="http://host/guide.xml"');
+  await routePlaylist(page, playlist);
+  await page.route('**/guide.xml', route => route.fulfill({
+    status: 200,
+    contentType: 'application/xml',
+    body: `<?xml version="1.0" encoding="UTF-8"?><tv>
+<channel id="alpha.news.uk"><display-name>Alpha-News UK HD</display-name></channel>
+<channel id="alpha.newsroom"><display-name>Alpha-Newsroom</display-name></channel>
+<channel id="delta.sports"><display-name>Delta Sports</display-name></channel>
+</tv>`,
+  }));
+  const sent: string[] = [];
+  await page.route('http://ai.test/v1/chat/completions', (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const body = JSON.parse(route.request().postData() || '{}') as { messages: Array<{ role: string; content: string }> };
+    sent.push(body.messages.find(m => m.role === 'user')?.content || '');
+    return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
+      body: JSON.stringify({ choices: [{ message: { content: '{"matches":[{"number":1,"confidence":"high"}]}' } }] }) });
+  });
+  await seedPlaylist(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_llm', JSON.stringify({
+      enabled: true,
+      baseUrl: 'http://ai.test/v1',
+      model: 'm1',
+      capabilities: {
+        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
+        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
+      },
+    }));
+  });
+  const guideResponse = page.waitForResponse('**/guide.xml');
+  await page.goto('/');
+  await guideResponse;
+  await liveLoaded(page);
+  await page.mouse.move(1, 1);
+
+  await key(page, YELLOW);
+  await focusChannel(page, 0);
+  await key(page, ENTER);
+  await page.locator('[data-epg-action]').click();
+  await expect(page.locator('.epg-mapping-caption')).toHaveText('Similar names');
+  const first = page.locator('[data-epg-position="1"]');
+  await expect(first.locator('.epg-mapping-ai')).toHaveText('AI suggestion');
+  await expect(first.locator('.epg-mapping-name')).toHaveText('Alpha-News UK HD');
+  await expect(page.locator('[data-epg-position="2"] .epg-mapping-name')).toHaveText('Alpha-Newsroom');
+  await expect(page.locator('.epg-mapping-ai')).toHaveCount(1);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toContain('Channel: Alpha News');
+  expect(sent[0]).toContain('1. Alpha-News UK HD (alpha.news.uk)');
+  expect(sent[0]).not.toContain('Delta Sports');
+
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.epg-mapping-picker')).toHaveCount(0);
+  await expect.poll(async () => {
+    const records = await readUserDataStore<{ epgChannelId?: string }>(page, 'channel-state');
+    return records.some(record => record.value.epgChannelId?.endsWith('::alpha.news.uk'));
+  }).toBe(true);
+});
+
 test('red moves a channel into another group', async ({ page }) => {
   await boot(page);
   await key(page, YELLOW);

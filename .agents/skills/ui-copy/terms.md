@@ -65,6 +65,8 @@ a new term after review, add a row here.
 | AI-translated subtitle entry | {name} · AI translation | {name} · AI 翻译 |
 | Subtitle translation progress / failure | Translating subtitles… {percent}% / Subtitle translation failed | 正在翻译字幕… {percent}% / 字幕翻译失败 |
 | Daily cap hit during a task | Daily AI limit reached. Translation paused. | 已达到每日 AI 上限，翻译已暂停。 |
+| AI-picked EPG mapping row (badge) | AI suggestion | AI 推荐 |
+| Rule-based similar guide channels (caption) | Similar names | 相似名称 |
 
 ## Rejected wordings
 
@@ -97,3 +99,5 @@ Never reintroduce these for the concept named.
 | zh address labels | 服务器 URL, 播放列表 URL | 服务器网址, 播放列表网址 |
 | AI translation label | Auto-translated / Machine translation / 自动翻译 / 机器翻译 | AI translation / AI 翻译 |
 | Daily cap toast | quota / 配额 (that is the provider rate limit) | Daily AI limit / 每日 AI 上限 |
+| AI-picked row | Suggested by AI / AI pick / Recommended / AI 建议 | AI suggestion / AI 推荐 |
+| Similar guide channels | Closest matches / 相近的频道 / 类似频道 | Similar names / 相似名称 |

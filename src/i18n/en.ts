@@ -98,6 +98,8 @@ export const EN_MESSAGES = {
   'channel.editEpgSearch': 'Search XMLTV channels',
   'channel.editEpgAutomatic': 'Automatic matching',
   'channel.editEpgEmpty': 'No XMLTV channels match this search.',
+  'channel.editEpgAiSuggestion': 'AI suggestion',
+  'channel.editEpgSimilar': 'Similar names',
   'channel.editEpgOffsetFollowSource': 'Follow source ({offset})',
   'channel.editEpgOffsetHint': 'Left or right shifts this channel’s EPG times by 15 minutes. Select the middle button to follow the source correction.',
   'channel.editEpgOffsetUnavailable': 'No EPG data is available for this channel. Map it first.',
