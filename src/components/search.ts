@@ -33,6 +33,8 @@ import {
   rankExpanded,
   rankPreparedNamesTopK,
   rankPreparedTopK,
+  type PreparedNameSearchIndex,
+  type PreparedSearchItem,
 } from '../utils/channel-search';
 import { SearchQueryExpansion } from './search-query-expansion';
 import { expansionQuery } from '../services/search-expansion';
@@ -77,12 +79,44 @@ import {
   sampleDocuments,
   selectCatalogItems,
 } from './search-cache-source';
+import { LlmService } from '../services/llm/llm-service';
+import { LlmError } from '../services/llm/client';
+import {
+  askSearch,
+  SEARCH_ASK_FEATURE,
+  type AskFilter,
+  type AskType,
+} from '../services/ask-search/ask-query';
+import { askPlan, askWeekday, askWindows } from '../services/ask-search/time-window';
+import {
+  askChannels,
+  collectPrograms,
+  interleave,
+  namesByCount,
+  narrowsPrograms,
+  programDocument,
+  programKey,
+  rankNames,
+  matchPrograms,
+  rankPrograms,
+  wantsType,
+} from '../services/ask-search/execute';
+import {
+  askCatalogCategories,
+  askMovies,
+  askSeries,
+  unlockedCategories,
+  type AskCatalogCategories,
+} from '../services/ask-search/catalog-source';
+import { AI_ICON } from './icons';
 
 const log = createLogger('Search');
 const SEARCH_LIST_VIEWPORT = 420;
 const SEARCH_RAIL_VIEWPORT = 1760;
 const SEARCH_ROW_OVERSCAN = 6;
 const SEARCH_RAIL_OVERSCAN = 4;
+// How often an AI search's filter runs again when the lists change under it.
+const ASK_LIST_ATTEMPTS = 3;
 
 export interface SearchHandlers {
   onRevealTabBar: () => void;
@@ -159,15 +193,6 @@ function sampleIndices(count: number): number[] {
   return indices;
 }
 
-function programDocument(result: ProgramResult): string[] {
-  return [
-    result.programme.title,
-    result.programme.category,
-    result.programme.description,
-    result.channel.name,
-    result.channel.group,
-  ];
-}
 
 type CatalogLoadResult<T> =
   | { ok: true; data: T }
@@ -190,6 +215,26 @@ interface SourcePost {
   // Settles once this post stops sending chunks.
   sent: Promise<void>;
   result: Promise<boolean>;
+}
+
+// Ask mode: an AI search for the query, its filter shown above its results.
+type AskView =
+  | { phase: 'idle' }
+  | { phase: 'loading'; query: string }
+  | { phase: 'shown'; query: string; filter: AskFilter; catalog: AskCatalogCategories | null }
+  | { phase: 'failed'; query: string; reason: string };
+
+interface LocalIndexes {
+  programs: PreparedSearchItem<ProgramResult>[];
+  movies: PreparedNameSearchIndex<VodItem>;
+  series: PreparedNameSearchIndex<SeriesItem>;
+}
+
+interface ResultLists {
+  channels: Channel[];
+  programs: ProgramResult[];
+  movies: VodItem[];
+  series: SeriesItem[];
 }
 
 function nextFrame(): Promise<void> {
@@ -423,6 +468,13 @@ export class Search {
   private workerIndexedSeries: SeriesItem[] | null = null;
   private releaseWorker: (() => void) | null = null;
   private readonly scrollGuard = new VirtualScrollGuard();
+  private ask: AskView = { phase: 'idle' };
+  // Bumped by each AI search and each way out of one, so a late reply is dropped.
+  private askSeq = 0;
+  private askController: AbortController | null = null;
+  // The query the AI last searched, whose action stays offered.
+  private askUsedFor: string | null = null;
+  private askNameCache: { key: string; list: Channel[]; channels: Channel[]; genres: string[] } | null = null;
 
   constructor(private container: HTMLElement, private handlers: SearchHandlers) {
     this.focusScope = Focus.register({
@@ -484,7 +536,12 @@ export class Search {
       this.loadedFor = null;
       this.catalogExpiresAt = 0;
     }
+    // Reopened over the same search, as after a PIN or a list change: shown AI
+    // results stay and run again on the new lists; only a running one stops.
+    const ask = this.ask;
+    const keep = ask.phase === 'shown' && account?.id === this.account?.id && ask.query === query.trim();
     this.account = account;
+    if (!keep) this.cancelAsk();
     this.query = query;
     if (!reuseWorkerIndex) {
       this.pendingIndex = { channels: true, programmes: true, catalog: !!account };
@@ -599,6 +656,7 @@ export class Search {
   async setQuery(query: string): Promise<void> {
     this.focusPending = false;
     this.cancelScheduledQuery();
+    this.leaveAskFor(query);
     this.query = query;
     this.expansion.plan(query);
     if (!query.trim()) {
@@ -611,6 +669,7 @@ export class Search {
 
   scheduleQuery(query: string): void {
     this.focusPending = false;
+    this.leaveAskFor(query);
     this.query = query;
     this.expansion.plan(query);
     const generation = ++this.queryGeneration;
@@ -735,7 +794,13 @@ export class Search {
   }
 
   refreshLocks(): void {
-    if (this.container.querySelector('.search-view')) this.render();
+    if (!this.container.querySelector('.search-view')) return;
+    // A rule change can lock a name the shown AI filter picked: run it again.
+    if (this.active && this.askShownFor(this.query)) {
+      void this.startQuery(++this.queryGeneration);
+      return;
+    }
+    this.render();
   }
 
   // Locked content was hidden or revealed: drop the rendered results at once,
@@ -778,6 +843,7 @@ export class Search {
   deactivate(): void {
     this.active = false;
     this.expansion.cancel();
+    this.cancelAsk();
     this.abortRecordFallback();
     this.focusPending = false;
     this.programIndexGeneration++;
@@ -809,6 +875,10 @@ export class Search {
         this.onSelect();
         return;
       case 'back':
+        if (this.ask.phase === 'loading' || this.ask.phase === 'shown') {
+          this.exitAsk();
+          return;
+        }
         this.handlers.onBack();
         return;
       default:
@@ -1083,6 +1153,10 @@ export class Search {
       input.setSelectionRange(input.value.length, input.value.length);
       return;
     }
+    if (el.dataset.searchAsk !== undefined) {
+      this.onAskAction(el);
+      return;
+    }
     // Only a query that opened something is worth remembering, not every keystroke.
     const query = this.query;
     if (el.dataset.channelIndex !== undefined) {
@@ -1122,7 +1196,10 @@ export class Search {
   // the latest query with something to focus completes the handoff.
   private applyPendingFocus(): void {
     if (!this.focusPending || !this.active || this.queryPending) return;
-    const first = this.container.querySelector<HTMLElement>('.search-results [data-focusable]');
+    // Enter from the box opens results; the AI search, which spends a
+    // request, takes the focus only when there are none.
+    const first = this.container.querySelector<HTMLElement>('.search-results [data-focusable]:not([data-search-ask])')
+      ?? this.container.querySelector<HTMLElement>('.search-results [data-search-ask]');
     if (!first && (this.catalogLoading || this.pendingIndex || this.channelsArriving())) {
       // Wait in the search box, not on a blank screen, for the catalog or channels.
       if (!this.focusWaitingInBox) {
@@ -1691,7 +1768,8 @@ export class Search {
   // Typing settled or AI alternatives arrived for the query shown: rank it
   // again, which only appends results and sections, so focus stays.
   private applyExpansion(key: string): void {
-    if (!this.active || expansionQuery(this.query) !== key) return;
+    // Shown AI results come from the AI's filter; the expansion waits for all results.
+    if (!this.active || expansionQuery(this.query) !== key || this.askShownFor(this.query)) return;
     const preserveOffsets = !this.queryPending;
     this.cancelScheduledQuery();
     this.expansionGeneration = this.queryGeneration;
@@ -1816,6 +1894,8 @@ export class Search {
         return;
       }
     }
+    // AI results stand until the query changes or the viewer leaves them.
+    if (this.askShownFor(query) && await this.refreshAsk(generation, sessionId, preserveOffsets)) return;
     if (response && !sameLists(lists, this.indexedLists())) {
       // The lists changed under the reply, so its indices may not map onto them.
       return this.runWorkerQuery(generation, preserveOffsets);
@@ -1862,7 +1942,20 @@ export class Search {
     }
   }
 
-  private queryLocally(query: string): SearchQueryResponse {
+  // The page's lists prepared for ranking; one set serves several queries.
+  private localIndexes(): LocalIndexes {
+    return {
+      programs: prepareSearchItems(this.programIndex, programDocument),
+      movies: prepareNameSearchItems(this.allVod),
+      series: prepareNameSearchItems(this.allSeries),
+    };
+  }
+
+  private queryLocally(
+    query: string,
+    indexes: LocalIndexes = this.localIndexes(),
+    strict = false,
+  ): SearchQueryResponse {
     const { RESULTS, FUZZY_FILL } = CONFIG.SEARCH;
     const alternatives = this.expansion.alternativesFor(query);
     const settled = this.expansion.settledOn(query);
@@ -1870,31 +1963,30 @@ export class Search {
     const channels = rankExpanded(
       expandedQueries(query, alternatives, settled ? script => PlaylistService.localSearchHasScript(script) : null),
       RESULTS,
-      q => PlaylistService.searchLocalRanked(q, RESULTS, undefined, FUZZY_FILL, settled).items,
+      q => PlaylistService.searchLocalRanked(q, RESULTS, undefined, FUZZY_FILL, settled, strict).items,
       expanded,
     );
-    const programs = prepareSearchItems(this.programIndex, programDocument);
+    const programs = indexes.programs;
     const programmes = rankExpanded(
       expandedQueries(query, alternatives, settled ? script => preparedHaveScript(programs, script) : null),
       RESULTS,
-      q => rankPreparedTopK(programs, q, RESULTS, FUZZY_FILL, settled).items,
+      q => rankPreparedTopK(programs, q, RESULTS, FUZZY_FILL, settled, strict).items,
       expanded,
     );
-    const names = <T extends { name: string }>(items: T[]): T[] => {
+    const names = <T extends { name: string }>(index: PreparedNameSearchIndex<T>): T[] => {
       if (!this.account) return [];
-      const index = prepareNameSearchItems(items);
       return rankExpanded(
         expandedQueries(query, alternatives, settled ? script => namesHaveScript(index, script) : null),
         RESULTS,
-        q => rankPreparedNamesTopK(index, q, RESULTS).items,
+        q => rankPreparedNamesTopK(index, q, RESULTS, strict).items,
         expanded,
       );
     };
     const response: SearchQueryResponse = {
       channels: { indices: channels.map(channel => PlaylistService.indexOf(channel)) },
       programmes: { indices: indicesOf(this.programIndex, programmes) },
-      movies: { indices: indicesOf(this.allVod, names(this.allVod)) },
-      series: { indices: indicesOf(this.allSeries, names(this.allSeries)) },
+      movies: { indices: indicesOf(this.allVod, names(indexes.movies)) },
+      series: { indices: indicesOf(this.allSeries, names(indexes.series)) },
     };
     if (expanded.size) {
       response.expanded = [];
@@ -2100,18 +2192,31 @@ export class Search {
     vod: VodItem[],
     series: SeriesItem[],
   ): void {
-    this.visibleChannels = itemsAt(PlaylistService.channels, response.channels.indices);
-    this.visiblePrograms = this.programsAt(response.programmes.indices);
     this.expandedTerms = response.expanded ?? [];
     this.moreWhenSettled = response.moreWhenSettled ? expansionQuery(this.query) : null;
+    this.showResults(this.resultsOf(response, vod, series));
+  }
+
+  private resultsOf(response: SearchQueryResponse, vod: VodItem[], series: SeriesItem[]): ResultLists {
     // An answer from another epoch indexes items this page no longer keeps.
     const kept = response.items?.epoch === this.delivered.epoch ? this.delivered : null;
-    this.visibleMovies = isRecordList(vod)
-      ? (kept ? keptAt(kept.movies, response.movies.indices) : [])
-      : itemsAt(vod, response.movies.indices);
-    this.visibleSeries = isRecordList(series)
-      ? (kept ? keptAt(kept.series, response.series.indices) : [])
-      : itemsAt(series, response.series.indices);
+    return {
+      channels: itemsAt(PlaylistService.channels, response.channels.indices),
+      programs: this.programsAt(response.programmes.indices),
+      movies: isRecordList(vod)
+        ? (kept ? keptAt(kept.movies, response.movies.indices) : [])
+        : itemsAt(vod, response.movies.indices),
+      series: isRecordList(series)
+        ? (kept ? keptAt(kept.series, response.series.indices) : [])
+        : itemsAt(series, response.series.indices),
+    };
+  }
+
+  private showResults(results: ResultLists): void {
+    this.visibleChannels = results.channels;
+    this.visiblePrograms = results.programs;
+    this.visibleMovies = results.movies;
+    this.visibleSeries = results.series;
   }
 
   private clearResults(): void {
@@ -2341,8 +2446,19 @@ export class Search {
       this.placeSections(Object.keys(sections));
       return this.sectionOrder.map(key => sections[key]);
     };
+    const askShown = this.askShownFor(q);
+    const settled = !this.pendingIndex && !this.queryPending && !this.channelsArriving();
+    // Kept up while the results it replaced or restored load, so its focus holds.
+    const askHeld = this.ask.phase !== 'idle' || this.askUsedFor === q;
+    const askBar = q && (askShown || ((settled || askHeld) && this.askOffered(q)))
+      ? this.askBar(q)
+      : '';
     const resultsBody = !q
       ? html``
+      : askShown
+        ? (hasResults ? html`${sectionsShown()}` : html`<p class="catalog-hint search-empty">${
+            this.pendingIndex || this.queryPending ? t('search.preparing') : t('search.empty')
+          }</p>`)
       : this.pendingIndex && (!partial || (!hasResults && !this.queryPending))
         ? html`<p class="catalog-hint search-empty">${t('search.preparing')}</p>`
       : this.queryPending
@@ -2353,13 +2469,14 @@ export class Search {
         ? html`<p class="catalog-hint search-empty">${t('search.empty')}</p>`
         : html`${sectionsShown()}`;
 
-    const hinted = !!q && hasResults && !this.queryPending && this.expandedTerms.length > 0;
+    // AI results come from the AI's filter, not the expanded query, so its note stays hidden.
+    const hinted = !!q && hasResults && !askShown && !this.queryPending && this.expandedTerms.length > 0;
     // The query box lives in the tab bar; this view renders results only.
     morph(this.container, html`
       <div class="search-view ${hinted ? 'search-view-hinted' : ''}" data-nav-container data-search-query="${q}"
            data-search-pending="${this.queryPending ? 'true' : 'false'}"
            data-search-partial="${moreComing ? 'true' : 'false'}">
-        <div class="search-results">${resultsBody}${moreComing && q && hasResults && !this.queryPending
+        <div class="search-results">${askBar}${resultsBody}${!askShown && moreComing && q && hasResults && !this.queryPending
           ? html`<p class="catalog-hint search-loading-more">${t('common.loading')}</p>`
           : ''}</div>
       </div>
@@ -2501,6 +2618,412 @@ export class Search {
     return this.visibleSeries.length;
   }
 
+  private askShownFor(query: string): boolean {
+    return this.ask.phase === 'shown' && this.ask.query === query.trim();
+  }
+
+  // Offered for every settled query, and kept for one the AI already searched.
+  private askOffered(query: string): boolean {
+    if (!LlmService.isReady(SEARCH_ASK_FEATURE)) return false;
+    // A query the AI already searched keeps its button while the index rebuilds.
+    if (this.ask.phase !== 'idle' || this.askUsedFor === query) return true;
+    return !this.pendingIndex;
+  }
+
+  // A compact action at the right of the results' first line: beside the first
+  // section heading, or beside the AI summary or failure note when one shows.
+  private askBar(query: string): ReturnType<typeof html> {
+    const ask = this.ask;
+    const mine = ask.phase !== 'idle' && ask.query === query;
+    const shown = mine && ask.phase === 'shown';
+    const loading = mine && ask.phase === 'loading';
+    const line = mine && ask.phase === 'shown'
+      ? this.askSummary(ask.filter)
+      : mine && ask.phase === 'failed'
+        ? (ask.reason === 'cap' ? t('search.aiLimit') : t('search.aiFailed'))
+        : '';
+    return html`
+      <div class="search-ask" data-key="ask-bar" data-nav-container
+           data-nav-leave-left="" data-nav-leave-right="" data-search-ask-state="${ask.phase}">
+        ${line ? html`<p class="search-ask-line ${shown ? 'search-ask-summary' : 'search-ask-note'}">${
+          shown ? html`<span class="catalog-action-icon">${raw(AI_ICON)}</span>` : ''}${line}</p>` : ''}
+        <div class="search-ask-anchor">
+          <button class="btn catalog-collection-button search-ask-action" type="button"
+                  data-focusable data-key="ask"
+                  data-search-ask="${shown ? 'exit' : loading ? 'loading' : 'run'}">
+            ${shown ? '' : html`<span class="catalog-action-icon">${raw(AI_ICON)}</span>`}
+            <span class="search-ask-label">${
+              shown ? t('search.aiShowAll') : loading ? t('search.aiLoading') : t('search.aiAction', { query })
+            }</span>
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private askSummary(filter: AskFilter): string {
+    const typeLabels: Record<AskType, string> = {
+      channel: t('common.channels'),
+      program: t('search.programs'),
+      movie: t('common.movies'),
+      series: t('common.series'),
+    };
+    // The section headings already name the kinds of results, so the kinds
+    // show only when the AI understood nothing else.
+    const parts: string[] = [];
+    // A group and a genre of the same name (both "Sports") are named once; both still filter.
+    const named = new Set<string>();
+    for (const label of [...filter.groups, ...filter.categories, ...filter.genres]) {
+      const key = label.trim().toLowerCase();
+      if (named.has(key)) continue;
+      named.add(key);
+      parts.push(label);
+    }
+    const time = askTimeLabel(filter);
+    if (time) parts.push(time);
+    for (const keyword of filter.keywords) parts.push(t('search.aiQuoted', { text: keyword }));
+    if (!parts.length) for (const type of filter.types) parts.push(typeLabels[type]);
+    return [t('search.aiSearch'), ...parts].join(' · ');
+  }
+
+  private onAskAction(el: HTMLElement): void {
+    const action = el.dataset.searchAsk;
+    if (action === 'run') void this.runAsk();
+    else if (action === 'exit') this.exitAsk();
+  }
+
+  private cancelAsk(): void {
+    this.askSeq++;
+    this.askController?.abort();
+    this.askController = null;
+    this.ask = { phase: 'idle' };
+  }
+
+  // A new query leaves the AI search of the old one.
+  private leaveAskFor(query: string): void {
+    const trimmed = query.trim();
+    if (this.askUsedFor !== null && this.askUsedFor !== trimmed) this.askUsedFor = null;
+    if (this.ask.phase !== 'idle' && this.ask.query !== trimmed) this.cancelAsk();
+  }
+
+  private exitAsk(): void {
+    const shown = this.ask.phase === 'shown';
+    this.cancelAsk();
+    if (!shown) {
+      this.render();
+      return;
+    }
+    this.clearResults();
+    this.render();
+    // The focused result may not be among all results; the button stays.
+    const button = this.container.querySelector<HTMLElement>('[data-search-ask]');
+    if (button) this.nav.focus(button);
+    else this.handlers.onRevealTabBar();
+    void this.startQuery(++this.queryGeneration);
+  }
+
+  private async runAsk(): Promise<void> {
+    const query = this.query.trim();
+    if (!query) return;
+    this.cancelAsk();
+    const seq = this.askSeq;
+    const controller = new AbortController();
+    this.askController = controller;
+    this.askUsedFor = query;
+    const sessionId = this.workerSession;
+    const account = this.account;
+    const current = (): boolean => seq === this.askSeq && this.active
+      && sessionId === this.workerSession && this.query.trim() === query;
+    const stopped = (): void => {
+      log.info('AI search canceled', 'event=search.ask.outcome', 'outcome=cancelled');
+    };
+    this.ask = { phase: 'loading', query };
+    this.render();
+    const types: AskType[] = account ? ['channel', 'program', 'movie', 'series'] : ['channel', 'program'];
+    let filter: AskFilter | null = null;
+    try {
+      const catalog = account ? await askCatalogCategories(account, controller.signal) : null;
+      const names = current() ? await this.askNames(current) : null;
+      if (!names || !current()) return stopped();
+      const reply = await askSearch(query, types, {
+        groups: namesByCount(names.channels.map(channel => channel.group)),
+        categories: catalog ? catalog.names : [],
+        genres: names.genres,
+      }, controller.signal);
+      if (!current()) return stopped();
+      filter = reply.filter;
+      const results = await this.askResults(filter, account, catalog, sessionId, controller.signal, current);
+      if (!results || !current()) return stopped();
+      this.ask = { phase: 'shown', query, filter, catalog };
+      this.askController = null;
+      this.showResults(results);
+      this.queryPending = false;
+      this.resetVirtualOffsets();
+      this.render();
+      this.rememberAsk(query, results);
+      const count = results.channels.length + results.programs.length
+        + results.movies.length + results.series.length;
+      log.info(
+        'AI search applied',
+        'event=search.ask.outcome',
+        `outcome=${count ? 'results' : 'empty'}`,
+        `types=${String(filter.types.length)}`,
+        `filters=${String(filter.groups.length + filter.categories.length + filter.genres.length)}`,
+        `time=${filter.time}`,
+        `keywords=${String(filter.keywords.length)}`,
+        `dropped=${String(reply.dropped)}`,
+        `cached=${reply.cached ? 1 : 0}`,
+        `results=${String(count)}`,
+      );
+    } catch (error) {
+      if (!current()) return stopped();
+      const reason = error instanceof LlmError ? error.reason : filter ? 'results' : 'error';
+      this.askController = null;
+      this.ask = { phase: 'failed', query, reason };
+      this.render();
+      log.warn('AI search failed', 'event=search.ask.outcome', 'outcome=failed', `reason=${reason}`);
+    }
+  }
+
+  // An AI search is a search the viewer ran, so it joins recent searches,
+  // unless it showed PIN-guarded content.
+  private rememberAsk(query: string, results: ResultLists): void {
+    if (ParentalControlService.enabled) {
+      const guarded = results.channels.some(channel => ParentalControlService.protects(liveParentalRequest(channel)))
+        || results.programs.some(result => ParentalControlService.protects(liveParentalRequest(result.channel)))
+        || results.movies.some(item => ParentalControlService.protects(
+          catalogParentalRequest('vod', { ...item, id: item.streamId })))
+        || results.series.some(item => ParentalControlService.protects(
+          catalogParentalRequest('series', { ...item, id: item.seriesId })));
+      if (guarded) return;
+    }
+    StorageService.addSearchHistory(query);
+  }
+
+  // Channels whose groups and guide may be named to the AI, never hidden or
+  // locked ones whether or not they show right now, and their guide genres by
+  // how many programs carry them. Kept while the channels, the guide, and the
+  // rules stay; the genres take a walk over the guide, a channel at a time.
+  private async askNames(current: () => boolean): Promise<{ channels: Channel[]; genres: string[] } | null> {
+    const key = [
+      EpgService.guideRevision,
+      EpgService.mappingRevision,
+      ParentalControlService.rulesRevision,
+      ParentalControlService.enabled ? 1 : 0,
+      // A source locked again changes no rule, only the approved list.
+      ParentalControlService.approvedSources.join(','),
+      StorageService.getShowHiddenChannels() ? 1 : 0,
+    ].join('|');
+    const cached = this.askNameCache;
+    if (cached && cached.key === key && cached.list === PlaylistService.channels) return cached;
+    const list = PlaylistService.channels;
+    let channels = PlaylistService.getEpgEligibleChannels();
+    if (ParentalControlService.enabled) {
+      channels = channels.filter(channel => !ParentalControlService.protects(liveParentalRequest(channel)));
+    }
+    const categories: string[] = [];
+    const listed = new Set<string>();
+    let index = 0;
+    const done = await runInFrameSlices(() => {
+      if (index >= channels.length) return true;
+      const id = EpgService.findChannelId(channels[index++]);
+      if (!id || listed.has(id)) return false;
+      listed.add(id);
+      for (const programme of EpgService.getProgrammes(id) ?? []) {
+        if (programme.category) categories.push(programme.category);
+      }
+      return false;
+    }, { shouldContinue: current });
+    if (!done) return null;
+    const names = { key, list, channels, genres: namesByCount(categories) };
+    this.askNameCache = names;
+    return names;
+  }
+
+  // The results a filter names, from the lists Search holds once they stop
+  // changing under it; null once `current` says they are no longer wanted.
+  private async askResults(
+    filter: AskFilter,
+    account: PlaylistEntry | null,
+    catalog: AskCatalogCategories | null,
+    sessionId: number,
+    signal: AbortSignal,
+    current: () => boolean,
+  ): Promise<ResultLists | null> {
+    // Without the worker's index, the page's own program index stands in; it
+    // is built first so building it does not count as the lists changing.
+    if (this.workerIndexLost && !await this.ensureProgramIndex()) return null;
+    for (let attempt = 0; attempt < ASK_LIST_ATTEMPTS; attempt++) {
+      const lists = this.indexedLists();
+      const results = await this.askResultsOnce(filter, account, catalog, sessionId, signal, current);
+      if (!results || sameLists(lists, this.indexedLists())) return results;
+    }
+    throw new Error('Search lists kept changing');
+  }
+
+  private async askResultsOnce(
+    filter: AskFilter,
+    account: PlaylistEntry | null,
+    catalog: AskCatalogCategories | null,
+    sessionId: number,
+    signal: AbortSignal,
+    current: () => boolean,
+  ): Promise<ResultLists | null> {
+    const now = Date.now();
+    const limit = CONFIG.SEARCH.RESULTS;
+    const windows = askWindows(filter.time, filter.fromHour, filter.toHour, now);
+    const timed = !!windows;
+    const wants = (type: AskType): boolean => wantsType(filter, type, timed);
+    const channelList = PlaylistService.channels;
+    const channels = wants('channel') ? askChannels(channelList, filter, limit) : [];
+    let programs: ProgramResult[] | null = [];
+    if (wants('program')) {
+      programs = null;
+      if (narrowsPrograms(filter, windows)) {
+        const collector = collectPrograms({
+          channels: channelList,
+          guideId: channel => EpgService.findChannelId(channel),
+          programmes: id => EpgService.getProgrammes(id),
+        }, filter, windows);
+        if (!await runInFrameSlices(collector.step, { shouldContinue: current })) return null;
+        const matcher = matchPrograms(collector.candidates, filter.keywords);
+        if (!await runInFrameSlices(matcher.step, { shouldContinue: current })) return null;
+        programs = rankPrograms(collector.candidates, matcher.matched, filter, now, limit);
+      }
+    }
+    const named = !!account && !!catalog && filter.categories.length > 0;
+    const held = !!account && this.loadedFor === account.id;
+    const [movies, series] = await Promise.all([
+      named && wants('movie') && account && catalog
+        ? askMovies(account, catalog, filter.categories,
+          held && !isRecordList(this.allVod) ? this.allVod : null, signal)
+        : Promise.resolve(null),
+      named && wants('series') && account && catalog
+        ? askSeries(account, catalog, filter.categories,
+          held && !isRecordList(this.allSeries) ? this.allSeries : null, signal)
+        : Promise.resolve(null),
+    ]);
+    const results: ResultLists = {
+      channels: channels ?? [],
+      programs: programs ?? [],
+      movies: movies ? rankNames(movies, filter.keywords, true, limit) : [],
+      series: series ? rankNames(series, filter.keywords, true, limit) : [],
+    };
+    // Kinds no name or time narrows are searched by the keywords alone.
+    const byKeyword = {
+      channels: channels === null,
+      programs: programs === null,
+      movies: wants('movie') && !!account && !movies,
+      series: wants('series') && !!account && !series,
+    };
+    if (filter.keywords.length && (byKeyword.channels || byKeyword.programs || byKeyword.movies || byKeyword.series)) {
+      const found = await this.keywordResults(filter.keywords, sessionId);
+      if (!found) return null;
+      if (byKeyword.channels) results.channels = found.channels;
+      if (byKeyword.programs) results.programs = found.programs;
+      if (byKeyword.movies) results.movies = found.movies;
+      if (byKeyword.series) results.series = found.series;
+    }
+    return results;
+  }
+
+  // Each keyword through today's search, merged so every keyword shows; null
+  // when the session moved on.
+  private async keywordResults(keywords: string[], sessionId: number): Promise<ResultLists | null> {
+    const repost = this.channelRepost;
+    if (repost && repost.sessionId === sessionId) await repost.done;
+    const lists: ResultLists[] = [];
+    let indexes: LocalIndexes | null = null;
+    for (const keyword of keywords) {
+      if (sessionId !== this.workerSession) return null;
+      let response: SearchQueryResponse | null = null;
+      if (!this.workerIndexLost) {
+        try {
+          const pending = runAppWorkerTask('search.query', this.queryRequest({
+            sessionId,
+            query: keyword,
+            limit: CONFIG.SEARCH.RESULTS,
+            includeCatalog: !!this.account && !this.pendingIndex?.catalog && !this.lostSources?.catalog,
+            includeProgrammes: !this.pendingIndex?.programmes && !this.lostSources?.programmes,
+            strict: true,
+          }));
+          const worker = appWorkerGeneration();
+          response = await pending;
+          this.keepDelivered(response, worker);
+        } catch {
+          response = null;
+        }
+      }
+      if (response) {
+        lists.push(this.resultsOf(response, this.indexedVod, this.indexedSeries));
+        continue;
+      }
+      // Without the worker's index, the page ranks the keyword itself, as a
+      // search does; the AI reply is not thrown away.
+      if (!await this.ensureProgramIndex() || sessionId !== this.workerSession) return null;
+      if (!indexes) indexes = this.localIndexes();
+      lists.push(this.resultsOf(this.queryLocally(keyword, indexes, true), this.allVod, this.allSeries));
+    }
+    const limit = CONFIG.SEARCH.RESULTS;
+    return {
+      channels: interleave(lists.map(list => list.channels), limit),
+      // Each answer builds its own program results, so a program two keywords
+      // find arrives twice as different objects.
+      programs: interleave(lists.map(list => list.programs), limit, programKey),
+      movies: interleave(lists.map(list => list.movies), limit),
+      series: interleave(lists.map(list => list.series), limit),
+    };
+  }
+
+  // The lists changed under shown AI results: the stored filter runs again on
+  // them, without asking the AI, so no result points at a moved channel.
+  private async refreshAsk(generation: number, sessionId: number, preserveOffsets: boolean): Promise<boolean> {
+    const ask = this.ask;
+    if (ask.phase !== 'shown') return false;
+    const current = (): boolean => this.ask === ask && generation === this.queryGeneration
+      && sessionId === this.workerSession && this.active;
+    this.askController?.abort();
+    const controller = new AbortController();
+    this.askController = controller;
+    let results: ResultLists | null = null;
+    try {
+      // A name locked or gone since the AI picked it leaves the filter.
+      const names = await this.askNames(current);
+      if (names) {
+        const groups = new Set(names.channels.map(channel => channel.group.trim()));
+        const catalog = ask.catalog && this.account ? unlockedCategories(this.account, ask.catalog) : ask.catalog;
+        ask.catalog = catalog;
+        const before = ask.filter;
+        ask.filter = {
+          ...ask.filter,
+          groups: ask.filter.groups.filter(group => groups.has(group)),
+          genres: ask.filter.genres.filter(genre => names.genres.indexOf(genre) >= 0),
+          categories: ask.filter.categories.filter(name => !!catalog && catalog.names.indexOf(name) >= 0),
+        };
+        const named = (filter: AskFilter): number => filter.groups.length + filter.categories.length + filter.genres.length;
+        // A filter left with neither names nor keywords would show everything.
+        results = named(before) > 0 && !named(ask.filter) && !ask.filter.keywords.length
+          ? { channels: [], programs: [], movies: [], series: [] }
+          : await this.askResults(ask.filter, this.account, catalog, sessionId, controller.signal, current);
+      }
+    } catch {
+      results = null;
+    }
+    if (this.askController === controller) this.askController = null;
+    if (!current()) return true;
+    if (!results) {
+      log.warn('AI search results could not be updated', 'event=search.ask.outcome', 'outcome=failed', 'reason=results');
+      this.ask = { phase: 'failed', query: ask.query, reason: 'results' };
+      return false;
+    }
+    this.showResults(results);
+    this.queryPending = false;
+    if (!preserveOffsets) this.resetVirtualOffsets();
+    this.render();
+    this.applyPendingFocus();
+    return true;
+  }
+
   private cancelScheduledQuery(): void {
     this.queryGeneration++;
     if (this.queryFrame !== null) cancelAnimationFrame(this.queryFrame);
@@ -2540,4 +3063,41 @@ function indicesOf<T>(items: T[], selected: T[]): number[] {
 // anyone can see once the session is locked again (or the PIN was canceled).
 function rememberQuery(query: string, request: Parameters<typeof ParentalControlService.protects>[0]): void {
   if (!ParentalControlService.protects(request)) StorageService.addSearchHistory(query);
+}
+
+const WEEKDAY_LABELS = [
+  'weekday.0', 'weekday.1', 'weekday.2', 'weekday.3', 'weekday.4', 'weekday.5', 'weekday.6',
+] as const;
+
+function hourLabel(hour: number): string {
+  return `${hour < 10 ? '0' : ''}${String(hour)}:00`;
+}
+
+function askTimeLabel(filter: AskFilter): string {
+  let day = '';
+  switch (filter.time) {
+    case 'any': break;
+    case 'now': return t('search.liveNow');
+    case 'today': day = t('common.today'); break;
+    case 'tonight': day = t('search.timeTonight'); break;
+    case 'tomorrow': day = t('common.tomorrow'); break;
+    case 'yesterday': day = t('search.timeYesterday'); break;
+    case 'weekend': day = t('search.timeWeekend'); break;
+    case 'this_week': day = t('search.timeThisWeek'); break;
+    default: day = t(WEEKDAY_LABELS[askWeekday(filter.time)]);
+  }
+  // Tonight with no hours names its own; a range a clock change skips names none.
+  const now = Date.now();
+  const plan = filter.fromHour < 0 && filter.toHour < 0
+    ? null
+    : askPlan(filter.time, filter.fromHour, filter.toHour, now);
+  const windows = askWindows(filter.time, filter.fromHour, filter.toHour, now);
+  if (!plan || (windows && !windows.length)) return day;
+  const hours = plan.hours;
+  const single = filter.fromHour >= 0
+    && (filter.toHour === filter.fromHour || (filter.fromHour === 24 && filter.toHour < 0));
+  const label = single
+    ? hourLabel(hours[0] % 24)
+    : `${hourLabel(hours[0] % 24)}–${hourLabel(hours[1] > 24 ? hours[1] - 24 : hours[1])}`;
+  return day ? `${day} ${label}` : label;
 }

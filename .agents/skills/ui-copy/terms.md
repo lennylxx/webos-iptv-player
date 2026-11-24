@@ -69,6 +69,10 @@ a new term after review, add a row here.
 | Rule-based similar guide channels (caption) | Similar names | 相似名称 |
 | AI-suggested search terms on top of built-in multilingual matching (setting) | AI-enhanced multilingual search | AI 增强多语言搜索 |
 | Results an expanded query added (Search) | Including results for {terms} | 还包括以下内容的结果：{terms} |
+| AI-assisted Search (feature, summary prefix) | AI search | AI 搜索 |
+| AI search button (action) | Search with AI: “{query}” | 用 AI 搜索：“{query}” |
+| Leave AI search for the normal results | Show all results | 查看全部结果 |
+| AI search time labels | Live now / Today / Tonight / Tomorrow / Yesterday / This weekend / This week / weekday | 正在直播 / 今天 / 今晚 / 明天 / 昨天 / 本周末 / 本周 / 星期 |
 
 ## Rejected wordings
 
@@ -105,3 +109,5 @@ Never reintroduce these for the concept named.
 | Daily cap toast | quota / 配额 (that is the provider rate limit) | Daily AI limit / 每日 AI 上限 |
 | AI-picked row | Suggested by AI / AI pick / Recommended / AI 建议 | AI suggestion / AI 推荐 |
 | Similar guide channels | Closest matches / 相近的频道 / 类似频道 | Similar names / 相似名称 |
+| AI search | Ask, Smart search, Natural-language search, 智能搜索 | AI search / AI 搜索 |
+| Leave AI search | Clear filter, Exit, 显示 | Show all results / 查看全部结果 |

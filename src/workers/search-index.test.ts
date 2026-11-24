@@ -60,6 +60,22 @@ describe('SearchWorkerIndex', () => {
     });
   });
 
+  it('ranks an AI keyword by whole words and word starts, without typos', () => {
+    const index = new SearchWorkerIndex();
+    post(index, 1, {
+      channels: [['Charlie', 'News']],
+      programmes: [['Weekly Summary', 'News', 'Lo más visto de la semana.'], ['Marsh Life', 'Nature', ''], ['Dámaso Report', 'News', '']],
+      movies: ['Smarsh', 'Mars Trip'],
+      series: [],
+    });
+    const ask = (q: string, strict: boolean) => query(index, { sessionId: 1, query: q, limit: 10, includeCatalog: true, strict });
+    expect(ask('mars', false)?.programmes.indices).toEqual([1, 0]);
+    expect(ask('mars', true)?.programmes.indices).toEqual([1]);
+    expect(ask('mars', true)?.movies.indices).toEqual([1]);
+    // Accents still fold.
+    expect(ask('damaso', true)?.programmes.indices).toEqual([2]);
+  });
+
   it('rejects stale index updates and queries', () => {
     const index = new SearchWorkerIndex();
     post(index, 2, { channels: [['Alpha']] });

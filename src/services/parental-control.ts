@@ -763,6 +763,11 @@ class ParentalControlServiceImpl {
     this.persist('group-rule', `target=${key}`, `locked=${String(protectedValue)}`);
   }
 
+  // Replaced, never mutated, on an approval or a re-lock.
+  get approvedSources(): readonly string[] {
+    return this.config.approvedSources;
+  }
+
   // Rule tables are replaced, never mutated, so identity marks a change.
   get rulesRevision(): number {
     const tables = this.ruleTables;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from 'vitest';
 import type { PlaylistEntry, Programme } from '../types';
 import type { SearchIndexPersistRequest, SearchIndexRequest, SearchQueryRequest, SearchQueryResponse } from '../workers/tasks';
 
@@ -15,11 +15,16 @@ const {
   cacheMock,
   persistMock,
   llmMock,
+  askMock,
 } = vi.hoisted(() => ({
-  llmMock: { isReady: vi.fn(() => false), run: vi.fn() },
+  llmMock: { isReady: vi.fn((_feature?: string) => false), run: vi.fn() },
   persistMock: vi.fn(async (_candidates?: Array<{ key: string; prefix: string }>) => undefined),
   catalogMock: {
     getSearchCatalogExpiresAt: vi.fn(),
+    loadVodCategories: vi.fn(async (): Promise<unknown[]> => []),
+    loadSeriesCategories: vi.fn(async (): Promise<unknown[]> => []),
+    loadVodStreams: vi.fn(async (_account: unknown, _id: string): Promise<unknown[]> => []),
+    loadSeries: vi.fn(async (): Promise<unknown[]> => []),
     loadAllVodStreams: vi.fn(),
     loadAllSeries: vi.fn(),
     onCatalogListRefreshed: vi.fn(),
@@ -32,6 +37,7 @@ const {
     indexOf: vi.fn((_channel: { name: string }) => 0),
     localSearchHasScript: vi.fn((_script: string) => false),
     getChannelCacheSource: vi.fn((): unknown => null),
+    getEpgEligibleChannels(): unknown[] { return this.channels; },
   },
   epgMock: {
     guideRevision: 0,
@@ -54,6 +60,7 @@ const {
     getCatchupProgressList: vi.fn(() => [] as unknown[]),
     clearCatchupProgress: vi.fn(),
     addSearchHistory: vi.fn(),
+    getShowHiddenChannels: vi.fn(() => false),
   },
   archiveMock: {
     load: vi.fn(async () => null as Set<number> | null),
@@ -74,6 +81,11 @@ const {
     records: new Map<string, Record<string, unknown>>(),
     refs: new WeakMap<object, unknown>(),
   },
+  askMock: vi.fn(),
+}));
+vi.mock('../services/ask-search/ask-query', async importOriginal => ({
+  ...await importOriginal<typeof import('../services/ask-search/ask-query')>(),
+  askSearch: askMock,
 }));
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
@@ -134,6 +146,8 @@ import { Focus } from '../navigation/focus-scope';
 import { ParentalControlService } from '../services/parental-control';
 import { SEARCH_INDEX_FORMAT } from '../workers/search-source-index';
 import { resetSearchExpansionForTests } from '../services/search-expansion';
+import { LlmError } from '../services/llm/client';
+import type { AskFilter, AskReply } from '../services/ask-search/ask-query';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -1851,7 +1865,7 @@ describe('Search', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       await view.setQuery('alpha');
-      expect(searchLocalRanked).toHaveBeenCalledWith('alpha', CONFIG.SEARCH.RESULTS, undefined, CONFIG.SEARCH.FUZZY_FILL, false);
+      expect(searchLocalRanked).toHaveBeenCalledWith('alpha', CONFIG.SEARCH.RESULTS, undefined, CONFIG.SEARCH.FUZZY_FILL, false, false);
       expect(container.querySelector('.search-program-row')?.textContent).toContain('Alhpa');
     } finally {
       workerMock.run.mockImplementation(originalRun);
@@ -2213,6 +2227,7 @@ describe('Search', () => {
     await vi.waitFor(() => expect(container.textContent).toContain('Old Movie'));
 
     const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
     let rejected = false;
     workerMock.run.mockImplementation(async (task: string, payload: unknown) => {
       if (!rejected && (payload as SearchIndexRequest).chunk?.source === 'movies') {
@@ -2270,6 +2285,7 @@ describe('Search', () => {
   it('logs each source a rejected channel post leaves incomplete', async () => {
     playlistMock.channels = [chan('Alpha')];
     const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
     let rejected = false;
     workerMock.run.mockImplementation(async (task: string, payload: unknown) => {
       if (!rejected && (payload as SearchIndexRequest).chunk?.source === 'channels') {
@@ -2297,6 +2313,7 @@ describe('Search', () => {
     playlistMock.channels = [chan('Alpha')];
     epgMock.programmes = { Alpha: [prog('Evening Report', Date.now() + 3600000, Date.now() + 7200000)] };
     const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
     let rejected = false;
     const held: Array<() => void> = [];
     let resets = 0;
@@ -2560,6 +2577,24 @@ describe('Search', () => {
       expect(reminderMock.add).toHaveBeenCalledWith(expect.objectContaining({ channelName: 'Alpha', title: 'Alpha Report' }));
     });
 
+    it('lists a worker-matched program that two AI keywords find once', async () => {
+      const { programmes } = guideSetup();
+      epgMock.searchMatchSample.mockImplementation(((channel: { id: string }) =>
+        [`${encodeURIComponent(url)}::${channel.id}`, programmes[channel.id].length]) as never);
+      llmMock.isReady.mockImplementation((feature?: string) => feature === 'search-ask');
+      askMock.mockResolvedValue({ filter: {
+        types: ['program'], keywords: ['bravo', 'report'], groups: [], categories: [], genres: [],
+        time: 'any', fromHour: -1, toHour: -1,
+      }, dropped: 0, cached: false });
+      const { view } = await openWith();
+      await view.setQuery('bravo report programs');
+      container.querySelector('[data-search-ask]')!.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      view.handleAction('select');
+      await vi.waitFor(() => expect(container.querySelector('.search-ask-summary')).not.toBeNull());
+      const titles = Array.from(container.querySelectorAll('.search-program-title'), el => el.textContent);
+      expect(titles.sort()).toEqual(['Alpha Report', 'Bravo Morning', 'Bravo Report']);
+    });
+
     function matchAll(programmes: Record<string, Programme[]>): void {
       epgMock.searchMatchSample.mockImplementation(((channel: { id: string }) =>
         [`${encodeURIComponent(url)}::${channel.id}`, programmes[channel.id].length]) as never);
@@ -2689,6 +2724,7 @@ describe('Search', () => {
       // A newer guide revision: the reopen indexes afresh.
       epgMock.programmes = { ...programmes };
       const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
       let release!: () => void;
       const released = new Promise<void>(resolve => { release = resolve; });
       let matching = false;
@@ -2933,6 +2969,7 @@ describe('Search', () => {
     playlistMock.channels = [chan('Alpha')];
     epgMock.programmes = { Alpha: [prog('Evening Report', Date.now() + 3600000, Date.now() + 7200000)] };
     const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
     let rejected = false;
     workerMock.run.mockImplementation(async (task: string, payload: unknown) => {
       if (!rejected && (payload as SearchIndexRequest).chunk?.source === 'programmes') {
@@ -2963,6 +3000,7 @@ describe('Search', () => {
 
   it('rebuilds an index whose catalog post failed and never reuses it', async () => {
     const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
     let rejected = false;
     workerMock.run.mockImplementation(async (task: string, payload: unknown) => {
       if (!rejected && (payload as SearchIndexRequest).chunk?.source === 'movies') {
@@ -2991,6 +3029,7 @@ describe('Search', () => {
 
   it('recovers movies when the catalog post fails during open', async () => {
     const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
     let rejected = false;
     workerMock.run.mockImplementation(async (task: string, payload: unknown) => {
       if (!rejected && (payload as SearchIndexRequest).chunk?.source === 'movies') {
@@ -3014,6 +3053,7 @@ describe('Search', () => {
     await view.setQuery('report');
     epgMock.programmes = { Alpha: [prog('Late Report', Date.now() + 3600000, Date.now() + 7200000)] };
     const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let crashed = false;
     workerMock.run.mockImplementation(async (task: string, payload: unknown) => {
@@ -3726,5 +3766,637 @@ describe('Search with worker-held catalog records', () => {
     expect(catalogMock.loadAllVodStreams).not.toHaveBeenCalled();
     expect(workerMock.run.mock.calls.filter(([task, payload]) =>
       task === 'search.index' && (payload as SearchIndexRequest).catalogMovies)).toHaveLength(2);
+  });
+});
+
+describe('Search AI search', () => {
+  const filter = (patch: Partial<AskFilter>): AskFilter => ({
+    types: [], keywords: [], groups: [], categories: [], genres: [],
+    time: 'any', fromHour: -1, toHour: -1, ...patch,
+  });
+  const reply = (patch: Partial<AskFilter>): AskReply => ({ filter: filter(patch), dropped: 0, cached: false });
+  const grouped = (name: string, group: string) => ({ ...chan(name), group });
+  const hour = 60 * 60 * 1000;
+
+  async function openReady(withAccount = false) {
+    llmMock.isReady.mockImplementation((feature?: string) => feature === 'search-ask');
+    const handlers = mkHandlers();
+    const view = new Search(container, handlers);
+    openViews.push(view);
+    if (withAccount) {
+      catalogMock.loadAllVodStreams.mockResolvedValue([]);
+      catalogMock.loadAllSeries.mockResolvedValue([]);
+    }
+    await view.open(withAccount ? account : null);
+    await indexReady(view);
+    return { view, handlers };
+  }
+
+  const askButton = () => container.querySelector<HTMLElement>('[data-search-ask]');
+
+  function pressAsk(view: Search): void {
+    askButton()!.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+  }
+
+  async function asked(view: Search, state: string): Promise<void> {
+    void view;
+    await vi.waitFor(() => {
+      expect(container.querySelector('.search-ask')?.getAttribute('data-search-ask-state')).toBe(state);
+    });
+  }
+
+  it('offers AI search for any query, with or without results, and sends nothing while typing', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    const { view } = await openReady();
+    await view.setQuery('alpha');
+    expect(container.querySelector('.search-channel-tile')).not.toBeNull();
+    expect(askButton()?.textContent).toContain('alpha');
+    await view.setQuery('zulu');
+    expect(container.textContent).toContain('No results found.');
+    expect(askButton()).not.toBeNull();
+    expect(askMock).not.toHaveBeenCalled();
+
+    llmMock.isReady.mockReturnValue(false);
+    await view.setQuery('alpha bravo');
+    expect(askButton()).toBeNull();
+  });
+
+  it('shows the filtered programs with the filter, and Back returns to all results', async () => {
+    const now = Date.now();
+    playlistMock.channels = [grouped('ch1', 'Group A'), grouped('ch2', 'Group B')];
+    playlistMock.indexOf.mockImplementation((ch: { name: string }) => (ch.name === 'ch1' ? 0 : 1));
+    epgMock.programmes = {
+      ch1: [prog('Alpha Cup', now + hour, now + 2 * hour)],
+      ch2: [prog('Alpha News', now + hour, now + 2 * hour)],
+    };
+    askMock.mockResolvedValue(reply({ types: ['program'], groups: ['Group A'], keywords: ['alpha'] }));
+    const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { view, handlers } = await openReady();
+    await view.setQuery('alpha news ch2');
+    expect(container.textContent).toContain('Alpha News');
+
+    pressAsk(view);
+    await asked(view, 'shown');
+    const [query, types, vocabulary, signal] = askMock.mock.calls[0] as [string, string[], { groups: string[]; genres: string[] }, AbortSignal];
+    expect(query).toBe('alpha news ch2');
+    expect(types).toEqual(['channel', 'program']);
+    expect(vocabulary.groups.sort()).toEqual(['Group A', 'Group B']);
+    expect(vocabulary.genres).toEqual(['Drama']);
+    expect(signal.aborted).toBe(false);
+    expect(container.querySelector('.search-ask-summary')?.textContent)
+      .toBe('AI search · Group A · “alpha”');
+    const rows = Array.from(container.querySelectorAll('.search-program-title'), el => el.textContent);
+    expect(rows).toEqual(['Alpha Cup']);
+    // A program that has not started yet offers its reminder, as any search result does.
+    expect(container.querySelector('.search-program-action')?.textContent).toBe('Set reminder');
+    expect(diagEvents(info, 'search.ask.outcome')).toEqual([expect.stringContaining(
+      'outcome=results types=1 filters=1 time=any keywords=1 dropped=0 cached=0 results=1',
+    )]);
+    info.mockRestore();
+
+    view.handleAction('back');
+    expect(handlers.onBack).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(container.textContent).toContain('Alpha News'));
+    expect(container.querySelector('.search-ask-summary')).toBeNull();
+    expect(askButton()?.dataset.searchAsk).toBe('run');
+    view.handleAction('back');
+    expect(handlers.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a reply that arrives after the query changed', async () => {
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    let answer!: (value: AskReply) => void;
+    askMock.mockImplementation(() => new Promise<AskReply>(resolve => { answer = resolve; }));
+    const { view } = await openReady();
+    await view.setQuery('alpha bravo');
+    pressAsk(view);
+    await asked(view, 'loading');
+    await vi.waitFor(() => expect(askMock).toHaveBeenCalled());
+    const signal = askMock.mock.calls[0][3] as AbortSignal;
+
+    await view.setQuery('alpha bravo charlie');
+    expect(signal.aborted).toBe(true);
+    answer(reply({ groups: ['Group A'] }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(container.querySelector('.search-ask')?.getAttribute('data-search-ask-state')).toBe('idle');
+    expect(container.querySelector('.search-ask-summary')).toBeNull();
+  });
+
+  it('keeps all results and says so when the daily AI limit is reached', async () => {
+    playlistMock.channels = [chan('Alpha Tonight Show')];
+    askMock.mockRejectedValue(new LlmError('cap', 'Daily cap reached'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { view } = await openReady();
+    await view.setQuery('alpha tonight show');
+    pressAsk(view);
+    await asked(view, 'failed');
+    expect(container.querySelector('.search-ask-note')?.textContent).toBe('Daily AI limit reached. Showing all results.');
+    expect(container.querySelector('.search-channel-tile')).not.toBeNull();
+    expect(diagEvents(warn, 'search.ask.outcome')).toEqual([expect.stringContaining('outcome=failed reason=cap')]);
+    warn.mockRestore();
+  });
+
+  it('searches each keyword when nothing else narrows the results', async () => {
+    playlistMock.channels = [chan('Alpha'), chan('Bravo'), chan('Charlie')];
+    playlistMock.indexOf.mockImplementation((ch: { name: string }) => ['Alpha', 'Bravo', 'Charlie'].indexOf(ch.name));
+    askMock.mockResolvedValue(reply({ keywords: ['bravo', 'alpha'] }));
+    const { view } = await openReady();
+    await view.setQuery('alpha or bravo');
+    pressAsk(view);
+    await asked(view, 'shown');
+    const tiles = Array.from(container.querySelectorAll('.search-channel-tile .catalog-tile-name'), el => el.textContent);
+    expect(tiles).toEqual(['Bravo', 'Alpha']);
+    const keywordQueries = workerMock.run.mock.calls
+      .filter(([task, payload]) => task === 'search.query' && ['bravo', 'alpha'].indexOf((payload as SearchQueryRequest).query) >= 0)
+      .map(([, payload]) => (payload as SearchQueryRequest).strict);
+    expect(keywordQueries).toEqual([true, true]);
+  });
+
+  it('lists movies of the named categories from the catalog Search holds', async () => {
+    catalogMock.loadVodCategories.mockResolvedValue([{ id: '1', name: 'Cat A' }, { id: '2', name: 'Cat B' }]);
+    catalogMock.loadSeriesCategories.mockResolvedValue([{ id: '1', name: 'Cat A' }]);
+    askMock.mockResolvedValue(reply({ types: ['movie', 'series'], categories: ['Cat A'] }));
+    llmMock.isReady.mockImplementation((feature?: string) => feature === 'search-ask');
+    const { view } = await openWith({
+      vod: [vod('10', 'Alpha Movie'), { ...vod('11', 'Bravo Movie'), categoryId: '2' }],
+      series: [ser('20', 'Alpha Series')],
+    });
+    await view.setQuery('cat a films');
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect((askMock.mock.calls[0][2] as { categories: string[] }).categories).toEqual(['Cat A', 'Cat B']);
+    expect(catalogMock.loadVodStreams).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Alpha Movie');
+    expect(container.textContent).toContain('Alpha Series');
+    expect(container.textContent).not.toContain('Bravo Movie');
+  });
+
+  it('never names a locked group or its guide to the AI, even in lock mode', async () => {
+    const now = Date.now();
+    playlistMock.channels = [grouped('ch1', 'Group A'), grouped('ch2', 'Group B')];
+    epgMock.programmes = {
+      ch1: [{ ...prog('Alpha Cup', now + hour, now + 2 * hour), category: 'Genre A' }],
+      ch2: [{ ...prog('Alpha Late', now + hour, now + 2 * hour), category: 'Genre B' }],
+    };
+    const enabled = vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    const protects = vi.spyOn(ParentalControlService, 'protects').mockImplementation(request => (
+      (request as { label?: string }).label === 'ch2'
+    ));
+    askMock.mockResolvedValue(reply({ groups: ['Group A'] }));
+    try {
+      const { view } = await openReady();
+      await view.setQuery('alpha tonight');
+      pressAsk(view);
+      await asked(view, 'shown');
+      const vocabulary = askMock.mock.calls[0][2] as { groups: string[]; genres: string[] };
+      expect(vocabulary.groups).toEqual(['Group A']);
+      expect(vocabulary.genres).toEqual(['Genre A']);
+    } finally {
+      enabled.mockRestore();
+      protects.mockRestore();
+    }
+  });
+
+  it('names no group of a source locked again since the last AI search', async () => {
+    const now = Date.now();
+    playlistMock.channels = [grouped('ch1', 'Group A'), grouped('ch2', 'Group B')];
+    epgMock.programmes = {
+      ch1: [{ ...prog('Alpha Cup', now + hour, now + 2 * hour), category: 'Genre A' }],
+      ch2: [{ ...prog('Alpha Late', now + hour, now + 2 * hour), category: 'Genre B' }],
+    };
+    let relocked = false;
+    const enabled = vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    const approved = vi.spyOn(ParentalControlService, 'approvedSources', 'get')
+      .mockImplementation(() => (relocked ? [] : ['s1']));
+    const protects = vi.spyOn(ParentalControlService, 'protects').mockImplementation(request => (
+      relocked && (request as { label?: string }).label === 'ch2'
+    ));
+    askMock.mockResolvedValue(reply({ groups: ['Group A'] }));
+    try {
+      const { view } = await openReady();
+      await view.setQuery('alpha tonight');
+      pressAsk(view);
+      await asked(view, 'shown');
+      expect((askMock.mock.calls[0][2] as { groups: string[] }).groups.sort()).toEqual(['Group A', 'Group B']);
+      relocked = true;
+      await view.setQuery('alpha later');
+      pressAsk(view);
+      await vi.waitFor(() => expect(askMock).toHaveBeenCalledTimes(2));
+      const vocabulary = askMock.mock.calls[1][2] as { groups: string[]; genres: string[] };
+      expect(vocabulary.groups).toEqual(['Group A']);
+      expect(vocabulary.genres).toEqual(['Genre A']);
+    } finally {
+      enabled.mockRestore();
+      approved.mockRestore();
+      protects.mockRestore();
+    }
+  });
+
+  it('plays the right channel after the channel list changes under AI results', async () => {
+    const now = Date.now();
+    const ch1 = grouped('ch1', 'Group A');
+    const ch2 = grouped('ch2', 'Group B');
+    playlistMock.channels = [ch1, ch2];
+    playlistMock.indexOf.mockImplementation((ch: { name: string }) => (
+      (playlistMock.channels as Array<{ name: string }>).findIndex(item => item.name === ch.name)
+    ));
+    epgMock.programmes = { ch2: [prog('Bravo Live', now - hour, now + hour)] };
+    askMock.mockResolvedValue(reply({ types: ['program'], groups: ['Group B'] }));
+    const { view, handlers } = await openReady();
+    await view.setQuery('group b now');
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect(container.querySelector('.search-program-title')?.textContent).toBe('Bravo Live');
+
+    playlistMock.channels = [ch2, ch1];
+    await view.refreshChannels();
+    await vi.waitFor(() => {
+      expect(container.querySelector('.search-program-row')?.getAttribute('data-key')).toMatch(/^p:0:/);
+    });
+    expect(askMock).toHaveBeenCalledTimes(1);
+    const row = container.querySelector('.search-program-row') as HTMLElement;
+    row.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await vi.waitFor(() => expect(handlers.onPlayChannel).toHaveBeenCalledWith(0, undefined));
+  });
+
+  it('shows the right channels when the list changes while the AI search runs', async () => {
+    const alpha = chan('Alpha');
+    const bravo = chan('Bravo');
+    playlistMock.channels = [alpha, bravo];
+    playlistMock.indexOf.mockImplementation((ch: { name: string }) => (
+      (playlistMock.channels as Array<{ name: string }>).findIndex(item => item.name === ch.name)
+    ));
+    askMock.mockResolvedValue(reply({ types: ['channel'], keywords: ['alpha'] }));
+    const { view, handlers } = await openReady();
+    const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
+    let swapped = false;
+    workerMock.run.mockImplementation(async (task: string, payload: unknown) => {
+      const answer = await run(task, payload);
+      if (!swapped && task === 'search.query' && (payload as SearchQueryRequest).query === 'alpha') {
+        swapped = true;
+        playlistMock.channels = [bravo, alpha];
+        // The new list is indexed and searched again before this answer lands.
+        await view.refreshChannels();
+      }
+      return answer;
+    });
+    await view.setQuery('alpha first channel');
+    pressAsk(view);
+    await asked(view, 'shown');
+    const tiles = Array.from(container.querySelectorAll('.search-channel-tile'));
+    expect(tiles.map(tile => tile.querySelector('.catalog-tile-name')?.textContent)).toEqual(['Alpha']);
+    tiles[0].dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    expect(handlers.onPlayChannel).toHaveBeenCalledWith(1);
+  });
+
+  it('ranks the keywords on the page when the worker lost its index', async () => {
+    const alpha = chan('Alpha');
+    playlistMock.channels = [alpha, chan('Bravo')];
+    const local = vi.fn((query: string) => ({ items: query === 'alpha' ? [alpha] : [] }));
+    Object.assign(playlistMock, { searchLocalRanked: local });
+    onTestFinished(() => { Reflect.deleteProperty(playlistMock, 'searchLocalRanked'); });
+    askMock.mockResolvedValue(reply({ types: ['channel'], keywords: ['alpha'] }));
+    const { view } = await openReady();
+    const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
+    workerMock.run.mockImplementation(async (task: string, payload: unknown) => (
+      task === 'search.query' && (payload as SearchQueryRequest).query === 'alpha' ? null : run(task, payload)
+    ));
+    await view.setQuery('alpha first channel');
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect(Array.from(container.querySelectorAll('.search-channel-tile .catalog-tile-name'), el => el.textContent))
+      .toEqual(['Alpha']);
+  });
+
+  it('runs the AI filter again when Search reopens over it, as after a PIN', async () => {
+    playlistMock.channels = [grouped('ch1', 'Group A'), grouped('ch2', 'Group B')];
+    askMock.mockResolvedValue(reply({ types: ['channel'], groups: ['Group A'] }));
+    const { view } = await openReady();
+    await view.setQuery('group a channels');
+    pressAsk(view);
+    await asked(view, 'shown');
+    playlistMock.channels = [grouped('ch3', 'Group A'), grouped('ch1', 'Group A'), grouped('ch2', 'Group B')];
+    await view.refreshConcealment();
+    await vi.waitFor(() => {
+      expect(Array.from(container.querySelectorAll('.search-channel-tile .catalog-tile-name'), el => el.textContent))
+        .toEqual(['ch3', 'ch1']);
+    });
+    expect(container.querySelector('.search-ask-summary')).not.toBeNull();
+    expect(askMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('walks the guide for genre names once while nothing changes, with parental controls on', async () => {
+    const now = Date.now();
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    epgMock.programmes = { ch1: [prog('Alpha Cup', now + hour, now + 2 * hour)] };
+    const enabled = vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    const protects = vi.spyOn(ParentalControlService, 'protects').mockReturnValue(false);
+    const walk = vi.spyOn(epgMock, 'getProgrammes');
+    askMock.mockResolvedValue(reply({ types: ['channel'], groups: ['Group A'] }));
+    try {
+      const { view } = await openReady();
+      await view.setQuery('group a channels');
+      pressAsk(view);
+      await asked(view, 'shown');
+      const walked = walk.mock.calls.length;
+      await view.setQuery('group a channels again');
+      pressAsk(view);
+      await asked(view, 'shown');
+      expect(walk.mock.calls.length).toBe(walked);
+      expect((askMock.mock.calls[1][2] as { genres: string[] }).genres).toEqual(['Drama']);
+    } finally {
+      enabled.mockRestore();
+      protects.mockRestore();
+      walk.mockRestore();
+    }
+  });
+
+  it('keeps the AI search button focused on Back while the index rebuilds', async () => {
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    askMock.mockResolvedValue(reply({ types: ['channel'], groups: ['Group A'] }));
+    const { view } = await openReady();
+    await view.setQuery('group a channels');
+    pressAsk(view);
+    await asked(view, 'shown');
+    const hold = holdWorkerTask((task, payload) => task === 'search.index' && !!payload.reset);
+    try {
+      const reopened = view.refreshConcealment();
+      await vi.waitFor(() => expect(hold.held).toBe(true));
+      expect(container.querySelector('.search-ask-summary')).not.toBeNull();
+      view.handleAction('back');
+      const nav = (view as unknown as { nav: { focused: HTMLElement | null } }).nav;
+      expect(nav.focused?.dataset.searchAsk).toBe('run');
+      expect(nav.focused?.isConnected).toBe(true);
+      hold.release();
+      await reopened;
+    } finally {
+      hold.restore();
+    }
+  });
+
+  it('says so when AI results cannot follow a list that keeps changing', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    askMock.mockResolvedValue(reply({ types: ['channel'], keywords: ['alpha'] }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { view } = await openReady();
+    await view.setQuery('alpha first channel');
+    pressAsk(view);
+    await asked(view, 'shown');
+    const run = workerMock.run.getMockImplementation()!;
+    onTestFinished(() => { workerMock.run.mockImplementation(run); });
+    workerMock.run.mockImplementation(async (task: string, payload: unknown) => {
+      const answer = await run(task, payload);
+      if (task === 'search.query' && (payload as SearchQueryRequest).query === 'alpha') {
+        playlistMock.channels = [chan('Alpha')];
+      }
+      return answer;
+    });
+    const internals = view as unknown as { queryGeneration: number; startQuery(generation: number): Promise<void> };
+    await internals.startQuery(++internals.queryGeneration);
+    await asked(view, 'failed');
+    expect(container.querySelector('.search-ask-note')?.textContent).toBe('AI search failed. Showing all results.');
+    expect(diagEvents(warn, 'search.ask.outcome')).toEqual([expect.stringContaining('outcome=failed reason=results')]);
+    warn.mockRestore();
+  });
+
+  it('drops a group locked after the AI picked it', async () => {
+    playlistMock.channels = [grouped('ch1', 'Group A'), grouped('ch2', 'Group B')];
+    askMock.mockResolvedValue(reply({ types: ['channel'], groups: ['Group A', 'Group B'] }));
+    const { view } = await openReady();
+    await view.setQuery('group a and b');
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect(container.querySelector('.search-ask-summary')?.textContent).toContain('Group B');
+    const enabled = vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    const revision = vi.spyOn(ParentalControlService, 'rulesRevision', 'get').mockReturnValue(99);
+    const protects = vi.spyOn(ParentalControlService, 'protects').mockImplementation(request => (
+      (request as { label?: string }).label === 'ch2'
+    ));
+    try {
+      await view.refreshConcealment();
+      await vi.waitFor(() => {
+        expect(container.querySelector('.search-ask-summary')?.textContent).toBe('AI search · Group A');
+      });
+      expect(Array.from(container.querySelectorAll('.search-channel-tile .catalog-tile-name'), el => el.textContent))
+        .toEqual(['ch1']);
+    } finally {
+      enabled.mockRestore();
+      revision.mockRestore();
+      protects.mockRestore();
+    }
+  });
+
+  function lockChannel(name: string): () => void {
+    const enabled = vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    const revision = vi.spyOn(ParentalControlService, 'rulesRevision', 'get').mockReturnValue(99);
+    const protects = vi.spyOn(ParentalControlService, 'protects').mockImplementation(request => (
+      (request as { label?: string }).label === name
+    ));
+    return () => {
+      enabled.mockRestore();
+      revision.mockRestore();
+      protects.mockRestore();
+    };
+  }
+
+  it('runs the AI filter again when a lock changes without hiding anything', async () => {
+    playlistMock.channels = [grouped('ch1', 'Kids'), grouped('ch2', 'Group A')];
+    askMock.mockResolvedValue(reply({ types: ['channel'], groups: ['Kids', 'Group A'] }));
+    const { view } = await openReady();
+    await view.setQuery('kids and group a');
+    pressAsk(view);
+    await asked(view, 'shown');
+    const unlock = lockChannel('ch1');
+    try {
+      view.refreshLocks();
+      await vi.waitFor(() => {
+        expect(container.querySelector('.search-ask-summary')?.textContent).toBe('AI search · Group A');
+      });
+      expect(Array.from(container.querySelectorAll('.search-channel-tile .catalog-tile-name'), el => el.textContent))
+        .toEqual(['ch2']);
+    } finally {
+      unlock();
+    }
+  });
+
+  it('shows nothing, not everything, when every name the AI picked gets locked', async () => {
+    const now = Date.now();
+    playlistMock.channels = [grouped('ch1', 'Kids'), grouped('ch2', 'Group A')];
+    epgMock.programmes = {
+      ch1: [prog('Kids Hour', now + hour, now + 2 * hour)],
+      ch2: [prog('Adult Hour', now + hour, now + 2 * hour)],
+    };
+    askMock.mockResolvedValue(reply({ types: ['program'], groups: ['Kids'], time: 'this_week' }));
+    const { view } = await openReady();
+    await view.setQuery('kids shows this week');
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect(Array.from(container.querySelectorAll('.search-program-title'), el => el.textContent)).toEqual(['Kids Hour']);
+    const unlock = lockChannel('ch1');
+    try {
+      view.refreshLocks();
+      await vi.waitFor(() => {
+        expect(container.querySelector('.search-ask-summary')?.textContent).toBe('AI search · This week');
+      });
+      expect(container.querySelectorAll('.search-program-row')).toHaveLength(0);
+      expect(container.textContent).toContain('No results found.');
+    } finally {
+      unlock();
+    }
+  });
+
+  it('names the hours of tonight under way in the summary', async () => {
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    askMock.mockResolvedValue(reply({ types: ['channel'], groups: ['Group A'], time: 'tonight', fromHour: 21 }));
+    const { view } = await openReady();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(new Date(2026, 0, 7, 1).getTime());
+    try {
+      await view.setQuery('group a from nine');
+      pressAsk(view);
+      await asked(view, 'shown');
+      expect(container.querySelector('.search-ask-summary')?.textContent)
+        .toBe('AI search · Group A · Tonight 21:00–04:00');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('names the kinds of results in the summary only when the AI understood nothing else', async () => {
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    askMock.mockResolvedValue(reply({ types: ['channel'] }));
+    const { view } = await openReady();
+    await view.setQuery('just the channels please');
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect(container.querySelector('.search-ask-summary')?.textContent).toBe('AI search · Channels');
+  });
+
+  it('names a group and a genre that read the same once in the summary', async () => {
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    askMock.mockResolvedValue(reply({ types: ['program'], groups: ['Group A'], genres: ['group a'] }));
+    const { view } = await openReady();
+    await view.setQuery('group a shows');
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect(container.querySelector('.search-ask-summary')?.textContent).toBe('AI search · Group A');
+  });
+
+  function expansionTo(text: string): { release: () => void } {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    llmMock.run.mockImplementation(async () => {
+      await gate;
+      return { value: { alternatives: [{ text, lang: 'l1', kind: 'translation' }] }, dropped: 0, cached: false };
+    });
+    return { release };
+  }
+
+  const expandedQueries = (): number => workerMock.run.mock.calls.filter(([task, payload]) =>
+    task === 'search.query' && !!(payload as SearchQueryRequest).alternatives).length;
+
+  it('hides the expansion note while AI results are shown, and Back brings it back', async () => {
+    playlistMock.channels = [chan('Alpha Zorb One Two'), chan('Bravo Quix')];
+    expansionTo('quix').release();
+    askMock.mockResolvedValue(reply({ types: ['channel'], keywords: ['alpha'] }));
+    const { view } = await openReady();
+    llmMock.isReady.mockReturnValue(true);
+    await view.setQuery('zorb one two');
+    await vi.waitFor(() => expect(container.querySelector('.search-expanded')?.textContent).toContain('quix'), { timeout: 3000 });
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect(container.querySelector('.search-expanded')).toBeNull();
+
+    view.handleAction('back');
+    await vi.waitFor(() => expect(container.querySelector('.search-expanded')?.textContent).toContain('quix'), { timeout: 3000 });
+    expect(container.textContent).toContain('Bravo Quix');
+  });
+
+  it('does not search again when an expansion settles under AI results, and runs it on Back', async () => {
+    playlistMock.channels = [chan('Alpha Zorb One Two'), chan('Bravo Quix')];
+    const expansion = expansionTo('quix');
+    askMock.mockResolvedValue(reply({ types: ['channel'], keywords: ['alpha'] }));
+    const { view } = await openReady();
+    llmMock.isReady.mockReturnValue(true);
+    await view.setQuery('zorb one two');
+    await vi.waitFor(() => expect(llmMock.run).toHaveBeenCalled(), { timeout: 3000 });
+    pressAsk(view);
+    await asked(view, 'shown');
+    const before = expandedQueries();
+    expansion.release();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(expandedQueries()).toBe(before);
+    expect(container.querySelector('.search-expanded')).toBeNull();
+    expect(container.querySelector('.search-ask-summary')).not.toBeNull();
+
+    view.handleAction('back');
+    await vi.waitFor(() => expect(container.querySelector('.search-expanded')?.textContent).toContain('quix'), { timeout: 3000 });
+    expect(expandedQueries()).toBeGreaterThan(before);
+  });
+
+  it('keeps a ring on the AI search button when Back leaves results found only by AI', async () => {
+    const now = Date.now();
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    epgMock.programmes = { ch1: [prog('Zulu Cup', now + hour, now + 2 * hour)] };
+    askMock.mockResolvedValue(reply({ types: ['program'], groups: ['Group A'] }));
+    const { view } = await openReady();
+    await view.setQuery('alpha tonight');
+    pressAsk(view);
+    await asked(view, 'shown');
+    const row = container.querySelector('.search-program-row') as HTMLElement;
+    row.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('back');
+    const nav = (view as unknown as { nav: { focused: HTMLElement | null } }).nav;
+    expect(nav.focused?.dataset.searchAsk).toBe('run');
+    expect(nav.focused?.isConnected).toBe(true);
+  });
+
+  it('hands Enter from the box to the AI search when nothing was found', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    const { view, handlers } = await openReady();
+    await view.setQuery('zulu');
+    expect(container.textContent).toContain('No results found.');
+    view.focusFirstResult();
+    const nav = (view as unknown as { nav: { focused: HTMLElement | null } }).nav;
+    expect(nav.focused?.dataset.searchAsk).toBe('run');
+    expect(handlers.onRevealTabBar).not.toHaveBeenCalled();
+  });
+
+  it('opens the first result on Enter then OK, not the AI search', async () => {
+    playlistMock.channels = [chan('Alpha Tonight Show')];
+    const { view, handlers } = await openReady();
+    await view.setQuery('alpha tonight show');
+    expect(askButton()).not.toBeNull();
+    view.focusFirstResult();
+    view.handleAction('select');
+    expect(handlers.onPlayChannel).toHaveBeenCalledWith(0);
+    expect(askMock).not.toHaveBeenCalled();
+  });
+
+  it('remembers the asked query, and logs a superseded AI search as canceled', async () => {
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    askMock.mockResolvedValue(reply({ groups: ['Group A'] }));
+    const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { view } = await openReady();
+    await view.setQuery('alpha tonight');
+    pressAsk(view);
+    await asked(view, 'shown');
+    expect(storageMock.addSearchHistory).toHaveBeenCalledWith('alpha tonight');
+
+    askMock.mockImplementation((_q: string, _t: unknown, _v: unknown, signal: AbortSignal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new LlmError('cancelled', 'Canceled')));
+    }));
+    await view.setQuery('alpha bravo');
+    pressAsk(view);
+    await asked(view, 'loading');
+    await vi.waitFor(() => expect(askMock).toHaveBeenCalledTimes(2));
+    await view.setQuery('alpha bravo charlie');
+    await vi.waitFor(() => expect(diagEvents(info, 'search.ask.outcome')).toHaveLength(2));
+    expect(diagEvents(info, 'search.ask.outcome')[1]).toContain('outcome=cancelled');
+    info.mockRestore();
   });
 });

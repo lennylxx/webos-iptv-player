@@ -102,6 +102,21 @@ export function formatDayLabel(date: Date): { weekday: string; date: string } {
   };
 }
 
+// The given hour of a display day; 24 and past run into the next day. Device
+// time sets the wall clock, so a day with a DST change keeps its hours.
+export function atDisplayHour(day: Date, hour: number): Date {
+  const start = startOfDisplayDay(day);
+  if (hour >= 24) return atDisplayHour(addDisplayDays(start, 1), hour - 24);
+  if (activeMode() === 'feed') return new Date(start.getTime() + hour * 3600000);
+  start.setHours(hour, 0, 0, 0);
+  return start;
+}
+
+// 0 = Sunday, in the active display timezone.
+export function displayWeekday(date: Date): number {
+  return displayParts(date).weekday;
+}
+
 // Stable YYYY-MM-DD key for a day, in the active display timezone.
 export function displayDayKey(date: Date): string {
   const p = displayParts(date);

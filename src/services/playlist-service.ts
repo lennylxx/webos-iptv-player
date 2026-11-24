@@ -1379,13 +1379,14 @@ class PlaylistServiceImpl {
     playlist?: string,
     fuzzyFill?: number,
     multilingual = false,
+    strict = false,
   ): RankedSearchResult<Channel> {
     if (!query.trim()) return { items: [] };
     this.ensureLocalSearchIndexes();
     const index = playlist
       ? this.channelSearchByPlaylist.get(playlist) ?? []
       : this.channelSearchIndex;
-    return rankPreparedTopK(index, query, limit, fuzzyFill, multilingual);
+    return rankPreparedTopK(index, query, limit, fuzzyFill, multilingual, strict);
   }
 
   getPlaylistIdsForGroup(group: ChannelGroupId): string[] {

@@ -340,6 +340,8 @@ export interface SearchQueryRequest {
   // Typing paused on the query: also rank its other-script spellings and
   // translated genre words, which cost a keystroke too much.
   settled?: boolean;
+  // An AI search keyword: whole words and word starts only, no typos.
+  strict?: boolean;
   /** The catalog items the page kept from earlier answers. */
   delivered?: SearchDeliveredCount;
 }

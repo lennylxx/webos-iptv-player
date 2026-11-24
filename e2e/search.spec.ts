@@ -1210,3 +1210,157 @@ test('a long list of AI alternatives stays on one line', async ({ page }) => {
   }));
   expect(box).toEqual({ oneLine: true, clipped: true });
 });
+
+// Two groups with one upcoming program each, and a fake AI server answering
+// with `filter`, or failing with `status`.
+async function seedAiSearch(
+  page: import('@playwright/test').Page,
+  reply: { status?: number; filter?: Record<string, unknown> },
+): Promise<string[]> {
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const stop = new Date(start.getTime() + 60 * 60 * 1000);
+  const m3u = [
+    '#EXTM3U',
+    '#EXTINF:-1 tvg-id="c1" group-title="Group A",Alpha One', 'http://host/a',
+    '#EXTINF:-1 tvg-id="c2" group-title="Group B",Bravo Two', 'http://host/b',
+  ].join('\n');
+  const epg = `<tv>
+    <channel id="c1"><display-name>Alpha One</display-name></channel>
+    <channel id="c2"><display-name>Bravo Two</display-name></channel>
+    <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+      <title>Alpha Show Time Cup</title><category>Genre A</category>
+    </programme>
+    <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+      <title>Alpha Show Time Talk</title><category>Genre B</category>
+    </programme>
+  </tv>`;
+  await page.route('**/playlist.m3u', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: m3u }));
+  await page.route('**/guide.xml', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/guide.xml', playlistIds: [] }]));
+    localStorage.setItem('iptv_llm', JSON.stringify({
+      enabled: true,
+      baseUrl: 'http://ai.test/v1',
+      model: 'm1',
+      capabilities: {
+        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
+        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
+      },
+    }));
+  });
+  const sent: string[] = [];
+  await page.route('http://ai.test/v1/chat/completions', (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const body = JSON.parse(route.request().postData() || '{}') as { messages: Array<{ role: string; content: string }> };
+    sent.push(body.messages.find(m => m.role === 'user')?.content || '');
+    if (reply.status) return route.fulfill({ status: reply.status, headers: cors, body: 'Server error' });
+    return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
+      body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply.filter) } }] }) });
+  });
+  return sent;
+}
+
+test('AI search shows the programs of the named group and sets a reminder from them', async ({ page }) => {
+  const sent = await seedAiSearch(page, { filter: {
+    types: ['program'], keywords: ['alpha'], groups: ['Group A'], genres: [],
+    time: 'any', from_hour: -1, to_hour: -1,
+  } });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('alpha show time');
+  const ask = page.locator('#view-search .search-ask-action');
+  await expect(ask).toHaveText('Search with AI: “alpha show time”');
+  expect(sent).toEqual([]);
+
+  // Down from the box opens the results; the AI search sits above them.
+  await input.press('ArrowDown');
+  await expect(page.locator('#view-search .search-program-row').first()).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowUp');
+  await expect(ask).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-search .search-ask-summary'))
+    .toHaveText('AI search · Group A · “alpha”');
+  const rows = page.locator('#view-search .search-program-row');
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText('Alpha Show Time Cup');
+  // Only the query and the names in the lists leave the device.
+  expect(sent.map(user => JSON.parse(user) as unknown)).toEqual([{
+    query: 'alpha show time',
+    types: ['channel', 'program'],
+    groups: expect.arrayContaining(['Group A', 'Group B']) as unknown,
+    genres: expect.arrayContaining(['Genre A', 'Genre B']) as unknown,
+  }]);
+
+  await page.keyboard.press('ArrowDown');
+  await expect(rows.first()).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.toast')).toContainText('Reminder set');
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#view-search .search-ask-summary')).toHaveCount(0);
+  await expect(page.locator('#view-search .search-program-row')).toHaveCount(2);
+  await expect(ask).toHaveText('Search with AI: “alpha show time”');
+});
+
+test('a failed AI search keeps all results and says so', async ({ page }) => {
+  await seedAiSearch(page, { status: 500 });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('alpha show time');
+  await input.press('ArrowDown');
+  await expect(page.locator('#view-search .search-program-row').first()).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('#view-search .search-ask-action')).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-search .search-ask-note')).toHaveText('AI search failed. Showing all results.');
+  await expect(page.locator('#view-search .search-program-row')).toHaveCount(2);
+  await expect(page.locator('#view-search .search-ask-action')).toHaveClass(/\bfocused\b/);
+});
+
+test('AI search sits on the first heading\'s line, and its summary shares a line with Show all results', async ({ page }) => {
+  await seedAiSearch(page, { filter: {
+    types: ['program'], keywords: ['alpha'], groups: ['Group A'], genres: [],
+    time: 'any', from_hour: -1, to_hour: -1,
+  } });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('alpha');
+  const ask = page.locator('#view-search .search-ask-action');
+  await expect(ask).toHaveText('Search with AI: “alpha”');
+  const heading = page.locator('#view-search .catalog-rail-title').first();
+  const middle = async (locator: import('@playwright/test').Locator): Promise<number> => {
+    const box = await locator.boundingBox();
+    return box ? box.y + box.height / 2 : NaN;
+  };
+  // Beside the first heading, not in a row of its own above it.
+  expect(Math.abs(await middle(ask) - await middle(heading))).toBeLessThanOrEqual(2);
+  const results = await page.locator('#view-search .search-results').boundingBox();
+  expect((await heading.boundingBox())?.y).toBeLessThanOrEqual((results?.y ?? 0) + 2);
+
+  await input.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await expect(ask).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('Enter');
+  const summary = page.locator('#view-search .search-ask-summary');
+  await expect(summary).toHaveText('AI search · Group A · “alpha”');
+  await expect(ask).toHaveText('Show all results');
+  expect(Math.abs(await middle(ask) - await middle(summary))).toBeLessThanOrEqual(4);
+
+  await input.fill('zulu');
+  const empty = page.locator('#view-search .search-empty');
+  await expect(empty).toHaveText('No results found.');
+  await expect(ask).toHaveText('Search with AI: “zulu”');
+  expect(Math.abs(await middle(ask) - await middle(empty))).toBeLessThanOrEqual(4);
+  await input.press('Enter');
+  await expect(ask).toHaveClass(/\bfocused\b/);
+});

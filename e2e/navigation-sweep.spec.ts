@@ -458,6 +458,31 @@ async function searchFor(page: Page, query: string): Promise<void> {
   await page.locator('.tab-bar-search-input').fill(query);
 }
 
+// A fake AI server whose filter searches the keyword alone, so AI search
+// shows its filter above every kind of result.
+async function seedAiSearch(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_llm', JSON.stringify({
+      enabled: true,
+      baseUrl: 'http://ai.test/v1',
+      model: 'm1',
+      capabilities: {
+        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
+        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
+      },
+    }));
+  });
+  await page.route('http://ai.test/v1/chat/completions', (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const filter = {
+      types: [], keywords: ['one'], groups: [], categories: [], genres: [], time: 'any', from_hour: -1, to_hour: -1,
+    };
+    return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
+      body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(filter) } }] }) });
+  });
+}
+
 const SCREENS: Screen[] = [
   {
     ...LIVE,
@@ -662,6 +687,36 @@ const SCREENS: Screen[] = [
       await expect(view.locator('.search-program-row').first()).toBeVisible();
       await expect(view.locator('.catalog-tile[data-stream-id="10"]')).toHaveCount(1);
       await expect(view.locator('.catalog-tile[data-series-id="20"]')).toHaveCount(1);
+      await page.locator('.tab-bar-search-input').press('ArrowDown');
+    },
+  },
+  {
+    ...SEARCH,
+    name: 'Search AI search',
+    seed: seedAiSearch,
+    async open(page) {
+      await searchFor(page, 'one tonight');
+      const view = page.locator('#view-search');
+      const ask = view.locator('.search-ask-action');
+      await expect(ask).toBeVisible();
+      await page.locator('.tab-bar-search-input').press('ArrowDown');
+      await expect(ask).toHaveClass(/focused/);
+      await page.keyboard.press('Enter');
+      await expect(view.locator('.search-ask-summary')).toBeVisible();
+      await expect(view.locator('.search-channel-tile').first()).toBeVisible();
+      await expect(view.locator('.search-program-row').first()).toBeVisible();
+    },
+  },
+  {
+    ...SEARCH,
+    name: 'Search with AI search offered',
+    seed: seedAiSearch,
+    async open(page) {
+      await searchFor(page, 'one');
+      const view = page.locator('#view-search');
+      await expect(view.locator('.search-ask-action')).toBeVisible();
+      await expect(view.locator('.search-channel-tile').first()).toBeVisible();
+      await expect(view.locator('.search-program-row').first()).toBeVisible();
       await page.locator('.tab-bar-search-input').press('ArrowDown');
     },
   },

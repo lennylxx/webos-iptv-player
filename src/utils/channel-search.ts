@@ -162,6 +162,7 @@ function tokenScore(
   fieldTokens: string[],
   start: number,
   end: number,
+  strict: boolean,
 ): number | null {
   let best: number | null = null;
   for (let variantIndex = 0; variantIndex < expanded.length; variantIndex++) {
@@ -171,7 +172,7 @@ function tokenScore(
       let score: number | null = null;
       if (fieldToken === variant) score = variantIndex === 0 ? 0 : 4;
       else if (fieldToken.startsWith(variant)) score = variantIndex === 0 ? 1 : 5;
-      else if (variantIndex === 0 && variant.length >= 4 && withinOneEdit(variant, fieldToken)) score = 2;
+      else if (!strict && variantIndex === 0 && variant.length >= 4 && withinOneEdit(variant, fieldToken)) score = 2;
       if (score !== null && (best === null || score < best)) best = score;
     }
   }
@@ -257,6 +258,7 @@ function compareNameScored<T>(a: ScoredNameItem<T>, b: ScoredNameItem<T>): numbe
 function directScore<T>(
   prepared: PreparedSearchItem<T>,
   query: string,
+  strict: boolean,
 ): number | null {
   let best: number | null = null;
   for (let fieldIndex = 0; fieldIndex < prepared.values.length; fieldIndex++) {
@@ -268,6 +270,7 @@ function directScore<T>(
       : pos === 0
         ? 1
         : !isLetterOrNumber(value[pos - 1]) ? 2 : 3;
+    if (strict && tier === 3) continue;
     const score = tier * 1000 + fieldIndex * 100 + pos * 10 + value.length;
     if (best === null || score < best) best = score;
   }
@@ -277,6 +280,7 @@ function directScore<T>(
 function fuzzyScore<T>(
   prepared: PreparedSearchItem<T>,
   terms: string[][],
+  strict: boolean,
 ): number | null {
   let total = 10000;
   for (const term of terms) {
@@ -287,6 +291,7 @@ function fuzzyScore<T>(
         prepared.fieldTokens,
         prepared.fieldTokenOffsets[fieldIndex],
         prepared.fieldTokenOffsets[fieldIndex + 1],
+        strict,
       );
       if (score !== null) {
         const weighted = score + fieldIndex * 10;
@@ -349,12 +354,17 @@ class BoundedHeap<T> {
   }
 }
 
+/**
+ * `strict` matches whole words and word starts only, without typos, for
+ * keywords an AI model chose rather than a person typed.
+ */
 export function rankPreparedTopK<T>(
   items: PreparedSearchItem<T>[],
   query: string,
   limit: number,
   fuzzyFill = limit,
   multilingual = false,
+  strict = false,
 ): RankedSearchResult<T> {
   const q = fold(query.trim());
   const tokens = queryTokens(query);
@@ -365,7 +375,7 @@ export function rankPreparedTopK<T>(
   let matches = 0;
   for (let i = 0; i < items.length; i++) {
     const prepared = items[i];
-    const score = directScore(prepared, q);
+    const score = directScore(prepared, q, strict);
     if (score === null) continue;
     directMatches[i] = 1;
     matches++;
@@ -375,7 +385,7 @@ export function rankPreparedTopK<T>(
     for (let i = 0; i < items.length; i++) {
       const prepared = items[i];
       if (directMatches[i]) continue;
-      const score = fuzzyScore(prepared, terms);
+      const score = fuzzyScore(prepared, terms, strict);
       if (score === null) continue;
       heap.add({ item: prepared.item, score, idx: i });
     }
@@ -387,6 +397,7 @@ export function rankPreparedNamesTopK<T>(
   index: PreparedNameSearchIndex<T>,
   query: string,
   limit: number,
+  strict = false,
 ): RankedSearchResult<T> {
   const q = fold(query.trim());
   if (!q || limit <= 0) return { items: [] };
@@ -400,6 +411,7 @@ export function rankPreparedNamesTopK<T>(
       : pos === 0
         ? 1
         : !isLetterOrNumber(value[pos - 1]) ? 2 : 3;
+    if (strict && tier === 3) continue;
     heap.add({
       item: index.items[i],
       tier,

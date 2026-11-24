@@ -765,7 +765,7 @@ function rankedFields(
     indices: rankExpanded(
       queries,
       request.limit,
-      query => rankPreparedTopK(index, query, request.limit, CONFIG.SEARCH.FUZZY_FILL, request.settled).items,
+      query => rankPreparedTopK(index, query, request.limit, CONFIG.SEARCH.FUZZY_FILL, request.settled, request.strict).items,
       expanded,
     ),
   };
@@ -785,7 +785,7 @@ function rankedNames(
     indices: rankExpanded(
       queries,
       request.limit,
-      query => rankPreparedNamesTopK(index, query, request.limit).items,
+      query => rankPreparedNamesTopK(index, query, request.limit, request.strict).items,
       expanded,
     ),
   };

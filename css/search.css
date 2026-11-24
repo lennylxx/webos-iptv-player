@@ -259,3 +259,48 @@
     0 0 0 3px rgb(var(--danger-rgb) / 0.24),
     0 0 20px rgb(var(--danger-rgb) / 0.35);
 }
+
+/* AI search: a compact action at the right of the results' first line, which
+   it shares with the first section heading, or with the AI summary or the
+   failure note when one shows; it takes no row of its own. */
+.search-ask { position: relative; }
+/* Centered on the first heading's line (.catalog-rail-title: 30px type, 42px
+   line), whatever the text size. */
+.search-ask-anchor {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: 45%;
+  height: calc(42px * var(--font-scale));
+}
+.btn.search-ask-action { min-width: 0; max-width: 100%; }
+/* Drawn like the same icon in the Settings sidebar and the rails' Manage pencil;
+   the AI summary starts with it too, as the button's label does. */
+.search-ask-summary .catalog-action-icon {
+  margin-right: 12px;
+  color: var(--text-primary);
+  vertical-align: -3px;
+}
+.search-ask-action .catalog-action-icon svg,
+.search-ask-summary .catalog-action-icon svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+.search-ask-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-ask-line {
+  max-width: 52%;
+  min-height: calc(40px * var(--font-scale));
+  margin: 0 0 24px;
+  font-size: 26px;
+  color: var(--text-secondary);
+}
