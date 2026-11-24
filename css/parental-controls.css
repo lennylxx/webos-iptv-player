@@ -281,6 +281,17 @@
   border-color: var(--warning);
 }
 
+.parental-row.parental-ai-row {
+  height: 58px;
+  color: var(--accent);
+  font-weight: 600;
+  border-color: var(--border);
+}
+
+.parental-row.parental-ai-row.is-busy {
+  color: var(--text-secondary);
+}
+
 .parental-suggest-row svg {
   flex: 0 0 24px;
   width: 24px;
@@ -541,4 +552,226 @@
 
 .parental-account-slot.focused {
   box-shadow: none;
+}
+
+.parental-ai-row .parental-ai-stop {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 18px;
+  white-space: nowrap;
+}
+
+/* ==== Review suggestions dialog (SuggestionReview, suggestion-review.ts) ====
+   A generic modal any feature can reuse; parental controls is its first user. */
+
+.suggestion-review {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 10000;
+}
+
+.suggestion-review.hidden {
+  display: none;
+}
+
+.suggestion-review-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 1600px;
+  height: 880px;
+  padding: 40px 48px 0;
+  /* The picker look of the EPG mapping picker (.group-picker). */
+  background: var(--bg-secondary);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.suggestion-review-head,
+.suggestion-review-notice,
+.suggestion-review-actions {
+  flex: 0 0 auto;
+}
+
+.suggestion-review-head {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  min-width: 0;
+}
+
+.suggestion-review-title {
+  margin: 0;
+  font-size: 34px;
+  white-space: nowrap;
+}
+
+.suggestion-review-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion-review-notice {
+  margin: 12px 0 0;
+  color: var(--text-secondary);
+  font-size: 22px;
+}
+
+.suggestion-review-actions {
+  display: flex;
+  min-height: 24px;
+  padding-top: 24px;
+}
+
+/* Holds the list and its drawn scrollbar, which sits in the panel's gutter. */
+.suggestion-review-body {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 16px;
+}
+
+/* Room for the focus ring, which the scroll container would clip. */
+.suggestion-review-list {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0 -8px;
+  padding: 4px 8px;
+  overflow-y: auto;
+}
+
+/* The drawn thumb replaces the native bar, which would double it. */
+.suggestion-review-list::-webkit-scrollbar {
+  width: 0;
+}
+
+/* The shape of the channel list's drawn thumb (.channel-scroll-thumb): 6px
+   and rounded. Secondary text, since --scrollbar-thumb falls under 3:1 on
+   light themes and a few dark ones; this one marks more rows to review. */
+.suggestion-review-scrollbar {
+  position: absolute;
+  top: 4px;
+  right: -28px;
+  bottom: 4px;
+  width: 6px;
+  pointer-events: none;
+}
+
+.suggestion-review-scrollbar.hidden {
+  display: none;
+}
+
+.suggestion-review-thumb {
+  width: 6px;
+  border-radius: 3px;
+  background: var(--text-secondary);
+}
+
+.suggestion-review-spacer {
+  position: relative;
+}
+
+.suggestion-review-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  /* Matches ROW_HEIGHT in suggestion-review.ts, which scales it the same way. */
+  height: calc(70px * var(--font-scale));
+  align-items: center;
+  gap: 16px;
+  padding: 0 8px 0 16px;
+}
+
+/* Sized by CAPTION_HEIGHT in suggestion-review.ts; the look is shared with
+   .epg-mapping-caption in channel-list.css. */
+.suggestion-review-caption {
+  height: calc(44px * var(--font-scale));
+  box-sizing: border-box;
+}
+
+.suggestion-review-name {
+  flex: 1 1 auto;
+  min-width: calc(240px * var(--font-scale));
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion-review-tags {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.suggestion-review-tags em {
+  /* The badge shape of .epg-mapping-ai; its tone says what the tag means. */
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 0.5);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.suggestion-review-tags em.is-warning {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+/* Outranks the shared .epg-mapping-ai rule whatever the stylesheet order;
+   the row's gap spaces the tags. */
+.suggestion-review .suggestion-review-tags em.is-accent {
+  margin-right: 0;
+}
+
+.suggestion-review-state {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.suggestion-review-row.is-accepted .suggestion-review-state {
+  color: var(--warning);
+}
+
+.suggestion-review-row .btn {
+  flex: 0 0 auto;
+  min-width: 140px;
+}
+
+.suggestion-review-row.is-accepted .suggestion-review-name,
+.suggestion-review-row.is-rejected .suggestion-review-name {
+  color: var(--text-muted);
+}
+
+.edit-hints.suggestion-review-hints {
+  position: static;
+  flex: 0 0 auto;
+  height: 64px;
+  margin: 16px -48px 0;
+  padding: 0 48px;
+  border-radius: 0 0 var(--radius) var(--radius);
 }

@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, enterTab, liveLoaded, type Page } from './helpers';
+import { test, expect, routeLiveManifest, routeFakeAi, enterTab, liveLoaded, type Page } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 import { channelPlaylist, guide } from './fixtures/live';
 import {
@@ -625,6 +625,35 @@ const SCREENS: Screen[] = [
       }
     },
   })),
+  {
+    name: 'Parental suggestion review',
+    root: '.suggestion-review',
+    focusables: '[data-focusable]',
+    columns: [['actions', '.suggestion-review-actions'], ['list', '.suggestion-review-list']],
+    tags: [],
+    cross: [],
+    followScroll: true,
+    async seed(page) {
+      // Every group flagged, half of them high-confidence, so the list scrolls.
+      await routeFakeAi(page, (user) => ({
+        flagged: (JSON.parse(user) as { items: Array<{ i: number }> }).items.map((item) => ({
+          i: item.i, verdict: item.i % 3 ? 'mature' : 'adult', confidence: item.i % 2 ? 'low' : 'high',
+        })),
+      }));
+    },
+    async open(page) {
+      await openTab(page, 'settings');
+      await page.locator('#manage-parental-controls').click();
+      const prompt = page.locator('.parental-pin-prompt .parental-pin-input');
+      await prompt.fill('1234');
+      await expect(page.locator('.parental-pin-prompt h2')).toContainText('Confirm');
+      await prompt.fill('1234');
+      await page.locator('#view-parental-controls [data-parental-ai]').click();
+      await page.locator('.confirmation-prompt [data-confirm-action="confirm"]').click();
+      await page.mouse.move(1, 1);
+      await expect(page.locator('.suggestion-review .focused')).toHaveCount(1);
+    },
+  },
   {
     name: 'Guide timeline',
     root: '#view-epg',

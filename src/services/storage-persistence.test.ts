@@ -225,6 +225,8 @@ describe('StorageService IndexedDB migration', () => {
       groupRules: { g1: 'protect' },
       approvedSources: [],
       itemRules: {},
+      dismissedSuggestions: [],
+      aiSuggestions: {},
     });
     vi.resetModules();
     const { StorageService: Stored } = await import('./storage-service');

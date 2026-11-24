@@ -21,7 +21,7 @@ export const DEFAULT_CONTEXT_TOKENS = 16000;
 
 // Features the user starts by hand; the AI switch alone turns them on.
 // Features that run on their own need their own toggle in `features`.
-const ON_DEMAND_FEATURES = ['subtitle-translation', 'subtitle-title', 'epg-match', 'search-ask'];
+const ON_DEMAND_FEATURES = ['subtitle-translation', 'subtitle-title', 'epg-match', 'search-ask', 'parental-suggestions'];
 
 export function featureEnabled(config: LlmConfig, feature: string): boolean {
   return config.features[feature] === true || ON_DEMAND_FEATURES.indexOf(feature) >= 0;
@@ -31,6 +31,11 @@ const MODES: readonly StructuredMode[] = ['json_schema', 'json_object', 'prompt'
 const MIN_CONTEXT_TOKENS = 2048;
 // The largest Context size Settings offers.
 const MAX_CONTEXT_TOKENS = 128000;
+// A reply larger than this may exceed what a server lets a model write at once.
+const MAX_REPLY_TOKENS = 8192;
+// Items a batch job sends at most at the 16k context size; a larger context takes more.
+const BATCH_ITEMS = 200;
+const BATCH_ITEMS_CONTEXT = 16000;
 
 function hostOf(url: string): string {
   const match = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(\[[^\]]*\]|[^:/?#]*)/i.exec(url.trim());
@@ -54,6 +59,16 @@ function isLocalHost(host: string): boolean {
 /** Request limits and local-model handling inferred from where the endpoint lives. */
 export function endpointProfile(baseUrl: string): EndpointProfile {
   return isLocalHost(hostOf(baseUrl)) ? PROFILES.local : PROFILES.remote;
+}
+
+/**
+ * The most items a batch of a background job holds: 200 at 16k, more in step
+ * with a larger context, while their replies stay within MAX_REPLY_TOKENS.
+ */
+export function batchItemLimit(contextTokens: number, replyTokensPerItem: number, replyOverhead: number): number {
+  const scaled = Math.floor((BATCH_ITEMS * contextTokens) / BATCH_ITEMS_CONTEXT);
+  const fits = Math.floor((MAX_REPLY_TOKENS - replyOverhead) / replyTokensPerItem);
+  return Math.max(BATCH_ITEMS, Math.min(scaled, fits));
 }
 
 export function defaultLlmConfig(): LlmConfig {

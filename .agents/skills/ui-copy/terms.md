@@ -73,6 +73,18 @@ a new term after review, add a row here.
 | AI search button (action) | Search with AI: “{query}” | 用 AI 搜索：“{query}” |
 | Leave AI search for the normal results | Show all results | 查看全部结果 |
 | AI search time labels | Live now / Today / Tonight / Tomorrow / Yesterday / This weekend / This week / weekday | 正在直播 / 今天 / 今晚 / 明天 / 昨天 / 本周末 / 本周 / 星期 |
+| Suggestion review dialog (title) | Review suggestions | 审阅建议 |
+| Row that opens the suggestion review (Parental controls) | Review groups to lock ({count}) | 审阅建议锁定的分组（{count}） |
+| AI lock-suggestion action / progress | Find with AI / Checking with AI… {done}/{total} | 用 AI 查找 / 正在用 AI 检查… {done}/{total} |
+| AI disclaimer | AI can make mistakes. | AI 可能会出错。 |
+| Review row actions and states | Lock / Dismiss / Undo; Locked / Dismissed | 锁定 / 忽略 / 撤销；已锁定 / 已忽略 |
+| AI confidence tags and bulk action | Likely / Possible; Lock all likely ({count}) | 很可能 / 可能；锁定全部“很可能”项（{count}） |
+| Content verdict tags (an AI guess, not a rating) | Adult / Mature | 成人 / 少儿不宜 |
+| Where a suggestion came from | Built-in / AI | 内置 / AI |
+| Suggestion review section captions | Built-in suggestions / AI suggestions | 内置建议 / AI 推荐 |
+| Stop a running AI check, keeping finished results (after the OK key) | Stop | 停止 |
+| Daily cap with nothing to fall back on | Daily AI limit reached. | 已达到每日 AI 上限。 |
+| Held-back review joined after a reason | {reason} Review groups to lock ({count}) (no space after a full-width stop) | {reason}审阅建议锁定的分组（{count}） |
 
 ## Rejected wordings
 
@@ -111,3 +123,11 @@ Never reintroduce these for the concept named.
 | Similar guide channels | Closest matches / 相近的频道 / 类似频道 | Similar names / 相似名称 |
 | AI search | Ask, Smart search, Natural-language search, 智能搜索 | AI search / AI 搜索 |
 | Leave AI search | Clear filter, Exit, 显示 | Show all results / 查看全部结果 |
+| Content verdict tags | 18+ / 16+ (reads as an official rating), 不宜儿童 | Adult / Mature, 成人 / 少儿不宜 |
+| Suggestion review title | 查看建议 | 审阅建议 |
+| Suggestion review row | Review suggestions ({count}) (doesn't say what they suggest), Lock suggested groups (reads as locking at once) | Review groups to lock ({count}) / 审阅建议锁定的分组（{count}） |
+| Confidence tags | High / Low, high-confidence, 高 / 低, 高可信度 | Likely / Possible, 很可能 / 可能 |
+| Dismiss a suggestion | Reject / 拒绝, Not now / 暂不 | Dismiss / 忽略 |
+| Suggestion source | Rules / 规则 | Built-in / 内置 |
+| AI disclaimer | AI can be wrong | AI can make mistakes |
+| Stop an AI check | Cancel / 取消 (implies results are discarded) | Stop / 停止 |

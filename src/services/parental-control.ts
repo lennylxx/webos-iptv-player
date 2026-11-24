@@ -6,6 +6,7 @@ import type {
   LiveGroupTarget,
   ParentalAccessDecision,
   ParentalAccessRequest,
+  ParentalAiVerdict,
   ParentalControlConfig,
   ParentalPinThrottle,
   ParentalItemTarget,
@@ -47,7 +48,24 @@ function emptyConfig(): ParentalControlConfig {
     groupRules: {},
     itemRules: {},
     approvedSources: [],
+    dismissedSuggestions: [],
+    aiSuggestions: {},
   };
+}
+
+const AI_VERDICTS: readonly ParentalAiVerdict[] = ['adult-high', 'adult-low', 'mature-high', 'mature-low'];
+
+// Older configs lack the suggestion fields; nothing to report, they start empty.
+function withSuggestionFields(config: ParentalControlConfig): ParentalControlConfig {
+  const dismissed = Array.isArray(config.dismissedSuggestions)
+    ? config.dismissedSuggestions.filter(key => typeof key === 'string')
+    : [];
+  const ai: Record<string, ParentalAiVerdict> = {};
+  const stored = config.aiSuggestions && typeof config.aiSuggestions === 'object' ? config.aiSuggestions : {};
+  Object.keys(stored).forEach((key) => {
+    if (AI_VERDICTS.indexOf(stored[key]) >= 0) ai[key] = stored[key];
+  });
+  return { ...config, dismissedSuggestions: dismissed, aiSuggestions: ai };
 }
 
 function part(value: string): string {
@@ -232,6 +250,8 @@ class ParentalControlServiceImpl {
   private badgeKey = '';
   private ruleTables: [object, object] | null = null;
   private ruleRevision = 0;
+  private suggestionTables: [object, object] | null = null;
+  private suggestionRevision = 0;
 
   reload(): void {
     const stored = StorageService.getParentalControl();
@@ -241,7 +261,7 @@ class ParentalControlServiceImpl {
       fixes.push(`version-reset:${String(stored.version)}`);
     }
     this.config = stored?.version === CONFIG.PARENTAL_CONTROL_VERSION
-      ? stored
+      ? withSuggestionFields(stored)
       : emptyConfig();
     // Off means no PIN; drop one left by an older build so it can't be forgotten.
     if (!this.config.enabled && this.config.pin) {
@@ -258,6 +278,7 @@ class ParentalControlServiceImpl {
       this.config = { ...this.config, unlockDuration: '5-minutes' };
       fixes.push('duration-raised');
     }
+    if (this.pruneSuggestions(StorageService.getPlaylists())) fixes.push('suggestions-pruned');
     if (fixes.length) {
       log.warn('Parental config repaired on load', 'event=parental.config.repaired',
         `fixes=${fixes.join(',')}`);
@@ -292,6 +313,8 @@ class ParentalControlServiceImpl {
       `itemProtect=${itemValues.filter(value => value === 'protect').length}`,
       `itemAllow=${itemValues.filter(value => value === 'allow').length}`,
       `approved=${this.config.approvedSources.length}`,
+      `dismissed=${this.config.dismissedSuggestions.length}`,
+      `aiFlagged=${Object.keys(this.config.aiSuggestions).length}`,
       `unreviewed=${current.filter(key => this.config.approvedSources.indexOf(key) < 0).join(',') || 'none'}`,
       `failures=${this.throttle.failures}`,
       `lockouts=${this.throttle.lockouts}`,
@@ -434,6 +457,7 @@ class ParentalControlServiceImpl {
   // A source whose address, account, or uploaded file changed is locked again
   // until the parent reviews it, like a newly added one.
   reviewChangedSources(previous: PlaylistEntry[], next: PlaylistEntry[]): void {
+    if (this.pruneSuggestions(next)) this.persist('suggestions-pruned');
     if (!this.enabled) return;
     const changes: string[] = [];
     const revoked = new Set<string>();
@@ -453,6 +477,22 @@ class ParentalControlServiceImpl {
     }
     this.config = { ...this.config, approvedSources };
     this.persist('sources-relocked', `changes=${changes.join(',')}`);
+  }
+
+  // Drops dismissals and AI verdicts of removed sources; a target key's second
+  // part is its playlist or account id.
+  private pruneSuggestions(sources: PlaylistEntry[]): boolean {
+    const ids = sources.map(entry => part(entry.id));
+    const kept = (key: string) => ids.indexOf(key.split('|')[1]) >= 0;
+    const dismissedSuggestions = this.config.dismissedSuggestions.filter(kept);
+    const aiSuggestions: Record<string, ParentalAiVerdict> = {};
+    Object.keys(this.config.aiSuggestions).forEach((key) => {
+      if (kept(key)) aiSuggestions[key] = this.config.aiSuggestions[key];
+    });
+    if (dismissedSuggestions.length === this.config.dismissedSuggestions.length
+      && Object.keys(aiSuggestions).length === Object.keys(this.config.aiSuggestions).length) return false;
+    this.config = { ...this.config, dismissedSuggestions, aiSuggestions };
+    return true;
   }
 
   private withApproved(key: string): string[] {
@@ -778,6 +818,16 @@ class ParentalControlServiceImpl {
     return this.ruleRevision;
   }
 
+  // Like rulesRevision, for the dismissed and AI suggestions.
+  get suggestionsRevision(): number {
+    const tables = this.suggestionTables;
+    if (!tables || tables[0] !== this.config.dismissedSuggestions || tables[1] !== this.config.aiSuggestions) {
+      this.suggestionTables = [this.config.dismissedSuggestions, this.config.aiSuggestions];
+      this.suggestionRevision++;
+    }
+    return this.suggestionRevision;
+  }
+
   groupRuleKeys(): string[] {
     return Object.keys(this.config.groupRules);
   }
@@ -830,8 +880,40 @@ class ParentalControlServiceImpl {
   }
 
   clearRules(): void {
-    this.config = { ...this.config, groupRules: {}, itemRules: {}, approvedSources: currentSourceKeys() };
+    this.config = {
+      ...this.config,
+      groupRules: {},
+      itemRules: {},
+      approvedSources: currentSourceKeys(),
+      dismissedSuggestions: [],
+      aiSuggestions: {},
+    };
     this.persist('rules-cleared');
+  }
+
+  suggestionDismissed(key: string): boolean {
+    return this.config.dismissedSuggestions.indexOf(key) >= 0;
+  }
+
+  setSuggestionsDismissed(keys: string[], dismissed: boolean): void {
+    const set = this.config.dismissedSuggestions.filter(key => keys.indexOf(key) < 0);
+    if (dismissed) set.push(...keys);
+    this.config = { ...this.config, dismissedSuggestions: set };
+    this.persist('suggestions-dismissed', `count=${keys.length}`, `dismissed=${String(dismissed)}`);
+  }
+
+  aiSuggestion(key: string): ParentalAiVerdict | null {
+    return this.config.aiSuggestions[key] ?? null;
+  }
+
+  // Replaces the verdicts for the groups the AI checked: a flagged group gets
+  // its verdict, any other checked group loses an older one.
+  setAiSuggestions(checked: string[], flagged: Record<string, ParentalAiVerdict>): void {
+    const aiSuggestions = { ...this.config.aiSuggestions };
+    for (const key of checked) delete aiSuggestions[key];
+    Object.keys(flagged).forEach((key) => { aiSuggestions[key] = flagged[key]; });
+    this.config = { ...this.config, aiSuggestions };
+    this.persist('ai-suggestions', `checked=${checked.length}`, `flagged=${Object.keys(flagged).length}`);
   }
 
   setGroupsProtected(

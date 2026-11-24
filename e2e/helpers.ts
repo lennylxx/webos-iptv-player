@@ -437,3 +437,41 @@ export async function expectSelectionVisibleInEveryTheme(
     expect(ratio, `selection contrast in ${theme.id}`).toBeGreaterThanOrEqual(3);
   }
 }
+
+export interface FakeAiServer {
+  // The user message of every chat request, in order.
+  sent: string[];
+}
+
+// Turns AI features on against a fake OpenAI-compatible server at
+// http://ai.test/v1 that answers each request with `reply(userMessage)`,
+// or fails with `status` when it returns a number; a promise holds the reply.
+export async function routeFakeAi(
+  page: Page,
+  reply: (user: string) => unknown,
+): Promise<FakeAiServer> {
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_llm', JSON.stringify({
+      enabled: true,
+      baseUrl: 'http://ai.test/v1',
+      model: 'm1',
+      capabilities: {
+        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
+        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
+      },
+    }));
+  });
+  const server: FakeAiServer = { sent: [] };
+  await page.route('http://ai.test/v1/chat/completions', async (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const body = JSON.parse(route.request().postData() || '{}') as { messages: Array<{ role: string; content: string }> };
+    const user = body.messages.find(m => m.role === 'user')?.content || '';
+    server.sent.push(user);
+    const answer = await reply(user);
+    if (typeof answer === 'number') return route.fulfill({ status: answer, headers: cors, body: '{}' });
+    return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
+      body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(answer) } }] }) });
+  });
+  return server;
+}

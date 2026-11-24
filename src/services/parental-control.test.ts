@@ -166,6 +166,65 @@ describe('ParentalControlService', () => {
     expect(ParentalControlService.sourceApproved('live', 'p3')).toBe(false);
   });
 
+  it('keeps dismissed and AI suggestions until Remove all or the source goes', () => {
+    const live = parentalTargetKey({ kind: 'live-group', playlistId: 'p1', groupKey: 'g1' });
+    const vod = parentalTargetKey({ kind: 'vod-category', accountId: 'a1', categoryId: 'c1' });
+    const other = parentalTargetKey({ kind: 'vod-category', accountId: 'a2', categoryId: 'c1' });
+    ParentalControlService.setSuggestionsDismissed([live, other], true);
+    ParentalControlService.setAiSuggestions([vod, other], { [vod]: 'adult-high', [other]: 'mature-low' });
+    ParentalControlService.reload();
+    expect(ParentalControlService.suggestionDismissed(live)).toBe(true);
+    expect(ParentalControlService.aiSuggestion(vod)).toBe('adult-high');
+
+    // A later run that no longer flags a group drops its verdict.
+    ParentalControlService.setAiSuggestions([vod], {});
+    expect(ParentalControlService.aiSuggestion(vod)).toBeNull();
+    ParentalControlService.setSuggestionsDismissed([live], false);
+    expect(ParentalControlService.suggestionDismissed(live)).toBe(false);
+    ParentalControlService.setSuggestionsDismissed([live], true);
+
+    // Unlocking every group of a source keeps what the parent reviewed.
+    ParentalControlService.clearSourceRules('vod', 'a2');
+    ParentalControlService.clearSourceRules('live', 'p1', ['ch1']);
+    expect(ParentalControlService.suggestionDismissed(other)).toBe(true);
+    expect(ParentalControlService.suggestionDismissed(live)).toBe(true);
+    expect(ParentalControlService.aiSuggestion(other)).toBe('mature-low');
+
+    // Removing the source drops them.
+    const remaining = sources.filter(entry => entry.id !== 'a2');
+    storage.playlists = remaining;
+    ParentalControlService.reviewChangedSources(sources, remaining);
+    expect(ParentalControlService.suggestionDismissed(other)).toBe(false);
+    expect(ParentalControlService.aiSuggestion(other)).toBeNull();
+    expect(ParentalControlService.suggestionDismissed(live)).toBe(true);
+    expect(storage.config!.dismissedSuggestions).toEqual([live]);
+
+    ParentalControlService.setAiSuggestions([vod], { [vod]: 'adult-low' });
+    ParentalControlService.clearRules();
+    expect(ParentalControlService.suggestionDismissed(live)).toBe(false);
+    expect(ParentalControlService.aiSuggestion(vod)).toBeNull();
+  });
+
+  it('drops suggestions of a source removed while the app was closed', () => {
+    const gone = parentalTargetKey({ kind: 'live-group', playlistId: 'p9', groupKey: 'g1' });
+    ParentalControlService.setSuggestionsDismissed([gone], true);
+    ParentalControlService.reload();
+    expect(ParentalControlService.suggestionDismissed(gone)).toBe(false);
+  });
+
+  it('loads a config saved without suggestion fields, dropping unknown verdicts', () => {
+    const saved = { ...storage.config! } as Partial<ParentalControlConfig>;
+    delete saved.dismissedSuggestions;
+    const a = parentalTargetKey({ kind: 'live-group', playlistId: 'p1', groupKey: 'a' });
+    const b = parentalTargetKey({ kind: 'live-group', playlistId: 'p1', groupKey: 'b' });
+    saved.aiSuggestions = { [a]: 'adult-high', [b]: 'unsafe' } as unknown as ParentalControlConfig['aiSuggestions'];
+    storage.config = saved as ParentalControlConfig;
+    ParentalControlService.reload();
+    expect(ParentalControlService.snapshot().dismissedSuggestions).toEqual([]);
+    expect(ParentalControlService.snapshot().aiSuggestions).toEqual({ [a]: 'adult-high' });
+    expect(ParentalControlService.configured).toBe(true);
+  });
+
   it('guards removing only a source that owns a lock', async () => {
     expect(ParentalControlService.guardsSourceRemoval('p1')).toBe(false);
     ParentalControlService.setItemRule({ kind: 'vod-item', accountId: 'a1', itemId: 'v1' }, 'allow');

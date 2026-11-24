@@ -293,7 +293,13 @@ export interface ParentalControlConfig {
   itemRules: Record<string, ParentalRuleValue>;
   /** `kind|sourceId` keys the parent has reviewed; any other source is locked. */
   approvedSources: string[];
+  /** Group target keys whose lock suggestion the parent dismissed. */
+  dismissedSuggestions: string[];
+  /** Group target keys the AI flagged, with its verdict. */
+  aiSuggestions: Record<string, ParentalAiVerdict>;
 }
+
+export type ParentalAiVerdict = 'adult-high' | 'adult-low' | 'mature-high' | 'mature-low';
 
 export interface LiveGroupTarget {
   kind: 'live-group';

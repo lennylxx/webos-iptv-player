@@ -1,6 +1,6 @@
 import {
   PLAYLIST_URL, test, expect, enterTab, routeLiveManifest, routePlaylist, seedPlaylist, type Page,
-  afterQueuedTasks, settled,
+  afterQueuedTasks, settled, routeFakeAi,
 } from './helpers';
 import { startFaultServer } from './fixtures/fault-server';
 
@@ -295,6 +295,42 @@ test('Parental Controls opened before the channels arrive lists their groups onc
     playlist.releaseRequest(0);
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
     await expect(page.locator('[data-parental-group]').filter({ hasText: 'Group 3' })).toHaveCount(1);
+  } finally {
+    await playlist.close();
+  }
+});
+
+test('a Find with AI check survives the channels finishing their load', async ({ page }) => {
+  const playlist = await serveHeldPlaylist();
+  let release: () => void = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await routeFakeAi(page, async (user) => {
+    await held;
+    const { items } = JSON.parse(user) as { items: Array<{ i: number; name: string }> };
+    return { flagged: items.filter(item => item.name === 'Group 3')
+      .map(item => ({ i: item.i, verdict: 'adult', confidence: 'high' })) };
+  });
+  try {
+    await routeLiveManifest(page);
+    await seedPlaylist(page, playlist.url);
+    await page.goto('/');
+    await headShown(page);
+    await enterTab(page, 'settings');
+    await page.locator('#manage-parental-controls').click();
+    const pin = page.locator('.parental-pin-prompt .parental-pin-input');
+    await pin.fill('1234');
+    await expect(page.locator('.parental-pin-prompt h2')).toContainText('Confirm');
+    await pin.fill('1234');
+    const view = page.locator('#view-parental-controls');
+    await expect(view.locator('[data-parental-group]').filter({ hasText: 'Group 3' })).toHaveCount(1);
+    await view.locator('[data-parental-ai]').click();
+    await page.locator('.confirmation-prompt [data-confirm-action="confirm"]').click();
+    await expect(view.locator('[data-parental-ai]')).toContainText('0/1');
+
+    playlist.releaseRequest(0);
+    await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
+    release();
+    await expect(page.locator('.suggestion-review-row')).toHaveText([/Group 3/]);
   } finally {
     await playlist.close();
   }

@@ -154,6 +154,10 @@ html.q-no-flex-gap .parental-header > * + * { margin-left: 32px; }
 html.q-no-flex-gap .parental-heading > * + * { margin-left: 32px; }
 html.q-no-flex-gap .parental-row > * + * { margin-left: 12px; }
 html.q-no-flex-gap .parental-pin-actions > * + * { margin-left: 16px; }
+html.q-no-flex-gap .parental-ai-row .parental-ai-stop > * + * { margin-left: 8px; }
+html.q-no-flex-gap .suggestion-review-head > * + * { margin-left: 20px; }
+html.q-no-flex-gap .suggestion-review-row > * + * { margin-left: 16px; }
+html.q-no-flex-gap .suggestion-review-tags > * + * { margin-left: 8px; }
 html.q-no-flex-gap .live-category-header > * + * { margin-left: 32px; }
 html.q-no-flex-gap .live-category-row > * + * { margin-left: 12px; }
 html.q-no-flex-gap .theme-editor-epg > * + * { margin-left: 8px; }

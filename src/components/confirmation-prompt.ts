@@ -8,6 +8,8 @@ interface ConfirmationOptions {
   message: string;
   confirmLabel: string;
   cancelLabel: string;
+  // Off for a confirm that destroys nothing.
+  danger?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -36,7 +38,8 @@ export class ConfirmationPrompt {
       });
     }
     this.options = options;
-    this.focus = 'cancel';
+    // A destructive action defaults to Cancel; anything else to the action.
+    this.focus = options.danger === false ? 'confirm' : 'cancel';
     if (!this.el) {
       this.el = document.createElement('div');
       this.el.className = 'confirmation-prompt';
@@ -100,7 +103,7 @@ export class ConfirmationPrompt {
         <h2 class="confirmation-title">${this.options.title}</h2>
         <p class="confirmation-message">${this.options.message}</p>
         <div class="confirmation-buttons">
-          <button class="confirmation-btn danger" data-focusable
+          <button class="confirmation-btn ${this.options.danger === false ? '' : 'danger'}" data-focusable
                   data-key="confirm" data-confirm-action="confirm">${this.options.confirmLabel}</button>
           <button class="confirmation-btn" data-focusable
                   data-key="cancel" data-confirm-action="cancel">${this.options.cancelLabel}</button>

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChatBody, chatCompletion, listModels, listModelsDetailed, LlmError, type Endpoint } from './client';
 import {
+  batchItemLimit,
   completeServerUrl,
   defaultLlmConfig,
   endpointProfile,
@@ -210,6 +211,14 @@ describe('endpoint settings', () => {
     expect(normalizeLlmConfig({ contextTokens: 1000000 }).contextTokens).toBe(128000);
     expect(normalizeLlmConfig({ contextTokens: 262144 }).contextTokens).toBe(128000);
     expect(normalizeLlmConfig({ contextTokens: 100 }).contextTokens).toBe(2048);
+  });
+
+  it('lets a batch job send more items with a larger context, within its reply limit', () => {
+    expect(batchItemLimit(2048, 14, 64)).toBe(200);
+    expect(batchItemLimit(16000, 14, 64)).toBe(200);
+    expect(batchItemLimit(32000, 14, 64)).toBe(400);
+    expect(batchItemLimit(128000, 14, 64)).toBe(580);
+    expect(batchItemLimit(128000, 24, 64)).toBe(338);
   });
 
   it('parses extra headers and skips malformed lines', () => {

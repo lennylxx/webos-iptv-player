@@ -6,6 +6,7 @@ import type {
   LiveChannelTarget,
   LiveGroupTarget,
   ParentalItemTarget,
+  ParentalAiVerdict,
   ParentalParentTarget,
   ParentalUnlockDuration,
   PlaylistEntry,
@@ -41,7 +42,7 @@ import { ParentalControlService, liveParentalRequest, parentalTargetKey } from '
 import { t, tp } from '../i18n';
 import { createLogger } from '../utils/logger';
 import { CONFIG } from '../config';
-import { LOCK_ICON } from './icons';
+import { AI_ICON, LOCK_ICON } from './icons';
 import { doneHint, keyHint, okHint } from './key-hints';
 import { AccountSwitcher } from './account-switcher';
 import { lockBadge } from './parental-badge';
@@ -49,6 +50,15 @@ import { sourceToggle, toggleGroup } from './toggle-controls';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import { showToast } from './toast';
 import { isAdultGroupName } from './group-icon';
+import { ChannelCustomizationService } from '../services/channel-customization';
+import { SuggestionReview, type ReviewDecision, type ReviewItem } from './suggestion-review';
+import { LlmService } from '../services/llm/llm-service';
+import {
+  PARENTAL_AI_FEATURE,
+  planBatches,
+  suggestAdultGroups,
+  type ParentalAiGroup,
+} from '../services/parental-ai-suggestions';
 
 const log = createLogger('ParentalControls');
 
@@ -57,6 +67,7 @@ const ROW_STRIDE = 64;
 const LIST_PADDING = 4;
 const LIST_OVERSCAN = 8;
 const FALLBACK_LIST_HEIGHT = 600;
+const AI_SAMPLES = 3;
 
 type ListKind = 'group' | 'item';
 // The on/off switch is shared markup without a key of its own.
@@ -109,6 +120,16 @@ function groupTarget(group: GroupEntry): LiveGroupTarget | CatalogCategoryTarget
 // Built on first use: most rows of a 50,000-row catalog never need it.
 function ruleKey(entry: GroupEntry | ItemEntry): string {
   return entry.ruleKey ?? (entry.ruleKey = parentalTargetKey(entry.target));
+}
+
+// Chinese runs sentences together after its full stop.
+function joinSentences(first: string, second: string): string {
+  if (!first || !second) return first || second;
+  return /[。！？]$/.test(first) ? `${first}${second}` : `${first} ${second}`;
+}
+
+function channelKeyOf(item: ItemEntry): string {
+  return (item.target as LiveChannelTarget).channelKey;
 }
 
 function itemTarget(item: ItemEntry): LiveChannelTarget | CatalogItemTarget {
@@ -164,6 +185,14 @@ export class ParentalControls {
   private groupsByKey = new Map<string, GroupEntry>();
   private tab: 'rules' | 'options' = 'rules';
   private readonly confirmationPrompt = new ConfirmationPrompt('prompt.parental');
+  private readonly review = new SuggestionReview('prompt.parental-review');
+  // `stopped`: the parent stopped it, so finished batches still count.
+  private aiRun: { controller: AbortController; stopped: boolean } | null = null;
+  private aiEligibleCache: { inputs: unknown[]; any: boolean } | null = null;
+  // Batches done and total while Find with AI runs.
+  private aiProgress: { done: number; total: number } | null = null;
+  // Read once per opening: AI settings can't change while the manager shows.
+  private aiReady = false;
   private readonly groupVirtualizer = new VirtualList({
     itemSize: ROW_STRIDE,
     overscan: LIST_OVERSCAN,
@@ -251,6 +280,7 @@ export class ParentalControls {
 
   open(): void {
     ParentalControlService.setRevealAll(true);
+    this.aiReady = LlmService.isReady(PARENTAL_AI_FEATURE);
     // Channels hidden by customization can be shown again from Settings, so
     // they must be reviewed and adopted too.
     PlaylistService.setIncludeHidden(true);
@@ -279,6 +309,7 @@ export class ParentalControls {
 
   dismissPrompt(): void {
     this.confirmationPrompt.hide();
+    this.review.hide();
     this.switcher?.closeMenu();
   }
 
@@ -290,12 +321,17 @@ export class ParentalControls {
     this.dismissPrompt();
     this.requestController?.abort();
     this.requestController = null;
+    this.cancelAi();
     this.resetItems();
   }
 
   handleAction(action: Action): void {
     if (this.confirmationPrompt.visible) {
       this.confirmationPrompt.handleAction(action);
+      return;
+    }
+    if (this.review.visible) {
+      this.review.handleAction(action);
       return;
     }
     if (this.switcher?.menuOpen) {
@@ -355,6 +391,8 @@ export class ParentalControls {
       confirmLabel: t('parental.removeAll'),
       cancelLabel: t('common.cancel'),
       onConfirm: () => {
+        // A run still going would write its verdicts back.
+        this.cancelAi();
         ParentalControlService.clearRules();
         showToast(t('parental.allRemoved'));
         this.render();
@@ -442,6 +480,8 @@ export class ParentalControls {
     const source = this.sources[index];
     if (!source) return;
     this.requestController?.abort();
+    // A reload of the shown source keeps a running check; its results key by group.
+    if (this.sources[this.sourceIndex]?.key !== source.key) this.cancelAi();
     const controller = new AbortController();
     this.requestController = controller;
     this.sourceIndex = index;
@@ -470,7 +510,7 @@ export class ParentalControls {
             count: members.length,
             suggested: isAdultGroupName(name) || channels.some(isAdultChannel),
             target,
-                  members,
+            members,
           };
         });
         this.adoptLiveSource(source.account, this.groupTargets());
@@ -600,7 +640,7 @@ export class ParentalControls {
     const data = el.dataset;
     const area = data.parentalItem !== undefined ? 'item'
       : data.parentalGroup !== undefined || data.parentalSuggest !== undefined
-        || data.parentalSource !== undefined ? 'group' : null;
+        || data.parentalAi !== undefined || data.parentalSource !== undefined ? 'group' : null;
     const areaChanged = area !== null && area !== this.focusArea;
     if (area) this.focusArea = area;
     const index = this.via === 'key' ? data.parentalGroup : undefined;
@@ -861,7 +901,12 @@ export class ParentalControls {
       return;
     }
     if (el.dataset.parentalSuggest !== undefined) {
-      this.lockSuggested();
+      this.openReview();
+      return;
+    }
+    if (el.dataset.parentalAi !== undefined) {
+      if (this.aiRun) this.stopAi();
+      else this.findWithAi();
       return;
     }
     if (el.dataset.parentalChangePin !== undefined) {
@@ -985,14 +1030,16 @@ export class ParentalControls {
   // every key press, so each reruns only when its own inputs change.
   private ruleSummary(): RuleSummary {
     const revision = ParentalControlService.rulesRevision;
-    const groupInputs: unknown[] = [this.groups, this.memberGroupsRevision, revision];
+    const groupInputs: unknown[] = [
+      this.groups, this.memberGroupsRevision, revision, ParentalControlService.suggestionsRevision,
+    ];
     let groups = this.groupSummaryCache;
     if (!groups || !sameInputs(groups.inputs, groupInputs)) {
       let lockedGroups = 0;
       const suggestions: GroupEntry[] = [];
       for (const group of this.groups) {
         if (this.isGroupLocked(group)) lockedGroups++;
-        else if (group.suggested) suggestions.push(group);
+        else if (this.suggestedFor(group)) suggestions.push(group);
       }
       groups = { inputs: groupInputs, lockedGroups, suggestions, mixedGroups: this.computeMixedGroups() };
       this.groupSummaryCache = groups;
@@ -1033,12 +1080,225 @@ export class ParentalControls {
     return count;
   }
 
-  private lockSuggested(): void {
+  // Rules or the AI flagged the group, and the parent hasn't dismissed it.
+  private suggestedFor(group: GroupEntry): boolean {
+    const key = ruleKey(group);
+    if (ParentalControlService.suggestionDismissed(key)) return false;
+    return group.suggested || ParentalControlService.aiSuggestion(key) !== null;
+  }
+
+  private reviewItem(group: GroupEntry): ReviewItem {
+    const verdict: ParentalAiVerdict | null = group.suggested
+      ? null
+      : ParentalControlService.aiSuggestion(ruleKey(group));
+    if (!verdict) {
+      return {
+        key: ruleKey(group),
+        title: group.name,
+        tags: [{ label: t('parental.adult'), tone: 'warning' }],
+        high: true,
+        section: t('parental.builtInSection'),
+      };
+    }
+    const high = verdict === 'adult-high' || verdict === 'mature-high';
+    return {
+      key: ruleKey(group),
+      title: group.name,
+      tags: [
+        { label: t(verdict.indexOf('adult') === 0 ? 'parental.adult' : 'parental.mature'), tone: 'warning' },
+        high ? { label: t('parental.likely'), tone: 'accent' } : { label: t('parental.possible') },
+      ],
+      high,
+      section: t('parental.aiSection'),
+      ai: true,
+    };
+  }
+
+  // `reason`: why AI fell short, shown in the dialog, which would cover a toast.
+  private openReview(reason = '', unasked = false): void {
     const groups = this.pendingSuggestions();
     if (!groups.length) return;
-    ParentalControlService.setGroupsProtected(groups.map(groupTarget), true);
+    const byKey = new Map(groups.map(group => [ruleKey(group), group]));
+    const targets = (keys: string[]) => keys
+      .map(key => byKey.get(key))
+      .filter((group): group is GroupEntry => !!group)
+      .map(groupTarget);
+    // Built-in matches first: they're certain, and the AI's guesses follow under their own caption.
+    const items = groups.filter(group => group.suggested).concat(groups.filter(group => !group.suggested))
+      .map(group => this.reviewItem(group));
+    const fromAi = items.some(item => item.section === t('parental.aiSection'));
+    const source = this.sources[this.sourceIndex];
+    const apply = (keys: string[], decision: ReviewDecision, on: boolean) => {
+      if (decision === 'accepted') ParentalControlService.setGroupsProtected(targets(keys), on);
+      else ParentalControlService.setSuggestionsDismissed(keys, on);
+      this.render();
+    };
+    this.review.show({
+      labels: {
+        title: t('parental.reviewTitle'),
+        subtitle: source?.account.name,
+        notice: joinSentences(reason, fromAi ? t('parental.aiNotice') : '') || undefined,
+        accept: t('parental.reviewLock'),
+        reject: t('parental.reviewDismiss'),
+        undo: t('parental.reviewUndo'),
+        accepted: t('parental.locked'),
+        rejected: t('parental.reviewDismissed'),
+        acceptAllHigh: count => t('parental.lockAllLikely', { count }),
+      },
+      items,
+      onDecide: (keys, decision) => apply(keys, decision, true),
+      onUndo: (key, decision) => apply([key], decision, false),
+      onClose: () => this.focusLeading(),
+      unasked,
+    });
+  }
+
+  // Back on the suggestion row, or the AI row, or the first group.
+  private focusLeading(): void {
+    this.groupVirtualizer.setScrollOffset(0);
     this.render();
-    this.focusColumn('group');
+    this.focusSelector(this.pendingSuggestions().length ? '[data-parental-suggest]'
+      : this.aiAvailable() ? '[data-parental-ai]' : '[data-parental-group]');
+  }
+
+  // Rule matches are suggested already, a locked or dismissed group needs no
+  // suggestion, and a hidden Live group shows nothing; the AI checks the rest.
+  private aiEligible(group: GroupEntry): boolean {
+    if (group.suggested || this.isGroupLocked(group)
+      || ParentalControlService.suggestionDismissed(ruleKey(group))) return false;
+    if (!group.members) return true;
+    if (ChannelCustomizationService.isGroupHidden((group.target as LiveGroupTarget).groupKey)) return false;
+    return !group.members.length
+      || group.members.some(member => !ChannelCustomizationService.isHidden(channelKeyOf(member)));
+  }
+
+  private aiCandidates(): ParentalAiGroup[] {
+    return this.groups
+      .filter(group => this.aiEligible(group))
+      .map(group => ({ key: ruleKey(group), name: group.name, samples: this.aiSamples(group) }));
+  }
+
+  // Channel names a Live group shows; never a hidden or locked one, including
+  // one locked through a group of another playlist.
+  private aiSamples(group: GroupEntry): string[] | undefined {
+    if (!group.members) return undefined;
+    const samples: string[] = [];
+    for (const member of group.members) {
+      if (samples.length >= AI_SAMPLES) break;
+      if (ChannelCustomizationService.isHidden(channelKeyOf(member)) || this.isItemLocked(member, group)) continue;
+      samples.push(member.name);
+    }
+    return samples;
+  }
+
+  // Runs on every render, so it rechecks only when groups or rules change.
+  private aiAvailable(): boolean {
+    if (this.aiProgress) return true;
+    if (this.tab !== 'rules' || this.groupsLoading || !this.aiReady) return false;
+    const inputs: unknown[] = [
+      this.groups, ParentalControlService.rulesRevision, ParentalControlService.suggestionsRevision,
+    ];
+    const cache = this.aiEligibleCache;
+    if (cache && sameInputs(cache.inputs, inputs)) return cache.any;
+    const any = this.groups.some(group => this.aiEligible(group));
+    this.aiEligibleCache = { inputs, any };
+    return any;
+  }
+
+  private findWithAi(): void {
+    if (this.aiProgress) return;
+    const candidates = this.aiCandidates();
+    if (!candidates.length) return;
+    const requests = planBatches(candidates, LlmService.contextTokens()).length;
+    this.confirmationPrompt.show({
+      title: t('parental.findWithAi'),
+      message: tp('parental.aiRequests', requests),
+      confirmLabel: t('parental.findWithAi'),
+      cancelLabel: t('common.cancel'),
+      danger: false,
+      onConfirm: () => void this.runAi(candidates),
+      onCancel: () => this.focusSelector('[data-parental-ai]'),
+    });
+  }
+
+  private async runAi(candidates: ParentalAiGroup[]): Promise<void> {
+    const source = this.sources[this.sourceIndex];
+    if (!source) return;
+    this.cancelAi();
+    const run = { controller: new AbortController(), stopped: false };
+    this.aiRun = run;
+    this.aiProgress = { done: 0, total: planBatches(candidates, LlmService.contextTokens()).length };
+    this.render();
+    this.focusSelector('[data-parental-ai]');
+    const result = await suggestAdultGroups(source.kind, candidates, {
+      signal: run.controller.signal,
+      eligible: key => !ParentalControlService.groupProtectedByKey(key)
+        && !ParentalControlService.suggestionDismissed(key),
+      onProgress: (done, total) => {
+        if (run.controller.signal.aborted) return;
+        this.aiProgress = { done, total };
+        this.render();
+      },
+    });
+    if (this.aiRun !== run) return;
+    this.aiRun = null;
+    this.aiProgress = null;
+    if (result.checked.length) ParentalControlService.setAiSuggestions(result.checked, result.flagged);
+    const pending = this.pendingSuggestions().length;
+    // The run finished behind something else the parent opened: the
+    // suggestions wait on their row instead of taking over.
+    const free = this.tab === 'rules' && !this.confirmationPrompt.visible && !this.review.visible
+      && !this.switcher?.menuOpen;
+    const failure = result.failure === 'cancelled' ? null : result.failure;
+    const message = this.aiOutcome(failure, result.checked.length > 0, pending, free, run.stopped);
+    if (pending && free) {
+      this.render();
+      this.openReview(message, true);
+      return;
+    }
+    if (message) showToast(message);
+    // Focus moves only when it was on the AI row or the render took it away.
+    const key = this.focusScope.focusKey;
+    const focused = key !== null ? this.findKey(key) : null;
+    this.render();
+    if (free && (!focused || focused.dataset.parentalAi !== undefined || !focused.isConnected)) {
+      this.focusLeading();
+    }
+  }
+
+  // What the parent hears once a run ends: why AI fell short, what the
+  // review shows, or that suggestions wait on their row.
+  private aiOutcome(
+    failure: string | null,
+    checked: boolean,
+    pending: number,
+    free: boolean,
+    stopped: boolean,
+  ): string {
+    const waiting = pending && !free ? t('parental.reviewSuggestions', { count: pending }) : '';
+    // A stopped run didn't look everywhere, so it can't claim there's nothing.
+    if (!failure) return waiting || (pending || stopped ? '' : t('parental.noSuggestions'));
+    // Built-in suggestions alone fill the review the parent is about to see.
+    const fallback = free && pending > 0 && !checked;
+    const reason = failure === 'cap'
+      ? t(fallback ? 'parental.aiLimit' : 'parental.aiLimitOnly')
+      : checked ? t('parental.aiPartial')
+        : t(fallback ? 'parental.aiUnavailable' : 'parental.aiFailed');
+    return joinSentences(reason, waiting);
+  }
+
+  // Drops the batch in flight at once; finished batches still count.
+  private stopAi(): void {
+    if (!this.aiRun) return;
+    this.aiRun.stopped = true;
+    this.aiRun.controller.abort();
+  }
+
+  // Drops the run and whatever it would still report.
+  private cancelAi(): void {
+    this.aiRun?.controller.abort();
+    this.aiRun = null;
+    this.aiProgress = null;
   }
 
   private async clearCurrentExceptions(): Promise<void> {
@@ -1247,7 +1507,7 @@ export class ParentalControls {
           this.groupsLoading
             ? [html`<div class="parental-empty">${t('common.loading')}</div>`]
             : this.groups.length
-              ? [this.suggestionRow(), this.virtualRows('group', this.groups, (group, index, top) => {
+              ? [this.suggestionRow(), this.aiRow(), this.virtualRows('group', this.groups, (group, index, top) => {
                 const locked = this.isGroupLocked(group);
                 return html`
                 <button class="parental-row ${index === this.groupIndex ? 'active' : ''}"
@@ -1256,7 +1516,7 @@ export class ParentalControls {
                   ${raw(lockBadge(locked ? 'locked' : 'unlocked'))}
                   <span>${group.name}</span>
                   ${group.count === null ? '' : html`<small>${group.count}</small>`}
-                  ${group.suggested && !locked
+                  ${!locked && this.suggestedFor(group)
                     ? html`<em class="parental-suggested">${t('parental.suggested')}</em>`
                     : ''}
                   <strong class="${locked || this.hasExceptions(group) ? 'is-locked' : ''}">${
@@ -1348,8 +1608,27 @@ export class ParentalControls {
     return html`
       <button class="parental-row parental-suggest-row" data-focusable
               data-key="parental-suggest" data-parental-suggest>
-        ${raw(LOCK_ICON)}<span>${t('parental.lockSuggested', { count })}</span>
+        ${raw(LOCK_ICON)}<span>${t('parental.reviewSuggestions', { count })}</span>
       </button>`;
+  }
+
+  private aiRow(): Safe {
+    if (!this.aiAvailable()) return html``;
+    const progress = this.aiProgress;
+    return html`
+      <button class="parental-row parental-ai-row ${progress ? 'is-busy' : ''}" data-focusable
+              data-key="parental-ai" data-parental-ai>
+        <span><span class="ai-icon">${raw(AI_ICON)}</span>${progress
+          ? t('parental.findingWithAi', { done: progress.done, total: progress.total || 1 })
+          : t('parental.findWithAi')}</span>
+        ${progress ? html`<small class="parental-ai-stop"><span class="edit-key key-ok">OK</span>${
+          t('parental.aiStop')}</small>` : ''}
+      </button>`;
+  }
+
+  // Action rows above the virtualized groups: the suggestion review, then Find with AI.
+  private leadingRows(): number {
+    return (this.pendingSuggestions().length ? 1 : 0) + (this.aiAvailable() ? 1 : 0);
   }
 
   private column(title: string, note: Safe, rows: Safe[], kind: string): Safe {
@@ -1369,8 +1648,8 @@ export class ParentalControls {
     row: (entry: T, index: number, top: number) => Safe,
   ): Safe {
     const virtualizer = this.virtualizer(kind);
-    const suggestion = kind === 'group' && this.pendingSuggestions().length > 0;
-    virtualizer.setLeadingSize(LIST_PADDING + (suggestion ? ROW_STRIDE : 0));
+    const leading = kind === 'group' ? this.leadingRows() : 0;
+    virtualizer.setLeadingSize(LIST_PADDING + leading * ROW_STRIDE);
     const range = virtualizer.getRange(entries.length, this.listViewport(kind));
     const rows: Safe[] = [];
     for (let index = range.start; index < range.end; index++) {
@@ -1402,8 +1681,19 @@ export class ParentalControls {
   private moveInList(delta: number): boolean {
     const data = this.nav.focused?.dataset;
     if (!data) return false;
-    if (data.parentalSuggest !== undefined) {
-      if (delta < 0 || !this.groups.length) return false;
+    if (data.parentalSuggest !== undefined || data.parentalAi !== undefined) {
+      const ai = this.container.querySelector<HTMLElement>('[data-parental-ai]');
+      if (delta < 0) {
+        const suggest = this.container.querySelector<HTMLElement>('[data-parental-suggest]');
+        if (data.parentalAi === undefined || !suggest) return false;
+        this.nav.focus(suggest);
+        return true;
+      }
+      if (data.parentalSuggest !== undefined && ai) {
+        this.nav.focus(ai);
+        return true;
+      }
+      if (!this.groups.length) return false;
       this.focusRow('group', 0);
       return true;
     }
@@ -1415,11 +1705,12 @@ export class ParentalControls {
 
   private stepInList(kind: ListKind, from: number, delta: number): boolean {
     const index = from + delta;
-    if (kind === 'group' && index < 0 && this.pendingSuggestions().length) {
+    if (kind === 'group' && index < 0 && this.leadingRows()) {
       this.groupVirtualizer.setScrollOffset(0);
       this.render();
-      const suggest = this.container.querySelector<HTMLElement>('[data-parental-suggest]');
-      if (suggest) this.nav.focus(suggest);
+      const lead = this.container.querySelector<HTMLElement>('[data-parental-ai]')
+        ?? this.container.querySelector<HTMLElement>('[data-parental-suggest]');
+      if (lead) this.nav.focus(lead);
       return true;
     }
     const count = kind === 'group' ? this.groups.length : this.items.length;

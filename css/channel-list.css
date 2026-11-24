@@ -735,8 +735,10 @@
   font-size: 16px;
 }
 
-/* Heads the similar names inside the list, in the room their first row leaves. */
-.epg-mapping-caption {
+/* Heads the similar names inside the list, in the room their first row leaves;
+   the suggestion review heads its sections the same way. */
+.epg-mapping-caption,
+.suggestion-review-caption {
   position: absolute;
   right: 0;
   left: 0;
@@ -745,8 +747,10 @@
   font-size: 18px;
 }
 
-/* An AI pick still waits for the user, so it takes the accent, not a status color. */
-.epg-mapping-ai {
+/* An AI pick still waits for the user, so it takes the accent, not a status color;
+   so does a likely AI suggestion in the suggestion review. */
+.epg-mapping-ai,
+.suggestion-review-tags em.is-accent {
   display: inline-block;
   margin-right: 10px;
   padding: 2px 8px;

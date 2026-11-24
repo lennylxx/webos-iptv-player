@@ -41,6 +41,16 @@ describe('ConfirmationPrompt', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
+  it('defaults focus to the action when it destroys nothing', () => {
+    prompt.show({
+      title: 'Find', message: 'About 5 requests', confirmLabel: 'Find', cancelLabel: 'Cancel',
+      danger: false, onConfirm, onCancel,
+    });
+    prompt.handleAction('select');
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
   it('cancels on Back', () => {
     prompt.handleAction('back');
     expect(onCancel).toHaveBeenCalledTimes(1);
