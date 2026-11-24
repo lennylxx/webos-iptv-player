@@ -55,6 +55,11 @@ vi.mock('./toast', () => ({ showToast: vi.fn() }));
 vi.mock('../services/subtitle-search/subtitle-search-service', () => ({
   subtitleSearchService: subtitleSearchServiceMock,
 }));
+const { suggestSearchTitle } = vi.hoisted(() => ({ suggestSearchTitle: vi.fn() }));
+vi.mock('../services/subtitle-search/ai-title', () => ({
+  SUBTITLE_TITLE_FEATURE: 'subtitle-title',
+  suggestSearchTitle,
+}));
 vi.mock('../services/llm/llm-service', () => ({
   LlmService: { isReady: vi.fn(() => false), runText: vi.fn(), contextTokens: () => 16000 },
 }));
@@ -1592,6 +1597,191 @@ describe('PlayerTracks', () => {
         expect.objectContaining({ manualQuery: 'Manual Query' }),
       );
       host.remove();
+    });
+
+    describe('search keys', () => {
+      let host: HTMLElement;
+      const run = (query: string | null): Promise<void> => (
+        tracks as unknown as { runSubtitleSearch(query: string | null): Promise<void> }
+      ).runSubtitleSearch(query);
+      const result = {
+        providerId: 'subdl' as const,
+        id: '1',
+        language: 'l1',
+        releaseName: 'Track 1',
+        fileName: 'a.srt',
+        format: 'srt' as const,
+        hearingImpaired: false,
+        downloads: 0,
+      };
+      const lines = (): string => vi.mocked(console.log).mock.calls.concat(vi.mocked(console.warn).mock.calls)
+        .map(args => args.join(' ')).join('\n');
+
+      beforeEach(() => {
+        subtitleSearchServiceMock.setAvailable(true);
+        host = document.createElement('div');
+        host.id = 'subtitle-search';
+        document.body.appendChild(host);
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        suggestSearchTitle.mockReset();
+      });
+
+      afterEach(() => {
+        host.remove();
+        vi.mocked(LlmService.isReady).mockReturnValue(false);
+      });
+
+      it('searches a movie by its tidied name and an episode by its series', async () => {
+        subtitleSearchServiceMock.search.mockResolvedValue([result]);
+        vod = vodRequest({ title: '|EN| Alpha (2019) 4K' });
+        await run(null);
+        expect(subtitleSearchServiceMock.search).toHaveBeenLastCalledWith(
+          expect.objectContaining({ type: 'movie', title: 'Alpha', year: 2019 }));
+
+        vod = vodRequest({
+          kind: 'episode',
+          title: 'Bravo — S1E2 — Charlie',
+          searchMeta: { season: 1, episode: 2, imdbId: '9' },
+          watchlistOwner: { kind: 'series', itemId: 's1', name: '[FR] Bravo', poster: '' },
+        });
+        await run(null);
+        expect(subtitleSearchServiceMock.search).toHaveBeenLastCalledWith(
+          expect.objectContaining({ type: 'episode', title: 'Bravo', imdbId: '9', season: 1, episode: 2 }));
+
+        vod = vodRequest({ kind: 'episode', title: 'Delta — S3E4', searchMeta: { season: 3, episode: 4 } });
+        await run(null);
+        expect(subtitleSearchServiceMock.search).toHaveBeenLastCalledWith(
+          expect.objectContaining({ title: 'Delta', season: 3, episode: 4 }));
+        expect(suggestSearchTitle).not.toHaveBeenCalled();
+      });
+
+      it('asks the AI model for a title when nothing is found, then for the original title', async () => {
+        vi.mocked(LlmService.isReady).mockReturnValue(true);
+        subtitleSearchServiceMock.search
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([result]);
+        suggestSearchTitle.mockResolvedValue({ title: 'Alpha', year: 2019, season: 0, episode: 0, originalTitle: 'Bravo' });
+        vod = vodRequest({ title: 'EN - Alpha Remastered Edition', searchMeta: { imdbId: '9' } });
+
+        await run(null);
+
+        expect(suggestSearchTitle).toHaveBeenCalledWith('EN - Alpha Remastered Edition', 'movie', expect.any(AbortSignal));
+        const calls = subtitleSearchServiceMock.search.mock.calls.map(call => call[0] as { title: string; imdbId?: string; year?: number });
+        expect(calls.map(call => [call.title, call.imdbId, call.year])).toEqual([
+          ['Alpha Remastered Edition', '9', undefined],
+          ['Alpha', undefined, 2019],
+          ['Bravo', undefined, 2019],
+        ]);
+        expect(host.querySelector<HTMLInputElement>('input')?.value).toBe('Bravo');
+        expect(lines()).toMatch(/event=subtitle\.search\.ai_title outcome=found_original results=1/);
+      });
+
+      it('searches by the cleaned title alone when ids found nothing, even if the AI agrees', async () => {
+        vi.mocked(LlmService.isReady).mockReturnValue(true);
+        subtitleSearchServiceMock.search.mockResolvedValueOnce([]).mockResolvedValueOnce([result]);
+        suggestSearchTitle.mockResolvedValue({ title: 'Alpha', year: 0, season: 0, episode: 0, originalTitle: '' });
+        vod = vodRequest({ title: '|EN| Alpha', searchMeta: { tmdbId: '7' } });
+
+        await run(null);
+
+        expect(subtitleSearchServiceMock.search).toHaveBeenLastCalledWith(
+          expect.objectContaining({ title: 'Alpha', tmdbId: undefined }));
+        expect(lines()).toMatch(/outcome=found_title results=1/);
+      });
+
+      it('asks with the series name for an episode, and records an empty or useless answer', async () => {
+        vi.mocked(LlmService.isReady).mockReturnValue(true);
+        subtitleSearchServiceMock.search.mockResolvedValue([]);
+        suggestSearchTitle.mockResolvedValueOnce(null);
+        vod = vodRequest({ kind: 'episode', title: 'Bravo — S1E2', searchMeta: { season: 1, episode: 2 } });
+
+        await run(null);
+        expect(suggestSearchTitle).toHaveBeenCalledWith('Bravo', 'episode', expect.any(AbortSignal));
+        expect(lines()).toMatch(/outcome=empty results=0/);
+
+        suggestSearchTitle.mockResolvedValueOnce({ title: 'Charlie', year: 0, season: 0, episode: 0, originalTitle: '' });
+        await run(null);
+        expect(lines()).toMatch(/outcome=none results=0/);
+      });
+
+      it('leaves a newer typed search and a closed overlay alone when the AI answers late', async () => {
+        vi.mocked(LlmService.isReady).mockReturnValue(true);
+        let answer: (value: unknown) => void = () => {};
+        suggestSearchTitle.mockImplementation((_name: string, _type: string, signal: AbortSignal) => new Promise((resolve) => {
+          answer = resolve;
+          signal.addEventListener('abort', () => undefined);
+        }));
+        subtitleSearchServiceMock.search.mockResolvedValueOnce([]).mockResolvedValueOnce([result]);
+        vod = vodRequest({ title: 'Alpha' });
+
+        const automatic = run(null);
+        await vi.waitFor(() => expect(suggestSearchTitle).toHaveBeenCalled());
+        const signal = suggestSearchTitle.mock.calls[0][2] as AbortSignal;
+        await run('Bravo');
+        expect(signal.aborted).toBe(true);
+        answer({ title: 'Charlie', year: 0, season: 0, episode: 0, originalTitle: '' });
+        await automatic;
+
+        expect(subtitleSearchServiceMock.search).toHaveBeenCalledTimes(2);
+        expect(host.querySelector<HTMLInputElement>('input')?.value).toBe('Bravo');
+        expect(host.textContent).toContain('Track 1');
+
+        // Closing the overlay while the AI works keeps it closed.
+        subtitleSearchServiceMock.search.mockResolvedValueOnce([]);
+        suggestSearchTitle.mockClear();
+        const again = run(null);
+        await vi.waitFor(() => expect(suggestSearchTitle).toHaveBeenCalled());
+        tracks.closeSubtitleSearch();
+        answer({ title: 'Charlie', year: 0, season: 0, episode: 0, originalTitle: '' });
+        await again;
+        expect((trackInternals(tracks).subsOverlay as { visible: boolean }).visible).toBe(false);
+      });
+
+      it('skips an AI title that only repeats the title already searched', async () => {
+        vi.mocked(LlmService.isReady).mockReturnValue(true);
+        subtitleSearchServiceMock.search.mockResolvedValue([]);
+        suggestSearchTitle.mockResolvedValue({ title: 'alpha', year: 0, season: 0, episode: 0, originalTitle: '' });
+        vod = vodRequest({ title: '|EN| Alpha' });
+
+        await run(null);
+
+        expect(subtitleSearchServiceMock.search).toHaveBeenCalledTimes(1);
+        expect(lines()).toMatch(/outcome=unchanged results=0/);
+      });
+
+      it('keeps the overlay closed after a download when a typed search answers later', async () => {
+        let answer: (value: unknown) => void = () => {};
+        subtitleSearchServiceMock.search
+          .mockResolvedValueOnce([result])
+          .mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+        vod = vodRequest({ title: 'Alpha' });
+        video = { textTracks: [], addTextTrack: vi.fn(() => ({ mode: 'disabled', cues: [], addCue: vi.fn(), removeCue: vi.fn() })) } as unknown as HTMLVideoElement;
+        await run(null);
+        const typed = run('Bravo');
+
+        await (tracks as unknown as { applyOnlineSubtitle(r: unknown): Promise<void> }).applyOnlineSubtitle(result);
+        answer([result]);
+        await typed;
+
+        expect((trackInternals(tracks).subsOverlay as { visible: boolean }).visible).toBe(false);
+      });
+
+      it('says nothing was found when the AI model fails, and never asks for a typed query', async () => {
+        vi.mocked(LlmService.isReady).mockReturnValue(true);
+        subtitleSearchServiceMock.search.mockResolvedValue([]);
+        suggestSearchTitle.mockRejectedValue(new LlmError('quota', 'HTTP 429', 429));
+        vod = vodRequest({ title: 'Alpha' });
+
+        await run(null);
+        expect(host.textContent).toContain('No subtitles found');
+        expect(lines()).toMatch(/event=subtitle\.search\.ai_title outcome=failed reason=quota results=0/);
+
+        suggestSearchTitle.mockClear();
+        await run('Bravo');
+        expect(suggestSearchTitle).not.toHaveBeenCalled();
+      });
     });
 
     it('applies an online SRT result as a shown text track', async () => {

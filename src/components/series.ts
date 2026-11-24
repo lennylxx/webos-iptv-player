@@ -415,7 +415,12 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       categoryId: series.categoryId,
       parentalItemId: series.seriesId,
       subtitles: ep.subtitles,
-      searchMeta: { season: ep.season, episode: ep.episode },
+      searchMeta: {
+        season: ep.season,
+        episode: ep.episode,
+        imdbId: this.currentInfo?.imdbId || undefined,
+        tmdbId: this.currentInfo?.tmdbId || undefined,
+      },
       episodeTitle: ep.title || undefined,
       watchlistOwner: {
         kind: 'series', itemId: series.seriesId, name: series.name,
@@ -836,11 +841,14 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
 }
 
 function resumeSearchMeta(entry: ResumeEntry): SearchMeta | undefined {
+  const ids: SearchMeta = {};
+  if (entry.imdbId) ids.imdbId = entry.imdbId;
+  if (entry.tmdbId) ids.tmdbId = entry.tmdbId;
   if (entry.season !== undefined && entry.episode !== undefined) {
-    return { season: entry.season, episode: entry.episode };
+    return { season: entry.season, episode: entry.episode, ...ids };
   }
   const label = EPISODE_LABEL.exec(entry.name);
-  return label ? { season: Number(label[2]), episode: Number(label[3]) } : undefined;
+  return label ? { season: Number(label[2]), episode: Number(label[3]), ...ids } : undefined;
 }
 
 function resumeEpisodeCode(entry: ResumeEntry): string {

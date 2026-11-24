@@ -1166,6 +1166,8 @@ export class Player {
       watchlistOwner: v.watchlistOwner,
       season: v.searchMeta?.season,
       episode: v.searchMeta?.episode,
+      imdbId: v.searchMeta?.imdbId,
+      tmdbId: v.searchMeta?.tmdbId,
       categoryId: v.categoryId,
     }, { keepStart: v.holdsSeriesPlace === true });
   }
@@ -1466,6 +1468,8 @@ export class Player {
       watchlistOwner: next.watchlistOwner,
       season: next.searchMeta?.season,
       episode: next.searchMeta?.episode,
+      imdbId: next.searchMeta?.imdbId,
+      tmdbId: next.searchMeta?.tmdbId,
       categoryId: next.categoryId,
     }, { keepStart: true });
   }

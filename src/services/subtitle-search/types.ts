@@ -4,7 +4,7 @@ export type SubtitleFormat = 'srt' | 'vtt' | 'ass' | 'ssa';
 
 export interface SubtitleQuery {
   type: 'movie' | 'episode';
-  imdbId?: string;   // digits only, no "tt"
+  imdbId?: string;   // digits only, no "tt"; an episode's are its series'
   tmdbId?: string;
   title: string;
   year?: number;

@@ -38,6 +38,17 @@ describe('opensubtitles provider', () => {
     expect(out[0]).toMatchObject({ providerId: 'opensubtitles', id: '991', language: 'zh-CN', downloads: 42, format: 'srt' });
   });
 
+  it('searches an episode by its series ids', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(res(200, { data: [] }));
+    await provider.search({ type: 'episode', title: 'Alpha', imdbId: '123', season: 1, episode: 2 });
+    await provider.search({ type: 'episode', title: 'Alpha', tmdbId: '456', season: 1, episode: 2 });
+    const first = new URL(String(spy.mock.calls[0][0])).searchParams;
+    expect(first.get('parent_imdb_id')).toBe('123');
+    expect(first.get('imdb_id')).toBeNull();
+    expect(first.get('season_number')).toBe('1');
+    expect(new URL(String(spy.mock.calls[1][0])).searchParams.get('parent_tmdb_id')).toBe('456');
+  });
+
   it('logs in then downloads the raw link', async () => {
     const spy = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(res(200, { token: 'T1' }))

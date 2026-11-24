@@ -2995,7 +2995,7 @@ describe('Player VOD mode', () => {
     const next = {
       url: 'http://host:8080/series/u/p/e3.mkv', title: 'Series One — S1E3',
       poster: '', accountId: 'x1', itemId: 'e3', kind: 'episode' as const, subtitles: [],
-      searchMeta: { season: 1, episode: 3 }, watchlistOwner: owner,
+      searchMeta: { season: 1, episode: 3, imdbId: '123', tmdbId: '456' }, watchlistOwner: owner,
     };
     const later = { ...next, itemId: 'e4', title: 'Series One — S1E4' };
     vi.mocked(StorageService.getResumeList).mockReturnValueOnce([
@@ -3015,6 +3015,7 @@ describe('Player VOD mode', () => {
     expect(StorageService.setCatalogMark).toHaveBeenCalledWith('x1', 'episode', 'e2', { watched: true });
     expect(StorageService.setResume).toHaveBeenCalledWith(expect.objectContaining({
       itemId: 'e3', position: 0, ext: 'mkv', season: 1, episode: 3,
+      imdbId: '123', tmdbId: '456',
       episodeQueue: [later], watchlistOwner: owner,
     }), { keepStart: true });
     // Leaving during the countdown keeps that place rather than clearing it.

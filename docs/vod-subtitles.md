@@ -129,8 +129,32 @@ A provider that throws is logged and skipped, not fatal.
 ### Search keys
 
 The player builds a `SubtitleQuery` from `VodPlayback.searchMeta` (populated by the catalog views
-from `get_vod_info` / `get_series_info`): `imdbId`/`tmdbId`/`year` for movies, `season`/`episode`
-for episodes, and `title` as the always-available fallback.
+from `get_vod_info` / `get_series_info`): `imdbId`/`tmdbId`/`year` for movies; `season`/`episode`
+plus the **series'** `imdbId`/`tmdbId` for episodes (OpenSubtitles takes them as `parent_imdb_id`
+/ `parent_tmdb_id`, SubDL with the season and episode); and `title` as the always-available
+fallback, which Assrt always uses.
+
+`title` is the work's own name, tidied by rules (`cleanSearchTitle` in
+`subtitle-search/title-cleanup.ts`): an episode uses its series name, not the player's
+`Series — S1E2 — Episode` label. Language/country tags at either end (`|EN|`, `[FR]`, `(DE)`, and
+a bare `EN - `, `UK: `, or trailing `| FR` in capitals) are removed only for known codes, so `QXZ: …` or `[QRZ]`
+stay. Release tags (`4K`, `1080p`, `HEVC`, `MULTI`, …) are removed only after the title or inside
+brackets, and word-like ones (`HD`, `Dual`, `Multi`) only in capitals, so `HD Alpha` stays. A
+bracketed year, or the last dotted one, is kept as `year`; the end is cleaned until nothing more
+goes, so `Title [EN] (2019) HD` becomes `Title`. A leading capital `IT:` reads as a tag. The search box starts with this title. An episode
+resumed from Continue Watching keeps its series' ids, which the resume entry stores.
+
+**AI search title.** When the automatic search finds nothing and AI features are on, the raw
+catalog name (only that, with the item type) goes to the AI model (`suggestSearchTitle`, JSON
+schema: `title`, `year`, `season`, `episode`, `original_title`). The search runs again by title
+alone (ids already found nothing) with the cleaned title (even when it matches the rule-based one,
+if the first search went by id), then, if still empty, with the
+original or English title the model gave — the one step that relies on the model's own knowledge,
+so it only runs second and the user still picks from the release names. The search box shows the
+title searched. Replies are cached per name; a typed search never calls the model, and a typed
+search or closing the overlay supersedes (and cancels) one under way.
+`event=subtitle.search.ai_title outcome=<found_title|found_original|none|unchanged|empty|failed>
+results=<n>` (plus `reason` on failure) records each attempt, without the name.
 
 ### Player UI
 

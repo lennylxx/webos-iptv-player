@@ -38,9 +38,11 @@ export function createOpenSubtitlesProvider(cfg: OsProviderConfig): SubtitleProv
     async search(q: SubtitleQuery): Promise<OnlineSubtitleResult[]> {
       const p = new URLSearchParams();
       p.set('type', q.type);
+      // An episode's ids are its series', which OpenSubtitles takes as parent ids.
+      const prefix = q.type === 'episode' ? 'parent_' : '';
       if (q.manualQuery) p.set('query', q.manualQuery);
-      else if (q.imdbId) p.set('imdb_id', q.imdbId);
-      else if (q.tmdbId) p.set('tmdb_id', q.tmdbId);
+      else if (q.imdbId) p.set(`${prefix}imdb_id`, q.imdbId);
+      else if (q.tmdbId) p.set(`${prefix}tmdb_id`, q.tmdbId);
       else p.set('query', q.title);
       if (q.type === 'episode') {
         if (q.season != null) p.set('season_number', String(q.season));

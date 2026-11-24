@@ -52,6 +52,9 @@ import { $ } from '../utils/dom';
 import { t } from '../i18n';
 import { showToast } from './toast';
 import type { VttCue } from '../utils/webvtt';
+import { cleanSearchTitle, workTitle } from '../services/subtitle-search/title-cleanup';
+import { SUBTITLE_TITLE_FEATURE, suggestSearchTitle, type AiSearchTitle } from '../services/subtitle-search/ai-title';
+import { LlmError } from '../services/llm/client';
 import { LlmService } from '../services/llm/llm-service';
 import {
   needsTranslation,
@@ -128,6 +131,8 @@ export class PlayerTracks {
   private translationGen = 0;
   private translationRestoreLoggedFor = ''; // one subtitle.translate.restore per opening, across reloads
   private subsOverlay: SubtitleSearchOverlay | null = null; // online subtitle search overlay
+  private searchSeq = 0; // the online search under way; a newer one or a close supersedes it
+  private searchAbort: AbortController | null = null;
   private subtitleOffsetS = 0; // per-stream subtitle timing offset (seconds; + = later)
   private offsetOverlay: SubtitleOffsetOverlay | null = null;
 
@@ -237,6 +242,7 @@ export class PlayerTracks {
    *  view transition (App.showView) so it never lingers over another view or
    *  reappears when its player view is shown again. */
   closeSubtitleSearch(): void {
+    this.cancelSearch();
     this.subsOverlay?.close();
   }
 
@@ -327,23 +333,76 @@ export class PlayerTracks {
     this.subsOverlay = new SubtitleSearchOverlay(
       container,
       (result) => void this.applyOnlineSubtitle(result),
-      () => { /* closed */ },
+      () => this.cancelSearch(),
       (query) => void this.runSubtitleSearch(query),
     );
     return this.subsOverlay;
   }
 
+  // The name of the work itself: an episode searches by its series.
+  private searchName(vod: VodPlayback): string {
+    return vod.kind === 'episode' ? (vod.watchlistOwner?.name || workTitle(vod.title)) : vod.title;
+  }
+
   private buildSubtitleQuery(vod: VodPlayback): SubtitleQuery {
     const meta = vod.searchMeta ?? {};
+    const clean = cleanSearchTitle(this.searchName(vod));
     return {
       type: vod.kind === 'episode' ? 'episode' : 'movie',
-      title: vod.title,
+      title: clean.title,
       imdbId: meta.imdbId,
       tmdbId: meta.tmdbId,
-      year: meta.year,
+      year: meta.year || clean.year || undefined,
       season: meta.season,
       episode: meta.episode,
     };
+  }
+
+  // With nothing found for the catalog name, asks the AI model for a clean
+  // title, then its original or English title, and searches by those.
+  // Null once a newer search or a closed overlay superseded this one.
+  private async searchByAiTitle(
+    vod: VodPlayback,
+    base: SubtitleQuery,
+    current: () => boolean,
+    signal: AbortSignal,
+  ): Promise<OnlineSubtitleResult[] | null> {
+    let suggestion: AiSearchTitle | null;
+    try {
+      suggestion = await suggestSearchTitle(this.searchName(vod), base.type, signal);
+    } catch (error) {
+      if (!current()) return null;
+      const reason = error instanceof LlmError ? error.reason : 'network';
+      log.warn('AI search title failed', 'event=subtitle.search.ai_title', 'outcome=failed', `reason=${reason}`, 'results=0');
+      return [];
+    }
+    if (!current()) return null;
+    const overlay = this.ensureSubsOverlay();
+    // Ids found nothing, so the retries go by title alone.
+    const query: SubtitleQuery = {
+      ...base,
+      imdbId: undefined,
+      tmdbId: undefined,
+      year: base.year || suggestion?.year || undefined,
+      season: base.season ?? (suggestion?.season || undefined),
+      episode: base.episode ?? (suggestion?.episode || undefined),
+    };
+    const titles = suggestion ? [suggestion.title, suggestion.originalTitle] : [];
+    // With ids, SubDL and OpenSubtitles never searched by the title itself.
+    const tried = base.imdbId || base.tmdbId ? [] : [base.title.toLowerCase()];
+    let outcome = suggestion ? 'unchanged' : 'empty';
+    let results: OnlineSubtitleResult[] = [];
+    for (let i = 0; i < titles.length && !results.length; i++) {
+      const title = titles[i];
+      if (!title || tried.indexOf(title.toLowerCase()) >= 0) continue;
+      tried.push(title.toLowerCase());
+      overlay?.setQuery(title);
+      results = await subtitleSearchService.search({ ...query, title });
+      if (!current()) return null;
+      outcome = results.length ? (i === 0 ? 'found_title' : 'found_original') : 'none';
+    }
+    log.info('AI search title', 'event=subtitle.search.ai_title', `outcome=${outcome}`, `results=${results.length}`);
+    return results;
   }
 
   subtitleSearchAvailable(): boolean {
@@ -461,7 +520,7 @@ export class PlayerTracks {
     const overlay = this.ensureSubsOverlay();
     const vod = this.options.getVod();
     if (!overlay || !vod) return;
-    overlay.setQuery(vod.title); // prefill the box with the detected title
+    overlay.setQuery(this.buildSubtitleQuery(vod).title); // prefill the box with the detected title
     await this.runSubtitleSearch(null);
   }
 
@@ -469,17 +528,33 @@ export class PlayerTracks {
    *  structured keys (imdb/tmdb/title); a string is a manual free-form title that
    *  overrides them via `manualQuery`. Errors/empties stay on screen (no
    *  auto-close) so the persistent search box can be edited and retried. */
+  // A new search or a closed overlay supersedes the search under way.
+  private cancelSearch(): void {
+    this.searchSeq++;
+    this.searchAbort?.abort();
+    this.searchAbort = null;
+  }
+
   private async runSubtitleSearch(query: string | null): Promise<void> {
     const overlay = this.ensureSubsOverlay();
     const vod = this.options.getVod();
     if (!overlay || !vod) return;
+    this.cancelSearch();
+    const seq = this.searchSeq;
+    const abort = new AbortController();
+    this.searchAbort = abort;
+    const current = (): boolean => seq === this.searchSeq && this.options.getVod() === vod;
     if (query != null) overlay.setQuery(query);
     overlay.showStatus(t('subtitle.searching'));
     try {
       const base = this.buildSubtitleQuery(vod);
       const search = query != null ? { ...base, manualQuery: query } : base;
-      const results = await subtitleSearchService.search(search);
-      if (this.options.getVod() !== vod) return;
+      let results: OnlineSubtitleResult[] | null = await subtitleSearchService.search(search);
+      if (!current()) return;
+      if (!results.length && query == null && LlmService.isReady(SUBTITLE_TITLE_FEATURE)) {
+        results = await this.searchByAiTitle(vod, base, current, abort.signal);
+        if (!results || !current()) return;
+      }
       if (!results.length) {
         overlay.showStatus(t('subtitle.noneFound'));
         return;
@@ -531,6 +606,8 @@ export class PlayerTracks {
         name: result.releaseName || result.language,
         lang: result.language,
       });
+      // A search typed while this downloaded must not reopen the overlay.
+      this.cancelSearch();
       overlay?.close();
       showToast(t('player.subtitlesTrack', {
         name: result.releaseName || result.language,

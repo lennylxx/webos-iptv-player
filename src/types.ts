@@ -667,12 +667,16 @@ export interface ResumeEntry {
   /** An episode's own season and number; absent on legacy entries. */
   season?: number;
   episode?: number;
+  /** An episode's series ids, for the online subtitle search. */
+  imdbId?: string;
+  tmdbId?: string;
   /** Catalog category at save time, so parental rules apply from the Continue rail. */
   categoryId?: string;
 }
 
 // Structured metadata for online subtitle search (passed from Xtream catalog to player).
 export interface SearchMeta {
+  // An episode carries its series' ids.
   imdbId?: string;
   tmdbId?: string;
   year?: number;

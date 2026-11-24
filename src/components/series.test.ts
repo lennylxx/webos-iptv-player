@@ -753,6 +753,8 @@ describe('Series detail', () => {
       url: 'http://host:8080/series/u/p/e1.mp4',
       title: expect.stringContaining('S1E1'),
       episodeTitle: 'Episode One',
+      // The series' ids, for the online subtitle search.
+      searchMeta: { season: 1, episode: 1, imdbId: '1234567', tmdbId: '7654' },
       watchlistOwner: {
         kind: 'series', itemId: 's1', name: 'Series One', poster: 'http://host/series.jpg',
       },
@@ -931,7 +933,7 @@ describe('Series detail', () => {
   it('keeps the episode code when Resume plays before the series info arrives', async () => {
     catalogMock.loadSeriesInfo.mockReturnValue(new Promise(() => undefined));
     storageMock.getResumeList.mockReturnValue([
-      ownedResume('e2', 'Series One — S2E1', 2, { season: 2, episode: 1 }),
+      ownedResume('e2', 'Series One — S2E1', 2, { season: 2, episode: 1, imdbId: '123' }),
       ownedResume('e7', 'Series One — S1E3', 1),
     ]);
     const { view, handlers } = await openWith();
@@ -942,7 +944,7 @@ describe('Series detail', () => {
     expect(container.querySelector('.catalog-layer-detail .focused')?.getAttribute('data-action')).toBe('resume');
     view.handleAction('select');
     expect(handlers.onPlayVod).toHaveBeenLastCalledWith(expect.objectContaining({
-      itemId: 'e2', searchMeta: { season: 2, episode: 1 },
+      itemId: 'e2', searchMeta: { season: 2, episode: 1, imdbId: '123' },
     }));
   });
 
