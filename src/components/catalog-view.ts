@@ -15,7 +15,9 @@ import { cleanUrl, cssUrl, html, inShownView, raw, Safe, withInstantScroll } fro
 import { syncTabBarOverArt } from './tab-bar';
 import { backdropUrl } from '../utils/artwork';
 import { categoryLockBadge, lockBadge } from './parental-badge';
-import { SORT_ASCENDING_ICON, SORT_DESCENDING_ICON, SEE_ALL_ICON, REMOVE_ICON, CHECK_ICON, TRASH_ICON, PENCIL_ICON, SEARCH_ICON } from './icons';
+import { AI_ICON, SORT_ASCENDING_ICON, SORT_DESCENDING_ICON, SEE_ALL_ICON, REMOVE_ICON, CHECK_ICON, TRASH_ICON, PENCIL_ICON, SEARCH_ICON } from './icons';
+import { catalogSource, ProgramTranslation, programTitleLabel, translateLabel, type ProgramView, type TranslationSource } from './program-translation';
+import type { ProgramText } from '../services/epg-translation';
 import { foldSearchText } from '../utils/channel-search';
 import { ConfirmationPrompt } from './confirmation-prompt';
 import { backKey, okHint } from './key-hints';
@@ -41,6 +43,11 @@ import {
 } from '../utils/catalog-sort';
 
 const log = createLogger('Catalog');
+
+export interface TranslationTarget {
+  source: TranslationSource;
+  text: ProgramText;
+}
 
 const SORT_DIRECTION_LABELS = {
   name: { asc: 'catalog.sortAToZ', desc: 'catalog.sortZToA' },
@@ -312,6 +319,9 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         this.filterInput()?.blur();
       },
     });
+    ProgramTranslation.subscribe(() => {
+      if (this.mode === 'detail' && this.container.isConnected && inShownView(this.container)) this.onTranslationChanged();
+    });
     this.container.addEventListener('input', (e: Event) => {
       const input = e.target as HTMLInputElement;
       if (!input.classList.contains('catalog-filter-input')) return;
@@ -464,6 +474,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   protected abstract itemPoster(item: I): string;
   protected abstract itemBackdrop(item: I): string;
   protected abstract itemCategoryId(item: I): string;
+  protected abstract withCategoryId(item: I, categoryId: string): I;
   protected abstract itemGenre(item: I): string;
   protected abstract itemCount(count: number): string;
   protected abstract readonly parentalKind: 'vod' | 'series';
@@ -482,6 +493,11 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     return undefined;
   }
   protected handleExtraScroll(_target: HTMLElement): boolean { return false; }
+  // The detail's own title and description, which Translate acts on.
+  protected abstract translationHeader(): TranslationTarget | null;
+  // The title and description the detail's focus rests on, to translate.
+  protected translationTarget(): TranslationTarget | null { return this.translationHeader(); }
+  protected onTranslationChanged(): void { this.renderDetail(false); }
   protected onRequestSessionReset(): void {}
   protected abstract collectionEntries(kind: CollectionKind): CollectionEntry[];
   // A tile id that isn't in a loaded category (Continue/Watchlist); default none.
@@ -849,6 +865,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   }
 
   deactivate(): void {
+    ProgramTranslation.release(this);
     if (this.heroTimer !== null) clearTimeout(this.heroTimer);
     this.heroTimer = null;
     this.clearPrompt.hide();
@@ -859,6 +876,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   }
 
   async open(account: PlaylistEntry): Promise<void> {
+    ProgramTranslation.release(this);
     this.clearPrompt.hide();
     this.collection = null;
     this.managing = false;
@@ -968,6 +986,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       // Browse may have rendered while hidden, when no rail could be measured.
       this.requestNearRails();
       this.repaintArt();
+      // Translation may have been turned over while the detail was hidden.
+      if (this.mode === 'detail') this.renderDetail(false);
       return;
     }
     log.debug(
@@ -984,6 +1004,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   // here and show what it opened over.
   leaveDeepLink(): void {
     if (!this.deepLinkBack) return;
+    ProgramTranslation.release(this);
     this.beginRequests();
     this.deepLinkBack = null;
     this.clearDetail();
@@ -1091,6 +1112,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   private onBack(): void {
     if (this.mode === 'detail') {
+      ProgramTranslation.release(this);
       this.clearDetail();
       if (this.deepLinkBack) {
         const back = this.deepLinkBack;
@@ -1171,6 +1193,11 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     if (el.dataset.categoryId !== undefined
         && (el.classList.contains('catalog-cat') || el.classList.contains('catalog-see-all'))) {
       void this.openGrid(el.dataset.categoryId);
+      return;
+    }
+    if (el.dataset.action === 'translate' && this.mode === 'detail') {
+      const header = this.translationHeader();
+      if (!ProgramTranslation.retry(this, header?.source, header?.text)) ProgramTranslation.toggle();
       return;
     }
     if (this.selectExtra(el)) return;
@@ -1421,6 +1448,34 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       style="--icon-count:${shown.length}${width}">${shown}</div>`;
   }
 
+  protected translationSource(categoryId: string, id: string, name: string): TranslationSource | null {
+    return this.account ? catalogSource(this.parentalKind, { accountId: this.account.id, categoryId, name, id }) : null;
+  }
+
+  // A translation label without a plot to lead, on a line of its own below the
+  // title, whose line clamp would cut it.
+  protected titleLabel(view: ProgramView): Safe | '' {
+    const label = programTitleLabel(view);
+    return label ? html`<div class="detail-title-label">${label}</div>` : '';
+  }
+
+  // Shown for a title parental controls leave alone, once AI is set up. After a
+  // failed translation it offers Translate again, which asks once more.
+  protected translateButton(source: TranslationSource | null, text: ProgramText | null): Safe | '' {
+    if (!ProgramTranslation.available(source)) return '';
+    const failed = ProgramTranslation.stateOf(source, text)?.status === 'failed';
+    const on = ProgramTranslation.active && !failed;
+    return this.detailIconButton('translate', AI_ICON, failed ? t('ai.translate') : translateLabel(), on ? 'on' : '');
+  }
+
+  // Only a detail on screen asks for a translation; a hidden one lets its title go.
+  protected syncTranslation(): void {
+    const shown = this.container.isConnected && inShownView(this.container);
+    const target = this.mode === 'detail' && shown ? this.translationTarget() : null;
+    if (target) ProgramTranslation.want(this, target.source, target.text);
+    else ProgramTranslation.release(this);
+  }
+
   // A round detail action; its name shows beside it while it has focus.
   protected detailIconButton(key: string, icon: string, label: string, state: 'on' | 'danger' | '' = ''): Safe {
     return html`
@@ -1443,6 +1498,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     }
     if (this.mode === 'browse' && !el?.closest('.catalog-sort')) this.browseSortReturn = null;
     this.request(el ? this.keyFor(el) : null, this.pickVia);
+    if (this.mode === 'detail') this.syncTranslation();
     const gridCell = el?.closest<HTMLElement>('[data-grid-index]');
     if (this.mode === 'grid' && gridCell?.dataset.gridIndex !== undefined) {
       this.gridFocusIndex = parseInt(gridCell.dataset.gridIndex, 10);
@@ -1546,12 +1602,15 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     categoryId: string,
     signal: AbortSignal,
   ): Promise<I[]> {
-    const items = await this.loadItems(account, categoryId, signal);
+    // A provider may leave an item's category out; the category it was listed
+    // under stands in, so locks, playback, records, and translation agree.
+    const items = (await this.loadItems(account, categoryId, signal)).map(item =>
+      this.itemCategoryId(item) ? item : this.withCategoryId(item, categoryId));
     if (!ParentalControlService.concealing) return items;
     return items.filter(item => !ParentalControlService.isConcealed(
       catalogParentalRequest(this.parentalKind, {
         accountId: account.id,
-        categoryId: this.itemCategoryId(item) || categoryId,
+        categoryId: this.itemCategoryId(item),
         name: this.itemName(item),
         id: this.itemId(item),
       }),

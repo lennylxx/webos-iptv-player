@@ -5,7 +5,9 @@ import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
 import { loadVodCategories, loadVodStreams, loadVodInfo } from '../services/xtream-catalog';
 import { xtreamVodUrl } from '../utils/xtream-url';
-import { CatalogView, type CollectionKind, type CollectionEntry } from './catalog-view';
+import { CatalogView, type CollectionKind, type CollectionEntry, type TranslationTarget } from './catalog-view';
+import { programDescription, programView, ProgramTranslation, type TranslationSource } from './program-translation';
+import type { ProgramText } from '../services/epg-translation';
 import { CHECK_ICON, HIDE_ICON, PLAY_ICON, REMOVE_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
 import { t, tp } from '../i18n';
@@ -46,6 +48,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
   protected itemPoster(v: VodItem): string { return v.poster; }
   protected itemBackdrop(v: VodItem): string { return v.backdrop ?? ''; }
   protected itemCategoryId(v: VodItem): string { return v.categoryId; }
+  protected withCategoryId(v: VodItem, categoryId: string): VodItem { return { ...v, categoryId }; }
   protected itemGenre(v: VodItem): string { return v.genre ?? ''; }
   protected clearDetail(): void {
     this.detailController?.abort();
@@ -210,6 +213,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     const a = this.account;
     if (!vod || !a) return;
     const saved = StorageService.getResume(a.id, 'vod', vod.streamId);
+    ProgramTranslation.release(this);
     this.handlers.onPlayVod({
       url: this.vodUrl(vod),
       title: vod.name,
@@ -257,11 +261,30 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     );
   }
 
+  private vodSource(): TranslationSource | null {
+    const vod = this.currentVod;
+    return vod ? this.translationSource(vod.categoryId, vod.streamId, vod.name) : null;
+  }
+
+  // The movie's text, once its info has come: its title alone would be sent apart.
+  private vodText(): ProgramText | null {
+    const vod = this.currentVod;
+    return vod && !this.infoPending ? { title: vod.name, description: this.currentInfo?.plot ?? '' } : null;
+  }
+
+  protected translationHeader(): TranslationTarget | null {
+    const source = this.vodSource();
+    const text = this.vodText();
+    return source && text ? { source, text } : null;
+  }
+
   protected renderDetail(): void {
     const vod = this.currentVod;
     const a = this.account;
     if (!vod || !a) return;
     const info = this.currentInfo;
+    const source = this.vodSource();
+    const view = programView(source, this.vodText() ?? { title: vod.name, description: info?.plot ?? '' });
     const saved = StorageService.getResume(a.id, 'vod', vod.streamId);
     const poster = info?.poster || vod.poster;
     const year = info ? (info.releaseDate.match(/\d{4}/) || [''])[0] : '';
@@ -281,9 +304,10 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
       ${this.detailPoster(art)}
       <div class="catalog-view movies-detail" data-key="detail-scroller" data-nav-container>
         <div class="detail-body">
-          <h1 class="detail-title">${vod.name}</h1>
+          <h1 class="detail-title">${view.title}</h1>
+          ${this.titleLabel(view)}
           <div class="detail-meta">${meta.join('  ·  ')}</div>
-          ${info?.plot ? html`<p class="detail-plot">${info.plot}</p>` : ''}
+          ${programDescription('detail-plot', view)}
           <div class="detail-actions" data-key="detail-actions" data-nav-container data-nav-straight data-nav-remember
                data-nav-leave-left="" data-nav-leave-right="" data-nav-leave-down="">
             ${saved ? html`
@@ -300,6 +324,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
               this.detailIconButton('watched', CHECK_ICON,
                 t(watched ? 'catalog.markNotWatched' : 'catalog.markWatched'), watched ? 'on' : ''),
               this.detailIconButton('hide', HIDE_ICON, t(hidden ? 'catalog.unhide' : 'catalog.hide'), hidden ? 'on' : ''),
+              this.translateButton(source, this.vodText()),
               saved ? this.detailIconButton('remove-resume', REMOVE_ICON, t('catalog.removeContinueWatching'), 'danger') : '',
             ])}
           </div>
@@ -311,5 +336,6 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     syncTabBarOverArt();
     this.refreshIconRows();
     this.settleDetailFocus();
+    this.syncTranslation();
   }
 }

@@ -5,7 +5,9 @@ import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
 import { loadSeriesCategories, loadSeries, loadSeriesInfo } from '../services/xtream-catalog';
 import { xtreamEpisodeUrl, type XtreamCredentials } from '../utils/xtream-url';
-import { CatalogView, type CatalogHandlers, type CollectionKind, type CollectionEntry } from './catalog-view';
+import { CatalogView, type CatalogHandlers, type CollectionKind, type CollectionEntry, type TranslationTarget } from './catalog-view';
+import { programDescription, programTitleLabel, programView, ProgramTranslation, type TranslationSource } from './program-translation';
+import type { ProgramText } from '../services/epg-translation';
 import { CHECK_ICON, HIDE_ICON, PLAY_ICON, REMOVE_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
 import { t, tp } from '../i18n';
@@ -78,6 +80,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   protected itemPoster(s: SeriesItem): string { return s.poster; }
   protected itemBackdrop(s: SeriesItem): string { return s.backdrop ?? ''; }
   protected itemCategoryId(s: SeriesItem): string { return s.categoryId; }
+  protected withCategoryId(s: SeriesItem, categoryId: string): SeriesItem { return { ...s, categoryId }; }
   protected itemGenre(s: SeriesItem): string { return s.genre ?? ''; }
   protected clearDetail(): void {
     this.detailController?.abort();
@@ -375,6 +378,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   }
 
   private playSeriesEpisode(req: Omit<VodPlayback, 'onBack'>): void {
+    ProgramTranslation.release(this);
     const series = this.currentSeries;
     this.placeBeforePlay = series ? this.seriesResume(series.seriesId) : null;
     this.handlers.onPlayVod(req);
@@ -538,8 +542,39 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     `;
   }
 
-  private episodeRow(accountId: string, ep: Episode): Safe {
+  private seriesSource(): TranslationSource | null {
+    const series = this.currentSeries;
+    return series ? this.translationSource(series.categoryId, series.seriesId, series.name) : null;
+  }
+
+  // The series' own text once its info has come, or failed to: then its name alone.
+  private seriesText(): ProgramText | null {
+    const series = this.currentSeries;
+    return series && !this.detailLoading ? { title: series.name, description: this.currentInfo?.plot ?? '' } : null;
+  }
+
+  protected translationHeader(): TranslationTarget | null {
+    const source = this.seriesSource();
+    const text = this.seriesText();
+    return source && text ? { source, text } : null;
+  }
+
+  // The focused episode's text, or else the series' own.
+  protected override translationTarget(): TranslationTarget | null {
+    const source = this.seriesSource();
+    const ep = this.episodeOfKey(this.focusedKey());
+    return source && ep ? { source, text: episodeText(ep) } : this.translationHeader();
+  }
+
+  // A translated plot may take another line, so the shown rows are measured again.
+  protected override onTranslationChanged(): void {
+    this.measuredEpisodes.clear();
+    this.renderDetail(false);
+  }
+
+  private episodeRow(accountId: string, ep: Episode, source: TranslationSource | null): Safe {
     const saved = StorageService.getResume(accountId, 'episode', ep.id);
+    const view = programView(source, episodeText(ep));
     const mins = ep.durationSecs > 0 ? t('catalog.minutes', { count: Math.floor(ep.durationSecs / 60) }) : '';
     return html`
       <div class="episode-row" data-focusable data-key="ep:${ep.id}" data-episode-id="${ep.id}">
@@ -547,13 +582,13 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
         <div class="episode-body">
           <div class="episode-title">
             <span class="episode-num">E${ep.episode}</span>
-            <span class="episode-name">${ep.title}</span>
+            <span class="episode-name">${view.title}</span>${programTitleLabel(view)}
             ${saved && saved.position > 0 ? html`<span class="episode-resume">${t('common.resume')}</span>`
               : this.watchedEpisodes.has(ep.id)
                 ? html`<span class="episode-watched">${t('catalog.watched')}</span>` : ''}
           </div>
           ${mins ? html`<div class="episode-meta">${mins}</div>` : ''}
-          ${ep.plot ? html`<p class="episode-plot">${ep.plot}</p>` : ''}
+          ${programDescription('episode-plot', view)}
         </div>
       </div>
     `;
@@ -578,6 +613,8 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     const info = this.currentInfo;
     const episodes = info ? (info.episodesBySeason[this.selectedSeason] ?? []) : [];
     const seriesWatched = this.seriesWatched();
+    const source = this.seriesSource();
+    const view = programView(source, { title: series.name, description: info?.plot ?? '' });
     const seasonWatched = this.allWatched(episodes);
     const poster = info?.poster || series.poster;
     const year = info?.year ? String(info.year) : '';
@@ -625,9 +662,10 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
         ${this.detailPoster(art)}
         <div class="series-detail-head">
           <div class="detail-body">
-            <h1 class="detail-title">${series.name}</h1>
+            <h1 class="detail-title">${view.title}</h1>
+            ${this.titleLabel(view)}
             ${meta.length ? html`<div class="detail-meta">${meta.join('  ·  ')}</div>` : ''}
-            ${info?.plot ? html`<p class="detail-plot">${info.plot}</p>` : ''}
+            ${programDescription('detail-plot', view)}
             ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
             ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
             <div class="detail-actions" data-key="detail-actions" data-nav-container data-nav-straight data-nav-remember
@@ -645,6 +683,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
                 this.allEpisodes().length ? this.detailIconButton('watched', CHECK_ICON,
                   t(seriesWatched ? 'catalog.markNotWatched' : 'catalog.markWatched'), seriesWatched ? 'on' : '') : '',
                 this.detailIconButton('hide', HIDE_ICON, t(hidden ? 'catalog.unhide' : 'catalog.hide'), hidden ? 'on' : ''),
+                this.translateButton(source, this.seriesText()),
                 resumed ? this.detailIconButton('remove-resume', REMOVE_ICON, t('catalog.removeContinueWatching'), 'danger') : '',
               ])}
             </div>
@@ -683,7 +722,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
                            data-key="episode-cell:${ep.id}"
                            data-episode-index="${index}"
                            style="top:${this.episodeVirtualizer.getItemOffset(index)}px">
-                        ${this.episodeRow(a.id, ep)}
+                        ${this.episodeRow(a.id, ep, source)}
                         ${this.episodeMark(ep)}
                       </div>
                     `;
@@ -726,6 +765,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     }
     this.refreshIconRows();
     if (restoreFocus) this.settleDetailFocus();
+    this.syncTranslation();
   }
 
   private selectedEpisodes(): Episode[] {
@@ -838,6 +878,10 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       : list.offsetTop - scroller.offsetTop;
     return Math.max(0, top);
   }
+}
+
+function episodeText(ep: Episode): ProgramText {
+  return { title: ep.title, description: ep.plot };
 }
 
 function resumeSearchMeta(entry: ResumeEntry): SearchMeta | undefined {

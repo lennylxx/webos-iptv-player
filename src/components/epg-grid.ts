@@ -42,7 +42,7 @@ import { rankByName } from '../utils/channel-search';
 import { CONFIG } from '../config';
 import { bellIcon, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
 import { clickHint, okHint } from './key-hints';
-import { ProgramTranslation, programDescription, programTitleLabel, programView, translateHint } from './program-translation';
+import { liveSource, ProgramTranslation, programDescription, programTitleLabel, programView, translateHint } from './program-translation';
 import { channelLockBadge, channelLockState } from './parental-badge';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { VirtualList, type VirtualRange } from '../utils/virtual-list';
@@ -817,7 +817,7 @@ export class EpgGrid {
                       ? XtreamArchiveService.isAvailable(channel, startMs, now, p.catchupId)
                       : false;
                     const progress = catchupAvailable && channelHasCatchup ? progressMap!.get(startMs) : undefined;
-                    const view = programView(channel, p);
+                    const view = programView(liveSource(channel), p);
                     return html`
                       <div class="epg-programme-item
                                   state-${state} ${current ? 'current' : ''}"
@@ -1182,7 +1182,7 @@ export class EpgGrid {
     const keys = this.focusCol === 'timeline' && !this.searchInputFocused();
     const p = this.timeline.focusedProgramme();
     // The details follow the ring, so the program they show is the one to translate.
-    ProgramTranslation.want(this, item?.channel, item && keys ? p : null);
+    ProgramTranslation.want(this, liveSource(item?.channel), item && keys ? p : null);
     if (!item) return html``;
     const when = (content: Safe | string) => html`
       <div class="epg-tl-when">${content}</div>`;
@@ -1206,7 +1206,7 @@ export class EpgGrid {
     const reminder = upcoming && this.hasReminder(item.channel, start);
     const replay = stop <= now && XtreamArchiveService.isAvailable(item.channel, start, now, p.catchupId);
     const ok = keys ? this.programmeOkLabel(item.channel, p) : null;
-    const view = programView(item.channel, p);
+    const view = programView(liveSource(item.channel), p);
     const translate = keys && this.canToggleTranslation()
       ? translateHint('epg-hint-translate', { 'data-epg-translate': '' }) : '';
     return html`
@@ -2276,7 +2276,7 @@ export class EpgGrid {
     const ok = this.okHintLabel();
     const ring = this.ringProgramme();
     // The legend follows the ring, so the program it rests on is the one to translate.
-    ProgramTranslation.want(this, ring.channel, ring.programme);
+    ProgramTranslation.want(this, liveSource(ring.channel), ring.programme);
     return html`
       ${ok ? okHint(ok) : ''}
       ${clickHint('red', t('epg.backToNow'), 'epg-hint-now', { 'data-epg-now': '' })}
@@ -2307,7 +2307,7 @@ export class EpgGrid {
     if (this.timelineLayout && this.focusCol !== 'timeline') return false;
     if (ProgramTranslation.active) return true;
     const ring = this.ringProgramme();
-    return ProgramTranslation.translatable(ring.channel, ring.programme);
+    return ProgramTranslation.translatable(liveSource(ring.channel), ring.programme);
   }
 
   /** The Guide no longer shows: the program its ring rests on is not sent. */

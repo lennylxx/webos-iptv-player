@@ -12,6 +12,7 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
     catalogMock: { loadVodCategories: vi.fn(), loadVodStreams: vi.fn(), loadVodInfo: vi.fn() },
     watchlistState,
     storageMock: {
+      getLlmConfig: vi.fn(() => ({ baseUrl: 'http://host/v1', model: 'm1' })),
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
       setCatalogSort: vi.fn((_kind: 'vod' | 'series', _sort: CatalogSortPreference) => true),
       getResumeList: vi.fn(() => [] as unknown[]),
@@ -45,6 +46,11 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
     toastMock: { showToast: vi.fn() },
   };
 });
+const { llmMock } = vi.hoisted(() => ({
+  llmMock: { isReady: vi.fn(() => false), translateVod: vi.fn() },
+}));
+vi.mock('../services/llm/llm-service', () => ({ LlmService: { isReady: llmMock.isReady } }));
+vi.mock('../services/vod-translation', () => ({ translateVod: llmMock.translateVod }));
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
@@ -54,6 +60,8 @@ import { Focus, Tier } from '../navigation/focus-scope';
 import { FocusRing } from '../navigation/focus-ring';
 import { VirtualGrid } from '../utils/virtual-grid';
 import { ParentalControlService } from '../services/parental-control';
+import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
+import { LlmError } from '../services/llm/client';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -2652,5 +2660,173 @@ describe('Movies progressive rails', () => {
     expect(container.textContent).toContain('Bravo Movie');
     expect(container.textContent).not.toContain('Alpha Movie');
     expect(container.textContent).not.toContain('Cat 1');
+  });
+});
+
+describe('Movies detail translation', () => {
+  const info = {
+    plot: 'An old plot.', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+    poster: '', imdbId: '', tmdbId: '', year: 0,
+  };
+  const button = () => container.querySelector<HTMLElement>('.movies-detail [data-key="translate"]');
+  const title = () => container.querySelector('.movies-detail .detail-title')!.textContent;
+  const plot = () => container.querySelector('.movies-detail .detail-plot')!.textContent;
+
+  async function openDetail() {
+    catalogMock.loadVodInfo.mockResolvedValue(info);
+    const { view, handlers } = await openWith();
+    await view.openItem(account, vod('42', 'Movie Alpha'), vi.fn());
+    return { view, handlers };
+  }
+
+  function select(view: Movies, key: string): void {
+    view.focusScope.track(JSON.stringify(['detail', '', key]));
+    Focus.flush();
+    view.handleAction('select');
+  }
+
+  beforeEach(() => {
+    // Earlier tests' views stay on the page, and their late art would ask for their own details.
+    Array.from(document.body.children).forEach(el => { if (el !== container) el.remove(); });
+    vi.useFakeTimers();
+    llmMock.isReady.mockReturnValue(true);
+    llmMock.translateVod.mockResolvedValue({ title: 'Film Alpha', description: 'Eine alte Handlung.' });
+  });
+  afterEach(() => {
+    resetProgramTranslationForTests();
+    llmMock.isReady.mockReturnValue(false);
+    // A view left on the page would still ask for its own detail's translation.
+    container.remove();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('offers Translate only once AI is set up', async () => {
+    llmMock.isReady.mockReturnValue(false);
+    await openDetail();
+    expect(button()).toBeNull();
+  });
+
+  it('translates the title and plot in place, and shows the original again', async () => {
+    const { view } = await openDetail();
+    expect(button()!.textContent).toContain('Translate with AI');
+
+    select(view, 'translate');
+    expect(button()!.classList.contains('on')).toBe(true);
+    expect(button()!.textContent).toContain('Show original');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+
+    expect(llmMock.translateVod).toHaveBeenCalledTimes(1);
+    expect(llmMock.translateVod.mock.calls[0][0]).toEqual({ title: 'Movie Alpha', description: 'An old plot.' });
+    expect(title()).toBe('Film Alpha');
+    expect(plot()).toBe('AI translation · Eine alte Handlung.');
+    expect(container.querySelector('.movies-detail .detail-plot .ai-icon')).not.toBeNull();
+
+    select(view, 'translate');
+    expect(ProgramTranslation.active).toBe(false);
+    expect(title()).toBe('Movie Alpha');
+    expect(plot()).toBe('An old plot.');
+  });
+
+  it('sends nothing for a movie parental controls protect', async () => {
+    vi.spyOn(ParentalControlService, 'protects').mockReturnValue(true);
+    ProgramTranslation.toggle();
+    await openDetail();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(button()).toBeNull();
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
+    expect(plot()).toBe('An old plot.');
+  });
+
+  it('asks again for a failed translation when Translate is pressed', async () => {
+    llmMock.translateVod.mockRejectedValueOnce(new LlmError('network', 'offline'));
+    const { view } = await openDetail();
+    select(view, 'translate');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(plot()).toBe('Translation failed · An old plot.');
+    expect(button()!.getAttribute('aria-label')).toBe('Translate with AI');
+    expect(button()!.classList.contains('on')).toBe(false);
+
+    select(view, 'translate');
+    expect(ProgramTranslation.active).toBe(true);
+    // The press asks again at once, without the focus pause.
+    expect(llmMock.translateVod).toHaveBeenCalledTimes(2);
+    expect(plot()).toBe('Translating… · An old plot.');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).toHaveBeenCalledTimes(2);
+    expect(plot()).toBe('AI translation · Eine alte Handlung.');
+  });
+
+  it('files a movie without a category of its own under the rail that lists it', async () => {
+    // Parental controls are on, but its rail is not locked.
+    vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    vi.spyOn(ParentalControlService, 'protects').mockReturnValue(false);
+    catalogMock.loadVodInfo.mockResolvedValue(info);
+    const { view, handlers } = await openWith([{ id: '7', name: 'Cat A' }], [vod('10', 'Movie Alpha', '')]);
+    const tile = container.querySelector<HTMLElement>('[data-rail-key="cat:7"] .catalog-tile[data-item-id="10"]')!;
+    expect(tile.dataset.categoryId).toBe('7');
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(button()).not.toBeNull();
+
+    select(view, 'watchlist');
+    expect(storageMock.toggleWatchlist).toHaveBeenCalledWith(expect.objectContaining({ itemId: '10', categoryId: '7' }));
+    select(view, 'play');
+    expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({ itemId: '10', categoryId: '7' }));
+  });
+
+  it('lends no rail category to another account\'s title with the same id', async () => {
+    vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    vi.spyOn(ParentalControlService, 'protects').mockReturnValue(false);
+    catalogMock.loadVodInfo.mockResolvedValue(info);
+    ProgramTranslation.toggle();
+    const { view } = await openWith([{ id: '7', name: 'Cat A' }], [vod('10', 'Movie Alpha', '')]);
+    const tile = container.querySelector<HTMLElement>('[data-rail-key="cat:7"] .catalog-tile[data-item-id="10"]')!;
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await vi.advanceTimersByTimeAsync(0);
+    view.handleAction('back');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    llmMock.translateVod.mockClear();
+
+    // A Search deep link to account B's title 10, whose category nothing has listed.
+    const other: PlaylistEntry = { ...account, id: 'x2' };
+    await view.openItem(other, { ...vod('10', 'Movie Bravo', ''), accountId: 'x2' }, vi.fn());
+    expect(title()).toBe('Movie Bravo');
+    expect(button()).toBeNull();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
+  });
+
+  it('keeps back a movie without a category of its own that a locked rail lists', async () => {
+    // Only the rail's category is locked; the movie doesn't name it.
+    vi.spyOn(ParentalControlService, 'protects').mockImplementation(request =>
+      JSON.stringify(request).indexOf('"categoryId":"7"') >= 0);
+    catalogMock.loadVodInfo.mockResolvedValue(info);
+    ProgramTranslation.toggle();
+    const { view } = await openWith([{ id: '7', name: 'Cat A' }], [vod('10', 'Movie Alpha', '')]);
+    const tile = container.querySelector<HTMLElement>('[data-rail-key="cat:7"] .catalog-tile[data-item-id="10"]')!;
+        tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector('.movies-detail .detail-plot')).not.toBeNull();
+    expect(button()).toBeNull();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a movie played or left before the focus rested', async () => {
+    ProgramTranslation.toggle();
+    const { view, handlers } = await openDetail();
+    select(view, 'play');
+    expect(handlers.onPlayVod).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
+
+    view.refreshPlaybackState();
+    view.handleAction('back');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
   });
 });

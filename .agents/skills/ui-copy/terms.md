@@ -86,9 +86,13 @@ a new term after review, add a row here.
 | Stop a running AI check, keeping finished results (after the OK key) | Stop | 停止 |
 | Daily cap with nothing to fall back on | Daily AI limit reached. | 已达到每日 AI 上限。 |
 | Held-back review joined after a reason | {reason} Review groups to lock ({count}) (no space after a full-width stop) | {reason}审阅建议锁定的分组（{count}） |
-| Program info translation (Guide / player info, green key) | Translate / Show original | 翻译 / 显示原文 |
+| Program, movie, and series info translation (Guide / player info green key; detail-page AI button) | Translate with AI / Show original | 用 AI 翻译 / 显示原文 |
 | AI-translated program info (label) | AI translation | AI 翻译 |
 | Translation progress / failure | Translating… / Translation failed | 正在翻译… / 翻译失败 |
+| Movie and series plot text (Settings AI intro) | movie and series descriptions | 电影和剧集的简介 |
+| AI help in EPG mapping and parental controls (Settings AI intro) | AI suggestions for EPG mapping and parental controls | EPG 映射和家长控制的 AI 推荐 |
+| Account credentials never sent to AI (AI privacy hint) | login details | 登录信息 |
+| Channel stream addresses never sent to AI (AI privacy hint) | stream URLs | 播放网址 |
 
 ## Rejected wordings
 
@@ -138,3 +142,5 @@ Never reintroduce these for the concept named.
 | Stop an AI check | Cancel / 取消 (implies results are discarded) | Stop / 停止 |
 | Show the untranslated text | See original / 查看原文, Turn off translation / 关闭翻译 | Show original / 显示原文 |
 | AI-translated label | Translated / 已翻译 | AI translation / AI 翻译 |
+| Movie and series plot text | plot / synopsis / summary, 剧情简介 / 描述 / 情节 | description / 简介 |
+| Info translation action | Translate (doesn't say AI), AI translate (noun used as a verb), AI 翻译 (reads as the AI translation mark) | Translate with AI / 用 AI 翻译 |

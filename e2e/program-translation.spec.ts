@@ -90,7 +90,7 @@ test('Green translates the focused Guide program and shows the original again', 
   const sent = await setup(page);
   await openSchedule(page);
   const hint = page.locator('#view-epg .epg-hints [data-epg-translate]');
-  await expect(hint).toHaveText('Translate');
+  await expect(hint).toHaveText('Translate with AI');
   const row = page.locator('#epg-programmes .epg-programme-item.focused');
 
   await key(page, GREEN);
@@ -107,7 +107,7 @@ test('Green translates the focused Guide program and shows the original again', 
   await expect(page.locator('#epg-programmes .epg-programme-item', { hasText: 'Programm 12' })).toHaveCount(1);
 
   await key(page, GREEN);
-  await expect(hint).toHaveText('Translate');
+  await expect(hint).toHaveText('Translate with AI');
   await expect(next.locator('.epg-prog-desc')).toHaveText('Episode 13.');
   await expect(page.locator('#epg-programmes .program-translation-label')).toHaveCount(0);
   await expect(page.locator('#view-epg .focused')).toHaveCount(1);
@@ -117,7 +117,7 @@ test('Green does nothing where the Guide\'s ring rests on no program', async ({ 
   const sent = await setup(page);
   await openSchedule(page);
   const hint = page.locator('#view-epg .epg-hints [data-epg-translate]');
-  await expect(hint).toHaveText('Translate');
+  await expect(hint).toHaveText('Translate with AI');
 
   await page.keyboard.press('ArrowLeft');
   await expect(page.locator('#view-epg .epg-channel-item.selected')).toHaveClass(/\bfocused\b/);
@@ -131,7 +131,7 @@ test('Green does nothing where the Guide\'s ring rests on no program', async ({ 
   await key(page, 461);
 
   await key(page, RED);
-  await expect(hint).toHaveText('Translate');
+  await expect(hint).toHaveText('Translate with AI');
   await page.waitForTimeout(600);
   expect(sent).toEqual([]);
 });
@@ -230,7 +230,7 @@ test('Green translates the program in the player info', async ({ page }) => {
   await liveLoaded(page);
   await page.keyboard.press('Enter');
   await expect(page.locator('.osd-programme-title')).toHaveText('Program 12');
-  await expect(page.locator('[data-osd-translate]')).toHaveText('Translate');
+  await expect(page.locator('[data-osd-translate]')).toHaveText('Translate with AI');
 
   // The hint sits at the row's end, the legacy engine's flex-gap fallback included.
   const ends = await page.locator('.osd-programme-time').evaluate((row) => ({

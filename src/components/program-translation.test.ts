@@ -24,11 +24,13 @@ import {
   programTitleLabel,
   MAX_REMEMBERED_TRANSLATIONS,
   programView,
+  liveSource,
   resetProgramTranslationForTests,
   TRANSLATION_DWELL_MS,
 } from './program-translation';
 
 const ch1 = { name: 'ch1', url: 'http://host/a' } as Channel;
+const live1 = liveSource(ch1);
 const alpha = { title: 'Program Alpha', description: 'An episode.' };
 const bravo = { title: 'Program Bravo', description: '' };
 const owner = {};
@@ -53,10 +55,10 @@ afterEach(() => {
 
 describe('ProgramTranslation', () => {
   it('sends nothing until Green turns it on', async () => {
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(translate).not.toHaveBeenCalled();
-    expect(programView(ch1, alpha)).toEqual({ ...alpha, label: '', ai: false });
+    expect(programView(live1, alpha)).toEqual({ ...alpha, label: '', ai: false });
   });
 
   it('translates the program the focus rests on and labels it', async () => {
@@ -64,23 +66,23 @@ describe('ProgramTranslation', () => {
     const changed = vi.fn();
     ProgramTranslation.subscribe(changed);
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS - 1);
     expect(translate).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(translate).toHaveBeenCalledWith(alpha, 'en', expect.anything());
-    expect(programView(ch1, alpha)).toEqual({ title: 'Programm Alpha', description: 'Eine Folge.', label: 'AI translation', ai: true });
+    expect(programView(live1, alpha)).toEqual({ title: 'Programm Alpha', description: 'Eine Folge.', label: 'AI translation', ai: true });
     expect(changed).toHaveBeenCalled();
 
     ProgramTranslation.toggle();
-    expect(programView(ch1, alpha)).toEqual({ ...alpha, label: '', ai: false });
+    expect(programView(live1, alpha)).toEqual({ ...alpha, label: '', ai: false });
   });
 
   it('sends nothing for a program the focus only passes over', async () => {
     translate.mockResolvedValue(alpha);
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
-    ProgramTranslation.want(owner, ch1, bravo);
+    ProgramTranslation.want(owner, live1, alpha);
+    ProgramTranslation.want(owner, live1, bravo);
     await dwell();
     expect(translate).toHaveBeenCalledTimes(1);
     expect(translate.mock.calls[0][0]).toEqual(bravo);
@@ -90,56 +92,56 @@ describe('ProgramTranslation', () => {
     let resolve!: (text: typeof alpha) => void;
     translate.mockReturnValue(new Promise((done) => { resolve = done; }));
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
-    expect(programView(ch1, alpha).label).toBe('Translating…');
+    expect(programView(live1, alpha).label).toBe('Translating…');
     resolve({ title: 'Programm Alpha', description: 'Eine Folge.' });
     await vi.advanceTimersByTimeAsync(0);
-    expect(programView(ch1, alpha).label).toBe('AI translation');
+    expect(programView(live1, alpha).label).toBe('AI translation');
   });
 
   it('shows text already in the UI language unlabeled', async () => {
     translate.mockResolvedValue({ title: 'Program  Alpha', description: 'An episode. ' });
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
-    expect(programView(ch1, alpha)).toEqual({ ...alpha, label: '', ai: false });
+    expect(programView(live1, alpha)).toEqual({ ...alpha, label: '', ai: false });
   });
 
   it('never sends a program of a channel a parental rule guards', async () => {
     protects.mockReturnValue(true);
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(translate).not.toHaveBeenCalled();
-    expect(ProgramTranslation.available(ch1)).toBe(false);
+    expect(ProgramTranslation.available(live1)).toBe(false);
   });
 
   it('is unavailable without AI set up', () => {
     isReady.mockReturnValue(false);
-    expect(ProgramTranslation.available(ch1)).toBe(false);
+    expect(ProgramTranslation.available(live1)).toBe(false);
   });
 
   it('marks a failure and tries again once the focus comes back', async () => {
     translate.mockRejectedValueOnce(new LlmError('network', 'offline'));
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
-    expect(programView(ch1, alpha).label).toBe('Translation failed');
+    expect(programView(live1, alpha).label).toBe('Translation failed');
     expect(ProgramTranslation.active).toBe(true);
 
     translate.mockResolvedValue({ title: 'Programm Alpha', description: 'Eine Folge.' });
-    ProgramTranslation.want(owner, ch1, null);
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, null);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(translate).toHaveBeenCalledTimes(2);
-    expect(programView(ch1, alpha).label).toBe('AI translation');
+    expect(programView(live1, alpha).label).toBe('AI translation');
   });
 
   it('turns off at the daily AI limit and says so', async () => {
     translate.mockRejectedValue(new LlmError('cap', 'Daily cap reached'));
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(ProgramTranslation.active).toBe(false);
     expect(showToast).toHaveBeenCalledWith('Daily AI limit reached. Translation paused.');
@@ -148,7 +150,7 @@ describe('ProgramTranslation', () => {
   it('turns off when the AI setup is wrong and says so', async () => {
     translate.mockRejectedValue(new LlmError('auth', 'Invalid API key'));
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(ProgramTranslation.active).toBe(false);
     expect(showToast).toHaveBeenCalledWith('AI setup problem. Translation paused.');
@@ -162,15 +164,15 @@ describe('ProgramTranslation', () => {
     }));
     translate.mockResolvedValue({ title: 'Programm Alpha', description: 'Eine Folge.' });
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
-    ProgramTranslation.want(owner, ch1, bravo);
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, bravo);
+    ProgramTranslation.want(owner, live1, alpha);
     dropped.forEach(reject => reject());
     await vi.advanceTimersByTimeAsync(0);
     await dwell();
     expect(translate).toHaveBeenCalledTimes(2);
-    expect(programView(ch1, alpha).label).toBe('AI translation');
+    expect(programView(live1, alpha).label).toBe('AI translation');
   });
 
   it('turns off without a word once AI features are switched off', async () => {
@@ -183,7 +185,7 @@ describe('ProgramTranslation', () => {
 
     isReady.mockReturnValue(true);
     await Promise.resolve();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(translate).not.toHaveBeenCalled();
   });
@@ -199,17 +201,17 @@ describe('ProgramTranslation', () => {
     ProgramTranslation.toggle();
     await Promise.resolve();
     isReady.mockClear();
-    for (let i = 0; i < 20; i++) programView(ch1, { title: `Program ${i}`, description: '' });
+    for (let i = 0; i < 20; i++) programView(live1, { title: `Program ${i}`, description: '' });
     expect(isReady).toHaveBeenCalledTimes(1);
   });
 
   it('sends a program once while its translation is on its way', async () => {
     translate.mockReturnValue(new Promise(() => undefined));
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
-    ProgramTranslation.want(owner, ch1, bravo);
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, bravo);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(translate).toHaveBeenCalledTimes(1);
   });
@@ -217,7 +219,7 @@ describe('ProgramTranslation', () => {
   it('sends nothing once the surface that wanted a program lets it go', async () => {
     translate.mockResolvedValue(alpha);
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     ProgramTranslation.release({});
     ProgramTranslation.release(owner);
     await dwell();
@@ -227,7 +229,7 @@ describe('ProgramTranslation', () => {
   it('keeps another surface\'s program when one lets go', async () => {
     translate.mockResolvedValue(alpha);
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     ProgramTranslation.release({});
     await dwell();
     expect(translate).toHaveBeenCalledTimes(1);
@@ -236,19 +238,19 @@ describe('ProgramTranslation', () => {
   it('asks again after the AI model changes, showing no earlier result', async () => {
     translate.mockRejectedValueOnce(new LlmError('network', 'offline'));
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
-    expect(programView(ch1, alpha).label).toBe('Translation failed');
+    expect(programView(live1, alpha).label).toBe('Translation failed');
 
     llmConfig.model = 'm2';
     // The AI settings are read once per synchronous pass.
     await Promise.resolve();
-    expect(programView(ch1, alpha).label).toBe('');
+    expect(programView(live1, alpha).label).toBe('');
     translate.mockResolvedValue({ title: 'Programm Alpha', description: 'Eine Folge.' });
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(translate).toHaveBeenCalledTimes(2);
-    expect(programView(ch1, alpha).label).toBe('AI translation');
+    expect(programView(live1, alpha).label).toBe('AI translation');
   });
 
   it('sends a program again when the focus left it while it still waited in the queue', async () => {
@@ -256,17 +258,33 @@ describe('ProgramTranslation', () => {
       signal.addEventListener('abort', () => reject(new LlmError('cancelled', 'Request was cancelled')));
     }));
     ProgramTranslation.toggle();
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
-    expect(programView(ch1, alpha).label).toBe('Translating…');
-    ProgramTranslation.want(owner, ch1, bravo);
+    expect(programView(live1, alpha).label).toBe('Translating…');
+    ProgramTranslation.want(owner, live1, bravo);
     await vi.advanceTimersByTimeAsync(0);
-    expect(programView(ch1, alpha).label).toBe('');
+    expect(programView(live1, alpha).label).toBe('');
 
-    ProgramTranslation.want(owner, ch1, alpha);
+    ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(translate.mock.calls.map(call => (call[0] as { title: string }).title))
       .toEqual(['Program Alpha', 'Program Alpha']);
+  });
+
+  it('asks again at once for a failed translation, showing its progress', async () => {
+    translate.mockRejectedValueOnce(new LlmError('network', 'offline'));
+    translate.mockResolvedValueOnce({ title: 'Programm Alpha', description: 'Eine Folge.' });
+    ProgramTranslation.toggle();
+    ProgramTranslation.want(owner, live1, alpha);
+    await dwell();
+    expect(programView(live1, alpha).label).toBe('Translation failed');
+
+    expect(ProgramTranslation.retry(owner, live1, alpha)).toBe(true);
+    expect(programView(live1, alpha).label).toBe('Translating…');
+    expect(translate).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(programView(live1, alpha).label).toBe('AI translation');
+    expect(ProgramTranslation.retry(owner, live1, alpha)).toBe(false);
   });
 });
 
@@ -290,11 +308,11 @@ describe('program labels', () => {
 
 describe('remembered translations', () => {
   const program = (i: number) => ({ title: `Program ${i}`, description: '' });
-  const label = (i: number) => programView(ch1, program(i)).label;
+  const label = (i: number) => programView(live1, program(i)).label;
 
   async function translateRange(from: number, to: number): Promise<void> {
     for (let i = from; i < to; i++) {
-      ProgramTranslation.want(owner, ch1, program(i));
+      ProgramTranslation.want(owner, live1, program(i));
       await dwell();
     }
   }

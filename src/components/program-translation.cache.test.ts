@@ -16,11 +16,13 @@ import {
   MAX_REMEMBERED_TRANSLATIONS,
   ProgramTranslation,
   programView,
+  liveSource,
   resetProgramTranslationForTests,
   TRANSLATION_DWELL_MS,
 } from './program-translation';
 
 const ch1 = { name: 'ch1', url: 'http://host/a', playlistIds: [] } as unknown as Channel;
+const live1 = liveSource(ch1);
 const owner = {};
 const program = (i: number) => ({ title: `Program ${i}`, description: '' });
 
@@ -56,14 +58,14 @@ it('brings a translation dropped from memory back from the cache without a new A
   });
   ProgramTranslation.toggle();
   for (let i = 0; i <= MAX_REMEMBERED_TRANSLATIONS; i++) {
-    ProgramTranslation.want(owner, ch1, program(i));
+    ProgramTranslation.want(owner, live1, program(i));
     await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
   }
   expect(fetch).toHaveBeenCalledTimes(MAX_REMEMBERED_TRANSLATIONS + 1);
-  expect(programView(ch1, program(0)).label).toBe('');
+  expect(programView(live1, program(0)).label).toBe('');
 
-  ProgramTranslation.want(owner, ch1, program(0));
+  ProgramTranslation.want(owner, live1, program(0));
   await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
-  expect(programView(ch1, program(0))).toEqual({ title: 'Programm 0', description: '', label: 'AI translation', ai: true });
+  expect(programView(live1, program(0))).toEqual({ title: 'Programm 0', description: '', label: 'AI translation', ai: true });
   expect(fetch).toHaveBeenCalledTimes(MAX_REMEMBERED_TRANSLATIONS + 1);
 });

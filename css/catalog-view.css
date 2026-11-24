@@ -211,6 +211,8 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .detail-label { color: var(--text-primary); font-weight: 600; margin-right: 8px; }
+.detail-title-label { margin: -4px 0 20px; }
+.detail-title-label .program-translation-label.is-title { font-size: 22px; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
 .detail-actions + .detail-cast { margin-top: 32px; }
 

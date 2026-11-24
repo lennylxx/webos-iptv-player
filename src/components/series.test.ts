@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type {
   PlaylistEntry, ResumeEntry, ResumeKind, VodQueueItem, WatchlistEntry, WatchlistKind,
 } from '../types';
@@ -17,6 +17,7 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
     catalogMock: { loadSeriesCategories: vi.fn(), loadSeries: vi.fn(), loadSeriesInfo: vi.fn() },
     watchlistState,
     storageMock: {
+      getLlmConfig: vi.fn(() => ({ baseUrl: 'http://host/v1', model: 'm1' })),
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
       setCatalogSort: vi.fn((_kind: 'vod' | 'series', _sort: CatalogSortPreference) => true),
       getResumeList: vi.fn(() => [] as unknown[]),
@@ -47,12 +48,20 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
     toastMock: { showToast: vi.fn() },
   };
 });
+const { llmMock } = vi.hoisted(() => ({
+  llmMock: { isReady: vi.fn(() => false), translateVod: vi.fn() },
+}));
+vi.mock('../services/llm/llm-service', () => ({ LlmService: { isReady: llmMock.isReady } }));
+vi.mock('../services/vod-translation', () => ({ translateVod: llmMock.translateVod }));
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 
 import { Series } from './series';
 import { Focus } from '../navigation/focus-scope';
+import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
+import { ParentalControlService } from '../services/parental-control';
+import { LlmError } from '../services/llm/client';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -1105,5 +1114,171 @@ describe('Series deep-link (openItem)', () => {
     logs.mockRestore();
     expect(onDetailBack).toHaveBeenCalledTimes(1);
     expect(handlers.onBack).not.toHaveBeenCalled();
+  });
+});
+
+describe('Series detail translation', () => {
+  beforeEach(() => {
+    // Earlier tests' views stay on the page, and their late art would ask for their own details.
+    Array.from(document.body.children).forEach(el => { if (el !== container) el.remove(); });
+    vi.useFakeTimers();
+    llmMock.isReady.mockReturnValue(true);
+    llmMock.translateVod.mockImplementation(async (text: { title: string; description: string }) =>
+      ({ title: `${text.title} (de)`, description: text.description ? `${text.description} (de)` : '' }));
+    catalogMock.loadSeriesInfo.mockResolvedValue(SERIES_INFO);
+  });
+  afterEach(() => {
+    resetProgramTranslationForTests();
+    llmMock.isReady.mockReturnValue(false);
+    document.documentElement.classList.remove('keyboard-nav');
+    // A view left on the page would still ask for its own detail's translation.
+    container.remove();
+    vi.useRealTimers();
+  });
+
+  it('translates the series, then the episode the focus rests on', async () => {
+    const { view } = await openWith();
+    await openDetail(view);
+    view.focusScope.track(JSON.stringify(['detail', '', 'translate']));
+    view.handleAction('select');
+    expect(ProgramTranslation.active).toBe(true);
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod.mock.calls.map(call => call[0])).toEqual([{ title: 'Series One', description: 'Series plot.' }]);
+    expect(container.querySelector('.series-detail .detail-title')!.textContent).toBe('Series One (de)');
+    expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('AI translation · Series plot. (de)');
+
+    container.querySelector('[data-episode-id="e1"]')!.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).toHaveBeenLastCalledWith({ title: 'Episode One', description: 'Ep plot.' }, 'en', expect.anything());
+    expect(container.querySelector('[data-episode-id="e1"] .episode-name')!.textContent).toBe('Episode One (de)');
+    expect(container.querySelector('[data-episode-id="e1"] .episode-plot')!.textContent).toBe('AI translation · Ep plot. (de)');
+    // The series' own translation stays shown.
+    expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('AI translation · Series plot. (de)');
+    expect(llmMock.translateVod).toHaveBeenCalledTimes(2);
+  });
+
+  const translateButton = () => container.querySelector<HTMLElement>('.series-detail [data-key="translate"]');
+  const hoverEpisode = (id: string) =>
+    container.querySelector(`[data-episode-id="${id}"]`)!.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+  const select = (view: Series, key: string) => {
+    view.focusScope.track(JSON.stringify(['detail', '', key]));
+    view.handleAction('select');
+  };
+  const manyEpisodes = {
+    ...SERIES_INFO,
+    seasons: [1],
+    episodesBySeason: { 1: ['e1', 'e2', 'e3', 'e4'].map((id, i) => ({
+      id, title: `Episode ${i + 1}`, season: 1, episode: i + 1, containerExtension: 'mp4', durationSecs: 1500, plot: `Plot ${i + 1}.`, poster: '',
+    })) },
+  };
+
+  it('translates the name of a series whose info failed to load', async () => {
+    catalogMock.loadSeriesInfo.mockRejectedValue(new Error('offline'));
+    const { view } = await openWith();
+    await openDetail(view);
+    expect(container.querySelector('.catalog-hint')?.textContent).toBeTruthy();
+    select(view, 'translate');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod.mock.calls.map(call => call[0])).toEqual([{ title: 'Series One', description: '' }]);
+    expect(container.querySelector('.series-detail .detail-title')!.textContent).toBe('Series One (de)');
+    // Below the title, whose line clamp would cut it.
+    expect(container.querySelector('.series-detail .detail-title-label')!.textContent).toBe('AI translation');
+  });
+
+  it('sends nothing from a series parental controls protect, its episodes included', async () => {
+    vi.spyOn(ParentalControlService, 'protects').mockReturnValue(true);
+    ProgramTranslation.toggle();
+    const { view } = await openWith();
+    await openDetail(view);
+    expect(translateButton()).toBeNull();
+    hoverEpisode('e1');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-episode-id="e1"] .episode-plot')!.textContent).toBe('Ep plot.');
+    vi.restoreAllMocks();
+  });
+
+  it('sends nothing for a series in an unknown category while parental controls are on', async () => {
+    // Its category is locked, but the item doesn't say which one it is in.
+    vi.spyOn(ParentalControlService, 'enabled', 'get').mockReturnValue(true);
+    vi.spyOn(ParentalControlService, 'protects').mockReturnValue(false);
+    ProgramTranslation.toggle();
+    const { view } = await openWith([{ id: '', name: 'Cat A' }], [series('s1', 'Series One', '')]);
+    await openDetail(view);
+    expect(translateButton()).toBeNull();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it('sends nothing for an episode left by Back or played before the focus rested', async () => {
+    ProgramTranslation.toggle();
+    const { view, handlers } = await openWith();
+    await openDetail(view);
+    hoverEpisode('e1');
+    view.handleAction('select');
+    expect(handlers.onPlayVod).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
+
+    view.refreshPlaybackState();
+    hoverEpisode('e1');
+    view.handleAction('back');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).not.toHaveBeenCalled();
+  });
+
+  it('sends only the episode the focus rests on after a fast pass down the list', async () => {
+    catalogMock.loadSeriesInfo.mockResolvedValue(manyEpisodes);
+    ProgramTranslation.toggle();
+    const { view } = await openWith();
+    await openDetail(view);
+    document.documentElement.classList.add('keyboard-nav');
+    view.focusScope.track(JSON.stringify(['detail', '', 'ep:e1']));
+    Focus.flush();
+    for (let i = 0; i < 3; i++) {
+      view.handleAction('down');
+      Focus.input();
+      Focus.flush();
+      await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS / 4);
+    }
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['detail', '', 'ep:e4']));
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod.mock.calls.map(call => call[0])).toEqual([{ title: 'Episode 4', description: 'Plot 4.' }]);
+  });
+
+  for (const [reason, message] of [['cap', 'Daily AI limit reached. Translation paused.'], ['auth', 'AI setup problem. Translation paused.']] as const) {
+    it(`turns translation off with a message on a ${reason} error`, async () => {
+      llmMock.translateVod.mockRejectedValue(new LlmError(reason, 'x'));
+      const { view } = await openWith();
+      await openDetail(view);
+      select(view, 'translate');
+      expect(translateButton()!.getAttribute('aria-label')).toBe('Show original');
+      await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+      expect(toastMock.showToast).toHaveBeenCalledWith(message);
+      expect(ProgramTranslation.active).toBe(false);
+      expect(translateButton()!.getAttribute('aria-label')).toBe('Translate with AI');
+      expect(translateButton()!.classList.contains('on')).toBe(false);
+    });
+  }
+
+  it('asks again for a series translation that failed when Translate is pressed', async () => {
+    llmMock.translateVod.mockRejectedValueOnce(new LlmError('network', 'offline'));
+    const { view } = await openWith();
+    await openDetail(view);
+    select(view, 'translate');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('Translation failed · Series plot.');
+    expect(translateButton()!.getAttribute('aria-label')).toBe('Translate with AI');
+
+    select(view, 'translate');
+    expect(ProgramTranslation.active).toBe(true);
+    // The press asks again at once, without the focus pause.
+    expect(llmMock.translateVod).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('Translating… · Series plot.');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVod).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('AI translation · Series plot. (de)');
+    expect(translateButton()!.getAttribute('aria-label')).toBe('Show original');
   });
 });

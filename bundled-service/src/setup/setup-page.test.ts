@@ -612,7 +612,10 @@ describe('setup page forms', () => {
     expect(field('aiApiKey').value).toBe('********');
     expect(field('aiExtraHeaders').value).toBe('');
     expect(form.querySelector('[data-message="aiIntro"]')!.textContent)
-      .toBe('Optional features powered by an AI model you choose. Turn on “Use AI features” on the TV to use them.');
+      .toBe('Optional features powered by an AI model you choose, such as AI search and translation. '
+        + 'After saving, turn on “Use AI features” in the TV’s settings, which also explain what each feature sends.');
+    expect(form.querySelector('[data-message="aiServerHint"]')!.textContent)
+      .toBe('Works with any OpenAI-compatible server, such as an online AI service or a local model on your home network.');
     const typeUrl = (value: string) => {
       field('baseUrl').value = value;
       field('baseUrl').dispatchEvent(new dom.window.Event('input', { bubbles: true }));

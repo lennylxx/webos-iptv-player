@@ -11,6 +11,7 @@ import { CONFIG } from '../config';
 import { InputMode } from '../navigation/input-mode';
 import type { ProgramText } from '../services/epg-translation';
 import {
+  liveSource,
   ProgramTranslation,
   programDescription,
   programTitleLabel,
@@ -702,7 +703,7 @@ export class PlayerOsd {
   toggleTranslation(): void {
     if (!this.visible || this.message || this.callbacks.colorKeysTaken?.()) return;
     const { channel, text } = this.shownProgram();
-    if (!ProgramTranslation.active && !ProgramTranslation.translatable(channel, text)) return;
+    if (!ProgramTranslation.active && !ProgramTranslation.translatable(liveSource(channel), text)) return;
     ProgramTranslation.toggle();
     this.resetTimer();
   }
@@ -710,10 +711,10 @@ export class PlayerOsd {
   private translated(channel: Channel | null, text: ProgramText): ProgramView {
     // The info on screen is what the viewer reads, so its program is the one to translate.
     if (this.visible) {
-      ProgramTranslation.want(this, channel, text);
+      ProgramTranslation.want(this, liveSource(channel), text);
       this.wantsTranslation = true;
     }
-    return programView(channel, text);
+    return programView(liveSource(channel), text);
   }
 
   // Info without a program still shows how Green turns translation off.
@@ -724,7 +725,7 @@ export class PlayerOsd {
 
   private translateHint(channel: Channel | null, text: ProgramText): Safe | '' {
     if (this.callbacks.colorKeysTaken?.()) return '';
-    if (!ProgramTranslation.active && !ProgramTranslation.translatable(channel, text)) return '';
+    if (!ProgramTranslation.active && !ProgramTranslation.translatable(liveSource(channel), text)) return '';
     return html`<span class="osd-translate">${translateHint('osd-translate', { 'data-osd-translate': '' })}</span>`;
   }
 

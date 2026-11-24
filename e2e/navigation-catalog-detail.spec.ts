@@ -36,6 +36,8 @@ interface Setup {
   locale?: string;
   pseudo?: boolean;
   textSize?: string;
+  // AI features are set up, so the round actions offer Translate.
+  ai?: boolean;
 }
 
 const episodeId = (season: number, index: number) => season * 1000 + index + 1;
@@ -75,6 +77,13 @@ async function seed(page: Page, setup: Setup): Promise<void> {
     localStorage.setItem('iptv_animation_mode', JSON.stringify('essential'));
     if (s.textSize) localStorage.setItem('iptv_text_size', JSON.stringify(s.textSize));
     if (s.locale) localStorage.setItem('iptv_locale', JSON.stringify(s.locale));
+    if (s.ai) {
+      localStorage.setItem('iptv_llm', JSON.stringify({
+        enabled: true, baseUrl: 'http://ai.test/v1', model: 'm1',
+        capabilities: { signature: 'http://ai.test/v1|m1', structured: 'json_schema',
+          thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
+      }));
+    }
     if (!s.resume) return;
     localStorage.setItem('iptv_resume', JSON.stringify(s.kind === 'movie'
       ? { 'x1|vod|10': { accountId: 'x1', kind: 'vod', itemId: '10', name: 'Movie One', poster: '', ext: 'mp4',
@@ -322,6 +331,8 @@ const SETUPS: Array<[string, Setup]> = [
   ['a resumed movie whose round actions wrap', { kind: 'movie', resume: true, wraps: true, pseudo: true, textSize: '150' }],
   ['a resumed movie in Polish at 140%', { kind: 'movie', resume: true, wraps: true, locale: 'pl', textSize: '140' }],
   ['a resumed movie in Turkish at 130%', { kind: 'movie', resume: true, wraps: true, locale: 'tr', textSize: '130' }],
+  ['a resumed movie with AI features', { kind: 'movie', resume: true, wraps: false, ai: true }],
+  ['a resumed movie with AI features in Russian at 130%', { kind: 'movie', resume: true, wraps: true, ai: true, locale: 'ru', textSize: '130' }],
   ['a series still loading', { kind: 'series', resume: true, wraps: false, seasons: 1, loading: true }],
   ['a series with no seasons', { kind: 'series', resume: false, wraps: false, seasons: 0 }],
   ['a series whose season shown has no episodes', { kind: 'series', resume: false, wraps: false, seasons: 2, emptySeasons: [1] }],
@@ -333,6 +344,7 @@ const SETUPS: Array<[string, Setup]> = [
   ['a resumed series whose round actions wrap', { kind: 'series', resume: true, wraps: true, seasons: 2, markAlone: true,
     pseudo: true, textSize: '150' }],
   ['a resumed series in Turkish at 150%', { kind: 'series', resume: true, wraps: true, seasons: 2, locale: 'tr', textSize: '150' }],
+  ['a resumed series of two seasons with AI features', { kind: 'series', resume: true, wraps: false, seasons: 2, ai: true }],
 ];
 
 for (const [name, setup] of SETUPS) {

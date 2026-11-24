@@ -23,6 +23,7 @@ export const DEFAULT_CONTEXT_TOKENS = 16000;
 // Features that run on their own need their own toggle in `features`.
 const ON_DEMAND_FEATURES = [
   'subtitle-translation', 'subtitle-title', 'epg-match', 'search-ask', 'parental-suggestions', 'epg-translation',
+  'vod-translation',
 ];
 
 export function featureEnabled(config: LlmConfig, feature: string): boolean {

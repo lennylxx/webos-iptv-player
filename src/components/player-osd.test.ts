@@ -565,7 +565,7 @@ describe('PlayerOsd program translation', () => {
 
   it('translates the shown program on Green and shows the original on Green again', async () => {
     osd.show();
-    expect(hint()).toBe('Translate');
+    expect(hint()).toBe('Translate with AI');
     osd.toggleTranslation();
     expect(hint()).toBe('Show original');
     await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
@@ -576,7 +576,7 @@ describe('PlayerOsd program translation', () => {
     osd.toggleTranslation();
     expect(title()).toBe('Programme 1');
     expect(description()).toBe('Description 1');
-    expect(hint()).toBe('Translate');
+    expect(hint()).toBe('Translate with AI');
   });
 
   it('takes a click on its hint', () => {
@@ -628,7 +628,7 @@ describe('PlayerOsd program translation', () => {
 
     taken = false;
     osd.render();
-    expect(hint()).toBe('Translate');
+    expect(hint()).toBe('Translate with AI');
   });
 
   it('ignores Green on a movie-file channel, whose info shows no program', () => {

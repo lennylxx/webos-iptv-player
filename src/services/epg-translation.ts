@@ -49,17 +49,23 @@ function replyOr(reply: string, sent: string, original: string): string {
   return !sent || !text || normalized(text) === normalized(sent) ? original : text;
 }
 
-/** The program's title and description in `target`; the original stands for text already in it. */
-export async function translateProgram(program: ProgramText, target: string, signal?: AbortSignal): Promise<ProgramText> {
+export interface TitledPrompt {
+  feature: string;
+  system: string;
+  promptVersion: number;
+}
+
+/** A title and description in the prompt's language; the original stands for text already in it. */
+export async function translateTitled(prompt: TitledPrompt, program: ProgramText, signal?: AbortSignal): Promise<ProgramText> {
   const title = program.title.trim();
   const description = clipDescription(program.description.trim());
   const outcome = await LlmService.run<ProgramText>({
-    feature: EPG_TRANSLATION_FEATURE,
+    feature: prompt.feature,
     priority: 'foreground',
-    system: systemPrompt(target),
+    system: prompt.system,
     user: `Title: ${title}\nDescription: ${description}`,
     schema: SCHEMA,
-    promptVersion: PROMPT_VERSION,
+    promptVersion: prompt.promptVersion,
     maxTokens: 2048,
     signal,
     // Once sent, a reply still lands in the cache when the focus has moved on.
@@ -69,4 +75,9 @@ export async function translateProgram(program: ProgramText, target: string, sig
     title: replyOr(outcome.value.title, title, program.title),
     description: replyOr(outcome.value.description, description, program.description),
   };
+}
+
+/** The program's title and description in `target`; the original stands for text already in it. */
+export function translateProgram(program: ProgramText, target: string, signal?: AbortSignal): Promise<ProgramText> {
+  return translateTitled({ feature: EPG_TRANSLATION_FEATURE, system: systemPrompt(target), promptVersion: PROMPT_VERSION }, program, signal);
 }
