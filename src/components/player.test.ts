@@ -23,6 +23,7 @@ vi.mock('../services/epg-service', () => ({
 vi.mock('../services/storage-service', () => ({
   StorageService: {
     getLastChannel: vi.fn(() => null), setLastChannel: vi.fn(),
+    getLlmConfig: vi.fn(() => ({ enabled: false })),
     getSubtitlePref: vi.fn(), setSubtitlePref: vi.fn(),
     getAudioPref: vi.fn(), setAudioPref: vi.fn(),
     setResume: vi.fn(), clearResume: vi.fn(), setCatalogMark: vi.fn(), getResumeList: vi.fn(() => []), getResume: vi.fn(() => null),

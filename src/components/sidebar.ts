@@ -138,6 +138,7 @@ export class Sidebar {
     getCurrentIndex: () => number,
     onSelectChannel: (index: number, catchup?: CatchupInfo, scope?: ChannelScope) => void,
     getCurrentCatchupStart: () => number | null = () => null,
+    private onVisibilityChange: () => void = () => {},
   ) {
     this.getCurrentIndex = getCurrentIndex;
     this.onSelectChannel = onSelectChannel;
@@ -256,12 +257,14 @@ export class Sidebar {
       this.el.classList.add('visible');
     }
     this.resetTimer();
+    this.onVisibilityChange();
   }
 
   hide(): void {
     if (!this.isVisible) return;
     this.isVisible = false;
     Focus.pop(this.focusScope);
+    this.onVisibilityChange();
     this.channelSearchGeneration++;
     this.channelSearch.release();
     this.channelSearchPending = false;

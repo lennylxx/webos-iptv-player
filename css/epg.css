@@ -876,7 +876,10 @@
 
 /* Says what OK does on the focused program; its cell has no room for it. */
 .epg-tl-hint {
+  display: flex;
   flex-shrink: 0;
+  align-items: center;
+  gap: 16px;
   margin-left: auto;
 }
 
@@ -1274,4 +1277,17 @@ html:not(.keyboard-nav) .epg-hints .edit-action:hover {
   bottom: 0;
   height: 3px;
   background: var(--live);
+}
+
+/* Says the program text beside it is an AI translation, or how getting one goes.
+   It keeps the text's color, which holds its contrast in every theme. */
+.program-translation-label {
+  font-weight: 600;
+}
+
+.program-translation-label.is-title {
+  flex-shrink: 0;
+  font-size: 18px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }

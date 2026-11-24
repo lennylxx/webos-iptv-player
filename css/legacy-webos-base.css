@@ -81,6 +81,7 @@ html.q-no-flex-gap .epg-prog-dur > * + * { margin-left: 4px; }
 html.q-no-flex-gap .epg-prog-title > * + * { margin-left: 10px; }
 html.q-no-flex-gap .epg-tl-range > * + * { margin-left: 10px; }
 html.q-no-flex-gap .epg-tl-title > * + * { margin-left: 12px; }
+html.q-no-flex-gap .epg-tl-hint > * + * { margin-left: 16px; }
 html.q-no-flex-gap .epg-now-pill > * + * { margin-left: 8px; }
 html.q-no-flex-gap .settings-nav-list > * + * { margin-top: 6px; }
 html.q-no-flex-gap .settings-nav-item > * + * { margin-left: 14px; }

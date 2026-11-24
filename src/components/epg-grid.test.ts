@@ -90,6 +90,7 @@ const { storageMock } = vi.hoisted(() => ({
     getCatchupProgressList: vi.fn((): CatchupProgressEntry[] => []),
     clearCatchupProgress: vi.fn(),
     getGuideLayout: vi.fn((): GuideLayout => 'schedule'),
+    getLlmConfig: vi.fn(() => ({ enabled: false })),
     getCustomThemes: vi.fn(() => []),
     getTheme: vi.fn(() => 'midnight'),
     getThemeCss: vi.fn(() => ''),

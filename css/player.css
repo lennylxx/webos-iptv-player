@@ -225,6 +225,23 @@
   font-size: 22px;
 }
 
+.osd-translate {
+  margin-left: auto;
+}
+
+.osd-programme-title .program-translation-label {
+  margin-left: 16px;
+}
+
+.osd-translate .edit-hint {
+  font-size: 20px;
+}
+
+.osd-translate .edit-action:hover {
+  color: var(--text-primary);
+  background: var(--overlay-chip);
+}
+
 .osd-progress-row {
   display: flex;
   align-items: center;

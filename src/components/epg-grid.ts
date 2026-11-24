@@ -42,6 +42,7 @@ import { rankByName } from '../utils/channel-search';
 import { CONFIG } from '../config';
 import { bellIcon, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
 import { clickHint, okHint } from './key-hints';
+import { ProgramTranslation, programDescription, programTitleLabel, programView, translateHint } from './program-translation';
 import { channelLockBadge, channelLockState } from './parental-badge';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { VirtualList, type VirtualRange } from '../utils/virtual-list';
@@ -296,6 +297,11 @@ export class EpgGrid {
     ParentalControlService.subscribe(() => {
       this.timelineMarksRev++;
       this.refreshTimelineMarks();
+    });
+    ProgramTranslation.subscribe(() => {
+      if (!inShownView(this.container)) return;
+      if (this.timelineLayout) this.refreshTimelineDetail();
+      else this.render();
     });
     this.bindEvents();
   }
@@ -811,6 +817,7 @@ export class EpgGrid {
                       ? XtreamArchiveService.isAvailable(channel, startMs, now, p.catchupId)
                       : false;
                     const progress = catchupAvailable && channelHasCatchup ? progressMap!.get(startMs) : undefined;
+                    const view = programView(channel, p);
                     return html`
                       <div class="epg-programme-item
                                   state-${state} ${current ? 'current' : ''}"
@@ -826,12 +833,13 @@ export class EpgGrid {
                         <div class="epg-prog-body">
                           <div class="epg-prog-title">
                             ${current ? liveBadge() : ''}
-                            <span>${p.title}</span>
+                            <span>${view.title}</span>
+                            ${programTitleLabel(view)}
                             ${state === 'future' && channel ? raw(bellIcon(ReminderService.has(channelKey(channel), startMs))) : ''}
                             ${progress ? html`<span class="epg-catchup-badge ${progress.completed ? 'watched' : 'resume'}">${t(progress.completed ? 'epg.watched' : 'common.resume')}</span>` : ''}
                           </div>
                           ${progress && !progress.completed && progress.duration > 0 ? html`<div class="epg-catchup-progress"><div class="epg-catchup-progress-fill" style="width: ${Math.min(100, Math.max(0, Math.round(progress.position / progress.duration * 100)))}%"></div></div>` : ''}
-                          ${p.description ? html`<div class="epg-prog-desc">${p.description}</div>` : ''}
+                          ${programDescription('epg-prog-desc', view)}
                         </div>
                       </div>
                     `;
@@ -1170,10 +1178,12 @@ export class EpgGrid {
   // right and leaves the left empty, as it has no time to show.
   private detailMarkup(): Safe {
     const item = this.timelineRows()[this.timeline.row];
-    if (!item) return html``;
     // While the search box has the caret, OK leaves it rather than acting here.
     const keys = this.focusCol === 'timeline' && !this.searchInputFocused();
     const p = this.timeline.focusedProgramme();
+    // The details follow the ring, so the program they show is the one to translate.
+    ProgramTranslation.want(this, item?.channel, item && keys ? p : null);
+    if (!item) return html``;
     const when = (content: Safe | string) => html`
       <div class="epg-tl-when">${content}</div>`;
     if (!p) {
@@ -1182,7 +1192,8 @@ export class EpgGrid {
         <div class="epg-tl-what">
           <div class="epg-tl-title">
             <span class="epg-tl-title-text epg-tl-no-info">${t('epg.noInfo')}</span>
-            ${keys ? html`<span class="epg-tl-hint">${okHint(t('epg.watchLive'))}</span>` : ''}
+            ${keys ? html`<span class="epg-tl-hint">${okHint(t('epg.watchLive'))}${
+              this.canToggleTranslation() ? translateHint('epg-hint-translate', { 'data-epg-translate': '' }) : ''}</span>` : ''}
           </div>
         </div>`;
     }
@@ -1195,6 +1206,9 @@ export class EpgGrid {
     const reminder = upcoming && this.hasReminder(item.channel, start);
     const replay = stop <= now && XtreamArchiveService.isAvailable(item.channel, start, now, p.catchupId);
     const ok = keys ? this.programmeOkLabel(item.channel, p) : null;
+    const view = programView(item.channel, p);
+    const translate = keys && this.canToggleTranslation()
+      ? translateHint('epg-hint-translate', { 'data-epg-translate': '' }) : '';
     return html`
       ${when(html`
         <div class="epg-tl-range">
@@ -1205,11 +1219,12 @@ export class EpgGrid {
       <div class="epg-tl-what">
         <div class="epg-tl-title">
           ${live ? liveBadge() : ''}
-          <span class="epg-tl-title-text">${p.title}</span>
+          <span class="epg-tl-title-text">${view.title}</span>
+          ${programTitleLabel(view)}
           ${upcoming ? raw(bellIcon(reminder)) : ''}
-          ${ok ? html`<span class="epg-tl-hint">${okHint(ok)}</span>` : ''}
+          ${ok || translate ? html`<span class="epg-tl-hint">${ok ? okHint(ok) : ''}${translate}</span>` : ''}
         </div>
-        ${p.description ? html`<div class="epg-tl-desc">${p.description}</div>` : ''}
+        ${programDescription('epg-tl-desc', view)}
       </div>`;
   }
 
@@ -1751,6 +1766,13 @@ export class EpgGrid {
     // reusing nodes across renders, per-render addEventListener would stack up.
     this.container.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
+      const translate = target.closest<HTMLElement>('[data-epg-translate]');
+      if (translate) {
+        this.act('green');
+        // Chromium 53 outlines a clicked button beside the app's ring.
+        translate.blur();
+        return;
+      }
       const now = target.closest<HTMLElement>('[data-epg-now]');
       if (now) {
         this.act('red');
@@ -2252,10 +2274,45 @@ export class EpgGrid {
   // then the color keys. It follows the ring, hover included.
   private hintsMarkup(): Safe {
     const ok = this.okHintLabel();
+    const ring = this.ringProgramme();
+    // The legend follows the ring, so the program it rests on is the one to translate.
+    ProgramTranslation.want(this, ring.channel, ring.programme);
     return html`
       ${ok ? okHint(ok) : ''}
       ${clickHint('red', t('epg.backToNow'), 'epg-hint-now', { 'data-epg-now': '' })}
+      ${this.canToggleTranslation() ? translateHint('epg-hint-translate', { 'data-epg-translate': '' }) : ''}
       <span class="edit-hint"><span class="edit-key key-yellow"></span><span>${t('common.search')}</span></span>`;
+  }
+
+  // The program the ring rests on, when the keys rest on one.
+  private ringProgramme(): { channel: Channel | undefined; programme: Programme | null } {
+    const none = { channel: undefined, programme: null };
+    // A Guide re-rendered while hidden has no ring a viewer reads.
+    if (this.groupOpen || this.searchInputFocused() || !inShownView(this.container)) return none;
+    if (this.timelineLayout) {
+      if (this.focusCol !== 'timeline') return none;
+      return { channel: this.timelineRows()[this.timeline.row]?.channel, programme: this.timeline.focusedProgramme() };
+    }
+    if (this.focusCol !== 'programmes') return none;
+    return {
+      channel: PlaylistService.channels[this.selectedChannelIdx],
+      programme: this.getCurrentProgrammes()[this.focusProg] ?? null,
+    };
+  }
+
+  // Green turns translation on for a program it can send, and off anywhere.
+  // The legend and the details show Green's key exactly where Green acts.
+  private canToggleTranslation(): boolean {
+    if (this.groupOpen || this.searchInputFocused()) return false;
+    if (this.timelineLayout && this.focusCol !== 'timeline') return false;
+    if (ProgramTranslation.active) return true;
+    const ring = this.ringProgramme();
+    return ProgramTranslation.translatable(ring.channel, ring.programme);
+  }
+
+  /** The Guide no longer shows: the program its ring rests on is not sent. */
+  releaseTranslation(): void {
+    ProgramTranslation.release(this);
   }
 
   private okHintLabel(): string | null {
@@ -2330,6 +2387,11 @@ export class EpgGrid {
 
     if (action === 'yellow') {
       this.openSearchInput();
+      return;
+    }
+
+    if (action === 'green') {
+      if (this.canToggleTranslation()) ProgramTranslation.toggle();
       return;
     }
 

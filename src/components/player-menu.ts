@@ -143,6 +143,7 @@ export class PlayerMenu {
     // null hides the subtitle translate row.
     getTranslateLabel: () => string | null = () => null,
     translateSubtitles: () => void = () => {},
+    private onVisibilityChange: () => void = () => {},
   ) {
     this.getCurrentChannel = getCurrentChannel;
     this.onAction = onAction;
@@ -198,12 +199,14 @@ export class PlayerMenu {
     if (this.scope) Focus.push(this.scope);
     this.openAt(0);
     this.resetTimer();
+    this.onVisibilityChange();
   }
 
   hide(): void {
     if (!this.isVisible) return;
     this.isVisible = false;
     if (this.scope) Focus.pop(this.scope);
+    this.onVisibilityChange();
     const el = this.el;
     if (el) {
       el.classList.remove('visible');

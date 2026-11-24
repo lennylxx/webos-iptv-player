@@ -318,6 +318,8 @@ export class Player {
       onPlayNext: () => this.playNextItem(),
       onCancelNext: () => this.cancelNextItem(),
       onSkipEpisode: (step) => this.skipEpisode(step),
+      // The OSD auto-reveals exactly while no sidebar or menu holds the keys.
+      colorKeysTaken: () => !this.canAutoRevealOsd(),
     });
     this.stallWatchdog = new StallWatchdog({
       probe: (): StallProbe => {
@@ -2776,6 +2778,9 @@ export class Player {
       case 'down':
       case 'channel_down':
         this.channelDown();
+        break;
+      case 'green':
+        this.osd.toggleTranslation();
         break;
       case 'yellow':
         this.showOSD();

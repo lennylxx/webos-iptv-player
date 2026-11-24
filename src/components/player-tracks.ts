@@ -486,7 +486,7 @@ export class PlayerTracks {
     this.options.onChanged?.();
     const reason = report.error?.reason;
     if (!reason || reason === 'cancelled') return;
-    showToast(reason === 'cap' ? t('subtitle.translateLimit') : t('subtitle.translateFailed'));
+    showToast(reason === 'cap' ? t('ai.translateLimit') : t('subtitle.translateFailed'));
   }
 
   private translationSource(index: number): string | undefined {

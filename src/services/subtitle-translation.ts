@@ -40,7 +40,7 @@ export function targetLabel(code: string): string {
   return LABELS[code] || languageName(code);
 }
 
-function englishName(code: string): string {
+export function englishName(code: string): string {
   return ENGLISH_NAMES[code] || ISO6391.getName(languageKey(code)) || code;
 }
 

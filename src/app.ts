@@ -261,6 +261,8 @@ class App {
       () => this.player.getCurrentIndex(),
       (idx, catchup, scope) => this.playChannel(idx, catchup, scope),
       () => this.player.getCurrentCatchupStart(),
+      // The OSD's Green hint gives way to the sidebar's favorite.
+      () => this.player.refreshOsd(),
     );
     this.menu = new PlayerMenu(
       this.views.player,
@@ -282,6 +284,7 @@ class App {
       (pick) => this.player.setQualityOverride(pick),
       () => this.player.subtitleTranslationLabel(),
       () => this.player.translateSubtitles(),
+      () => this.player.refreshOsd(),
     );
 
     this.movies = new Movies(this.views.movies, {
@@ -1206,6 +1209,7 @@ class App {
     this.player.closeSubtitleSearch(); // never let the subtitle overlay linger across a view change
     this.player.closeSubtitleOffset(); // never let the subtitle-sync overlay linger across a view change
     this.epgGrid.dismissPrompt(); // never let the catch-up prompt linger across a view change
+    if (name !== 'epg') this.epgGrid.releaseTranslation();
     this.search.dismissPrompt();
     this.settings.dismissPrompt();
     this.reminderManager.dismissPrompt();

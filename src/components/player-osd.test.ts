@@ -6,6 +6,12 @@ import { StorageService } from '../services/storage-service';
 import type { Channel, Programme, VodQueueItem } from '../types';
 import type { DvrState } from '../utils/dvr';
 import { PlayerOsd, upNextCard, vodHeading, type PlayerOsdOptions, type PlayerOsdSnapshot } from './player-osd';
+import { normalizeLlmConfig } from '../services/llm/config';
+import { ParentalControlService } from '../services/parental-control';
+import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
+
+const { translateProgram } = vi.hoisted(() => ({ translateProgram: vi.fn() }));
+vi.mock('../services/epg-translation', () => ({ EPG_TRANSLATION_FEATURE: 'epg-translation', translateProgram }));
 
 const CHANNEL: Channel = {
   id: 'ch1',
@@ -514,6 +520,169 @@ describe('PlayerOsd', () => {
     osd.render();
     expect(container.querySelector('.osd-next-episode-thumb')).toBeNull();
     expect(container.querySelector('.osd-vod-detail')).toBeNull();
+  });
+});
+
+describe('PlayerOsd program translation', () => {
+  let container: HTMLElement;
+  let state: PlayerOsdSnapshot;
+  let osd: PlayerOsd;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.clear();
+    StorageService.setLlmConfig(normalizeLlmConfig({ enabled: true, baseUrl: 'http://host/v1', model: 'm1' }));
+    translateProgram.mockReset();
+    translateProgram.mockResolvedValue({ title: 'Programm 1', description: 'Beschreibung 1' });
+    container = document.createElement('div');
+    container.innerHTML = '<div id="player-osd"></div>';
+    document.body.appendChild(container);
+    state = snapshot({ nowPlaying: PROGRAMME });
+    osd = new PlayerOsd(container, {
+      getSnapshot: () => state,
+      canAutoReveal: () => true,
+      canSeek: () => false,
+      onSeekFraction: vi.fn(),
+      onHoverFraction: vi.fn(),
+      onPauseToggle: vi.fn(),
+      onGoLive: vi.fn(),
+      onResync: vi.fn(),
+      onPlayNext: vi.fn(),
+      onCancelNext: vi.fn(),
+      onSkipEpisode: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    resetProgramTranslationForTests();
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  const title = () => container.querySelector('.osd-programme-title')?.textContent;
+  const description = () => container.querySelector('.osd-description')?.textContent;
+  const hint = () => container.querySelector('[data-osd-translate]')?.textContent?.trim();
+
+  it('translates the shown program on Green and shows the original on Green again', async () => {
+    osd.show();
+    expect(hint()).toBe('Translate');
+    osd.toggleTranslation();
+    expect(hint()).toBe('Show original');
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(translateProgram).toHaveBeenCalledWith({ title: 'Programme 1', description: 'Description 1' }, 'en', expect.anything());
+    expect(title()).toBe('Programm 1');
+    expect(description()).toBe('AI translation · Beschreibung 1');
+
+    osd.toggleTranslation();
+    expect(title()).toBe('Programme 1');
+    expect(description()).toBe('Description 1');
+    expect(hint()).toBe('Translate');
+  });
+
+  it('takes a click on its hint', () => {
+    osd.show();
+    const button = container.querySelector('[data-osd-translate]') as HTMLElement;
+    button.getBoundingClientRect = () => rect(700, 10, 120, 30);
+    container.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 710, clientY: 20 }));
+    expect(ProgramTranslation.active).toBe(true);
+  });
+
+  it('sends nothing for a program the info stopped showing before the focus rested', async () => {
+    osd.show();
+    osd.toggleTranslation();
+    osd.hide();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(translateProgram).not.toHaveBeenCalled();
+
+    osd.show();
+    state = snapshot({ nowPlaying: null });
+    osd.render();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(translateProgram).not.toHaveBeenCalled();
+  });
+
+  it('offers no translation for a channel a parental rule guards', () => {
+    const protects = vi.spyOn(ParentalControlService, 'protects').mockReturnValue(true);
+    try {
+      osd.show();
+      expect(hint()).toBeUndefined();
+      osd.toggleTranslation();
+      expect(ProgramTranslation.active).toBe(false);
+    } finally {
+      protects.mockRestore();
+    }
+  });
+
+  it('leaves Green to the sidebar or menu while one is open', () => {
+    let taken = true;
+    osd = new PlayerOsd(container, {
+      getSnapshot: () => state, canAutoReveal: () => true, canSeek: () => false,
+      onSeekFraction: vi.fn(), onHoverFraction: vi.fn(), onPauseToggle: vi.fn(), onGoLive: vi.fn(),
+      onResync: vi.fn(), onPlayNext: vi.fn(), onCancelNext: vi.fn(), onSkipEpisode: vi.fn(),
+      colorKeysTaken: () => taken,
+    });
+    osd.show();
+    expect(hint()).toBeUndefined();
+    osd.toggleTranslation();
+    expect(ProgramTranslation.active).toBe(false);
+
+    taken = false;
+    osd.render();
+    expect(hint()).toBe('Translate');
+  });
+
+  it('ignores Green on a movie-file channel, whose info shows no program', () => {
+    state = snapshot({ nowPlaying: PROGRAMME, movieFile: true, playback: playback(120, 30) });
+    osd.show();
+    expect(hint()).toBeUndefined();
+    osd.toggleTranslation();
+    expect(ProgramTranslation.active).toBe(false);
+  });
+
+  it('shows how to turn translation off in info without a program', () => {
+    state = snapshot({ nowPlaying: null });
+    osd.show();
+    expect(hint()).toBeUndefined();
+    ProgramTranslation.toggle();
+    osd.render();
+    expect(hint()).toBe('Show original');
+    osd.toggleTranslation();
+    expect(ProgramTranslation.active).toBe(false);
+    expect(hint()).toBeUndefined();
+
+    ProgramTranslation.toggle();
+    state = snapshot({ channel: null, vodTitle: 'Video 1', playback: playback(120, 30) });
+    osd.render();
+    expect(hint()).toBe('Show original');
+  });
+
+  it('offers no translation for a program without a title or description', () => {
+    state = snapshot({ nowPlaying: { ...PROGRAMME, title: '', description: '' } });
+    osd.show();
+    expect(hint()).toBeUndefined();
+    osd.toggleTranslation();
+    expect(ProgramTranslation.active).toBe(false);
+  });
+
+  it('labels a program without a description in its title line', async () => {
+    translateProgram.mockResolvedValue({ title: 'Programm 1', description: '' });
+    state = snapshot({ nowPlaying: { ...PROGRAMME, description: '' } });
+    osd.show();
+    osd.toggleTranslation();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(title()).toBe('Programm 1AI translation');
+    expect(container.querySelector('.osd-description')).toBeNull();
+  });
+
+  it('offers nothing and ignores Green while hidden or without AI', () => {
+    osd.toggleTranslation();
+    expect(ProgramTranslation.active).toBe(false);
+
+    StorageService.setLlmConfig(normalizeLlmConfig({ enabled: false, baseUrl: 'http://host/v1', model: 'm1' }));
+    osd.show();
+    expect(hint()).toBeUndefined();
+    osd.toggleTranslation();
+    expect(ProgramTranslation.active).toBe(false);
   });
 });
 

@@ -9,6 +9,15 @@ import { NEXT_EPISODE_ICON, PAUSE_ICON, PLAY_ICON, PREVIOUS_EPISODE_ICON, RESYNC
 import type { SeekThumbnail } from '../services/seek-preview';
 import { CONFIG } from '../config';
 import { InputMode } from '../navigation/input-mode';
+import type { ProgramText } from '../services/epg-translation';
+import {
+  ProgramTranslation,
+  programDescription,
+  programTitleLabel,
+  programView,
+  translateHint,
+  type ProgramView,
+} from './program-translation';
 
 const THUMB_WIDTH = CONFIG.PLAYER.SEEK_PREVIEW_WIDTH;
 const THUMB_HEIGHT = Math.round(THUMB_WIDTH * 9 / 16);
@@ -105,6 +114,15 @@ export interface PlayerOsdOptions {
   onPlayNext: () => void;
   onCancelNext: () => void;
   onSkipEpisode: (step: 1 | -1) => void;
+  // The sidebar or menu has Green, for the favorite.
+  colorKeysTaken?: () => boolean;
+}
+
+// The program the live info shows, as renderOsd picks it: a movie file's seek bar shows none.
+function programShown(state: PlayerOsdSnapshot): ProgramText | null {
+  if (state.catchup) return state.catchup;
+  if (state.movieFile && state.playback) return null;
+  return state.nowPlaying;
 }
 
 function audioTrackText(name: string): string {
@@ -122,6 +140,7 @@ export class PlayerOsd {
   // re-requesting a broken image (which would thrash the OSD layout).
   private failedIcons = new Set<string>();
   private hoverFrame = 0;
+  private wantsTranslation = false;
 
   constructor(private container: HTMLElement, private callbacks: PlayerOsdOptions) {
     // Activate OSD controls on click by coordinate hit-test (vs e.target) since
@@ -158,6 +177,12 @@ export class PlayerOsd {
         if (this.visible) this.render();
       }
     }, true);
+    ProgramTranslation.subscribe(() => {
+      if (!this.visible || this.message) return;
+      this.render();
+      // A translation that lands stays up long enough to read.
+      this.resetTimer();
+    });
   }
 
   isVisible(): boolean {
@@ -196,6 +221,7 @@ export class PlayerOsd {
 
   hide(): void {
     this.visible = false;
+    ProgramTranslation.release(this);
     this.cancelHoverFrame();
     this.callbacks.onHoverFraction(null);
     const osd = $('#player-osd', this.container);
@@ -222,7 +248,10 @@ export class PlayerOsd {
   }
 
   render(): void {
+    this.wantsTranslation = false;
     this.renderOsd();
+    // Info without a program to translate lets the last one go.
+    if (!this.wantsTranslation) ProgramTranslation.release(this);
     this.placeBubble();
   }
 
@@ -249,21 +278,23 @@ export class PlayerOsd {
         ? playback.duration
         : catchup.end - catchup.start;
       const pos = playback ? Math.min(playback.position, dur) : 0;
+      const view = this.translated(state.channel, catchup);
       programmeHtml = html`
         <div class="osd-programme">
           <div class="osd-now-label">${t('common.catchup')}</div>
           <div class="osd-programme-detail">
             ${this.programmeIcon(catchup.icon)}
             <div class="osd-programme-info">
-              <div class="osd-programme-title">${catchup.title}</div>
+              <div class="osd-programme-title">${view.title}${programTitleLabel(view)}</div>
               <div class="osd-programme-time">
                 <span>${formatTime(start)} - ${formatTime(end)}</span>
                 <span class="osd-remaining">${formatDuration(end.getTime() - start.getTime())}</span>
+                ${this.translateHint(state.channel, catchup)}
               </div>
             </div>
           </div>
           ${this.positionRow(pos, dur, state.playback?.paused ?? false, state.scrub)}
-          ${catchup.description ? html`<div class="osd-description">${catchup.description}</div>` : ''}
+          ${programDescription('osd-description', view)}
         </div>
       `;
     } else if (state.movieFile && state.playback) {
@@ -277,6 +308,7 @@ export class PlayerOsd {
       // Live playback. Show EPG programme info, and a DVR timeshift bar when the
       // stream exposes a usable seekable window.
       const nowPlaying = state.nowPlaying;
+      const view = nowPlaying ? this.translated(state.channel, nowPlaying) : null;
       const next = state.upcoming ? html`
         <div class="osd-next">
           <span class="osd-next-label">${t('player.next')}</span>
@@ -285,16 +317,17 @@ export class PlayerOsd {
           </span>
         </div>
       ` : '';
-      const detail = nowPlaying ? html`
+      const detail = nowPlaying && view ? html`
         <div class="osd-programme-detail">
           ${this.programmeIcon(nowPlaying.icon)}
           <div class="osd-programme-info">
-            <div class="osd-programme-title">${nowPlaying.title}</div>
+            <div class="osd-programme-title">${view.title}${programTitleLabel(view)}</div>
             <div class="osd-programme-time">
               <span>${formatTime(nowPlaying.start)} - ${formatTime(nowPlaying.stop)}</span>
               <span class="osd-remaining">${t('player.remaining', {
                 duration: formatDuration(nowPlaying.stop.getTime() - Date.now()),
               })}</span>
+              ${this.translateHint(state.channel, nowPlaying)}
             </div>
           </div>
         </div>
@@ -318,9 +351,7 @@ export class PlayerOsd {
             : 'player.now')}</div>
           ${detail}
           ${progressRow}
-          ${nowPlaying?.description
-            ? html`<div class="osd-description">${nowPlaying.description}</div>`
-            : ''}
+          ${view ? programDescription('osd-description', view) : ''}
         </div>
         ${next}
       `;
@@ -334,6 +365,7 @@ export class PlayerOsd {
           : ''}
         <div class="osd-channel-name">${state.channel.name}</div>
         ${this.renderStreamInfo(state.streamInfo)}
+        ${programShown(state) ? '' : this.offHint()}
       </div>
       ${programmeHtml}
     `);
@@ -344,6 +376,7 @@ export class PlayerOsd {
     if (!osd) return;
     morph(osd, html`<div class="osd-message">${message}</div>`);
     this.message = true;
+    ProgramTranslation.release(this);
     // Keep the OSD visible so metadata can repaint over this once the stream
     // recovers (else "Reconnecting..." sticks) and it auto-hides otherwise.
     this.visible = true;
@@ -522,6 +555,7 @@ export class PlayerOsd {
       <div class="osd-channel">
         <div class="osd-channel-name">${state.vodTitle ?? ''}</div>
         ${this.renderStreamInfo(state.streamInfo)}
+        ${this.offHint()}
       </div>
       ${state.vodDetail ? html`<div class="osd-vod-detail">${state.vodDetail}</div>` : ''}
       <div class="osd-progress-row">
@@ -654,6 +688,44 @@ export class PlayerOsd {
     else if (this.hitsControl('[data-skip-episode="1"]:not([disabled])', x, y)) this.callbacks.onSkipEpisode(1);
     else if (this.hitsControl('[data-golive]', x, y)) this.callbacks.onGoLive();
     else if (this.hitsControl('[data-resync]', x, y)) this.callbacks.onResync();
+    else if (this.hitsControl('[data-osd-translate]', x, y)) this.toggleTranslation();
+  }
+
+  // The program the info shows; null when it shows none.
+  private shownProgram(): { channel: Channel | null; text: ProgramText | null } {
+    const state = this.callbacks.getSnapshot();
+    if (state.vodTitle !== null) return { channel: null, text: null };
+    return { channel: state.channel, text: programShown(state) };
+  }
+
+  /** Green while the info shows: translates its program, or shows the original again. */
+  toggleTranslation(): void {
+    if (!this.visible || this.message || this.callbacks.colorKeysTaken?.()) return;
+    const { channel, text } = this.shownProgram();
+    if (!ProgramTranslation.active && !ProgramTranslation.translatable(channel, text)) return;
+    ProgramTranslation.toggle();
+    this.resetTimer();
+  }
+
+  private translated(channel: Channel | null, text: ProgramText): ProgramView {
+    // The info on screen is what the viewer reads, so its program is the one to translate.
+    if (this.visible) {
+      ProgramTranslation.want(this, channel, text);
+      this.wantsTranslation = true;
+    }
+    return programView(channel, text);
+  }
+
+  // Info without a program still shows how Green turns translation off.
+  private offHint(): Safe | '' {
+    if (!ProgramTranslation.active || this.callbacks.colorKeysTaken?.()) return '';
+    return html`<span class="osd-translate">${translateHint('osd-translate', { 'data-osd-translate': '' })}</span>`;
+  }
+
+  private translateHint(channel: Channel | null, text: ProgramText): Safe | '' {
+    if (this.callbacks.colorKeysTaken?.()) return '';
+    if (!ProgramTranslation.active && !ProgramTranslation.translatable(channel, text)) return '';
+    return html`<span class="osd-translate">${translateHint('osd-translate', { 'data-osd-translate': '' })}</span>`;
   }
 
   private hitsControl(selector: string, x: number, y: number): boolean {

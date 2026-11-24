@@ -65,6 +65,7 @@ a new term after review, add a row here.
 | AI-translated subtitle entry | {name} · AI translation | {name} · AI 翻译 |
 | Subtitle translation progress / failure | Translating subtitles… {percent}% / Subtitle translation failed | 正在翻译字幕… {percent}% / 字幕翻译失败 |
 | Daily cap hit during a task | Daily AI limit reached. Translation paused. | 已达到每日 AI 上限，翻译已暂停。 |
+| AI auth or invalid setup stops a task | AI setup problem. Translation paused. | AI 设置有问题，翻译已暂停。 |
 | AI-picked EPG mapping row (badge) | AI suggestion | AI 推荐 |
 | Rule-based similar guide channels (caption) | Similar names | 相似名称 |
 | AI-suggested search terms on top of built-in multilingual matching (setting) | AI-enhanced multilingual search | AI 增强多语言搜索 |
@@ -85,6 +86,9 @@ a new term after review, add a row here.
 | Stop a running AI check, keeping finished results (after the OK key) | Stop | 停止 |
 | Daily cap with nothing to fall back on | Daily AI limit reached. | 已达到每日 AI 上限。 |
 | Held-back review joined after a reason | {reason} Review groups to lock ({count}) (no space after a full-width stop) | {reason}审阅建议锁定的分组（{count}） |
+| Program info translation (Guide / player info, green key) | Translate / Show original | 翻译 / 显示原文 |
+| AI-translated program info (label) | AI translation | AI 翻译 |
+| Translation progress / failure | Translating… / Translation failed | 正在翻译… / 翻译失败 |
 
 ## Rejected wordings
 
@@ -119,6 +123,7 @@ Never reintroduce these for the concept named.
 | zh address labels | 服务器 URL, 播放列表 URL | 服务器网址, 播放列表网址 |
 | AI translation label | Auto-translated / Machine translation / 自动翻译 / 机器翻译 | AI translation / AI 翻译 |
 | Daily cap toast | quota / 配额 (that is the provider rate limit) | Daily AI limit / 每日 AI 上限 |
+| AI setup stop toast | Translation failed / 翻译失败 (one program, retryable), Invalid API key / API 密钥无效, Check your AI settings / 请检查 AI 设置, AI error / AI 错误, 配置 | AI setup problem / AI 设置有问题 |
 | AI-picked row | Suggested by AI / AI pick / Recommended / AI 建议 | AI suggestion / AI 推荐 |
 | Similar guide channels | Closest matches / 相近的频道 / 类似频道 | Similar names / 相似名称 |
 | AI search | Ask, Smart search, Natural-language search, 智能搜索 | AI search / AI 搜索 |
@@ -131,3 +136,5 @@ Never reintroduce these for the concept named.
 | Suggestion source | Rules / 规则 | Built-in / 内置 |
 | AI disclaimer | AI can be wrong | AI can make mistakes |
 | Stop an AI check | Cancel / 取消 (implies results are discarded) | Stop / 停止 |
+| Show the untranslated text | See original / 查看原文, Turn off translation / 关闭翻译 | Show original / 显示原文 |
+| AI-translated label | Translated / 已翻译 | AI translation / AI 翻译 |
