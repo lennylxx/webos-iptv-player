@@ -283,8 +283,9 @@ class App {
       () => this.player.getQualityMenu(),
       (pick) => this.player.setQualityOverride(pick),
       () => this.player.subtitleTranslationLabel(),
-      () => this.player.translateSubtitles(),
+      (target) => this.player.translateSubtitles(target),
       () => this.player.refreshOsd(),
+      () => this.player.subtitleTranslationLanguages(),
     );
 
     this.movies = new Movies(this.views.movies, {

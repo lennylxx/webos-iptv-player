@@ -5,6 +5,21 @@ import { iso6392BTo1 } from 'iso-639-2/2b-to-1';
 import { iso6392TTo1 } from 'iso-639-2/2t-to-1';
 import { t } from '../i18n';
 
+/** Subtitle languages offered by name: the preferred-language setting and the
+ *  player's translation targets. Endonyms render on the TV's fonts. */
+export const SUBTITLE_LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
+  { code: 'en', label: 'English' },
+  { code: 'zh-CN', label: '简体中文' },
+  { code: 'zh-TW', label: '繁體中文' },
+  { code: 'es', label: 'Español' },
+  { code: 'fr', label: 'Français' },
+  { code: 'de', label: 'Deutsch' },
+  { code: 'pt', label: 'Português' },
+  { code: 'ru', label: 'Русский' },
+  { code: 'ja', label: '日本語' },
+  { code: 'ko', label: '한국어' },
+];
+
 // The hls.js subtitle-track fields we read, structural to avoid an hls.js type dep.
 export interface HlsSubtitleTrackLike {
   name?: string;

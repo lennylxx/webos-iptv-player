@@ -11,6 +11,7 @@ import type {
   SubtitleOption,
   SubtitlePref,
   SubtitleTrackOption,
+  TranslationLanguageOption,
   VodPlayback,
 } from '../types';
 import { StorageService } from '../services/storage-service';
@@ -43,13 +44,14 @@ import {
   manifestSubtitleOptions,
   nativeSubtitleOptions,
   shiftForeignTrack,
+  SUBTITLE_LANGUAGES,
   subtitleLabel,
 } from '../utils/subtitle-tracks';
 import { playbackPreferenceKey } from '../utils/channel';
 import { createLogger } from '../utils/logger';
 import { isWebOS } from '../utils/platform';
 import { $ } from '../utils/dom';
-import { t } from '../i18n';
+import { getLocale, t } from '../i18n';
 import { showToast } from './toast';
 import type { VttCue } from '../utils/webvtt';
 import { cleanSearchTitle, workTitle } from '../services/subtitle-search/title-cleanup';
@@ -58,8 +60,10 @@ import { LlmError } from '../services/llm/client';
 import { LlmService } from '../services/llm/llm-service';
 import {
   needsTranslation,
+  sameTarget,
   SUBTITLE_TRANSLATION_FEATURE,
   SubtitleTranslation,
+  targetCode,
   targetLabel,
   translationTarget,
 } from '../services/subtitle-translation';
@@ -409,35 +413,68 @@ export class PlayerTracks {
     return !!this.options.getVod() && subtitleSearchService.isAvailable();
   }
 
-  // What the translate row acts on: the shown SRT/WebVTT sidecar, or a shown
-  // translation that stopped before it finished.
-  private translateOffer(): { entry: number; target: string } | null {
+  // The subtitle a translation would come from: the shown SRT/WebVTT sidecar,
+  // or the source of a shown translation.
+  private translationContext(): { active: number; source: number } | null {
     if (!this.options.getVod() || this.pipeline.isMseActive()) return null;
     if (!LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE)) return null;
     const active = this.vodSubs.activeIndex;
-    const sidecar = this.vodTextSidecars[active];
-    if (!sidecar) return null;
-    if (this.vodSubs.sourceOf(active) >= 0) {
-      const job = this.translations.get(active);
-      return job && !job.complete && !job.running ? { entry: active, target: sidecar.lang } : null;
-    }
+    if (!this.vodTextSidecars[active]) return null;
+    const source = this.vodSubs.sourceOf(active);
+    return { active, source: source >= 0 ? source : active };
+  }
+
+  // The target of the one-press translate row: the default target, or a shown
+  // translation that stopped before it finished.
+  private translateOffer(): string | null {
+    const context = this.translationContext();
+    if (!context) return null;
     const target = translationTarget();
-    return needsTranslation(sidecar.lang, target) ? { entry: active, target } : null;
+    if (context.source !== context.active) {
+      const lang = this.vodTextSidecars[context.active].lang;
+      const job = this.translations.get(context.active);
+      if (job && !job.complete && !job.running) return lang;
+      if (sameTarget(lang, target)) return null;
+    }
+    return needsTranslation(this.vodTextSidecars[context.source].lang, target) ? target : null;
   }
 
   /** Label of the menu's translate row, or null to hide it. */
   subtitleTranslationLabel(): string | null {
-    const offer = this.translateOffer();
-    return offer ? t('player.translateTo', { language: targetLabel(offer.target) }) : null;
+    const target = this.translateOffer();
+    return target ? t('player.translateTo', { language: targetLabel(target) }) : null;
   }
 
-  /** Translate the shown subtitle, reusing or resuming a translation into the same language. */
-  translateSubtitles(): void {
-    const offer = this.translateOffer();
-    if (!offer) return;
-    const entry = this.vodSubs.sourceOf(offer.entry) >= 0
-      ? offer.entry
-      : this.translationEntry(offer.entry, offer.target);
+  /** Languages the shown subtitle can be translated into, the shown one active; null when none. */
+  subtitleTranslationLanguages(): TranslationLanguageOption[] | null {
+    const context = this.translationContext();
+    if (!context) return null;
+    const sourceLang = this.vodTextSidecars[context.source].lang;
+    const shown = context.source !== context.active ? this.vodTextSidecars[context.active].lang : '';
+    const used = this.vodTextSidecars
+      .filter((_, index) => this.vodSubs.sourceOf(index) === context.source)
+      .map(sidecar => sidecar.lang);
+    const codes: string[] = [];
+    [translationTarget(), ...SUBTITLE_LANGUAGES.map(language => language.code), getLocale(), ...used]
+      .forEach((code) => {
+        if (code && needsTranslation(sourceLang, code) && !codes.some(known => sameTarget(known, code))) codes.push(code);
+      });
+    if (!codes.length) return null;
+    return codes.map(code => ({
+      code,
+      label: SUBTITLE_LANGUAGES.find(language => language.code === code)?.label || targetLabel(code),
+      active: !!shown && sameTarget(shown, code),
+    }));
+  }
+
+  /** Translate the shown subtitle into `target` (else the translate row's), reusing or resuming one. */
+  translateSubtitles(target?: string): void {
+    const context = this.translationContext();
+    const into = target ?? this.translateOffer();
+    if (!context || !into) return;
+    const existing = this.vodTextSidecars.findIndex((sidecar, index) =>
+      this.vodSubs.sourceOf(index) === context.source && sameTarget(sidecar.lang, into));
+    const entry = existing >= 0 ? existing : this.translationEntry(context.source, into);
     this.selectSubtitleTrack(VOD_SUBTITLE_BASE + entry);
     const job = this.translations.get(entry);
     if (!job?.complete) showToast(t('subtitle.translating', { percent: job?.percent ?? 0 }));
@@ -447,7 +484,7 @@ export class PlayerTracks {
     const existing = this.vodSubs.translationOf(source, target);
     if (existing >= 0) return existing;
     const sidecar = this.vodTextSidecars[source];
-    const name = t('player.aiTranslation', { name: sidecarName(sidecar) });
+    const name = t('player.aiTranslation', { name: sidecarName(sidecar), language: targetLabel(target) });
     this.vodTextSidecars.push({ id: `${sidecar.id}|${target}`, name, lang: target, url: '' });
     return this.vodSubs.addTranslation(source, name, target);
   }
@@ -908,14 +945,18 @@ export class PlayerTracks {
    *  webOS native path a single "Closed Captions" toggle is appended when the
    *  manifest declares in-band CEA-608/708 — drawn by the native compositor. */
   getSubtitleTracks(): SubtitleTrackOption[] {
-    const tracks: SubtitleTrackOption[] = this.displaySubtitleOptions().map(option => ({
-      index: option.index,
-      label: subtitleLabel(option),
-      active: option.active,
-      available: option.available,
-      detail: this.translationDetail(option.index),
-      aiSource: this.translationSource(option.index),
-    }));
+    const tracks: SubtitleTrackOption[] = this.displaySubtitleOptions().map(option => {
+      const aiSource = this.translationSource(option.index);
+      return {
+        index: option.index,
+        label: subtitleLabel(option),
+        active: option.active,
+        available: option.available,
+        detail: this.translationDetail(option.index),
+        aiSource,
+        aiCode: aiSource === undefined ? undefined : targetCode(option.lang),
+      };
+    });
     if (this.ccAvailable()) {
       tracks.push({
         index: CC_SUBTITLE_INDEX,

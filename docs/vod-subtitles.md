@@ -212,11 +212,19 @@ sidecar, bundled or downloaded, whose language differs from the target. The targ
 different languages. In-container tracks, ASS/SSA, and live subtitles are not translated. The row
 stays hidden while AI features are off.
 
-- Picking it adds a picker entry **"{name} · AI translation"** next to its source (a
-  `VodSubtitles.addTranslation` entry that starts as a copy of the source cues) and shows it.
+- Picking it adds a picker entry next to its source (a `VodSubtitles.addTranslation` entry that
+  starts as a copy of the source cues) and shows it. The menu tags it **"{name} · AI · EN"** with
+  the target's code (`targetCode`: ISO 639-1 in caps, 简中/繁中 for Chinese in every UI language), the name giving
+  way to the tag; the toast and the OSD name it in full, **"{name} · AI translation ({language})"**.
   Untranslated lines keep the original text; translated batches replace cue text in place
   (`setCueTexts` updates the live `VTTCue.text`), so the offset and sync adjuster still apply.
   While it runs, the entry shows its progress.
+- **"Translate to another language…"** opens a **Translation language** list while the shown
+  subtitle is a sidecar or its translation: the default target first, then the Settings
+  languages, the UI language, and targets already used, less the source's own language. Picking
+  one translates into it for this playback only; the Settings language stays, and the title
+  remembers the pick like any subtitle choice. Each language keeps its own entry, and the
+  one-press row hides only while the default target's translation is shown.
 - `SubtitleTranslation` splits the cues into fixed batches (at most 40 lines, a quarter of the
   **Context size** setting) and sends each as numbered plain text, one `[n] text` line per cue
   with `<br>` for a line break, through `LlmService.runText` — never times, titles, or URLs. The

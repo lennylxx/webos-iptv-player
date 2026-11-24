@@ -467,8 +467,18 @@ export interface SubtitleTrackOption {
   available?: boolean;
   // Shown beside the label, e.g. translation progress.
   detail?: string;
-  // An AI translation: the name of the subtitle it translates.
+  // An AI translation: the name of the subtitle it translates, and the
+  // target's short tag for the menu (EN, 繁中).
   aiSource?: string;
+  aiCode?: string;
+}
+
+/** A language the player menu offers to translate subtitles into. */
+export interface TranslationLanguageOption {
+  code: string;
+  label: string;
+  // The shown subtitle is the translation into it.
+  active: boolean;
 }
 
 /** Normalized subtitle rendition, unified across the hls.js list and the native

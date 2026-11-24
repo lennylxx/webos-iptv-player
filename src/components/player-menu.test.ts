@@ -524,7 +524,7 @@ describe('PlayerMenu', () => {
       );
       subtitleTracks = [
         { index: 0, label: 'Track 1', active: true },
-        { index: 1, label: 'Track 1 · AI translation', active: false, detail: '40%', aiSource: 'Track 1' },
+        { index: 1, label: 'Track 1 · AI translation (Deutsch)', active: false, detail: '40%', aiSource: 'Track 1', aiCode: 'DE' },
       ];
       menu.show();
       items().find((i) => i.dataset.menuAction === '__subs_open__')!.click();
@@ -533,17 +533,73 @@ describe('PlayerMenu', () => {
       expect(items()[2].querySelector('.ai-icon')).toBeNull();
       // The icon leads the note's words, after the name that gives way to it.
       expect(items()[3].querySelector('.menu-track-name')!.textContent).toBe('Track 1');
-      expect(items()[3].querySelector('.menu-track-note')!.textContent).toBe('· AI translation');
+      // The menu tags the target with its short code; the toast and OSD use the full label.
+      expect(items()[3].querySelector('.menu-track-note')!.textContent).toBe('· AI · DE');
       expect(items()[3].querySelector('.menu-track-note .ai-icon svg')).not.toBeNull();
       const row = items().find((i) => i.dataset.menuAction === '__subs_translate__');
       expect(row!.textContent).toContain('Translate to Deutsch');
-      expect(row!.querySelector('.menu-track-label .ai-icon svg')).not.toBeNull();
+      // The action is never checked, so its icon sits in the check column.
+      expect(row!.querySelector('.menu-check .ai-icon svg')).not.toBeNull();
+      expect(row!.querySelector('.menu-track-label .ai-icon')).toBeNull();
 
       row!.click();
 
       expect(translateSubtitles).toHaveBeenCalledTimes(1);
       expect(selectSubtitleTrack).not.toHaveBeenCalled();
       expect(items().map(i => i.dataset.menuAction)).toContain('__subs_open__');
+    });
+
+    it('opens a translation language list that translates into the pick', () => {
+      const translateSubtitles = vi.fn<(target?: string) => void>();
+      let languages = [
+        { code: 'de', label: 'Deutsch', active: false },
+        { code: 'fr', label: 'Français', active: true },
+      ];
+      menu = new PlayerMenu(
+        container, getCurrentChannel, onAction,
+        getAudioTracks, selectAudioTrack,
+        getSubtitleTracks, selectSubtitleTrack,
+        getSubtitleOffsetState, openSubtitleOffset,
+        getPlaybackRateState, selectPlaybackRate,
+        subtitleSearchAvailable, openSubtitleSearch,
+        undefined, undefined, undefined, undefined,
+        () => 'Translate to Deutsch', translateSubtitles, undefined,
+        () => languages,
+      );
+      subtitleTracks = [
+        { index: 0, label: 'Track 1', active: false },
+        { index: 1, label: 'Track 1 · AI translation (Français)', active: true, aiSource: 'Track 1', aiCode: 'FR' },
+      ];
+      const focused = () => container.querySelector<HTMLElement>('#player-menu .menu-item.focused');
+      menu.show();
+      items().find((i) => i.dataset.menuAction === '__subs_open__')!.click();
+      const open = items().find((i) => i.dataset.menuAction === '__subs_translate_open__')!;
+      expect(open.textContent).toContain('Translate to another language…');
+      expect(open.querySelector('.menu-check .ai-icon svg')).not.toBeNull();
+
+      open.click();
+      expect(container.querySelector('#player-menu h2')!.textContent).toBe('Translation language');
+      expect(items().map(i => i.textContent!.replace(/\s+/g, ' ').trim())).toEqual(['‹ Back', 'Deutsch', '✓ Français']);
+      expect(focused()!.dataset.key).toBe('translate:fr');
+
+      // Back returns to the subtitles, on the row that opened the list.
+      expect(menu.handleBack()).toBe(true);
+      expect(focused()!.dataset.key).toBe('__subs_translate_open__');
+      items().find((i) => i.dataset.menuAction === '__subs_translate_open__')!.click();
+      items()[0].click();
+      expect(focused()!.dataset.key).toBe('__subs_translate_open__');
+
+      items().find((i) => i.dataset.menuAction === '__subs_translate_open__')!.click();
+      items().find((i) => i.dataset.lang === 'de')!.click();
+      expect(translateSubtitles).toHaveBeenCalledWith('de');
+      expect(items().map(i => i.dataset.menuAction)).toContain('__subs_open__');
+
+      // The row hides when there is nothing to translate into.
+      languages = [];
+      menu.hide();
+      menu.show();
+      items().find((i) => i.dataset.menuAction === '__subs_open__')!.click();
+      expect(items().some((i) => i.dataset.menuAction === '__subs_translate_open__')).toBe(false);
     });
 
     it('shows a Subtitle Sync row in the subtitles submenu and opens the adjuster', () => {

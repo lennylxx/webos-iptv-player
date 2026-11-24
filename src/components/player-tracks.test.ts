@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
 import type { Channel, VodPlayback } from '../types';
 import { channelKey } from '../utils/channel';
+import { setLocale } from '../i18n';
 import { StorageService } from '../services/storage-service';
 import type { PlayerPipeline } from './player-pipeline';
 import {
@@ -2259,9 +2260,9 @@ describe('PlayerTracks subtitle translation', () => {
     tracks.translateSubtitles();
 
     await vi.waitFor(() => expect(cueList.map(cue => cue.text)).toEqual(['Alpha (de)', 'Bravo (de)']));
-    expect(tracks.getSubtitleTracks().map(item => [item.label, item.active, item.aiSource])).toEqual([
-      ['Track 1', false, undefined],
-      ['Track 1 · AI translation', true, 'Track 1'],
+    expect(tracks.getSubtitleTracks().map(item => [item.label, item.active, item.aiSource, item.aiCode])).toEqual([
+      ['Track 1', false, undefined, undefined],
+      ['Track 1 · AI translation (Deutsch)', true, 'Track 1', 'DE'],
     ]);
     expect(StorageService.setSubtitlePref).toHaveBeenLastCalledWith(
       'vod:x1:vod:10',
@@ -2328,7 +2329,67 @@ describe('PlayerTracks subtitle translation', () => {
     tracks.selectSubtitleTrack(VOD_SUBTITLE_BASE);
     tracks.selectSubtitleTrack(VOD_SUBTITLE_BASE + 1);
 
-    expect(showToast).toHaveBeenLastCalledWith('Subtitles: Track 1 · AI translation');
+    expect(showToast).toHaveBeenLastCalledWith('Subtitles: Track 1 · AI translation (Deutsch)');
+  });
+
+  it('translates into a language from the list, keeping one entry per language', async () => {
+    expect(tracks.subtitleTranslationLanguages()).toBeNull();
+    await showSource();
+    const languages = tracks.subtitleTranslationLanguages()!;
+    // The default target first, then the Settings languages and the UI's, once each.
+    expect(languages.map(language => language.code)).toEqual(
+      ['de', 'en', 'zh-CN', 'zh-TW', 'es', 'fr', 'pt', 'ru', 'ja', 'ko']);
+    expect(languages.find(language => language.code === 'fr')).toEqual({ code: 'fr', label: 'Français', active: false });
+
+    tracks.translateSubtitles('fr');
+    await vi.waitFor(() => expect(cueList.map(cue => cue.text)).toEqual(['Alpha (de)', 'Bravo (de)']));
+    // The model is asked for the language picked, not the default.
+    expect(vi.mocked(LlmService.runText).mock.calls.map(([task]) => task.system))
+      .toEqual([expect.stringContaining('into French.')]);
+    expect(tracks.subtitleTranslationLanguages()!.filter(language => language.active).map(language => language.code))
+      .toEqual(['fr']);
+    // From the French translation, the one-press row still offers the default.
+    expect(tracks.subtitleTranslationLabel()).toBe('Translate to Deutsch');
+    expect(StorageService.setSubtitlePref).toHaveBeenLastCalledWith(
+      'vod:x1:vod:10', { off: false, name: 'Track 1', lang: 'l1', translateTo: 'fr' });
+
+    tracks.translateSubtitles();
+    tracks.translateSubtitles('fr');
+    tracks.translateSubtitles('de');
+    expect(tracks.getSubtitleTracks().map(item => [item.label, item.active])).toEqual([
+      ['Track 1', false],
+      ['Track 1 · AI translation (Français)', false],
+      ['Track 1 · AI translation (Deutsch)', true],
+    ]);
+    expect(tracks.subtitleTranslationLabel()).toBeNull();
+  });
+
+  it('leaves the source language out of the list', async () => {
+    vod = vodRequest({ subtitles: [{ id: '1', name: 'Track 1', lang: 'fr', url: '', text: SRT }] });
+    tracks.attachVod(vod);
+    await showSource();
+    expect(tracks.subtitleTranslationLanguages()!.map(language => language.code)).not.toContain('fr');
+  });
+
+  it('lists the other Chinese script for a Chinese source', async () => {
+    vod = vodRequest({ subtitles: [{ id: '1', name: 'Track 1', lang: 'zh-TW', url: '', text: SRT }] });
+    tracks.attachVod(vod);
+    await showSource();
+    const codes = tracks.subtitleTranslationLanguages()!.map(language => language.code);
+    expect(codes).toContain('zh-CN');
+    expect(codes).not.toContain('zh-TW');
+  });
+
+  it('shows a Portuguese UI language once, as the UI names it', async () => {
+    vi.mocked(StorageService.getOnlineSubtitleConfig).mockReturnValue(config(''));
+    setLocale('pt-BR');
+    try {
+      await showSource();
+      const portuguese = tracks.subtitleTranslationLanguages()!.filter(language => language.label === 'Português');
+      expect(portuguese.map(language => language.code)).toEqual(['pt-BR']);
+    } finally {
+      setLocale('en');
+    }
   });
 
   it('drops a reply for the previous item instead of writing it into the next one', async () => {

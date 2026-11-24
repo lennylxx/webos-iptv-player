@@ -63,6 +63,7 @@ import {
 } from './dropdown';
 import qrcode from 'qrcode-generator';
 import { createLogger } from '../utils/logger';
+import { SUBTITLE_LANGUAGES } from '../utils/subtitle-tracks';
 import { ParentalControlService, isResumeConcealed, isWatchlistConcealed } from '../services/parental-control';
 import { parentalPinSupported } from '../services/parental-pin';
 import { VIDEO_QUALITIES, isVideoQuality } from '../utils/video-quality';
@@ -168,20 +169,11 @@ function themeSwatch(theme: { id: string; name: string }, activeId: string): Saf
 }
 
 /** Preferred-subtitle-language options for the online-subtitle search ranking.
- *  '' = no preference. Endonyms render on the TV's fonts (Latin/Cyrillic/CJK/Hangul). */
+ *  '' = no preference. */
 function subtitleLanguages(): { value: string; label: string }[] {
   return [
     { value: '', label: t('settings.any') },
-    { value: 'en', label: 'English' },
-    { value: 'zh-CN', label: '简体中文' },
-    { value: 'zh-TW', label: '繁體中文' },
-    { value: 'es', label: 'Español' },
-    { value: 'fr', label: 'Français' },
-    { value: 'de', label: 'Deutsch' },
-    { value: 'pt', label: 'Português' },
-    { value: 'ru', label: 'Русский' },
-    { value: 'ja', label: '日本語' },
-    { value: 'ko', label: '한국어' },
+    ...SUBTITLE_LANGUAGES.map(({ code, label }) => ({ value: code, label })),
   ];
 }
 

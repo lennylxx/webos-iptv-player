@@ -40,6 +40,14 @@ export function targetLabel(code: string): string {
   return LABELS[code] || languageName(code);
 }
 
+/** Short untranslated tag of a target language: EN, PT, and 简中/繁中 for Chinese scripts. */
+export function targetCode(code: string): string {
+  const key = languageKey(code);
+  if (key !== 'zh') return (key || code).toUpperCase();
+  const script = chineseScript(code);
+  return script === 'hant' ? '繁中' : script === 'hans' ? '简中' : 'ZH';
+}
+
 export function englishName(code: string): string {
   return ENGLISH_NAMES[code] || ISO6391.getName(languageKey(code)) || code;
 }
@@ -60,6 +68,11 @@ export function needsTranslation(sourceLang: string, target: string): boolean {
   const from = chineseScript(sourceLang);
   const to = chineseScript(target);
   return !!from && !!to && from !== to;
+}
+
+/** Whether two targets name one language (pt and pt-BR do; zh-CN and zh-TW don't). */
+export function sameTarget(a: string, b: string): boolean {
+  return !needsTranslation(a, b) && !needsTranslation(b, a);
 }
 
 // Rough token count: ASCII runs about four characters a token, CJK about one.

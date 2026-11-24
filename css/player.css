@@ -1064,6 +1064,7 @@
 .player-menu .menu-header h2 {
   font-size: 28px;
   color: var(--accent);
+  overflow-wrap: break-word; /* a long one-word title (de at text size 150) stays inside the panel */
 }
 
 .player-menu .menu-header .menu-subtitle {
@@ -1164,6 +1165,17 @@
   font-weight: 700;
 }
 
+/* An action that is never checked marks itself with the AI icon in the check column. */
+.player-menu .menu-check.menu-check-ai {
+  color: inherit;
+}
+
+.player-menu .menu-check-ai .ai-icon {
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0;
+}
+
 .player-menu .menu-check.menu-back {
   color: var(--text-primary);
   font-size: 26px;
@@ -1178,7 +1190,7 @@
   text-overflow: ellipsis;
 }
 
-/* An AI translation: the name truncates; its "· AI translation" note never does. */
+/* An AI translation: the name truncates; its "· AI · EN" note never does. */
 .player-menu .menu-track-label.menu-track-ai {
   display: flex;
   align-items: baseline;

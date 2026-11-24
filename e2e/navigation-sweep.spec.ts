@@ -338,6 +338,10 @@ interface Screen extends ProbeScreen {
   // D explores what keys scroll into view too, once nothing on screen at the
   // start has keys left: a key leads off screen before the way back.
   followScroll?: boolean;
+  // Keys that close the screen by design (the player menu), and how to tell
+  // it closed; after one does, `open` shows it again. A key that leaves the
+  // screen open but loses focus is still judged.
+  closedBy?: { keys: Direction[]; closed(page: Page): Promise<boolean> };
 }
 
 const probeOf = (s: Screen): ProbeScreen => ({
@@ -626,6 +630,54 @@ const SCREENS: Screen[] = [
     },
   })),
   {
+    name: 'Player translation language',
+    root: '#player-menu',
+    focusables: '.menu-item',
+    columns: [],
+    tags: [],
+    cross: [],
+    // Left and Right close the player menu.
+    closedBy: {
+      keys: ['left', 'right'],
+      closed: (page) => page.locator('#player-menu').evaluate((el) => !el.classList.contains('visible')),
+    },
+    async seed(page) {
+      await routeFakeAi(page, () => ({}));
+    },
+    async open(page) {
+      const menu = page.locator('#player-menu');
+      if (!await page.locator('#view-player').isVisible()) {
+        await openTab(page, 'movies');
+        await hover(page.locator('#view-movies .catalog-tile[data-item-id="10"]').first());
+        await page.keyboard.press('Enter');
+        await expect(page.locator('#view-movies .detail-plot')).toBeVisible();
+        await hover(page.locator('#view-movies [data-action="play"]'));
+        await page.keyboard.press('Enter');
+        await expect(page.locator('#player-osd .osd-channel-name')).toBeVisible();
+      }
+      const openSubtitles = async () => {
+        await page.mouse.move(960, 540);
+        await page.mouse.move(1900, 540);
+        await expect(menu).toBeVisible();
+        await hover(menu.locator('[data-menu-action="__subs_open__"]'));
+        await page.keyboard.press('Enter');
+      };
+      await openSubtitles();
+      const sub = menu.locator('.menu-item[data-menu-action="__subs_track__"]:not([data-track-index="-1"])').first();
+      if (!(await sub.textContent())?.includes('✓')) {
+        await hover(sub);
+        await page.keyboard.press('Enter');
+        await openSubtitles();
+      }
+      await hover(menu.locator('[data-menu-action="__subs_translate_open__"]'));
+      await page.keyboard.press('Enter');
+      await expect(menu.locator('[data-menu-action="__subs_translate_pick__"]').first()).toBeVisible();
+      // Done sliding in, so every row is where the probe measures it.
+      await expect.poll(() => menu.evaluate((el) => getComputedStyle(el).transform))
+        .toMatch(/^(none|matrix\(1, 0, 0, 1, 0, 0\))$/);
+    },
+  },
+  {
     name: 'Parental suggestion review',
     root: '.suggestion-review',
     focusables: '[data-focusable]',
@@ -912,6 +964,14 @@ async function step(page: Page, s: Screen, from: Item, direction: Direction, run
   const { focus, from: fromAfter } = await page.evaluate(([q, id]) =>
     (window as unknown as ProbeWindow).__navProbe.after(q, id), [p, from.id] as const);
   run.pairs++;
+  if (focus.kind !== 'item' && focus.kind !== 'tab' && s.closedBy?.keys.includes(direction)
+    && await s.closedBy.closed(page)) {
+    run.allowed.add(`${from.label} ${direction} closes the screen`);
+    if (!run.edges.has(from.id)) run.edges.set(from.id, new Map());
+    run.edges.get(from.id)!.set(direction, '<closed>');
+    await s.open(page);
+    return { kind: 'other', item: null, owner: 'closed' };
+  }
   const verdict = judge(s, from, direction, pre, focus, fromAfter);
   run.violations.push(...verdict.violations);
   for (const a of verdict.allowed) run.allowed.add(a);

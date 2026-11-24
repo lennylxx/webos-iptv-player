@@ -476,8 +476,25 @@ test('Translate turns the downloaded subtitle into an AI translation', async ({ 
   await page.keyboard.press('Enter'); // Subtitles; focus lands on the shown subtitle
   const translate = menu.locator('[data-menu-action="__subs_translate__"]');
   await expect(translate).toHaveText('Translate to Deutsch');
+  // Never checked, the action keeps its AI icon in the check column, so its
+  // words line up with the subtitles above it.
+  const lefts = await menu.evaluate((root) => Array.from(root.querySelectorAll('.menu-item[data-track-index], [data-menu-action="__subs_translate__"]'))
+    .map((row) => {
+      const label = row.querySelector('.menu-track-label')!;
+      const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node && !node.textContent!.trim()) node = walker.nextNode();
+      const range = document.createRange();
+      const at = node!.textContent!.search(/\S/);
+      range.setStart(node!, at);
+      range.setEnd(node!, at + 1);
+      return range.getBoundingClientRect().left;
+    }));
+  for (const left of lefts) expect(Math.abs(left - lefts[0])).toBeLessThan(1);
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
+  // The OSD beside the menu names the translation at once.
+  await expect(page.locator('.osd-stream-info')).toContainText('Popular Release · AI translation (Deutsch)', { timeout: 1000 });
 
   await expect.poll(async () => page.evaluate(() => {
     const v = document.getElementById('video-player') as HTMLVideoElement;
@@ -493,12 +510,93 @@ test('Translate turns the downloaded subtitle into an AI translation', async ({ 
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  await expect(menu.locator('.menu-item').filter({ hasText: 'Popular Release · AI translation' })).toContainText('✓');
+  // The menu tags the translation with its target's code.
+  await expect(menu.locator('.menu-item').filter({ hasText: 'Popular Release · AI · DE' })).toContainText('✓');
   await expect(translate).toHaveCount(0);
+  // Picking it again (focus is on it) announces the full label.
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.toast')).toHaveText('Subtitles: Popular Release · AI translation (Deutsch)');
 });
 
+test('the translation language list translates into another language without leaving playback', async ({ page }) => {
+  await seedTranslation(page, 'Popular Release');
+  await startVodPlayback(page);
+  await openSearchOverlay(page);
+  await expect(page.locator('#subtitle-search .subs-row')).toContainText('Popular Release');
+  await page.keyboard.press('Enter');
+  const menu = page.locator('#player-menu');
+  const openSubtitles = async () => {
+    await page.mouse.move(960, 540);
+    await page.mouse.move(1900, 540);
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+  };
+  await openSubtitles();
+  const other = menu.locator('[data-menu-action="__subs_translate_open__"]');
+  await expect(other).toHaveText('Translate to another language…');
+  await page.keyboard.press('ArrowDown'); // Translate to Deutsch
+  await page.keyboard.press('ArrowDown'); // Translate to another language…
+  await page.keyboard.press('Enter');
+  await expect(menu.locator('h2')).toHaveText('Translation language');
+  // Nothing is shown in translation yet, so focus lands on the default target.
+  await expect(menu.locator('.menu-item.focused')).toHaveText('Deutsch');
+
+  // Back returns to the row that opened the list.
+  await page.keyboard.press('Escape');
+  await expect(menu.locator('h2')).toHaveText('Subtitles');
+  await expect(other).toHaveClass(/focused/);
+
+  await page.keyboard.press('Enter');
+  await menu.locator('[data-lang="fr"]').evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.osd-stream-info')).toContainText('Popular Release · AI translation (Français)', { timeout: 1000 });
+
+  await openSubtitles();
+  await expect(menu.locator('.menu-item.focused')).toContainText('Popular Release · AI · FR');
+  // From French, the one-press row still offers the default, and the list checks French.
+  await expect(menu.locator('[data-menu-action="__subs_translate__"]')).toHaveText('Translate to Deutsch');
+  await other.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await expect(menu.locator('.menu-item.focused')).toHaveText(/✓\s*Français/);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('iptv_online_subtitles') || '{}').preferredLanguage)).toBe('de');
+});
+
+// The row that opens the translation language list fits its words in full,
+// in the longest locales, within the menu's width.
+for (const locale of ['en', 'de', 'fr', 'ru', 'uk', 'pt-BR']) {
+  test(`"Translate to another language…" fits the menu in ${locale}`, async ({ page }) => {
+    await seedTranslation(page, 'Popular Release');
+    await page.addInitScript((loc) => { localStorage.setItem('iptv_locale', JSON.stringify(loc)); }, locale);
+    await startVodPlayback(page);
+    const menu = page.locator('#player-menu');
+    const hover = (selector: string) => menu.locator(selector).first()
+      .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+    const openSubtitles = async () => {
+      await page.mouse.move(960, 540);
+      await page.mouse.move(1900, 540);
+      await expect(menu).toBeVisible();
+      await hover('[data-menu-action="__subs_open__"]');
+      await page.keyboard.press('Enter');
+    };
+    await openSubtitles();
+    await hover('[data-menu-action="__subs_search__"]');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#subtitle-search .subs-row').first()).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#subtitle-search .subs-overlay')).toBeHidden();
+    await openSubtitles();
+    const label = menu.locator('[data-menu-action="__subs_translate_open__"] .menu-track-label');
+    await expect(label).toBeVisible();
+    const fit = await label.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth, text: el.textContent }));
+    await page.screenshot({ path: test.info().outputPath(`translate-other-${locale}.png`) });
+    expect(fit.scroll, `${fit.text} is cut`).toBeLessThanOrEqual(fit.client);
+  });
+}
+
 // The translation's row lines its text up with the other rows, and a long name
-// gives way to its "· AI translation" note, which always shows in full.
+// gives way to its "· AI · DE" note, which always shows in full.
 test('a long-named AI translation keeps its note and lines up with the other subtitles', async ({ page }) => {
   const long = 'A Very Long Release Name That Will Never Fit In The Player Menu';
   await seedTranslation(page, long);
@@ -519,7 +617,7 @@ test('a long-named AI translation keeps its note and lines up with the other sub
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter'); // Translate to Deutsch
   await openSubtitles();
-  const entry = menu.locator('.menu-item').filter({ hasText: 'AI translation' });
+  const entry = menu.locator('.menu-item').filter({ hasText: 'AI · DE' });
   await expect(entry).toContainText('✓');
   await expect(entry.locator('.ai-icon svg')).toHaveCount(1);
 
@@ -552,10 +650,17 @@ test('a long-named AI translation keeps its note and lines up with the other sub
       aiLeft: textLeft(label),
       wordsRight: rect(node, at, at + words.length).right,
       labelRight: label.getBoundingClientRect().right,
+      nameCut: (() => {
+        const name = label.querySelector('.menu-track-name')!;
+        return name.scrollWidth > name.clientWidth;
+      })(),
+      menuWidth: (root as HTMLElement).getBoundingClientRect().width,
     };
-  }, 'AI translation');
+  }, 'AI · DE');
   for (const left of geometry.lefts) expect(Math.abs(left - geometry.aiLeft)).toBeLessThan(1);
   expect(geometry.wordsRight).toBeLessThanOrEqual(geometry.labelRight + 0.5);
+  expect(geometry.nameCut).toBe(true);
+  expect(geometry.menuWidth).toBeLessThanOrEqual(440.5);
 });
 
 test('an empty search keeps the box open for a manual retry that finds results', async ({ page }) => {

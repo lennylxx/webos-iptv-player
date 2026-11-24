@@ -18,7 +18,9 @@ import {
   parseLines,
   planBatches,
   replyTokens,
+  sameTarget,
   SubtitleTranslation,
+  targetCode,
 } from './subtitle-translation';
 
 type Outcome = { text: string; cached: boolean };
@@ -109,6 +111,23 @@ describe('needsTranslation', () => {
     expect(needsTranslation('zh-TW', 'zh-CN')).toBe(true);
     expect(needsTranslation('zh-Hans', 'zh-CN')).toBe(false);
     expect(needsTranslation('zh', 'zh-CN')).toBe(false);
+  });
+});
+
+describe('sameTarget', () => {
+  it('treats regional variants as one language, but not the Chinese scripts', () => {
+    expect(sameTarget('pt', 'pt-BR')).toBe(true);
+    expect(sameTarget('zh-CN', 'zh-TW')).toBe(false);
+  });
+});
+
+describe('targetCode', () => {
+  it('tags a target by its base language, and Chinese by its script', () => {
+    expect(targetCode('de')).toBe('DE');
+    expect(targetCode('pt-BR')).toBe('PT');
+    expect(targetCode('zh-CN')).toBe('简中');
+    expect(targetCode('zh-TW')).toBe('繁中');
+    expect(targetCode('zh-Hant')).toBe('繁中');
   });
 });
 

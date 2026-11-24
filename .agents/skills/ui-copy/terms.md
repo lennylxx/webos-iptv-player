@@ -62,7 +62,10 @@ a new term after review, add a row here.
 | LLM token | token | Token |
 | Stored AI output (cache category) | AI results | AI 结果 |
 | Translate subtitles (menu row; endonym after a colon outside en) | Translate to {language} | 翻译为：{language} |
-| AI-translated subtitle entry | {name} · AI translation | {name} · AI 翻译 |
+| AI-translated subtitle in the player menu (untranslated suffix; ISO 639-1 code in caps; Chinese 简中 / 繁中 in every UI language; the name truncates, the suffix never) | {name} · ✦ AI · EN, {name} · ✦ AI · 简中 | {name} · ✦ AI · EN, {name} · ✦ AI · 简中 |
+| AI-translated subtitle in the toast and OSD (target's native name) | {name} · AI translation ({language}) | {name} · AI 翻译（{language}） |
+| Open the translation language list (subtitles menu row) | Translate to another language… | 翻译为其他语言… |
+| Translation language list (sub-menu title; rows are native names) | Translation language | 翻译语言 |
 | Subtitle translation progress / failure | Translating subtitles… {percent}% / Subtitle translation failed | 正在翻译字幕… {percent}% / 字幕翻译失败 |
 | Daily cap hit during a task | Daily AI limit reached. Translation paused. | 已达到每日 AI 上限，翻译已暂停。 |
 | AI auth or invalid setup stops a task | AI setup problem. Translation paused. | AI 设置有问题，翻译已暂停。 |
@@ -142,5 +145,7 @@ Never reintroduce these for the concept named.
 | Stop an AI check | Cancel / 取消 (implies results are discarded) | Stop / 停止 |
 | Show the untranslated text | See original / 查看原文, Turn off translation / 关闭翻译 | Show original / 显示原文 |
 | AI-translated label | Translated / 已翻译 | AI translation / AI 翻译 |
+| Translation language row / list title | More languages… (reads as more subtitle tracks), Change language (reads as the UI language), Other language…, Auto-translate (clashes with AI translation); title Translate to (a dangling preposition) | Translate to another language… / Translation language |
+| AI-translated subtitle target | AI translation to {language} (case agreement with a native name), {language} AI translation, AI translation: {language}, a bare · {language} (source or target?), {name} >> {language}; full language names in the menu suffix; ZH-CN / ZH-TW / ZH-HANS / ZH-HANT in the menu suffix | Menu: · AI · EN, · AI · 简中 / 繁中; toast/OSD: AI translation ({language}) |
 | Movie and series plot text | plot / synopsis / summary, 剧情简介 / 描述 / 情节 | description / 简介 |
 | Info translation action | Translate (doesn't say AI), AI translate (noun used as a verb), AI 翻译 (reads as the AI translation mark) | Translate with AI / 用 AI 翻译 |

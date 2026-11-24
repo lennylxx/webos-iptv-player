@@ -9,6 +9,7 @@ import type {
   NumberEvent,
   ResumeEntry,
   SubtitleTrackOption,
+  TranslationLanguageOption,
   VodPlayback,
   VodQueueItem,
   XtreamCatchupSource,
@@ -1287,8 +1288,13 @@ export class Player {
     return this.tracks.subtitleTranslationLabel();
   }
 
-  translateSubtitles(): void {
-    this.tracks.translateSubtitles();
+  subtitleTranslationLanguages(): TranslationLanguageOption[] | null {
+    return this.tracks.subtitleTranslationLanguages();
+  }
+
+  translateSubtitles(target?: string): void {
+    this.tracks.translateSubtitles(target);
+    this.refreshOsd();
   }
 
   openSubtitleOffset(): void {
@@ -2612,6 +2618,8 @@ export class Player {
 
   selectSubtitleTrack(index: number): void {
     this.tracks.selectSubtitleTrack(index);
+    // The OSD stays up beside the menu; its subtitle line names the pick.
+    this.refreshOsd();
   }
 
   getPlaybackRateState(): PlaybackRateState {
