@@ -414,7 +414,7 @@ const SETTINGS: Omit<Screen, 'name' | 'open'> = {
 
 // Each category after General scrolled to the top of the pane, so its own
 // controls are what is on screen.
-const SETTINGS_CATEGORIES = ['sources', 'guide', 'appearance', 'playback', 'subtitles', 'advanced', 'data'];
+const SETTINGS_CATEGORIES = ['sources', 'guide', 'appearance', 'playback', 'subtitles', 'ai', 'advanced', 'data'];
 
 const LIVE: Omit<Screen, 'name' | 'open'> = {
   root: '#view-channels',

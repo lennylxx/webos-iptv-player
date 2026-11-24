@@ -1,3 +1,4 @@
+import { createLogger } from '../logger';
 import {
   booleanValue,
   httpUrl,
@@ -5,6 +6,8 @@ import {
   stringValue,
   subtitleLanguage,
 } from './validation';
+
+const log = createLogger('setup');
 
 export interface OnlineSubtitleState {
   preferredLanguage: string;
@@ -14,6 +17,13 @@ export interface OnlineSubtitleState {
   opensubtitlesApiKeyConfigured: boolean;
   opensubtitlesPasswordConfigured: boolean;
   opensubtitlesUsername: string;
+}
+
+export interface AiState {
+  baseUrl: string;
+  model: string;
+  apiKeyConfigured: boolean;
+  extraHeadersConfigured: boolean;
 }
 
 export interface ManualEpgSourceState {
@@ -37,6 +47,37 @@ export interface SetupState {
   }>;
   manualEpgSources: ManualEpgSourceState[];
   onlineSubtitles: OnlineSubtitleState;
+  ai: AiState;
+}
+
+function defaultAiState(): AiState {
+  return { baseUrl: '', model: '', apiKeyConfigured: false, extraHeadersConfigured: false };
+}
+
+// A missing or invalid AI state falls back to the default: a bad AI field
+// must not reject the whole snapshot, which would stall every phone action.
+function aiState(value: unknown): AiState {
+  if (value === undefined) return defaultAiState();
+  try {
+    return parseAiState(value);
+  } catch (e) {
+    log.warn('Invalid AI state; publishing defaults', 'event=setup.ai_state.invalid',
+      'reason=' + (e instanceof Error ? e.message.replace(/\s+/g, '_') : 'unknown'));
+    return defaultAiState();
+  }
+}
+
+function parseAiState(value: unknown): AiState {
+  const input = objectValue(value);
+  const baseUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim() === ''
+    ? ''
+    : httpUrl(input.baseUrl, 'AI server URL');
+  return {
+    baseUrl,
+    model: stringValue(input.model, 'AI model', 200, false),
+    apiKeyConfigured: booleanValue(input.apiKeyConfigured, 'AI API key status'),
+    extraHeadersConfigured: booleanValue(input.extraHeadersConfigured, 'AI HTTP headers status'),
+  };
 }
 
 function enabledState(value: unknown): { enabled?: false } {
@@ -130,6 +171,7 @@ export function parseSetupState(value: unknown): SetupState {
         false,
       ),
     },
+    ai: aiState(input.ai),
   };
 }
 
@@ -148,6 +190,7 @@ export class SetupStateStore {
       opensubtitlesPasswordConfigured: false,
       opensubtitlesUsername: '',
     },
+    ai: defaultAiState(),
   };
 
   set(state: SetupState): void {
@@ -160,6 +203,7 @@ export class SetupStateStore {
         playlistIds: item.playlistIds.slice(),
       })),
       onlineSubtitles: { ...state.onlineSubtitles },
+      ai: { ...state.ai },
     };
   }
 
@@ -173,6 +217,7 @@ export class SetupStateStore {
         playlistIds: item.playlistIds.slice(),
       })),
       onlineSubtitles: { ...this.state.onlineSubtitles },
+      ai: { ...this.state.ai },
     };
   }
 }

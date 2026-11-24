@@ -278,7 +278,7 @@ describe('idb-cache', () => {
 
   it('uses the next schema version after the published v3 database', async () => {
     const db = await openPersistenceDb();
-    expect(db?.version).toBe(7);
+    expect(db?.version).toBe(8);
     expect(db?.objectStoreNames.contains(STREAM_MIME_STORE)).toBe(true);
     expect(db?.objectStoreNames.contains('search-index-cache')).toBe(true);
   });

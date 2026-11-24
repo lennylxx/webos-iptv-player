@@ -3,6 +3,8 @@ import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, isV
 import { MAX_CUSTOM_THEMES, sanitizeCustomThemes, type CustomTheme } from '../config/custom-theme';
 import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelResumeEntry, ChannelCustomization, ChannelCycleMode, GuideLayout, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
+import type { LlmConfig } from './llm/types';
+import { normalizeLlmConfig } from './llm/config';
 import { isCatalogSort, isCatalogSortDirection, type CatalogSortPreference } from '../utils/catalog-sort';
 import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
@@ -1501,6 +1503,19 @@ export const StorageService = {
   },
   setOnlineSubtitleConfig(cfg: OnlineSubtitleConfig): boolean {
     return set('online_subtitles', cfg);
+  },
+
+  getLlmConfig(): LlmConfig {
+    return normalizeLlmConfig(get<unknown>('llm', null));
+  },
+  setLlmConfig(cfg: LlmConfig): boolean {
+    return set('llm', cfg);
+  },
+  getLlmUsage(): unknown {
+    return get<unknown>('llm_usage', null);
+  },
+  setLlmUsage(usage: unknown): boolean {
+    return set('llm_usage', usage);
   },
 
   getCatalogMark(accountId: string, kind: CatalogMarkKind, itemId: string): CatalogMark | null {

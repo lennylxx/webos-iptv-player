@@ -609,9 +609,12 @@ class App {
   private queueDeviceSetupSync(): Promise<void> {
     this.deviceSetupSync = this.deviceSetupSync
       .then(async () => {
-        if (await SetupClient.applyPendingActions()) {
-          await this.onSettingsSaved('reload');
-        }
+        // Subtitle and AI settings need no reload; an open Settings form
+        // shows them at once, so its Save can't write the old values back.
+        // Settings may sit under Reminders, which returns to it without a
+        // re-render; updating its form while hidden keeps a later Save right.
+        const reload = await SetupClient.applyPendingActions(changed => this.settings.applyExternalChanges(changed));
+        if (reload) await this.onSettingsSaved('reload');
       })
       .catch(err => log.error('Device setup sync failed:', err));
     return this.deviceSetupSync;

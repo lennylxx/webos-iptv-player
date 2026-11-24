@@ -56,8 +56,8 @@ HTTP (called by phones, and by the app for reconcile):
 | `/setup?token=…` | GET | QR entry that opens the same page already authorized. |
 | `/pair` | POST | Rate-limited exchange of the four-digit code for the setup token. |
 | `/setup-state` | PUT | Loopback-only sanitized source state, including enabled flags, published by the TV. |
-| `/setup-state?token=…` | GET | Sanitized source and online-subtitle state for the setup page. |
-| `/setup-actions?token=…` | POST | Validate and queue a source or online-subtitle change. |
+| `/setup-state?token=…` | GET | Sanitized source, online-subtitle, and AI state for the setup page. |
+| `/setup-actions?token=…` | POST | Validate and queue a source, online-subtitle, or AI change. |
 | `/setup-actions` | GET | Loopback-only list consumed by the TV app. |
 | `/setup-actions/:id` | DELETE | Loopback-only acknowledgement from the TV app. |
 | `/setup-actions/:id?token=…` | GET | Phone-facing application status. |
@@ -366,7 +366,9 @@ which iterates the active `serviceEvents` subscriber list and calls
 `msg.respond({event})` on each one. Upload events refresh `/uploads`.
 Setup events make `SetupClient` consume the pending actions, update the
 existing `StorageService` models, publish a sanitized `/setup-state` snapshot,
-acknowledge each action, and reload data. EPG edits use one
+and acknowledge each action. Source and EPG changes then reload data;
+online-subtitle and AI changes only update the subtitle and AI fields of the
+Settings form, keeping any field edited on the TV. EPG edits use one
 `manual-epg-sources` action containing the complete ordered list, so priority
 and playlist scope change atomically. The phone waits for that
 acknowledgement before showing “Saved on TV”. Source-removal actions use the
@@ -378,11 +380,16 @@ The TV also publishes state after service startup and local Settings changes.
 The setup page refreshes the snapshot periodically. Xtream snapshots contain
 the account id, display name, server URL, and username, but never the password.
 Online-subtitle snapshots contain only the preferred language and configured
-flags for each provider, plus the OpenSubtitles username. API keys, passwords,
-and login tokens never leave the TV. The phone shows configured secrets as a
+flags for each provider, plus the OpenSubtitles username. AI snapshots contain
+the server URL and model plus configured flags for the API key and extra HTTP
+headers. API keys, passwords, header values, and login tokens never leave the
+TV. The phone shows configured secrets as a
 fixed `********` mask that does not reveal their length. An unchanged mask
 preserves the value, one delete clears the field, and replacement text updates
-only that field.
+only that field. A saved AI key and extra headers stay with their server: when
+an AI action moves the server URL to another origin (scheme, host, or port),
+or clears it, without re-entering them, the TV drops them (`event=llm.setup.key_dropped`),
+and the phone clears their masks as soon as the address changes.
 
 Rejected uploads (HTTP 400) and missing-id deletes (HTTP 404) do **not**
 fire the event.

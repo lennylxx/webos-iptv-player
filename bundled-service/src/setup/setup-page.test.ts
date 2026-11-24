@@ -568,4 +568,175 @@ describe('setup page forms', () => {
     expect(password.value).toBe('********');
     dom.window.close();
   });
+
+  it('shows the TV\'s AI endpoint with masked secrets and sends only what changed', async () => {
+    const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
+      if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        return Promise.resolve(response({
+          playlists: [],
+          xtreamAccounts: [],
+          manualEpgSources: [],
+          onlineSubtitles: {},
+          ai: {
+            baseUrl: 'http://host:8080/v1',
+            model: 'm1',
+            apiKeyConfigured: true,
+            extraHeadersConfigured: false,
+          },
+        }));
+      }
+      if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
+        return Promise.resolve(response({ id: 13, type: 'ai' }, 201));
+      }
+      if (url === '/setup-actions/13?token=abc123') {
+        return Promise.resolve(response({ id: 13, pending: false }));
+      }
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+        window.HTMLFormElement.prototype.reportValidity = () => true;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const form = dom.window.document.querySelector<HTMLFormElement>('.config-fields[data-action="ai"]')!;
+    const field = (name: string) => form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+    expect(field('baseUrl').value).toBe('http://host:8080/v1');
+    expect(field('aiModel').value).toBe('m1');
+    expect(field('aiApiKey').value).toBe('********');
+    expect(field('aiExtraHeaders').value).toBe('');
+    expect(form.querySelector('[data-message="aiIntro"]')!.textContent)
+      .toBe('Optional features powered by an AI model you choose. Turn on “Use AI features” on the TV to use them.');
+    const typeUrl = (value: string) => {
+      field('baseUrl').value = value;
+      field('baseUrl').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    };
+    // Another server clears the masked key; coming back restores the mask.
+    typeUrl('192.168.1.5:8080/v1');
+    expect(field('aiApiKey').value).toBe('');
+    typeUrl('host:8080/v1');
+    expect(field('aiApiKey').value).toBe('********');
+    field('aiModel').value = 'm2';
+    field('aiModel').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    typeUrl('192.168.1.5:8080/v1');
+    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const post = fetchMock.mock.calls.find(call =>
+      call[0] === '/setup-actions?token=abc123' && call[1]?.method === 'POST');
+    expect(JSON.parse(String(post![1]?.body))).toEqual({
+      type: 'ai',
+      baseUrl: 'http://192.168.1.5:8080/v1',
+      model: 'm2',
+    });
+    dom.window.close();
+  });
+
+  it('hides the TV\'s key when the phone clears Server URL, and shows no stale mask after saving', async () => {
+    let state = {
+      baseUrl: 'http://ai.test/v1',
+      model: 'm1',
+      apiKeyConfigured: true,
+      extraHeadersConfigured: false,
+    };
+    const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
+      if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        return Promise.resolve(response({
+          playlists: [], xtreamAccounts: [], manualEpgSources: [], onlineSubtitles: {}, ai: state,
+        }));
+      }
+      if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
+        const body = JSON.parse(String(options.body)) as { baseUrl: string };
+        state = { ...state, baseUrl: body.baseUrl, apiKeyConfigured: false };
+        return Promise.resolve(response({ id: 15, type: 'ai' }, 201));
+      }
+      if (url === '/setup-actions/15?token=abc123') return Promise.resolve(response({ id: 15, pending: false }));
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+        window.HTMLFormElement.prototype.reportValidity = () => true;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const form = dom.window.document.querySelector<HTMLFormElement>('.config-fields[data-action="ai"]')!;
+    const field = (name: string) => form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+    const typeUrl = (value: string) => {
+      field('baseUrl').value = value;
+      field('baseUrl').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    };
+    // An empty address is no server, so the key doesn't stay with it.
+    typeUrl('');
+    expect(field('aiApiKey').value).toBe('');
+    typeUrl('ai.test/v1');
+    expect(field('aiApiKey').value).toBe('********');
+
+    typeUrl('http://other.lan:8080/v1');
+    expect(field('aiApiKey').value).toBe('');
+    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    typeUrl('http://other.lan:8080/v1/');
+    expect(field('aiApiKey').value).toBe('');
+    dom.window.close();
+  });
+
+  it('still sends a key the user deleted, and rechecks the mask when the TV state changes', async () => {
+    let state = { baseUrl: 'http://host:8080/v1', model: 'm1', apiKeyConfigured: true, extraHeadersConfigured: false };
+    const posts: unknown[] = [];
+    const fetchMock = vi.fn((url: string, options?: { method?: string; body?: string }) => {
+      if (url === '/uploads') return Promise.resolve(response([]));
+      if (url === '/setup-state?token=abc123') {
+        return Promise.resolve(response({ playlists: [], xtreamAccounts: [], manualEpgSources: [], onlineSubtitles: {}, ai: state }));
+      }
+      if (url === '/setup-actions?token=abc123' && options?.method === 'POST') {
+        posts.push(JSON.parse(String(options.body)));
+        return Promise.resolve(response({ id: 16, type: 'ai' }, 201));
+      }
+      if (url === '/setup-actions/16?token=abc123') return Promise.resolve(response({ id: 16, pending: false }));
+      return Promise.resolve(response({ error: 'unexpected request' }, 500));
+    });
+    const dom = new JSDOM(PAGE_HTML, {
+      runScripts: 'dangerously',
+      url: 'http://host/setup?token=abc123',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'languages', { value: ['en'] });
+        window.fetch = fetchMock as unknown as typeof window.fetch;
+        window.HTMLFormElement.prototype.reportValidity = () => true;
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const form = dom.window.document.querySelector<HTMLFormElement>('.config-fields[data-action="ai"]')!;
+    const field = (name: string) => form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+
+    // A deliberate delete still clears the TV's key.
+    field('aiApiKey').dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(posts[0]).toMatchObject({ apiKey: '' });
+
+    // While the phone types server B, the TV saves B with its own key. The
+    // next poll must show that key as configured, and a save must keep it.
+    posts.length = 0;
+    field('baseUrl').value = 'http://other.lan:8080/v1';
+    field('baseUrl').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    state = { ...state, baseUrl: 'http://other.lan:8080/v1', apiKeyConfigured: true };
+    await (dom.window as unknown as { refreshSetupState: () => Promise<void> }).refreshSetupState();
+    expect(field('aiApiKey').value).toBe('********');
+    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(posts[0]).not.toHaveProperty('apiKey');
+    dom.window.close();
+  });
 });

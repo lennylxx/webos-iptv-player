@@ -16,6 +16,8 @@ const { storage } = vi.hoisted(() => ({
       opensubtitles: { apiKey: '', username: '', password: '' },
     })),
     setOnlineSubtitleConfig: vi.fn(() => true),
+    getLlmConfig: vi.fn(() => ({ baseUrl: '', model: '', apiKey: '', extraHeaders: '' })),
+    setLlmConfig: vi.fn(() => true),
   },
 }));
 vi.mock('./storage-service', () => ({ StorageService: storage }));

@@ -11,6 +11,8 @@ import { StorageService } from './storage-service';
 import { uploadIdFromUrl } from './upload-client';
 import { ParentalControlService } from './parental-control';
 import type { OnlineSubtitleConfig } from './subtitle-search/types';
+import { completeServerUrl, endpointSignature, originOf } from './llm/config';
+import type { LlmConfig } from './llm/types';
 
 const log = createLogger('Setup');
 const TIMEOUT = 4000;
@@ -42,6 +44,14 @@ export type SetupAction =
         username?: string;
         password?: string;
       } | null;
+    }
+  | {
+      id: number;
+      type: 'ai';
+      baseUrl: string;
+      model: string;
+      apiKey?: string;
+      extraHeaders?: string;
     };
 
 export interface SetupState {
@@ -64,6 +74,18 @@ export interface SetupState {
     opensubtitlesPasswordConfigured: boolean;
     opensubtitlesUsername: string;
   };
+  ai: {
+    baseUrl: string;
+    model: string;
+    apiKeyConfigured: boolean;
+    extraHeadersConfigured: boolean;
+  };
+}
+
+/** Which settings-only groups a phone action changed. */
+export interface SettingsChanges {
+  subtitles: boolean;
+  ai: boolean;
 }
 
 class SetupClientImpl {
@@ -106,6 +128,7 @@ class SetupClientImpl {
     if (!base) return false;
     const playlists = StorageService.getPlaylists();
     const onlineSubtitles = StorageService.getOnlineSubtitleConfig();
+    const llm = StorageService.getLlmConfig();
     const state: SetupState = {
       playlists: playlists
         .filter(item => item.source !== 'upload' && item.source !== 'xtream')
@@ -146,6 +169,12 @@ class SetupClientImpl {
             onlineSubtitles.opensubtitles.password !== '',
           opensubtitlesUsername: onlineSubtitles.opensubtitles.username,
         },
+      ai: {
+        baseUrl: llm.baseUrl,
+        model: llm.model,
+        apiKeyConfigured: llm.apiKey.trim() !== '',
+        extraHeadersConfigured: llm.extraHeaders.trim() !== '',
+      },
     };
     try {
       const res = await fetchWithTimeout(
@@ -168,8 +197,10 @@ class SetupClientImpl {
   /**
    * Apply phone-submitted source changes to the same storage used by Settings.
    * Actions are idempotent so a failed acknowledgement can be retried safely.
+   * Resolves true when sources or guides changed and data must reload;
+   * subtitle and AI changes only call `onSettingsChanged`.
    */
-  async applyPendingActions(): Promise<boolean> {
+  async applyPendingActions(onSettingsChanged?: (changed: SettingsChanges) => void): Promise<boolean> {
     const base = serviceBase();
     if (!base) {
       log.debug('Action sync skipped: service port not yet known');
@@ -208,9 +239,12 @@ class SetupClientImpl {
       assrt: { ...previousOnlineSubtitles.assrt },
       opensubtitles: { ...previousOnlineSubtitles.opensubtitles },
     };
+    const previousLlm = StorageService.getLlmConfig();
+    let llm: LlmConfig = { ...previousLlm };
     const playlistActionIds: number[] = [];
     const epgActionIds: number[] = [];
     const subtitleActionIds: number[] = [];
+    const llmActionIds: number[] = [];
 
     for (const action of actions) {
       if (!action || !Number.isSafeInteger(action.id)) continue;
@@ -326,6 +360,29 @@ class SetupClientImpl {
           };
         }
         subtitleActionIds.push(action.id);
+      } else if (action.type === 'ai' &&
+          typeof action.baseUrl === 'string' &&
+          typeof action.model === 'string') {
+        const endpoint = { baseUrl: completeServerUrl(action.baseUrl), model: action.model.trim() };
+        // A masked key the phone didn't resend stays only on the same server;
+        // it must never follow a new address the phone typed.
+        const sameServer = originOf(endpoint.baseUrl) === originOf(llm.baseUrl);
+        const droppedKey = !sameServer && typeof action.apiKey !== 'string' && llm.apiKey !== '';
+        const droppedHeaders = !sameServer && typeof action.extraHeaders !== 'string' && llm.extraHeaders !== '';
+        if (droppedKey || droppedHeaders) {
+          log.warn('AI key dropped for a new server', 'event=llm.setup.key_dropped',
+            `key=${String(droppedKey)}`, `headers=${String(droppedHeaders)}`, `action=${action.id}`);
+        }
+        llm = {
+          ...llm,
+          ...endpoint,
+          apiKey: typeof action.apiKey === 'string' ? action.apiKey : sameServer ? llm.apiKey : '',
+          extraHeaders: typeof action.extraHeaders === 'string'
+            ? action.extraHeaders
+            : sameServer ? llm.extraHeaders : '',
+        };
+        if (llm.capabilities && llm.capabilities.signature !== endpointSignature(llm)) llm.capabilities = null;
+        llmActionIds.push(action.id);
       } else {
         log.warn('Ignoring invalid action:', action.id);
       }
@@ -341,21 +398,28 @@ class SetupClientImpl {
       !epgChanged || StorageService.setManualEpgSources(manualEpgSources);
     const subtitlesStored =
       !subtitlesChanged || StorageService.setOnlineSubtitleConfig(onlineSubtitles);
+    const llmChanged = JSON.stringify(llm) !== JSON.stringify(previousLlm);
+    const llmStored = !llmChanged || StorageService.setLlmConfig(llm);
 
     if (!playlistsStored) log.error('Playlist setup actions were not persisted');
     if (!epgStored) log.error('EPG setup action was not persisted');
     if (!subtitlesStored) log.error('Online subtitle setup action was not persisted');
+    if (!llmStored) log.error('AI setup action was not persisted');
+    // At once, before the slower publish and acknowledgements, so an open
+    // Settings form shows the new values before its Save could write old ones.
+    const changed = { subtitles: subtitlesChanged && subtitlesStored, ai: llmChanged && llmStored };
+    if (onSettingsChanged && (changed.subtitles || changed.ai)) onSettingsChanged(changed);
     const acknowledgedIds = [
       ...(playlistsStored ? playlistActionIds : []),
       ...(epgStored ? epgActionIds : []),
       ...(subtitlesStored ? subtitleActionIds : []),
+      ...(llmStored ? llmActionIds : []),
     ];
     if (acknowledgedIds.length > 0 && await this.publishState()) {
       for (const id of acknowledgedIds) await this.acknowledgeAction(id);
     }
     return (playlistsChanged && playlistsStored) ||
-      (epgChanged && epgStored) ||
-      (subtitlesChanged && subtitlesStored);
+      (epgChanged && epgStored);
   }
 }
 

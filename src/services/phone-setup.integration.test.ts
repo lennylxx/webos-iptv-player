@@ -70,6 +70,9 @@ describe('phone setup synchronization', () => {
       subdlApiKey: 'k1',
       opensubtitles: { apiKey: 'k2', username: 'u2', password: 'password-secret' },
     });
+    await submit({
+      type: 'ai', baseUrl: 'http://host:8080/v1', model: 'm1', apiKey: 'ai-key-secret',
+    });
 
     await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
 
@@ -108,6 +111,12 @@ describe('phone setup synchronization', () => {
         tokenTs: 0,
       },
     });
+    expect(StorageService.getLlmConfig()).toMatchObject({
+      enabled: false,
+      baseUrl: 'http://host:8080/v1',
+      model: 'm1',
+      apiKey: 'ai-key-secret',
+    });
     expect(await (await fetch(`${baseUrl}/setup-actions`)).json()).toEqual([]);
 
     const state = await (await fetch(`${baseUrl}/setup-state${setupToken}`)).json();
@@ -137,10 +146,17 @@ describe('phone setup synchronization', () => {
         opensubtitlesPasswordConfigured: true,
         opensubtitlesUsername: 'u2',
       },
+      ai: {
+        baseUrl: 'http://host:8080/v1',
+        model: 'm1',
+        apiKeyConfigured: true,
+        extraHeadersConfigured: false,
+      },
     });
     expect((state as { xtreamAccounts: Array<Record<string, unknown>> })
       .xtreamAccounts[0]).not.toHaveProperty('password');
     expect(JSON.stringify(state)).not.toContain('password-secret');
+    expect(JSON.stringify(state)).not.toContain('ai-key-secret');
 
     const xtreamId = StorageService.getPlaylists()
       .find(item => item.source === 'xtream')!.id;

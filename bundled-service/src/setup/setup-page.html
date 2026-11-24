@@ -789,6 +789,37 @@
           <p class="config-status" aria-live="polite"></p>
         </form>
       </details>
+      <details class="config-group">
+        <summary><span class="config-type">AI</span><span data-message="aiFeatures">AI Features</span></summary>
+        <form class="config-fields" data-action="ai">
+          <label class="config-field">
+            <span data-message="serverUrl">Server URL</span>
+            <input class="config-input" name="baseUrl" type="text" inputmode="url"
+              autocapitalize="off" spellcheck="false" autocomplete="off"
+              placeholder="http://192.168.1.10:8080/v1">
+          </label>
+          <div class="config-provider-status" data-message="aiServerHint">Works with any OpenAI-compatible server, such as an online AI service or a local model on your home network.</div>
+          <div class="config-row">
+            <label class="config-field">
+              <span data-message="apiKey">API key</span>
+              <input class="config-input" name="aiApiKey" type="password" autocomplete="off">
+            </label>
+            <label class="config-field">
+              <span data-message="aiModel">Model</span>
+              <input class="config-input" name="aiModel" type="text" autocomplete="off">
+            </label>
+          </div>
+          <label class="config-field">
+            <span data-message="aiExtraHeaders">Extra HTTP headers</span>
+            <input class="config-input" name="aiExtraHeaders" type="password" autocomplete="off"
+              placeholder="api-key: value">
+          </label>
+          <div class="config-provider-status" data-message="aiIntro">Optional features powered by an AI model you choose. Turn on “Use AI features” on the TV to use them.</div>
+          <button class="config-save" type="submit"
+            data-message="saveAiSettings">Save AI settings</button>
+          <p class="config-status" aria-live="polite"></p>
+        </form>
+      </details>
     </div>
     <div class="upload-heading" data-message="uploadM3uFiles">Upload M3U files</div>
     <label class="drop" id="drop">
@@ -825,6 +856,7 @@
   var languageCurrent = document.getElementById("language-current");
   var subtitleForm = document.querySelector('[data-action="online-subtitles"]');
   var subtitleState = document.getElementById("subtitle-state");
+  var aiForm = document.querySelector('[data-action="ai"]');
   var epgForm = document.getElementById("epg-form");
   var epgSourceList = document.getElementById("epg-source-list");
   var addEpgSource = document.getElementById("add-epg-source");
@@ -885,6 +917,12 @@
         apiKey: "API key",
         assrtToken: "API token",
         saveSubtitleSettings: "Save subtitle settings",
+        aiFeatures: "AI Features",
+        aiModel: "Model",
+        aiExtraHeaders: "Extra HTTP headers",
+        saveAiSettings: "Save AI settings",
+        aiIntro: "Optional features powered by an AI model you choose. Turn on “Use AI features” on the TV to use them.",
+        aiServerHint: "Works with any OpenAI-compatible server, such as an online AI service or a local model on your home network.",
         configured: "Configured",
         notConfigured: "Not configured",
         builtInAccess: "Built-in access",
@@ -953,6 +991,12 @@
         apiKey: "API-Schlüssel",
         assrtToken: "API-Token",
         saveSubtitleSettings: "Untertiteleinstellungen speichern",
+        aiFeatures: "KI-Funktionen",
+        aiModel: "Modell",
+        aiExtraHeaders: "Zusätzliche HTTP-Header",
+        saveAiSettings: "KI-Einstellungen speichern",
+        aiIntro: "Optionale Funktionen mit einem KI-Modell Ihrer Wahl. Schalten Sie danach auf dem Fernseher „KI-Funktionen verwenden“ ein.",
+        aiServerHint: "Funktioniert mit jedem OpenAI-kompatiblen Server, etwa einem Online-KI-Dienst oder einem lokalen Modell in Ihrem Heimnetz.",
         configured: "Eingerichtet",
         notConfigured: "Nicht eingerichtet",
         builtInAccess: "Integrierter Zugriff",
@@ -1021,6 +1065,12 @@
         apiKey: "Clave de API",
         assrtToken: "Token de API",
         saveSubtitleSettings: "Guardar configuración de subtítulos",
+        aiFeatures: "Funciones de IA",
+        aiModel: "Modelo",
+        aiExtraHeaders: "Cabeceras HTTP adicionales",
+        saveAiSettings: "Guardar configuración de IA",
+        aiIntro: "Funciones opcionales con el modelo de IA que elijas. Después, activa «Usar funciones de IA» en la TV.",
+        aiServerHint: "Funciona con cualquier servidor compatible con OpenAI, como un servicio de IA en línea o un modelo local en tu red doméstica.",
         configured: "Configurado",
         notConfigured: "Sin configurar",
         builtInAccess: "Acceso integrado",
@@ -1089,6 +1139,12 @@
         apiKey: "Clé API",
         assrtToken: "Jeton API",
         saveSubtitleSettings: "Enregistrer les paramètres des sous-titres",
+        aiFeatures: "Fonctionnalités IA",
+        aiModel: "Modèle",
+        aiExtraHeaders: "En-têtes HTTP supplémentaires",
+        saveAiSettings: "Enregistrer les paramètres IA",
+        aiIntro: "Fonctionnalités facultatives basées sur le modèle d’IA de votre choix. Activez ensuite « Utiliser les fonctionnalités IA » sur le téléviseur.",
+        aiServerHint: "Fonctionne avec tout serveur compatible OpenAI, comme un service d’IA en ligne ou un modèle local sur votre réseau domestique.",
         configured: "Configuré",
         notConfigured: "Non configuré",
         builtInAccess: "Accès intégré",
@@ -1157,6 +1213,12 @@
         apiKey: "Chiave API",
         assrtToken: "Token API",
         saveSubtitleSettings: "Salva impostazioni sottotitoli",
+        aiFeatures: "Funzionalità IA",
+        aiModel: "Modello",
+        aiExtraHeaders: "Intestazioni HTTP aggiuntive",
+        saveAiSettings: "Salva impostazioni IA",
+        aiIntro: "Funzionalità opzionali basate sul modello IA che scegli. Poi attiva «Usa le funzionalità IA» sulla TV.",
+        aiServerHint: "Funziona con qualsiasi server compatibile con OpenAI, come un servizio di IA online o un modello locale sulla tua rete domestica.",
         configured: "Configurato",
         notConfigured: "Non configurato",
         builtInAccess: "Accesso integrato",
@@ -1225,6 +1287,12 @@
         apiKey: "Klucz API",
         assrtToken: "Token API",
         saveSubtitleSettings: "Zapisz ustawienia napisów",
+        aiFeatures: "Funkcje AI",
+        aiModel: "Model",
+        aiExtraHeaders: "Dodatkowe nagłówki HTTP",
+        saveAiSettings: "Zapisz ustawienia AI",
+        aiIntro: "Opcjonalne funkcje oparte na wybranym przez Ciebie modelu AI. Następnie włącz „Używaj funkcji AI” na telewizorze.",
+        aiServerHint: "Działa z każdym serwerem zgodnym z OpenAI, np. z internetową usługą AI lub lokalnym modelem w Twojej sieci domowej.",
         configured: "Skonfigurowano",
         notConfigured: "Nie skonfigurowano",
         builtInAccess: "Wbudowany dostęp",
@@ -1295,6 +1363,12 @@
         apiKey: "Chave da API",
         assrtToken: "Token da API",
         saveSubtitleSettings: "Salvar configurações de legenda",
+        aiFeatures: "Recursos de IA",
+        aiModel: "Modelo",
+        aiExtraHeaders: "Cabeçalhos HTTP adicionais",
+        saveAiSettings: "Salvar configurações de IA",
+        aiIntro: "Recursos opcionais com o modelo de IA que você escolher. Depois, ative “Usar recursos de IA” na TV.",
+        aiServerHint: "Funciona com qualquer servidor compatível com OpenAI, como um serviço de IA on-line ou um modelo local na sua rede doméstica.",
         configured: "Configurado",
         notConfigured: "Não configurado",
         builtInAccess: "Acesso integrado",
@@ -1363,6 +1437,12 @@
         apiKey: "Ключ API",
         assrtToken: "Токен API",
         saveSubtitleSettings: "Сохранить настройки субтитров",
+        aiFeatures: "Функции ИИ",
+        aiModel: "Модель",
+        aiExtraHeaders: "Дополнительные HTTP-заголовки",
+        saveAiSettings: "Сохранить настройки ИИ",
+        aiIntro: "Дополнительные функции на основе выбранной вами модели ИИ. Затем включите «Использовать функции ИИ» на телевизоре.",
+        aiServerHint: "Работает с любым сервером, совместимым с OpenAI, например с онлайн-сервисом ИИ или локальной моделью в вашей домашней сети.",
         configured: "Настроено",
         notConfigured: "Не настроено",
         builtInAccess: "Встроенный доступ",
@@ -1433,6 +1513,12 @@
         apiKey: "API anahtarı",
         assrtToken: "API belirteci",
         saveSubtitleSettings: "Altyazı ayarlarını kaydet",
+        aiFeatures: "Yapay Zeka Özellikleri",
+        aiModel: "Model",
+        aiExtraHeaders: "Ek HTTP başlıkları",
+        saveAiSettings: "Yapay zeka ayarlarını kaydet",
+        aiIntro: "Seçtiğiniz bir yapay zeka modeliyle çalışan isteğe bağlı özellikler. Ardından TV’de “Yapay zeka özelliklerini kullan” seçeneğini açın.",
+        aiServerHint: "Çevrim içi bir yapay zeka hizmeti veya ev ağınızdaki yerel bir model gibi OpenAI uyumlu her sunucuyla çalışır.",
         configured: "Yapılandırıldı",
         notConfigured: "Yapılandırılmadı",
         builtInAccess: "Yerleşik erişim",
@@ -1500,6 +1586,12 @@
         apiKey: "Ключ API",
         assrtToken: "Токен API",
         saveSubtitleSettings: "Зберегти налаштування субтитрів",
+        aiFeatures: "Функції ШІ",
+        aiModel: "Модель",
+        aiExtraHeaders: "Додаткові заголовки HTTP",
+        saveAiSettings: "Зберегти налаштування ШІ",
+        aiIntro: "Додаткові функції на основі вибраної вами моделі ШІ. Потім увімкніть «Використовувати функції ШІ» на телевізорі.",
+        aiServerHint: "Працює з будь-яким сервером, сумісним з OpenAI, наприклад з онлайн-сервісом ШІ або локальною моделлю у вашій домашній мережі.",
         configured: "Налаштовано",
         notConfigured: "Не налаштовано",
         builtInAccess: "Вбудований доступ",
@@ -1530,7 +1622,7 @@
       systemPrefixes: ["zh-cn", "zh-sg", "zh-hans"],
       text: {
         title: "设置 IPTV",
-        subtitle: "通过播放列表 URL、Xtream 账户或 M3U 文件设置 IPTV",
+        subtitle: "通过播放列表网址、Xtream 账户或 M3U 文件设置 IPTV",
         configuredSources: "已设置的节目源",
         noConfiguredSources: "尚未设置节目源",
         remove: "删除",
@@ -1544,12 +1636,12 @@
         pairFailed: "配对码不正确。",
         pairLocked: "尝试次数过多，请一分钟后重试。",
         setupSources: "设置节目源",
-        playlistUrl: "播放列表 URL",
+        playlistUrl: "播放列表网址",
         name: "名称",
         playlistNamePlaceholder: "我的播放列表",
         addPlaylist: "添加播放列表",
         xtreamAccount: "Xtream 账户",
-        serverUrl: "服务器 URL",
+        serverUrl: "服务器网址",
         username: "用户名",
         password: "密码",
         addAccount: "添加账户",
@@ -1570,6 +1662,12 @@
         apiKey: "API 密钥",
         assrtToken: "API 令牌",
         saveSubtitleSettings: "保存字幕设置",
+        aiFeatures: "AI 功能",
+        aiModel: "模型",
+        aiExtraHeaders: "额外 HTTP 请求头",
+        saveAiSettings: "保存 AI 设置",
+        aiIntro: "由你选择的 AI 模型提供的可选功能。保存后，请在电视设置中打开“开启 AI 功能”开关。",
+        aiServerHint: "支持任何兼容 OpenAI 的服务器，例如在线 AI 服务，或家庭网络中的本地模型。",
         configured: "已配置",
         notConfigured: "未配置",
         builtInAccess: "内置访问",
@@ -2015,6 +2113,10 @@
       submitEpgSetup(form);
       return;
     }
+    if (form.getAttribute("data-action") === "ai") {
+      submitAiSetup(form);
+      return;
+    }
     if (!form.reportValidity()) return;
     var button = form.querySelector(".config-save");
     var status = form.querySelector(".config-status");
@@ -2088,6 +2190,56 @@
     }).then(function () {
       Array.from(form.elements).forEach(function (field) {
         if (field.dataset) field.dataset.dirty = "";
+      });
+      return refreshSetupState();
+    }).then(function () {
+      status.className = "config-status ok";
+      status.textContent = tr("savedToTv");
+      button.disabled = false;
+    }).catch(function (error) {
+      status.className = "config-status err";
+      status.textContent = error.message === "timeout" ? tr("setupTimedOut") : tr("setupFailed");
+      button.disabled = false;
+    });
+  }
+
+  function submitAiSetup(form) {
+    if (!form.reportValidity()) return;
+    var credentialMask = "********";
+    var button = form.querySelector(".config-save");
+    var status = form.querySelector(".config-status");
+    var credentialUpdate = function (name) {
+      var input = form.elements[name];
+      if (!input.dataset.dirty || input.value === credentialMask) return undefined;
+      // A mask this page hid for a new address is left to the TV, which keeps
+      // or drops the key against the server it actually stores.
+      if (input.dataset.cleared && !input.value) return undefined;
+      if (/^\**$/.test(input.value)) return "";
+      return input.value.trim();
+    };
+    // Same as the TV: a typed LAN address usually leaves out the scheme.
+    var baseUrl = completeUrl(form.elements.baseUrl.value);
+    var payload = {
+      type: "ai",
+      baseUrl: baseUrl,
+      model: form.elements.aiModel.value.trim(),
+    };
+    var apiKey = credentialUpdate("aiApiKey");
+    var extraHeaders = credentialUpdate("aiExtraHeaders");
+    if (apiKey !== undefined) payload.apiKey = apiKey;
+    if (extraHeaders !== undefined) payload.extraHeaders = extraHeaders;
+
+    button.disabled = true;
+    status.className = "config-status";
+    status.textContent = tr("saving");
+    requestSetupAction(payload, function () {
+      status.textContent = tr("applyingOnTv");
+    }).then(function () {
+      Array.from(form.elements).forEach(function (field) {
+        if (field.dataset) {
+          field.dataset.dirty = "";
+          field.dataset.cleared = "";
+        }
       });
       return refreshSetupState();
     }).then(function () {
@@ -2198,6 +2350,7 @@
     });
     refresh();
     renderSubtitleState(state.onlineSubtitles || {});
+    renderAiState(state.ai || {});
     if (count === 0) {
       var empty = document.createElement("div");
       empty.className = "configured-empty";
@@ -2235,6 +2388,59 @@
       "OpenSubtitles: " +
         tr(state.opensubtitlesConfigured ? "configured" : "notConfigured"),
     ].join(" · ");
+  }
+
+  function completeUrl(value) {
+    var text = value.trim();
+    return text && !/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? "http://" + text : text;
+  }
+
+  function urlOrigin(value) {
+    var url = completeUrl(value);
+    var match = /^([a-z][a-z0-9+.-]*:\/\/[^\/?#]*)/i.exec(url);
+    return match ? match[1].toLowerCase() : value.trim().toLowerCase();
+  }
+
+  // A saved key stays on its server: once the address points elsewhere, the
+  // masked secrets clear so the TV drops them unless they are entered again.
+  function guardAiSecrets() {
+    var credentialMask = "********";
+    var key = aiForm.elements.aiApiKey;
+    var headers = aiForm.elements.aiExtraHeaders;
+    var sameServer = urlOrigin(aiForm.elements.baseUrl.value) === (aiForm.dataset.origin || "");
+    [key, headers].forEach(function (input) {
+      if (!sameServer && input.value === credentialMask && !input.dataset.dirty) {
+        input.value = "";
+        input.dataset.dirty = "true";
+        input.dataset.cleared = "true";
+      } else if (sameServer && input.dataset.cleared && !input.value) {
+        input.value = credentialMask;
+        input.dataset.dirty = "";
+        input.dataset.cleared = "";
+      }
+    });
+  }
+
+  function renderAiState(state) {
+    var credentialMask = "********";
+    var setText = function (name, value) {
+      var input = aiForm.elements[name];
+      if (!input.dataset.dirty) input.value = value || "";
+    };
+    var setCredential = function (name, configured) {
+      var input = aiForm.elements[name];
+      if (input.dataset.dirty) return;
+      input.value = configured ? credentialMask : "";
+      // The TV's state now decides what the field shows; nothing to restore.
+      input.dataset.cleared = "";
+    };
+    aiForm.dataset.origin = urlOrigin(state.baseUrl || "");
+    setText("baseUrl", state.baseUrl);
+    setText("aiModel", state.model);
+    setCredential("aiApiKey", state.apiKeyConfigured);
+    setCredential("aiExtraHeaders", state.extraHeadersConfigured);
+    // A refreshed server may differ from an address being typed.
+    guardAiSecrets();
   }
 
   function refreshSetupState() {
@@ -2276,30 +2482,33 @@
     var inputs = epgSourceList.querySelectorAll(".epg-url-input");
     inputs[inputs.length - 1].focus();
   });
-  subtitleForm.addEventListener("input", function (event) {
-    event.target.dataset.dirty = "true";
-  });
-  subtitleForm.addEventListener("change", function (event) {
-    event.target.dataset.dirty = "true";
-  });
-  subtitleForm.addEventListener("focusin", function (event) {
-    if (event.target.value === "********" && event.target.select) event.target.select();
-  });
-  subtitleForm.addEventListener("keydown", function (event) {
-    if (event.target.value === "********" &&
-        (event.key === "Backspace" || event.key === "Delete")) {
-      event.preventDefault();
-      event.target.value = "";
+  aiForm.elements.baseUrl.addEventListener("input", guardAiSecrets);
+  [subtitleForm, aiForm].forEach(function (secretForm) {
+    secretForm.addEventListener("input", function (event) {
       event.target.dataset.dirty = "true";
-    }
-  });
-  subtitleForm.addEventListener("beforeinput", function (event) {
-    if (event.target.value === "********" &&
-        event.inputType && event.inputType.indexOf("delete") === 0) {
-      event.preventDefault();
-      event.target.value = "";
+    });
+    secretForm.addEventListener("change", function (event) {
       event.target.dataset.dirty = "true";
-    }
+    });
+    secretForm.addEventListener("focusin", function (event) {
+      if (event.target.value === "********" && event.target.select) event.target.select();
+    });
+    secretForm.addEventListener("keydown", function (event) {
+      if (event.target.value === "********" &&
+          (event.key === "Backspace" || event.key === "Delete")) {
+        event.preventDefault();
+        event.target.value = "";
+        event.target.dataset.dirty = "true";
+      }
+    });
+    secretForm.addEventListener("beforeinput", function (event) {
+      if (event.target.value === "********" &&
+          event.inputType && event.inputType.indexOf("delete") === 0) {
+        event.preventDefault();
+        event.target.value = "";
+        event.target.dataset.dirty = "true";
+      }
+    });
   });
 
   // Drag-over highlight + drop handling. We listen on the whole document for

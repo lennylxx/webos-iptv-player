@@ -381,7 +381,8 @@
   height: 26px;
 }
 
-#manage-parental-controls:disabled {
+#manage-parental-controls:disabled,
+#ai-test-connection.is-busy {
   cursor: default;
   opacity: 0.38;
 }
@@ -1040,7 +1041,17 @@
   padding-left: 0;
 }
 
-.xtream-status {
+.ai-test-row {
+  align-items: center;
+}
+
+/* The section intro sits under its title like the first setting would. */
+.settings-item-hint.ai-intro {
+  margin: 0 0 20px;
+}
+
+.xtream-status,
+.ai-status {
   flex: 1;
   min-width: 0;
   font-size: 18px;
@@ -1048,8 +1059,10 @@
   word-break: break-word;
 }
 
-.xtream-status.ok { color: var(--accent); }
-.xtream-status.err { color: var(--danger); }
+.xtream-status.ok,
+.ai-status.ok { color: var(--accent); }
+.xtream-status.err,
+.ai-status.err { color: var(--danger); }
 
 /* Theme picker: focusable swatch tiles. Each tile carries its own data-theme, so
    its mini app-mock (tab bar, focused channel tile, list rows, status dots) and

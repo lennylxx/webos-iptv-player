@@ -15,6 +15,7 @@ import {
   SEARCH_INDEX_STORE,
   STREAM_MIME_STORE,
   SUBTITLE_STORE,
+  LLM_STORE,
   transactionDone,
   type CacheStore,
 } from './idb-database';
@@ -50,7 +51,7 @@ import {
 } from './playlist-chunks';
 
 const log = createLogger('CacheStorage');
-const CACHE_CATEGORIES = ['playlist', 'epg', 'catalog', 'subtitle', 'health', 'search'] as const;
+const CACHE_CATEGORIES = ['playlist', 'epg', 'catalog', 'subtitle', 'health', 'search', 'ai'] as const;
 const MAX_BUDGET_BYTES = 1024 * 1024 * 1024;
 const STANDARD_QUOTA_SHARE = 0.5;
 // The prefixed API reports no usage, so nothing checks the origin before a
@@ -60,10 +61,11 @@ const PREFIXED_QUOTA_SHARE = 0.25;
 const PREFIXED_QUOTA_TIMEOUT_MS = 1000;
 // Least valuable first. Pruning ahead of a write never evicts the playlist the
 // app boots from; only the engine's quota error does.
-const EVICTION_ORDER: readonly CacheCategory[] = ['search', 'subtitle', 'catalog', 'epg', 'playlist'];
+const EVICTION_ORDER: readonly CacheCategory[] = ['search', 'subtitle', 'ai', 'catalog', 'epg', 'playlist'];
 const BUDGET_EVICTION_ORDER = EVICTION_ORDER.filter((category) => category !== 'playlist');
 const SUBTITLE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SEARCH_INDEX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const LLM_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const CLEANUP_MARGIN_BYTES = 4 * 1024 * 1024;
 const ENTRY_META_PREFIX = 'entry:';
 const ENTRY_META_INDEX_KEY = 'entry-index';
@@ -403,6 +405,7 @@ function categoryForStore(store: CacheStore): CacheCategory {
     case SUBTITLE_STORE: return 'subtitle';
     case CHANNEL_HEALTH_STORE: return 'health';
     case SEARCH_INDEX_STORE: return 'search';
+    case LLM_STORE: return 'ai';
   }
 }
 
@@ -414,6 +417,7 @@ function ttlFor(category: CacheCategory): number {
     case 'subtitle': return SUBTITLE_TTL_MS;
     case 'health': return 30 * 24 * 60 * 60 * 1000;
     case 'search': return SEARCH_INDEX_TTL_MS;
+    case 'ai': return LLM_TTL_MS;
   }
 }
 
@@ -623,6 +627,7 @@ function emptyUsage(): Record<CacheCategory, CacheUsageEntry> {
     subtitle: { bytes: 0, entries: 0 },
     health: { bytes: 0, entries: 0 },
     search: { bytes: 0, entries: 0 },
+    ai: { bytes: 0, entries: 0 },
   };
 }
 
@@ -1635,6 +1640,25 @@ export async function setCachedSubtitle(key: string, text: string): Promise<void
     timestamp,
     text,
     expiresAt: timestamp + SUBTITLE_TTL_MS,
+  });
+}
+
+export async function getCachedLlmResult(key: string): Promise<unknown> {
+  const raw = await readRaw(LLM_STORE, key);
+  if (raw && raw.expiresAt !== null && raw.expiresAt <= Date.now()) {
+    await removeExpiredRecord(LLM_STORE, key);
+    return undefined;
+  }
+  return raw ? raw.value : undefined;
+}
+
+export async function setCachedLlmResult(key: string, value: unknown): Promise<void> {
+  const timestamp = Date.now();
+  await putRaw(LLM_STORE, {
+    key,
+    timestamp,
+    value,
+    expiresAt: timestamp + LLM_TTL_MS,
   });
 }
 

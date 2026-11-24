@@ -174,6 +174,12 @@ describe('setup state', () => {
       opensubtitlesPasswordConfigured: true,
       opensubtitlesUsername: 'u2',
     },
+    ai: {
+      baseUrl: 'http://host:8080/v1',
+      model: 'm1',
+      apiKeyConfigured: true,
+      extraHeadersConfigured: false,
+    },
   };
 
   it('accepts a loopback snapshot and returns it only with the setup token', async () => {
@@ -201,6 +207,7 @@ describe('setup state', () => {
           subdlApiKey: 'k1',
           opensubtitlesPassword: 'p1',
         },
+        ai: { ...state.ai, apiKey: 'k3', extraHeaders: 'api-key: k4' },
       }),
     });
     expect(put.status).toBe(200);
@@ -208,6 +215,39 @@ describe('setup state', () => {
     expect(saved).not.toHaveProperty('xtreamAccounts.0.password');
     expect(saved).not.toHaveProperty('onlineSubtitles.subdlApiKey');
     expect(saved).not.toHaveProperty('onlineSubtitles.opensubtitlesPassword');
+    expect(saved).not.toHaveProperty('ai.apiKey');
+    expect(saved).not.toHaveProperty('ai.extraHeaders');
+  });
+
+  it('keeps the rest of the snapshot when the AI server URL is invalid', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const put = await fetch(`${baseUrl}/setup-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...state, ai: { ...state.ai, baseUrl: '192.168.1.5:11434/v1' } }),
+    });
+    expect(put.status).toBe(200);
+    const saved = await (await fetch(`${baseUrl}/setup-state?token=${setupToken}`)).json();
+    expect(saved.playlists).toEqual(state.playlists);
+    expect(saved.ai).toEqual({
+      baseUrl: '', model: '', apiKeyConfigured: false, extraHeadersConfigured: false,
+    });
+    expect(warn).toHaveBeenCalledWith('[setup]', expect.any(String), 'event=setup.ai_state.invalid',
+      'reason=Invalid_AI_server_URL');
+    warn.mockRestore();
+  });
+
+  it('defaults the AI state for an app that publishes none', async () => {
+    const { ai: _ai, ...older } = state;
+    const put = await fetch(`${baseUrl}/setup-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(older),
+    });
+    expect(put.status).toBe(200);
+    const saved = await (await fetch(`${baseUrl}/setup-state?token=${setupToken}`)).json();
+    expect(saved.ai).toEqual({ baseUrl: '', model: '', apiKeyConfigured: false, extraHeadersConfigured: false,
+    });
   });
 
   it('rejects duplicate program guide URLs in setup snapshots', async () => {
@@ -262,6 +302,9 @@ describe('setup actions', () => {
       subdlApiKey: 'k1',
       opensubtitles: { apiKey: 'k2', username: 'u2', password: 'p2' },
     })).status).toBe(201);
+    expect((await postAction({
+      type: 'ai', baseUrl: 'http://host:8080/v1', model: 'm1', apiKey: ' k3 ',
+    })).status).toBe(201);
 
     const actions = await (await fetch(`${baseUrl}/setup-actions`)).json();
     expect(actions).toEqual([
@@ -294,6 +337,13 @@ describe('setup actions', () => {
         preferredLanguage: '',
         subdlApiKey: 'k1',
         opensubtitles: { apiKey: 'k2', username: 'u2', password: 'p2' },
+      },
+      {
+        id: expect.any(Number),
+        type: 'ai',
+        baseUrl: 'http://host:8080/v1',
+        model: 'm1',
+        apiKey: 'k3',
       },
     ]);
   });
@@ -332,6 +382,20 @@ describe('setup actions', () => {
       sourceId: 'u1',
       enabled: 'false',
     })).status).toBe(400);
+    expect((await postAction({
+      type: 'ai', baseUrl: '', model: 'm'.repeat(201),
+    })).status).toBe(400);
+    expect((await postAction({
+      type: 'ai', baseUrl: 'file:///tmp/a', model: 'm1',
+    })).status).toBe(400);
+  });
+
+  it('completes a scheme-less AI server address like the TV does', async () => {
+    expect((await postAction({
+      type: 'ai', baseUrl: 'localhost:11434/v1', model: 'm1',
+    })).status).toBe(201);
+    const actions = await (await fetch(`${baseUrl}/setup-actions`)).json();
+    expect(actions[actions.length - 1]).toMatchObject({ type: 'ai', baseUrl: 'http://localhost:11434/v1' });
     expect((await postAction({
       type: 'manual-epg-sources',
       sources: [

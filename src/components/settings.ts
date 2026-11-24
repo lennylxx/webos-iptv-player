@@ -27,6 +27,16 @@ import {
   type ChannelHealthProgress,
 } from '../services/channel-health';
 import { createXtreamClient } from '../services/xtream-client';
+import type { SettingsChanges } from '../services/setup-client';
+import { LlmService } from '../services/llm/llm-service';
+import { LlmError } from '../services/llm/client';
+import {
+  completeServerUrl,
+  endpointSignature,
+  normalizeBaseUrl,
+  originOf,
+} from '../services/llm/config';
+import type { LlmCapabilities, LlmConfig } from '../services/llm/types';
 import { newLiveCategoryIds, normalizeLiveCategoryFilter } from '../utils/xtream-category-filter';
 import { LiveCategoryPicker } from './live-category-picker';
 import { normalizeXtreamBaseUrl, normalizeXtreamLiveOutputPreference } from '../utils/xtream-url';
@@ -45,6 +55,7 @@ import { sourceToggle, toggleGroup } from './toggle-controls';
 import {
   closeDropdown,
   commitDropdownOption,
+  setDropdownValue,
   dropdown,
   toggleDropdown,
 } from './dropdown';
@@ -69,6 +80,7 @@ import {
 } from '../services/motion-service';
 import {
   ADVANCED_ICON,
+  AI_ICON,
   APPEARANCE_ICON,
   CHEVRON_DOWN,
   CHEVRON_UP,
@@ -225,7 +237,7 @@ function timeoutOptions(values: readonly number[]): { value: string; label: stri
 }
 
 type SettingsCategory = 'general' | 'sources' | 'guide' | 'appearance'
-  | 'playback' | 'subtitles' | 'data' | 'advanced';
+  | 'playback' | 'subtitles' | 'ai' | 'data' | 'advanced';
 
 const SETTINGS_CATEGORIES: readonly {
   id: SettingsCategory;
@@ -263,6 +275,11 @@ const SETTINGS_CATEGORIES: readonly {
     icon: raw(CAPTIONS_ICON),
   },
   {
+    id: 'ai',
+    label: 'settings.ai',
+    icon: raw(AI_ICON),
+  },
+  {
     id: 'advanced',
     label: 'settings.advanced',
     icon: raw(ADVANCED_ICON),
@@ -273,6 +290,46 @@ const SETTINGS_CATEGORIES: readonly {
     icon: raw(DATABASE_ICON),
   },
 ];
+
+const AI_CONTEXT_SIZES = [4096, 8192, 16000, 32000, 128000];
+const AI_REQUEST_LIMITS = [0, 100, 500, 1000, 5000];
+const AI_TOKEN_LIMITS = [0, 100000, 500000, 1000000, 5000000];
+
+// The stored value stays selectable even when it isn't one of the presets.
+function aiCountOptions(values: number[], current: number, zeroIsNoLimit: boolean): { value: string; label: string }[] {
+  const all = values.indexOf(current) >= 0 ? values : values.concat(current).sort((a, b) => a - b);
+  return all.map(value => ({
+    value: String(value),
+    label: zeroIsNoLimit && value === 0 ? t('settings.aiNoLimit') : formatNumber(value),
+  }));
+}
+
+function aiFailureText(error: unknown): string {
+  const reason = error instanceof LlmError ? error.reason : 'network';
+  switch (reason) {
+    case 'auth': return t('settings.aiInvalidKey');
+    case 'quota': return t('settings.aiRateLimited');
+    case 'timeout': return t('settings.aiTimedOut');
+    case 'config':
+      if (error instanceof LlmError && error.hint === 'address') return t('settings.aiCheckServerUrl');
+      return error instanceof LlmError && error.status === 404
+        ? t('settings.aiModelNotFound')
+        : t('settings.aiEnterServer');
+    case 'http': return t('settings.aiServerError', { status: error instanceof LlmError ? error.status : 0 });
+    default: return t('settings.aiUnreachable');
+  }
+}
+
+function aiUsageText(): string {
+  const usage = LlmService.usageToday();
+  let requests = 0;
+  let tokens = 0;
+  Object.keys(usage.features).forEach((id) => {
+    requests += usage.features[id].requests;
+    tokens += usage.features[id].inputTokens + usage.features[id].outputTokens;
+  });
+  return t('settings.aiUsageToday', { requests: formatNumber(requests), tokens: formatNumber(tokens) });
+}
 
 function settingsNavItem(category: typeof SETTINGS_CATEGORIES[number], active: boolean): Safe {
   return html`
@@ -527,6 +584,13 @@ export type SaveAction = 'reload' | 'apply' | 'reset' | 'cancel' | 'edit-channel
 export class Settings {
   private container: HTMLElement;
   private onSave: (action: SaveAction) => void | Promise<void>;
+  private aiTesting = false;
+  // Bumped by render(), so a test that outlives the form it ran on is ignored.
+  private aiRender = 0;
+  // The subtitle language render() showed, to tell a phone change from an edit here.
+  private renderedSubtitleLanguage = '';
+  // Capabilities the last Test connection detected, saved with matching values.
+  private aiTested: LlmCapabilities | null = null;
   private onChannelsChanged: () => void;
   private nav: SpatialNav;
   // The nav only picks elements geometrically; the scope holds the focused
@@ -665,7 +729,9 @@ export class Settings {
 
     this.container.addEventListener('input', (e: Event) => {
       const input = e.target as HTMLInputElement;
-      if (input.classList.contains('manual-epg-url')) {
+      if (input.id === 'ai-base-url') {
+        this.guardAiSecrets(input.value);
+      } else if (input.classList.contains('manual-epg-url')) {
         this.refreshEpgOffsetEditor(this.manualEpgSourcesFromEditor(), input.value.trim());
       } else if (
         input.classList.contains('playlist-name')
@@ -761,6 +827,10 @@ export class Settings {
   }
 
   render(): void {
+    // A fresh form starts without an earlier, unsaved connection test.
+    this.aiTested = null;
+    this.aiTesting = false;
+    this.aiRender++;
     this.pendingLiveCategories.clear();
     const allPlaylists = StorageService.getPlaylists();
     const playlists = allPlaylists.filter(pl => pl.source !== 'upload' && pl.source !== 'xtream');
@@ -783,6 +853,8 @@ export class Settings {
     const guideLayout = StorageService.getGuideLayout();
     const tzOffset = StorageService.getEpgTzOffset();
     const os = StorageService.getOnlineSubtitleConfig();
+    const ai = StorageService.getLlmConfig();
+    this.renderedSubtitleLanguage = os.preferredLanguage;
     const theme = StorageService.getTheme();
     this.selectedTheme = theme;
     const overlayStyle = StorageService.getOverlayStyle();
@@ -1070,6 +1142,65 @@ export class Settings {
                     <input type="password" class="settings-input" data-focusable data-key="os-pass" id="os-pass"
                            value="${os.opensubtitles.password}" placeholder="password">
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-category" id="settings-ai" data-settings-category="ai">
+              <div class="settings-section">
+                <h3 class="settings-section-title">${t('settings.ai')}</h3>
+                <div class="settings-item-hint ai-intro">${t('settings.aiIntro')}</div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.aiUse')}</div>
+                  ${toggleGroup('ai-enabled', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], ai.enabled ? 'on' : 'off')}
+                  <div class="settings-item-hint">${t('settings.aiPrivacyHint')}</div>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-field wide">
+                    <label>${t('settings.serverUrl')}</label>
+                    <input type="url" class="settings-input" data-focusable data-key="ai-base-url" id="ai-base-url"
+                           value="${ai.baseUrl}" placeholder="http://192.168.1.10:8080/v1">
+                    <div class="settings-item-hint">${t('settings.aiServerHint')}</div>
+                  </div>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-field">
+                    <label>${t('settings.apiKey')}</label>
+                    <input type="text" class="settings-input" data-focusable data-key="ai-api-key" id="ai-api-key"
+                           value="${ai.apiKey}" placeholder="api_key">
+                  </div>
+                  <div class="settings-field">
+                    <label>${t('settings.aiModel')}</label>
+                    <input type="text" class="settings-input" data-focusable data-key="ai-model" id="ai-model"
+                           value="${ai.model}">
+                  </div>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-field wide">
+                    <label>${t('settings.aiExtraHeaders')}</label>
+                    <input type="text" class="settings-input" data-focusable data-key="ai-extra-headers" id="ai-extra-headers"
+                           value="${ai.extraHeaders}" placeholder="api-key: value">
+                    <div class="settings-item-hint">${t('settings.aiExtraHeadersHint')}</div>
+                  </div>
+                </div>
+                <div class="settings-row ai-test-row">
+                  <button class="btn btn-secondary" data-focusable data-key="ai-test-connection" id="ai-test-connection">${t('settings.aiTestConnection')}</button>
+                  <div class="ai-status" id="ai-status" data-key="ai-status"></div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.aiContextSize')}</div>
+                  ${dropdown('ai-context-size', aiCountOptions(AI_CONTEXT_SIZES, ai.contextTokens, false), String(ai.contextTokens))}
+                  <div class="settings-item-hint">${t('settings.aiContextSizeHint')}</div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.aiDailyRequestLimit')}</div>
+                  ${dropdown('ai-daily-requests', aiCountOptions(AI_REQUEST_LIMITS, ai.dailyRequestCap, true), String(ai.dailyRequestCap))}
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.aiDailyTokenLimit')}</div>
+                  ${dropdown('ai-daily-tokens', aiCountOptions(AI_TOKEN_LIMITS, ai.dailyTokenCap, true), String(ai.dailyTokenCap))}
+                  <div class="settings-item-hint">${t('settings.aiLimitsHint')}</div>
+                  <div class="settings-item-hint" id="ai-usage">${aiUsageText()}</div>
                 </div>
               </div>
             </div>
@@ -1563,6 +1694,8 @@ export class Settings {
       this.authorizeSourceRemoval(this.sourceId(el), () => this.removeXtreamEntry(el));
     } else if (el.classList.contains('check-xtream')) {
       void this.checkXtreamAccount(el);
+    } else if (el.id === 'ai-test-connection') {
+      void this.testAiConnection();
     } else if (el.classList.contains('xtream-live-categories')) {
       this.openLiveCategories(el);
     } else if (el.classList.contains('source-toggle')) {
@@ -1865,6 +1998,7 @@ export class Settings {
         <span>${t('settings.onlineSubtitles')} <strong>${formatBytes(usage.categories.subtitle.bytes)}</strong></span>
         <span>${t('settings.channelHealth')} <strong>${formatBytes(usage.categories.health.bytes)}</strong></span>
         <span>${t('settings.searchIndex')} <strong>${formatBytes(usage.categories.search.bytes)}</strong></span>
+        <span>${t('settings.aiResults')} <strong>${formatBytes(usage.categories.ai.bytes)}</strong></span>
       </div>
     `);
   }
@@ -2718,6 +2852,178 @@ export class Settings {
   }
 
   /**
+   * Shows subtitle and AI values the phone just saved without re-rendering,
+   * so edits elsewhere in an open form survive, and a field edited here keeps
+   * the edit. A field still holding what render() put in (its defaultValue)
+   * takes the new value.
+   */
+  applyExternalChanges(changed: SettingsChanges): void {
+    const update = (id: string, next: string, force = false) => {
+      const input = $(`#${id}`, this.container) as HTMLInputElement | null;
+      if (!input) return;
+      if (force || input.value === input.defaultValue) {
+        input.value = next;
+        delete input.dataset.cleared;
+      }
+      input.defaultValue = next;
+    };
+    if (changed.subtitles) {
+      const os = StorageService.getOnlineSubtitleConfig();
+      update('subdl-key', os.subdl.apiKey);
+      update('assrt-key', os.assrt.apiKey);
+      update('os-key', os.opensubtitles.apiKey);
+      update('os-user', os.opensubtitles.username);
+      update('os-pass', os.opensubtitles.password);
+      const language = $('#os-pref-lang', this.container) as HTMLElement | null;
+      if (language && language.dataset.value === this.renderedSubtitleLanguage) {
+        setDropdownValue(language, os.preferredLanguage);
+      }
+      this.renderedSubtitleLanguage = os.preferredLanguage;
+    }
+    if (changed.ai) {
+      const ai = StorageService.getLlmConfig();
+      const url = $('#ai-base-url', this.container) as HTMLInputElement | null;
+      // The phone moved the endpoint to another server, where the TV already
+      // dropped the key: a key typed here for the old server must not follow.
+      // Forced only when the address field follows the phone: a key typed
+      // here beside an address also typed here belongs to that address.
+      const moved = !!url && url.value === url.defaultValue && originOf(url.defaultValue) !== originOf(ai.baseUrl);
+      update('ai-base-url', ai.baseUrl);
+      update('ai-model', ai.model);
+      // Secrets go only beside the server they belong to: when the form shows
+      // an address typed here for another server, the phone's key waits behind
+      // the cleared flag, so guardAiSecrets restores it if that server returns.
+      const shown = originOf(url ? url.value : '');
+      const secrets: Array<[string, string]> = [['ai-api-key', ai.apiKey], ['ai-extra-headers', ai.extraHeaders]];
+      secrets.forEach(([id, saved]) => {
+        if (shown === originOf(ai.baseUrl)) {
+          update(id, saved, moved);
+          return;
+        }
+        const input = $(`#${id}`, this.container) as HTMLInputElement | null;
+        if (!input) return;
+        if (input.value === input.defaultValue) input.value = '';
+        if (!input.value && saved) input.dataset.cleared = 'true';
+        input.defaultValue = saved;
+      });
+      // A test or its result for the old endpoint no longer applies.
+      this.aiRender++;
+      this.aiTested = null;
+      this.aiTesting = false;
+      this.setAiTestEnabled(true);
+      this.setAiStatus('', '');
+    }
+  }
+
+  /** The AI section as edited, merged over the stored config. */
+  private aiFormConfig(): LlmConfig {
+    const stored = StorageService.getLlmConfig();
+    const value = (id: string) => ($(`#${id}`, this.container) as HTMLInputElement | null)?.value.trim() ?? '';
+    const choice = (id: string, fallback: number) => {
+      const raw = ($(`#${id}`, this.container) as HTMLElement | null)?.dataset.value;
+      return raw === undefined ? fallback : Number(raw);
+    };
+    const enabled = $('#ai-enabled .toggle-option.active', this.container)?.getAttribute('data-value');
+    const next: LlmConfig = {
+      ...stored,
+      enabled: enabled === undefined || enabled === null ? stored.enabled : enabled === 'on',
+      baseUrl: completeServerUrl(value('ai-base-url')),
+      apiKey: value('ai-api-key'),
+      model: value('ai-model'),
+      extraHeaders: value('ai-extra-headers'),
+      contextTokens: choice('ai-context-size', stored.contextTokens),
+      dailyRequestCap: choice('ai-daily-requests', stored.dailyRequestCap),
+      dailyTokenCap: choice('ai-daily-tokens', stored.dailyTokenCap),
+    };
+    const signature = endpointSignature(next);
+    // A test of these exact values replaces what an earlier detection saved.
+    if (this.aiTested && this.aiTested.signature === signature) next.capabilities = this.aiTested;
+    else if (next.baseUrl !== stored.baseUrl || next.model !== stored.model) next.capabilities = null;
+    return next;
+  }
+
+  /**
+   * Clears the saved API key and headers from the form once the address
+   * points at another server, so they aren't sent there unless re-entered,
+   * and puts them back if the address returns to the saved server.
+   */
+  private guardAiSecrets(address: string): void {
+    const stored = StorageService.getLlmConfig();
+    const sameServer = originOf(address) === originOf(stored.baseUrl);
+    const fields: Array<[string, string]> = [['ai-api-key', stored.apiKey], ['ai-extra-headers', stored.extraHeaders]];
+    // Each field on its own: editing one must not let the other follow.
+    fields.forEach(([id, saved]) => {
+      const input = $(`#${id}`, this.container) as HTMLInputElement | null;
+      if (!input) return;
+      if (!sameServer && saved && input.value === saved) {
+        input.value = '';
+        input.dataset.cleared = 'true';
+      } else if (sameServer && input.dataset.cleared && !input.value) {
+        input.value = saved;
+        delete input.dataset.cleared;
+      }
+    });
+  }
+
+  // Like the EPG move buttons: a disabled button also leaves the D-pad's reach.
+  private setAiTestEnabled(enabled: boolean): void {
+    const button = $('#ai-test-connection', this.container);
+    // Stays focusable while busy, so the D-pad stays on it; OK meanwhile does nothing.
+    button?.classList.toggle('is-busy', !enabled);
+  }
+
+  private setAiStatus(text: string, tone: 'ok' | 'err' | ''): void {
+    const status = $('#ai-status', this.container);
+    if (!status) return;
+    status.className = `ai-status${tone ? ` ${tone}` : ''}`;
+    status.textContent = text;
+  }
+
+  private async testAiConnection(): Promise<void> {
+    if (this.aiTesting) return;
+    let config = this.aiFormConfig();
+    if (!normalizeBaseUrl(config.baseUrl)) {
+      this.setAiStatus(t('settings.aiEnterServer'), 'err');
+      return;
+    }
+    this.aiTesting = true;
+    this.aiTested = null;
+    const render = this.aiRender;
+    this.setAiTestEnabled(false);
+    this.setAiStatus(t('settings.checking'), '');
+    try {
+      if (!config.model.trim()) {
+        // A server serving one model (as llama.cpp does) needs no model typed.
+        const models = await LlmService.listModels(config);
+        if (render !== this.aiRender) return;
+        const model = $('#ai-model', this.container) as HTMLInputElement | null;
+        if (models.length !== 1 || !model) {
+          this.setAiStatus(t('settings.aiEnterServer'), 'err');
+          return;
+        }
+        model.value = models[0];
+        config = this.aiFormConfig();
+      }
+      const report = await LlmService.testConnection(config);
+      if (render !== this.aiRender) return;
+      this.aiTested = report.capabilities;
+      // A reply passed the probe, so the model works even when /models names it differently.
+      this.setAiStatus(report.models.length
+        ? tp('settings.aiConnectedModels', report.models.length)
+        : t('settings.aiConnected'), 'ok');
+    } catch (error) {
+      if (render === this.aiRender) this.setAiStatus(aiFailureText(error), 'err');
+    } finally {
+      if (render === this.aiRender) {
+        this.aiTesting = false;
+        this.setAiTestEnabled(true);
+      }
+      const usage = $('#ai-usage', this.container);
+      if (usage) usage.textContent = aiUsageText();
+    }
+  }
+
+  /**
    * Verify a card's current (unsaved) credentials via get_account_info and show
    * the result inline, so the user can confirm before saving. Re-resolves the
    * status node after the await in case the view re-rendered, and never blocks
@@ -3093,6 +3399,9 @@ export class Settings {
         tokenTs: sameCreds ? prevOs.opensubtitles.tokenTs : 0,
       },
     });
+
+    StorageService.setLlmConfig(this.aiFormConfig());
+    this.aiTested = null;
 
     // Source, EPG URL, and time correction changes rebuild loaded data. Display-only
     // settings (time zone, auto-play) just re-render in place.

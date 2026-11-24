@@ -50,3 +50,11 @@ export function subtitleLanguage(value: unknown): string {
   }
   return value;
 }
+
+/** Adds the http:// a typed LAN address usually leaves out, as the TV does. */
+export function completeHttpUrl(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!text || /^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
+  return 'http://' + text;
+}

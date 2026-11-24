@@ -1,6 +1,6 @@
 // Shared with the app worker, so it must stay free of DOM and storage access.
 export const DB_NAME = 'iptv';
-export const DB_VERSION = 7;
+export const DB_VERSION = 8;
 
 export const EPG_STORE = 'epg-cache';
 export const CATALOG_STORE = 'catalog-cache';

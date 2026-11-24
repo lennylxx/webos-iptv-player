@@ -71,3 +71,13 @@ export function commitDropdownOption(el: HTMLElement): HTMLElement | null {
   dd.querySelector('.dropdown-trigger')?.setAttribute('aria-expanded', 'false');
   return dd;
 }
+
+/** Shows another value without opening or closing the menu, or moving focus. */
+export function setDropdownValue(dd: HTMLElement, value: string): void {
+  const option = dd.querySelector<HTMLElement>(`[data-dropdown-value="${value}"]`);
+  if (!option) return;
+  dd.dataset.value = value;
+  dd.querySelectorAll('.dropdown-option').forEach(o => o.classList.toggle('active', o === option));
+  const cur = dd.querySelector('.dropdown-current');
+  if (cur) cur.textContent = option.textContent;
+}

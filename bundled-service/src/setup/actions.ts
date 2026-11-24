@@ -1,4 +1,11 @@
-import { booleanValue, httpUrl, objectValue, stringValue, subtitleLanguage } from './validation';
+import {
+  booleanValue,
+  completeHttpUrl,
+  httpUrl,
+  objectValue,
+  stringValue,
+  subtitleLanguage,
+} from './validation';
 
 interface OpenSubtitlesCredentials {
   apiKey?: string;
@@ -23,6 +30,14 @@ export type SetupActionPayload =
       subdlApiKey?: string;
       assrtApiKey?: string;
       opensubtitles?: OpenSubtitlesCredentials | null;
+    }
+  | {
+      type: 'ai';
+      baseUrl: string;
+      model: string;
+      // Omitted keeps the TV's value; an empty string clears it.
+      apiKey?: string;
+      extraHeaders?: string;
     };
 
 export type SetupAction = SetupActionPayload & { id: number };
@@ -37,6 +52,12 @@ function passwordValue(value: unknown): string {
 function optionalApiKey(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.length > 256) throw new Error(`Invalid ${field}`);
+  return value.trim();
+}
+
+function optionalSecret(value: unknown, field: string, maxLength: number): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length > maxLength) throw new Error(`Invalid ${field}`);
   return value.trim();
 }
 
@@ -125,6 +146,20 @@ export function parseSetupAction(value: unknown): SetupActionPayload {
       ...(subdlApiKey === undefined ? {} : { subdlApiKey }),
       ...(assrtApiKey === undefined ? {} : { assrtApiKey }),
       ...(opensubtitles === undefined ? {} : { opensubtitles }),
+    };
+  }
+  if (input.type === 'ai') {
+    const apiKey = optionalSecret(input.apiKey, 'AI API key', 1024);
+    const extraHeaders = optionalSecret(input.extraHeaders, 'AI HTTP headers', 4096);
+    const baseUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim() === ''
+      ? ''
+      : httpUrl(completeHttpUrl(input.baseUrl), 'AI server URL');
+    return {
+      type: 'ai',
+      baseUrl,
+      model: stringValue(input.model, 'AI model', 200, false),
+      ...(apiKey === undefined ? {} : { apiKey }),
+      ...(extraHeaders === undefined ? {} : { extraHeaders }),
     };
   }
   throw new Error('Invalid setup action type');

@@ -4,6 +4,7 @@ import {
   CACHE_META_STORE,
   CACHE_STORES,
   cacheKeyPath,
+  LLM_STORE,
   openPersistenceDb,
   PLAYLIST_STORE,
   requestResult,
@@ -13,14 +14,14 @@ import {
 } from './idb-database';
 import { DB_NAME } from './idb-schema';
 
-// The v6 layout: every store except the search index cache.
+// The v6 layout: every store except the search index and LLM caches.
 function createV6(): Promise<void> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 6);
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const name of CACHE_STORES) {
-        if (name === SEARCH_INDEX_STORE) continue;
+        if (name === SEARCH_INDEX_STORE || name === LLM_STORE) continue;
         const store = db.createObjectStore(name, { keyPath: cacheKeyPath(name) });
         store.createIndex('expiresAt', 'expiresAt');
         store.createIndex('lastAccessedAt', 'lastAccessedAt');
@@ -41,13 +42,14 @@ function createV6(): Promise<void> {
   });
 }
 
-describe('persistence database upgrade to v7', () => {
-  it('adds the search index cache and keeps existing records', async () => {
+describe('persistence database upgrade to v8', () => {
+  it('adds the search index and LLM caches and keeps existing records', async () => {
     await createV6();
 
     const db = (await openPersistenceDb())!;
-    expect(db.version).toBe(7);
+    expect(db.version).toBe(8);
     expect(db.objectStoreNames.contains(SEARCH_INDEX_STORE)).toBe(true);
+    expect(db.objectStoreNames.contains(LLM_STORE)).toBe(true);
     const tx = db.transaction([SEARCH_INDEX_STORE, PLAYLIST_STORE, 'favorites', CACHE_META_STORE]);
     const search = tx.objectStore(SEARCH_INDEX_STORE);
     expect(search.keyPath).toBe('key');

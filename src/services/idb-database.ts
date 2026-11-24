@@ -15,6 +15,7 @@ export { CACHE_META_STORE, CATALOG_STORE, EPG_STORE, PLAYLIST_STORE, SEARCH_INDE
 export const SUBTITLE_STORE = 'subtitle-cache';
 export const STREAM_MIME_STORE = 'stream-mime-cache';
 export const CHANNEL_HEALTH_STORE = 'channel-health-cache';
+export const LLM_STORE = 'llm-cache';
 export const CACHE_STORES = [
   EPG_STORE,
   CATALOG_STORE,
@@ -23,6 +24,7 @@ export const CACHE_STORES = [
   STREAM_MIME_STORE,
   CHANNEL_HEALTH_STORE,
   SEARCH_INDEX_STORE,
+  LLM_STORE,
 ] as const;
 export type CacheStore = typeof CACHE_STORES[number];
 

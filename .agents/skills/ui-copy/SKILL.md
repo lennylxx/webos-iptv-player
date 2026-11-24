@@ -16,8 +16,8 @@ words first, translate second.
 
 1. **List the concepts** the change touches (a setting, a state, an
    action, a content type), not the strings.
-2. **Check what already exists.** Look the concept up in "Settled
-   terms" below, then search `en.ts` and `zh-CN.ts`. A settled or
+2. **Check what already exists.** Look the concept up in `terms.md`,
+   then search `en.ts` and `zh-CN.ts`. A settled or
    established term wins; reuse its key when the meaning is identical.
 3. **Research the industry term for each new concept.** Search how
    established TV and streaming UIs name it — LG/webOS, other platforms'
@@ -38,7 +38,7 @@ words first, translate second.
 6. **Verify** (see "Checks") and report any locale whose wording you
    are unsure about instead of guessing silently.
 
-When the user changes a term later, update "Settled terms" first, then
+When the user changes a term later, update `terms.md` first, then
 sweep every locale, both READMEs, and the setup page for the old term.
 
 ## Terms
@@ -105,65 +105,11 @@ sweep every locale, both READMEs, and the setup page for the old term.
 
 ## Settled terms
 
-Terms the user decided after back-and-forth review. Use them for their
-concept and never reintroduce a rejected wording. When the user settles
-a new term after review, add a row here.
-
-| Concept | en | zh-CN |
-|---|---|---|
-| Configured M3U/Xtream input | Source | 播放源 |
-| One M3U list | Playlist | 播放列表 |
-| EPG view | Guide / Program Guide | 节目指南 |
-| Catch-up | Catch-up | 回看 |
-| Timeshift | Timeshift | 时移 |
-| Watchlist | Watchlist | 稍后观看 |
-| Current / next program | NOW / Up next | 当前 / 即将播放 |
-| Resume playback | Resume | 继续播放 |
-| EPG time offset | EPG time correction | EPG 时间校正 |
-| Audio track | Audio track | 音轨 |
-| Animation modes | Full / Reduced / Essential | 完整 / 均衡 / 基础 |
-| Parental feature toggle | Use parental controls | 开启家长控制 |
-| PIN re-ask timing | Ask for PIN again | 再次要求 PIN |
-| Item that differs from its group | Set separately | 单独设置 |
-| Group with some items locked | Partly locked | 部分锁定 |
-| Xtream live category filter | Live categories | 直播分类 |
-| Catalog sort field | Sort by | 排序方式 |
-| Server catalog order | Default | 默认 |
-| Catalog sort fields | Date added / Rating / Year | 加入日期 / 评分 / 年份 |
-| Name sort direction | A–Z / Z–A | A–Z / Z–A |
-| Date added / Year sort direction | Newest / Oldest | 最新 / 最早 |
-| Rating sort direction | Highest / Lowest | 最高 / 最低 |
-| Header-channel playback setting | HTTP headers | HTTP 请求头 |
-| Header playback modes | Off / Media service / Local proxy | 关闭 / 媒体服务 / 本地代理 |
-| Catalog genre filter | Genre / All genres | 类型 / 全部类型 |
-| Catalog title filter | Show: All titles / Not watched / Watched / Hidden | 显示：全部 / 未观看 / 已观看 / 已隐藏 |
-| Watched state and actions | Watched / Mark as watched / Mark as not watched | 已观看 / 标记为已观看 / 标记为未观看 |
-| Season watched actions | Mark season as watched / Mark season as not watched | 将本季标记为已观看 / 将本季标记为未观看 |
-| Hiding a title | Hide / Unhide | 隐藏 / 取消隐藏 |
-| Player aspect ratio setting | Aspect Ratio | 画面比例 |
-| Aspect ratio modes | Auto / 16:9 / 4:3 / Zoom | 自动 / 16:9 / 4:3 / 缩放 |
-| Video quality setting | Video quality (menu: Video Quality) | 画质 |
-| Video quality options | Auto / Highest / Up to 4K / Up to 1080p / Up to 720p / Lowest | 自动 / 最高画质 / 最高 4K / 最高 1080p / 最高 720p / 最低画质 |
-| Following the setting (menu row) | Default · {value} | 默认 · {value} |
-| A variant (menu row) | {resolution} · {bitrate} Mbps | {resolution} · {bitrate} Mbps |
-| Guide layout setting | Program guide layout | 节目指南布局 |
-| Guide layouts | Channel schedule / Timeline | 频道节目单 / 时间轴 |
-| Empty guide slot | No information | 暂无节目信息 |
-| Jump the guide to the current time | Back to now | 回到现在 |
-| Tune a channel live from an aired program without catch-up or a row without program info | Watch live | 观看直播 |
-
-Rejected: 片单 (watchlist), 已看 / 未看 (watched), played / 已播放 (watched), unwatched (not watched), HTTP 标头 (headers), Luna / System player
-(header playback mode), 正在播放 for NOW, 节目单 (guide; 频道节目单 names
-one channel's schedule),
-全局频道 / "Global" for all channels, "programme",
-Ascending / Descending / 升序 / 降序 / Asc / Desc and 最旧 (sort
-direction),
-"Exception" / 例外 (set separately), "Mixed" / 混合 (partly locked),
-宽高比 (aspect ratio), 原始 / 满屏 / 填充 (aspect modes),
-清晰度 (video quality), Data saver / 省流量 and Prefer highest / Prefer
-lowest (quality options), List / Grid / 列表 / 网格, Single channel /
-Channel grid, Full guide, and three-pane (guide layouts), Go live /
-Tune in / 返回直播 / 收看直播 (watch live).
+Terms the user decided after review live in [`terms.md`](terms.md), with
+the wordings they rejected. Before writing any string, search it for each
+concept you touch (for example `grep -i "watch" terms.md`) and use the
+settled term; never reintroduce a rejected one. When the user settles a new
+term, add a row there.
 
 ## Checks
 

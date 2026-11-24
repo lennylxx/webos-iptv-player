@@ -7,6 +7,7 @@ import type { XtreamAccountInfo, XtreamLiveCategory } from '../services/xtream-c
 import type { ChannelHealthService, ChannelHealthSummary } from '../services/channel-health';
 import type { ServiceInfo } from '../services/setup-client';
 import type { CustomTheme } from '../config/custom-theme';
+import type { LlmCapabilities, LlmConfig } from '../services/llm/types';
 
 const {
   state,
@@ -19,6 +20,7 @@ const {
   xtreamMock,
   healthMock,
   motionMock,
+  llmMock,
 } = vi.hoisted(() => {
   const state = {
     // Message overrides, so a test can feed markup through a translation.
@@ -64,9 +66,18 @@ const {
       opensubtitles: { apiKey: '', username: '', password: '', token: '', tokenTs: 0 },
       assrt: { apiKey: '' },
     },
+    llm: null as unknown as LlmConfig,
   };
   return {
     state,
+    llmMock: {
+      usageToday: vi.fn(() => ({
+        day: '2026-01-01',
+        features: { f1: { requests: 3, inputTokens: 1200, outputTokens: 34 } } as Record<string, { requests: number; inputTokens: number; outputTokens: number }>,
+      })),
+      testConnection: vi.fn<(config: LlmConfig) => Promise<{ models: string[]; capabilities: unknown }>>(),
+      listModels: vi.fn<(config: LlmConfig) => Promise<string[]>>(),
+    },
     cacheMock: {
       clearAllCachedData: vi.fn(async () => {}),
       getCacheUsage: vi.fn(async () => ({
@@ -78,6 +89,7 @@ const {
           subtitle: { bytes: 41 * 1024 * 1024, entries: 2 },
           health: { bytes: 0, entries: 0 },
           search: { bytes: 3 * 1024 * 1024, entries: 2 },
+          ai: { bytes: 0, entries: 0 },
         },
         budgetBytes: 1024 * 1024 * 1024 as number | null,
         originUsageBytes: null,
@@ -123,6 +135,8 @@ const {
       getEpgOffsets: vi.fn(() => ({ ...state.epgOffsets })),
       getLocalePreference: vi.fn(() => state.locale),
       getOnlineSubtitleConfig: vi.fn(() => state.onlineSubtitles),
+      getLlmConfig: vi.fn(() => state.llm),
+      setLlmConfig: vi.fn((config: LlmConfig) => { state.llm = config; return true; }),
       getSelectedXtreamAccountId: vi.fn((): string | null => null),
       getLiveCategorySnapshot: vi.fn(() => null),
       setLiveCategorySnapshot: vi.fn(),
@@ -229,6 +243,7 @@ vi.mock('../services/storage-service', () => ({
   StorageService: storageMock,
 }));
 vi.mock('../services/theme-service', () => themeMock);
+vi.mock('../services/llm/llm-service', () => ({ LlmService: llmMock }));
 vi.mock('../services/motion-service', () => ({
   ANIMATION_MODES: ['essential', 'reduced', 'full'],
   applyAnimationMode: motionMock.applyAnimationMode,
@@ -275,6 +290,8 @@ import { hide, show } from '../utils/dom';
 import { Focus } from '../navigation/focus-scope';
 import { CONFIG } from '../config';
 import { ParentalControlService } from '../services/parental-control';
+import { defaultLlmConfig } from '../services/llm/config';
+import { LlmError } from '../services/llm/client';
 
 let container: HTMLElement;
 let onSave: Mock<ConstructorParameters<typeof Settings>[1]>;
@@ -312,6 +329,7 @@ beforeEach(() => {
     opensubtitles: { apiKey: '', username: '', password: '', token: '', tokenTs: 0 },
     assrt: { apiKey: '' },
   };
+  state.llm = { ...defaultLlmConfig(), baseUrl: 'http://ai.test/v1', model: 'm1' };
   vi.clearAllMocks();
   document.body.innerHTML = '';
   container = document.createElement('div');
@@ -341,6 +359,7 @@ describe('Settings.render', () => {
       'Appearance',
       'Playback',
       'Online Subtitles',
+      'AI Features',
       'Advanced',
       'Data Management',
     ]);
@@ -1109,8 +1128,9 @@ describe('Settings.render', () => {
       ?.getAttribute('transform')).toBe('rotate(-90 60 60)');
     const breakdown = container.querySelector('.cache-usage-breakdown')!;
     expect(breakdown.previousElementSibling?.classList.contains('cache-usage-total')).toBe(true);
-    expect(breakdown.children).toHaveLength(6);
-    expect(breakdown.lastElementChild?.textContent).toBe('Search Index 3.00 MiB');
+    expect(breakdown.children).toHaveLength(7);
+    expect(breakdown.lastElementChild?.previousElementSibling?.textContent).toBe('Search Index 3.00 MiB');
+    expect(breakdown.lastElementChild?.textContent).toBe('AI Results 0 B');
     expect(breakdown.textContent).toContain('286 MiB');
     expect(breakdown.textContent).toContain('92.0 MiB');
     expect(breakdown.textContent).toContain('Channel Health');
@@ -2070,6 +2090,373 @@ describe('Settings.save', () => {
     (container.querySelector('#assrt-key') as HTMLInputElement).value = 'AZ';
     click('#save-settings');
     expect(storageMock.getOnlineSubtitleConfig().assrt.apiKey).toBe('AZ');
+  });
+
+  it('saves the AI endpoint and limits, and forgets detected capabilities for a new model', () => {
+    state.llm = {
+      ...defaultLlmConfig(),
+      capabilities: { signature: 'x', structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
+    };
+    settings.render();
+    click('#ai-enabled [data-value="on"]');
+    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
+    field('ai-base-url').value = ' http://host:8080/v1 ';
+    field('ai-api-key').value = 'k1';
+    field('ai-model').value = 'm1';
+    field('ai-extra-headers').value = 'api-key: k2';
+    click('#ai-context-size [data-dropdown-value="8192"]');
+    click('#ai-daily-requests [data-dropdown-value="500"]');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: true,
+      baseUrl: 'http://host:8080/v1',
+      apiKey: 'k1',
+      model: 'm1',
+      extraHeaders: 'api-key: k2',
+      contextTokens: 8192,
+      dailyRequestCap: 500,
+      dailyTokenCap: 0,
+      capabilities: null,
+    }));
+  });
+
+  it('shows today\'s AI usage', () => {
+    settings.render();
+    expect(container.querySelector('#ai-usage')?.textContent).toBe('Today: Requests 3 · Tokens 1,234');
+  });
+
+  it('tests the AI connection with the unsaved form values', async () => {
+    llmMock.testConnection.mockResolvedValue({ models: ['m0', 'm1'], capabilities: {} });
+    settings.render();
+    container.querySelector<HTMLInputElement>('#ai-base-url')!.value = 'http://host:8080/v1';
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = 'm1';
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected · 2 models'));
+    expect(llmMock.testConnection).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://host:8080/v1', model: 'm1' }));
+    expect(container.querySelector('#ai-status')?.classList.contains('ok')).toBe(true);
+    expect(storageMock.setLlmConfig).not.toHaveBeenCalled();
+  });
+
+  it('names the AI connection failure', async () => {
+    settings.render();
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = 'm1';
+    llmMock.testConnection.mockRejectedValueOnce(new LlmError('auth', 'HTTP 401', 401));
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Invalid API key'));
+    expect(container.querySelector('#ai-status')?.classList.contains('err')).toBe(true);
+
+    llmMock.testConnection.mockRejectedValueOnce(new LlmError('config', 'HTTP 404', 404, 0, 'address'));
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent)
+      .toBe('Check the server URL. It usually ends in /v1.'));
+
+    llmMock.testConnection.mockRejectedValueOnce(new LlmError('config', 'HTTP 404', 404));
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Model not found'));
+
+    container.querySelector<HTMLInputElement>('#ai-base-url')!.value = 'http://host:8080/v1';
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = '';
+    llmMock.listModels.mockResolvedValueOnce([]);
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent)
+      .toBe('Enter the server URL and model first.'));
+  });
+
+  it('reports a working model as connected even when the server lists it under another name', async () => {
+    llmMock.testConnection.mockResolvedValue({ models: ['m1:latest'], capabilities: {} });
+    settings.render();
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = 'm1';
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected · 1 model'));
+  });
+
+  it('fills in the model when a server with an empty model serves exactly one', async () => {
+    llmMock.listModels.mockResolvedValueOnce(['m1']);
+    llmMock.testConnection.mockResolvedValueOnce({ models: ['m1'], capabilities: {} });
+    settings.render();
+    container.querySelector<HTMLInputElement>('#ai-base-url')!.value = 'http://host:8080/v1';
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = '';
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected · 1 model'));
+    expect(container.querySelector<HTMLInputElement>('#ai-model')!.value).toBe('m1');
+    expect(llmMock.testConnection).toHaveBeenCalledWith(expect.objectContaining({ model: 'm1' }));
+  });
+
+  it('still asks for a model when the server serves several, or none can be listed', async () => {
+    settings.render();
+    container.querySelector<HTMLInputElement>('#ai-base-url')!.value = 'http://host:8080/v1';
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = '';
+    llmMock.listModels.mockResolvedValueOnce(['m1', 'm2']);
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Enter the server URL and model first.'));
+    expect(container.querySelector<HTMLInputElement>('#ai-model')!.value).toBe('');
+    expect(llmMock.testConnection).not.toHaveBeenCalled();
+
+    llmMock.listModels.mockRejectedValueOnce(new LlmError('network', 'Request failed'));
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Can’t reach the server'));
+  });
+
+  it('runs one connection test at a time', async () => {
+    let finish!: () => void;
+    llmMock.testConnection.mockImplementation(() => new Promise((resolve) => {
+      finish = () => resolve({ models: [], capabilities: {} });
+    }));
+    settings.render();
+    click('#ai-test-connection');
+    click('#ai-test-connection');
+    expect(llmMock.testConnection).toHaveBeenCalledTimes(1);
+    const button = container.querySelector('#ai-test-connection')!;
+    expect(button.classList.contains('is-busy')).toBe(true);
+    expect(button.hasAttribute('data-focusable')).toBe(true);
+    finish();
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected'));
+    expect(button.classList.contains('is-busy')).toBe(false);
+  });
+
+  it('keeps the D-pad on Test connection while it checks and after', async () => {
+    let finish: (value: { models: string[]; capabilities: object }) => void = () => undefined;
+    llmMock.testConnection.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    settings.render();
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = 'm1';
+    const focused = () => container.querySelector<HTMLElement>('[data-focusable].focused')?.id;
+    container.querySelector('#ai-test-connection')!.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    settings.handleAction('select');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Checking…'));
+    expect(focused()).toBe('ai-test-connection');
+    // OK while it checks starts no second test.
+    settings.handleAction('select');
+    expect(llmMock.testConnection).toHaveBeenCalledTimes(1);
+    finish({ models: ['m1'], capabilities: {} });
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected · 1 model'));
+    expect(focused()).toBe('ai-test-connection');
+  });
+
+  it('adds a missing http:// and saves what the connection test detected', async () => {
+    const tested: LlmCapabilities = { signature: 'http://192.168.1.5:11434/v1|m1', structured: 'json_object', thinkingOff: true, effortOff: false, reasoningParams: false, checkedAt: 2 };
+    llmMock.testConnection.mockResolvedValue({ models: [], capabilities: tested });
+    state.llm = {
+      ...defaultLlmConfig(),
+      baseUrl: 'http://192.168.1.5:11434/v1',
+      model: 'm1',
+      capabilities: { ...tested, structured: 'prompt', checkedAt: 1 },
+    };
+    settings.render();
+    container.querySelector<HTMLInputElement>('#ai-base-url')!.value = '192.168.1.5:11434/v1';
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected'));
+    expect(llmMock.testConnection).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.1.5:11434/v1' }));
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: 'http://192.168.1.5:11434/v1',
+      capabilities: tested,
+    }));
+
+    // A later save must not bring the old test back over what requests learned since.
+    const learned = { ...tested, reasoningParams: true, checkedAt: 3 };
+    state.llm = { ...state.llm, capabilities: learned };
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ capabilities: learned }));
+  });
+
+  it('clears a saved key from the form when the address moves to another server, and restores it on return', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host:8080/v1', model: 'm1', apiKey: 'k1', extraHeaders: 'api-key: k2' };
+    settings.render();
+    const url = container.querySelector<HTMLInputElement>('#ai-base-url')!;
+    const key = container.querySelector<HTMLInputElement>('#ai-api-key')!;
+    const headers = container.querySelector<HTMLInputElement>('#ai-extra-headers')!;
+    const type = (value: string) => {
+      url.value = value;
+      url.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    type('http://host:8080/v1/');
+    expect(key.value).toBe('k1');
+    type('other.lan:8080/v1');
+    expect([key.value, headers.value]).toEqual(['', '']);
+    type('host:8080/v1');
+    expect([key.value, headers.value]).toEqual(['k1', 'api-key: k2']);
+    type('other.lan:8080/v1');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', extraHeaders: '' }));
+  });
+
+  it('keeps the saved key from a new server even when the headers were edited first', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'https://api.host.test/v1', model: 'm1', apiKey: 'k1', extraHeaders: '' };
+    settings.render();
+    const url = container.querySelector<HTMLInputElement>('#ai-base-url')!;
+    const headers = container.querySelector<HTMLInputElement>('#ai-extra-headers')!;
+    headers.value = 'X-Org: o1';
+    url.value = 'http://192.168.1.5:8080/v1';
+    url.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(container.querySelector<HTMLInputElement>('#ai-api-key')!.value).toBe('');
+    expect(headers.value).toBe('X-Org: o1');
+  });
+
+  it('shows phone-saved AI and subtitle values without discarding edits made on the TV', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host:8080/v1', model: 'm1', apiKey: 'k1' };
+    settings.render();
+    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
+    field('subdl-key').value = 'typed-on-tv';
+    click('#ai-enabled [data-value="on"]');
+
+    state.llm = { ...state.llm, model: 'm2', apiKey: 'k2' };
+    state.onlineSubtitles = { ...state.onlineSubtitles, preferredLanguage: 'zh-CN', subdl: { apiKey: 'from-phone' } };
+    settings.applyExternalChanges({ subtitles: true, ai: true });
+
+    expect(field('ai-model').value).toBe('m2');
+    expect(field('ai-api-key').value).toBe('k2');
+    expect(field('subdl-key').value).toBe('typed-on-tv');
+    expect(container.querySelector<HTMLElement>('#os-pref-lang')!.dataset.value).toBe('zh-CN');
+    expect(container.querySelector('#ai-enabled .toggle-option.active')?.getAttribute('data-value')).toBe('on');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenCalledWith(expect.objectContaining({ model: 'm2', apiKey: 'k2', enabled: true }));
+  });
+
+  it('keeps a cleared key restorable across a phone change on the same server', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host:8080/v1', model: 'm1', apiKey: 'k1' };
+    settings.render();
+    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
+    const typeUrl = (value: string) => {
+      field('ai-base-url').value = value;
+      field('ai-base-url').dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    typeUrl('http://other.lan:8080/v1');
+    expect(field('ai-api-key').value).toBe('');
+    // The phone changes only the model, on the same server.
+    state.llm = { ...state.llm, model: 'm2' };
+    settings.applyExternalChanges({ subtitles: false, ai: true });
+    typeUrl('http://host:8080/v1');
+    expect(field('ai-api-key').value).toBe('k1');
+  });
+
+  it('drops a key typed on the TV when the phone moves the endpoint to another server', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host:8080/v1', model: 'm1', apiKey: 'k1' };
+    settings.render();
+    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
+    field('ai-api-key').value = 'typed-on-tv';
+    state.llm = { ...state.llm, baseUrl: 'http://other.lan:8080/v1', apiKey: '' };
+    settings.applyExternalChanges({ subtitles: false, ai: true });
+    expect(field('ai-base-url').value).toBe('http://other.lan:8080/v1');
+    expect(field('ai-api-key').value).toBe('');
+  });
+
+  it('keeps a phone key out of a form whose address was typed for another server', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host-a:8080/v1', model: 'm1', apiKey: 'kA' };
+    settings.render();
+    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
+    const typeUrl = (value: string) => {
+      field('ai-base-url').value = value;
+      field('ai-base-url').dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    typeUrl('http://host-b:8080/v1');
+    // The phone moves the endpoint to C with a new key.
+    state.llm = { ...state.llm, baseUrl: 'http://host-c:8080/v1', apiKey: 'kC', extraHeaders: 'api-key: hC' };
+    settings.applyExternalChanges({ subtitles: false, ai: true });
+    expect(field('ai-base-url').value).toBe('http://host-b:8080/v1');
+    expect([field('ai-api-key').value, field('ai-extra-headers').value]).toEqual(['', '']);
+    // Typing the phone's server brings its key back; leaving it clears it again.
+    typeUrl('host-c:8080/v1');
+    expect([field('ai-api-key').value, field('ai-extra-headers').value]).toEqual(['kC', 'api-key: hC']);
+    typeUrl('http://host-b:8080/v1');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({
+      baseUrl: 'http://host-b:8080/v1', apiKey: '', extraHeaders: '',
+    }));
+  });
+
+  it('keeps a key the phone adds for the saved server out of an address typed for another', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host-a:8080/v1', model: 'm1', apiKey: '' };
+    settings.render();
+    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
+    field('ai-base-url').value = 'http://host-b:8080/v1';
+    field('ai-base-url').dispatchEvent(new Event('input', { bubbles: true }));
+    state.llm = { ...state.llm, apiKey: 'kA2' };
+    settings.applyExternalChanges({ subtitles: false, ai: true });
+    expect(field('ai-api-key').value).toBe('');
+  });
+
+  it('keeps a key typed beside an address also typed here when the phone saves that same server', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host-a:8080/v1', model: 'm1', apiKey: 'kA' };
+    settings.render();
+    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
+    field('ai-base-url').value = 'http://host-c:8080/v1';
+    field('ai-base-url').dispatchEvent(new Event('input', { bubbles: true }));
+    field('ai-api-key').value = 'kC';
+    state.llm = { ...state.llm, baseUrl: 'http://host-c:8080/v1', apiKey: '' };
+    settings.applyExternalChanges({ subtitles: false, ai: true });
+    expect(field('ai-api-key').value).toBe('kC');
+  });
+
+  it('keeps an open subtitle-language menu open with focus in it when the phone changes the language', () => {
+    settings.render();
+    const dd = container.querySelector<HTMLElement>('#os-pref-lang')!;
+    click('#os-pref-lang [data-dropdown-trigger]');
+    expect(dd.classList.contains('open')).toBe(true);
+    state.onlineSubtitles = { ...state.onlineSubtitles, preferredLanguage: 'zh-CN' };
+    settings.applyExternalChanges({ subtitles: true, ai: false });
+    expect(dd.classList.contains('open')).toBe(true);
+    expect(dd.dataset.value).toBe('zh-CN');
+    expect(dd.querySelector('.dropdown-option.active')?.getAttribute('data-dropdown-value')).toBe('zh-CN');
+  });
+
+  it('keeps the AI connection result when the phone changes only subtitles', async () => {
+    llmMock.testConnection.mockResolvedValueOnce({ models: [], capabilities: {} });
+    settings.render();
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected'));
+    settings.applyExternalChanges({ subtitles: true, ai: false });
+    expect(container.querySelector('#ai-status')?.textContent).toBe('Connected');
+    settings.applyExternalChanges({ subtitles: false, ai: true });
+    expect(container.querySelector('#ai-status')?.textContent).toBe('');
+  });
+
+  it('puts the extra headers before Test connection, so a test uses them', () => {
+    settings.render();
+    const headers = container.querySelector('#ai-extra-headers')!;
+    const test = container.querySelector('#ai-test-connection')!;
+    expect(headers.compareDocumentPosition(test) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('ignores a connection test that outlives the form it ran on', async () => {
+    let finish!: () => void;
+    const tested = { signature: 'x', structured: 'json_object' as const, thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 2 };
+    llmMock.testConnection.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve({ models: [], capabilities: tested });
+    }));
+    state.llm = { ...state.llm, capabilities: null };
+    settings.render();
+    click('#ai-test-connection');
+    settings.render();
+    const button = container.querySelector('#ai-test-connection')!;
+    expect(button.hasAttribute('disabled')).toBe(false);
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(container.querySelector('#ai-status')?.textContent).toBe('');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenCalledWith(expect.objectContaining({ capabilities: null }));
+  });
+
+  it('forgets a finished connection test when the form is rendered again', async () => {
+    const config = { ...defaultLlmConfig(), baseUrl: 'http://ai.test/v1', model: 'm1' };
+    const tested = { signature: `${config.baseUrl}|${config.model}`, structured: 'json_object' as const, thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 2 };
+    llmMock.testConnection.mockResolvedValueOnce({ models: [], capabilities: tested });
+    state.llm = config;
+    settings.render();
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected'));
+    settings.render();
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenCalledWith(expect.objectContaining({ capabilities: null }));
+  });
+
+  it('saves a cleared server URL and model as not configured', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host:8080/v1', model: 'm1' };
+    settings.render();
+    container.querySelector<HTMLInputElement>('#ai-base-url')!.value = '';
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = '';
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: '', model: '' }));
   });
 });
 

@@ -23,6 +23,9 @@ const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
     setManualEpgSources: vi.fn(),
     getOnlineSubtitleConfig: vi.fn(),
     setOnlineSubtitleConfig: vi.fn(),
+    llm: null as unknown,
+    getLlmConfig: vi.fn(),
+    setLlmConfig: vi.fn(),
     remove: vi.fn(),
   },
   fetchWithTimeoutMock: vi.fn(),
@@ -47,6 +50,12 @@ storageMock.setOnlineSubtitleConfig.mockImplementation(
   },
 );
 
+storageMock.getLlmConfig.mockImplementation(() => storageMock.llm);
+storageMock.setLlmConfig.mockImplementation((config: unknown) => {
+  storageMock.llm = config;
+  return true;
+});
+
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../utils/fetch-helper', () => ({ fetchWithTimeout: fetchWithTimeoutMock }));
 const guardedSourceIds = vi.hoisted(() => new Set<string>());
@@ -56,6 +65,7 @@ vi.mock('../services/parental-control', () => ({
   },
 }));
 
+import { defaultLlmConfig } from './llm/config';
 import { setServicePort } from './service-http';
 import { SetupClient } from './setup-client';
 import { UploadClient, uploadIdFromUrl } from './upload-client';
@@ -85,6 +95,8 @@ beforeEach(() => {
   storageMock.setManualEpgSources.mockClear();
   storageMock.getOnlineSubtitleConfig.mockClear();
   storageMock.setOnlineSubtitleConfig.mockClear();
+  storageMock.llm = defaultLlmConfig();
+  storageMock.setLlmConfig.mockClear();
   storageMock.remove.mockClear();
   fetchWithTimeoutMock.mockReset();
   // Simulate the Luna `start` response that the app applies before any
@@ -358,6 +370,95 @@ describe('SetupClient.applyPendingActions', () => {
         opensubtitlesPasswordConfigured: true,
         opensubtitlesUsername: 'u2',
       },
+      ai: {
+        baseUrl: '',
+        model: '',
+        apiKeyConfigured: false,
+        extraHeadersConfigured: false,
+      },
+    });
+  });
+
+  it('keeps an omitted AI key on the same server and never publishes it', async () => {
+    storageMock.llm = {
+      ...defaultLlmConfig(),
+      enabled: true,
+      baseUrl: 'http://host:8080/v1',
+      apiKey: 'old-key',
+      capabilities: { signature: 'http://host:8080/v1|m0', structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
+    };
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 12, type: 'ai', baseUrl: 'http://host:8080/v1', model: 'm1' },
+      ]))
+      .mockResolvedValue(jsonResponse({ updated: true }));
+
+    // Settings-only changes update Settings instead of reloading data, before
+    // the slower publish, so a TV Save in between can't write old values.
+    let publishedFirst: boolean | null = null;
+    const settingsChanged = vi.fn(() => {
+      publishedFirst = fetchWithTimeoutMock.mock.calls.some(call => call[0] === 'http://127.0.0.1:8890/setup-state');
+    });
+    await expect(SetupClient.applyPendingActions(settingsChanged)).resolves.toBe(false);
+    expect(settingsChanged).toHaveBeenCalledTimes(1);
+    expect(publishedFirst).toBe(false);
+
+    expect(storageMock.llm).toMatchObject({
+      enabled: true,
+      baseUrl: 'http://host:8080/v1',
+      model: 'm1',
+      apiKey: 'old-key',
+      capabilities: null,
+    });
+    const stateRequest = fetchWithTimeoutMock.mock.calls.find(call =>
+      call[0] === 'http://127.0.0.1:8890/setup-state');
+    const published = JSON.parse(String(stateRequest![1].body));
+    expect(published.ai).toEqual({
+      baseUrl: 'http://host:8080/v1',
+      model: 'm1',
+      apiKeyConfigured: true,
+      extraHeadersConfigured: false,
+    });
+    expect(JSON.stringify(published)).not.toContain('old-key');
+    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/setup-actions/12',
+      { method: 'DELETE' },
+      4000,
+    );
+  });
+
+  it('drops a masked AI key and headers when the phone points to another server', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    storageMock.llm = { ...defaultLlmConfig(), baseUrl: 'http://ai.test/v1', apiKey: 'old-key', extraHeaders: 'api-key: k2' };
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 14, type: 'ai', baseUrl: 'http://other.lan:8080/v1', model: 'm1' },
+      ]))
+      .mockResolvedValue(jsonResponse({ updated: true }));
+
+    await SetupClient.applyPendingActions();
+
+    expect(storageMock.llm).toMatchObject({ baseUrl: 'http://other.lan:8080/v1', apiKey: '', extraHeaders: '' });
+    expect(warn).toHaveBeenCalledWith('[Setup]', expect.any(String), 'event=llm.setup.key_dropped',
+      'key=true', 'headers=true', 'action=14');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('old-key');
+    warn.mockRestore();
+  });
+
+  it('clears the AI key when the phone sends an empty one, and an empty address leaves AI unconfigured', async () => {
+    storageMock.llm = { ...defaultLlmConfig(), baseUrl: 'http://ai.test/v1', model: 'm1', apiKey: 'old-key' };
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 13, type: 'ai', baseUrl: '', model: '', apiKey: '' },
+      ]))
+      .mockResolvedValue(jsonResponse({ updated: true }));
+
+    await SetupClient.applyPendingActions();
+
+    expect(storageMock.llm).toMatchObject({
+      apiKey: '',
+      baseUrl: '',
+      model: '',
     });
   });
 
@@ -615,7 +716,15 @@ describe('SetupClient.applyPendingActions', () => {
       ]))
       .mockResolvedValue(jsonResponse({ updated: true }));
 
-    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+    // Settings-only changes update Settings instead of reloading data, before
+    // the slower publish, so a TV Save in between can't write old values.
+    let publishedFirst: boolean | null = null;
+    const settingsChanged = vi.fn(() => {
+      publishedFirst = fetchWithTimeoutMock.mock.calls.some(call => call[0] === 'http://127.0.0.1:8890/setup-state');
+    });
+    await expect(SetupClient.applyPendingActions(settingsChanged)).resolves.toBe(false);
+    expect(settingsChanged).toHaveBeenCalledTimes(1);
+    expect(publishedFirst).toBe(false);
 
     expect(storageMock.setOnlineSubtitleConfig).toHaveBeenCalledWith({
       preferredLanguage: '',

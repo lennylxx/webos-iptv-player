@@ -1878,6 +1878,61 @@ test.describe('Settings upload', () => {
   });
 });
 
+test.describe('Settings phone AI changes', () => {
+  test('a phone AI change while Reminders is open is not saved over on return', async ({ page }) => {
+    let actions: unknown[] = [];
+    await page.route('http://127.0.0.1:9999/uploads', (route) => route.fulfill({ json: [] }));
+    await page.route('http://127.0.0.1:9999/info', (route) => route.fulfill({ status: 404, body: '' }));
+    await page.route('http://127.0.0.1:9999/setup-state', (route) => route.fulfill({ json: { updated: true } }));
+    await page.route('http://127.0.0.1:9999/setup-actions', (route) => route.fulfill({ json: actions }));
+    await page.route('http://127.0.0.1:9999/setup-actions/*', (route) => {
+      actions = [];
+      return route.fulfill({ json: { ok: true } });
+    });
+    await page.addInitScript(() => {
+      type Cb = (data: unknown) => void;
+      const win = window as unknown as { PalmServiceBridge?: unknown; __push__?: (data: unknown) => void };
+      const callbacks: Cb[] = [];
+      win.__push__ = (data) => callbacks.forEach((cb) => cb(data));
+      class FakePalmServiceBridge {
+        onservicecallback: ((message: string) => void) | null = null;
+        private respond(response: unknown): void {
+          setTimeout(() => this.onservicecallback?.(JSON.stringify(response)), 0);
+        }
+        call(uri: string): void {
+          const method = uri.slice(uri.lastIndexOf('/') + 1);
+          if (method === 'start') this.respond({ running: true, port: 9999 });
+          else if (method === 'serviceEvents') {
+            this.respond({ subscribed: true });
+            callbacks.push((data) => this.onservicecallback?.(JSON.stringify(data)));
+          } else this.respond({ returnValue: true });
+        }
+        cancel(): void {
+          this.onservicecallback = null;
+        }
+      }
+      win.PalmServiceBridge = FakePalmServiceBridge;
+      localStorage.setItem('iptv_llm', JSON.stringify({ baseUrl: 'http://host:8080/v1', model: 'm1' }));
+    });
+    await seedPlaylist(page);
+    await page.goto('/');
+    await liveLoaded(page);
+    await enterTab(page, 'settings');
+    await page.locator('#manage-reminders').click();
+    await expect(page.locator('#view-reminders')).toBeVisible();
+
+    actions = [{ id: 1, type: 'ai', baseUrl: 'http://host:8080/v1', model: 'm2' }];
+    await page.evaluate(() => (window as unknown as { __push__: (d: unknown) => void }).__push__({ event: 'setup-changed' }));
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('iptv_llm') || '{}').model)).toBe('m2');
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#view-settings')).toBeVisible();
+    await expect(page.locator('#ai-model')).toHaveValue('m2');
+    await page.locator('#save-settings').click();
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('iptv_llm') || '{}').model)).toBe('m2');
+  });
+});
+
 test.describe('Settings phone setup card', () => {
   // The QR sits beside its instructions via flex `gap`, so on webOS the spacing
   // comes entirely from the generated margin fallback. Under the
