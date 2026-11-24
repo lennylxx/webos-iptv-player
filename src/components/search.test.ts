@@ -1210,6 +1210,30 @@ describe('Search', () => {
     expect(container.textContent).not.toContain('Old Report');
   });
 
+  it('spaces program rows further apart at a larger text size', async () => {
+    const later = (offset: number) => [Date.now() + offset * 3600000, Date.now() + (offset + 1) * 3600000] as const;
+    playlistMock.channels = [chan('Alpha')];
+    epgMock.programmes = { Alpha: [prog('Report 1', ...later(1)), prog('Report 2', ...later(2))] };
+    const root = document.documentElement;
+    onTestFinished(() => {
+      delete root.dataset.textSize;
+      root.style.removeProperty('--font-scale');
+    });
+    const { view } = await openWith();
+    const step = () => {
+      const cell = container.querySelector<HTMLElement>('[data-search-section="programmes"][data-search-index="1"]');
+      return parseFloat(cell!.style.top);
+    };
+    await view.setQuery('report');
+    const normal = step();
+
+    root.dataset.textSize = '150';
+    root.style.setProperty('--font-scale', '1.5');
+    (view as unknown as { render(): void }).render();
+
+    expect(step()).toBeGreaterThan(normal * 1.3);
+  });
+
   it('posts the channels a playlist change replaced during a crash rebuild', async () => {
     playlistMock.channels = [chan('Alpha')];
     const { view } = await openWith();

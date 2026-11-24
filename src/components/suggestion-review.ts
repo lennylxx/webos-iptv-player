@@ -1,6 +1,6 @@
 import type { Action } from '../types';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
-import { html, raw, type Safe } from '../utils/dom';
+import { fontScale, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
@@ -70,11 +70,6 @@ export interface ReviewOptions {
 }
 
 type Button = 'a' | 'r' | 'u';
-
-function fontScale(): number {
-  const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-scale'));
-  return scale > 0 ? scale : 1;
-}
 
 function buttonKey(button: Button, itemKey: string): string {
   return `${button}|${itemKey}`;

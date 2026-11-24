@@ -76,12 +76,13 @@
 }
 /* Rail cells are absolutely positioned, so the spacer carries the row height:
    poster tile (330 + 10 margin + 31 name line) by default, and the shorter
-   landscape channel tile (124 logo) for the channel rail. */
+   landscape channel tile (124 logo) for the channel rail. The name line
+   (22px at line-height 1.4) grows with the text size. */
 .search-virtual-rail-spacer {
   flex: 0 0 auto;
-  height: 371px;
+  height: calc(340px + 31px * var(--font-scale));
 }
-.search-channel-rail .search-virtual-rail-spacer { height: 165px; }
+.search-channel-rail .search-virtual-rail-spacer { height: calc(134px + 31px * var(--font-scale)); }
 .search-virtual-rail-cell {
   position: absolute;
   top: 0;
@@ -99,11 +100,16 @@
   flex-direction: column;
   gap: 8px;
 }
+/* Fixed height: the list is virtualized, so programRowStride() in search.ts
+   must stay this height plus the 8px row gap. The 69px is the time column's
+   two lines or the title and subtitle lines, which grow with the text size;
+   the 32px is the padding, border, and subtitle margin, which don't. */
 .search-program-row {
   display: flex;
   align-items: center;
   gap: 24px;
-  min-height: 72px;
+  box-sizing: border-box;
+  height: calc(32px + 69px * var(--font-scale));
   padding: 12px 20px;
   border: 2px solid transparent;
   border-radius: var(--radius);
@@ -115,7 +121,7 @@
   background: var(--bg-tertiary);
 }
 .search-program-time {
-  width: 150px;
+  width: calc(150px * var(--font-scale));
   flex: none;
   font-size: 21px;
   line-height: 1.35;

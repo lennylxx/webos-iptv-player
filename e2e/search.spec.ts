@@ -296,6 +296,83 @@ test('program search shows XMLTV metadata and toggles a future reminder', async 
     (await readUserDataStore(page, 'reminders')).length).toBe(1);
 });
 
+test('program results at the largest text size do not overlap, and Down keeps the focused one in view', async ({ page }) => {
+  const base = Date.now() + 60 * 60 * 1000;
+  const programmes = Array.from({ length: 6 }, (_, i) => {
+    const start = new Date(base + i * 60 * 60 * 1000);
+    const stop = new Date(start.getTime() + 60 * 60 * 1000);
+    return `<programme channel="one" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+      <title>Report ${i}</title><category>News</category></programme>`;
+  }).join('');
+  await seedSearch(page);
+  await page.route('**/xmltv.php*', route => route.fulfill({
+    status: 200,
+    contentType: 'application/xml',
+    body: `<tv><channel id="one"><display-name>Channel One</display-name></channel>${programmes}</tv>`,
+  }));
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_text_size', JSON.stringify('150'));
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  await page.locator('.tab-bar-search-input').fill('report');
+  const rows = page.locator('#view-search .search-program-row');
+  await expect(rows.nth(2)).toBeVisible();
+
+  // The rows keep the 8px gap the list's stride reserves, so CSS and JS
+  // drifting apart either way shows.
+  const gaps = () => rows.evaluateAll((els) => {
+    const rects = els.map(el => el.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+    return rects.slice(1).map((rect, i) => rect.top - rects[i].bottom);
+  });
+  const expectGaps = async () => {
+    const found = await gaps();
+    expect(found.length).toBeGreaterThan(1);
+    for (const gap of found) expect(gap).toBeCloseTo(8, 0);
+  };
+  await expectGaps();
+  // Each row holds its own lines.
+  const contained = await rows.first().evaluate((row) => {
+    const box = row.getBoundingClientRect();
+    return Array.from(row.querySelectorAll('.search-program-time, .search-program-channel'))
+      .every(el => el.getBoundingClientRect().bottom <= box.bottom);
+  });
+  expect(contained).toBe(true);
+
+  await page.keyboard.press('ArrowDown');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
+  const focused = page.locator('#view-search .search-program-row.focused');
+  await expect(focused).toContainText('Report 5');
+  const [focusBox, scrollBox] = await Promise.all([
+    focused.boundingBox(),
+    page.locator('[data-search-virtual="programmes"]').boundingBox(),
+  ]);
+  expect(focusBox!.y + focusBox!.height).toBeLessThanOrEqual(scrollBox!.y + scrollBox!.height + 1);
+  await expectGaps();
+});
+
+test('tile names in the result rails at the largest text size stay inside their rail', async ({ page }) => {
+  await seedSearch(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_text_size', JSON.stringify('150'));
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterSearch(page);
+  await page.locator('.tab-bar-search-input').fill('one');
+  for (const key of ['channels-rail', 'movies', 'series']) {
+    const rail = page.locator(`#view-search [data-search-virtual="${key}"]`);
+    await expect(rail.locator('.catalog-tile-name').first()).toBeVisible();
+    const overhang = await rail.evaluate((el) => {
+      const spacer = el.querySelector('.search-virtual-rail-spacer')!.getBoundingClientRect();
+      const name = el.querySelector('.catalog-tile-name')!.getBoundingClientRect();
+      return name.bottom - spacer.bottom;
+    });
+    expect(overhang, key).toBeLessThanOrEqual(0.5);
+  }
+});
+
 test('a reminder set in Search shows in the timeline guide it returns to', async ({ page }) => {
   await seedSearch(page);
   await page.addInitScript(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));

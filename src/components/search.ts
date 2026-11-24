@@ -2,7 +2,7 @@ import type { Action, CatchupInfo, Channel, PlaylistEntry, Programme, VodItem, S
 import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { Focus, type FocusScope } from '../navigation/focus-scope';
 import { InputMode } from '../navigation/input-mode';
-import { html, raw } from '../utils/dom';
+import { fontScale, html, raw } from '../utils/dom';
 import { channelLockBadge, seriesLockBadge, vodLockBadge } from './parental-badge';
 import { morph } from '../utils/morph';
 import { PlaylistService } from '../services/playlist-service';
@@ -114,6 +114,15 @@ const log = createLogger('Search');
 const SEARCH_LIST_VIEWPORT = 420;
 const SEARCH_RAIL_VIEWPORT = 1760;
 const SEARCH_ROW_OVERSCAN = 6;
+// A program row's height, as `.search-program-row` sets it in css/search.css,
+// plus the 8px gap to the next row: the part that grows with the text size,
+// and the part that doesn't.
+const SEARCH_PROGRAM_ROW_TEXT = 69;
+const SEARCH_PROGRAM_ROW_FIXED = 40;
+
+function programRowStride(scale: number): number {
+  return SEARCH_PROGRAM_ROW_FIXED + SEARCH_PROGRAM_ROW_TEXT * scale;
+}
 const SEARCH_RAIL_OVERSCAN = 4;
 // How often an AI search's filter runs again when the lists change under it.
 const ASK_LIST_ATTEMPTS = 3;
@@ -370,7 +379,10 @@ export class Search {
   private visibleMovies: VodItem[] = [];
   private visibleSeries: SeriesItem[] = [];
   private resumePrompt = new CatchupResumePrompt('prompt.search');
-  private readonly programVirtualizer = this.createVirtualizer(109, SEARCH_ROW_OVERSCAN, SEARCH_LIST_VIEWPORT);
+  private programVirtualizer = this.createVirtualizer(programRowStride(1), SEARCH_ROW_OVERSCAN, SEARCH_LIST_VIEWPORT);
+  private programStride = programRowStride(1);
+  // The text size the program rows were last sized for.
+  private programTextSize: string | null = null;
   private readonly channelRailVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
   private readonly movieVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
   private readonly seriesVirtualizer = this.createVirtualizer(240, SEARCH_RAIL_OVERSCAN, SEARCH_RAIL_VIEWPORT);
@@ -2396,6 +2408,7 @@ export class Search {
   }
 
   private render(): void {
+    this.syncProgramStride();
     const q = this.query.trim();
     const hasResults = this.visibleChannels.length > 0 || this.visiblePrograms.length > 0
       || this.visibleMovies.length > 0 || this.visibleSeries.length > 0;
@@ -2515,7 +2528,22 @@ export class Search {
     });
   }
 
+  // Program rows grow with the text size, so their stride follows it. Reading
+  // the computed style is costly; redo it only when the text size changes.
+  private syncProgramStride(): void {
+    const textSize = document.documentElement.dataset.textSize ?? '';
+    if (textSize === this.programTextSize) return;
+    this.programTextSize = textSize;
+    const stride = programRowStride(fontScale());
+    if (stride === this.programStride) return;
+    const offset = this.programVirtualizer.scrollOffset * stride / this.programStride;
+    this.programVirtualizer = this.createVirtualizer(stride, SEARCH_ROW_OVERSCAN, SEARCH_LIST_VIEWPORT);
+    this.programVirtualizer.setScrollOffset(offset);
+    this.programStride = stride;
+  }
+
   private virtualizers(): Record<string, VirtualList> {
+    this.syncProgramStride();
     return {
       programmes: this.programVirtualizer,
       'channels-rail': this.channelRailVirtualizer,

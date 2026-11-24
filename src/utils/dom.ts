@@ -127,6 +127,13 @@ export function afterNextPaint(fallbackMs = 500): Promise<void> {
   });
 }
 
+// The Settings text size as a factor, for sizes JS keeps in step with CSS
+// boxes that grow by `var(--font-scale)`.
+export function fontScale(): number {
+  const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-scale'));
+  return scale > 0 ? scale : 1;
+}
+
 // A URL as the URL parser reads it for an <img>: outer whitespace and any
 // tab or newline dropped. Kept, CSS would encode them and break the URL.
 export function cleanUrl(url: string): string {
