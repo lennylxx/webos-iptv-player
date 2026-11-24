@@ -21,7 +21,11 @@ export class VodSubtitles {
     text?: string;
     cues?: VttCue[];
     loading?: Promise<VttCue[]>;
+    // A translation of this entry index; its cues start as copies of the source's.
+    source?: number;
   }> = [];
+  // Cues added for the shown entry, by its cue index, so a translation can update them.
+  private shownCues: Array<VTTCue | null> = [];
   private video: HTMLVideoElement | null = null;
   private cueTrack = new WebVttCueTrack();
   private gen = 0;
@@ -53,15 +57,15 @@ export class VodSubtitles {
     if (this._activeIndex === index) return;
     const gen = ++this.gen;
     this._activeIndex = index;
+    this.shownCues = [];
     this.cueTrack.disable();
     try {
       const cues = await this.load(entry);
       if (gen !== this.gen) return;
       this.cueTrack.attach(video, entry.name, entry.lang);
-      for (const cue of cues) {
-        this.cueTrack.add(cue.start, cue.end, cue.text, cue.settings);
-      }
-      log.info('loaded', cues.length, 'cues from', entry.url);
+      this.shownCues = cues.map(cue => this.cueTrack.addCue(cue.start, cue.end, cue.text, cue.settings));
+      this.cueTrack.redraw();
+      log.info('loaded', cues.length, 'cues', entry.source === undefined ? 'from sidecar' : 'for translation');
     } catch (e) {
       if (gen === this.gen) {
         this._activeIndex = -1;
@@ -75,8 +79,24 @@ export class VodSubtitles {
     }
   }
 
+  /** The cues of entry `index`, loading them on first use. */
+  cuesOf(index: number): Promise<VttCue[]> {
+    const entry = this.entries[index];
+    return entry ? this.load(entry) : Promise.reject(new Error('No such subtitle'));
+  }
+
   private load(entry: typeof this.entries[number]): Promise<VttCue[]> {
     if (entry.cues) return Promise.resolve(entry.cues);
+    if (entry.source !== undefined && !entry.loading) {
+      entry.loading = this.cuesOf(entry.source).then((cues) => {
+        entry.cues = cues.map(cue => ({ ...cue }));
+        entry.loading = undefined;
+        return entry.cues;
+      }, (error: unknown) => {
+        entry.loading = undefined;
+        throw error;
+      });
+    }
     if (!entry.loading) {
       entry.loading = (entry.text != null
         ? Promise.resolve(entry.text)
@@ -109,8 +129,43 @@ export class VodSubtitles {
     return this.entries.length - 1;
   }
 
+  /** Add a translation of entry `source` and return its picker index. */
+  addTranslation(source: number, name: string, lang: string): number {
+    this.entries.push({ name, lang, url: '', source });
+    return this.entries.length - 1;
+  }
+
+  /** Index of the translation of `source` into `lang`, or -1. */
+  translationOf(source: number, lang: string): number {
+    return this.entries.findIndex(entry => entry.source === source && entry.lang === lang);
+  }
+
+  sourceOf(index: number): number {
+    return this.entries[index]?.source ?? -1;
+  }
+
+  /** Replace the text of translated cues, live if the entry is shown. */
+  setCueTexts(index: number, cueIndices: readonly number[], texts: readonly string[]): void {
+    const cues = this.entries[index]?.cues;
+    if (!cues) return;
+    const shown = this._activeIndex === index && this.shownCues.length === cues.length;
+    const now = this.video?.currentTime ?? NaN;
+    let onScreen = false;
+    cueIndices.forEach((cueIndex, k) => {
+      const cue = cues[cueIndex];
+      if (!cue) return;
+      cue.text = texts[k];
+      const live = shown ? this.shownCues[cueIndex] : null;
+      if (!live) return;
+      live.text = texts[k];
+      if (live.startTime <= now && now < live.endTime) onScreen = true;
+    });
+    if (onScreen) this.cueTrack.redraw();
+  }
+
   hide(): void {
     this.gen++;
+    this.shownCues = [];
     this._activeIndex = -1;
     this.cueTrack.disable();
   }

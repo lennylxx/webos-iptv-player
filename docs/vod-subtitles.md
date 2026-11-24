@@ -8,7 +8,7 @@ ASS/SSA through an `assjs` overlay.
 
 | | |
 |---|---|
-| **Code** | `src/components/player-tracks.ts`, `src/components/player-pipeline.ts`, `src/services/vod-subtitles.ts`, `src/services/ass-subtitles.ts`, `src/utils/srt.ts`, `src/services/xtream-client.ts`, `src/utils/subtitle-tracks.ts` |
+| **Code** | `src/components/player-tracks.ts`, `src/components/player-pipeline.ts`, `src/services/vod-subtitles.ts`, `src/services/subtitle-translation.ts`, `src/services/ass-subtitles.ts`, `src/utils/srt.ts`, `src/services/xtream-client.ts`, `src/utils/subtitle-tracks.ts` |
 | **Live/HLS counterpart** | [`hls-subtitles.md`](hls-subtitles.md) |
 | **Audio counterpart** | [`audio-track-selection.md`](audio-track-selection.md) |
 
@@ -26,6 +26,8 @@ ASS/SSA through an `assjs` overlay.
   offered for VOD once a provider is configured, not only when the bundled tracks come up empty;
   downloaded results reuse the in-memory-text paths for SRT/WebVTT/ASS and are cached to
   avoid re-fetching on replay.
+- With AI features on, a shown SRT/WebVTT sidecar (bundled or downloaded) can be **translated**
+  into the preferred subtitle language; only cue text is sent, timings stay on the TV.
 
 ## In-container subtitles
 
@@ -53,7 +55,10 @@ empty DOM `<track>` element but may not paint them, while an application-created
 
 The renderer track is reused because `addTextTrack()` tracks cannot be removed from a persistent
 video element. Switching sidecars clears and repopulates its cues; the internal renderer track is
-filtered out of the picker so each sidecar appears exactly once under its real name. Parsed cues
+filtered out of the picker so each sidecar appears exactly once under its real name. While the
+video is paused, Chromium keeps drawing a removed or rewritten cue until the track's mode changes,
+so after a switch, and after a translated batch rewrites a cue on screen, the track goes
+`hidden` and back to `showing` in one task (`WebVttCueTrack.redraw`), with no blank frame. Parsed cues
 stay cached for the current VOD item. A `WEBVTT` file is parsed directly; anything else is treated
 as SRT and converted first (`srtToVtt` / `parseSubtitleFile` in `src/utils/srt.ts`).
 
@@ -173,6 +178,62 @@ OpenSubtitles password lives only in the TV's `localStorage`.
   WebView, so verify OpenSubtitles downloads on a real TV; SubDL/Assrt are lower-risk.
 - **No exotic Unicode symbols in UI text.** Provider labels and release names are escaped, but the
   TV's font won't render uncommon symbols — stick to letters, digits, punctuation.
+
+## AI subtitle translation
+
+With **Use AI features** on (see the AI features settings), the Subtitles menu adds
+**"Translate to {language}"** under the subtitle list while the shown subtitle is an SRT/WebVTT
+sidecar, bundled or downloaded, whose language differs from the target. The target is the
+**Preferred subtitle language**, else the UI language; Traditional and Simplified Chinese count as
+different languages. In-container tracks, ASS/SSA, and live subtitles are not translated. The row
+stays hidden while AI features are off.
+
+- Picking it adds a picker entry **"{name} · AI translation"** next to its source (a
+  `VodSubtitles.addTranslation` entry that starts as a copy of the source cues) and shows it.
+  Untranslated lines keep the original text; translated batches replace cue text in place
+  (`setCueTexts` updates the live `VTTCue.text`), so the offset and sync adjuster still apply.
+  While it runs, the entry shows its progress.
+- `SubtitleTranslation` splits the cues into fixed batches (at most 40 lines, a quarter of the
+  **Context size** setting) and sends each as numbered plain text, one `[n] text` line per cue
+  with `<br>` for a line break, through `LlmService.runText` — never times, titles, or URLs. The
+  reply is parsed the same way (full-width `【n】`/`［n］` markers too), so a missing or garbled line
+  keeps only that line in the original language. The reply limit is at least 2048 tokens or three
+  times the batch, capped by the room the context size leaves. Blank cues are not sent.
+- Two workers each take the unfinished batch nearest the **current** playback position (then the
+  ones before it), so a seek is translated next; batches within a minute of it go out at
+  foreground priority.
+- Fixed batches make every usable answer a cache hit on replay (the `llm-cache` store). A reply
+  with fewer than half its lines is not cached and leaves the batch for a later run; when the
+  first two replies are unusable the run stops with "Subtitle translation failed".
+- Rate limits (429), server errors (5xx), timeouts, and network errors retry a batch up to twice,
+  after the server's `Retry-After` or 10 s, then 20 s. Any other failure, or the daily limit,
+  stops the run with a toast, keeping what was translated.
+- Switching to another subtitle stops the run: queued batches are dropped, but batches already
+  sent finish and are cached (`finishStarted`), so stopping never wastes a paid request. A stop
+  ends quietly even if such a batch fails afterwards, and the first failure ends the run at once
+  (toast, Translate row back), cutting short any retry wait; a resumed run waits for the batches
+  still out. An identical request already out (e.g. after a quality change rebuilds the job) is
+  shared instead of sent again. A
+  stopped, unfinished translation brings back **"Translate to {language}"**, which resumes it.
+- The pick is remembered with the other subtitle choices as the **source** subtitle plus
+  `translateTo`, and restored over its source on replay while AI features are on (otherwise the
+  source shows).
+- Diagnostics (no subtitle text): `subtitle.translate.start` (target, lines, batches, remaining,
+  resume), `subtitle.translate.retry` (reason, status, attempt, wait), and once per run that
+  wasn't stopped either `subtitle.translate.done` or `subtitle.translate.incomplete` (reason `lines_kept`,
+  `unusable_reply`, or the failure; failed batches; done/kept/cached/requested/total lines and
+  batches); `subtitle.translate.restore` (`restored` or `ai_off`) once per opening of an item, a reload such
+  as a quality change included.
+  Request failures also log `llm.request.failed`.
+
+**Context size.** **Test connection** reads the model's context window where the server reports
+one: `max_model_len` (vLLM), `context_length` (OpenRouter, Together), `context_window` (Groq),
+`max_context_length` (Mistral), or `loaded_context_length` (LM Studio, read before its maximum) on `/models`, else
+llama.cpp's per-slot `n_ctx` from `/props`. Many hosted services report none. The setting snaps to
+the largest preset that fits (the smallest, 2048, when none does): it is always lowered to fit, but
+raised only from the default or from a size an earlier test set (saved as `detectedContextTokens`),
+so a smaller size the user picked stays. `llm.context.detected` logs the source and size.
+The default is 16000 for every server. Saved sizes clamp to 2048–128000, the presets' range. Subtitle batches stay at 40 lines at any size.
 
 ## Subtitle offset (sync)
 

@@ -510,6 +510,42 @@ describe('PlayerMenu', () => {
       expect(menu.visible).toBe(false);
     });
 
+    it('shows translation progress and a translate row that starts translating', () => {
+      const translateSubtitles = vi.fn<() => void>();
+      menu = new PlayerMenu(
+        container, getCurrentChannel, onAction,
+        getAudioTracks, selectAudioTrack,
+        getSubtitleTracks, selectSubtitleTrack,
+        getSubtitleOffsetState, openSubtitleOffset,
+        getPlaybackRateState, selectPlaybackRate,
+        subtitleSearchAvailable, openSubtitleSearch,
+        undefined, undefined, undefined, undefined,
+        () => 'Translate to Deutsch', translateSubtitles,
+      );
+      subtitleTracks = [
+        { index: 0, label: 'Track 1', active: true },
+        { index: 1, label: 'Track 1 · AI translation', active: false, detail: '40%', aiSource: 'Track 1' },
+      ];
+      menu.show();
+      items().find((i) => i.dataset.menuAction === '__subs_open__')!.click();
+      expect(items()[3].textContent).toContain('40%');
+      // The AI icon marks the translation and the translate action, not the source.
+      expect(items()[2].querySelector('.ai-icon')).toBeNull();
+      // The icon leads the note's words, after the name that gives way to it.
+      expect(items()[3].querySelector('.menu-track-name')!.textContent).toBe('Track 1');
+      expect(items()[3].querySelector('.menu-track-note')!.textContent).toBe('· AI translation');
+      expect(items()[3].querySelector('.menu-track-note .ai-icon svg')).not.toBeNull();
+      const row = items().find((i) => i.dataset.menuAction === '__subs_translate__');
+      expect(row!.textContent).toContain('Translate to Deutsch');
+      expect(row!.querySelector('.menu-track-label .ai-icon svg')).not.toBeNull();
+
+      row!.click();
+
+      expect(translateSubtitles).toHaveBeenCalledTimes(1);
+      expect(selectSubtitleTrack).not.toHaveBeenCalled();
+      expect(items().map(i => i.dataset.menuAction)).toContain('__subs_open__');
+    });
+
     it('shows a Subtitle Sync row in the subtitles submenu and opens the adjuster', () => {
       subtitleTracks = [{ index: 0, label: 'Track 1', active: true }];
       getSubtitleOffsetState.mockReturnValue({ available: true, label: '+0.25 s' });

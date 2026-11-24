@@ -1,8 +1,8 @@
 import type { Action, AudioTrackOption, Channel, SubtitleTrackOption } from '../types';
 import { CONFIG } from '../config';
-import { $, html, inShownView, onceTransitionEnd, raw, withInstantScroll } from '../utils/dom';
+import { $, html, inShownView, onceTransitionEnd, raw, withInstantScroll, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
-import { ASPECT_ICON, AUDIO_ICON, QUALITY_ICON, SPEED_ICON, SUBTITLE_ICON } from './icons';
+import { AI_ICON, ASPECT_ICON, AUDIO_ICON, QUALITY_ICON, SPEED_ICON, SUBTITLE_ICON } from './icons';
 import { t } from '../i18n';
 import {
   PLAYBACK_RATES,
@@ -46,6 +46,7 @@ const OPEN_SUBS = '__subs_open__';
 const PICK_SUB = '__subs_track__';
 const OPEN_OFFSET = '__subs_offset__';
 const OPEN_SEARCH = '__subs_search__';
+const TRANSLATE_SUBS = '__subs_translate__';
 const OPEN_SPEED = '__speed_open__';
 const PICK_SPEED = '__speed_rate__';
 const OPEN_ASPECT = '__aspect_open__';
@@ -57,6 +58,20 @@ function qualityValue(state: QualityMenuState): string {
   if (state.override === 'auto') return t('player.qualityAuto');
   const pinned = state.tiers[state.pinned];
   return pinned ? qualityTierLabel(pinned) : videoQualityLabel(state.setting);
+}
+
+// "{name} · AI translation" with the AI icon before its words; the name gives
+// way to the note, which always shows.
+function aiTranslationLabel(name: string, label: string): Safe {
+  const marker = '\u0001';
+  const template = t('player.aiTranslation', { name: marker });
+  const note = /^\s*([·•:|\-–—]?)\s*(.+)$/.exec(template.slice(marker.length));
+  if (template.indexOf(marker) !== 0 || !note) {
+    return html`<span class="menu-track-label"><span class="ai-icon">${raw(AI_ICON)}</span>${label}</span>`;
+  }
+  return html`<span class="menu-track-label menu-track-ai">
+    <span class="menu-track-name">${name}</span> <span class="menu-track-note">${
+      note[1] ? `${note[1]} ` : ''}<span class="ai-icon">${raw(AI_ICON)}</span>${note[2]}</span></span>`;
 }
 
 function aspectLabel(mode: AspectRatio): string {
@@ -95,6 +110,8 @@ export class PlayerMenu {
   private selectAspectRatio: (mode: AspectRatio) => void;
   private getQuality: () => QualityMenuState | null;
   private selectQuality: (pick: QualityOverride | null) => void;
+  private getTranslateLabel: () => string | null;
+  private translateSubtitles: () => void;
   private isVisible = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private focusIdx = 0;
@@ -123,6 +140,9 @@ export class PlayerMenu {
     // null hides the Video Quality row.
     getQuality: () => QualityMenuState | null = () => null,
     selectQuality: (pick: QualityOverride | null) => void = () => {},
+    // null hides the subtitle translate row.
+    getTranslateLabel: () => string | null = () => null,
+    translateSubtitles: () => void = () => {},
   ) {
     this.getCurrentChannel = getCurrentChannel;
     this.onAction = onAction;
@@ -140,6 +160,8 @@ export class PlayerMenu {
     this.selectAspectRatio = selectAspectRatio;
     this.getQuality = getQuality;
     this.selectQuality = selectQuality;
+    this.getTranslateLabel = getTranslateLabel;
+    this.translateSubtitles = translateSubtitles;
     this.el = $('#player-menu', container);
     this.bindEvents();
   }
@@ -362,6 +384,9 @@ export class PlayerMenu {
     } else if (action === PICK_SUB) {
       const idx = Number(item.dataset.trackIndex);
       if (!Number.isNaN(idx)) this.selectSubtitleTrack(idx);
+      this.openMain();
+    } else if (action === TRANSLATE_SUBS) {
+      this.translateSubtitles();
       this.openMain();
     } else if (action === OPEN_SEARCH) {
       this.hide();
@@ -676,6 +701,7 @@ export class PlayerMenu {
 
     const tracks = this.getSubtitleTracks();
     const anyActive = tracks.some(t => t.active);
+    const translateLabel = this.getTranslateLabel();
 
     morph(el, html`
       <div class="menu-header">
@@ -696,9 +722,18 @@ export class PlayerMenu {
           <div class="menu-item ${t.available === false ? 'unavailable' : ''}" data-key="sub:${t.index}"
                data-focusable data-menu-action="${PICK_SUB}" data-track-index="${t.index}">
             <span class="menu-check">${t.active ? '✓' : ''}</span>
-            <span class="menu-track-label">${t.label}</span>
+            ${t.aiSource !== undefined ? aiTranslationLabel(t.aiSource, t.label) : html`
+              <span class="menu-track-label">${t.label}</span>`}
+            ${t.detail ? html`<span class="menu-item-value">${t.detail}</span>` : ''}
           </div>
         `)}
+        ${translateLabel ? html`
+          <div class="menu-item" data-key="${TRANSLATE_SUBS}"
+               data-focusable data-menu-action="${TRANSLATE_SUBS}">
+            <span class="menu-check"></span>
+            <span class="menu-track-label"><span class="ai-icon">${raw(AI_ICON)}</span>${translateLabel}</span>
+          </div>
+        ` : ''}
         ${this.subtitleSearchAvailable() ? html`
           <div class="menu-item" data-key="${OPEN_SEARCH}"
                data-focusable data-menu-action="${OPEN_SEARCH}">

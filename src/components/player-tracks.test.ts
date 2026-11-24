@@ -55,6 +55,9 @@ vi.mock('./toast', () => ({ showToast: vi.fn() }));
 vi.mock('../services/subtitle-search/subtitle-search-service', () => ({
   subtitleSearchService: subtitleSearchServiceMock,
 }));
+vi.mock('../services/llm/llm-service', () => ({
+  LlmService: { isReady: vi.fn(() => false), runText: vi.fn(), contextTokens: () => 16000 },
+}));
 vi.mock('../services/idb-cache', () => ({
   getCachedSubtitle: vi.fn(),
   setCachedSubtitle: vi.fn(),
@@ -62,6 +65,9 @@ vi.mock('../services/idb-cache', () => ({
 
 import { Focus } from '../navigation/focus-scope';
 import { getCachedSubtitle } from '../services/idb-cache';
+import { LlmError } from '../services/llm/client';
+import { LlmService, type LlmTextTask } from '../services/llm/llm-service';
+import { showToast } from './toast';
 
 const CHANNEL: Channel = {
   id: 'ch1',
@@ -1145,6 +1151,7 @@ describe('PlayerTracks', () => {
         clear: vi.fn(),
         setOffset: vi.fn(),
         owns: vi.fn(() => false),
+        sourceOf: vi.fn(() => -1),
         activeIndex: -1,
       };
       const internals = trackInternals(tracks);
@@ -1187,6 +1194,7 @@ describe('PlayerTracks', () => {
       internals.vodSubs = {
         activeIndex: 0,
         owns: vi.fn((track: TextTrack) => track === renderer),
+        sourceOf: vi.fn(() => -1),
       };
 
       expect(tracks.getSubtitleTracks()).toEqual([{
@@ -1209,6 +1217,7 @@ describe('PlayerTracks', () => {
       internals.vodSubs = {
         activeIndex: -1,
         owns: vi.fn(() => false),
+        sourceOf: vi.fn(() => -1),
       };
 
       expect(tracks.getSubtitleTracks()[0].label).toBe('Subtitles');
@@ -1226,6 +1235,7 @@ describe('PlayerTracks', () => {
       internals.vodSubs = {
         activeIndex: -1,
         owns: vi.fn(() => false),
+        sourceOf: vi.fn(() => -1),
       };
 
       expect(tracks.getSubtitleTracks()[0].label).toBe('l1');
@@ -1606,6 +1616,7 @@ describe('PlayerTracks', () => {
         hide: vi.fn(),
         setOffset: vi.fn(),
         owns: vi.fn(() => false),
+        sourceOf: vi.fn(() => -1),
         activeIndex: 0,
       };
       trackInternals(tracks).vodSubs = vodSubs;
@@ -1975,5 +1986,218 @@ describe('PlayerTracks Luna audio', () => {
     tracks.applyNativeAudioSelection();
 
     expect(audio.map(item => item.enabled)).toEqual([true, false]);
+  });
+});
+
+describe('PlayerTracks subtitle translation', () => {
+  const SRT = '1\n00:00:01,000 --> 00:00:02,000\nAlpha\n\n2\n00:00:03,000 --> 00:00:04,000\nBravo\n';
+  let cueList: Array<{ startTime: number; endTime: number; text: string }>;
+  let vod: VodPlayback;
+  let tracks: PlayerTracks;
+  const onChanged = vi.fn();
+
+  function config(preferredLanguage: string): ReturnType<typeof StorageService.getOnlineSubtitleConfig> {
+    return { ...StorageService.getOnlineSubtitleConfig(), preferredLanguage };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('VTTCue', class {
+      constructor(public startTime: number, public endTime: number, public text: string) {}
+    });
+    cueList = [];
+    const renderer = {
+      kind: 'subtitles',
+      mode: 'disabled',
+      // Like a browser, a disabled track lists no cues.
+      get cues() { return this.mode === 'disabled' ? null : cueList; },
+      addCue: (cue: (typeof cueList)[number]) => cueList.push(cue),
+      removeCue: (cue: (typeof cueList)[number]) => cueList.splice(cueList.indexOf(cue), 1),
+    };
+    const video = {
+      textTracks: [renderer] as unknown as TextTrackList,
+      currentTime: 0,
+      addTextTrack: vi.fn(() => renderer),
+    } as unknown as HTMLVideoElement;
+    vi.mocked(StorageService.getSubtitlePref).mockReturnValue(null);
+    vi.mocked(StorageService.getSubtitleOffset).mockReturnValue(0);
+    vi.mocked(StorageService.getPickedOnlineSub).mockReturnValue(null);
+    vi.mocked(StorageService.getOnlineSubtitleConfig).mockReturnValue(config('de'));
+    vi.mocked(LlmService.isReady).mockReturnValue(true);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(LlmService.runText).mockImplementation(async (task: LlmTextTask) => ({
+      text: task.user.split('\n').map(line => `${line} (de)`).join('\n'),
+      cached: false,
+    }));
+    vod = vodRequest({ subtitles: [{ id: '1', name: 'Track 1', lang: 'l1', url: '', text: SRT }] });
+    tracks = new PlayerTracks(pipeline(), {
+      getVideoElement: () => video,
+      getChannel: () => null,
+      getVod: () => vod,
+      playbackLabel: () => 'session=1 load=7',
+      onChanged,
+    });
+    tracks.attachVod(vod);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function showSource(): Promise<void> {
+    tracks.selectSubtitleTrack(VOD_SUBTITLE_BASE);
+    await vi.waitFor(() => expect(cueList).toHaveLength(2));
+  }
+
+  it('offers translation for a shown sidecar in another language while AI is ready', async () => {
+    expect(tracks.subtitleTranslationLabel()).toBeNull();
+    await showSource();
+    expect(tracks.subtitleTranslationLabel()).toBe('Translate to Deutsch');
+
+    vi.mocked(LlmService.isReady).mockReturnValue(false);
+    expect(tracks.subtitleTranslationLabel()).toBeNull();
+
+    vi.mocked(LlmService.isReady).mockReturnValue(true);
+    vi.mocked(StorageService.getOnlineSubtitleConfig).mockReturnValue(config('l1'));
+    expect(tracks.subtitleTranslationLabel()).toBeNull();
+  });
+
+  it('shows a translation entry, fills its cues, and remembers it by its source', async () => {
+    await showSource();
+
+    tracks.translateSubtitles();
+
+    await vi.waitFor(() => expect(cueList.map(cue => cue.text)).toEqual(['Alpha (de)', 'Bravo (de)']));
+    expect(tracks.getSubtitleTracks().map(item => [item.label, item.active, item.aiSource])).toEqual([
+      ['Track 1', false, undefined],
+      ['Track 1 · AI translation', true, 'Track 1'],
+    ]);
+    expect(StorageService.setSubtitlePref).toHaveBeenLastCalledWith(
+      'vod:x1:vod:10',
+      { off: false, name: 'Track 1', lang: 'l1', translateTo: 'de' },
+    );
+    expect(showToast).toHaveBeenLastCalledWith('Translating subtitles… 0%');
+    expect(tracks.subtitleTranslationLabel()).toBeNull();
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalled());
+
+    // Translating again picks the same entry instead of adding another.
+    tracks.selectSubtitleTrack(VOD_SUBTITLE_BASE);
+    tracks.translateSubtitles();
+    expect(tracks.getSubtitleTracks()).toHaveLength(2);
+    expect(LlmService.runText).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores a saved translation over its source', async () => {
+    vi.mocked(StorageService.getSubtitlePref).mockReturnValue({ off: false, name: 'Track 1', lang: 'l1', translateTo: 'l2' });
+
+    tracks.applyNativeSubtitleSelection();
+
+    await vi.waitFor(() => expect(cueList.map(cue => cue.text)).toEqual(['Alpha (de)', 'Bravo (de)']));
+    expect(tracks.getSubtitleTracks()[1]).toMatchObject({ index: VOD_SUBTITLE_BASE + 1, active: true });
+    expect((vi.mocked(LlmService.runText).mock.calls[0][0] as LlmTextTask).system).toContain('into l2');
+    expect(vi.mocked(console.log).mock.calls.map(args => args.join(' ')).join('\n'))
+      .toMatch(/event=subtitle\.translate\.restore outcome=restored target=l2/);
+
+    const restores = (): number => vi.mocked(console.log).mock.calls
+      .filter(args => args.join(' ').indexOf('subtitle.translate.restore') >= 0).length;
+    const reopen = async (reload: boolean): Promise<void> => {
+      tracks.resetForLoad(reload);
+      tracks.attachVod(vod);
+      tracks.applyNativeSubtitleSelection();
+      await vi.waitFor(() => expect(tracks.getSubtitleTracks()[1]).toMatchObject({ active: true }));
+    };
+
+    // A reload of the same item (e.g. a quality change) restores again but logs once;
+    // opening the item again logs again.
+    await reopen(true);
+    expect(restores()).toBe(1);
+    await reopen(false);
+    expect(restores()).toBe(2);
+  });
+
+  it('keeps the source when AI features are off', async () => {
+    vi.mocked(LlmService.isReady).mockReturnValue(false);
+    vi.mocked(StorageService.getSubtitlePref).mockReturnValue({ off: false, name: 'Track 1', lang: 'l1', translateTo: 'l2' });
+
+    tracks.applyNativeSubtitleSelection();
+
+    await vi.waitFor(() => expect(cueList.map(cue => cue.text)).toEqual(['Alpha', 'Bravo']));
+    expect(tracks.getSubtitleTracks()).toHaveLength(1);
+    expect(LlmService.runText).not.toHaveBeenCalled();
+    expect(vi.mocked(console.log).mock.calls.map(args => args.join(' ')).join('\n'))
+      .toMatch(/event=subtitle\.translate\.restore outcome=ai_off target=l2/);
+  });
+
+  it('names a translation picked from the list, and announces progress only for Translate', async () => {
+    vi.mocked(LlmService.runText).mockImplementation(() => new Promise(() => {}));
+    await showSource();
+    tracks.translateSubtitles();
+    expect(showToast).toHaveBeenLastCalledWith('Translating subtitles… 0%');
+
+    tracks.selectSubtitleTrack(VOD_SUBTITLE_BASE);
+    tracks.selectSubtitleTrack(VOD_SUBTITLE_BASE + 1);
+
+    expect(showToast).toHaveBeenLastCalledWith('Subtitles: Track 1 · AI translation');
+  });
+
+  it('drops a reply for the previous item instead of writing it into the next one', async () => {
+    const replies: Array<() => void> = [];
+    vi.mocked(LlmService.runText).mockImplementation((task: LlmTextTask) => new Promise((resolve) => {
+      replies.push(() => resolve({ text: task.user.split('\n').map(line => `${line} (de)`).join('\n'), cached: false }));
+    }));
+    await showSource();
+    tracks.translateSubtitles();
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+
+    tracks.resetForLoad();
+    vod = vodRequest({ itemId: '11', subtitles: [{ id: '2', name: 'Track 2', lang: 'l1', url: '', text: SRT }] });
+    tracks.attachVod(vod);
+    cueList.length = 0;
+    await showSource();
+    tracks.translateSubtitles();
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    onChanged.mockClear();
+
+    replies[0]();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(cueList.map(cue => cue.text)).toEqual(['Alpha', 'Bravo']);
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('offers to resume a translation that stopped, and resumes it', async () => {
+    vi.mocked(LlmService.runText).mockRejectedValueOnce(new LlmError('auth', 'HTTP 401', 401));
+    await showSource();
+    tracks.translateSubtitles();
+    await vi.waitFor(() => expect(showToast).toHaveBeenLastCalledWith('Subtitle translation failed'));
+    expect(tracks.subtitleTranslationLabel()).toBe('Translate to Deutsch');
+
+    tracks.translateSubtitles();
+
+    await vi.waitFor(() => expect(cueList.map(cue => cue.text)).toEqual(['Alpha (de)', 'Bravo (de)']));
+    expect(tracks.getSubtitleTracks()).toHaveLength(2);
+    expect(tracks.subtitleTranslationLabel()).toBeNull();
+  });
+
+  it('stops translating when another subtitle is picked and reports a failure', async () => {
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(LlmService.runText).mockImplementation((task: LlmTextTask) => new Promise((_, reject) => {
+      fail = reject;
+      task.signal?.addEventListener('abort', () => reject(new LlmError('cancelled', 'Request was cancelled')));
+    }));
+    await showSource();
+    tracks.translateSubtitles();
+    await vi.waitFor(() => expect(LlmService.runText).toHaveBeenCalled());
+    const signal = (vi.mocked(LlmService.runText).mock.calls[0][0] as LlmTextTask).signal;
+
+    tracks.selectSubtitleTrack(VOD_SUBTITLE_BASE);
+    expect(signal?.aborted).toBe(true);
+
+    vi.mocked(showToast).mockClear();
+    tracks.selectSubtitleTrack(VOD_SUBTITLE_BASE + 1);
+    await vi.waitFor(() => expect(LlmService.runText).toHaveBeenCalledTimes(2));
+    fail(new LlmError('cap', 'Daily cap reached'));
+    await vi.waitFor(() => expect(showToast).toHaveBeenLastCalledWith('Daily AI limit reached. Translation paused.'));
   });
 });

@@ -75,7 +75,7 @@ const {
         day: '2026-01-01',
         features: { f1: { requests: 3, inputTokens: 1200, outputTokens: 34 } } as Record<string, { requests: number; inputTokens: number; outputTokens: number }>,
       })),
-      testConnection: vi.fn<(config: LlmConfig) => Promise<{ models: string[]; capabilities: unknown }>>(),
+      testConnection: vi.fn<(config: LlmConfig) => Promise<{ models: string[]; capabilities: unknown; contextTokens?: number }>>(),
       listModels: vi.fn<(config: LlmConfig) => Promise<string[]>>(),
     },
     cacheMock: {
@@ -2135,6 +2135,59 @@ describe('Settings.save', () => {
     expect(llmMock.testConnection).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://host:8080/v1', model: 'm1' }));
     expect(container.querySelector('#ai-status')?.classList.contains('ok')).toBe(true);
     expect(storageMock.setLlmConfig).not.toHaveBeenCalled();
+  });
+
+  it('fits Context size to what the server reports, keeping a smaller choice', async () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host:8080/v1', contextTokens: 16000 };
+    settings.render();
+    const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
+    const test = async (contextTokens: number, expected: string): Promise<void> => {
+      llmMock.testConnection.mockResolvedValueOnce({ models: ['m1'], capabilities: {}, contextTokens });
+      const calls = llmMock.testConnection.mock.calls.length;
+      click('#ai-test-connection');
+      await vi.waitFor(() => expect(llmMock.testConnection).toHaveBeenCalledTimes(calls + 1));
+      await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected · 1 model'));
+      expect(size()).toBe(expected);
+    };
+    container.querySelector<HTMLInputElement>('#ai-model')!.value = 'm1';
+    expect(size()).toBe('16000');
+
+    await test(262144, '128000');
+    await test(8192, '8192');
+    // A size Test connection set may rise again for a larger server.
+    await test(40960, '32000');
+    // Below every preset, the smallest one is closest.
+    await test(1024, '2048');
+
+    // A size the user picks stays when a server reports more.
+    container.querySelector<HTMLElement>('#ai-context-size [data-dropdown-value="4096"]')!.click();
+    expect(size()).toBe('4096');
+    await test(40960, '4096');
+
+    // The detected size is saved, so a later session may raise it too.
+    await test(2048, '2048');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({
+      contextTokens: 2048,
+      detectedContextTokens: 2048,
+    }));
+  });
+
+  it('keeps the 16000 Context size for any server address until one is picked', () => {
+    settings.render();
+    const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
+    const address = (url: string): void => {
+      const input = container.querySelector<HTMLInputElement>('#ai-base-url')!;
+      input.value = url;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    expect(size()).toBe('16000');
+    address('http://192.168.1.10:8080/v1');
+    expect(size()).toBe('16000');
+    address('https://api.host.test/v1');
+    expect(size()).toBe('16000');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ contextTokens: 16000 }));
   });
 
   it('names the AI connection failure', async () => {

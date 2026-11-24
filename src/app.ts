@@ -280,6 +280,8 @@ class App {
       (mode) => this.player.setAspectRatio(mode),
       () => this.player.getQualityMenu(),
       (pick) => this.player.setQualityOverride(pick),
+      () => this.player.subtitleTranslationLabel(),
+      () => this.player.translateSubtitles(),
     );
 
     this.movies = new Movies(this.views.movies, {

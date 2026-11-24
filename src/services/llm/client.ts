@@ -29,8 +29,9 @@ export interface Endpoint {
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
-  schema: NamedSchema;
-  mode: StructuredMode;
+  // Absent for a plain-text reply.
+  schema?: NamedSchema;
+  mode: StructuredMode | 'text';
   thinkingOff: boolean;
   // Adds reasoning_effort "none" to the thinking-off fields.
   effortOff?: boolean;
@@ -150,7 +151,7 @@ async function send(endpoint: Endpoint, path: string, init: RequestInit, signal?
 
 export function buildChatBody(request: ChatRequest): Record<string, unknown> {
   const messages = request.messages.map((m) => ({ role: m.role, content: m.content }));
-  if (request.mode !== 'json_schema') {
+  if (request.schema && request.mode !== 'json_schema' && request.mode !== 'text') {
     // json_object mode also needs the word "JSON" in the prompt on OpenAI.
     // Some chat templates reject any system message but a single leading one.
     const instruction = schemaInstruction(request.schema.schema);
@@ -163,7 +164,7 @@ export function buildChatBody(request: ChatRequest): Record<string, unknown> {
   const body: Record<string, unknown> = { model: request.model, messages, stream: false };
   if (!request.reasoningParams) body.temperature = request.temperature ?? 0;
   if (request.maxTokens) body[request.reasoningParams ? 'max_completion_tokens' : 'max_tokens'] = request.maxTokens;
-  if (request.mode === 'json_schema') {
+  if (request.schema && request.mode === 'json_schema') {
     body.response_format = {
       type: 'json_schema',
       json_schema: { name: request.schema.name, schema: request.schema.schema },
@@ -226,23 +227,74 @@ function postChat(endpoint: Endpoint, request: ChatRequest): Promise<string> {
   }, request.signal);
 }
 
-export async function listModels(endpoint: Endpoint, signal?: AbortSignal): Promise<string[]> {
+export interface ModelList {
+  ids: string[];
+  // Context window per model id, where the server reports one.
+  contexts: Record<string, number>;
+  // llama.cpp, which reports its context on /props instead.
+  llamaCpp: boolean;
+}
+
+// Fields servers use for a model's context window: LM Studio's loaded size
+// (before its maximum), vLLM, OpenRouter and Together, Groq, Mistral.
+const CONTEXT_FIELDS = ['loaded_context_length', 'max_model_len', 'context_length', 'context_window', 'max_context_length'];
+
+type ModelEntry = Record<string, unknown>;
+
+function contextOf(entry: ModelEntry): number {
+  for (const field of CONTEXT_FIELDS) {
+    const value = entry[field];
+    if (typeof value === 'number' && isFinite(value) && value > 0) return Math.floor(value);
+  }
+  return 0;
+}
+
+export async function listModelsDetailed(endpoint: Endpoint, signal?: AbortSignal): Promise<ModelList> {
   const text = await send(endpoint, '/models', { method: 'GET', headers: headersFor(endpoint, false) }, signal);
-  let parsed: { data?: Array<{ id?: unknown }>; models?: Array<{ id?: unknown; name?: unknown; model?: unknown }> };
+  let parsed: { data?: ModelEntry[]; models?: ModelEntry[] };
   try {
     parsed = JSON.parse(text) as typeof parsed;
   } catch {
     throw new LlmError('http', 'Response is not JSON');
   }
-  const ids: string[] = [];
-  (parsed.data ?? []).forEach((m) => { if (typeof m.id === 'string') ids.push(m.id); });
+  const entries: Array<{ id: string; entry: ModelEntry }> = [];
+  (Array.isArray(parsed.data) ? parsed.data : []).forEach((m) => {
+    if (m && typeof m.id === 'string') entries.push({ id: m.id, entry: m });
+  });
   // llama.cpp also answers with an Ollama-style `models` list.
-  if (!ids.length) {
-    (parsed.models ?? []).forEach((m) => {
-      const id = typeof m.id === 'string' ? m.id : typeof m.model === 'string' ? m.model : m.name;
-      if (typeof id === 'string') ids.push(id);
+  if (!entries.length) {
+    (Array.isArray(parsed.models) ? parsed.models : []).forEach((m) => {
+      const id = m && (typeof m.id === 'string' ? m.id : typeof m.model === 'string' ? m.model : m.name);
+      if (typeof id === 'string') entries.push({ id, entry: m });
     });
   }
-  // Some servers list ids as "models/<id>" but takes the bare id in requests.
-  return ids.map((id) => id.replace(/^models\//, '')).filter((id, i, all) => all.indexOf(id) === i).sort();
+  const contexts: Record<string, number> = {};
+  let llamaCpp = false;
+  entries.forEach(({ id, entry }) => {
+    // Some servers list ids as "models/<id>" but take the bare id in requests.
+    const bare = id.replace(/^models\//, '');
+    const context = contextOf(entry);
+    if (context && !contexts[bare]) contexts[bare] = context;
+    if (entry.owned_by === 'llamacpp') llamaCpp = true;
+  });
+  const ids = entries.map(({ id }) => id.replace(/^models\//, ''))
+    .filter((id, i, all) => all.indexOf(id) === i).sort();
+  return { ids, contexts, llamaCpp };
+}
+
+export async function listModels(endpoint: Endpoint, signal?: AbortSignal): Promise<string[]> {
+  return (await listModelsDetailed(endpoint, signal)).ids;
+}
+
+/** llama.cpp's per-slot context from /props, beside the /v1 path; 0 when unknown. */
+export async function llamaCppContext(endpoint: Endpoint, signal?: AbortSignal): Promise<number> {
+  const root = { ...endpoint, baseUrl: endpoint.baseUrl.replace(/\/v1$/, '') };
+  const text = await send(root, '/props', { method: 'GET', headers: headersFor(endpoint, false) }, signal);
+  try {
+    const props = JSON.parse(text) as { default_generation_settings?: { n_ctx?: unknown }; n_ctx?: unknown };
+    const value = props.default_generation_settings?.n_ctx ?? props.n_ctx;
+    return typeof value === 'number' && isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  } catch {
+    return 0;
+  }
 }

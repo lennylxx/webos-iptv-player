@@ -277,6 +277,22 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   font-size: 26px;
 }
 
+/* Marks an AI action or AI-made text inline with its label: sized and colored
+   by the label, and inside its line box so the row never grows. */
+.ai-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.5em;
+  vertical-align: -0.15em;
+}
+.ai-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
 /* Toast */
 .toast {
   position: fixed;

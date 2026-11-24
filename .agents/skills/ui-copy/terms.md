@@ -61,6 +61,10 @@ a new term after review, add a row here.
 | LLM daily caps | Daily request limit / Daily token limit / No limit | 每日请求上限 / 每日 Token 上限 / 无限制 |
 | LLM token | token | Token |
 | Stored AI output (cache category) | AI results | AI 结果 |
+| Translate subtitles (menu row; endonym after a colon outside en) | Translate to {language} | 翻译为：{language} |
+| AI-translated subtitle entry | {name} · AI translation | {name} · AI 翻译 |
+| Subtitle translation progress / failure | Translating subtitles… {percent}% / Subtitle translation failed | 正在翻译字幕… {percent}% / 字幕翻译失败 |
+| Daily cap hit during a task | Daily AI limit reached. Translation paused. | 已达到每日 AI 上限，翻译已暂停。 |
 
 ## Rejected wordings
 
@@ -91,3 +95,5 @@ Never reintroduce these for the concept named.
 | LLM tokens | 令牌, 词元 | Token |
 | Endpoint address | Endpoint / 终端 / Base URL | Server URL |
 | zh address labels | 服务器 URL, 播放列表 URL | 服务器网址, 播放列表网址 |
+| AI translation label | Auto-translated / Machine translation / 自动翻译 / 机器翻译 | AI translation / AI 翻译 |
+| Daily cap toast | quota / 配额 (that is the provider rate limit) | Daily AI limit / 每日 AI 上限 |

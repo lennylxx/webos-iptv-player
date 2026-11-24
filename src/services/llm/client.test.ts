@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildChatBody, chatCompletion, listModels, LlmError, type Endpoint } from './client';
+import { buildChatBody, chatCompletion, listModels, listModelsDetailed, LlmError, type Endpoint } from './client';
 import {
   completeServerUrl,
   defaultLlmConfig,
@@ -73,6 +73,18 @@ describe('OpenAI-compatible client', () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({ data: [] }));
     await listModels({ ...endpoint, headers: { authorization: 'Basic x', 'X-Test': 'a' } });
     expect(spy.mock.calls[0][1]!.headers).toEqual({ 'X-Test': 'a', Authorization: 'Bearer k1' });
+  });
+
+  it('reads the loaded context before the model maximum', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({ data: [
+      { id: 'm1', max_context_length: 32768, loaded_context_length: 4096 },
+      { id: 'models/m2', max_context_length: 32768 },
+    ] }));
+    await expect(listModelsDetailed(endpoint)).resolves.toEqual({
+      ids: ['m1', 'm2'],
+      contexts: { m1: 4096, m2: 32768 },
+      llamaCpp: false,
+    });
   });
 
   it('sends no Authorization header for a keyless local server', async () => {
@@ -185,6 +197,13 @@ describe('endpoint settings', () => {
     for (const url of ['https://api.host.test/v1', 'https://172.32.0.1/v1', 'http://203.0.113.5/v1', '']) {
       expect(endpointProfile(url)).toMatchObject({ kind: 'remote', concurrency: 2, preferThinkingOff: false });
     }
+  });
+
+  it('defaults Context size to 16000 for every server and keeps a saved one', () => {
+    expect(defaultLlmConfig().contextTokens).toBe(16000);
+    expect(normalizeLlmConfig({ baseUrl: 'http://192.168.1.20:8080/v1' }).contextTokens).toBe(16000);
+    expect(normalizeLlmConfig({ baseUrl: 'https://api.host.test/v1' }).contextTokens).toBe(16000);
+    expect(normalizeLlmConfig({ baseUrl: 'https://api.host.test/v1', contextTokens: 32000 }).contextTokens).toBe(32000);
   });
 
   it('clamps a saved Context size to what Settings offers', () => {

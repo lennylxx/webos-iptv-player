@@ -69,6 +69,17 @@ describe('LlmService', () => {
     expect(LlmService.isReady('f1')).toBe(false);
   });
 
+  it('runs a feature the user starts by hand on the AI switch alone', async () => {
+    save({ features: {}, capabilities: { signature: SIGNATURE, structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 } });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => reply('{"genre":"news"}'));
+    expect(LlmService.isReady('subtitle-translation')).toBe(true);
+    await expect(LlmService.run({ ...task, feature: 'subtitle-translation' })).resolves.toMatchObject({ value: { genre: 'news' } });
+
+    save({ enabled: false, features: {} });
+    expect(LlmService.isReady('subtitle-translation')).toBe(false);
+    await expect(LlmService.run({ ...task, feature: 'subtitle-translation' })).rejects.toMatchObject({ reason: 'disabled' });
+  });
+
   it('falls back to json_object when the server rejects json_schema, and remembers it', async () => {
     save({});
     const spy = vi.spyOn(globalThis, 'fetch')
@@ -257,6 +268,111 @@ describe('LlmService', () => {
       models: ['m1'],
       capabilities: { structured: 'json_schema', thinkingOff: false },
     });
+  });
+
+  it('reads the context size a server reports for the model', async () => {
+    const config = save({ enabled: false });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: 'm0', max_model_len: 4096 }, { id: 'm1', context_length: 32768 }] }), { status: 200 }))
+      .mockResolvedValueOnce(reply('{"ok":true,"word":"bravo"}'));
+    await expect(LlmService.testConnection(config)).resolves.toMatchObject({ contextTokens: 32768 });
+    expect(log).toHaveBeenCalledWith('[LLM]', expect.any(String), 'event=llm.context.detected', 'source=models', 'tokens=32768');
+  });
+
+  it('reads llama.cpp’s context from /props, and reports none for other servers', async () => {
+    const config = save({ enabled: false, baseUrl: 'http://host:8080/v1' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const spy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: 'm1', owned_by: 'llamacpp', meta: { n_ctx_train: 262144 } }] }), { status: 200 }))
+      .mockResolvedValueOnce(reply('{"ok":true,"word":"bravo"}'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ default_generation_settings: { n_ctx: 8192 } }), { status: 200 }));
+    await expect(LlmService.testConnection(config)).resolves.toMatchObject({ contextTokens: 8192 });
+    expect(String(spy.mock.calls[2][0])).toBe('http://host:8080/props');
+    expect(log).toHaveBeenCalledWith('[LLM]', expect.any(String), 'event=llm.context.detected', 'source=props', 'tokens=8192');
+
+    resetLlmServiceForTests();
+    const remote = save({ enabled: false });
+    spy.mockReset();
+    spy
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: 'm1' }] }), { status: 200 }))
+      .mockResolvedValueOnce(reply('{"ok":true,"word":"bravo"}'));
+    await expect(LlmService.testConnection(remote)).resolves.toMatchObject({ contextTokens: 0 });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledWith('[LLM]', expect.any(String), 'event=llm.context.detected', 'source=none', 'tokens=0');
+  });
+
+  it('runs a plain-text task without a response format, and caches only accepted replies', async () => {
+    save({ capabilities: { signature: SIGNATURE, structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 } });
+    const spy = vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(async () => reply('<think>hm</think>not usable'))
+      .mockImplementation(async () => reply('[1] A\n'));
+    const textTask = { ...task, accept: (text: string) => text.indexOf('[1]') === 0 };
+
+    await expect(LlmService.runText(textTask)).resolves.toEqual({ text: 'not usable', cached: false });
+    const body = bodyOf(spy.mock.calls[0]);
+    expect(body.response_format).toBeUndefined();
+    expect((body.messages as Array<{ content: string }>)[0].content).toBe('Classify.');
+
+    await expect(LlmService.runText(textTask)).resolves.toEqual({ text: '[1] A', cached: false });
+    await expect(LlmService.runText(textTask)).resolves.toEqual({ text: '[1] A', cached: true });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers an identical plain-text request still out without sending it again', async () => {
+    save({ capabilities: { signature: SIGNATURE, structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 } });
+    let answer: (response: Response) => void = () => {};
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    const first = LlmService.runText(task);
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    const second = LlmService.runText(task);
+
+    answer(reply('[1] A'));
+
+    await expect(first).resolves.toEqual({ text: '[1] A', cached: false });
+    await expect(second).resolves.toEqual({ text: '[1] A', cached: true });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends a shared request anew when its first caller dropped it from the queue', async () => {
+    save({
+      baseUrl: 'http://host:8080/v1',
+      capabilities: { signature: 'http://host:8080/v1|m1', structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
+    });
+    let answer: (response: Response) => void = () => {};
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    // A local server takes one request at a time, so the second waits in the queue.
+    const busy = LlmService.runText({ ...task, user: 'ch0' });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    const controller = new AbortController();
+    const dropped = LlmService.runText({ ...task, signal: controller.signal, finishStarted: true });
+    const joined = LlmService.runText(task);
+    controller.abort();
+    await expect(dropped).rejects.toMatchObject({ reason: 'cancelled' });
+
+    answer(reply('[1] busy'));
+    await busy;
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    answer(reply('[1] A'));
+    await expect(joined).resolves.toEqual({ text: '[1] A', cached: false });
+  });
+
+  it('finishes and caches a sent request when finishStarted is set and the caller stops', async () => {
+    save({ capabilities: { signature: SIGNATURE, structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 } });
+    let answer: (response: Response) => void = () => {};
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise<Response>((resolve, reject) => {
+      answer = resolve;
+      (init as RequestInit).signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    }));
+    const controller = new AbortController();
+    const pending = LlmService.runText({ ...task, signal: controller.signal, finishStarted: true });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+
+    controller.abort();
+    answer(reply('[1] A'));
+
+    await expect(pending).resolves.toEqual({ text: '[1] A', cached: false });
+    await expect(LlmService.runText(task)).resolves.toEqual({ text: '[1] A', cached: true });
   });
 
   it('lets a confirmed request past a reached cap without waiting behind refused ones', async () => {

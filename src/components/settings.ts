@@ -32,6 +32,7 @@ import { LlmService } from '../services/llm/llm-service';
 import { LlmError } from '../services/llm/client';
 import {
   completeServerUrl,
+  DEFAULT_CONTEXT_TOKENS,
   endpointSignature,
   normalizeBaseUrl,
   originOf,
@@ -291,7 +292,7 @@ const SETTINGS_CATEGORIES: readonly {
   },
 ];
 
-const AI_CONTEXT_SIZES = [4096, 8192, 16000, 32000, 128000];
+const AI_CONTEXT_SIZES = [2048, 4096, 8192, 16000, 32000, 128000];
 const AI_REQUEST_LIMITS = [0, 100, 500, 1000, 5000];
 const AI_TOKEN_LIMITS = [0, 100000, 500000, 1000000, 5000000];
 
@@ -591,6 +592,10 @@ export class Settings {
   private renderedSubtitleLanguage = '';
   // Capabilities the last Test connection detected, saved with matching values.
   private aiTested: LlmCapabilities | null = null;
+  // The Context size the last unsaved Test connection set; null when none.
+  private aiDetectedContext: number | null = null;
+  // Context size was picked in this form, so a larger size a server reports won't raise it.
+  private aiContextChosen = false;
   private onChannelsChanged: () => void;
   private nav: SpatialNav;
   // The nav only picks elements geometrically; the scope holds the focused
@@ -829,6 +834,8 @@ export class Settings {
   render(): void {
     // A fresh form starts without an earlier, unsaved connection test.
     this.aiTested = null;
+    this.aiDetectedContext = null;
+    this.aiContextChosen = false;
     this.aiTesting = false;
     this.aiRender++;
     this.pendingLiveCategories.clear();
@@ -2554,6 +2561,7 @@ export class Settings {
     // showView() reverts it if Settings closes without saving.
     if (dd.id === 'text-size') applyTextSize(dd.dataset.value ?? '');
     if (dd.id === 'epg-offset-source') this.updateEpgOffsetControl();
+    if (dd.id === 'ai-context-size') this.aiContextChosen = true;
     const trigger = dd.querySelector<HTMLElement>('.dropdown-trigger');
     if (trigger) this.nav.focus(trigger);
   }
@@ -2932,6 +2940,7 @@ export class Settings {
       model: value('ai-model'),
       extraHeaders: value('ai-extra-headers'),
       contextTokens: choice('ai-context-size', stored.contextTokens),
+      detectedContextTokens: this.aiDetectedContext ?? stored.detectedContextTokens,
       dailyRequestCap: choice('ai-daily-requests', stored.dailyRequestCap),
       dailyTokenCap: choice('ai-daily-tokens', stored.dailyTokenCap),
     };
@@ -2979,6 +2988,21 @@ export class Settings {
     status.textContent = text;
   }
 
+  // Lowers Context size to what the server reports, or raises it from the
+  // default or an earlier detected size; a smaller size the user chose stays.
+  private applyReportedContext(tokens: number): void {
+    const dropdown = $('#ai-context-size', this.container);
+    if (!dropdown || tokens <= 0) return;
+    const fits = AI_CONTEXT_SIZES.filter(size => size <= tokens);
+    // Below every preset, the smallest comes closest.
+    const best = fits.length ? fits[fits.length - 1] : AI_CONTEXT_SIZES[0];
+    const current = Number(dropdown.dataset.value) || DEFAULT_CONTEXT_TOKENS;
+    const detected = this.aiDetectedContext ?? StorageService.getLlmConfig().detectedContextTokens;
+    const untouched = (current === DEFAULT_CONTEXT_TOKENS && !this.aiContextChosen) || current === detected;
+    if (best < current || (best > current && untouched)) setDropdownValue(dropdown, String(best));
+    if (best <= current || untouched) this.aiDetectedContext = best;
+  }
+
   private async testAiConnection(): Promise<void> {
     if (this.aiTesting) return;
     let config = this.aiFormConfig();
@@ -3007,6 +3031,7 @@ export class Settings {
       const report = await LlmService.testConnection(config);
       if (render !== this.aiRender) return;
       this.aiTested = report.capabilities;
+      this.applyReportedContext(report.contextTokens);
       // A reply passed the probe, so the model works even when /models names it differently.
       this.setAiStatus(report.models.length
         ? tp('settings.aiConnectedModels', report.models.length)
@@ -3402,6 +3427,7 @@ export class Settings {
 
     StorageService.setLlmConfig(this.aiFormConfig());
     this.aiTested = null;
+    this.aiDetectedContext = null;
 
     // Source, EPG URL, and time correction changes rebuild loaded data. Display-only
     // settings (time zone, auto-play) just re-render in place.

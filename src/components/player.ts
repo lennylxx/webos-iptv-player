@@ -1279,6 +1279,14 @@ export class Player {
     void this.tracks.openSubtitleSearch();
   }
 
+  subtitleTranslationLabel(): string | null {
+    return this.tracks.subtitleTranslationLabel();
+  }
+
+  translateSubtitles(): void {
+    this.tracks.translateSubtitles();
+  }
+
   openSubtitleOffset(): void {
     this.tracks.openSubtitleOffset();
   }
@@ -1593,7 +1601,7 @@ export class Player {
     }
     this.loadPlayed = false;
     if (!opts?.reload) this.loadAspectRatio();
-    this.tracks.resetForLoad();
+    this.tracks.resetForLoad(opts?.reload === true);
     this.vodTracksLatePending = false;
     this.manifestVariants = [];
     this.qualityTiers = this.keptQualityTiers ?? [];

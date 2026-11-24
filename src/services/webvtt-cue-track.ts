@@ -70,7 +70,17 @@ export class WebVttCueTrack {
     text: string,
     settings?: VttCueSettings,
   ): boolean {
-    if (!this.track || end <= start) return false;
+    return this.addCue(start, end, text, settings) !== null;
+  }
+
+  /** Like `add`, returning the added cue so its text can change later. */
+  addCue(
+    start: number,
+    end: number,
+    text: string,
+    settings?: VttCueSettings,
+  ): VTTCue | null {
+    if (!this.track || end <= start) return null;
     // Bake the current offset into new cues; setOffset shifts existing cues by
     // only its delta, so repeated absolute updates cannot accumulate drift.
     const cue = new VTTCue(start + this.offset, end + this.offset, text);
@@ -81,10 +91,19 @@ export class WebVttCueTrack {
     }
     try {
       this.track.addCue(cue);
-      return true;
+      return cue;
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  // Blink keeps drawing a removed or rewritten cue while the media is paused,
+  // until the track's mode changes; a round trip in one task redraws it with no blank frame.
+  redraw(): void {
+    const track = this.clock ? this.display : this.track;
+    if (!track || track.mode !== 'showing') return;
+    track.mode = 'hidden';
+    track.mode = 'showing';
   }
 
   /** Shift self-rendered subtitles relative to media time; positive means later. */

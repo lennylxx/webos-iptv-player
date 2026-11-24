@@ -19,6 +19,14 @@ const PROFILES: Record<EndpointKind, EndpointProfile> = {
 // Context size until one is picked or Test connection reads the server's.
 export const DEFAULT_CONTEXT_TOKENS = 16000;
 
+// Features the user starts by hand; the AI switch alone turns them on.
+// Features that run on their own need their own toggle in `features`.
+const ON_DEMAND_FEATURES = ['subtitle-translation'];
+
+export function featureEnabled(config: LlmConfig, feature: string): boolean {
+  return config.features[feature] === true || ON_DEMAND_FEATURES.indexOf(feature) >= 0;
+}
+
 const MODES: readonly StructuredMode[] = ['json_schema', 'json_object', 'prompt'];
 const MIN_CONTEXT_TOKENS = 2048;
 // The largest Context size Settings offers.
@@ -56,6 +64,7 @@ export function defaultLlmConfig(): LlmConfig {
     apiKey: '',
     extraHeaders: '',
     contextTokens: DEFAULT_CONTEXT_TOKENS,
+    detectedContextTokens: 0,
     dailyRequestCap: 0,
     dailyTokenCap: 0,
     features: {},
@@ -104,6 +113,7 @@ export function normalizeLlmConfig(raw: unknown): LlmConfig {
     apiKey: str(value.apiKey, ''),
     extraHeaders: str(value.extraHeaders, ''),
     contextTokens: count(value.contextTokens, base.contextTokens, MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS),
+    detectedContextTokens: count(value.detectedContextTokens, 0),
     dailyRequestCap: count(value.dailyRequestCap, 0),
     dailyTokenCap: count(value.dailyTokenCap, 0),
     features,

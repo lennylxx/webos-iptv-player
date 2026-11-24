@@ -257,4 +257,59 @@ describe('VodSubtitles', () => {
     await subs.show(0);
     expect(addTextTrack).toHaveBeenCalledOnce();
   });
+
+  it('shows a translation from copied cues and updates its text live', async () => {
+    subs.attach(video, [sidecar({
+      url: '',
+      text: 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n\n00:00:03.000 --> 00:00:04.000\nBravo\n',
+    })]);
+    const index = subs.addTranslation(0, 'Track 1 · l2', 'l2');
+    expect(subs.translationOf(0, 'l2')).toBe(index);
+    expect(subs.sourceOf(index)).toBe(0);
+    expect(subs.sourceOf(0)).toBe(-1);
+
+    subs.setCueTexts(index, [0], ['Early']);
+    await subs.show(index);
+    expect(track.cues.map(cue => cue.text)).toEqual(['Alpha', 'Bravo']);
+
+    subs.setCueTexts(index, [1], ['Charlie']);
+    expect(track.cues.map(cue => cue.text)).toEqual(['Alpha', 'Charlie']);
+    expect((await subs.cuesOf(0)).map(cue => cue.text)).toEqual(['Alpha', 'Bravo']);
+
+    // A text set while another subtitle shows is kept for the next show.
+    await subs.show(0);
+    subs.setCueTexts(index, [0], ['Delta']);
+    expect(track.cues.map(cue => cue.text)).toEqual(['Alpha', 'Bravo']);
+    await subs.show(index);
+    expect(track.cues.map(cue => cue.text)).toEqual(['Delta', 'Charlie']);
+  });
+
+  it('redraws the track once its cues change, so a paused video shows them', async () => {
+    const log: string[] = [];
+    let mode: TextTrackMode = 'disabled';
+    Object.defineProperty(track, 'mode', {
+      get: () => mode,
+      set: (value: TextTrackMode) => { mode = value; log.push(value); },
+    });
+    const addCue = track.addCue;
+    track.addCue = (cue: FakeVTTCue) => { log.push(`add ${cue.text}`); return addCue(cue); };
+    subs.attach(video, [sidecar({
+      url: '',
+      text: 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n\n00:00:03.000 --> 00:00:04.000\nBravo\n',
+    })]);
+    const index = subs.addTranslation(0, 'Track 1 · l2', 'l2');
+    await subs.show(0);
+    log.length = 0;
+
+    await subs.show(index);
+    expect(log.slice(-4)).toEqual(['add Alpha', 'add Bravo', 'hidden', 'showing']);
+
+    (video as { currentTime: number }).currentTime = 3.5;
+    log.length = 0;
+    subs.setCueTexts(index, [0], ['Charlie']);
+    expect(log).toEqual([]);
+    subs.setCueTexts(index, [1], ['Delta']);
+    expect(log).toEqual(['hidden', 'showing']);
+    expect(mode).toBe('showing');
+  });
 });

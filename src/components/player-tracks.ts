@@ -51,6 +51,15 @@ import { isWebOS } from '../utils/platform';
 import { $ } from '../utils/dom';
 import { t } from '../i18n';
 import { showToast } from './toast';
+import type { VttCue } from '../utils/webvtt';
+import { LlmService } from '../services/llm/llm-service';
+import {
+  needsTranslation,
+  SUBTITLE_TRANSLATION_FEATURE,
+  SubtitleTranslation,
+  targetLabel,
+  translationTarget,
+} from '../services/subtitle-translation';
 import { subtitleSearchService } from '../services/subtitle-search/subtitle-search-service';
 import { SubtitleSearchOverlay } from './subtitle-search-overlay';
 import { SubtitleOffsetOverlay } from './subtitle-offset-overlay';
@@ -74,6 +83,10 @@ const CC_SUBTITLE_INDEX = -2;
 // ASS_SUBTITLE_BASE + i.
 export const ASS_SUBTITLE_BASE = 1000;
 export const VOD_SUBTITLE_BASE = 2000;
+
+function sidecarName(sidecar: SidecarSubtitle): string {
+  return sidecar.name || sidecar.lang || t('player.subtitles');
+}
 
 interface PlayerTracksOptions {
   getVideoElement: () => HTMLVideoElement | null;
@@ -111,6 +124,9 @@ export class PlayerTracks {
   private vodTextSidecars: SidecarSubtitle[] = []; // SRT/WebVTT sidecars of the current VOD item
   private vodAssSidecars: SidecarSubtitle[] = []; // the ASS/SSA sidecars of the current VOD item
   private activeAssIndex = -1; // index into vodAssSidecars currently shown (-1 = none)
+  private translations = new Map<number, SubtitleTranslation>(); // by translated vodSubs entry
+  private translationGen = 0;
+  private translationRestoreLoggedFor = ''; // one subtitle.translate.restore per opening, across reloads
   private subsOverlay: SubtitleSearchOverlay | null = null; // online subtitle search overlay
   private subtitleOffsetS = 0; // per-stream subtitle timing offset (seconds; + = later)
   private offsetOverlay: SubtitleOffsetOverlay | null = null;
@@ -120,7 +136,9 @@ export class PlayerTracks {
     private options: PlayerTracksOptions,
   ) {}
 
-  resetForLoad(): void {
+  // `reload` reloads the same item (e.g. a quality change) rather than opening it.
+  resetForLoad(reload = false): void {
+    if (!reload) this.translationRestoreLoggedFor = '';
     this.manifestAudio = [];
     this.manifestSubtitles = [];
     this.manifestClosedCaptions = [];
@@ -183,6 +201,9 @@ export class PlayerTracks {
   }
 
   private clearVodSubtitles(): void {
+    this.translations.forEach(job => job.stop());
+    this.translations.clear();
+    this.translationGen++;
     this.vodSubs.clear();
     this.assSubs.destroy();
     this.vodTextSidecars = [];
@@ -327,6 +348,113 @@ export class PlayerTracks {
 
   subtitleSearchAvailable(): boolean {
     return !!this.options.getVod() && subtitleSearchService.isAvailable();
+  }
+
+  // What the translate row acts on: the shown SRT/WebVTT sidecar, or a shown
+  // translation that stopped before it finished.
+  private translateOffer(): { entry: number; target: string } | null {
+    if (!this.options.getVod() || this.pipeline.isMseActive()) return null;
+    if (!LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE)) return null;
+    const active = this.vodSubs.activeIndex;
+    const sidecar = this.vodTextSidecars[active];
+    if (!sidecar) return null;
+    if (this.vodSubs.sourceOf(active) >= 0) {
+      const job = this.translations.get(active);
+      return job && !job.complete && !job.running ? { entry: active, target: sidecar.lang } : null;
+    }
+    const target = translationTarget();
+    return needsTranslation(sidecar.lang, target) ? { entry: active, target } : null;
+  }
+
+  /** Label of the menu's translate row, or null to hide it. */
+  subtitleTranslationLabel(): string | null {
+    const offer = this.translateOffer();
+    return offer ? t('player.translateTo', { language: targetLabel(offer.target) }) : null;
+  }
+
+  /** Translate the shown subtitle, reusing or resuming a translation into the same language. */
+  translateSubtitles(): void {
+    const offer = this.translateOffer();
+    if (!offer) return;
+    const entry = this.vodSubs.sourceOf(offer.entry) >= 0
+      ? offer.entry
+      : this.translationEntry(offer.entry, offer.target);
+    this.selectSubtitleTrack(VOD_SUBTITLE_BASE + entry);
+    const job = this.translations.get(entry);
+    if (!job?.complete) showToast(t('subtitle.translating', { percent: job?.percent ?? 0 }));
+  }
+
+  private translationEntry(source: number, target: string): number {
+    const existing = this.vodSubs.translationOf(source, target);
+    if (existing >= 0) return existing;
+    const sidecar = this.vodTextSidecars[source];
+    const name = t('player.aiTranslation', { name: sidecarName(sidecar) });
+    this.vodTextSidecars.push({ id: `${sidecar.id}|${target}`, name, lang: target, url: '' });
+    return this.vodSubs.addTranslation(source, name, target);
+  }
+
+  // Translates the batches of a shown translation entry that are still missing.
+  private async runTranslation(entry: number): Promise<void> {
+    const source = this.vodSubs.sourceOf(entry);
+    if (source < 0 || !LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE)) return;
+    const gen = this.translationGen;
+    let job = this.translations.get(entry);
+    if (!job) {
+      let cues: VttCue[];
+      try {
+        cues = await this.vodSubs.cuesOf(source);
+        await this.vodSubs.cuesOf(entry);
+      } catch {
+        return; // VodSubtitles.show logs the load failure
+      }
+      if (gen !== this.translationGen || this.vodSubs.activeIndex !== entry) return;
+      job = this.translations.get(entry) ?? new SubtitleTranslation(
+        cues,
+        this.vodTextSidecars[entry].lang,
+        // Cue times are media time less the subtitle offset.
+        () => (this.options.getVideoElement()?.currentTime || 0) - this.subtitleOffsetS,
+        (indices, texts) => {
+          // A stopped job's last batches can land after the item changed.
+          if (gen === this.translationGen) this.vodSubs.setCueTexts(entry, indices, texts);
+        },
+        () => { if (gen === this.translationGen) this.options.onChanged?.(); },
+      );
+      this.translations.set(entry, job);
+    }
+    if (job.complete || job.running) return;
+    const report = await job.start();
+    if (gen !== this.translationGen) return;
+    this.options.onChanged?.();
+    const reason = report.error?.reason;
+    if (!reason || reason === 'cancelled') return;
+    showToast(reason === 'cap' ? t('subtitle.translateLimit') : t('subtitle.translateFailed'));
+  }
+
+  private translationSource(index: number): string | undefined {
+    const source = index >= VOD_SUBTITLE_BASE ? this.vodSubs.sourceOf(index - VOD_SUBTITLE_BASE) : -1;
+    return source >= 0 ? sidecarName(this.vodTextSidecars[source]) : undefined;
+  }
+
+  private translationDetail(index: number): string | undefined {
+    if (index < VOD_SUBTITLE_BASE) return undefined;
+    const job = this.translations.get(index - VOD_SUBTITLE_BASE);
+    return job?.running ? t('subtitle.translationProgress', { percent: job.percent }) : undefined;
+  }
+
+  // A saved translation comes back over its source while AI features are on.
+  private restoreTranslation(options: SubtitleOption[], index: number, pref: SubtitlePref | null): number {
+    const source = index - VOD_SUBTITLE_BASE;
+    if (!pref?.translateTo || source < 0 || !this.vodTextSidecars[source]) return index;
+    if (this.vodSubs.sourceOf(source) >= 0 || !isSubtitlePrefMatch(options.find(o => o.index === index), pref)) return index;
+    const ready = LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE);
+    const item = this.preferenceKey();
+    if (this.translationRestoreLoggedFor !== item) {
+      this.translationRestoreLoggedFor = item;
+      log.info('Saved subtitle translation', 'event=subtitle.translate.restore',
+        `outcome=${ready ? 'restored' : 'ai_off'}`, `target=${pref.translateTo}`);
+    }
+    if (!ready) return index;
+    return VOD_SUBTITLE_BASE + this.translationEntry(source, pref.translateTo);
   }
 
   async openSubtitleSearch(): Promise<void> {
@@ -661,7 +789,7 @@ export class PlayerTracks {
         : [];
       const sidecars = this.vodTextSidecars.map((sidecar, index) => ({
         index: VOD_SUBTITLE_BASE + index,
-        name: sidecar.name || sidecar.lang || t('player.subtitles'),
+        name: sidecarName(sidecar),
         lang: sidecar.lang,
         isDefault: false,
         isForced: false,
@@ -708,6 +836,8 @@ export class PlayerTracks {
       label: subtitleLabel(option),
       active: option.active,
       available: option.available,
+      detail: this.translationDetail(option.index),
+      aiSource: this.translationSource(option.index),
     }));
     if (this.ccAvailable()) {
       tracks.push({
@@ -757,7 +887,14 @@ export class PlayerTracks {
     this.setNativeCC(false);
     this.subtitlePick = 'user';
     this.applySubtitleChoice(index);
-    this.rememberSubtitle({ off: false, name: option.name, lang: option.lang });
+    const entry = index >= VOD_SUBTITLE_BASE ? index - VOD_SUBTITLE_BASE : -1;
+    const source = entry >= 0 ? this.vodSubs.sourceOf(entry) : -1;
+    if (source >= 0) {
+      const sidecar = this.vodTextSidecars[source];
+      this.rememberSubtitle({ off: false, name: sidecarName(sidecar), lang: sidecar.lang, translateTo: option.lang });
+    } else {
+      this.rememberSubtitle({ off: false, name: option.name, lang: option.lang });
+    }
     showToast(t('player.subtitlesTrack', { name: subtitleLabel(option) }));
   }
 
@@ -835,17 +972,23 @@ export class PlayerTracks {
     // VOD has three mutually exclusive paths: reusable SRT/WebVTT TextTrack,
     // ASS overlay, or native in-container track.
     if (this.options.getVod()) {
+      const shownEntry = index >= VOD_SUBTITLE_BASE ? index - VOD_SUBTITLE_BASE : -1;
+      // A translation stops when its subtitle is switched away; picking it again resumes.
+      this.translations.forEach((job, entry) => { if (entry !== shownEntry) job.stop(); });
       const list = this.options.getVideoElement()?.textTracks;
       if (index >= VOD_SUBTITLE_BASE) {
         if (list) for (let i = 0; i < list.length; i++) {
           const track = list[i];
+          // The renderer's own track lists no cues once disabled, so show() could not clear it.
+          if (this.ownsTextTrack(track)) continue;
           if (track.kind === 'subtitles' || track.kind === 'captions') {
             track.mode = 'disabled';
           }
         }
         this.activeAssIndex = -1;
         this.assSubs.hide();
-        void this.vodSubs.show(index - VOD_SUBTITLE_BASE);
+        void this.vodSubs.show(shownEntry);
+        void this.runTranslation(shownEntry);
         return;
       }
       if (index >= ASS_SUBTITLE_BASE) {
@@ -1056,7 +1199,7 @@ export class PlayerTracks {
       if (this.vodSubs.activeIndex >= 0) return;
       const options = this.subtitleOptions();
       if (!options.length) return;
-      const index = chooseSubtitleIndex(options, pref);
+      const index = this.restoreTranslation(options, chooseSubtitleIndex(options, pref), pref);
       this.logSubtitleChoice('vod-native', options, pref, index);
       this.applySubtitleChoice(index);
       this.loadSubtitleOffset();

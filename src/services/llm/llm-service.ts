@@ -1,36 +1,62 @@
 import { createLogger } from '../../utils/logger';
 import { StorageService } from '../storage-service';
 import { getCachedLlmResult, setCachedLlmResult } from '../idb-cache';
-import { chatCompletion, LlmError, listModels, type ChatRequest, type ChatResult, type Endpoint } from './client';
+import {
+  chatCompletion,
+  LlmError,
+  listModels,
+  listModelsDetailed,
+  llamaCppContext,
+  type ChatRequest,
+  type ChatResult,
+  type Endpoint,
+  type ModelList,
+} from './client';
 import {
   endpointProfile,
   endpointSignature,
+  featureEnabled,
   originOf,
   isConfigured,
   normalizeBaseUrl,
   parseExtraHeaders,
 } from './config';
 import { contentHash } from './hash';
-import { extractJson, validate } from './json';
+import { extractJson, stripThinking, validate } from './json';
 import { LlmQueue } from './queue';
 import type { LlmCapabilities, LlmConfig, LlmPriority, NamedSchema, StructuredMode } from './types';
 import { addUsage, capHit, usageFor, type UsageDay } from './usage';
 
 const log = createLogger('LLM');
 
-export interface LlmTask {
+interface LlmTaskBase {
   // Feature id: its toggle, usage counter, and diagnostics label.
   feature: string;
   priority: LlmPriority;
   system: string;
   user: string;
-  schema: NamedSchema;
   // Bump when the prompt or schema changes, so old cached answers are ignored.
   promptVersion: number;
   maxTokens?: number;
   // Foreground actions the user confirmed past a daily cap.
   ignoreCap?: boolean;
   signal?: AbortSignal;
+  // The signal drops the request only while it waits; once sent, it finishes and is cached.
+  finishStarted?: boolean;
+}
+
+export interface LlmTask extends LlmTaskBase {
+  schema: NamedSchema;
+}
+
+export interface LlmTextTask extends LlmTaskBase {
+  // Whether a reply is good enough to cache; the caller still gets every reply.
+  accept?: (text: string) => boolean;
+}
+
+export interface LlmTextOutcome {
+  text: string;
+  cached: boolean;
 }
 
 export interface LlmOutcome<T> {
@@ -43,6 +69,8 @@ export interface LlmOutcome<T> {
 export interface ConnectionReport {
   models: string[];
   capabilities: LlmCapabilities;
+  // The model's context window as the server reports it; 0 when it doesn't.
+  contextTokens: number;
 }
 
 const PROBE_SCHEMA: NamedSchema = {
@@ -138,6 +166,7 @@ async function send(
   priority: LlmPriority,
   request: Omit<ChatRequest, 'model'>,
   ignoreCap: boolean,
+  finishStarted = false,
 ): Promise<ChatResult> {
   const q = queueFor(config);
   // Checked as the request leaves the queue, so a queued batch can't overshoot
@@ -145,8 +174,9 @@ async function send(
   const precheck = ignoreCap ? undefined : () => capError(StorageService.getLlmConfig());
   return q.run(priority, () => {
     // Usage is recorded before the queue frees the slot, so the next request sees it.
-    const sent = !request.signal || !request.signal.aborted;
-    return chatCompletion(endpointOf(config), { ...request, model: config.model.trim() }).then((result) => {
+    const signal = finishStarted ? undefined : request.signal;
+    const sent = !signal || !signal.aborted;
+    return chatCompletion(endpointOf(config), { ...request, signal, model: config.model.trim() }).then((result) => {
       StorageService.setLlmUsage(addUsage(readUsage(), feature, result.usage));
       return result;
     }, (error: unknown) => {
@@ -306,10 +336,60 @@ function capabilitiesFor(config: LlmConfig, signal: AbortSignal | undefined, ign
   return untilAborted(detection.promise, signal);
 }
 
+async function reportedContext(config: LlmConfig, list: ModelList): Promise<number> {
+  let source = 'none';
+  let tokens = list.contexts[config.model.trim()] || 0;
+  if (tokens) {
+    source = 'models';
+  } else if (list.llamaCpp) {
+    // An optional extra; the connection already passed.
+    tokens = await llamaCppContext(endpointOf(config)).catch(() => 0);
+    if (tokens) source = 'props';
+  }
+  log.info('Context size reported', 'event=llm.context.detected', `source=${source}`, `tokens=${tokens}`);
+  return tokens;
+}
+
+// Plain-text requests in flight, by cache key.
+const pendingTexts = new Map<string, Promise<string>>();
+
+async function requestText(config: LlmConfig, task: LlmTextTask, key: string, ignoreCap: boolean): Promise<string> {
+  const caps = await capabilitiesFor(config, task.signal, ignoreCap);
+  const result = await send(config, task.feature, task.priority, {
+    messages: [{ role: 'system', content: task.system }, { role: 'user', content: task.user }],
+    mode: 'text',
+    thinkingOff: caps.thinkingOff,
+    effortOff: caps.effortOff,
+    reasoningParams: caps.reasoningParams,
+    maxTokens: task.maxTokens,
+    signal: task.signal,
+  }, ignoreCap, task.finishStarted);
+  if (result.reasoningParams && !caps.reasoningParams) saveCapabilities({ ...caps, reasoningParams: true });
+  const text = stripThinking(result.text).trim();
+  if (!task.accept || task.accept(text)) await setCachedLlmResult(key, text).catch(() => undefined);
+  return text;
+}
+
+// Refuses a task the settings or the daily cap don't allow.
+function gate(config: LlmConfig, feature: string, ignoreCap: boolean): void {
+  if (!config.enabled || !featureEnabled(config, feature)) throw new LlmError('disabled', 'Feature is off');
+  if (!isConfigured(config)) throw new LlmError('config', 'Endpoint is not configured');
+  if (!ignoreCap) {
+    const refused = capError(config);
+    if (refused) throw refused;
+  }
+}
+
+function logUnlessExpected(feature: string, error: unknown): void {
+  if (!(error instanceof LlmError && (error.reason === 'disabled' || error.reason === 'cap'))) {
+    logFailure(feature, error);
+  }
+}
+
 export const LlmService = {
   isReady(feature?: string): boolean {
     const config = StorageService.getLlmConfig();
-    return config.enabled && isConfigured(config) && (!feature || config.features[feature] === true);
+    return config.enabled && isConfigured(config) && (!feature || featureEnabled(config, feature));
   },
 
   /** The prompt budget batching features should stay within. */
@@ -323,22 +403,16 @@ export const LlmService = {
 
   async run<T>(task: LlmTask): Promise<LlmOutcome<T>> {
     const config = StorageService.getLlmConfig();
+    const ignoreCap = task.ignoreCap === true;
     try {
-      if (!config.enabled || config.features[task.feature] !== true) {
-        throw new LlmError('disabled', 'Feature is off');
-      }
-      if (!isConfigured(config)) throw new LlmError('config', 'Endpoint is not configured');
+      gate(config, task.feature, true);
       const key = contentHash([endpointSignature(config), task.feature, String(task.promptVersion), task.system, task.user]);
       const hit = await getCachedLlmResult(key);
       if (hit !== undefined) {
         const checked = validate(task.schema.schema, hit);
         if (checked) return { value: checked.value as T, dropped: 0, cached: true };
       }
-      const ignoreCap = task.ignoreCap === true;
-      if (!ignoreCap) {
-        const refused = capError(config);
-        if (refused) throw refused;
-      }
+      gate(config, task.feature, ignoreCap);
       const caps = await capabilitiesFor(config, task.signal, ignoreCap);
       const attempts = task.priority === 'foreground' && caps.structured !== 'json_schema' ? 2 : 1;
       for (let attempt = 1; ; attempt++) {
@@ -351,7 +425,7 @@ export const LlmService = {
           reasoningParams: caps.reasoningParams,
           maxTokens: task.maxTokens,
           signal: task.signal,
-        }, ignoreCap);
+        }, ignoreCap, task.finishStarted);
         if (result.reasoningParams && !caps.reasoningParams) saveCapabilities({ ...caps, reasoningParams: true });
         const checked = validate(task.schema.schema, extractJson(result.text));
         if (checked) {
@@ -361,9 +435,43 @@ export const LlmService = {
         if (attempt >= attempts) throw new LlmError('schema', 'Reply did not match the schema');
       }
     } catch (error) {
-      if (!(error instanceof LlmError && (error.reason === 'disabled' || error.reason === 'cap'))) {
-        logFailure(task.feature, error);
+      logUnlessExpected(task.feature, error);
+      throw error;
+    }
+  },
+
+  /** Like `run`, for a reply the caller parses itself: plain text, thinking removed. */
+  async runText(task: LlmTextTask): Promise<LlmTextOutcome> {
+    const config = StorageService.getLlmConfig();
+    const ignoreCap = task.ignoreCap === true;
+    try {
+      gate(config, task.feature, true);
+      const key = contentHash([endpointSignature(config), task.feature, String(task.promptVersion), 'text', task.system, task.user]);
+      const hit = await getCachedLlmResult(key);
+      if (typeof hit === 'string') return { text: hit, cached: true };
+      // The same request already out (e.g. a job rebuilt after a reload) answers this caller too.
+      const shared = pendingTexts.get(key);
+      if (shared) {
+        try {
+          return { text: await untilAborted(shared, task.signal), cached: true };
+        } catch (error) {
+          // The caller that sent it stopped while it waited in the queue; send it anew.
+          if (error instanceof LlmError && error.reason === 'cancelled' && !task.signal?.aborted) {
+            return LlmService.runText(task);
+          }
+          throw error;
+        }
       }
+      gate(config, task.feature, ignoreCap);
+      const request = requestText(config, task, key, ignoreCap);
+      pendingTexts.set(key, request);
+      const settle = (): void => {
+        if (pendingTexts.get(key) === request) pendingTexts.delete(key);
+      };
+      request.then(settle, settle);
+      return { text: await request, cached: false };
+    } catch (error) {
+      logUnlessExpected(task.feature, error);
       throw error;
     }
   },
@@ -373,16 +481,17 @@ export const LlmService = {
     if (!isConfigured(config)) throw new LlmError('config', 'Endpoint is not configured');
     let modelsMissing = false;
     try {
-      let models: string[] = [];
+      let list: ModelList = { ids: [], contexts: {}, llamaCpp: false };
       try {
-        models = await listModels(endpointOf(config));
+        list = await listModelsDetailed(endpointOf(config));
       } catch (error) {
         // Some gateways have no /models; the probe below decides.
         if (!(error instanceof LlmError) || (error.reason !== 'config' && error.reason !== 'http')) throw error;
         modelsMissing = error.status === 404;
       }
       const capabilities = await detect({ ...config, capabilities: null }, true);
-      return { models, capabilities };
+      const contextTokens = await reportedContext(config, list);
+      return { models: list.ids, capabilities, contextTokens };
     } catch (error) {
       logFailure('probe', error);
       // Both paths missing means the address is wrong, not the model.
@@ -400,6 +509,7 @@ export const LlmService = {
 
 export function resetLlmServiceForTests(): void {
   queues.clear();
+  pendingTexts.clear();
   detections.clear();
   capLogged = '';
 }

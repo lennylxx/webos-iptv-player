@@ -37,6 +37,8 @@ export interface LlmConfig {
   extraHeaders: string;
   // Prompt budget used to size batches; small for local models.
   contextTokens: number;
+  // The Context size Test connection last set from the server; 0 when none.
+  detectedContextTokens: number;
   // 0 turns a cap off.
   dailyRequestCap: number;
   dailyTokenCap: number;

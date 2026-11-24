@@ -459,6 +459,10 @@ export interface SubtitleTrackOption {
   /** False = shown but not switchable — a rendition the platform didn't expose
    *  as a native textTrack. Defaults to switchable when absent. */
   available?: boolean;
+  // Shown beside the label, e.g. translation progress.
+  detail?: string;
+  // An AI translation: the name of the subtitle it translates.
+  aiSource?: string;
 }
 
 /** Normalized subtitle rendition, unified across the hls.js list and the native
@@ -481,6 +485,8 @@ export interface SubtitlePref {
   name: string;
   lang: string;
   cc?: boolean;
+  // The pick was an AI translation of the subtitle named above into this language.
+  translateTo?: string;
 }
 
 export interface DashSubtitleSegment {

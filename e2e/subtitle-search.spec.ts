@@ -427,6 +427,137 @@ test('picking a result downloads it into the application subtitle track', async 
   })).toEqual({ label: 'Popular Release', cues: 2 });
 });
 
+// Offers a downloaded subtitle named `name` and an AI server that appends " (de)" to each cue.
+async function seedTranslation(page: Page, name: string): Promise<string[]> {
+  await seedVod(page);
+  await routeAssrtSearch(page, () => [
+    assrtSub({ id: '201', langDesc: '英', name, downloads: 100 }),
+  ]);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_online_subtitles', JSON.stringify({ preferredLanguage: 'de' }));
+    localStorage.setItem('iptv_llm', JSON.stringify({
+      enabled: true,
+      baseUrl: 'http://ai.test/v1',
+      model: 'm1',
+      capabilities: {
+        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
+        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
+      },
+    }));
+  });
+  const sent: string[] = [];
+  await page.route('http://ai.test/v1/chat/completions', (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const body = JSON.parse(route.request().postData() || '{}') as { messages: Array<{ role: string; content: string }> };
+    const user = body.messages.find(m => m.role === 'user')?.content || '';
+    sent.push(user);
+    const content = user.split('\n').map(line => `${line} (de)`).join('\n');
+    return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
+      body: JSON.stringify({ choices: [{ message: { content } }] }) });
+  });
+  return sent;
+}
+
+test('Translate turns the downloaded subtitle into an AI translation', async ({ page }) => {
+  const sent = await seedTranslation(page, 'Popular Release');
+  await startVodPlayback(page);
+  await openSearchOverlay(page);
+  await expect(page.locator('#subtitle-search .subs-row')).toContainText('Popular Release');
+  await page.keyboard.press('Enter'); // pick the focused first result
+  await expect(page.locator('.toast')).toContainText('Subtitles: Popular Release');
+
+  await page.mouse.move(960, 540);
+  await page.mouse.move(1900, 540);
+  const menu = page.locator('#player-menu');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter'); // Subtitles; focus lands on the shown subtitle
+  const translate = menu.locator('[data-menu-action="__subs_translate__"]');
+  await expect(translate).toHaveText('Translate to Deutsch');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+
+  await expect.poll(async () => page.evaluate(() => {
+    const v = document.getElementById('video-player') as HTMLVideoElement;
+    const t = Array.from(v.textTracks).find((x) => x.mode === 'showing');
+    return t?.cues ? Array.from(t.cues).map(c => (c as VTTCue).text) : null;
+  })).toEqual(['Cue one (de)', 'Cue two (de)']);
+  // Only the cue text leaves the device, never its timing.
+  expect(sent).toEqual(['[1] Cue one\n[2] Cue two']);
+
+  await page.mouse.move(960, 540);
+  await page.mouse.move(1900, 540);
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(menu.locator('.menu-item').filter({ hasText: 'Popular Release · AI translation' })).toContainText('✓');
+  await expect(translate).toHaveCount(0);
+});
+
+// The translation's row lines its text up with the other rows, and a long name
+// gives way to its "· AI translation" note, which always shows in full.
+test('a long-named AI translation keeps its note and lines up with the other subtitles', async ({ page }) => {
+  const long = 'A Very Long Release Name That Will Never Fit In The Player Menu';
+  await seedTranslation(page, long);
+  await startVodPlayback(page);
+  await openSearchOverlay(page);
+  await expect(page.locator('#subtitle-search .subs-row')).toContainText(long);
+  await page.keyboard.press('Enter');
+  const menu = page.locator('#player-menu');
+  const openSubtitles = async () => {
+    await page.mouse.move(960, 540);
+    await page.mouse.move(1900, 540);
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+  };
+  await openSubtitles();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter'); // Translate to Deutsch
+  await openSubtitles();
+  const entry = menu.locator('.menu-item').filter({ hasText: 'AI translation' });
+  await expect(entry).toContainText('✓');
+  await expect(entry.locator('.ai-icon svg')).toHaveCount(1);
+
+  const geometry = await menu.evaluate((root, words) => {
+    // Where a row's first text starts, and where the given words end on screen.
+    const textNodes = (el: Element) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const nodes: Text[] = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.textContent!.trim()) nodes.push(n as Text);
+      return nodes;
+    };
+    const rect = (node: Text, from: number, to: number) => {
+      const range = document.createRange();
+      range.setStart(node, from);
+      range.setEnd(node, to);
+      return range.getBoundingClientRect();
+    };
+    const textLeft = (el: Element) => {
+      const node = textNodes(el)[0];
+      const at = node.textContent!.search(/\S/);
+      return rect(node, at, at + 1).left;
+    };
+    const rows = Array.from(root.querySelectorAll('.menu-item[data-track-index]'));
+    const ai = rows.find(row => row.textContent!.includes(words))!;
+    const label = ai.querySelector('.menu-track-label')!;
+    const node = textNodes(label).find(n => n.textContent!.includes(words))!;
+    const at = node.textContent!.indexOf(words);
+    return {
+      lefts: rows.map(row => textLeft(row.querySelector('.menu-track-label')!)),
+      aiLeft: textLeft(label),
+      wordsRight: rect(node, at, at + words.length).right,
+      labelRight: label.getBoundingClientRect().right,
+    };
+  }, 'AI translation');
+  for (const left of geometry.lefts) expect(Math.abs(left - geometry.aiLeft)).toBeLessThan(1);
+  expect(geometry.wordsRight).toBeLessThanOrEqual(geometry.labelRight + 0.5);
+});
+
 test('an empty search keeps the box open for a manual retry that finds results', async ({ page }) => {
   await seedVod(page);
   // The auto-detected title misses; a manual query hits (echoed into the label).

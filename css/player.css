@@ -1161,6 +1161,24 @@
   text-overflow: ellipsis;
 }
 
+/* An AI translation: the name truncates; its "· AI translation" note never does. */
+.player-menu .menu-track-label.menu-track-ai {
+  display: flex;
+  align-items: baseline;
+}
+
+.player-menu .menu-track-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-menu .menu-track-note {
+  flex: none;
+  margin-left: 0.25em;
+}
+
 .player-menu .menu-item.unavailable {
   opacity: 0.4;
 }
