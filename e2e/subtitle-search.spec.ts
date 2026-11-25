@@ -27,7 +27,7 @@ function assrtSub(o: { id: string; langDesc: string; name: string; downloads: nu
 // file can't fire `error` and eject VOD, and route the Assrt *detail*/download
 // endpoints (the .srt serves SRT_BODY). The Assrt *search* endpoint is routed
 // per-test via routeAssrtSearch so each test controls its own results.
-async function seedVod(page: Page): Promise<void> {
+async function seedVod(page: Page, media?: Buffer): Promise<void> {
   await page.route('**/get.php*', (r) =>
     r.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U }));
   await page.route('**/xmltv.php*', (r) =>
@@ -50,7 +50,9 @@ async function seedVod(page: Page): Promise<void> {
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
   // The movie file itself: a small response so play() doesn't hang the test.
-  await page.route('**/movie/**', (r) => r.fulfill({ status: 200, contentType: 'video/mp4', body: '' }));
+  await page.route('**/movie/**', (r) => (media
+    ? r.fulfill({ status: 200, contentType: 'audio/wav', body: media })
+    : r.fulfill({ status: 200, contentType: 'video/mp4', body: '' })));
   // Assrt detail: hand back a directly-downloadable .srt via the filelist.
   await page.route(/\/v1\/sub\/detail/, (route) => {
     const id = new URL(route.request().url()).searchParams.get('id') || '';
@@ -67,6 +69,7 @@ async function seedVod(page: Page): Promise<void> {
         source: 'xtream', xtream: { username: 'u', password: 'p' } },
     ]));
   });
+  if (media) return;
   // Keep VOD alive: the empty mock file must not fire `error` and eject.
   await page.addInitScript(() => {
     const P = HTMLMediaElement.prototype;
@@ -428,8 +431,8 @@ test('picking a result downloads it into the application subtitle track', async 
 });
 
 // Offers a downloaded subtitle named `name` and an AI server that appends " (de)" to each cue.
-async function seedTranslation(page: Page, name: string): Promise<string[]> {
-  await seedVod(page);
+async function seedTranslation(page: Page, name: string, media?: Buffer): Promise<string[]> {
+  await seedVod(page, media);
   await routeAssrtSearch(page, () => [
     assrtSub({ id: '201', langDesc: '英', name, downloads: 100 }),
   ]);
@@ -516,6 +519,71 @@ test('Translate turns the downloaded subtitle into an AI translation', async ({ 
   // Picking it again (focus is on it) announces the full label.
   await page.keyboard.press('Enter');
   await expect(page.locator('.toast')).toHaveText('Subtitles: Popular Release · AI translation (Deutsch)');
+});
+
+// Ten seconds of silent 8 kHz WAV: real media, so cues become active and are drawn.
+function silentWav(seconds: number): Buffer {
+  const rate = 8000;
+  const data = rate * seconds;
+  const wav = Buffer.alloc(44 + data, 128);
+  wav.write('RIFF', 0);
+  wav.writeUInt32LE(36 + data, 4);
+  wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(rate, 24);
+  wav.writeUInt32LE(rate, 28);
+  wav.writeUInt16LE(1, 32);
+  wav.writeUInt16LE(8, 34);
+  wav.write('data', 36);
+  wav.writeUInt32LE(data, 40);
+  return wav;
+}
+
+test('a translation picked while paused replaces the cue on screen at once', async ({ page }) => {
+  await seedTranslation(page, 'Popular Release', silentWav(10));
+  await startVodPlayback(page);
+  await openSearchOverlay(page);
+  await expect(page.locator('#subtitle-search .subs-row')).toContainText('Popular Release');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.toast')).toContainText('Subtitles: Popular Release');
+  await page.locator('#video-player').evaluate(async (video: HTMLVideoElement) => {
+    // A routed response can't serve ranges, so play into the first cue rather than seek.
+    video.muted = true;
+    await video.play();
+    while (video.currentTime < 1.5) await new Promise(resolve => setTimeout(resolve, 50));
+    video.pause();
+  });
+  const activeCue = () => page.evaluate(() => {
+    const v = document.getElementById('video-player') as HTMLVideoElement;
+    const t = Array.from(v.textTracks).find((x) => x.mode === 'showing');
+    const cues = t?.activeCues;
+    return cues && cues.length ? (cues[0] as VTTCue).text : null;
+  });
+  await expect.poll(activeCue).toBe('Cue one');
+  // Only the video box: the OSD, menu, and toasts change on their own.
+  const cueShot = async (): Promise<Buffer> => {
+    const style = await page.addStyleTag({ content: '#player-osd, #player-menu, .toast, #subtitle-search { visibility: hidden !important; }' });
+    const shot = await page.locator('#video-player').screenshot({ animations: 'disabled' });
+    await style.evaluate(el => (el as Element).remove());
+    return shot;
+  };
+  const original = await cueShot();
+
+  await page.mouse.move(960, 540);
+  await page.mouse.move(1900, 540);
+  const menu = page.locator('#player-menu');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(menu.locator('[data-menu-action="__subs_translate__"]')).toHaveText('Translate to Deutsch');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect.poll(activeCue).toBe('Cue one (de)');
+  expect(await page.locator('#video-player').evaluate((video: HTMLVideoElement) => video.paused)).toBe(true);
+  await expect.poll(async () => (await cueShot()).equals(original)).toBe(false);
 });
 
 test('the translation language list translates into another language without leaving playback', async ({ page }) => {

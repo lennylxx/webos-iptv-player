@@ -165,4 +165,9 @@ describe('subtitleSummary', () => {
     expect(subtitleSummary([s({ label: 'Track 1', active: true })])).toBe('Track 1');
     expect(subtitleSummary([s({ label: 'Track 1', active: true }), s({ index: 1, label: 'Track 2' })])).toBe('Track 1 (2)');
   });
+
+  it('adds the progress of a running translation', () => {
+    expect(subtitleSummary([s({ label: 'Track 1 · AI translation (Deutsch)', active: true, detail: '40%' })]))
+      .toBe('Track 1 · AI translation (Deutsch) · 40%');
+  });
 });

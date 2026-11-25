@@ -303,7 +303,6 @@ export const PL_MESSAGES = {
   'subtitle.downloadFailed': 'Pobieranie nie powiodło się',
   'subtitle.syncHint': 'Lewo/Prawo — dostosuj; OK — wyzeruj; Wstecz — zamknij.',
   'subtitle.reset': 'Resetuj',
-  'subtitle.translating': 'Tłumaczenie napisów… {percent}%',
   'subtitle.translationProgress': '{percent}%',
   'subtitle.translateFailed': 'Tłumaczenie napisów nie powiodło się',
   'ai.translateLimit': 'Osiągnięto dzienny limit AI. Tłumaczenie wstrzymane.',

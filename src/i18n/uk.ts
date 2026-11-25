@@ -303,7 +303,6 @@ export const UK_MESSAGES = {
   'subtitle.downloadFailed': 'Не вдалося завантажити',
   'subtitle.syncHint': 'Ліворуч/праворуч — налаштувати, OK — скинути, Назад — закрити.',
   'subtitle.reset': 'Скинути',
-  'subtitle.translating': 'Перекладаю субтитри… {percent} %',
   'subtitle.translationProgress': '{percent} %',
   'subtitle.translateFailed': 'Не вдалося перекласти субтитри',
   'ai.translateLimit': 'Досягнуто денного ліміту ШІ. Переклад призупинено.',

@@ -173,19 +173,19 @@ describe('SubtitleTranslation', () => {
     expect(logged().join('\n')).toMatch(/event=subtitle\.translate\.done done=3 kept=0 cached=0 requested=1 total=3/);
   });
 
-  it('asks to keep tag markers only for an ASS batch that has them, and logs the extra fields', async () => {
+  it('asks to keep tag markers only for a batch that has them, and logs the extra fields', async () => {
     runText.mockImplementation(translate);
     const ass = (text: string): SubtitleTranslation => new SubtitleTranslation([{ start: 0, end: 1, text }], 'de', () => 0, vi.fn(), () => {},
-      { tagMarkers: true, start: ['format=ass', 'skipped=2'], finish: () => ['tags_dropped=0'] });
+      { start: ['format=ass', 'skipped=2'], finish: () => ['tags_dropped=0'] });
     await ass('A <x1/>B').start();
     await ass('A <i>B</i>').start();
     await ass('A B').start();
-    await job(cues(1, () => 'A <i>B</i>')).start();
+    await job(cues(1, () => 'A B')).start();
 
     const systems = runText.mock.calls.map(([task]) => (task as LlmTextTask).system);
     const keep = 'Keep tags such as <i>, </i> and <x1/> exactly, moving them with the words they mark.';
     expect(systems.map(system => system.includes(keep))).toEqual([true, true, false, false]);
-    // SRT prompts stay as they were, so their cached batches still match.
+    // Prompts without markers stay as they were, so their cached batches still match.
     expect(systems[3]).toBe([
       'You translate film and TV subtitles into German.',
       'Each input line is one subtitle: its number in square brackets, then its text. <br> marks a line break within a subtitle.',

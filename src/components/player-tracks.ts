@@ -24,6 +24,7 @@ import { DashSubtitles } from '../services/dash-subtitles';
 import { VodSubtitles } from '../services/vod-subtitles';
 import { AssSubtitles, isAssSidecar } from '../services/ass-subtitles';
 import { AssTranslationDoc, RedrawThrottle } from '../services/ass-translation';
+import { CueTranslationDoc } from '../services/cue-translation';
 import { getCachedSubtitle, setCachedSubtitle } from '../services/idb-cache';
 import { isLunaAvailable, lunaRequest } from '../services/luna';
 import {
@@ -453,6 +454,22 @@ export class PlayerTracks {
     return (kind === 'text' ? VOD_SUBTITLE_BASE : ASS_SUBTITLE_BASE) + entry;
   }
 
+  // Lists each translation right after its source; picker indices stay as they are.
+  private besideSources<T extends { index: number }>(kind: SidecarKind, options: T[]): T[] {
+    const sourceOf = (option: T): number => this.sourceOf(kind, option.index - this.pickerIndex(kind, 0));
+    const out: T[] = [];
+    options.forEach((option) => {
+      if (sourceOf(option) >= 0) return;
+      out.push(option);
+      options.forEach((other) => {
+        if (sourceOf(other) === option.index - this.pickerIndex(kind, 0)) out.push(other);
+      });
+    });
+    // A translation whose source is not listed keeps its place at the end.
+    options.forEach((option) => { if (out.indexOf(option) < 0) out.push(option); });
+    return out;
+  }
+
   // The translated entry's source entry, or -1 for an entry that isn't a translation.
   private sourceOf(kind: SidecarKind, entry: number): number {
     return kind === 'text' ? this.vodSubs.sourceOf(entry) : this.assSources.get(entry) ?? -1;
@@ -534,10 +551,8 @@ export class PlayerTracks {
     const existing = this.sidecarsOf(context.kind).findIndex((sidecar, index) =>
       this.sourceOf(context.kind, index) === context.source && sameTarget(sidecar.lang, into));
     const entry = existing >= 0 ? existing : this.translationEntry(context.kind, context.source, into);
-    const index = this.pickerIndex(context.kind, entry);
-    this.selectSubtitleTrack(index);
-    const job = this.translations.get(index);
-    if (!job?.complete) showToast(t('subtitle.translating', { percent: job?.percent ?? 0 }));
+    // The OSD beside the menu names the translation and its progress, so no toast covers it.
+    this.selectSubtitleTrack(this.pickerIndex(context.kind, entry), false);
   }
 
   private translationEntry(kind: SidecarKind, source: number, target: string): number {
@@ -617,15 +632,17 @@ export class PlayerTracks {
       return null; // VodSubtitles.show logs the load failure
     }
     if (gen !== this.translationGen || this.vodSubs.activeIndex !== entry) return null;
+    const doc = new CueTranslationDoc(cues);
     return new SubtitleTranslation(
-      cues,
+      doc.units,
       this.vodTextSidecars[entry].lang,
       () => this.cueTime(),
       (indices, texts) => {
         // A stopped job's last batches can land after the item changed.
-        if (gen === this.translationGen) this.vodSubs.setCueTexts(entry, indices, texts);
+        if (gen === this.translationGen) this.vodSubs.setCueTexts(entry, indices, doc.texts(indices, texts));
       },
       () => { if (gen === this.translationGen) this.options.onChanged?.(); },
+      { finish: () => [`tags_dropped=${doc.tagsDropped}`] },
     );
   }
 
@@ -648,7 +665,7 @@ export class PlayerTracks {
         redraw.changed(doc.touches(indices, now - ASS_NEAR_BEFORE_S, now + ASS_NEAR_AFTER_S));
       },
       () => { if (gen === this.translationGen) this.options.onChanged?.(); },
-      { tagMarkers: true, start: ['format=ass', `skipped=${doc.skipped}`], finish: () => [`tags_dropped=${doc.tagsDropped}`] },
+      { start: ['format=ass', `skipped=${doc.skipped}`], finish: () => [`tags_dropped=${doc.tagsDropped}`] },
     );
   }
 
@@ -691,7 +708,8 @@ export class PlayerTracks {
     this.options.onChanged?.();
     const reason = report.error?.reason;
     if (!reason || reason === 'cancelled') return;
-    showToast(reason === 'cap' ? t('ai.translateLimit') : t('subtitle.translateFailed'));
+    const setup = reason === 'auth' || reason === 'disabled' || reason === 'config';
+    showToast(reason === 'cap' ? t('ai.translateLimit') : setup ? t('ai.setupProblem') : t('subtitle.translateFailed'));
   }
 
   private translationSource(index: number): string | undefined {
@@ -1072,22 +1090,22 @@ export class PlayerTracks {
         ? nativeSubtitleOptions(list)
           .filter(option => !this.ownsTextTrack(list[option.index]))
         : [];
-      const sidecars = this.vodTextSidecars.map((sidecar, index) => ({
+      const sidecars = this.besideSources('text', this.vodTextSidecars.map((sidecar, index) => ({
         index: VOD_SUBTITLE_BASE + index,
         name: sidecarName(sidecar),
         lang: sidecar.lang,
         isDefault: false,
         isForced: false,
         active: this.vodSubs.activeIndex === index,
-      }));
-      const ass = this.vodAssSidecars.map((sidecar, index) => ({
+      })));
+      const ass = this.besideSources('ass', this.vodAssSidecars.map((sidecar, index) => ({
         index: ASS_SUBTITLE_BASE + index,
         name: sidecar.name,
         lang: sidecar.lang,
         isDefault: false,
         isForced: false,
         active: this.activeAssIndex === index,
-      })).filter(option => !this.assUnreadable.has(this.assSources.get(option.index - ASS_SUBTITLE_BASE) ?? -1));
+      })).filter(option => !this.assUnreadable.has(this.assSources.get(option.index - ASS_SUBTITLE_BASE) ?? -1)));
       return native.concat(sidecars, ass);
     }
     // webOS native live/catch-up: in-manifest WebVTT is self-rendered (not surfaced
@@ -1149,7 +1167,7 @@ export class PlayerTracks {
   /** Switch the active subtitle (index -1 = off, -2 = in-band CC) and remember it
    *  for this channel. No-op for a grayed (unavailable) track the platform didn't
    *  expose. CC and the other subtitle paths are mutually exclusive. */
-  selectSubtitleTrack(index: number): void {
+  selectSubtitleTrack(index: number, announce = true): void {
     if (index === CC_SUBTITLE_INDEX) {
       this.ccRefusedMediaId = '';
       this.subs.stop(); // self-render and the native compositor can't both draw
@@ -1184,7 +1202,7 @@ export class PlayerTracks {
     } else {
       this.rememberSubtitle({ off: false, name: option.name, lang: option.lang });
     }
-    showToast(t('player.subtitlesTrack', { name: subtitleLabel(option) }));
+    if (announce) showToast(t('player.subtitlesTrack', { name: subtitleLabel(option) }));
   }
 
   // Toggle the native caption compositor (CEA-608/708, IMSC/stpp and wvtt) via Luna. Only

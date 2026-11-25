@@ -288,7 +288,6 @@ export const TR_MESSAGES = {
   'subtitle.downloadFailed': 'İndirme başarısız',
   'subtitle.syncHint': 'Ayarlamak için Sol/Sağ, sıfırlamak için OK, kapatmak için Geri tuşunu kullanın.',
   'subtitle.reset': 'Sıfırla',
-  'subtitle.translating': 'Altyazılar çevriliyor… %{percent}',
   'subtitle.translationProgress': '%{percent}',
   'subtitle.translateFailed': 'Altyazı çevirisi başarısız',
   'ai.translateLimit': 'Günlük yapay zeka sınırına ulaşıldı. Çeviri duraklatıldı.',

@@ -295,7 +295,6 @@ export const EN_MESSAGES = {
   'subtitle.downloadFailed': 'Download failed',
   'subtitle.syncHint': 'Use Left/Right to adjust, OK to reset, and Back to close.',
   'subtitle.reset': 'Reset',
-  'subtitle.translating': 'Translating subtitles… {percent}%',
   'subtitle.translationProgress': '{percent}%',
   'subtitle.translateFailed': 'Subtitle translation failed',
   'ai.translateLimit': 'Daily AI limit reached. Translation paused.',

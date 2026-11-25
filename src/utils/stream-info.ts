@@ -157,6 +157,8 @@ export function audioSummary(tracks: AudioTrackOption[]): string {
 export function subtitleSummary(tracks: SubtitleTrackOption[]): string {
   if (!tracks.length) return '';
   const active = tracks.find(t => t.active);
-  const base = active ? (active.label || t('settings.on')) : t('common.off');
+  const label = active ? (active.label || t('settings.on')) : t('common.off');
+  // A running translation's progress.
+  const base = active?.detail ? `${label} · ${active.detail}` : label;
   return tracks.length > 1 ? `${base} (${tracks.length})` : base;
 }

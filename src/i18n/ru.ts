@@ -303,7 +303,6 @@ export const RU_MESSAGES = {
   'subtitle.downloadFailed': 'Не удалось скачать',
   'subtitle.syncHint': 'Влево/вправо — настроить, OK — сбросить, Назад — закрыть.',
   'subtitle.reset': 'Сбросить',
-  'subtitle.translating': 'Перевожу субтитры… {percent} %',
   'subtitle.translationProgress': '{percent} %',
   'subtitle.translateFailed': 'Не удалось перевести субтитры',
   'ai.translateLimit': 'Достигнут дневной лимит ИИ. Перевод приостановлен.',

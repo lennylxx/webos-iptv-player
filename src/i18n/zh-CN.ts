@@ -288,7 +288,6 @@ export const ZH_CN_MESSAGES = {
   'subtitle.downloadFailed': '下载失败',
   'subtitle.syncHint': '使用左右键调整，确认键重置，返回键关闭。',
   'subtitle.reset': '重置',
-  'subtitle.translating': '正在翻译字幕… {percent}%',
   'subtitle.translationProgress': '{percent}%',
   'subtitle.translateFailed': '字幕翻译失败',
   'ai.translateLimit': '已达到每日 AI 上限，翻译已暂停。',

@@ -293,7 +293,6 @@ export const FR_MESSAGES = {
   'subtitle.downloadFailed': 'Échec du téléchargement',
   'subtitle.syncHint': 'Gauche/Droite pour régler, OK pour réinitialiser et Retour pour fermer.',
   'subtitle.reset': 'Réinitialiser',
-  'subtitle.translating': 'Traduction des sous-titres en cours… {percent} %',
   'subtitle.translationProgress': '{percent} %',
   'subtitle.translateFailed': 'Échec de la traduction des sous-titres',
   'ai.translateLimit': 'Limite quotidienne d’IA atteinte. Traduction suspendue.',

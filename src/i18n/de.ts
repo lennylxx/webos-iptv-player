@@ -293,7 +293,6 @@ export const DE_MESSAGES = {
   'subtitle.downloadFailed': 'Download fehlgeschlagen',
   'subtitle.syncHint': 'Mit Links/Rechts anpassen, mit OK zurücksetzen und mit Zurück schließen.',
   'subtitle.reset': 'Zurücksetzen',
-  'subtitle.translating': 'Untertitel werden übersetzt… {percent} %',
   'subtitle.translationProgress': '{percent} %',
   'subtitle.translateFailed': 'Untertitelübersetzung fehlgeschlagen',
   'ai.translateLimit': 'Tägliches KI-Limit erreicht. Übersetzung pausiert.',

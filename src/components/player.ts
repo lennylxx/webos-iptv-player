@@ -300,7 +300,11 @@ export class Player {
       getChannel: () => this.currentChannel,
       getVod: () => this.vod,
       playbackLabel: () => this.playbackLabel(),
-      onChanged: () => this.onPlaybackStateChanged(),
+      // The OSD names the subtitle and a running translation's progress.
+      onChanged: () => {
+        this.refreshOsd();
+        this.onPlaybackStateChanged();
+      },
     });
     this.playbackRate = new PlaybackRateController(() => this.videoEl, {
       onFallback: rate => this.onPlaybackRateFallback(rate),

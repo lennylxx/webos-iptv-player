@@ -217,10 +217,11 @@ stays hidden while AI features are off.
 - Picking it adds a picker entry next to its source (a `VodSubtitles.addTranslation` entry that
   starts as a copy of the source cues) and shows it. The menu tags it **"{name} · AI · EN"** with
   the target's code (`targetCode`: ISO 639-1 in caps, 简中/繁中 for Chinese in every UI language), the name giving
-  way to the tag; the toast and the OSD name it in full, **"{name} · AI translation ({language})"**.
+  way to the tag; the OSD names it in full, **"{name} · AI translation ({language})"**, as does
+  the toast when it is picked from the list (Translate itself shows no toast over the OSD).
   Untranslated lines keep the original text; translated batches replace cue text in place
   (`setCueTexts` updates the live `VTTCue.text`), so the offset and sync adjuster still apply.
-  While it runs, the entry shows its progress.
+  While it runs, the entry and the OSD's subtitle readout show its progress.
 - **"Translate to another language…"** opens a **Translation language** list while the shown
   subtitle is a sidecar or its translation: the default target first, then the Settings
   languages, the UI language, and targets already used, less the source's own language. Picking
@@ -233,6 +234,22 @@ stays hidden while AI features are off.
   reply is parsed the same way (full-width `【n】`/`［n］` markers too), so a missing or garbled line
   keeps only that line in the original language. The reply limit is at least 2048 tokens or three
   times the batch, capped by the room the context size leaves. Blank cues are not sent.
+- Only the words of a cue are sent (`src/services/cue-translation.ts`, over the splitter shared
+  with ASS in `subtitle-markers.ts`). Markup at a cue's edges (`{\an8}`, `<font …>`, `<c.…>`,
+  `<v …>`, `<lang …>`, edge `<i>`) stays on the device; markup between the words travels as a
+  marker: `<i>`/`<b>`/`<u>` paired inside the cue as such, anything else (inline timestamps,
+  `<font>`, a lone toggle) as `<x1/>`, `<x2/>`, …. Ruby readings describe the source words, so a
+  translated cue leaves out `<ruby>`, `<rt>…</rt>`, and `</ruby>` and sends only the base text.
+  Tags pair as the WebVTT parser pairs them (an end tag closes the open tag on top when the names
+  match). A reply whose markers don't add up, or that would leave more tags unpaired than the
+  cue had, keeps its words without the inner markup and without each edge tag whose partner was
+  inside, so no tag is left open. Entities (any HTML named entity, and numeric ones) are decoded
+  before sending and the reply is escaped (`&amp;`, `&lt;`, `&gt;`) before it goes back into the
+  cue, whether the file was SRT or WebVTT, since both are drawn as WebVTT cue text. A cue with no
+  `<`, `{`, or `&` is sent byte for byte as before, and batches are planned on each cue's
+  original text, so batches of such cues keep their cache; only a batch with markers gets the
+  extra system-prompt sentence asking to keep them. A cue with more than eight inner markers is
+  sent as plain text the way heavy ASS typesetting is (ASS: more than four).
 - Two workers each take the unfinished batch nearest the **current** playback position (then the
   ones before it), so a seek is translated next; batches within a minute of it go out at
   foreground priority.
@@ -241,7 +258,9 @@ stays hidden while AI features are off.
   first two replies are unusable the run stops with "Subtitle translation failed".
 - Rate limits (429), server errors (5xx), timeouts, and network errors retry a batch up to twice,
   after the server's `Retry-After` or 10 s, then 20 s. Any other failure, or the daily limit,
-  stops the run with a toast, keeping what was translated.
+  stops the run with a toast, keeping what was translated: the daily limit's, "AI setup
+  problem" for a refused key or a setup error (as for program info), else "Subtitle translation
+  failed".
 - Switching to another subtitle stops the run: queued batches are dropped, but batches already
   sent finish and are cached (`finishStarted`), so stopping never wastes a paid request. A stop
   ends quietly even if such a batch fails afterwards, and the first failure ends the run at once
@@ -259,9 +278,8 @@ stays hidden while AI features are off.
   only toggles that and has its other half in the line, `<x1/>`, `<x2/>`, … for any other block,
   a lone toggle, or a drawing. A toggle right at the
   text's edge whose other half sits inside the line (`{\i1}Title{\i0} said …`) travels as a
-  marker too. Only an ASS batch with markers gets one more system-prompt sentence asking to keep
-  them; SRT prompts never change, and an ASS batch without markers is the same request as for SRT
-  and shares its cache. A reply whose markers don't add up, or whose closing marker comes before
+  marker too. An ASS batch with markers gets the same extra system-prompt sentence; one without
+  markers is the same request as for SRT and shares its cache. A reply whose markers don't add up, or whose closing marker comes before
   its opening one, keeps its text without the line-internal styling and without any edge toggle
   turning a style on whose other half was inside, so no style is left switched on (an edge block that also sets
   other tags, like `{\pos(1,2)\i1}`, keeps them and loses only that toggle; a `\r` inside turns
@@ -287,7 +305,7 @@ stays hidden while AI features are off.
   resume; for ASS also `format=ass` and the `skipped` events), `subtitle.translate.retry` (reason, status, attempt, wait), and once per run that
   wasn't stopped either `subtitle.translate.done` or `subtitle.translate.incomplete` (reason `lines_kept`,
   `unusable_reply`, or the failure; failed batches; done/kept/cached/requested/total lines and
-  batches; for ASS `tags_dropped`, the lines that lost their line-internal styling); `subtitle.translate.restore` (`restored` or `ai_off`, then `nothing_to_translate` when a restored ASS source has no text to translate) once per opening of an item, a reload such
+  batches; `tags_dropped`, the cues or ASS lines that lost their inner styling); `subtitle.translate.restore` (`restored` or `ai_off`, then `nothing_to_translate` when a restored ASS source has no text to translate) once per opening of an item, a reload such
   as a quality change included.
   Request failures also log `llm.request.failed`.
 

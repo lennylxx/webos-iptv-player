@@ -6,10 +6,14 @@ import type { VttCue } from '../utils/webvtt';
 import { LlmError } from './llm/client';
 import { LlmService } from './llm/llm-service';
 import { StorageService } from './storage-service';
+import { hasMarkers } from './subtitle-markers';
 
 const log = createLogger('SubTranslate');
 
-export type TranslationCue = Pick<VttCue, 'start' | 'end' | 'text'>;
+export type TranslationCue = Pick<VttCue, 'start' | 'end' | 'text'> & {
+  // The text batches are planned on, when it differs from the text sent.
+  original?: string;
+};
 
 export const SUBTITLE_TRANSLATION_FEATURE = 'subtitle-translation';
 const PROMPT_VERSION = 1;
@@ -84,8 +88,8 @@ function estimateTokens(text: string): number {
   return Math.ceil(tokens);
 }
 
-function lineCost(cue: TranslationCue): number {
-  return estimateTokens(cue.text) + 4;
+function lineCost(text: string): number {
+  return estimateTokens(text) + 4;
 }
 
 /** Splits cues into fixed batches of cue indices; fixed so a replay hits the same cached batches. */
@@ -96,7 +100,7 @@ export function planBatches(cues: readonly TranslationCue[], contextTokens: numb
   let current: number[] = [];
   let tokens = 0;
   cues.forEach((cue, index) => {
-    const cost = lineCost(cue);
+    const cost = lineCost(cue.original ?? cue.text);
     if (current.length && (current.length >= MAX_LINES || tokens + cost > budget)) {
       batches.push(current);
       current = [];
@@ -124,9 +128,6 @@ export function batchOrder(batches: readonly number[][], cues: readonly Translat
   for (let i = first - 1; i >= 0; i--) order.push(i);
   return order;
 }
-
-// ASS style toggles and the override blocks kept as <x1/>, <x2/>, …
-const TAG_MARKER = /<\/?[ibus]>|<x\d+\/>/;
 
 function systemPrompt(target: string, keptTags: boolean): string {
   const language = englishName(target);
@@ -221,8 +222,8 @@ export class SubtitleTranslation {
     private position: () => number,
     private onLines: (indices: number[], texts: string[]) => void,
     private onProgress: () => void = () => {},
-    // ASS text carries tag markers to keep; extra diagnostic fields for the start and the end of a run.
-    private extra: { tagMarkers?: boolean; start?: string[]; finish?: () => string[] } = {},
+    // Extra diagnostic fields for the start and the end of a run.
+    private extra: { start?: string[]; finish?: () => string[] } = {},
   ) {
     this.total = cues.length;
     this.contextTokens = LlmService.contextTokens();
@@ -369,7 +370,7 @@ export class SubtitleTranslation {
       return true;
     }
     const texts = batch.map(cueIndex => this.cues[cueIndex].text);
-    const inputTokens = batch.reduce((sum, cueIndex) => sum + lineCost(this.cues[cueIndex]), 0);
+    const inputTokens = batch.reduce((sum, cueIndex) => sum + lineCost(this.cues[cueIndex].text), 0);
     const position = this.position();
     const near = this.cues[batch[0]].start <= position + NEAR_S && this.cues[batch[batch.length - 1]].end >= position;
     const minimum = usableLines(batch.length);
@@ -379,7 +380,7 @@ export class SubtitleTranslation {
         const outcome = await LlmService.runText({
           feature: SUBTITLE_TRANSLATION_FEATURE,
           priority: near ? 'foreground' : 'background',
-          system: systemPrompt(this.target, !!this.extra.tagMarkers && texts.some(text => TAG_MARKER.test(text))),
+          system: systemPrompt(this.target, texts.some(hasMarkers)),
           user: formatLines(texts),
           promptVersion: PROMPT_VERSION,
           maxTokens: replyTokens(inputTokens, this.contextTokens),

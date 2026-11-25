@@ -713,6 +713,12 @@ describe('Player catch-up pause/play', () => {
     expect(osd.textContent).toContain('Resyncing');
   });
 
+  it('redraws the OSD when the tracks change, so it follows a translation\'s progress', () => {
+    const refresh = vi.spyOn(player, 'refreshOsd');
+    (player as unknown as { tracks: { options: { onChanged: () => void } } }).tracks.options.onChanged();
+    expect(refresh).toHaveBeenCalled();
+  });
+
   it('a pointer click on the resync control seeks backward', () => {
     video.currentTime = 60;
     const btn = container.querySelector('[data-resync]') as HTMLElement;

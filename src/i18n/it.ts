@@ -291,7 +291,6 @@ export const IT_MESSAGES = {
   'subtitle.downloadFailed': 'Download non riuscito',
   'subtitle.syncHint': 'Usa Sinistra/Destra per regolare, OK per reimpostare e Indietro per chiudere.',
   'subtitle.reset': 'Reimposta',
-  'subtitle.translating': 'Traduzione dei sottotitoli in corso… {percent}%',
   'subtitle.translationProgress': '{percent}%',
   'subtitle.translateFailed': 'Traduzione dei sottotitoli non riuscita',
   'ai.translateLimit': 'Limite giornaliero IA raggiunto. Traduzione in pausa.',

@@ -293,7 +293,6 @@ export const PT_BR_MESSAGES = {
   'subtitle.downloadFailed': 'Falha no download',
   'subtitle.syncHint': 'Use Esquerda/Direita para ajustar, OK para redefinir e Voltar para fechar.',
   'subtitle.reset': 'Redefinir',
-  'subtitle.translating': 'Traduzindo legendas… {percent}%',
   'subtitle.translationProgress': '{percent}%',
   'subtitle.translateFailed': 'Falha ao traduzir legendas',
   'ai.translateLimit': 'Limite diário de IA atingido. Tradução pausada.',

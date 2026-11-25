@@ -2,6 +2,19 @@
 // styling: override blocks, drawings, and every byte before the Text field stay
 // as they are, and only the text runs of Dialogue events are sent.
 
+import {
+  LEFTOVER_MARKER,
+  reassemble as reassembleWith,
+  splitText,
+  TOGGLE_LETTERS,
+  type Dialect,
+  type Piece,
+  type Reassembled,
+  type TextParts,
+} from './subtitle-markers';
+
+export type { Marker, TextParts } from './subtitle-markers';
+
 export interface AssUnit {
   start: number;
   end: number;
@@ -9,40 +22,14 @@ export interface AssUnit {
   text: string;
 }
 
-export interface Marker {
-  token: string;
-  raw: string;
-}
-
-export interface TextParts {
-  // Kept verbatim around the translated text.
-  prefix: string;
-  suffix: string;
-  // The same without style toggles, for a line whose inner styling is dropped.
-  barePrefix: string;
-  bareSuffix: string;
-  markers: Marker[];
-}
-
 interface AssEvent extends TextParts {
   line: number;
   head: string;
-  // Line-internal styling dropped up front (heavy typesetting).
   flattened: boolean;
   start: number;
   end: number;
 }
 
-// More line-internal blocks than this are typesetting, sent as plain text.
-const MAX_MARKERS = 4;
-const TOGGLES: Record<string, [string, string]> = {
-  i: ['<i>', '</i>'],
-  b: ['<b>', '</b>'],
-  u: ['<u>', '</u>'],
-  s: ['<s>', '</s>'],
-};
-const MARKER = /<\/?[ibus]>|<x\d+\/>/g;
-const LEFTOVER_MARKER = /<\s*\/?\s*(?:[ibus]|x\d*)\s*\/?\s*>/gi;
 const KARAOKE = /\\(?:k[fot]?|K)\d/;
 const DRAWING = /\\p(\d+(?:\.\d+)?)/g;
 // Whitespace, \h, and line breaks around the text stay where they are.
@@ -71,9 +58,7 @@ function splitFields(body: string, count: number): string[] | null {
   return fields;
 }
 
-type Piece = { kind: 'text' | 'block' | 'drawing'; raw: string };
-
-// Text runs, override blocks, and drawing runs (\p1 until \p0, as libass draws them).
+// Text runs, override blocks, and drawing runs (\p1 until \p0, as libass draws them), kept unsent.
 function pieces(text: string): Piece[] {
   const out: Piece[] = [];
   let drawing = false;
@@ -82,7 +67,7 @@ function pieces(text: string): Piece[] {
     const open = text.indexOf('{', at);
     const close = open < 0 ? -1 : text.indexOf('}', open);
     const end = close < 0 ? text.length : open;
-    if (end > at) out.push({ kind: drawing ? 'drawing' : 'text', raw: text.slice(at, end) });
+    if (end > at) out.push({ kind: drawing ? 'kept' : 'text', raw: text.slice(at, end) });
     if (close < 0) break;
     const block = text.slice(open, close + 1);
     out.push({ kind: 'block', raw: block });
@@ -108,8 +93,7 @@ function sendable(raw: string, hardSoftBreaks: boolean): string {
 function toggle(raw: string): string | null {
   const inner = /^\{\\([ibus])([01]?)\}$/.exec(raw);
   if (!inner) return null;
-  const [on, off] = TOGGLES[inner[1]];
-  return inner[2] === '1' ? on : off;
+  return inner[2] === '1' ? `<${inner[1]}>` : `</${inner[1]}>`;
 }
 
 // \i1, \b700, \u0, \s (back to the style), but not \iclip, \bord, \be, or \shad.
@@ -126,31 +110,10 @@ function styleState(letter: string, value: string): string {
 }
 
 function styleStates(raw: string): string[] {
-  const out = RESET.test(raw) ? Object.keys(TOGGLES).map(letter => `${letter}0`) : [];
+  const out = RESET.test(raw) ? TOGGLE_LETTERS.map(letter => `${letter}0`) : [];
   STYLE_TAG.lastIndex = 0;
   for (let match = STYLE_TAG.exec(raw); match; match = STYLE_TAG.exec(raw)) out.push(styleState(match[1], match[2]));
   return out;
-}
-
-function pieceToggle(piece: Piece | undefined): string | null {
-  return piece?.kind === 'block' ? toggle(piece.raw) : null;
-}
-
-function opposite(token: string): string {
-  return token[1] === '/' ? `<${token.slice(2)}` : `</${token.slice(1)}`;
-}
-
-function joined(list: readonly Piece[]): string {
-  return list.map(piece => piece.raw).join('');
-}
-
-function letterOf(token: string): string {
-  return token.replace(/[</>]/g, '');
-}
-
-// Each style's toggles in order, so an opening marker must still come before its closing one.
-function toggleOrder(tokens: readonly string[]): string {
-  return Object.keys(TOGGLES).map(letter => tokens.filter(token => token.replace('/', '') === `<${letter}>`).join('')).join('|');
 }
 
 // Model text can never open an override block or an escape.
@@ -158,39 +121,32 @@ function clean(text: string): string {
   return text.replace(LEFTOVER_MARKER, '').replace(/[{}\\]/g, '').replace(/\n/g, '\\N');
 }
 
-export interface Reassembled {
-  text: string;
-  dropped: boolean;
+// Dropping the inner styling also drops an edge toggle turned on whose other half was
+// inside, even from a block that sets more than the toggle; one turned off stays.
+function bare(edge: readonly Piece[], middle: readonly Piece[]): string {
+  const innerStates = new Set<string>();
+  middle.forEach((piece) => { if (piece.kind === 'block') styleStates(piece.raw).forEach(state => innerStates.add(state)); });
+  return edge.map((piece) => {
+    if (piece.kind !== 'block') return piece.raw;
+    const kept = piece.raw.replace(STYLE_TAG, (tag: string, letter: string, value: string) =>
+      styleState(letter, value) === `${letter}1` && innerStates.has(`${letter}0`) ? '' : tag);
+    return kept === '{}' && piece.raw !== '{}' ? '' : kept;
+  }).join('');
 }
+
+const ASS_DIALECT: Omit<Dialect, 'sendable'> = {
+  edgeStart: EDGE_START,
+  edgeEnd: EDGE_END,
+  visible,
+  toggle,
+  bare,
+  clean,
+  maxMarkers: 4,
+};
 
 /** The Text field for a translation, with each marker back as its block; markers that don't add up drop the styling. */
 export function reassemble(parts: TextParts, translated: string): Reassembled {
-  const { markers } = parts;
-  const want = new Map<string, string[]>();
-  markers.forEach((marker) => {
-    const list = want.get(marker.token) ?? [];
-    list.push(marker.raw);
-    want.set(marker.token, list);
-  });
-  const found = translated.match(MARKER) ?? [];
-  const counts = new Map<string, number>();
-  found.forEach(token => counts.set(token, (counts.get(token) ?? 0) + 1));
-  let valid = found.length === markers.length
-    && toggleOrder(found) === toggleOrder(markers.map(marker => marker.token));
-  want.forEach((list, token) => { if (counts.get(token) !== list.length) valid = false; });
-  if (!valid) {
-    if (!markers.length) return { text: parts.prefix + clean(translated) + parts.suffix, dropped: false };
-    return { text: parts.barePrefix + clean(translated) + parts.bareSuffix, dropped: true };
-  }
-  const used = new Map<string, number>();
-  const split = translated.split(MARKER);
-  let body = clean(split[0]);
-  found.forEach((token, k) => {
-    const n = used.get(token) ?? 0;
-    used.set(token, n + 1);
-    body += want.get(token)![n] + clean(split[k + 1]);
-  });
-  return { text: parts.prefix + body + parts.suffix, dropped: false };
+  return reassembleWith(parts, translated, clean);
 }
 
 /**
@@ -285,95 +241,11 @@ export class AssTranslationDoc {
   // Splits a Text field into what stays and what is sent; null skips the event.
   private event(line: number, head: string, text: string, start: number, end: number): { event: AssEvent; sent: string } | null {
     if (KARAOKE.test(text)) return null;
-    const list = pieces(text);
-    let first = -1;
-    let last = -1;
-    list.forEach((piece, k) => {
-      if (piece.kind === 'text' && visible(piece.raw)) {
-        if (first < 0) first = k;
-        last = k;
-      }
-    });
-    if (first < 0) return null;
     const hardSoftBreaks = /\\q2/.test(text);
-    const before = list.slice(0, first);
-    const after = list.slice(last + 1);
-    const middle = list.slice(first, last + 1);
-    const lead = EDGE_START.exec(middle[0].raw)?.[0] ?? '';
-    middle[0] = { kind: 'text', raw: middle[0].raw.slice(lead.length) };
-    const tailPiece = middle[middle.length - 1];
-    const trail = EDGE_END.exec(tailPiece.raw)?.[0] ?? '';
-    middle[middle.length - 1] = { kind: 'text', raw: tailPiece.raw.slice(0, tailPiece.raw.length - trail.length) };
-    // A toggle at the text's edge whose other half is inside the line travels with it.
-    const inner = middle.map(pieceToggle);
-    // One facing the other way stays where it is.
-    const opening = pieceToggle(before[before.length - 1]);
-    if (!lead && opening && opening[1] !== '/' && inner.indexOf(opposite(opening)) >= 0) middle.unshift(before.pop()!);
-    const closing = pieceToggle(after[0]);
-    if (!trail && closing && closing[1] === '/' && inner.indexOf(opposite(closing)) >= 0) middle.push(after.shift()!);
-    // Consecutive blocks and drawings between text runs travel as one marker.
-    const runs: Array<{ text: string } | { raw: string; drawing: boolean }> = [];
-    middle.forEach((piece) => {
-      const prev = runs[runs.length - 1];
-      if (piece.kind === 'text') runs.push({ text: piece.raw });
-      else if (prev && 'raw' in prev) {
-        prev.raw += piece.raw;
-        prev.drawing = prev.drawing || piece.kind === 'drawing';
-      } else runs.push({ raw: piece.raw, drawing: piece.kind === 'drawing' });
-    });
-    const keptBlocks = runs.filter(run => 'raw' in run).length;
-    const flattened = keptBlocks > MAX_MARKERS;
-    // Only a toggle with its other half in the line reads as <i>…</i>; a lone one is a kept block.
-    const toggles = runs.map(run => ('raw' in run && !flattened ? toggle(run.raw) : null));
-    const paired = new Set<number>();
-    const open = new Map<string, number>();
-    toggles.forEach((token, k) => {
-      if (!token) return;
-      const letter = letterOf(token);
-      if (token[1] !== '/') open.set(letter, k);
-      else if (open.has(letter)) {
-        paired.add(open.get(letter)!).add(k);
-        open.delete(letter);
-      }
-    });
-    const markers: Marker[] = [];
-    let sent = '';
-    let generic = 0;
-    runs.forEach((run, k) => {
-      if ('text' in run) {
-        sent += sendable(run.text, hardSoftBreaks);
-        return;
-      }
-      // Heavy typesetting keeps only its drawings.
-      if (flattened && !run.drawing) return;
-      const token = paired.has(k) ? toggles[k]! : `<x${++generic}/>`;
-      markers.push({ token, raw: run.raw });
-      sent += token;
-    });
-    // Dropping the inner styling also drops an edge toggle turned on whose other half was
-    // inside, even from a block that sets more than the toggle; one turned off stays.
-    const innerStates = new Set<string>();
-    middle.forEach((piece) => { if (piece.kind === 'block') styleStates(piece.raw).forEach(state => innerStates.add(state)); });
-    const bare = (list: readonly Piece[]): string => list.map((piece) => {
-      if (piece.kind !== 'block') return piece.raw;
-      const kept = piece.raw.replace(STYLE_TAG, (tag: string, letter: string, value: string) =>
-        styleState(letter, value) === `${letter}1` && innerStates.has(`${letter}0`) ? '' : tag);
-      return kept === '{}' && piece.raw !== '{}' ? '' : kept;
-    }).join('');
-    const barePrefix = bare(before) + lead;
-    const bareSuffix = trail + bare(after);
-    const event: AssEvent = {
-      line,
-      head,
-      prefix: flattened ? barePrefix : joined(before) + lead,
-      suffix: flattened ? bareSuffix : trail + joined(after),
-      barePrefix,
-      bareSuffix,
-      markers,
-      flattened,
-      start,
-      end,
-    };
+    const split = splitText(pieces(text), { ...ASS_DIALECT, sendable: raw => sendable(raw, hardSoftBreaks) });
+    if (!split) return null;
+    const { sent, ...parts } = split;
+    const event: AssEvent = { line, head, ...parts, start, end };
     return { event, sent };
   }
 

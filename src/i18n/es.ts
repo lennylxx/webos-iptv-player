@@ -293,7 +293,6 @@ export const ES_MESSAGES = {
   'subtitle.downloadFailed': 'Falló la descarga',
   'subtitle.syncHint': 'Izquierda/Derecha para ajustar, OK para restablecer y Volver para cerrar.',
   'subtitle.reset': 'Restablecer',
-  'subtitle.translating': 'Traduciendo subtítulos… {percent} %',
   'subtitle.translationProgress': '{percent} %',
   'subtitle.translateFailed': 'Falló la traducción de subtítulos',
   'ai.translateLimit': 'Límite diario de IA alcanzado. Traducción en pausa.',
