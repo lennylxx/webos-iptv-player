@@ -65,6 +65,13 @@ html.q-no-flex-gap .player-menu .menu-item-value,
 html.q-no-flex-gap .tab-bar-search { margin-left: auto; }
 
 /*
+ * The push above replaces the row's generated 14px gap, and the menu's
+ * growing label then runs up to the value (a 14px wider label box). The
+ * value's own 12px padding takes the gap back.
+ */
+html.q-no-flex-gap .player-menu .menu-item-value { padding-left: 26px; }
+
+/*
  * The Xtream fields grow to fill each line, so the trailing margin the
  * generated wrap fallback leaves on the last one would stop the line short
  * and could wrap it early. The card's 20px padding takes the row's box

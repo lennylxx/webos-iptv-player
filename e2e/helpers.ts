@@ -446,6 +446,8 @@ export interface FakeAiServer {
 // Turns AI features on against a fake OpenAI-compatible server at
 // http://ai.test/v1 that answers each request with `reply(userMessage)`,
 // or fails with `status` when it returns a number; a promise holds the reply.
+// A string reply is sent as the message text itself, as a subtitle
+// translation expects; anything else is sent as JSON.
 export async function routeFakeAi(
   page: Page,
   reply: (user: string) => unknown,
@@ -471,7 +473,8 @@ export async function routeFakeAi(
     const answer = await reply(user);
     if (typeof answer === 'number') return route.fulfill({ status: answer, headers: cors, body: '{}' });
     return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
-      body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(answer) } }] }) });
+      body: JSON.stringify({ choices: [{ message: {
+        content: typeof answer === 'string' ? answer : JSON.stringify(answer) } }] }) });
   });
   return server;
 }

@@ -1,4 +1,4 @@
-import { endHoldingUpNext, enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page, liveLoaded, settled } from './helpers';
+import { endHoldingUpNext, enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, routeFakeAi, type FakeAiServer, type Page, liveLoaded, settled } from './helpers';
 import { type Browser } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { findGappedLooseText, measureLooseText, newLegacyPage, pixelDiff } from './pixel-parity';
@@ -250,6 +250,8 @@ interface Screen {
   /** Budget as a fraction of the viewport; see the calibration note below. */
   budget: number;
   go: (page: Page) => Promise<void>;
+  /** Boxes that must match exactly where a budget allows antialiasing residue. */
+  geometry?: (page: Page) => Promise<string[]>;
 }
 
 async function openSettingsPane(p: Page, pane: string): Promise<void> {
@@ -468,6 +470,10 @@ const M3U_SCREENS: Screen[] = [
     name: 'search-empty',
     budget: 0,
     go: async (p) => {
+      // Abandon the number typed before this: left to its debounce, it tunes
+      // or still shows on whichever page a loaded machine slows down.
+      await p.keyboard.press('Shift');
+      await expect(p.locator('.number-entry.visible')).toHaveCount(0);
       await enterTab(p, 'search');
       await p.locator('.tab-bar-search-input').fill('zzqqxx');
       await expect(p.locator('#view-search')).toBeVisible();
@@ -1015,6 +1021,567 @@ const XTREAM_SCREENS: Screen[] = [
   },
 ];
 
+// The AI features' surfaces, against one fake AI server per page that
+// answers each request by its shape. The "(l2)" suffix marks a translation.
+// An AI search for "talk" fails, as does a probe while `failProbe` is set;
+// any other request it doesn't know fails too, and is logged.
+interface FakeAi { server: FakeAiServer; failProbe: boolean }
+
+const fakeAi = new WeakMap<Page, FakeAi>();
+
+async function routeParityAi(page: Page): Promise<void> {
+  const state: FakeAi = { server: { sent: [] }, failProbe: false };
+  state.server = await routeFakeAi(page, (user) => answerAi(user, state));
+  fakeAi.set(page, state);
+}
+
+function answerAi(user: string, state: FakeAi): unknown {
+  if (user.startsWith('[1] ')) return user.split('\n').map((line) => `${line} (l2)`).join('\n');
+  const title = /^Title: (.*)$/m.exec(user);
+  if (title) {
+    const description = /^Description: (.*)$/m.exec(user)?.[1] ?? '';
+    return { title: `${title[1]} (l2)`, description: description ? `${description} (l2)` : '' };
+  }
+  if (/^Channel: /m.test(user)) return { matches: [{ number: 1, confidence: 'high' }] };
+  if (user.indexOf('Return ok=true') >= 0) return state.failProbe ? 500 : { ok: true, word: 'bravo' };
+  let sent: { items?: Array<{ i: number; name?: string }>; types?: unknown; query?: unknown } = {};
+  try {
+    sent = JSON.parse(user) as typeof sent;
+  } catch { /* answered below */ }
+  if (sent.items) {
+    return sent.items[0]?.name === undefined
+      ? { items: sent.items.map((item) => ({ i: item.i, g: 'sports' })) }
+      : { flagged: sent.items.flatMap((item) => item.name === 'Group B' ? [{ i: item.i, verdict: 'adult', confidence: 'high' }]
+        : item.name === 'Group A' ? [{ i: item.i, verdict: 'mature', confidence: 'low' }] : []) };
+  }
+  if (sent.types) {
+    if (sent.query === 'talk') return 500;
+    return { types: ['program'], keywords: [], groups: [], genres: ['Sports'], time: 'any', from_hour: -1, to_hour: -1 };
+  }
+  if (typeof sent.query === 'string' && Object.keys(sent).length === 1) {
+    return { alternatives: [{ text: 'bravo', lang: 'l1', kind: 'translation' }] };
+  }
+  console.log(`legacy layout parity: unexpected AI request ${JSON.stringify(user.slice(0, 120))}`);
+  return 500;
+}
+
+// Where the player menu's rows, labels, and AI icons sit, to the pixel.
+function menuGeometry(p: Page): Promise<string[]> {
+  return p.locator('#player-menu').evaluate((menu) => Array.from(
+    menu.querySelectorAll('.menu-item, .menu-track-label, .ai-icon'),
+  ).map((el) => {
+    const r = el.getBoundingClientRect();
+    return `${el.className}@${[r.left, r.top, r.width, r.height].map(Math.round).join(',')}`;
+  }));
+}
+
+function pressKeyCode(p: Page, keyCode: number): Promise<void> {
+  return p.evaluate((k) => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: k, bubbles: true }));
+  }, keyCode);
+}
+
+const RED = 403;
+const GREEN = 404;
+const YELLOW = 405;
+
+// Only the guide's own pick contains Alpha One's name, so the EPG picker
+// lists a similar name after it; two programs have no category for AI
+// program genres to fill.
+const AI_EPG = `<?xml version="1.0" encoding="UTF-8"?><tv>
+<channel id="c1"><display-name>Alpha-One Plus HD</display-name></channel>
+<channel id="c2"><display-name>Bravo-Two Plus HD</display-name></channel>
+<channel id="c3"><display-name>Alpha-Oneworld</display-name></channel>
+<programme channel="c1" start="${at(-1)}" stop="${at(1)}"><title>Alpha Show Time Cup</title><desc>A synthetic description.</desc></programme>
+<programme channel="c1" start="${at(1)}" stop="${at(2)}"><title>Alpha Show Time Final</title><desc>A later description.</desc></programme>
+<programme channel="c2" start="${at(-1)}" stop="${at(2)}"><title>Alpha Show Time Talk</title><desc>Another description.</desc><category>Genre B</category></programme>
+</tv>`;
+
+async function prepareAiM3U(page: Page): Promise<void> {
+  await page.clock.setFixedTime(NOW);
+  await routePlaylist(page, [
+    '#EXTM3U',
+    '#EXTINF:-1 tvg-id="c1" group-title="Group A",Alpha One', 'http://host/a.m3u8',
+    '#EXTINF:-1 tvg-id="c2" group-title="Group B",Bravo Two', 'http://host/b.m3u8',
+  ].join('\n'));
+  await routeLiveManifest(page);
+  await neuterVideo(page);
+  await page.route('**/guide.xml', (r) =>
+    r.fulfill({ status: 200, contentType: 'application/xml', body: AI_EPG }));
+  await stubLanService(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'Source 1', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/guide.xml', playlistIds: [] }]));
+  });
+  // routeFakeAi writes its config on every navigation; keep what Settings
+  // saved since (AI program genres on) across the scenes' reloads.
+  await page.addInitScript(() => {
+    (window as { parityLlm?: string | null }).parityLlm = localStorage.getItem('iptv_llm');
+  });
+  await routeParityAi(page);
+  await page.addInitScript(() => {
+    const kept = (window as { parityLlm?: string | null }).parityLlm;
+    const config = JSON.parse(kept || localStorage.getItem('iptv_llm') || '{}') as { features?: Record<string, boolean> };
+    if (!kept) config.features = { 'search-expansion': true };
+    localStorage.setItem('iptv_llm', JSON.stringify(config));
+  });
+  // Test connection lists the models before it probes.
+  await page.route('http://ai.test/v1/models', (r) => r.fulfill({
+    status: r.request().method() === 'OPTIONS' ? 204 : 200,
+    headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
+    contentType: 'application/json',
+    body: JSON.stringify({ data: [{ id: 'm1' }] }),
+  }));
+  await page.goto('/');
+  await liveLoaded(page);
+  await expect(page.locator('.channel-item')).toHaveCount(2);
+}
+
+async function reloadWith(p: Page, items: Record<string, string | null>): Promise<void> {
+  await p.evaluate((entries) => {
+    Object.keys(entries).forEach((name) => {
+      const value = entries[name];
+      if (value === null) localStorage.removeItem(name);
+      else localStorage.setItem(name, JSON.stringify(value));
+    });
+  }, items);
+  await p.reload();
+  await liveLoaded(p);
+}
+
+async function askProgramGenres(p: Page): Promise<void> {
+  await p.locator('#ai-program-genres .toggle-option[data-value="on"]').click();
+  const prompt = p.locator('.confirmation-prompt');
+  await expect(prompt.locator('[data-confirm-action="confirm"]')).toBeEnabled();
+  await expect(prompt.locator('.confirmation-message')).toContainText(/\d/);
+}
+
+const AI_M3U_SCREENS: Screen[] = [
+  {
+    name: 'ai-settings',
+    budget: 0,
+    go: async (p) => {
+      await openSettingsPane(p, 'ai');
+      await p.locator('#ai-test-connection').click();
+      await expect(p.locator('#ai-status.ok')).toBeVisible();
+    },
+  },
+  {
+    name: 'ai-settings-test-failed',
+    budget: 0,
+    go: async (p) => {
+      fakeAi.get(p)!.failProbe = true;
+      await p.locator('#ai-test-connection').click();
+      await expect(p.locator('#ai-status.err')).toBeVisible();
+    },
+  },
+  {
+    // The ready state, with its request estimate.
+    name: 'ai-genres-confirm',
+    budget: 0,
+    go: async (p) => {
+      fakeAi.get(p)!.failProbe = false;
+      await askProgramGenres(p);
+    },
+  },
+  {
+    // The estimate's lines grow with the text size and must stay whole.
+    name: 'ai-genres-confirm-zh-150',
+    budget: 0,
+    go: async (p) => {
+      await p.keyboard.press('Escape');
+      await expect(p.locator('.confirmation-prompt')).toBeHidden();
+      await reloadWith(p, { iptv_locale: 'zh-CN', iptv_text_size: '150' });
+      await openSettingsPane(p, 'ai');
+      await askProgramGenres(p);
+    },
+  },
+  {
+    // AI program genres on: the hint and the status line below it.
+    name: 'ai-settings-genres',
+    budget: 0,
+    go: async (p) => {
+      await p.keyboard.press('Escape');
+      await expect(p.locator('.confirmation-prompt')).toBeHidden();
+      await reloadWith(p, { iptv_locale: null, iptv_text_size: null });
+      await openSettingsPane(p, 'ai');
+      await askProgramGenres(p);
+      await p.locator('.confirmation-prompt [data-confirm-action="confirm"]').click();
+      await p.locator('#save-settings').click();
+      await expect(p.locator('#ai-program-genres-status')).toHaveText('Programs with an AI genre: 2');
+      await p.evaluate(() => {
+        const scroll = document.querySelector('.settings-scroll') as HTMLElement;
+        const status = document.querySelector('#ai-program-genres-status')!;
+        scroll.style.setProperty('scroll-behavior', 'auto');
+        scroll.scrollTop += status.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 600;
+      });
+    },
+  },
+  {
+    // The AI's alternative spelling's band, the AI search action, and
+    // program rows with their AI genres.
+    name: 'ai-search',
+    budget: 0,
+    go: async (p) => {
+      await enterTab(p, 'search');
+      await p.locator('.tab-bar-search-input').fill('alpha');
+      await expect(p.locator('#view-search .search-expanded')).toContainText('bravo');
+      await expect(p.locator('#view-search .search-ask-action')).toBeVisible();
+      await expect(p.locator('#view-search .search-program-channel .ai-icon').first()).toBeVisible();
+    },
+  },
+  {
+    // An AI search filtered by an AI genre.
+    name: 'ai-search-results',
+    budget: 0,
+    go: async (p) => {
+      await p.locator('.tab-bar-search-input').press('ArrowDown');
+      await p.keyboard.press('ArrowUp');
+      await expect(p.locator('#view-search .search-ask-action')).toHaveClass(/\bfocused\b/);
+      await p.keyboard.press('Enter');
+      await expect(p.locator('#view-search .search-ask-summary')).toContainText('Sports');
+      await expect(p.locator('#view-search .search-program-row')).toHaveCount(2);
+    },
+  },
+  {
+    // The AI server fails this one: all results stay, and the note says so.
+    name: 'ai-search-failed',
+    budget: 0,
+    go: async (p) => {
+      await p.keyboard.press('Escape');
+      await expect(p.locator('#view-search .search-ask-summary')).toHaveCount(0);
+      const input = p.locator('.tab-bar-search-input');
+      await input.fill('talk');
+      await expect(p.locator('#view-search .search-program-row')).toHaveCount(1);
+      await input.press('ArrowDown');
+      await p.keyboard.press('ArrowUp');
+      await expect(p.locator('#view-search .search-ask-action')).toHaveClass(/\bfocused\b/);
+      await p.keyboard.press('Enter');
+      await expect(p.locator('#view-search .search-ask-note')).toHaveText('AI search failed. Showing all results.');
+    },
+  },
+  {
+    name: 'ai-search-text-150',
+    budget: 0,
+    go: async (p) => {
+      await reloadWith(p, { iptv_text_size: '150' });
+      await enterTab(p, 'search');
+      await p.locator('.tab-bar-search-input').fill('alpha show');
+      await expect(p.locator('#view-search .search-program-channel .ai-icon').first()).toBeVisible();
+      await expect(p.locator('#view-search .search-expanded')).toContainText('bravo');
+    },
+  },
+  {
+    name: 'epg-mapping-similar',
+    budget: 0,
+    go: async (p) => {
+      await reloadWith(p, { iptv_text_size: null });
+      await p.mouse.move(1, 1);
+      await pressKeyCode(p, YELLOW);
+      const channel = p.locator('.channel-main .channel-item').first();
+      await channel.hover();
+      await expect(channel).toHaveClass(/focused/);
+      await pressKeyCode(p, 13);
+      await p.locator('[data-epg-action]').click();
+      await expect(p.locator('.epg-mapping-caption')).toHaveText('Similar names');
+      const suggestion = p.locator('[data-epg-position="1"]');
+      await expect(suggestion.locator('.epg-mapping-ai')).toBeVisible();
+      // Down onto the AI suggestion. In the search box, the field's focus
+      // style is the accepted :focus-within fallback (a glow on the input,
+      // not the wrapper; see legacy-webos-overrides.css), which no layout
+      // fix can match.
+      await p.keyboard.press('ArrowDown');
+      await p.keyboard.press('ArrowDown');
+      await expect(suggestion).toBeFocused();
+    },
+  },
+  {
+    // Green on the program airing now: its translation and the hint's new name.
+    name: 'guide-translate',
+    budget: 0,
+    go: async (p) => {
+      await p.keyboard.press('Escape');
+      await expect(p.locator('.epg-mapping-picker')).toHaveCount(0);
+      await pressKeyCode(p, YELLOW);
+      await expect(p.locator('.channel-view.editing')).toHaveCount(0);
+      await enterTab(p, 'epg');
+      await expect(p.locator('#epg-programmes .epg-programme-item').first()).toBeVisible();
+      await p.keyboard.press('ArrowRight');
+      await p.keyboard.press('ArrowRight');
+      await pressKeyCode(p, RED);
+      await expect(p.locator('#epg-programmes .epg-programme-item.focused')).toContainText('Alpha Show Time Cup');
+      await pressKeyCode(p, GREEN);
+      await expect(p.locator('#epg-programmes .epg-programme-item.focused .program-translation-label')).toBeVisible();
+      await expect(p.locator('#view-epg .epg-hints [data-epg-translate]')).toHaveText('Show original');
+    },
+  },
+  {
+    // Translation stays on for the session, so the player's info opens translated.
+    name: 'player-info-translate',
+    budget: 0.001, // opaque-panel residue, as on the M3U player
+    go: async (p) => {
+      await enterTab(p, 'live');
+      await p.locator('.channel-main .channel-item').first().click();
+      await expect(p.locator('#player-osd')).toBeVisible();
+      await expect(p.locator('.osd-description .program-translation-label')).toBeVisible();
+      await expect(p.locator('[data-osd-translate]')).toHaveText('Show original');
+    },
+  },
+  {
+    // Last: parental controls stay on once a PIN is set.
+    name: 'parental-find-ai',
+    budget: 0,
+    go: async (p) => {
+      await p.keyboard.press('Escape');
+      await expect(p.locator('#view-channels')).toBeVisible();
+      await openSettingsPane(p, 'general');
+      await p.locator('#manage-parental-controls').click();
+      await enterPin(p);
+      await expect(p.locator('.parental-pin-prompt h2')).toContainText('Confirm');
+      await enterPin(p);
+      await expect(p.locator('#view-parental-controls [data-parental-ai] .ai-icon svg')).toHaveCount(1);
+    },
+  },
+  {
+    name: 'parental-ai-estimate',
+    budget: 0,
+    go: async (p) => {
+      await p.locator('#view-parental-controls [data-parental-ai]').click();
+      await expect(p.locator('.confirmation-prompt')).toContainText('request');
+    },
+  },
+  {
+    // The shared SuggestionReview dialog: a likely and a possible AI pick.
+    name: 'parental-ai-review',
+    budget: 0,
+    go: async (p) => {
+      await p.locator('.confirmation-prompt [data-confirm-action="confirm"]').click();
+      const review = p.locator('.suggestion-review');
+      await expect(review.locator('.suggestion-review-row')).toHaveCount(2);
+      await expect(review.locator('em.is-accent').first()).toBeVisible();
+    },
+  },
+];
+
+// Two minutes of 8 kHz mono silence: media every engine decodes, so the
+// otherwise empty <video> reaches metadata and draws its active cues.
+function silentWav(): Buffer {
+  const samples = 8000 * 120;
+  const wav = Buffer.alloc(44 + samples);
+  wav.write('RIFF', 0);
+  wav.writeUInt32LE(36 + samples, 4);
+  wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(8000, 24);
+  wav.writeUInt32LE(8000, 28);
+  wav.writeUInt16LE(1, 32);
+  wav.writeUInt16LE(8, 34);
+  wav.write('data', 36);
+  wav.writeUInt32LE(samples, 40);
+  wav.fill(128, 44);
+  return wav;
+}
+
+// A positioned sign and a line with an italic word.
+const AI_ASS = [
+  '[Script Info]',
+  'ScriptType: v4.00+',
+  'PlayResX: 640',
+  'PlayResY: 360',
+  '',
+  '[V4+ Styles]',
+  'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+  'Style: Default,Arial,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1',
+  'Style: Sign,Arial,20,&H0000FFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,7,10,10,10,1',
+  '',
+  '[Events]',
+  'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+  'Dialogue: 0,0:00:00.00,0:10:00.00,Sign,,0,0,0,,{\\pos(40,30)}Bravo Store',
+  'Dialogue: 0,0:00:00.00,0:10:00.00,Default,,0,0,0,,I {\\i1}really{\\i0} mean it.',
+].join('\n');
+
+async function prepareAiXtream(page: Page): Promise<void> {
+  await page.clock.setFixedTime(NOW);
+  await seedXtream(page);
+  // No preferred subtitle language, so subtitles translate into the UI's.
+  await page.addInitScript(() => {
+    const config = JSON.parse(localStorage.getItem('iptv_online_subtitles') || '{}') as { preferredLanguage?: string };
+    config.preferredLanguage = '';
+    localStorage.setItem('iptv_online_subtitles', JSON.stringify(config));
+  });
+  // Without the canvas font metrics (Chromium 87), assjs sizes text from a
+  // DOM line box, which includes the font's line gap: the same Arial draws
+  // about 3% smaller. That is font measurement, not layout, and the TV's own
+  // font decides it, so both engines take the DOM path here.
+  await page.addInitScript(() => {
+    const metrics = TextMetrics.prototype as unknown as Record<string, unknown>;
+    delete metrics.fontBoundingBoxAscent;
+    delete metrics.fontBoundingBoxDescent;
+  });
+  // A text and an ASS sidecar, each with a cue on screen at the paused start.
+  await page.route('**/player_api.php*', (route) => {
+    if (!route.request().url().includes('get_vod_info')) return route.fallback();
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ info: {
+      plot: 'A plot.', duration_secs: 3600, subtitles: [
+        { id: '1', title: 'Sub 1', language: 'l1', url: 'http://host/sub1.srt' },
+        { id: '2', title: 'Sub 2', language: 'l1', url: 'http://host/sub2.ass' },
+      ] } }) });
+  });
+  await page.route('**/sub1.srt', (r) => r.fulfill({ status: 200, contentType: 'text/plain',
+    body: '1\n00:00:00,000 --> 00:10:00,000\nA <i>styled</i> line.\n' }));
+  await page.route('http://host/silence.wav', (r) => r.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() }));
+  await page.route('**/sub2.ass', (r) => r.fulfill({ status: 200, contentType: 'text/plain', body: AI_ASS }));
+  await routeParityAi(page);
+  await page.goto('/');
+  await liveLoaded(page);
+}
+
+async function openVodSubtitles(p: Page): Promise<void> {
+  await p.mouse.move(960, 540);
+  await p.mouse.move(1900, 540);
+  await expect(p.locator('#player-menu')).toBeVisible();
+  await p.locator('[data-menu-action="__subs_open__"]').click();
+}
+
+// neuterVideo keeps the app's src from loading, so the <video> never reaches
+// metadata and draws no cue. Its attribute still loads natively: load the
+// silence, held paused at the start, before any subtitle is picked.
+async function loadSilence(p: Page): Promise<void> {
+  const video = p.locator('#video-player');
+  await video.evaluate((el) => {
+    (el as HTMLVideoElement).autoplay = false;
+    el.setAttribute('src', 'http://host/silence.wav');
+  });
+  await expect.poll(() => video.evaluate((el) => (el as HTMLVideoElement).readyState)).toBeGreaterThan(0);
+  await video.evaluate((el) => {
+    (el as HTMLVideoElement).pause();
+    (el as HTMLVideoElement).currentTime = 0;
+  });
+}
+
+async function closePlayerMenu(p: Page): Promise<void> {
+  // The class drops at once; visibility waits out the fade, and one Back
+  // too many leaves the player.
+  const open = () => p.locator('#player-menu').evaluate((menu) => menu.classList.contains('visible'));
+  for (let i = 0; i < 3 && await open(); i++) await p.keyboard.press('Escape');
+  await expect(p.locator('#player-menu')).toBeHidden();
+  await expect(p.locator('#view-player')).toBeVisible();
+}
+
+const AI_XTREAM_SCREENS: Screen[] = [
+  {
+    name: 'ai-movie-detail',
+    budget: 0,
+    go: async (p) => {
+      await enterTab(p, 'movies');
+      await p.locator('#view-movies .catalog-tile[data-item-id="10"]').first().click();
+      await expect(p.locator('#view-movies .detail-plot')).toContainText('A plot.');
+      await expect(p.locator('#view-movies [data-key="translate"]')).toBeVisible();
+    },
+  },
+  {
+    name: 'ai-movie-detail-translated',
+    budget: 0,
+    go: async (p) => {
+      await p.locator('#view-movies [data-key="translate"]').click();
+      await expect(p.locator('#view-movies .detail-plot')).toHaveText('AI translation · A plot. (l2)');
+      await expect(p.locator('#view-movies .detail-title')).toHaveText('Movie One (l2)');
+    },
+  },
+  {
+    // The shown sidecar offers its translation in one press, or into another language.
+    name: 'ai-menu-subtitles',
+    // The geometry check pins every row, label, and AI icon; the budget then
+    // allows only the opaque-panel residue of the other menus, which scales
+    // with the text on the panel, and these lists hold twice the rows.
+    budget: 0.002,
+    geometry: menuGeometry,
+    go: async (p) => {
+      await p.locator('#view-movies .detail-btn').first().click();
+      await expect(p.locator('#player-osd')).toBeVisible();
+      await loadSilence(p);
+      await openVodSubtitles(p);
+      await p.locator('[data-menu-action="__subs_track__"][data-track-index="2000"]').click();
+      await p.locator('[data-menu-action="__subs_open__"]').click();
+      await expect(p.locator('[data-menu-action="__subs_translate__"]')).toHaveText('Translate to English');
+      await expect(p.locator('[data-menu-action="__subs_translate_open__"]'))
+        .toHaveText('Translate to another language…');
+    },
+  },
+  {
+    name: 'ai-menu-translation-language',
+    budget: 0.002,
+    geometry: menuGeometry,
+    go: async (p) => {
+      await p.locator('[data-menu-action="__subs_translate_open__"]').click();
+      await expect(p.locator('#player-menu h2')).toHaveText('Translation language');
+    },
+  },
+  {
+    // The finished translation's entry, tagged with its target.
+    name: 'ai-menu-subtitles-translated',
+    budget: 0.002,
+    geometry: menuGeometry,
+    go: async (p) => {
+      await p.keyboard.press('Escape');
+      await expect(p.locator('#player-menu h2')).toHaveText('Subtitles');
+      await p.locator('[data-menu-action="__subs_translate__"]').click();
+      await expect.poll(() => fakeAi.get(p)!.server.sent.some((user) => user.startsWith('[1] A'))).toBe(true);
+      await expect(p.locator('.osd-stream-info')).toContainText('AI translation (English)');
+      await openVodSubtitles(p);
+      const entry = p.locator('#player-menu .menu-item').filter({ hasText: 'AI · EN' });
+      await expect(entry).toBeVisible();
+      // While it runs, the row shows its progress.
+      await expect(entry.locator('.menu-item-value')).toHaveCount(0);
+    },
+  },
+  {
+    // The translated cue, drawn by the engine with its italic word.
+    name: 'ai-subtitle-translated',
+    budget: 0,
+    go: async (p) => {
+      await closePlayerMenu(p);
+      await expect.poll(() => p.evaluate(() => {
+        const video = document.getElementById('video-player') as HTMLVideoElement;
+        const track = Array.from(video.textTracks).find((t) => t.mode === 'showing');
+        return track?.activeCues?.length ? (track.activeCues[0] as VTTCue).text : '';
+      })).toContain('(l2)');
+      // Reported as playing while held at the start, the player lets its
+      // info fade off the cue.
+      await p.locator('#video-player').evaluate((video) => {
+        Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
+        video.dispatchEvent(new Event('play'));
+        video.dispatchEvent(new Event('playing'));
+      });
+      await expect(p.locator('#player-osd')).toBeHidden({ timeout: 15_000 });
+    },
+  },
+  {
+    // The translated ASS sidecar keeps the sign's style and place and the
+    // line's italic word.
+    name: 'ai-ass-translated',
+    budget: 0,
+    go: async (p) => {
+      const overlay = p.locator('#ass-overlay');
+      await p.locator('#video-player').evaluate((video) => {
+        delete (video as { paused?: boolean }).paused;
+        video.dispatchEvent(new Event('pause'));
+      });
+      await openVodSubtitles(p);
+      await p.locator('[data-menu-action="__subs_track__"]').filter({ hasText: 'Sub 2' }).click();
+      await expect(overlay.locator('.ASS-dialogue').filter({ hasText: 'Bravo Store' })).toBeVisible();
+      await openVodSubtitles(p);
+      await p.locator('[data-menu-action="__subs_translate__"]').click();
+      await expect.poll(() => fakeAi.get(p)!.server.sent.some((user) => user.startsWith('[1] Bravo Store'))).toBe(true);
+      await expect(overlay.locator('.ASS-dialogue').filter({ hasText: 'Bravo Store (l2)' })).toBeVisible();
+      await expect(overlay.locator('.ASS-dialogue').filter({ hasText: 'mean it. (l2)' })).toBeVisible();
+      await closePlayerMenu(p);
+    },
+  },
+];
+
 /** Write user-data records straight into the already-created IndexedDB, then
  *  reload — the preview's media pipeline never advances, so nothing the player
  *  would normally persist (resume position, catchup progress) ever appears. */
@@ -1122,6 +1689,17 @@ async function walk(
       // Let both settle before sampling.
       await Promise.all([page, legacy.page].map((p) => settled(() => layoutOf(p))));
 
+      if (screen.geometry) {
+        const [modernBoxes, legacyBoxes] = await Promise.all([screen.geometry(page), screen.geometry(legacy.page)]);
+        expect(modernBoxes.length, `${screen.name}: geometry measured`).toBeGreaterThan(0);
+        modernBoxes.forEach((box, i) => {
+          if (legacyBoxes[i] !== box) failures.push(`${screen.name}: ${box} vs ${String(legacyBoxes[i])}`);
+        });
+        if (legacyBoxes.length !== modernBoxes.length) {
+          failures.push(`${screen.name}: ${String(modernBoxes.length)} boxes vs ${String(legacyBoxes.length)}`);
+        }
+      }
+
       const shot = (p: Page) => p.screenshot({ animations: 'disabled', caret: 'hide' });
       const [modernPng, legacyPng] = await Promise.all([shot(page), shot(legacy.page)]);
       const diff = await pixelDiff(page, modernPng, legacyPng, { render: true });
@@ -1182,4 +1760,19 @@ test('the webOS 4 fallbacks lay out where the modern engine does, with an Xtream
   test.skip(isChromium53(), 'this test drives both engines itself, so it runs once');
   test.slow();
   await walk(page, browser, prepareXtream, XTREAM_SCREENS);
+});
+
+// Every AI feature's surface: Settings, the genres prompt, Search, the EPG
+// picker, program translation and Find with AI on an M3U playlist; movie
+// info and subtitle translation on an Xtream account.
+test('the webOS 4 fallbacks lay out the AI features where the modern engine does, with an M3U playlist', async ({ page, browser }) => {
+  test.skip(isChromium53(), 'this test drives both engines itself, so it runs once');
+  test.slow();
+  await walk(page, browser, prepareAiM3U, AI_M3U_SCREENS);
+});
+
+test('the webOS 4 fallbacks lay out the AI features where the modern engine does, with an Xtream account', async ({ page, browser }) => {
+  test.skip(isChromium53(), 'this test drives both engines itself, so it runs once');
+  test.slow();
+  await walk(page, browser, prepareAiXtream, AI_XTREAM_SCREENS);
 });

@@ -1221,7 +1221,7 @@ export class ChannelListEditor {
     return html`
       <div class="channel-edit-overlay-back">
         ${backKey()}
-        ${t('common.back')}
+        <span>${t('common.back')}</span>
       </div>
     `;
   }
