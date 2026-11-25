@@ -4004,6 +4004,18 @@ describe('Search AI search', () => {
     warn.mockRestore();
   });
 
+  it('says the daily AI limit is reached when the AI server\'s quota is spent', async () => {
+    playlistMock.channels = [chan('Alpha Tonight Show')];
+    askMock.mockRejectedValue(new LlmError('quota', 'HTTP 429', 429));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { view } = await openReady();
+    await view.setQuery('alpha tonight show');
+    pressAsk(view);
+    await asked(view, 'failed');
+    expect(container.querySelector('.search-ask-note')?.textContent).toBe('Daily AI limit reached. Showing all results.');
+    warn.mockRestore();
+  });
+
   it('searches each keyword when nothing else narrows the results', async () => {
     playlistMock.channels = [chan('Alpha'), chan('Bravo'), chan('Charlie')];
     playlistMock.indexOf.mockImplementation((ch: { name: string }) => ['Alpha', 'Bravo', 'Charlie'].indexOf(ch.name));

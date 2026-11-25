@@ -1,13 +1,18 @@
 import type { JsonSchema } from './types';
 
-/** Drops `<think>…</think>` blocks, including an unclosed one a truncated reply leaves. */
+/**
+ * Drops `<think>…</think>` blocks, an unclosed one a truncated reply leaves,
+ * and the thinking before a lone `</think>` whose opening tag the server ate.
+ */
 export function stripThinking(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+  return text.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^[\s\S]*<\/think>/, '')
+    .replace(/<think>[\s\S]*$/, '').trim();
 }
 
 /** Finds the first complete JSON object or array in a reply, past fences and chatter. */
 export function extractJson(text: string): unknown {
   const body = stripThinking(text);
+  if (!body) return undefined;
   try {
     return JSON.parse(body);
   } catch {

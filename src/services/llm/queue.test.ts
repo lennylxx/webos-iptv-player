@@ -46,7 +46,7 @@ describe('LLM request queue', () => {
     const first = deferred();
     const blocker = queue.run('background', () => { started.push('a'); return first.promise; });
     const refused = queue.run('background', async () => { started.push('b'); return 'b'; }, undefined,
-      () => (capped ? new Error('cap') : null));
+      { precheck: () => (capped ? new Error('cap') : null) });
     const next = queue.run('background', async () => { started.push('c'); return 'c'; });
     capped = true;
     first.resolve('a');

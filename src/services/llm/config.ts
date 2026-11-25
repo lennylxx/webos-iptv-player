@@ -1,4 +1,5 @@
-import type { LlmCapabilities, LlmConfig, StructuredMode } from './types';
+import { contentHash } from './hash';
+import type { LlmCapabilities, LlmConfig, ReasoningEffort, StructuredMode } from './types';
 
 export type EndpointKind = 'local' | 'remote';
 
@@ -6,18 +7,22 @@ export interface EndpointProfile {
   kind: EndpointKind;
   concurrency: number;
   timeoutMs: number;
-  // Ask the server to skip the model's thinking, when it accepts the fields.
+  // Send chat_template_kwargs, the field LAN servers' chat templates read to skip a model's thinking.
   preferThinkingOff: boolean;
 }
 
-// Rate limits come from the server itself: a 429 pauses the queue for its Retry-After.
+// Rate limits come from the server itself: a 429 pauses the queue for the wait it names.
 const PROFILES: Record<EndpointKind, EndpointProfile> = {
   local: { kind: 'local', concurrency: 1, timeoutMs: 180000, preferThinkingOff: true },
   remote: { kind: 'remote', concurrency: 2, timeoutMs: 90000, preferThinkingOff: false },
 };
 
-// Context size until one is picked or Test connection reads the server's.
+// Context size until one is picked or Test connection reads the server's;
+// a saved contextTokens of 0 stands for it.
 export const DEFAULT_CONTEXT_TOKENS = 16000;
+// The default on a LAN server: some local servers cut a longer prompt short
+// instead of refusing it.
+export const LOCAL_DEFAULT_CONTEXT_TOKENS = 8192;
 
 // Features the user starts by hand; the AI switch alone turns them on.
 // Features that run on their own need their own toggle in `features`.
@@ -31,7 +36,8 @@ export function featureEnabled(config: LlmConfig, feature: string): boolean {
 }
 
 const MODES: readonly StructuredMode[] = ['json_schema', 'json_object', 'prompt'];
-const MIN_CONTEXT_TOKENS = 2048;
+const EFFORTS: readonly ReasoningEffort[] = ['none', 'minimal', 'low'];
+export const MIN_CONTEXT_TOKENS = 2048;
 // The largest Context size Settings offers.
 const MAX_CONTEXT_TOKENS = 128000;
 // A reply larger than this may exceed what a server lets a model write at once.
@@ -64,14 +70,85 @@ export function endpointProfile(baseUrl: string): EndpointProfile {
   return isLocalHost(hostOf(baseUrl)) ? PROFILES.local : PROFILES.remote;
 }
 
+/** The Context size a server starts with until one is picked or reported: less on the LAN. */
+export function defaultContextTokens(baseUrl: string): number {
+  return endpointProfile(baseUrl).kind === 'local' ? LOCAL_DEFAULT_CONTEXT_TOKENS : DEFAULT_CONTEXT_TOKENS;
+}
+
+/** The prompt budget requests are sized to: the size picked or detected, else the server's default. */
+export function effectiveContextTokens(config: LlmConfig): number {
+  return config.contextTokens || defaultContextTokens(config.baseUrl);
+}
+
+/**
+ * Whether the saved Context size was learned from the server (Test connection
+ * or an overflow saves it as detected too) rather than picked by the user.
+ */
+export function contextLearned(config: LlmConfig): boolean {
+  return config.contextTokens !== 0 && config.contextTokens === config.detectedContextTokens;
+}
+
+/** `next` with a Context size learned from `previous`'s server or model dropped, back to the default. */
+export function keepContextFor(previous: LlmConfig, next: LlmConfig): LlmConfig {
+  if (!contextLearned(previous) || endpointSignature(previous) === endpointSignature(next)) return next;
+  return { ...next, contextTokens: 0, detectedContextTokens: 0 };
+}
+
+/**
+ * A batch whose prompt overflowed the model's context, split smaller: as the
+ * planner splits it at the lowered context, else in half. Never called for one item.
+ */
+export function splitForContext<T>(batch: readonly T[], replan: (items: readonly T[]) => T[][]): T[][] {
+  const again = replan(batch);
+  if (again.length > 1) return again;
+  const half = Math.ceil(batch.length / 2);
+  return [batch.slice(0, half), batch.slice(half)];
+}
+
+/**
+ * After the batch at `index` overflowed: the batches not sent yet planned
+ * again when the Context size dropped below the one they were planned with,
+ * so later ones fit at once; else, or if the batch would go whole again, it
+ * alone is split. Returns the Context size the batches are now planned with.
+ */
+export function replanAfterOverflow<T>(
+  batches: T[][],
+  index: number,
+  planned: number,
+  contextTokens: number,
+  plan: (items: readonly T[], contextTokens: number) => T[][],
+): number {
+  const failed = batches[index];
+  if (contextTokens < planned) {
+    const rest: T[] = [];
+    batches.slice(index).forEach((batch) => batch.forEach((item) => rest.push(item)));
+    const again = plan(rest, contextTokens);
+    batches.splice(index, batches.length - index, ...again);
+    const first = batches[index];
+    if (first && first.length >= failed.length && failed.every((item) => first.indexOf(item) >= 0)) {
+      batches.splice(index, 1, ...splitForContext(first, (items) => plan(items, contextTokens)));
+    }
+    return contextTokens;
+  }
+  batches.splice(index, 1, ...splitForContext(failed, (items) => plan(items, contextTokens)));
+  return planned;
+}
+
 /**
  * The most items a batch of a background job holds: 200 at 16k, more in step
  * with a larger context, while their replies stay within MAX_REPLY_TOKENS.
  */
-export function batchItemLimit(contextTokens: number, replyTokensPerItem: number, replyOverhead: number): number {
+export function batchItemLimit(
+  contextTokens: number,
+  replyTokensPerItem: number,
+  replyOverhead: number,
+  // The model's output cap, where known: a reply covering every item stays within it.
+  replyCap = 0,
+): number {
   const scaled = Math.floor((BATCH_ITEMS * contextTokens) / BATCH_ITEMS_CONTEXT);
   const fits = Math.floor((MAX_REPLY_TOKENS - replyOverhead) / replyTokensPerItem);
-  return Math.max(BATCH_ITEMS, Math.min(scaled, fits));
+  const limit = Math.max(BATCH_ITEMS, Math.min(scaled, fits));
+  return replyCap > 0 ? Math.max(1, Math.min(limit, Math.floor((replyCap - replyOverhead) / replyTokensPerItem))) : limit;
 }
 
 export function defaultLlmConfig(): LlmConfig {
@@ -81,7 +158,7 @@ export function defaultLlmConfig(): LlmConfig {
     model: '',
     apiKey: '',
     extraHeaders: '',
-    contextTokens: DEFAULT_CONTEXT_TOKENS,
+    contextTokens: 0,
     detectedContextTokens: 0,
     dailyRequestCap: 0,
     dailyTokenCap: 0,
@@ -106,9 +183,10 @@ function capabilities(value: unknown): LlmCapabilities | null {
   return {
     signature: raw.signature,
     structured: raw.structured as StructuredMode,
-    thinkingOff: raw.thinkingOff === true,
-    effortOff: raw.effortOff === true,
-    reasoningParams: raw.reasoningParams === true,
+    effort: EFFORTS.indexOf(raw.effort as ReasoningEffort) >= 0 ? raw.effort as ReasoningEffort : '',
+    thinkingFields: raw.thinkingFields === true,
+    maxCompletionTokens: raw.maxCompletionTokens === true,
+    maxOutputTokens: count(raw.maxOutputTokens, 0),
     checkedAt: count(raw.checkedAt, 0),
   };
 }
@@ -130,7 +208,8 @@ export function normalizeLlmConfig(raw: unknown): LlmConfig {
     model: str(value.model, base.model),
     apiKey: str(value.apiKey, ''),
     extraHeaders: str(value.extraHeaders, ''),
-    contextTokens: count(value.contextTokens, base.contextTokens, MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS),
+    // 0 keeps the server's default; any other size clamps to what Settings offers.
+    contextTokens: value.contextTokens === 0 ? 0 : count(value.contextTokens, base.contextTokens, MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS),
     detectedContextTokens: count(value.detectedContextTokens, 0),
     dailyRequestCap: count(value.dailyRequestCap, 0),
     dailyTokenCap: count(value.dailyTokenCap, 0),
@@ -139,16 +218,19 @@ export function normalizeLlmConfig(raw: unknown): LlmConfig {
   };
 }
 
-/** Adds the http:// a remote-typed address usually leaves out ("192.168.1.5:8080/v1"). */
+/**
+ * The server URL to keep: with the http:// a remote-typed address usually
+ * leaves out ("192.168.1.5:8080/v1"), cleaned like normalizeBaseUrl.
+ */
 export function completeServerUrl(url: string): string {
-  const text = url.trim();
+  const text = normalizeBaseUrl(url);
   if (!text || /^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
   return `http://${text}`;
 }
 
-/** The base URL without trailing slashes or a pasted `/chat/completions`. */
+/** The base URL as entered, without trailing slashes or a pasted `/chat/completions`; nothing is added. */
 export function normalizeBaseUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '').replace(/\/chat\/completions$/, '').replace(/\/+$/, '');
+  return url.trim().replace(/\/+$/, '').replace(/\/chat\/completions$/i, '').replace(/\/+$/, '');
 }
 
 /** scheme://host:port, the part a key must never leave without being re-entered. */
@@ -159,6 +241,11 @@ export function originOf(baseUrl: string): string {
 
 export function endpointSignature(config: LlmConfig): string {
   return `${normalizeBaseUrl(config.baseUrl)}|${config.model.trim()}`;
+}
+
+/** What detected capabilities belong to: the server, the model, and the key (another key may mean another plan). */
+export function capabilitySignature(config: LlmConfig): string {
+  return `${endpointSignature(config)}|${contentHash([config.apiKey.trim()])}`;
 }
 
 export function isConfigured(config: LlmConfig): boolean {

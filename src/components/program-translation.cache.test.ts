@@ -9,7 +9,7 @@ vi.mock('../services/idb-cache', () => ({
 }));
 vi.mock('./toast', () => ({ showToast: vi.fn() }));
 
-import { defaultLlmConfig } from '../services/llm/config';
+import { capabilitySignature, defaultLlmConfig } from '../services/llm/config';
 import { resetLlmServiceForTests } from '../services/llm/llm-service';
 import { StorageService } from '../services/storage-service';
 import {
@@ -48,8 +48,10 @@ beforeEach(() => {
     enabled: true,
     baseUrl: 'http://host/v1',
     model: 'm1',
-    capabilities: { signature: 'http://host/v1|m1', structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
+    capabilities: { signature: 'pending', structured: 'json_schema', effort: '', thinkingFields: false, maxCompletionTokens: false, maxOutputTokens: 0, checkedAt: Date.now() },
   });
+  const config = StorageService.getLlmConfig();
+  StorageService.setLlmConfig({ ...config, capabilities: { ...config.capabilities!, signature: capabilitySignature(config) } });
 });
 
 afterEach(() => {

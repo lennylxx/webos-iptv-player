@@ -161,6 +161,24 @@ describe('ProgramTranslation', () => {
     expect(showToast).toHaveBeenCalledWith('Daily AI limit reached. Translation paused.');
   });
 
+  it('shows the daily limit when the AI server says its quota is spent', async () => {
+    translate.mockRejectedValue(new LlmError('quota', 'HTTP 429', 429));
+    ProgramTranslation.toggle();
+    ProgramTranslation.want(owner, live1, alpha);
+    await dwell();
+    expect(ProgramTranslation.active).toBe(false);
+    expect(showToast).toHaveBeenCalledWith('Daily AI limit reached. Translation paused.');
+  });
+
+  it('turns off on a prompt too long for the model, a setup problem', async () => {
+    translate.mockRejectedValue(new LlmError('context', 'HTTP 400', 400));
+    ProgramTranslation.toggle();
+    ProgramTranslation.want(owner, live1, alpha);
+    await dwell();
+    expect(ProgramTranslation.active).toBe(false);
+    expect(showToast).toHaveBeenCalledWith('AI setup problem. Translation paused.');
+  });
+
   it('turns off when the AI setup is wrong and says so', async () => {
     translate.mockRejectedValue(new LlmError('auth', 'Invalid API key'));
     ProgramTranslation.toggle();

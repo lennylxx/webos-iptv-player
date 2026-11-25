@@ -290,7 +290,7 @@ import { hide, show } from '../utils/dom';
 import { Focus } from '../navigation/focus-scope';
 import { CONFIG } from '../config';
 import { ParentalControlService } from '../services/parental-control';
-import { defaultLlmConfig } from '../services/llm/config';
+import { capabilitySignature, defaultLlmConfig } from '../services/llm/config';
 import { LlmError } from '../services/llm/client';
 import { ProgramGenres } from '../services/program-genres';
 
@@ -2133,7 +2133,7 @@ describe('Settings.save', () => {
   it('saves the AI endpoint and limits, and forgets detected capabilities for a new model', () => {
     state.llm = {
       ...defaultLlmConfig(),
-      capabilities: { signature: 'x', structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
+      capabilities: { signature: 'x', structured: 'json_schema', effort: '', thinkingFields: false, maxCompletionTokens: false, maxOutputTokens: 0, checkedAt: 1 },
     };
     settings.render();
     click('#ai-enabled [data-value="on"]');
@@ -2176,7 +2176,7 @@ describe('Settings.save', () => {
   });
 
   it('fits Context size to what the server reports, keeping a smaller choice', async () => {
-    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host:8080/v1', contextTokens: 16000 };
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://host:8080/v1' };
     settings.render();
     const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
     const test = async (contextTokens: number, expected: string): Promise<void> => {
@@ -2188,7 +2188,8 @@ describe('Settings.save', () => {
       expect(size()).toBe(expected);
     };
     container.querySelector<HTMLInputElement>('#ai-model')!.value = 'm1';
-    expect(size()).toBe('16000');
+    // A LAN server that reported nothing starts at the LAN default.
+    expect(size()).toBe('8192');
 
     await test(262144, '128000');
     await test(8192, '8192');
@@ -2211,7 +2212,7 @@ describe('Settings.save', () => {
     }));
   });
 
-  it('keeps the 16000 Context size for any server address until one is picked', () => {
+  it('shows 8192 as the default Context size for a LAN server and 16000 online, until one is picked', () => {
     settings.render();
     const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
     const address = (url: string): void => {
@@ -2220,9 +2221,135 @@ describe('Settings.save', () => {
       input.dispatchEvent(new Event('input', { bubbles: true }));
     };
     expect(size()).toBe('16000');
-    address('http://192.168.1.10:8080/v1');
-    expect(size()).toBe('16000');
+    address('192.168.1.10:8080/v1');
+    expect(size()).toBe('8192');
     address('https://api.host.test/v1');
+    expect(size()).toBe('16000');
+    address('http://127.0.0.1:8080/v1');
+    expect(size()).toBe('8192');
+    // Saved as the default, so it keeps following the server.
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ contextTokens: 0 }));
+
+    // A size picked in the form stays whatever the address.
+    container.querySelector<HTMLElement>('#ai-context-size [data-dropdown-value="16000"]')!.click();
+    address('http://192.168.1.11:8080/v1');
+    expect(size()).toBe('16000');
+  });
+
+  it('shows the LAN default for a saved LAN server that reported no context', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://192.168.1.10:8080/v1' };
+    settings.render();
+    expect(container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value).toBe('8192');
+  });
+
+  it('drops a Context size learned from one server when the address moves to another', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://192.168.1.10:8080/v1', model: 'm1', contextTokens: 32000, detectedContextTokens: 32000 };
+    settings.render();
+    const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
+    const address = (url: string): void => {
+      const input = container.querySelector<HTMLInputElement>('#ai-base-url')!;
+      input.value = url;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    expect(size()).toBe('32000');
+    address('https://api.host.test/v1');
+    expect(size()).toBe('16000');
+    address('192.168.1.10:8080/v1');
+    expect(size()).toBe('32000');
+    address('http://192.168.1.11:8080/v1');
+    expect(size()).toBe('8192');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ contextTokens: 0, detectedContextTokens: 0 }));
+  });
+
+  it('does not keep a size Test connection read once the address or model changes', async () => {
+    const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
+    const type = (id: string, value: string): void => {
+      const input = container.querySelector<HTMLInputElement>(id)!;
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const test = async (): Promise<void> => {
+      llmMock.testConnection.mockResolvedValueOnce({ models: ['m1'], capabilities: {}, contextTokens: 32768 });
+      click('#ai-test-connection');
+      await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected · 1 model'));
+      expect(size()).toBe('32000');
+    };
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'https://api.host.test/v1', model: 'm1' };
+    settings.render();
+    await test();
+    type('#ai-base-url', 'http://192.168.1.20:8080/v1');
+    expect(size()).toBe('8192');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ contextTokens: 0, detectedContextTokens: 0 }));
+
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'https://api.host.test/v1', model: 'm1' };
+    settings.render();
+    await test();
+    type('#ai-model', 'm2');
+    expect(size()).toBe('16000');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'm2', contextTokens: 0, detectedContextTokens: 0 }));
+  });
+
+  it('shows and saves the default for another model on the server a size was learned from, and the learned size again for its model', () => {
+    const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
+    const model = (value: string): void => {
+      const input = container.querySelector<HTMLInputElement>('#ai-model')!;
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://192.168.1.10:8080/v1', model: 'm1', contextTokens: 32000, detectedContextTokens: 32000 };
+    settings.render();
+    expect(size()).toBe('32000');
+    model('m2');
+    expect(size()).toBe('8192');
+    model('m1');
+    expect(size()).toBe('32000');
+    model('m2');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'm2', contextTokens: 0, detectedContextTokens: 0 }));
+
+  });
+
+  it('drops a test\'s size for another model to the default, not to a size learned for the first model', async () => {
+    const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://192.168.1.10:8080/v1', model: 'm1', contextTokens: 32000, detectedContextTokens: 32000 };
+    settings.render();
+    llmMock.testConnection.mockResolvedValueOnce({ models: ['m1'], capabilities: {}, contextTokens: 16384 });
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Connected · 1 model'));
+    expect(size()).toBe('16000');
+    const input = container.querySelector<HTMLInputElement>('#ai-model')!;
+    input.value = 'm2';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(size()).toBe('8192');
+  });
+
+  it('keeps a picked size for another model on the server', () => {
+    const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
+    const model = (value: string): void => {
+      const input = container.querySelector<HTMLInputElement>('#ai-model')!;
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://192.168.1.10:8080/v1', model: 'm1', contextTokens: 4096, detectedContextTokens: 32000 };
+    settings.render();
+    model('m2');
+    expect(size()).toBe('4096');
+    click('#save-settings');
+    expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'm2', contextTokens: 4096 }));
+  });
+
+  it('keeps 16000 picked for a LAN server, shown and saved, whatever the address', () => {
+    state.llm = { ...defaultLlmConfig(), baseUrl: 'http://192.168.1.10:8080/v1', contextTokens: 16000 };
+    settings.render();
+    const size = (): string | undefined => container.querySelector<HTMLElement>('#ai-context-size')?.dataset.value;
+    expect(size()).toBe('16000');
+    const input = container.querySelector<HTMLInputElement>('#ai-base-url')!;
+    input.value = 'http://192.168.1.11:8080/v1';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
     expect(size()).toBe('16000');
     click('#save-settings');
     expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ contextTokens: 16000 }));
@@ -2244,6 +2371,20 @@ describe('Settings.save', () => {
     llmMock.testConnection.mockRejectedValueOnce(new LlmError('config', 'HTTP 404', 404));
     click('#ai-test-connection');
     await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Model not found'));
+
+    llmMock.testConnection.mockRejectedValueOnce(new LlmError('config', 'HTTP 400', 400, 0, 'model'));
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Model not found'));
+
+    // A working key the account may not use for this model is not "Invalid API key".
+    llmMock.testConnection.mockRejectedValueOnce(new LlmError('config', 'HTTP 403', 403, 0, 'permission'));
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent).toBe('Server error (403)'));
+
+    llmMock.testConnection.mockRejectedValueOnce(new LlmError('rate', 'HTTP 429', 429));
+    click('#ai-test-connection');
+    await vi.waitFor(() => expect(container.querySelector('#ai-status')?.textContent)
+      .toBe('Rate limit or quota reached. Try again later.'));
 
     container.querySelector<HTMLInputElement>('#ai-base-url')!.value = 'http://host:8080/v1';
     container.querySelector<HTMLInputElement>('#ai-model')!.value = '';
@@ -2324,7 +2465,8 @@ describe('Settings.save', () => {
   });
 
   it('adds a missing http:// and saves what the connection test detected', async () => {
-    const tested: LlmCapabilities = { signature: 'http://192.168.1.5:11434/v1|m1', structured: 'json_object', thinkingOff: true, effortOff: false, reasoningParams: false, checkedAt: 2 };
+    const signature = capabilitySignature({ ...defaultLlmConfig(), baseUrl: 'http://192.168.1.5:11434/v1', model: 'm1' });
+    const tested: LlmCapabilities = { signature, structured: 'json_object', effort: '', thinkingFields: true, maxCompletionTokens: false, maxOutputTokens: 0, checkedAt: 2 };
     llmMock.testConnection.mockResolvedValue({ models: [], capabilities: tested });
     state.llm = {
       ...defaultLlmConfig(),
@@ -2344,7 +2486,7 @@ describe('Settings.save', () => {
     }));
 
     // A later save must not bring the old test back over what requests learned since.
-    const learned = { ...tested, reasoningParams: true, checkedAt: 3 };
+    const learned = { ...tested, maxCompletionTokens: true, checkedAt: 3 };
     state.llm = { ...state.llm, capabilities: learned };
     click('#save-settings');
     expect(storageMock.setLlmConfig).toHaveBeenLastCalledWith(expect.objectContaining({ capabilities: learned }));
@@ -2510,7 +2652,7 @@ describe('Settings.save', () => {
 
   it('ignores a connection test that outlives the form it ran on', async () => {
     let finish!: () => void;
-    const tested = { signature: 'x', structured: 'json_object' as const, thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 2 };
+    const tested = { signature: 'x', structured: 'json_object' as const, effort: '', thinkingFields: false, maxCompletionTokens: false, maxOutputTokens: 0, checkedAt: 2 };
     llmMock.testConnection.mockImplementationOnce(() => new Promise((resolve) => {
       finish = () => resolve({ models: [], capabilities: tested });
     }));
@@ -2530,7 +2672,7 @@ describe('Settings.save', () => {
 
   it('forgets a finished connection test when the form is rendered again', async () => {
     const config = { ...defaultLlmConfig(), baseUrl: 'http://ai.test/v1', model: 'm1' };
-    const tested = { signature: `${config.baseUrl}|${config.model}`, structured: 'json_object' as const, thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 2 };
+    const tested = { signature: `${config.baseUrl}|${config.model}`, structured: 'json_object' as const, effort: '', thinkingFields: false, maxCompletionTokens: false, maxOutputTokens: 0, checkedAt: 2 };
     llmMock.testConnection.mockResolvedValueOnce({ models: [], capabilities: tested });
     state.llm = config;
     settings.render();

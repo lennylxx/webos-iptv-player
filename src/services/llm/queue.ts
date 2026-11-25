@@ -5,8 +5,18 @@ export interface QueueLimits {
   concurrency: number;
 }
 
+export interface RunOptions {
+  // Rejects the job as it would leave the queue, before it takes a slot.
+  precheck?: () => Error | null;
+  // Who the job is for (server, model, and key): refusals apply per tag.
+  tag?: string;
+  // A retry, which goes ahead of the jobs of its priority that came after it.
+  front?: boolean;
+}
+
 interface Job {
   priority: LlmPriority;
+  tag: string;
   // Rejects the job as it would leave the queue, before it takes a slot.
   precheck?: () => Error | null;
   start: () => void;
@@ -19,6 +29,8 @@ export class LlmQueue {
   private readonly pending: Job[] = [];
   private active = 0;
   private pausedUntil = 0;
+  // Jobs of a tag and priority that fail at once until a time, instead of waiting in line.
+  private readonly refusals = new Map<string, { until: number; error: Error }>();
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private limits: QueueLimits, private readonly now: () => number = Date.now) {}
@@ -28,17 +40,39 @@ export class LlmQueue {
     this.pump();
   }
 
+  /** How long the queue still holds every job; 0 when it doesn't. */
+  pausedForMs(): number {
+    return Math.max(0, this.pausedUntil - this.now());
+  }
+
   /** Holds every job, e.g. after a 429 with Retry-After. */
   pause(ms: number): void {
     this.pausedUntil = Math.max(this.pausedUntil, this.now() + ms);
     this.pump();
   }
 
-  /** Fails every queued job of a priority, e.g. background work after a quota error. */
-  rejectPending(priority: LlmPriority, error: Error): number {
+  /**
+   * Fails the queued jobs of a tag at these priorities, and new ones until
+   * `ms` from now, with `error`: e.g. after a quota error, or a wait too long
+   * to hold anyone for. Other tags on the same server go on.
+   */
+  refuse(ms: number, error: Error, priorities: readonly LlmPriority[], tag = ''): number {
+    let failed = 0;
+    priorities.forEach((priority) => {
+      const key = `${priority}|${tag}`;
+      const until = this.now() + ms;
+      const current = this.refusals.get(key);
+      if (!current || current.until < until) this.refusals.set(key, { until, error });
+      failed += this.rejectPending(priority, error, tag);
+    });
+    return failed;
+  }
+
+  /** Fails every queued job of a priority (and tag, when given), e.g. background work after a quota error. */
+  rejectPending(priority: LlmPriority, error: Error, tag?: string): number {
     const kept: Job[] = [];
     const failed: Job[] = [];
-    this.pending.forEach((job) => (job.priority === priority ? failed : kept).push(job));
+    this.pending.forEach((job) => (job.priority === priority && (tag === undefined || job.tag === tag) ? failed : kept).push(job));
     this.pending.length = 0;
     kept.forEach((job) => this.pending.push(job));
     failed.forEach((job) => job.fail(error));
@@ -53,17 +87,24 @@ export class LlmQueue {
     priority: LlmPriority,
     task: () => Promise<T>,
     signal?: AbortSignal,
-    precheck?: () => Error | null,
+    options: RunOptions = {},
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       if (signal?.aborted) {
         reject(new LlmError('cancelled', 'Request was cancelled'));
         return;
       }
+      const tag = options.tag ?? '';
+      const refusal = this.refusals.get(`${priority}|${tag}`);
+      if (refusal && refusal.until > this.now()) {
+        reject(refusal.error);
+        return;
+      }
       const onAbort = (): void => job.cancel();
       const job: Job = {
         priority,
-        precheck,
+        tag,
+        precheck: options.precheck,
         fail: (error) => {
           signal?.removeEventListener('abort', onAbort);
           reject(error);
@@ -84,7 +125,11 @@ export class LlmQueue {
         },
       };
       signal?.addEventListener('abort', onAbort);
-      if (priority === 'foreground') {
+      if (options.front) {
+        let at = 0;
+        if (priority === 'background') while (at < this.pending.length && this.pending[at].priority === 'foreground') at++;
+        this.pending.splice(at, 0, job);
+      } else if (priority === 'foreground') {
         let at = 0;
         while (at < this.pending.length && this.pending[at].priority === 'foreground') at++;
         this.pending.splice(at, 0, job);

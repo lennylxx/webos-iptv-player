@@ -2706,7 +2706,7 @@ export class Search {
     const line = mine && ask.phase === 'shown'
       ? this.askSummary(ask.filter)
       : mine && ask.phase === 'failed'
-        ? (ask.reason === 'cap' ? t('search.aiLimit') : t('search.aiFailed'))
+        ? (ask.reason === 'cap' || ask.reason === 'quota' ? t('search.aiLimit') : t('search.aiFailed'))
         : '';
     return html`
       <div class="search-ask" data-key="ask-bar" data-nav-container

@@ -708,8 +708,9 @@ export class PlayerTracks {
     this.options.onChanged?.();
     const reason = report.error?.reason;
     if (!reason || reason === 'cancelled') return;
-    const setup = reason === 'auth' || reason === 'disabled' || reason === 'config';
-    showToast(reason === 'cap' ? t('ai.translateLimit') : setup ? t('ai.setupProblem') : t('subtitle.translateFailed'));
+    // A prompt too long for the model needs a smaller Context size, a setup matter.
+    const setup = reason === 'auth' || reason === 'disabled' || reason === 'config' || reason === 'context';
+    showToast(reason === 'cap' || reason === 'quota' ? t('ai.translateLimit') : setup ? t('ai.setupProblem') : t('subtitle.translateFailed'));
   }
 
   private translationSource(index: number): string | undefined {

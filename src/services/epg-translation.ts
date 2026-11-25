@@ -124,8 +124,12 @@ function itemCost(item: Sent): number {
 }
 
 /** Splits items into requests that fit the context: a quarter of the room for the lines sent, the reply up to three times as long. */
+function batchBudget(contextTokens: number): number {
+  return Math.max(200, Math.floor((contextTokens - PROMPT_OVERHEAD_TOKENS) / 4));
+}
+
 export function planBatches(items: readonly Sent[], contextTokens: number): number[][] {
-  const budget = Math.max(200, Math.floor((contextTokens - PROMPT_OVERHEAD_TOKENS) / 4));
+  const budget = batchBudget(contextTokens);
   const batches: number[][] = [];
   let current: number[] = [];
   let tokens = 0;
@@ -157,6 +161,7 @@ function taskFor(prompt: TitledPrompt, sent: readonly Sent[], signal?: AbortSign
     signal,
     // Once sent, a reply still lands in the cache when the surface has moved on.
     finishStarted: true,
+    splittable: sent.length > 1,
   };
 }
 
@@ -169,12 +174,35 @@ function translated(item: ProgramText, sent: Sent, reply: { title: string; descr
 
 // Sends one request for the items; a reply that fits them is kept per item, so
 // a later request for any of them, alone or with others, is answered from it.
+async function requestHalves(prompt: TitledPrompt, items: readonly ProgramText[], sent: readonly Sent[], signal?: AbortSignal): Promise<TitledOutcome[]> {
+  const half = Math.ceil(items.length / 2);
+  const parts = await Promise.all([
+    request(prompt, items.slice(0, half), sent.slice(0, half), signal),
+    request(prompt, items.slice(half), sent.slice(half), signal),
+  ]);
+  return parts[0].concat(parts[1]);
+}
+
 async function request(prompt: TitledPrompt, items: readonly ProgramText[], sent: readonly Sent[], signal?: AbortSignal): Promise<TitledOutcome[]> {
+  // Planned before the Context size dropped, or before the model's output cap
+  // was known: sized to them now instead of overflowing or cutting the reply short.
+  const cost = sent.reduce((sum, item) => sum + itemCost(item), 0);
+  const cap = LlmService.outputCap();
+  const tooLong = cost > batchBudget(LlmService.contextTokens()) || (cap > 0 && cost * 3 > cap);
+  if (items.length > 1 && tooLong) return requestHalves(prompt, items, sent, signal);
   let reply: string;
   try {
     // The reply is kept per item below, not as a whole.
-    ({ text: reply } = await LlmService.runText({ ...taskFor(prompt, sent, signal), accept: () => false }));
+    const outcome = await LlmService.runText({ ...taskFor(prompt, sent, signal), accept: () => false });
+    // Cut off at its budget: a description may end mid-sentence, so nothing of it is used or kept.
+    if (outcome.truncated) {
+      if (items.length > 1) return requestHalves(prompt, items, sent, signal);
+      return [{ error: new LlmError('schema', 'Reply was cut off') }];
+    }
+    reply = outcome.text;
   } catch (error) {
+    // Too long for the model: each half asks on its own.
+    if (error instanceof LlmError && error.reason === 'context' && items.length > 1) return requestHalves(prompt, items, sent, signal);
     return items.map(() => ({ error }));
   }
   const parsed = parseItems(reply, sent);

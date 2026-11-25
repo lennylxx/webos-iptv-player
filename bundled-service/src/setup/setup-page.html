@@ -2217,8 +2217,10 @@
       if (/^\**$/.test(input.value)) return "";
       return input.value.trim();
     };
-    // Same as the TV: a typed LAN address usually leaves out the scheme.
-    var baseUrl = completeUrl(form.elements.baseUrl.value);
+    // Same as the TV: a typed LAN address usually leaves out the scheme, and
+    // a pasted full endpoint keeps only its base.
+    var baseUrl = completeUrl(form.elements.baseUrl.value)
+      .replace(/\/+$/, "").replace(/\/chat\/completions$/i, "").replace(/\/+$/, "");
     var payload = {
       type: "ai",
       baseUrl: baseUrl,

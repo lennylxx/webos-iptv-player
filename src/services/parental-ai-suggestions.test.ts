@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NamedSchema } from './llm/types';
 
-const { run, contextTokens } = vi.hoisted(() => ({
+const { run, contextTokens, outputCap } = vi.hoisted(() => ({
+  outputCap: vi.fn(() => 0),
   run: vi.fn(),
   contextTokens: vi.fn(() => 16000),
 }));
-vi.mock('./llm/llm-service', () => ({ LlmService: { run, contextTokens } }));
+vi.mock('./llm/llm-service', () => ({ LlmService: { run, contextTokens, outputCap } }));
 
 import { LlmError } from './llm/client';
 import { validate } from './llm/json';
@@ -27,6 +28,8 @@ let lines: string[] = [];
 beforeEach(() => {
   run.mockReset();
   contextTokens.mockReturnValue(16000);
+  outputCap.mockReset();
+  outputCap.mockReturnValue(0);
   lines = [];
   const capture = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
   vi.spyOn(console, 'log').mockImplementation(capture);
@@ -114,6 +117,89 @@ describe('suggestAdultGroups', () => {
     expect(progress).toHaveBeenLastCalledWith(1, 3);
     expect(lines.some(line => line.includes('event=parental.ai.run') && line.includes('cached=1')
       && line.includes('failed=2') && line.includes('reason=quota'))).toBe(true);
+  });
+
+  it('sends a batch that overflowed the context again in smaller batches', async () => {
+    const groups = Array.from({ length: 150 }, (_, i) => group(`Group ${1000 + i}`));
+    run.mockRejectedValueOnce(new LlmError('context', 'HTTP 400', 400, 0, '', 2048))
+      .mockImplementation(async () => {
+        contextTokens.mockReturnValue(2048);
+        return reply([]);
+      });
+    contextTokens.mockReturnValueOnce(16000).mockReturnValue(2048);
+    const result = await suggestAdultGroups('live', groups);
+    expect(task(0).user).toContain('Group 1149');
+    expect(run.mock.calls.length).toBeGreaterThan(2);
+    expect(result.checked).toHaveLength(150);
+    expect(result.failure).toBeNull();
+  });
+
+  it('plans the later batches for a Context size an overflow lowered, so they don\'t overflow first', async () => {
+    const groups = Array.from({ length: 450 }, (_, i) => group(`Group ${1000 + i}`));
+    let context = 16000;
+    contextTokens.mockImplementation(() => context);
+    let overflows = 0;
+    run.mockImplementation(async (task: Task) => {
+      const items = (JSON.parse(task.user) as { items: unknown[] }).items;
+      if (context === 16000 || items.length > 150) {
+        context = 2048;
+        overflows++;
+        throw new LlmError('context', 'HTTP 400', 400);
+      }
+      return reply([]);
+    });
+    const result = await suggestAdultGroups('live', groups);
+    expect(overflows).toBe(1);
+    expect(result.checked).toHaveLength(450);
+    expect(result.failure).toBeNull();
+  });
+
+  it('keeps every batch\'s reply within the model\'s output cap, also one learned mid-run', async () => {
+    const groups = Array.from({ length: 450 }, (_, i) => group(`Group ${1000 + i}`));
+    run.mockImplementation(async () => {
+      outputCap.mockReturnValue(1000);
+      return reply([]);
+    });
+    const result = await suggestAdultGroups('live', groups);
+    expect(task(0).maxTokens).toBe(64 + 24 * 200);
+    expect((run.mock.calls[0][0] as { splittable?: boolean }).splittable).toBe(true);
+    expect(run.mock.calls.slice(1).every((_, i) => task(i + 1).maxTokens <= 1000)).toBe(true);
+    expect(result.checked).toHaveLength(450);
+
+    run.mockClear();
+    await suggestAdultGroups('live', groups);
+    expect(run.mock.calls.every((_, i) => task(i).maxTokens <= 1000)).toBe(true);
+  });
+
+  it('skips a single group whose reply is unusable and goes on, but stops at an unusable batch of several', async () => {
+    outputCap.mockReturnValue(64 + 24);
+    run.mockRejectedValueOnce(new LlmError('schema', 'Reply did not match the schema')).mockResolvedValue(reply([]));
+    const result = await suggestAdultGroups('live', [group('Alpha'), group('Bravo'), group('Charlie')]);
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ failure: null, failedBatches: 1 });
+    expect(result.checked).toHaveLength(2);
+
+    outputCap.mockReturnValue(0);
+    run.mockReset();
+    run.mockRejectedValue(new LlmError('schema', 'Reply did not match the schema'));
+    expect((await suggestAdultGroups('live', [group('Alpha'), group('Bravo')])).failure).toBe('schema');
+  });
+
+  it('fails a single group that overflows the context instead of splitting it', async () => {
+    run.mockRejectedValue(new LlmError('context', 'HTTP 400', 400));
+    const result = await suggestAdultGroups('live', [group('Alpha')]);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.failure).toBe('context');
+  });
+
+  it('skips a batch the content policy blocks and goes on with the rest', async () => {
+    const groups = Array.from({ length: 450 }, (_, i) => group(`Group ${1000 + i}`));
+    run.mockRejectedValueOnce(new LlmError('blocked', 'HTTP 400', 400))
+      .mockResolvedValue(reply([]));
+    const result = await suggestAdultGroups('live', groups);
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(result.checked).toHaveLength(250);
+    expect(result).toMatchObject({ batches: 3, failedBatches: 1, failure: null });
   });
 
   it('rechecks each batch before sending it, and skips one left empty', async () => {

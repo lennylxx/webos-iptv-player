@@ -3,12 +3,22 @@ export type StructuredMode = 'json_schema' | 'json_object' | 'prompt';
 
 export type LlmPriority = 'foreground' | 'background';
 
+// reasoning_effort values, least thinking first.
+export type ReasoningEffort = 'none' | 'minimal' | 'low';
+
 export type LlmFailureReason =
   | 'config'
   | 'disabled'
   | 'cap'
   | 'auth'
+  // A spent quota or balance; waiting a moment won't help.
   | 'quota'
+  // Throttled, and still throttled after the waits the server asked for.
+  | 'rate'
+  // The prompt didn't fit the model's context, or a per-request token cap.
+  | 'context'
+  // The server's content policy blocked the prompt or the reply.
+  | 'blocked'
   | 'network'
   | 'timeout'
   | 'cancelled'
@@ -16,15 +26,17 @@ export type LlmFailureReason =
   | 'schema';
 
 export interface LlmCapabilities {
-  // baseUrl + model the detection ran against.
+  // baseUrl, model, and a hash of the API key the detection ran against.
   signature: string;
   structured: StructuredMode;
-  // The endpoint accepted the request fields that turn a local model's thinking off.
-  thinkingOff: boolean;
-  // It also took reasoning_effort "none", the only switch Ollama's OpenAI API reads.
-  effortOff: boolean;
-  // The endpoint takes max_completion_tokens and no temperature (OpenAI reasoning models).
-  reasoningParams: boolean;
+  // The least reasoning_effort the server took; '' sends none.
+  effort: ReasoningEffort | '';
+  // A LAN server took chat_template_kwargs, which turns a local model's thinking off.
+  thinkingFields: boolean;
+  // The server names the output budget max_completion_tokens.
+  maxCompletionTokens: boolean;
+  // The model's output cap as /models reports it; 0 when unknown.
+  maxOutputTokens: number;
   checkedAt: number;
 }
 
@@ -35,7 +47,7 @@ export interface LlmConfig {
   apiKey: string;
   // One "Name: value" per line, for gateways that need more than a bearer key.
   extraHeaders: string;
-  // Prompt budget used to size batches; small for local models.
+  // Prompt budget used to size batches; 0 until one is picked or detected, for the server's default.
   contextTokens: number;
   // The Context size Test connection last set from the server; 0 when none.
   detectedContextTokens: number;

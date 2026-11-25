@@ -1,5 +1,5 @@
 import type { ParentalAiVerdict } from '../types';
-import { batchItemLimit } from './llm/config';
+import { batchItemLimit, replanAfterOverflow } from './llm/config';
 import { LlmService } from './llm/llm-service';
 import { LlmError } from './llm/client';
 import type { LlmFailureReason, NamedSchema } from './llm/types';
@@ -78,9 +78,9 @@ function byName(a: ParentalAiGroup, b: ParentalAiGroup): number {
  * Splits groups into batches that fit the context size. The order is fixed
  * by name, so a later run over the same groups hits the cached batches.
  */
-export function planBatches(groups: readonly ParentalAiGroup[], contextTokens: number): ParentalAiGroup[][] {
+export function planBatches(groups: readonly ParentalAiGroup[], contextTokens: number, replyCap = 0): ParentalAiGroup[][] {
   const budget = Math.max(200, contextTokens - PROMPT_OVERHEAD_TOKENS);
-  const maxItems = batchItemLimit(contextTokens, REPLY_TOKENS_PER_ITEM, REPLY_OVERHEAD_TOKENS);
+  const maxItems = batchItemLimit(contextTokens, REPLY_TOKENS_PER_ITEM, REPLY_OVERHEAD_TOKENS, replyCap);
   const batches: ParentalAiGroup[][] = [];
   let current: ParentalAiGroup[] = [];
   let tokens = 0;
@@ -144,8 +144,9 @@ export async function suggestAdultGroups(
     eligible?: (key: string) => boolean;
   } = {},
 ): Promise<ParentalAiResult> {
-  const contextTokens = LlmService.contextTokens();
-  const batches = planBatches(groups, contextTokens);
+  let planned = LlmService.contextTokens();
+  const plan = (items: readonly ParentalAiGroup[], contextTokens: number) => planBatches(items, contextTokens, LlmService.outputCap());
+  const batches = plan(groups, planned);
   const result: ParentalAiResult = {
     checked: [],
     flagged: {},
@@ -161,6 +162,14 @@ export async function suggestAdultGroups(
     const batch = eligible ? batches[index].filter(group => eligible(group.key)) : batches[index];
     options.onProgress?.(index, batches.length);
     if (!batch.length) continue;
+    // An output cap learned since the batch was planned: a reply covering it all wouldn't fit.
+    const cap = LlmService.outputCap();
+    if (cap && batch.length > 1 && REPLY_OVERHEAD_TOKENS + REPLY_TOKENS_PER_ITEM * batch.length > cap) {
+      batches.splice(index, 1, ...plan(batch, planned));
+      result.batches = batches.length;
+      index--;
+      continue;
+    }
     sent += batch.length;
     try {
       const outcome = await LlmService.run<Reply>({
@@ -171,6 +180,7 @@ export async function suggestAdultGroups(
         schema: schemaFor(batch.length),
         promptVersion: PROMPT_VERSION,
         maxTokens: REPLY_OVERHEAD_TOKENS + REPLY_TOKENS_PER_ITEM * batch.length,
+        splittable: batch.length > 1,
         signal: options.signal,
       });
       if (outcome.cached) cached++;
@@ -186,8 +196,23 @@ export async function suggestAdultGroups(
         result.flagged[group.key] = `${item.verdict}-${item.confidence}` as ParentalAiVerdict;
       }
     } catch (error) {
+      // Too long for the model: the same groups go again in smaller batches, and so do the later ones.
+      if (error instanceof LlmError && error.reason === 'context' && batch.length > 1) {
+        sent -= batch.length;
+        batches[index] = batch;
+        planned = replanAfterOverflow(batches, index, planned, LlmService.contextTokens(), plan);
+        result.batches = batches.length;
+        index--;
+        continue;
+      }
+      // A batch the server's content policy blocks is skipped, and so is a single group
+      // whose reply was unusable (cut off, say); the rest still go.
+      if (error instanceof LlmError && (error.reason === 'blocked' || (error.reason === 'schema' && batch.length === 1))) {
+        result.failedBatches++;
+        continue;
+      }
       result.failure = failureReason(error);
-      result.failedBatches = batches.length - index;
+      result.failedBatches += batches.length - index;
       break;
     }
   }

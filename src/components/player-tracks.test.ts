@@ -62,7 +62,7 @@ vi.mock('../services/subtitle-search/ai-title', () => ({
   suggestSearchTitle,
 }));
 vi.mock('../services/llm/llm-service', () => ({
-  LlmService: { isReady: vi.fn(() => false), runText: vi.fn(), contextTokens: () => 16000 },
+  LlmService: { isReady: vi.fn(() => false), runText: vi.fn(), contextTokens: () => 16000, outputCap: () => 0 },
 }));
 // The ASS overlay's renderer: each instance records the file it draws.
 const { assContents } = vi.hoisted(() => ({ assContents: [] as string[] }));

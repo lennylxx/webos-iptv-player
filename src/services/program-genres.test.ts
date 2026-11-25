@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
   // The unconcealed list as the real service keeps it: one array until the channels change.
   shown: null as { channels: unknown[]; hidden: unknown[]; list: unknown[] } | null,
   run: vi.fn(),
+  context: 16000,
+  cap: 0,
 }));
 
 vi.mock('./epg-service', () => ({
@@ -69,7 +71,8 @@ vi.mock('./llm/llm-service', () => ({
   LlmService: {
     run: state.run,
     isReady: () => state.config.enabled && state.config.features['program-genres'] === true,
-    contextTokens: () => 16000,
+    contextTokens: () => state.context,
+    outputCap: () => state.cap,
   },
 }));
 vi.mock('../utils/frame-slices', () => ({
@@ -138,6 +141,8 @@ beforeEach(() => {
   state.run.mockReset();
   state.store.clear();
   state.parentalOn = false;
+  state.context = 16000;
+  state.cap = 0;
   state.protectedIds = [];
   state.config = { enabled: true, features: { 'program-genres': true } };
   state.channels = [{ id: 'ch1' }, { id: 'ch2' }] as Channel[];
@@ -226,6 +231,96 @@ describe('ProgramGenres', () => {
     state.run.mockRejectedValue(new LlmError('network', 'Down'));
     await ProgramGenres.run();
     expect(ProgramGenres.statusText()).toBe('AI unavailable.');
+  });
+
+  it('sends a batch that overflowed the context again in smaller batches', async () => {
+    answerByTitle();
+    const answer = state.run.getMockImplementation()!;
+    state.run.mockImplementationOnce(() => Promise.reject(new LlmError('context', 'HTTP 400', 400)))
+      .mockImplementation(answer);
+    await ProgramGenres.run();
+    expect(sentTitles()).toEqual([['Alpha: sports', 'Charlie'], ['Alpha: sports'], ['Charlie']]);
+    expect(programGenre(state.guide.ch1[1] as Programme)).toBe('sports');
+    expect(ProgramGenres.status).toMatchObject({ state: 'done' });
+  });
+
+  it('plans the later batches for a Context size an overflow lowered, so they don\'t overflow first', async () => {
+    state.guide = { ch1: Array.from({ length: 450 }, (_, i) => programme(`Title ${1000 + i}`, 1)) };
+    let overflows = 0;
+    state.run.mockImplementation((task: { user: string }) => {
+      const sent = JSON.parse(task.user) as Sent;
+      // The first request finds the context smaller than planned; at 2048 no batch of 150 fits.
+      if (state.context === 16000 || sent.items.length > 150) {
+        state.context = 2048;
+        overflows++;
+        return Promise.reject(new LlmError('context', 'HTTP 400', 400));
+      }
+      return Promise.resolve({ value: { items: [] }, dropped: 0, cached: false });
+    });
+    await ProgramGenres.run();
+    expect(overflows).toBe(1);
+    expect(sentTitles().slice(1).reduce((sum, titles) => sum + titles.length, 0)).toBe(450);
+    expect(ProgramGenres.status).toMatchObject({ state: 'done' });
+  });
+
+  it('keeps every batch\'s reply within the model\'s output cap, also one learned mid-run', async () => {
+    state.guide = { ch1: Array.from({ length: 450 }, (_, i) => programme(`Title ${1000 + i}`, 1)) };
+    state.run.mockImplementation(() => {
+      state.cap = 500;
+      return Promise.resolve({ value: { items: [] }, dropped: 0, cached: false });
+    });
+    await ProgramGenres.run();
+    const budgets = state.run.mock.calls.map(call => (call[0] as { maxTokens: number }).maxTokens);
+    expect(budgets[0]).toBe(64 + 14 * 200);
+    expect(budgets.slice(1).every(tokens => tokens <= 500)).toBe(true);
+    expect(sentTitles().reduce((sum, titles) => sum + titles.length, 0)).toBe(450);
+  });
+
+  it('sends a batch whose reply was cut off at a newly learned output cap again in smaller batches', async () => {
+    state.guide = { ch1: Array.from({ length: 200 }, (_, i) => programme(`Title ${1000 + i}`, 1)) };
+    state.run.mockImplementationOnce(() => {
+      state.cap = 2048;
+      return Promise.reject(new LlmError('context', 'Reply is over the output cap', 0, 0, 'output-cap'));
+    }).mockImplementation(() => Promise.resolve({ value: { items: [] }, dropped: 0, cached: false }));
+    await ProgramGenres.run();
+    const budgets = state.run.mock.calls.map(call => (call[0] as { maxTokens: number }).maxTokens);
+    expect(budgets[0]).toBe(64 + 14 * 200);
+    expect(budgets.slice(1).every(tokens => tokens <= 2048)).toBe(true);
+    expect((state.run.mock.calls[0][0] as { splittable?: boolean }).splittable).toBe(true);
+    expect(state.context).toBe(16000);
+    expect(ProgramGenres.status).toMatchObject({ state: 'done' });
+  });
+
+  it('skips a single title whose reply is unusable and goes on, but stops at an unusable batch of several', async () => {
+    state.guide = { ch1: Array.from({ length: 3 }, (_, i) => programme(`Title ${1000 + i}`, 1)) };
+    state.cap = 64 + 14;
+    answerByTitle();
+    const answer = state.run.getMockImplementation()!;
+    state.run.mockImplementationOnce(() => Promise.reject(new LlmError('schema', 'Reply did not match the schema'))).mockImplementation(answer);
+    await ProgramGenres.run();
+    expect(state.run).toHaveBeenCalledTimes(3);
+    expect(ProgramGenres.status).toMatchObject({ state: 'done' });
+
+    state.cap = 0;
+    state.run.mockReset();
+    state.guide.ch1.push(programme('Title 2000', 2), programme('Title 2001', 3));
+    state.run.mockRejectedValue(new LlmError('schema', 'Reply did not match the schema'));
+    await ProgramGenres.run();
+    expect(ProgramGenres.status).toEqual({ state: 'failed' });
+  });
+
+  it('shows the daily limit when the server says its quota is spent', async () => {
+    state.run.mockRejectedValue(new LlmError('quota', 'HTTP 429', 429));
+    await ProgramGenres.run();
+    expect(ProgramGenres.status).toEqual({ state: 'limit' });
+  });
+
+  it('skips a batch the content policy blocks instead of failing the run', async () => {
+    state.run.mockRejectedValue(new LlmError('blocked', 'HTTP 400', 400));
+    await ProgramGenres.run();
+    expect(ProgramGenres.status).toMatchObject({ state: 'done' });
+    expect(lines.some(line => line.includes('event=genre.ai.run') && line.includes('failed=1')
+      && line.includes('reason=none'))).toBe(true);
   });
 
   it('shows no genre and sends nothing while the toggle is off', async () => {

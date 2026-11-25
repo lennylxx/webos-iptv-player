@@ -77,9 +77,14 @@ function itemCost(item: GenreItem): number {
  * Splits titles into batches that fit the context size. The order is fixed by
  * key, so a later run over the same titles hits the cached batches.
  */
-export function planGenreBatches(items: readonly GenreItem[], contextTokens: number): GenreItem[][] {
+/** The reply budget for a batch of this many titles. */
+export function genreReplyTokens(count: number): number {
+  return REPLY_OVERHEAD_TOKENS + REPLY_TOKENS_PER_ITEM * count;
+}
+
+export function planGenreBatches(items: readonly GenreItem[], contextTokens: number, replyCap = 0): GenreItem[][] {
   const budget = Math.max(200, contextTokens - PROMPT_OVERHEAD_TOKENS);
-  const maxItems = batchItemLimit(contextTokens, REPLY_TOKENS_PER_ITEM, REPLY_OVERHEAD_TOKENS);
+  const maxItems = batchItemLimit(contextTokens, REPLY_TOKENS_PER_ITEM, REPLY_OVERHEAD_TOKENS, replyCap);
   const batches: GenreItem[][] = [];
   let current: GenreItem[] = [];
   let tokens = 0;
@@ -136,7 +141,8 @@ export async function classifyBatch(batch: readonly GenreItem[], signal?: AbortS
     user: JSON.stringify({ genres: PROGRAM_GENRES, items: batch.map(sentItem) }),
     schema: schemaFor(batch.length),
     promptVersion: PROMPT_VERSION,
-    maxTokens: REPLY_OVERHEAD_TOKENS + REPLY_TOKENS_PER_ITEM * batch.length,
+    maxTokens: genreReplyTokens(batch.length),
+    splittable: batch.length > 1,
     signal,
   });
   const genres: Record<string, ProgramGenre | ''> = {};

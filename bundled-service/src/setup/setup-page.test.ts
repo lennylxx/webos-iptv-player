@@ -627,7 +627,8 @@ describe('setup page forms', () => {
     expect(field('aiApiKey').value).toBe('********');
     field('aiModel').value = 'm2';
     field('aiModel').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    typeUrl('192.168.1.5:8080/v1');
+    // A pasted full endpoint keeps only its base.
+    typeUrl('192.168.1.5:8080/v1/chat/completions/');
     form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await new Promise(resolve => setTimeout(resolve, 0));
 

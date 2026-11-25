@@ -385,11 +385,12 @@ describe('SetupClient.applyPendingActions', () => {
       enabled: true,
       baseUrl: 'http://host:8080/v1',
       apiKey: 'old-key',
-      capabilities: { signature: 'http://host:8080/v1|m0', structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
+      capabilities: { signature: 'http://host:8080/v1|m0', structured: 'json_schema', effort: '', thinkingFields: false, maxCompletionTokens: false, maxOutputTokens: 0, checkedAt: 1 },
     };
     fetchWithTimeoutMock
       .mockResolvedValueOnce(jsonResponse([
-        { id: 12, type: 'ai', baseUrl: 'http://host:8080/v1', model: 'm1' },
+        // A pasted full endpoint keeps only its base.
+        { id: 12, type: 'ai', baseUrl: 'http://host:8080/v1/chat/completions', model: 'm1' },
       ]))
       .mockResolvedValue(jsonResponse({ updated: true }));
 
@@ -425,6 +426,23 @@ describe('SetupClient.applyPendingActions', () => {
       { method: 'DELETE' },
       4000,
     );
+  });
+
+  it('drops a Context size learned from the old server when the phone points to another, keeping one the user picked', async () => {
+    storageMock.llm = { ...defaultLlmConfig(), baseUrl: 'http://ai.test/v1', model: 'm1', contextTokens: 8192, detectedContextTokens: 8192 };
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([{ id: 16, type: 'ai', baseUrl: 'http://other.lan:8080/v1', model: 'm1' }]))
+      .mockResolvedValue(jsonResponse({ updated: true }));
+    await SetupClient.applyPendingActions();
+    expect(storageMock.llm).toMatchObject({ baseUrl: 'http://other.lan:8080/v1', contextTokens: 0, detectedContextTokens: 0 });
+
+    storageMock.llm = { ...defaultLlmConfig(), baseUrl: 'http://ai.test/v1', model: 'm1', contextTokens: 4096, detectedContextTokens: 8192 };
+    fetchWithTimeoutMock.mockReset();
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([{ id: 17, type: 'ai', baseUrl: 'http://other.lan:8080/v1', model: 'm1' }]))
+      .mockResolvedValue(jsonResponse({ updated: true }));
+    await SetupClient.applyPendingActions();
+    expect(storageMock.llm).toMatchObject({ baseUrl: 'http://other.lan:8080/v1', contextTokens: 4096 });
   });
 
   it('drops a masked AI key and headers when the phone points to another server', async () => {

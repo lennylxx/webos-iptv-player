@@ -259,9 +259,9 @@ stays hidden while AI features are off.
 - Fixed batches make every usable answer a cache hit on replay (the `llm-cache` store). A reply
   with fewer than half its lines is not cached and leaves the batch for a later run; when the
   first two replies are unusable the run stops with "Subtitle translation failed".
-- Rate limits (429), server errors (5xx), timeouts, and network errors retry a batch up to twice,
-  after the server's `Retry-After` or 10 s, then 20 s. Any other failure, or the daily limit,
-  stops the run with a toast, keeping what was translated: the daily limit's, "AI setup
+- Throttles, overloaded servers, and dropped connections are retried by the AI client itself
+  (see below); the run sends no batch again on its own. A batch the server's content policy
+  blocks counts as unusable. Any other failure, or the daily limit, stops the run with a toast, keeping what was translated: the daily limit's, "AI setup
   problem" for a refused key or a setup error (as for program info), else "Subtitle translation
   failed".
 - Switching to another subtitle stops the run: queued batches are dropped, but batches already
@@ -305,25 +305,100 @@ stays hidden while AI features are off.
   simulation). A file with no Dialogue text to translate shows no Translate row, and a saved
   translation of it shows the source instead, with no translation entry in the menu.
 - Diagnostics (no subtitle text): `subtitle.translate.start` (target, lines, batches, remaining,
-  resume; for ASS also `format=ass` and the `skipped` events), `subtitle.translate.retry` (reason, status, attempt, wait), and once per run that
+  resume; for ASS also `format=ass` and the `skipped` events), and once per run that
   wasn't stopped either `subtitle.translate.done` or `subtitle.translate.incomplete` (reason `lines_kept`,
   `unusable_reply`, or the failure; failed batches; done/kept/cached/requested/total lines and
   batches; `tags_dropped`, the cues or ASS lines that lost their inner styling); `subtitle.translate.restore` (`restored` or `ai_off`, then `nothing_to_translate` when a restored ASS source has no text to translate) once per opening of an item, a reload such
   as a quality change included.
-  Request failures also log `llm.request.failed`.
+  Request failures also log `llm.request.failed` (feature, reason, status, and a hint from a fixed
+  set where one applies, e.g. `hint=output-cap` for a reply cut off at the output cap).
 
 **Context size.** **Test connection** reads the model's context window where the server reports
-one: `max_model_len` (vLLM), `context_length` (OpenRouter, Together), `context_window` (Groq),
-`max_context_length` (Mistral), or `loaded_context_length` (LM Studio, read before its maximum) on `/models`, else
-llama.cpp's per-slot `n_ctx` from `/props`. Many hosted services report none. The setting snaps to
+one on `/models`, in this order: `meta.n_ctx`, `max_model_len`, `loaded_context_length`,
+`context_length`, `context_window`, `max_context_length`, `max_input_tokens`,
+`model_info.context_window`, `top_provider.context_length`, `inputTokenLimit`; else the per-slot
+`n_ctx` from `/props`; else the training maximum `meta.n_ctx_train`. It also reads the model's
+output cap (`max_output_tokens`, `outputTokenLimit`, `max_completion_tokens`, `max_tokens`,
+`model_info.max_output_tokens`, `top_provider.max_completion_tokens`), which lowers every request's
+`max_tokens`. A server that doesn't report its output cap but refuses a budget over it ("must be
+<= N", "[1, N]", "at most N", "between 1 and N", "cannot exceed N", "to N (exclusive)", a
+validation error's `ctx.le` for the field; only right after the output field, and never below 64)
+teaches it: the request goes once more within it, the cap is saved with the capabilities at once,
+so requests waiting in line already go within it (`llm.output.capped`), and the batch jobs and
+translations size their batches so a reply fits it. A reply of a batch still cut off at the cap fails as
+too long without lowering Context size, so the batch goes again in smaller parts. Any reply that
+stops at its token budget is never kept in the cache; subtitle and program translation use no
+part of it (a batch of several goes again in halves), and a single item counts as an unusable
+reply, not a setup problem: the run goes on, and the batch jobs skip that one item. Detection's probe
+learns a cap below its 1000-token budget the same way. Many hosted services report neither. The setting snaps to
 the largest preset that fits (the smallest, 2048, when none does): it is always lowered to fit, but
 raised only from the default or from a size an earlier test set (saved as `detectedContextTokens`),
 so a smaller size the user picked stays. `llm.context.detected` logs the source and size.
-The default is 16000 for every server. Saved sizes clamp to 2048–128000, the presets' range. Subtitle batches stay at 40 lines at any size.
+The default is 16000, and 8192 for a LAN or loopback server that reports no context, since some
+local servers cut a longer prompt short instead of refusing it; the form's default follows the
+address typed until a size is picked or a test reports one, and a size learned from a server (a
+test, or an overflow) is dropped for the default when the server or model changes, on the TV or
+from the phone; a size the user picked stays. Saved sizes clamp to 2048–128000, the presets'
+range. A prompt the server refuses as too long for its context (or for a per-request token cap)
+lowers the setting to the size the error names, or halves the size the request was planned with,
+once for requests sent together (`llm.context.lowered`); the batch jobs, program translation, and
+subtitle translation then send that batch again in smaller parts, and size the batches they
+haven't sent yet for the new size so those don't overflow first; a single item fails.
+Subtitle batches hold at most 40 lines; a run started after the setting dropped plans its
+unfinished batches again for the new size.
 The background batch jobs (AI program genres, parental suggestions) send at most 200 items a
 batch at 16000 and more in step with a larger context, as long as a reply covering every item
 fits 8192 tokens: up to 580 titles for genres and 338 groups for parental suggestions at 128000
 (1000 titles: 5 requests at 16000, 2 at 128000).
+
+
+**AI server compatibility** (`src/services/llm/`). The base URL is used as entered, without
+trailing slashes or a pasted `/chat/completions` (on the TV, the phone page, and phone setup);
+no path such as `/v1` is added. Requests always carry an output budget
+(`max_tokens`, or `max_completion_tokens` once a 400 names it) and no sampling parameters. The
+first request for a server, model, and key runs two probe ladders, saved with the settings and
+reused for 7 days (`llm.capability.detected`):
+
+- **Thinking control.** `reasoning_effort` steps `none` → `minimal` → `low` → left out on a
+  400/422 that names it or no field at all, or on a server error that names reasoning, effort, or
+  thinking (a chat template that throws). LAN and loopback servers also get
+  `chat_template_kwargs: {enable_thinking: false}`, dropped on an error that names it. Whether the
+  model still thought is logged (`still_thinking`), not acted on.
+- **Structured output.** `json_schema` with `strict: true` (every schema lists every property as
+  required and forbids extra ones) → `json_object` (with a prompt that says JSON) → prompt-only,
+  on a 400/422 or a reply that isn't valid JSON for the schema.
+
+A saved rung the server later refuses steps down once and is saved (`llm.capability.stepped`).
+Replies keep only `content` (only its `text` parts when it is a list); reasoning fields and
+`<think>` blocks, also an unclosed one or a lone `</think>`, are dropped. An empty reply cut off by
+the budget goes once more with twice the budget (`llm.reply.truncated`). Errors are classified from
+the body in any common shape (a list of errors, `error` as an object or a string, `message`,
+`detail` and a validation error's `detail[].msg` and `loc`, `code`, `type`, `param`,
+`metadata.error_type`), and only the classification is kept; sizes are read only from the
+human-written text, never from codes or statuses: a bad key (401, 400 naming the key,
+`authentication_error`); a 403 for a model the account may not use, a region the service doesn't
+serve, or a missing model (setup problems); a spent quota (402, quota or billing codes, money
+wording such as balance or credit, per-day limits) that fails background work at once for 30 s
+and shows the daily-limit message, while a foreground action may still try; a throttle (other
+429s, a 5xx with code 429, throttle wording; per-minute wording wins over quota words, and a named
+wait or throttle wording wins over a bare "quota") that waits for `Retry-After`,
+`retry-after-ms`, a `retryDelay` or "retry in" in the body, or the reset of the
+`x-ratelimit-*` limit that ran out, else backs off 2 s, 4 s, 8 s, 16 s with jitter, up to four
+retries (`llm.request.retry`, with the reason); a wait over a minute fails the request and, until
+it ends, every new request for that server, model, and key at once (`llm.queue.rejected`), and
+one over an hour counts as a spent quota. A spent quota's refusal also covers only that server,
+model, and key, so another key goes on.
+A response that leaves `x-ratelimit-remaining-requests` at 0 with a reset within a minute pauses
+the queue until it. Overloaded servers (502/503/529, also when a gateway's page mentions a
+timeout) retry like a throttle; dropped connections and other server errors retry twice, except a
+LAN server's bare 500 during detection, which is a ladder step. Each try takes its own queue slot,
+so a backoff holds no slot another request could use (the retry then goes ahead of later requests
+of its priority). Test connection's probes retry at most once and only after a wait of 10 s or
+less, and fail at once while the server's queue is paused longer; a feature's own detection waits
+like any request. `/props` gives up after 5 s. A
+timeout (504 or the app's own) is not sent again, since it already held the server's slot. A
+caller that stops during a wait gets no retry, even for a request it lets finish. A
+content-policy block is never retried: the batch jobs and subtitle translation skip that batch.
 
 ## Subtitle offset (sync)
 

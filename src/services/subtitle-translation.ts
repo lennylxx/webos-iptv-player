@@ -23,9 +23,6 @@ const PROMPT_OVERHEAD_TOKENS = 600;
 const WORKERS = 2;
 // Batches within this window of the playback position go out first.
 const NEAR_S = 60;
-const MAX_ATTEMPTS = 3;
-const RETRY_MS = 10000;
-const MAX_RETRY_MS = 60000;
 // Unusable replies in a row, with none usable, that end the run.
 const FAILED_BATCHES_TO_STOP = 2;
 const LINE_BREAK = '<br>';
@@ -93,9 +90,13 @@ function lineCost(text: string): number {
 }
 
 /** Splits cues into fixed batches of cue indices; fixed so a replay hits the same cached batches. */
+// A quarter of the room for the lines sent; the reply runs up to about three times as long.
+function batchBudget(contextTokens: number): number {
+  return Math.max(100, Math.floor((contextTokens - PROMPT_OVERHEAD_TOKENS) / 4));
+}
+
 export function planBatches(cues: readonly TranslationCue[], contextTokens: number): number[][] {
-  // A quarter of the room for the lines sent; the reply runs up to about three times as long.
-  const budget = Math.max(100, Math.floor((contextTokens - PROMPT_OVERHEAD_TOKENS) / 4));
+  const budget = batchBudget(contextTokens);
   const batches: number[][] = [];
   let current: number[] = [];
   let tokens = 0;
@@ -174,23 +175,6 @@ export function parseLines(reply: string, count: number): Map<number, string> {
 // A reply with fewer lines than this is a failed batch: kept out of the cache and retried later.
 function usableLines(count: number): number {
   return Math.ceil(count / 2);
-}
-
-function retryable(error: LlmError): boolean {
-  if (error.reason === 'quota' || error.reason === 'timeout' || error.reason === 'network') return true;
-  return error.reason === 'http' && error.status >= 500;
-}
-
-function wait(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const done = (): void => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal.addEventListener('abort', done);
-  });
 }
 
 export interface TranslationReport {
@@ -275,6 +259,7 @@ export class SubtitleTranslation {
   }
 
   private async run(signal: AbortSignal): Promise<TranslationReport> {
+    this.replan();
     const keptBefore = this.keptLines;
     const failed = new Set<number>();
     const counts = { cached: 0, requested: 0 };
@@ -369,57 +354,112 @@ export class SubtitleTranslation {
       this.finish(index, blank, [], []);
       return true;
     }
-    const texts = batch.map(cueIndex => this.cues[cueIndex].text);
-    const inputTokens = batch.reduce((sum, cueIndex) => sum + lineCost(this.cues[cueIndex].text), 0);
     const position = this.position();
     const near = this.cues[batch[0]].start <= position + NEAR_S && this.cues[batch[batch.length - 1]].end >= position;
+    const lines = await this.request(batch, near, signal, counts);
+    if (!lines || lines.size < usableLines(batch.length)) return false;
+    const indices: number[] = [];
+    const translated: string[] = [];
+    batch.forEach((cueIndex, k) => {
+      const text = lines.get(k + 1);
+      if (text === undefined) return;
+      indices.push(cueIndex);
+      translated.push(text);
+    });
+    this.keptLines += batch.length - indices.length;
+    this.finish(index, batch.length + blank, indices, translated);
+    return true;
+  }
+
+  /**
+   * The translated lines of these cues, numbered from 1, or null when the
+   * server's content policy blocks them. Lines too long for the model's
+   * context go again in halves, each sized to the context as it is now.
+   */
+  private async request(
+    batch: number[],
+    near: boolean,
+    signal: AbortSignal,
+    counts: { cached: number; requested: number },
+  ): Promise<Map<number, string> | null> {
+    const texts = batch.map(cueIndex => this.cues[cueIndex].text);
+    const inputTokens = batch.reduce((sum, cueIndex) => sum + lineCost(this.cues[cueIndex].text), 0);
     const minimum = usableLines(batch.length);
-    for (let attempt = 1; ; attempt++) {
-      let reply: string;
-      try {
-        const outcome = await LlmService.runText({
-          feature: SUBTITLE_TRANSLATION_FEATURE,
-          priority: near ? 'foreground' : 'background',
-          system: systemPrompt(this.target, texts.some(hasMarkers)),
-          user: formatLines(texts),
-          promptVersion: PROMPT_VERSION,
-          maxTokens: replyTokens(inputTokens, this.contextTokens),
-          signal,
-          finishStarted: true,
-          accept: text => parseLines(text, batch.length).size >= minimum,
-        });
-        reply = outcome.text;
-        if (outcome.cached) counts.cached++;
-        else counts.requested++;
-      } catch (e) {
-        if (!(e instanceof LlmError) || !retryable(e) || attempt >= MAX_ATTEMPTS || signal.aborted) throw e;
-        const delay = Math.min(MAX_RETRY_MS, e.retryAfterMs || RETRY_MS * attempt);
-        log.warn(
-          'Subtitle translation retrying',
-          'event=subtitle.translate.retry',
-          `reason=${e.reason}`,
-          ...(e.status ? [`status=${e.status}`] : []),
-          `attempt=${attempt}`,
-          `wait_ms=${delay}`,
-        );
-        await wait(delay, signal);
-        if (signal.aborted) throw new LlmError('cancelled', 'Translation was cancelled');
-        continue;
-      }
-      const lines = parseLines(reply, batch.length);
-      if (lines.size < minimum) return false;
-      const indices: number[] = [];
-      const translated: string[] = [];
-      batch.forEach((cueIndex, k) => {
-        const text = lines.get(k + 1);
-        if (text === undefined) return;
-        indices.push(cueIndex);
-        translated.push(text);
-      });
-      this.keptLines += batch.length - indices.length;
-      this.finish(index, batch.length + blank, indices, translated);
-      return true;
+    const contextTokens = Math.min(this.contextTokens, LlmService.contextTokens());
+    // Planned before the Context size dropped mid-run: sized to it now instead of overflowing first.
+    const planned = batch.reduce((sum, cueIndex) => sum + lineCost(this.cues[cueIndex].original ?? this.cues[cueIndex].text), 0);
+    // A reply about three times the lines, within the model's output cap once that is known.
+    const cap = LlmService.outputCap();
+    if (batch.length > 1 && (planned > batchBudget(contextTokens) || (cap > 0 && planned * 3 > cap))) {
+      return this.requestHalves(batch, near, signal, counts);
     }
+    // Throttles, overloads, and dropped connections were already retried by the AI client.
+    let reply: string;
+    try {
+      const outcome = await LlmService.runText({
+        feature: SUBTITLE_TRANSLATION_FEATURE,
+        priority: near ? 'foreground' : 'background',
+        system: systemPrompt(this.target, texts.some(hasMarkers)),
+        user: formatLines(texts),
+        promptVersion: PROMPT_VERSION,
+        maxTokens: replyTokens(inputTokens, contextTokens),
+        signal,
+        finishStarted: true,
+        splittable: batch.length > 1,
+        accept: text => parseLines(text, batch.length).size >= minimum,
+      });
+      reply = outcome.text;
+      if (outcome.cached) counts.cached++;
+      else counts.requested++;
+      // Cut off at its budget: lines may end mid-sentence, so none is used.
+      if (outcome.truncated) return batch.length > 1 ? this.requestHalves(batch, near, signal, counts) : null;
+    } catch (e) {
+      // A batch the server's content policy blocks counts as unusable; the run goes on.
+      if (e instanceof LlmError && e.reason === 'blocked') return null;
+      if (e instanceof LlmError && e.reason === 'context' && batch.length > 1 && !signal.aborted) {
+        return this.requestHalves(batch, near, signal, counts);
+      }
+      throw e;
+    }
+    return parseLines(reply, batch.length);
+  }
+
+  private async requestHalves(
+    batch: number[],
+    near: boolean,
+    signal: AbortSignal,
+    counts: { cached: number; requested: number },
+  ): Promise<Map<number, string> | null> {
+    const half = Math.ceil(batch.length / 2);
+    const first = await this.request(batch.slice(0, half), near, signal, counts);
+    const second = await this.request(batch.slice(half), near, signal, counts);
+    if (!first && !second) return null;
+    const merged = new Map(first ?? []);
+    if (second) second.forEach((text, line) => merged.set(line + half, text));
+    return merged;
+  }
+
+  /**
+   * After an overflow lowered the Context size, splits the batches not done
+   * yet to fit it; finished batches keep their lines and cache.
+   */
+  private replan(): void {
+    const contextTokens = LlmService.contextTokens();
+    if (contextTokens >= this.contextTokens) return;
+    this.contextTokens = contextTokens;
+    const batches: number[][] = [];
+    const finished = new Set<number>();
+    this.batches.forEach((batch, index) => {
+      if (this.finished.has(index)) {
+        finished.add(batches.length);
+        batches.push(batch);
+        return;
+      }
+      planBatches(batch.map(cueIndex => this.cues[cueIndex]), contextTokens)
+        .forEach(part => batches.push(part.map(k => batch[k])));
+    });
+    this.batches = batches;
+    this.finished = finished;
   }
 
   private finish(index: number, lines: number, indices: number[], texts: string[]): void {

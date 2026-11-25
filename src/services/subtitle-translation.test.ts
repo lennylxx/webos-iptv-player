@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VttCue } from '../utils/webvtt';
 
-const { runText } = vi.hoisted(() => ({ runText: vi.fn() }));
+const { runText, contextTokens, outputCap } = vi.hoisted(() => ({
+  runText: vi.fn(), contextTokens: vi.fn(() => 16000), outputCap: vi.fn(() => 0),
+}));
 vi.mock('./llm/llm-service', () => ({
-  LlmService: { runText, contextTokens: () => 16000 },
+  LlmService: { runText, contextTokens, outputCap },
 }));
 vi.mock('./storage-service', () => ({
   StorageService: { getOnlineSubtitleConfig: () => ({ preferredLanguage: '' }) },
@@ -53,6 +55,10 @@ function job(list: VttCue[], onLines = vi.fn<(indices: number[], texts: string[]
 
 beforeEach(() => {
   runText.mockReset();
+  contextTokens.mockReset();
+  contextTokens.mockReturnValue(16000);
+  outputCap.mockReset();
+  outputCap.mockReturnValue(0);
   vi.useRealTimers();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -226,31 +232,144 @@ describe('SubtitleTranslation', () => {
     expect(translation.complete).toBe(true);
   });
 
-  it('retries a rate-limited batch after the server’s wait', async () => {
+  it('leaves retrying a throttled batch to the AI client instead of sending it again', async () => {
     vi.useFakeTimers();
     runText
-      .mockRejectedValueOnce(new LlmError('quota', 'HTTP 429', 429, 5000))
+      .mockRejectedValueOnce(new LlmError('rate', 'HTTP 429', 429, 5000))
       .mockImplementation(translate);
     const translation = job(cues(3));
 
     const pending = translation.start();
-    await vi.advanceTimersByTimeAsync(4999);
-    expect(runText).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(60000);
 
-    expect(await pending).toEqual({ error: null });
-    expect(logged().join('\n')).toMatch(/event=subtitle\.translate\.retry reason=quota status=429 attempt=1 wait_ms=5000/);
+    expect((await pending).error?.reason).toBe('rate');
+    expect(runText).toHaveBeenCalledTimes(1);
+    expect(logged().join('\n')).not.toMatch(/subtitle\.translate\.retry/);
   });
 
-  it('stops after the retries run out, and at once on a daily cap', async () => {
+  it('sends a batch too long for the model again in halves, and fails only a single line that still overflows', async () => {
+    runText.mockImplementation((task: LlmTextTask) => (inputLines(task).length > 20
+      ? Promise.reject(new LlmError('context', 'HTTP 400', 400))
+      : translate(task)));
+    const onLines = vi.fn<(indices: number[], texts: string[]) => void>();
+    const translation = job(cues(40), onLines);
+    expect(await translation.start()).toEqual({ error: null });
+    expect(runText.mock.calls.map(call => inputLines(call[0] as LlmTextTask).length)).toEqual([40, 20, 20]);
+    expect(onLines.mock.calls[0][0]).toHaveLength(40);
+
+    runText.mockReset();
+    runText.mockRejectedValue(new LlmError('context', 'HTTP 400', 400));
+    expect((await job(cues(1)).start()).error?.reason).toBe('context');
+    expect(runText).toHaveBeenCalledTimes(1);
+  });
+
+  it('sizes batches still to send for a Context size an overflow lowered mid-run, so they don\'t overflow first', async () => {
+    const long = (i: number) => `${'word '.repeat(20)}${i}`;
+    let overflows = 0;
+    runText.mockImplementation(async (task: LlmTextTask) => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (contextTokens() === 16000 || inputLines(task).length > 15) {
+        contextTokens.mockReturnValue(2048);
+        overflows++;
+        throw new LlmError('context', 'HTTP 400', 400);
+      }
+      return translate(task);
+    });
+    const translation = job(cues(120, long));
+    expect(await translation.start()).toEqual({ error: null });
+    // The two batches already out overflow; nothing sent after that does.
+    expect(overflows).toBe(2);
+    expect(translation.complete).toBe(true);
+  });
+
+  it('counts a single cue cut off at the output cap as an unusable batch and goes on, while a batch splits', async () => {
+    // Like the AI client: a batch of several lines may be split, a single line gets its cut-off reply.
+    runText.mockImplementation((task: LlmTextTask) => {
+      if (task.splittable && inputLines(task).length > 20) return Promise.reject(new LlmError('context', 'Reply is over the output cap', 0, 0, 'output-cap'));
+      if (!task.splittable) return Promise.resolve({ text: '', cached: false });
+      return translate(task);
+    });
+    const onLines = vi.fn<(indices: number[], texts: string[]) => void>();
+    const translation = job(cues(41), onLines);
+    expect(await translation.start()).toEqual({ error: null });
+    expect(onLines.mock.calls.reduce((sum, call) => sum + call[0].length, 0)).toBe(40);
+    expect(logged().join('\n')).toMatch(/event=subtitle\.translate\.incomplete reason=unusable_reply failed_batches=1/);
+  });
+
+  it('uses no line of a reply cut off at its budget, and asks a batch of several again in halves', async () => {
+    runText.mockImplementation((task: LlmTextTask) => (inputLines(task).length === 1
+      ? Promise.resolve({ text: '[1] Hallo, wie ge', cached: false, truncated: true })
+      : translate(task)));
+    const onLines = vi.fn<(indices: number[], texts: string[]) => void>();
+    expect(await job(cues(1), onLines).start()).toEqual({ error: null });
+    expect(onLines).not.toHaveBeenCalled();
+    expect(logged().join('\n')).toMatch(/event=subtitle\.translate\.incomplete reason=unusable_reply failed_batches=1/);
+
+    runText.mockReset();
+    runText.mockImplementationOnce(() => Promise.resolve({ text: '[1] Lin', cached: false, truncated: true })).mockImplementation(translate);
+    const halves = vi.fn<(indices: number[], texts: string[]) => void>();
+    expect(await job(cues(4), halves).start()).toEqual({ error: null });
+    expect(runText.mock.calls.map(call => inputLines(call[0] as LlmTextTask).length)).toEqual([4, 2, 2]);
+    expect(halves.mock.calls[0][0]).toHaveLength(4);
+  });
+
+  it('splits a batch whose reply would pass the model\'s output cap', async () => {
+    outputCap.mockReturnValue(300);
+    runText.mockImplementation(translate);
+    const translation = job(cues(40));
+    expect(await translation.start()).toEqual({ error: null });
+    const sizes = runText.mock.calls.map(call => inputLines(call[0] as LlmTextTask).length);
+    expect(Math.max(...sizes)).toBeLessThan(40);
+    expect(sizes.reduce((sum, size) => sum + size, 0)).toBe(40);
+  });
+
+  it('plans the unfinished batches again for a Context size lowered since the last run', async () => {
+    const long = (i: number) => `${'word '.repeat(20)}${i}`;
+    const translation = job(cues(41, long));
+    runText.mockRejectedValue(new LlmError('cap', 'Daily cap reached'));
+    expect((await translation.start()).error?.reason).toBe('cap');
+    const before = inputLines(runText.mock.calls[0][0] as LlmTextTask).length;
+    expect(before).toBe(40);
+
+    contextTokens.mockReturnValue(2048);
+    runText.mockReset();
+    runText.mockImplementation(translate);
+    expect(await translation.start()).toEqual({ error: null });
+    const sizes = runText.mock.calls.map(call => inputLines(call[0] as LlmTextTask).length);
+    expect(Math.max(...sizes)).toBeLessThan(40);
+    expect(sizes.reduce((sum, size) => sum + size, 0)).toBe(41);
+    expect(translation.complete).toBe(true);
+  });
+
+  it('skips a batch the content policy blocks and translates the rest', async () => {
+    runText
+      .mockRejectedValueOnce(new LlmError('blocked', 'HTTP 400', 400))
+      .mockImplementation(translate);
+    const translation = job(cues(120));
+
+    expect(await translation.start()).toEqual({ error: null });
+    expect(runText).toHaveBeenCalledTimes(3);
+    expect(logged().join('\n')).toMatch(/event=subtitle\.translate\.incomplete reason=unusable_reply failed_batches=1/);
+  });
+
+  it('stops at a failure the AI client gave up on, timeouts and dropped connections too, and at once on a daily cap', async () => {
     vi.useFakeTimers();
-    runText.mockRejectedValue(new LlmError('http', 'HTTP 503', 503));
+    runText.mockRejectedValue(new LlmError('http', 'HTTP 503', 503, 0, 'overloaded'));
     const translation = job(cues(3));
 
     const pending = translation.start();
     await vi.advanceTimersByTimeAsync(30000);
     expect((await pending).error?.status).toBe(503);
-    expect(runText).toHaveBeenCalledTimes(3);
+    expect(runText).toHaveBeenCalledTimes(1);
+
+    for (const reason of ['timeout', 'network'] as const) {
+      runText.mockReset();
+      runText.mockRejectedValue(new LlmError(reason, 'Request failed'));
+      const again = translation.start();
+      await vi.advanceTimersByTimeAsync(30000);
+      expect((await again).error?.reason).toBe(reason);
+      expect(runText).toHaveBeenCalledTimes(1);
+    }
 
     runText.mockReset();
     runText.mockRejectedValue(new LlmError('cap', 'Daily cap reached'));
@@ -258,11 +377,11 @@ describe('SubtitleTranslation', () => {
     expect(runText).toHaveBeenCalledTimes(1);
   });
 
-  it('ends a failed run at once instead of waiting out another batch’s retry', async () => {
+  it('ends a failed run at once instead of waiting out another batch still out', async () => {
     vi.useFakeTimers();
     runText
       .mockImplementationOnce(() => new Promise((_, reject) => setTimeout(() => reject(new LlmError('auth', 'HTTP 401', 401)), 10)))
-      .mockRejectedValueOnce(new LlmError('quota', 'HTTP 429', 429, 60000))
+      .mockImplementationOnce(() => new Promise(() => {}))
       .mockImplementation(translate);
     const translation = job(cues(200));
 

@@ -1209,7 +1209,7 @@ export class ParentalControls {
     if (this.aiProgress) return;
     const candidates = this.aiCandidates();
     if (!candidates.length) return;
-    const requests = planBatches(candidates, LlmService.contextTokens()).length;
+    const requests = planBatches(candidates, LlmService.contextTokens(), LlmService.outputCap()).length;
     this.confirmationPrompt.show({
       title: t('parental.findWithAi'),
       message: tp('parental.aiRequests', requests),
@@ -1227,7 +1227,7 @@ export class ParentalControls {
     this.cancelAi();
     const run = { controller: new AbortController(), stopped: false };
     this.aiRun = run;
-    this.aiProgress = { done: 0, total: planBatches(candidates, LlmService.contextTokens()).length };
+    this.aiProgress = { done: 0, total: planBatches(candidates, LlmService.contextTokens(), LlmService.outputCap()).length };
     this.render();
     this.focusSelector('[data-parental-ai]');
     const result = await suggestAdultGroups(source.kind, candidates, {
@@ -1280,7 +1280,7 @@ export class ParentalControls {
     if (!failure) return waiting || (pending || stopped ? '' : t('parental.noSuggestions'));
     // Built-in suggestions alone fill the review the parent is about to see.
     const fallback = free && pending > 0 && !checked;
-    const reason = failure === 'cap'
+    const reason = failure === 'cap' || failure === 'quota'
       ? t(fallback ? 'parental.aiLimit' : 'parental.aiLimitOnly')
       : checked ? t('parental.aiPartial')
         : t(fallback ? 'parental.aiUnavailable' : 'parental.aiFailed');

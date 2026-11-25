@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 
 const { runText } = vi.hoisted(() => ({ runText: vi.fn() }));
 vi.mock('./llm/llm-service', () => ({
-  LlmService: { runText, cachedText: async () => undefined, storeText: async () => undefined, contextTokens: () => 16000 },
+  LlmService: { runText, cachedText: async () => undefined, storeText: async () => undefined, contextTokens: () => 16000, outputCap: () => 0 },
 }));
 
 import { translateVods } from './vod-translation';

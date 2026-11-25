@@ -33,9 +33,14 @@ import { LlmError } from '../services/llm/client';
 import { SEARCH_EXPANSION_FEATURE } from '../services/search-expansion';
 import { PROGRAM_GENRES_FEATURE, ProgramGenres } from '../services/program-genres';
 import {
+  capabilitySignature,
   completeServerUrl,
-  DEFAULT_CONTEXT_TOKENS,
+  contextLearned,
   endpointSignature,
+  keepContextFor,
+  DEFAULT_CONTEXT_TOKENS,
+  defaultContextTokens,
+  effectiveContextTokens,
   normalizeBaseUrl,
   originOf,
 } from '../services/llm/config';
@@ -303,14 +308,19 @@ function aiFailureText(error: unknown): string {
   const reason = error instanceof LlmError ? error.reason : 'network';
   switch (reason) {
     case 'auth': return t('settings.aiInvalidKey');
-    case 'quota': return t('settings.aiRateLimited');
+    case 'quota':
+    case 'rate': return t('settings.aiRateLimited');
     case 'timeout': return t('settings.aiTimedOut');
     case 'config':
       if (error instanceof LlmError && error.hint === 'address') return t('settings.aiCheckServerUrl');
-      return error instanceof LlmError && error.status === 404
+      // The key works but the account may not use the model: not "Invalid API key".
+      if (error instanceof LlmError && error.hint === 'permission') return t('settings.aiServerError', { status: error.status });
+      return error instanceof LlmError && (error.status === 404 || error.hint === 'model')
         ? t('settings.aiModelNotFound')
         : t('settings.aiEnterServer');
-    case 'http': return t('settings.aiServerError', { status: error instanceof LlmError ? error.status : 0 });
+    case 'http':
+    case 'context':
+    case 'blocked': return t('settings.aiServerError', { status: error instanceof LlmError ? error.status : 0 });
     default: return t('settings.aiUnreachable');
   }
 }
@@ -594,6 +604,8 @@ export class Settings {
   private aiTested: LlmCapabilities | null = null;
   // The Context size the last unsaved Test connection set; null when none.
   private aiDetectedContext: number | null = null;
+  // The server and model (endpointSignature) aiDetectedContext was read from.
+  private aiDetectedFor: string | null = null;
   // Context size was picked in this form, so a larger size a server reports won't raise it.
   private aiContextChosen = false;
   private onChannelsChanged: () => void;
@@ -742,6 +754,11 @@ export class Settings {
       const input = e.target as HTMLInputElement;
       if (input.id === 'ai-base-url') {
         this.guardAiSecrets(input.value);
+        this.forgetStaleDetection();
+        this.followDefaultContext();
+      } else if (input.id === 'ai-model') {
+        this.forgetStaleDetection();
+        this.followDefaultContext();
       } else if (input.classList.contains('manual-epg-url')) {
         this.refreshEpgOffsetEditor(this.manualEpgSourcesFromEditor(), input.value.trim());
       } else if (
@@ -841,6 +858,7 @@ export class Settings {
     // A fresh form starts without an earlier, unsaved connection test.
     this.aiTested = null;
     this.aiDetectedContext = null;
+    this.aiDetectedFor = null;
     this.aiContextChosen = false;
     this.aiTesting = false;
     this.aiRender++;
@@ -1202,7 +1220,7 @@ export class Settings {
                 </div>
                 <div class="settings-item">
                   <div class="settings-item-title">${t('settings.aiContextSize')}</div>
-                  ${dropdown('ai-context-size', aiCountOptions(AI_CONTEXT_SIZES, ai.contextTokens, false), String(ai.contextTokens))}
+                  ${dropdown('ai-context-size', aiCountOptions(AI_CONTEXT_SIZES, effectiveContextTokens(ai), false), String(effectiveContextTokens(ai)))}
                   <div class="settings-item-hint">${t('settings.aiContextSizeHint')}</div>
                 </div>
                 <div class="settings-item">
@@ -2921,6 +2939,7 @@ export class Settings {
       const moved = !!url && url.value === url.defaultValue && originOf(url.defaultValue) !== originOf(ai.baseUrl);
       update('ai-base-url', ai.baseUrl);
       update('ai-model', ai.model);
+      if (url && url.value === ai.baseUrl) this.followDefaultContext();
       // Secrets go only beside the server they belong to: when the form shows
       // an address typed here for another server, the phone's key waits behind
       // the cleared flag, so guardAiSecrets restores it if that server returns.
@@ -2981,7 +3000,26 @@ export class Settings {
   }
 
   /** The AI section as edited, merged over the stored config. */
+  // The form's server and model.
+  private aiFormEndpoint(): string {
+    const value = (id: string) => ($(`#${id}`, this.container) as HTMLInputElement | null)?.value.trim() ?? '';
+    return endpointSignature({ ...StorageService.getLlmConfig(), baseUrl: completeServerUrl(value('ai-base-url')), model: value('ai-model') });
+  }
+
+  // A size Test connection read belongs to the server and model it tested.
+  private forgetStaleDetection(): void {
+    if (this.aiDetectedContext === null || this.aiDetectedFor === this.aiFormEndpoint()) return;
+    this.aiDetectedContext = null;
+    this.aiDetectedFor = null;
+    const dropdown = $('#ai-context-size', this.container);
+    if (!dropdown || this.aiContextChosen) return;
+    // Back to what the form would show without the test: a picked size, else the default or learned one.
+    setDropdownValue(dropdown, String(effectiveContextTokens(StorageService.getLlmConfig())));
+    this.followDefaultContext();
+  }
+
   private aiFormConfig(): LlmConfig {
+    this.forgetStaleDetection();
     const stored = StorageService.getLlmConfig();
     const value = (id: string) => ($(`#${id}`, this.container) as HTMLInputElement | null)?.value.trim() ?? '';
     const choice = (id: string, fallback: number) => {
@@ -2998,7 +3036,7 @@ export class Settings {
       apiKey: value('ai-api-key'),
       model: value('ai-model'),
       extraHeaders: value('ai-extra-headers'),
-      contextTokens: choice('ai-context-size', stored.contextTokens),
+      contextTokens: choice('ai-context-size', effectiveContextTokens(stored)),
       detectedContextTokens: this.aiDetectedContext ?? stored.detectedContextTokens,
       dailyRequestCap: choice('ai-daily-requests', stored.dailyRequestCap),
       dailyTokenCap: choice('ai-daily-tokens', stored.dailyTokenCap),
@@ -3008,10 +3046,19 @@ export class Settings {
         ...(programGenres ? { [PROGRAM_GENRES_FEATURE]: programGenres === 'on' } : {}),
       },
     };
-    const signature = endpointSignature(next);
+    // A default nobody picked or detected here stays the default, so it follows
+    // the server; so does a size learned from another server or model.
+    if (!this.aiContextChosen && this.aiDetectedContext === null) {
+      const kept = keepContextFor(stored, next);
+      if (stored.contextTokens === 0 || kept !== next) {
+        next.contextTokens = 0;
+        next.detectedContextTokens = kept.detectedContextTokens;
+      }
+    }
+    const signature = capabilitySignature(next);
     // A test of these exact values replaces what an earlier detection saved.
     if (this.aiTested && this.aiTested.signature === signature) next.capabilities = this.aiTested;
-    else if (next.baseUrl !== stored.baseUrl || next.model !== stored.model) next.capabilities = null;
+    else if (signature !== capabilitySignature(stored)) next.capabilities = null;
     return next;
   }
 
@@ -3052,6 +3099,21 @@ export class Settings {
     status.textContent = text;
   }
 
+  // A default Context size follows the address typed (8192 on the LAN, else
+  // 16000) until a size is picked in this form or a test reports one.
+  private followDefaultContext(): void {
+    const dropdown = $('#ai-context-size', this.container);
+    if (!dropdown || this.aiContextChosen || this.aiDetectedContext !== null) return;
+    // A size the user picked stays whatever the server or model; one learned stays with the server and model it came from.
+    const stored = StorageService.getLlmConfig();
+    if (stored.contextTokens !== 0 && !contextLearned(stored)) return;
+    const url = completeServerUrl(($('#ai-base-url', this.container) as HTMLInputElement | null)?.value ?? '');
+    const next = stored.contextTokens !== 0 && this.aiFormEndpoint() === endpointSignature(stored)
+      ? stored.contextTokens
+      : defaultContextTokens(url);
+    if (String(next) !== dropdown.dataset.value) setDropdownValue(dropdown, String(next));
+  }
+
   // Lowers Context size to what the server reports, or raises it from the
   // default or an earlier detected size; a smaller size the user chose stays.
   private applyReportedContext(tokens: number): void {
@@ -3062,7 +3124,8 @@ export class Settings {
     const best = fits.length ? fits[fits.length - 1] : AI_CONTEXT_SIZES[0];
     const current = Number(dropdown.dataset.value) || DEFAULT_CONTEXT_TOKENS;
     const detected = this.aiDetectedContext ?? StorageService.getLlmConfig().detectedContextTokens;
-    const untouched = (current === DEFAULT_CONTEXT_TOKENS && !this.aiContextChosen) || current === detected;
+    const defaulted = StorageService.getLlmConfig().contextTokens === 0 && !this.aiContextChosen;
+    const untouched = defaulted || current === detected;
     if (best < current || (best > current && untouched)) setDropdownValue(dropdown, String(best));
     if (best <= current || untouched) this.aiDetectedContext = best;
   }
@@ -3081,7 +3144,7 @@ export class Settings {
     this.setAiStatus(t('settings.checking'), '');
     try {
       if (!config.model.trim()) {
-        // A server serving one model (as llama.cpp does) needs no model typed.
+        // A server serving one model needs no model typed.
         const models = await LlmService.listModels(config);
         if (render !== this.aiRender) return;
         const model = $('#ai-model', this.container) as HTMLInputElement | null;
@@ -3096,6 +3159,7 @@ export class Settings {
       if (render !== this.aiRender) return;
       this.aiTested = report.capabilities;
       this.applyReportedContext(report.contextTokens);
+      this.aiDetectedFor = endpointSignature(config);
       // A reply passed the probe, so the model works even when /models names it differently.
       this.setAiStatus(report.models.length
         ? tp('settings.aiConnectedModels', report.models.length)
@@ -3496,6 +3560,7 @@ export class Settings {
     if (ProgramGenres.active && !genresWereOn) ProgramGenres.schedule(0);
     this.aiTested = null;
     this.aiDetectedContext = null;
+    this.aiDetectedFor = null;
 
     // Source, EPG URL, and time correction changes rebuild loaded data. Display-only
     // settings (time zone, auto-play) just re-render in place.

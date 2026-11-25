@@ -217,8 +217,8 @@ async function send(surface: Surface, entries: Array<[string, Wanted]>, translat
     }
     const reason = outcome.error instanceof LlmError ? outcome.error.reason : 'network';
     if (states.get(key)?.status === 'pending') states.delete(key);
-    if (reason === 'cap') message = 'ai.translateLimit';
-    else if (reason === 'auth' || reason === 'disabled' || reason === 'config') message = message || 'ai.setupProblem';
+    if (reason === 'cap' || reason === 'quota') message = 'ai.translateLimit';
+    else if (reason === 'auth' || reason === 'disabled' || reason === 'config' || reason === 'context') message = message || 'ai.setupProblem';
     else if (reason === 'cancelled') cancelled = true;
     else remember(key, { status: 'failed' });
   });

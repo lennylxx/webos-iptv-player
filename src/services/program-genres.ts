@@ -6,7 +6,8 @@ import { runInFrameSlices } from '../utils/frame-slices';
 import { EpgService } from './epg-service';
 import { getCachedLlmResult, setCachedLlmResult } from './idb-cache';
 import { LlmService } from './llm/llm-service';
-import { featureEnabled } from './llm/config';
+import { featureEnabled, replanAfterOverflow } from './llm/config';
+import { LlmError } from './llm/client';
 import { ParentalControlService, liveParentalRequest } from './parental-control';
 import { PlaylistService } from './playlist-service';
 import { StorageService } from './storage-service';
@@ -15,6 +16,7 @@ import {
   PROGRAM_GENRES_FEATURE,
   PROMPT_VERSION,
   classifyBatch,
+  genreReplyTokens,
   failureReason,
   planGenreBatches,
   type GenreItem,
@@ -289,7 +291,9 @@ async function runJob(signal: AbortSignal): Promise<void> {
   await load();
   const work = current() ? await pending(current, true) : null;
   if (!work) return;
-  const batches = planGenreBatches(work.items, LlmService.contextTokens());
+  let planned = LlmService.contextTokens();
+  const plan = (items: readonly GenreItem[], contextTokens: number) => planGenreBatches(items, contextTokens, LlmService.outputCap());
+  const batches = plan(work.items, planned);
   // Nothing new since a run that counted: the count stands.
   if (!batches.length && status.state === 'done') return;
   let cached = 0;
@@ -298,12 +302,20 @@ async function runJob(signal: AbortSignal): Promise<void> {
   let dropped = 0;
   let classified = 0;
   let failed = 0;
+  let blocked = 0;
   let reason: string = 'none';
   for (let index = 0; index < batches.length; index++) {
     // A channel hidden or locked meanwhile: its titles are not sent; a later run walks again.
     if (stopStale()) {
       if (unsaved) void persist();
       return;
+    }
+    // An output cap learned since the batch was planned: a reply covering it all wouldn't fit.
+    const cap = LlmService.outputCap();
+    if (cap && batches[index].length > 1 && genreReplyTokens(batches[index].length) > cap) {
+      batches.splice(index, 1, ...plan(batches[index], planned));
+      index--;
+      continue;
     }
     setStatus({ state: 'running', done: index, total: batches.length });
     try {
@@ -326,6 +338,18 @@ async function runJob(signal: AbortSignal): Promise<void> {
         void persist();
       }
     } catch (error) {
+      // Too long for the model: the same titles go again in smaller batches, and so do the later ones.
+      if (error instanceof LlmError && error.reason === 'context' && batches[index].length > 1) {
+        planned = replanAfterOverflow(batches, index, planned, LlmService.contextTokens(), plan);
+        index--;
+        continue;
+      }
+      // A batch the server's content policy blocks is skipped, and so is a single title
+      // whose reply was unusable (cut off, say); the rest still go.
+      if (error instanceof LlmError && (error.reason === 'blocked' || (error.reason === 'schema' && batches[index].length === 1))) {
+        blocked++;
+        continue;
+      }
       reason = failureReason(error);
       failed = batches.length - index;
       break;
@@ -334,11 +358,11 @@ async function runJob(signal: AbortSignal): Promise<void> {
   if (batches.length && reason !== 'cancelled') {
     log.info('Program genres finished', 'event=genre.ai.run', `programs=${work.programs}`,
       `titles=${work.items.length}`, `batches=${batches.length}`, `cached=${cached}`,
-      `classified=${classified}`, `dropped=${dropped}`, `failed=${failed}`, `reason=${reason}`);
+      `classified=${classified}`, `dropped=${dropped}`, `failed=${failed + blocked}`, `reason=${reason}`);
   }
   if (reason === 'cancelled' || signal.aborted) return;
   if (unsaved) void persist();
-  if (reason === 'cap') {
+  if (reason === 'cap' || reason === 'quota') {
     setStatus({ state: 'limit' });
     return;
   }
@@ -459,7 +483,7 @@ export const ProgramGenres = {
     await load();
     const work = await pending(() => true, false);
     if (!work) return { programs: 0, requests: 0 };
-    return { programs: work.programs, requests: planGenreBatches(work.items, LlmService.contextTokens()).length };
+    return { programs: work.programs, requests: planGenreBatches(work.items, LlmService.contextTokens(), LlmService.outputCap()).length };
   },
 
   /** Runs after `delayMs`, replacing a run already waiting. */

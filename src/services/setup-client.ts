@@ -11,7 +11,7 @@ import { StorageService } from './storage-service';
 import { uploadIdFromUrl } from './upload-client';
 import { ParentalControlService } from './parental-control';
 import type { OnlineSubtitleConfig } from './subtitle-search/types';
-import { completeServerUrl, endpointSignature, originOf } from './llm/config';
+import { capabilitySignature, completeServerUrl, keepContextFor, originOf } from './llm/config';
 import type { LlmConfig } from './llm/types';
 
 const log = createLogger('Setup');
@@ -373,15 +373,15 @@ class SetupClientImpl {
           log.warn('AI key dropped for a new server', 'event=llm.setup.key_dropped',
             `key=${String(droppedKey)}`, `headers=${String(droppedHeaders)}`, `action=${action.id}`);
         }
-        llm = {
+        llm = keepContextFor(llm, {
           ...llm,
           ...endpoint,
           apiKey: typeof action.apiKey === 'string' ? action.apiKey : sameServer ? llm.apiKey : '',
           extraHeaders: typeof action.extraHeaders === 'string'
             ? action.extraHeaders
             : sameServer ? llm.extraHeaders : '',
-        };
-        if (llm.capabilities && llm.capabilities.signature !== endpointSignature(llm)) llm.capabilities = null;
+        });
+        if (llm.capabilities && llm.capabilities.signature !== capabilitySignature(llm)) llm.capabilities = null;
         llmActionIds.push(action.id);
       } else {
         log.warn('Ignoring invalid action:', action.id);

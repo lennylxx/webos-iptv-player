@@ -9,18 +9,23 @@ const { runText, cachedText, storeText, cache } = vi.hoisted(() => {
     storeText: vi.fn(async (task: { user: string }, text: string) => { cache.set(task.user, text); }),
   };
 });
-vi.mock('./llm/llm-service', () => ({ LlmService: { runText, cachedText, storeText, contextTokens: () => 16000 } }));
+const context = vi.hoisted(() => ({ tokens: 16000, cap: 0 }));
+vi.mock('./llm/llm-service', () => ({
+  LlmService: { runText, cachedText, storeText, contextTokens: () => context.tokens, outputCap: () => context.cap },
+}));
 
 import { LlmError } from './llm/client';
 import { clipDescription, MAX_BATCH_ITEMS, MAX_DESCRIPTION_CHARS, parseItems, translatePrograms } from './epg-translation';
 
-interface Task { user: string; system: string; feature: string; finishStarted: boolean; priority: string }
+interface Task { user: string; system: string; feature: string; finishStarted: boolean; priority: string; splittable?: boolean }
 const tasks = () => runText.mock.calls.map(call => call[0] as Task);
 const program = (i: number, description = `Episode ${i}.`) => ({ title: `Program ${i}`, description });
 // Answers like a model: every line with its tag, translated.
 const translateLines = (user: string) => user.replace(/Program/g, 'Programm').replace(/Episode/g, 'Folge');
 
 beforeEach(() => {
+  context.tokens = 16000;
+  context.cap = 0;
   runText.mockReset();
   runText.mockImplementation(async (task: Task) => ({ text: translateLines(task.user), cached: false }));
   cache.clear();
@@ -85,6 +90,66 @@ describe('translatePrograms', () => {
     const error = new LlmError('cap', 'Daily cap reached');
     runText.mockRejectedValueOnce(error);
     expect(await translatePrograms([program(1), program(2)], 'de')).toEqual([{ error }, { error }]);
+  });
+
+  it('asks each half again when a request overflows the context, and fails a lone program that still does', async () => {
+    runText.mockImplementation(async (task: Task) => {
+      if (task.user.indexOf('Program 3') >= 0) throw new LlmError('context', 'HTTP 400', 400);
+      return { text: translateLines(task.user), cached: false };
+    });
+    const out = await translatePrograms([program(1), program(2), program(3), program(4)], 'de');
+    expect(out[0]).toEqual({ text: { title: 'Programm 1', description: 'Folge 1.' } });
+    expect(out[3]).toEqual({ text: { title: 'Programm 4', description: 'Folge 4.' } });
+    expect(out[2]).toMatchObject({ error: { reason: 'context' } });
+    expect(tasks().map(task => task.user.split('\n').length / 2)).toEqual([4, 2, 2, 1, 1]);
+  });
+
+  it('sizes the halves of an overflowed request for the lowered Context size, so they don\'t overflow first', async () => {
+    const programs = Array.from({ length: 16 }, (_, i) => program(i, `${'Episode words. '.repeat(30)}${i}`));
+    let overflows = 0;
+    runText.mockImplementation(async (task: Task) => {
+      if (context.tokens === 16000 || task.user.split('\n').length > 8) {
+        context.tokens = 2048;
+        overflows++;
+        throw new LlmError('context', 'HTTP 400', 400);
+      }
+      return { text: translateLines(task.user), cached: false };
+    });
+    const out = await translatePrograms(programs, 'de');
+    expect(overflows).toBe(1);
+    expect(out.every(outcome => 'text' in outcome)).toBe(true);
+  });
+
+  it('lets the AI client split a batch cut off at the output cap, and fails only a single program that still is', async () => {
+    runText.mockImplementation(async (task: Task) => {
+      if (task.splittable && task.user.indexOf('Program 3') >= 0) throw new LlmError('context', 'Reply is over the output cap', 0, 0, 'output-cap');
+      if (!task.splittable && task.user.indexOf('Program 3') >= 0) return { text: '[T1] Progr', cached: false };
+      return { text: translateLines(task.user), cached: false };
+    });
+    const out = await translatePrograms([program(1), program(2), program(3), program(4)], 'de');
+    expect(tasks()[0].splittable).toBe(true);
+    expect(out[0]).toEqual({ text: { title: 'Programm 1', description: 'Folge 1.' } });
+    expect(out[3]).toEqual({ text: { title: 'Programm 4', description: 'Folge 4.' } });
+    expect(out[2]).toMatchObject({ error: { reason: 'schema' } });
+  });
+
+  it('uses and keeps nothing of a reply cut off at its budget, and asks several programs again in halves', async () => {
+    runText.mockImplementationOnce(async () => ({ text: '[T1] Programm 1\n[D1] Fol', cached: false, truncated: true }));
+    const out = await translatePrograms([program(1)], 'de');
+    expect(out[0]).toMatchObject({ error: { reason: 'schema' } });
+    expect(storeText).not.toHaveBeenCalled();
+
+    runText.mockImplementationOnce(async () => ({ text: '[T1] Programm 1\n[D1] Folge 1.\n[T2] Programm 2\n[D2] Fol', cached: false, truncated: true }));
+    const both = await translatePrograms([program(1), program(2)], 'de');
+    expect(both.every(outcome => 'text' in outcome)).toBe(true);
+    expect(tasks().slice(1).map(task => task.user.split('\n').length / 2)).toEqual([2, 1, 1]);
+  });
+
+  it('splits a request whose reply would pass the model\'s output cap', async () => {
+    context.cap = 120;
+    const out = await translatePrograms([program(1), program(2), program(3), program(4)], 'de');
+    expect(tasks().length).toBeGreaterThan(1);
+    expect(out.every(outcome => 'text' in outcome)).toBe(true);
   });
 
   it('splits a long list into requests of at most MAX_BATCH_ITEMS', async () => {
