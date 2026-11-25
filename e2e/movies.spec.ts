@@ -1001,9 +1001,16 @@ test.describe('Down from the tab bar resumes Movies as Up left it', () => {
     const tile = page.locator('#view-movies .catalog-tile').first();
     await tile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
     await expect(tile).toHaveClass(/\bfocused\b/);
-    await upToTabBar(page);
-    // Scroll the parked tile half under the top edge of the catalog.
-    const left = page.locator('#view-movies .focused-parked');
+    // Follow the item Up leaves by its key: the catalog can still re-render
+    // once the tab bar has the keys, and that drops its parked ring class.
+    let key: string | null = null;
+    for (let i = 0; i < 8 && !(await page.locator('.tab-bar-item.focused').count()); i++) {
+      key = await page.evaluate(() => document.querySelector('#view-movies .focused')?.getAttribute('data-key') ?? null) ?? key;
+      await page.keyboard.press('ArrowUp');
+    }
+    await expect(page.locator('.tab-bar-item[data-section="movies"].focused')).toHaveCount(1);
+    // Scroll the item it left half under the top edge of the catalog.
+    const left = page.locator(`#view-movies [data-key="${key}"]`);
     await expect(left).toHaveCount(1);
     const clipped = await left.evaluate((el) => {
       let scroller = el.parentElement;

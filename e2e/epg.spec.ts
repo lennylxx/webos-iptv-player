@@ -15,8 +15,9 @@ import {
 // clock and a UTC device zone so wall-clock == absolute time.
 test.use({ timezoneId: 'UTC' });
 
+// The guide shows before its cache write lands, so this waits for the entry.
 async function ageCachedGuide(page: Page, url: string, timestamp: number): Promise<void> {
-  await page.evaluate(({ url, timestamp }) => new Promise<void>((resolve, reject) => {
+  await expect.poll(() => page.evaluate(({ url, timestamp }) => new Promise<boolean>((resolve, reject) => {
     const open = indexedDB.open('iptv');
     open.onerror = () => reject(open.error);
     open.onsuccess = () => {
@@ -26,20 +27,16 @@ async function ageCachedGuide(page: Page, url: string, timestamp: number): Promi
       const read = store.get(url);
       read.onerror = () => reject(read.error);
       read.onsuccess = () => {
-        if (!read.result) {
-          reject(new Error('EPG cache entry was not stored'));
-          return;
-        }
-        store.put({ ...read.result, timestamp });
+        if (read.result) store.put({ ...read.result, timestamp });
       };
       tx.oncomplete = () => {
         db.close();
-        resolve();
+        resolve(!!read.result);
       };
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
     };
-  }), { url, timestamp });
+  }), { url, timestamp }), { message: 'EPG cache entry was not stored' }).toBe(true);
 }
 
 // The next launch's cached-guide read waits for `releaseGuideRead(page)`.
