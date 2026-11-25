@@ -21,6 +21,8 @@ interface AssInstance {
   delay?: number;
 }
 
+type AssConstructor = new (content: string, video: HTMLVideoElement, options: { container: HTMLElement }) => unknown;
+
 /**
  * Renders `.ass` / `.ssa` sidecar subtitles for VOD with `assjs` — a DOM/CSS ASS
  * renderer, so the browser does font fallback (no bundled fonts) and it degrades
@@ -35,6 +37,9 @@ export class AssSubtitles {
   private sidecars: SidecarSubtitle[] = [];
   private ass: AssInstance | null = null;
   private gen = 0; // bumped on attach/show/hide/destroy; in-flight shows bail when it changes
+  private shown = -1;
+  private loads = new Map<number, Promise<string>>();
+  private Ass: AssConstructor | null = null;
   private delay = 0; // per-stream subtitle timing offset (seconds; + = later)
 
   // Record the video, the DOM host for the overlay, and the ASS sidecars. No
@@ -45,6 +50,7 @@ export class AssSubtitles {
     this.video = video;
     this.container = container;
     this.sidecars = sidecars;
+    this.loads.clear();
     if (sidecars.length) log.info('recorded', sidecars.length, 'ASS sidecar(s)');
   }
 
@@ -58,19 +64,70 @@ export class AssSubtitles {
     if (!sidecar || !video) return;
     const gen = ++this.gen;
     try {
-      const [{ default: ASS }, content] = await Promise.all([
-        import('assjs'),
-        sidecar.text != null ? Promise.resolve(sidecar.text) : fetchText(sidecar.url),
-      ]);
+      const [{ default: ASS }, content] = await Promise.all([import('assjs'), this.contentOf(index)]);
       if (gen !== this.gen) return; // a newer selection/stop landed mid-fetch
-      const overlay = this.ensureOverlay();
-      if (!overlay) return;
-      this.ass = new ASS(content, video, { container: overlay }) as unknown as AssInstance;
-      if (this.delay) { try { this.ass.delay = this.delay; } catch { /* older assjs */ } }
+      this.Ass = ASS as unknown as AssConstructor;
+      if (!this.render(content)) return;
+      this.shown = index;
       log.info('showing ASS sidecar', sidecar.name || sidecar.lang || sidecar.url);
     } catch (e) {
       log.warn('ASS load failed:', e);
     }
+  }
+
+  isShowing(index: number): boolean {
+    return this.shown === index && !!this.ass;
+  }
+
+  /** The text of the i-th sidecar, fetched once. */
+  contentOf(index: number): Promise<string> {
+    const sidecar = this.sidecars[index];
+    if (!sidecar) return Promise.reject(new Error('No such ASS sidecar'));
+    if (sidecar.text != null) return Promise.resolve(sidecar.text);
+    let load = this.loads.get(index);
+    if (!load) {
+      load = fetchText(sidecar.url);
+      load.catch(() => this.loads.delete(index));
+      this.loads.set(index, load);
+    }
+    return load;
+  }
+
+  /** Replaces the i-th sidecar's text, redrawing it at once if it is shown. */
+  setText(index: number, text: string): void {
+    const sidecar = this.sidecars[index];
+    if (!sidecar) return;
+    sidecar.text = text;
+    if (this.shown !== index || !this.ass) return;
+    const started = Date.now();
+    this.destroyInstance();
+    if (this.render(text)) this.shown = index;
+    log.debug('ASS redrawn in', Date.now() - started, 'ms');
+  }
+
+  private render(content: string): boolean {
+    const overlay = this.ensureOverlay();
+    const video = this.video;
+    if (!overlay || !video || !this.Ass) return false;
+    // assjs starts drawing frames only on a later play/playing event, so an
+    // instance made mid-playback would freeze; keep its handler to start it.
+    let start: EventListener | null = null;
+    const own = Object.prototype.hasOwnProperty.call(video, 'addEventListener');
+    const add = video.addEventListener;
+    video.addEventListener = function (this: HTMLVideoElement, type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) {
+      if (type === 'playing' && typeof listener === 'function') start = listener;
+      return add.call(this, type, listener, options);
+    } as typeof video.addEventListener;
+    try {
+      this.ass = new this.Ass(content, video, { container: overlay }) as AssInstance;
+    } finally {
+      if (own) video.addEventListener = add;
+      else delete (video as Partial<HTMLVideoElement>).addEventListener;
+    }
+    if (this.delay) { try { this.ass.delay = this.delay; } catch { /* older assjs */ } }
+    const playing = start as EventListener | null;
+    if (playing && !video.paused) playing.call(video, new Event('playing'));
+    return true;
   }
 
   // Stop drawing (destroys the instance) while keeping the overlay for reuse.
@@ -94,9 +151,11 @@ export class AssSubtitles {
     this.video = null;
     this.container = null;
     this.sidecars = [];
+    this.loads.clear();
   }
 
   private destroyInstance(): void {
+    this.shown = -1;
     if (!this.ass) return;
     try { this.ass.destroy(); } catch (e) { log.warn('ASS destroy failed:', e); }
     this.ass = null;

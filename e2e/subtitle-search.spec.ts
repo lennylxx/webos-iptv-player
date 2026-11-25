@@ -595,6 +595,68 @@ for (const locale of ['en', 'de', 'fr', 'ru', 'uk', 'pt-BR']) {
   });
 }
 
+const ASS_BODY = [
+  '[Script Info]',
+  'ScriptType: v4.00+',
+  'PlayResX: 640',
+  'PlayResY: 360',
+  '',
+  '[V4+ Styles]',
+  'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+  'Style: Default,Arial,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1',
+  '',
+  '[Events]',
+  'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+  'Dialogue: 0,0:00:00.00,0:10:00.00,Default,,0,0,0,,{\\an7\\pos(40,30)}Bravo Store',
+  'Dialogue: 0,0:00:00.00,0:10:00.00,Default,,0,0,0,,I {\\i1}really{\\i0} mean it.',
+  'Comment: 0,0:00:00.00,0:10:00.00,Default,,0,0,0,,Alpha note',
+].join('\n');
+
+test('Translate turns a downloaded ASS subtitle into a translation that keeps its styling', async ({ page }) => {
+  const sent = await seedTranslation(page, 'Styled Release');
+  await page.route(/\/v1\/sub\/detail/, (route) => {
+    const id = new URL(route.request().url()).searchParams.get('id') || '';
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      sub: { subs: [{ url: '', filelist: [{ url: `http://host.example.com:8080/onlinesub/${id}.ass`, f: `${id}.ass` }] }] },
+    }) });
+  });
+  await page.route('**/onlinesub/**', (r) => r.fulfill({ status: 200, contentType: 'text/plain', body: ASS_BODY }));
+  await startVodPlayback(page);
+  await openSearchOverlay(page);
+  await expect(page.locator('#subtitle-search .subs-row')).toContainText('Styled Release');
+  await page.keyboard.press('Enter');
+  const overlay = page.locator('#ass-overlay');
+  const sign = overlay.locator('.ASS-dialogue').filter({ hasText: 'Bravo Store' });
+  await expect(sign).toBeVisible();
+  const before = await sign.boundingBox();
+
+  await page.mouse.move(960, 540);
+  await page.mouse.move(1900, 540);
+  const menu = page.locator('#player-menu');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter'); // Subtitles; focus lands on the shown subtitle
+  await expect(menu.locator('[data-menu-action="__subs_translate__"]')).toHaveText('Translate to Deutsch');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.osd-stream-info')).toContainText('Styled Release · AI translation (Deutsch)', { timeout: 1000 });
+
+  await expect(overlay.locator('.ASS-dialogue').filter({ hasText: 'Bravo Store (de)' })).toBeVisible();
+  // Only the visible text leaves the device; the line-internal italics come back as \i1.
+  expect(sent).toEqual(['[1] Bravo Store\n[2] I <i>really</i> mean it.']);
+  // assjs rebuilds the overlay as translated batches land, so read the lines once they settle.
+  const translated = overlay.locator('.ASS-dialogue').filter({ hasText: 'Bravo Store (de)' });
+  await expect.poll(async () => {
+    const after = await translated.boundingBox().catch(() => null);
+    return after ? Math.max(Math.abs(after.x - before!.x), Math.abs(after.y - before!.y)) : Infinity;
+  }).toBeLessThan(1);
+  await expect.poll(() => overlay.locator('.ASS-dialogue').filter({ hasText: 'mean it. (de)' }).evaluate((el) =>
+    Array.from(el.querySelectorAll('span')).filter(span => getComputedStyle(span).fontStyle === 'italic')
+      .map(span => span.textContent)).catch(() => [])).toContain('really');
+  await expect(overlay).not.toContainText('Alpha note');
+});
+
 // The translation's row lines its text up with the other rows, and a long name
 // gives way to its "· AI · DE" note, which always shows in full.
 test('a long-named AI translation keeps its note and lines up with the other subtitles', async ({ page }) => {

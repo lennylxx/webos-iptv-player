@@ -9,6 +9,8 @@ import { StorageService } from './storage-service';
 
 const log = createLogger('SubTranslate');
 
+export type TranslationCue = Pick<VttCue, 'start' | 'end' | 'text'>;
+
 export const SUBTITLE_TRANSLATION_FEATURE = 'subtitle-translation';
 const PROMPT_VERSION = 1;
 const MAX_LINES = 40;
@@ -82,12 +84,12 @@ function estimateTokens(text: string): number {
   return Math.ceil(tokens);
 }
 
-function lineCost(cue: VttCue): number {
+function lineCost(cue: TranslationCue): number {
   return estimateTokens(cue.text) + 4;
 }
 
 /** Splits cues into fixed batches of cue indices; fixed so a replay hits the same cached batches. */
-export function planBatches(cues: readonly VttCue[], contextTokens: number): number[][] {
+export function planBatches(cues: readonly TranslationCue[], contextTokens: number): number[][] {
   // A quarter of the room for the lines sent; the reply runs up to about three times as long.
   const budget = Math.max(100, Math.floor((contextTokens - PROMPT_OVERHEAD_TOKENS) / 4));
   const batches: number[][] = [];
@@ -114,7 +116,7 @@ export function replyTokens(inputTokens: number, contextTokens: number): number 
 }
 
 /** Batch order: from the one at `position` to the end, then back toward the start. */
-export function batchOrder(batches: readonly number[][], cues: readonly VttCue[], position: number): number[] {
+export function batchOrder(batches: readonly number[][], cues: readonly TranslationCue[], position: number): number[] {
   let first = batches.findIndex(batch => cues[batch[batch.length - 1]].end > position);
   if (first < 0) first = batches.length - 1;
   const order: number[] = [];
@@ -123,15 +125,20 @@ export function batchOrder(batches: readonly number[][], cues: readonly VttCue[]
   return order;
 }
 
-function systemPrompt(target: string): string {
+// ASS style toggles and the override blocks kept as <x1/>, <x2/>, …
+const TAG_MARKER = /<\/?[ibus]>|<x\d+\/>/;
+
+function systemPrompt(target: string, keptTags: boolean): string {
   const language = englishName(target);
-  return [
+  const lines = [
     `You translate film and TV subtitles into ${language}.`,
     `Each input line is one subtitle: its number in square brackets, then its text. ${LINE_BREAK} marks a line break within a subtitle.`,
     'Reply with one line per subtitle, in the same order, each starting with the same number in square brackets. Write nothing else.',
     `Never merge, split, skip, or reorder subtitles. Keep ${LINE_BREAK}, formatting tags such as <i>, and leading dashes.`,
     `Write natural, concise subtitles. Keep names as they are, and copy a subtitle already in ${language} unchanged.`,
-  ].join('\n');
+  ];
+  if (keptTags) lines.push('Keep tags such as <i>, </i> and <x1/> exactly, moving them with the words they mark.');
+  return lines.join('\n');
 }
 
 export function formatLines(texts: readonly string[]): string {
@@ -208,12 +215,14 @@ export class SubtitleTranslation {
   private drain: Promise<unknown> = Promise.resolve();
 
   constructor(
-    private cues: readonly VttCue[],
+    private cues: readonly TranslationCue[],
     readonly target: string,
     // Playback position on the cue timeline, read before each batch.
     private position: () => number,
     private onLines: (indices: number[], texts: string[]) => void,
     private onProgress: () => void = () => {},
+    // ASS text carries tag markers to keep; extra diagnostic fields for the start and the end of a run.
+    private extra: { tagMarkers?: boolean; start?: string[]; finish?: () => string[] } = {},
   ) {
     this.total = cues.length;
     this.contextTokens = LlmService.contextTokens();
@@ -277,6 +286,7 @@ export class SubtitleTranslation {
       `batches=${this.batches.length}`,
       `remaining=${this.batches.length - this.finished.size}`,
       `resume=${String(this.finished.size > 0)}`,
+      ...(this.extra.start ?? []),
     );
     let error: LlmError | null = null;
     // Ends the run's waits and queued requests on a stop or the first failure.
@@ -322,6 +332,7 @@ export class SubtitleTranslation {
       `cached=${counts.cached}`,
       `requested=${counts.requested}`,
       `total=${this.total}`,
+      ...(this.extra.finish?.() ?? []),
     ];
     if (stopped) {
       if (failure && failure.reason !== 'cancelled') {
@@ -368,7 +379,7 @@ export class SubtitleTranslation {
         const outcome = await LlmService.runText({
           feature: SUBTITLE_TRANSLATION_FEATURE,
           priority: near ? 'foreground' : 'background',
-          system: systemPrompt(this.target),
+          system: systemPrompt(this.target, !!this.extra.tagMarkers && texts.some(text => TAG_MARKER.test(text))),
           user: formatLines(texts),
           promptVersion: PROMPT_VERSION,
           maxTokens: replyTokens(inputTokens, this.contextTokens),

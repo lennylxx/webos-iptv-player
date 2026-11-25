@@ -23,6 +23,7 @@ import {
 import { DashSubtitles } from '../services/dash-subtitles';
 import { VodSubtitles } from '../services/vod-subtitles';
 import { AssSubtitles, isAssSidecar } from '../services/ass-subtitles';
+import { AssTranslationDoc, RedrawThrottle } from '../services/ass-translation';
 import { getCachedSubtitle, setCachedSubtitle } from '../services/idb-cache';
 import { isLunaAvailable, lunaRequest } from '../services/luna';
 import {
@@ -91,6 +92,12 @@ const CC_SUBTITLE_INDEX = -2;
 export const ASS_SUBTITLE_BASE = 1000;
 export const VOD_SUBTITLE_BASE = 2000;
 
+// Rebuilt ASS lines this close to the playback position redraw at once.
+const ASS_NEAR_BEFORE_S = 5;
+const ASS_NEAR_AFTER_S = 60;
+
+type SidecarKind = 'text' | 'ass';
+
 function sidecarName(sidecar: SidecarSubtitle): string {
   return sidecar.name || sidecar.lang || t('player.subtitles');
 }
@@ -131,7 +138,15 @@ export class PlayerTracks {
   private vodTextSidecars: SidecarSubtitle[] = []; // SRT/WebVTT sidecars of the current VOD item
   private vodAssSidecars: SidecarSubtitle[] = []; // the ASS/SSA sidecars of the current VOD item
   private activeAssIndex = -1; // index into vodAssSidecars currently shown (-1 = none)
-  private translations = new Map<number, SubtitleTranslation>(); // by translated vodSubs entry
+  private translations = new Map<number, SubtitleTranslation>(); // by the translated entry's picker index
+  private assSources = new Map<number, number>(); // ASS translation entry -> its source entry
+  private assDocs = new Map<number, AssTranslationDoc>(); // by ASS translation entry
+  private assRedraws = new Map<number, RedrawThrottle>(); // by ASS translation entry
+  private assUnreadable = new Set<number>(); // ASS sources with no events to translate
+  private restoredAss = -1; // the ASS translation entry a saved pick brought back
+  private assParsed: { source: number; doc: AssTranslationDoc | null } | null = null; // the shown ASS source, parsed once
+  private assChecking = -1; // the ASS source being loaded for its check
+  private seekVideo: HTMLVideoElement | null = null;
   private translationGen = 0;
   private translationRestoreLoggedFor = ''; // one subtitle.translate.restore per opening, across reloads
   private subsOverlay: SubtitleSearchOverlay | null = null; // online subtitle search overlay
@@ -212,6 +227,16 @@ export class PlayerTracks {
   private clearVodSubtitles(): void {
     this.translations.forEach(job => job.stop());
     this.translations.clear();
+    this.assRedraws.forEach(redraw => redraw.cancel());
+    this.assRedraws.clear();
+    this.assSources.clear();
+    this.assDocs.clear();
+    this.assUnreadable.clear();
+    this.restoredAss = -1;
+    this.assParsed = null;
+    this.assChecking = -1;
+    this.seekVideo?.removeEventListener('seeking', this.onSeeking);
+    this.seekVideo = null;
     this.translationGen++;
     this.vodSubs.clear();
     this.assSubs.destroy();
@@ -413,15 +438,47 @@ export class PlayerTracks {
     return !!this.options.getVod() && subtitleSearchService.isAvailable();
   }
 
-  // The subtitle a translation would come from: the shown SRT/WebVTT sidecar,
-  // or the source of a shown translation.
-  private translationContext(): { active: number; source: number } | null {
-    if (!this.options.getVod() || this.pipeline.isMseActive()) return null;
-    if (!LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE)) return null;
-    const active = this.vodSubs.activeIndex;
-    if (!this.vodTextSidecars[active]) return null;
-    const source = this.vodSubs.sourceOf(active);
-    return { active, source: source >= 0 ? source : active };
+  // A picker index's sidecar kind and its entry within that kind.
+  private sidecarEntry(index: number): { kind: SidecarKind; entry: number } | null {
+    if (index >= VOD_SUBTITLE_BASE) return { kind: 'text', entry: index - VOD_SUBTITLE_BASE };
+    if (index >= ASS_SUBTITLE_BASE) return { kind: 'ass', entry: index - ASS_SUBTITLE_BASE };
+    return null;
+  }
+
+  private sidecarsOf(kind: SidecarKind): SidecarSubtitle[] {
+    return kind === 'text' ? this.vodTextSidecars : this.vodAssSidecars;
+  }
+
+  private pickerIndex(kind: SidecarKind, entry: number): number {
+    return (kind === 'text' ? VOD_SUBTITLE_BASE : ASS_SUBTITLE_BASE) + entry;
+  }
+
+  // The translated entry's source entry, or -1 for an entry that isn't a translation.
+  private sourceOf(kind: SidecarKind, entry: number): number {
+    return kind === 'text' ? this.vodSubs.sourceOf(entry) : this.assSources.get(entry) ?? -1;
+  }
+
+  // The name a sidecar's picker option carries, which a saved pick matches.
+  private optionName(kind: SidecarKind, sidecar: SidecarSubtitle): string {
+    return kind === 'text' ? sidecarName(sidecar) : sidecar.name;
+  }
+
+  // The subtitle a translation would come from: the shown SRT/WebVTT or ASS/SSA
+  // sidecar, or the source of a shown translation.
+  private canTranslate(): boolean {
+    return !!this.options.getVod() && !this.pipeline.isMseActive() && LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE);
+  }
+
+  private translationContext(): { kind: SidecarKind; active: number; source: number } | null {
+    if (!this.canTranslate()) return null;
+    const text = this.vodSubs.activeIndex;
+    const kind: SidecarKind | null = this.vodTextSidecars[text] ? 'text' : this.vodAssSidecars[this.activeAssIndex] ? 'ass' : null;
+    if (!kind) return null;
+    const active = kind === 'text' ? text : this.activeAssIndex;
+    const source = this.sourceOf(kind, active);
+    if (kind === 'ass' && source < 0) this.checkAssReadable(active);
+    if (kind === 'ass' && this.assUnreadable.has(source >= 0 ? source : active)) return null;
+    return { kind, active, source: source >= 0 ? source : active };
   }
 
   // The target of the one-press translate row: the default target, or a shown
@@ -429,14 +486,15 @@ export class PlayerTracks {
   private translateOffer(): string | null {
     const context = this.translationContext();
     if (!context) return null;
+    const sidecars = this.sidecarsOf(context.kind);
     const target = translationTarget();
     if (context.source !== context.active) {
-      const lang = this.vodTextSidecars[context.active].lang;
-      const job = this.translations.get(context.active);
+      const lang = sidecars[context.active].lang;
+      const job = this.translations.get(this.pickerIndex(context.kind, context.active));
       if (job && !job.complete && !job.running) return lang;
       if (sameTarget(lang, target)) return null;
     }
-    return needsTranslation(this.vodTextSidecars[context.source].lang, target) ? target : null;
+    return needsTranslation(sidecars[context.source].lang, target) ? target : null;
   }
 
   /** Label of the menu's translate row, or null to hide it. */
@@ -449,10 +507,11 @@ export class PlayerTracks {
   subtitleTranslationLanguages(): TranslationLanguageOption[] | null {
     const context = this.translationContext();
     if (!context) return null;
-    const sourceLang = this.vodTextSidecars[context.source].lang;
-    const shown = context.source !== context.active ? this.vodTextSidecars[context.active].lang : '';
-    const used = this.vodTextSidecars
-      .filter((_, index) => this.vodSubs.sourceOf(index) === context.source)
+    const sidecars = this.sidecarsOf(context.kind);
+    const sourceLang = sidecars[context.source].lang;
+    const shown = context.source !== context.active ? sidecars[context.active].lang : '';
+    const used = sidecars
+      .filter((_, index) => this.sourceOf(context.kind, index) === context.source)
       .map(sidecar => sidecar.lang);
     const codes: string[] = [];
     [translationTarget(), ...SUBTITLE_LANGUAGES.map(language => language.code), getLocale(), ...used]
@@ -472,54 +531,163 @@ export class PlayerTracks {
     const context = this.translationContext();
     const into = target ?? this.translateOffer();
     if (!context || !into) return;
-    const existing = this.vodTextSidecars.findIndex((sidecar, index) =>
-      this.vodSubs.sourceOf(index) === context.source && sameTarget(sidecar.lang, into));
-    const entry = existing >= 0 ? existing : this.translationEntry(context.source, into);
-    this.selectSubtitleTrack(VOD_SUBTITLE_BASE + entry);
-    const job = this.translations.get(entry);
+    const existing = this.sidecarsOf(context.kind).findIndex((sidecar, index) =>
+      this.sourceOf(context.kind, index) === context.source && sameTarget(sidecar.lang, into));
+    const entry = existing >= 0 ? existing : this.translationEntry(context.kind, context.source, into);
+    const index = this.pickerIndex(context.kind, entry);
+    this.selectSubtitleTrack(index);
+    const job = this.translations.get(index);
     if (!job?.complete) showToast(t('subtitle.translating', { percent: job?.percent ?? 0 }));
   }
 
-  private translationEntry(source: number, target: string): number {
-    const existing = this.vodSubs.translationOf(source, target);
+  private translationEntry(kind: SidecarKind, source: number, target: string): number {
+    const sidecars = this.sidecarsOf(kind);
+    const existing = kind === 'text'
+      ? this.vodSubs.translationOf(source, target)
+      : sidecars.findIndex((sidecar, index) => this.assSources.get(index) === source && sidecar.lang === target);
     if (existing >= 0) return existing;
-    const sidecar = this.vodTextSidecars[source];
+    const sidecar = sidecars[source];
     const name = t('player.aiTranslation', { name: sidecarName(sidecar), language: targetLabel(target) });
-    this.vodTextSidecars.push({ id: `${sidecar.id}|${target}`, name, lang: target, url: '' });
-    return this.vodSubs.addTranslation(source, name, target);
+    sidecars.push({ id: `${sidecar.id}|${target}`, name, lang: target, url: '' });
+    if (kind === 'text') return this.vodSubs.addTranslation(source, name, target);
+    this.assSources.set(sidecars.length - 1, source);
+    return sidecars.length - 1;
   }
 
-  // Translates the batches of a shown translation entry that are still missing.
-  private async runTranslation(entry: number): Promise<void> {
-    const source = this.vodSubs.sourceOf(entry);
-    if (source < 0 || !LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE)) return;
+  // Shows an ASS translation entry: its source with what is translated so far.
+  private async showAssTranslation(entry: number): Promise<void> {
     const gen = this.translationGen;
-    let job = this.translations.get(entry);
-    if (!job) {
-      let cues: VttCue[];
-      try {
-        cues = await this.vodSubs.cuesOf(source);
-        await this.vodSubs.cuesOf(entry);
-      } catch {
-        return; // VodSubtitles.show logs the load failure
+    const source = this.assSources.get(entry) ?? -1;
+    let content: string;
+    try {
+      content = await this.assSubs.contentOf(source);
+    } catch (e) {
+      log.warn('ASS load failed:', e);
+      return;
+    }
+    if (gen !== this.translationGen || this.activeAssIndex !== entry) return;
+    let doc = this.assDocs.get(entry);
+    if (!doc) {
+      doc = this.parsedAss(source, content)?.fork();
+      if (!doc) {
+        // Nothing to translate: the source shows, and the menu leaves the entry out.
+        if (this.restoredAss === entry) {
+          log.info('Saved subtitle translation', 'event=subtitle.translate.restore',
+            'outcome=nothing_to_translate', `target=${this.vodAssSidecars[entry].lang}`);
+        }
+        this.applySubtitleChoice(ASS_SUBTITLE_BASE + source);
+        this.options.onChanged?.();
+        return;
       }
-      if (gen !== this.translationGen || this.vodSubs.activeIndex !== entry) return;
-      job = this.translations.get(entry) ?? new SubtitleTranslation(
-        cues,
-        this.vodTextSidecars[entry].lang,
-        // Cue times are media time less the subtitle offset.
-        () => (this.options.getVideoElement()?.currentTime || 0) - this.subtitleOffsetS,
-        (indices, texts) => {
-          // A stopped job's last batches can land after the item changed.
-          if (gen === this.translationGen) this.vodSubs.setCueTexts(entry, indices, texts);
-        },
-        () => { if (gen === this.translationGen) this.options.onChanged?.(); },
-      );
-      this.translations.set(entry, job);
+      this.assDocs.set(entry, doc);
+    }
+    this.assSubs.setText(entry, doc.build());
+    await this.assSubs.show(entry);
+    if (gen !== this.translationGen || this.activeAssIndex !== entry) return;
+    void this.runTranslation(ASS_SUBTITLE_BASE + entry);
+  }
+
+  // A shown ASS source with no events to translate hides the Translate row.
+  // Parsed only while a translation could be offered: on show, or when the menu first asks.
+  private checkAssReadable(entry: number): void {
+    if (!this.canTranslate() || this.assUnreadable.has(entry) || this.assParsed?.source === entry || this.assChecking === entry) return;
+    const gen = this.translationGen;
+    this.assChecking = entry;
+    const done = (): void => { if (this.assChecking === entry) this.assChecking = -1; };
+    this.assSubs.contentOf(entry).then((content) => {
+      done();
+      if (gen !== this.translationGen || this.activeAssIndex !== entry || this.parsedAss(entry, content)) return;
+      this.options.onChanged?.();
+    }, done); // AssSubtitles.show logs the load failure
+  }
+
+  // The source's parse, kept while it or a translation of it shows; null for a file with nothing to translate.
+  private parsedAss(source: number, content: string): AssTranslationDoc | null {
+    if (this.assParsed?.source !== source) this.assParsed = { source, doc: AssTranslationDoc.parse(content) };
+    if (!this.assParsed.doc) this.assUnreadable.add(source);
+    return this.assParsed.doc;
+  }
+
+  private async textTranslationJob(entry: number, source: number, gen: number): Promise<SubtitleTranslation | null> {
+    let cues: VttCue[];
+    try {
+      cues = await this.vodSubs.cuesOf(source);
+      await this.vodSubs.cuesOf(entry);
+    } catch {
+      return null; // VodSubtitles.show logs the load failure
+    }
+    if (gen !== this.translationGen || this.vodSubs.activeIndex !== entry) return null;
+    return new SubtitleTranslation(
+      cues,
+      this.vodTextSidecars[entry].lang,
+      () => this.cueTime(),
+      (indices, texts) => {
+        // A stopped job's last batches can land after the item changed.
+        if (gen === this.translationGen) this.vodSubs.setCueTexts(entry, indices, texts);
+      },
+      () => { if (gen === this.translationGen) this.options.onChanged?.(); },
+    );
+  }
+
+  private assTranslationJob(entry: number, gen: number): SubtitleTranslation | null {
+    const doc = this.assDocs.get(entry);
+    if (!doc || this.activeAssIndex !== entry) return null;
+    const redraw = new RedrawThrottle(() => {
+      if (gen === this.translationGen) this.assSubs.setText(entry, doc.build());
+    });
+    this.assRedraws.set(entry, redraw);
+    this.watchSeeks();
+    return new SubtitleTranslation(
+      doc.units,
+      this.vodAssSidecars[entry].lang,
+      () => this.cueTime(),
+      (indices, texts) => {
+        if (gen !== this.translationGen) return;
+        doc.apply(indices, texts);
+        const now = this.cueTime();
+        redraw.changed(doc.touches(indices, now - ASS_NEAR_BEFORE_S, now + ASS_NEAR_AFTER_S));
+      },
+      () => { if (gen === this.translationGen) this.options.onChanged?.(); },
+      { tagMarkers: true, start: ['format=ass', `skipped=${doc.skipped}`], finish: () => [`tags_dropped=${doc.tagsDropped}`] },
+    );
+  }
+
+  // Cue times are media time less the subtitle offset.
+  private cueTime(): number {
+    return (this.options.getVideoElement()?.currentTime || 0) - this.subtitleOffsetS;
+  }
+
+  // A seek draws the ASS translations waiting for their next redraw at once.
+  private watchSeeks(): void {
+    const video = this.options.getVideoElement();
+    if (!video || this.seekVideo === video) return;
+    this.seekVideo?.removeEventListener('seeking', this.onSeeking);
+    this.seekVideo = video;
+    video.addEventListener('seeking', this.onSeeking);
+  }
+
+  private onSeeking = (): void => {
+    this.assRedraws.forEach(redraw => redraw.flush());
+  };
+
+  // Translates the batches of a shown translation entry that are still missing.
+  private async runTranslation(index: number): Promise<void> {
+    const at = this.sidecarEntry(index);
+    if (!at || this.sourceOf(at.kind, at.entry) < 0 || !LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE)) return;
+    const gen = this.translationGen;
+    let job = this.translations.get(index);
+    if (!job) {
+      const made = at.kind === 'text'
+        ? await this.textTranslationJob(at.entry, this.sourceOf(at.kind, at.entry), gen)
+        : this.assTranslationJob(at.entry, gen);
+      if (!made) return;
+      job = this.translations.get(index) ?? made;
+      this.translations.set(index, job);
     }
     if (job.complete || job.running) return;
     const report = await job.start();
     if (gen !== this.translationGen) return;
+    if (at.kind === 'ass') this.assRedraws.get(at.entry)?.flush();
     this.options.onChanged?.();
     const reason = report.error?.reason;
     if (!reason || reason === 'cancelled') return;
@@ -527,21 +695,22 @@ export class PlayerTracks {
   }
 
   private translationSource(index: number): string | undefined {
-    const source = index >= VOD_SUBTITLE_BASE ? this.vodSubs.sourceOf(index - VOD_SUBTITLE_BASE) : -1;
-    return source >= 0 ? sidecarName(this.vodTextSidecars[source]) : undefined;
+    const at = this.sidecarEntry(index);
+    const source = at ? this.sourceOf(at.kind, at.entry) : -1;
+    return at && source >= 0 ? sidecarName(this.sidecarsOf(at.kind)[source]) : undefined;
   }
 
   private translationDetail(index: number): string | undefined {
-    if (index < VOD_SUBTITLE_BASE) return undefined;
-    const job = this.translations.get(index - VOD_SUBTITLE_BASE);
+    const job = this.translations.get(index);
     return job?.running ? t('subtitle.translationProgress', { percent: job.percent }) : undefined;
   }
 
   // A saved translation comes back over its source while AI features are on.
   private restoreTranslation(options: SubtitleOption[], index: number, pref: SubtitlePref | null): number {
-    const source = index - VOD_SUBTITLE_BASE;
-    if (!pref?.translateTo || source < 0 || !this.vodTextSidecars[source]) return index;
-    if (this.vodSubs.sourceOf(source) >= 0 || !isSubtitlePrefMatch(options.find(o => o.index === index), pref)) return index;
+    const at = this.sidecarEntry(index);
+    if (!pref?.translateTo || !at || !this.sidecarsOf(at.kind)[at.entry]) return index;
+    if (this.sourceOf(at.kind, at.entry) >= 0 || !isSubtitlePrefMatch(options.find(o => o.index === index), pref)) return index;
+    if (at.kind === 'ass' && this.assUnreadable.has(at.entry)) return index;
     const ready = LlmService.isReady(SUBTITLE_TRANSLATION_FEATURE);
     const item = this.preferenceKey();
     if (this.translationRestoreLoggedFor !== item) {
@@ -550,7 +719,9 @@ export class PlayerTracks {
         `outcome=${ready ? 'restored' : 'ai_off'}`, `target=${pref.translateTo}`);
     }
     if (!ready) return index;
-    return VOD_SUBTITLE_BASE + this.translationEntry(source, pref.translateTo);
+    const entry = this.translationEntry(at.kind, at.entry, pref.translateTo);
+    if (at.kind === 'ass') this.restoredAss = entry;
+    return this.pickerIndex(at.kind, entry);
   }
 
   async openSubtitleSearch(): Promise<void> {
@@ -916,7 +1087,7 @@ export class PlayerTracks {
         isDefault: false,
         isForced: false,
         active: this.activeAssIndex === index,
-      }));
+      })).filter(option => !this.assUnreadable.has(this.assSources.get(option.index - ASS_SUBTITLE_BASE) ?? -1));
       return native.concat(sidecars, ass);
     }
     // webOS native live/catch-up: in-manifest WebVTT is self-rendered (not surfaced
@@ -1005,11 +1176,11 @@ export class PlayerTracks {
     this.setNativeCC(false);
     this.subtitlePick = 'user';
     this.applySubtitleChoice(index);
-    const entry = index >= VOD_SUBTITLE_BASE ? index - VOD_SUBTITLE_BASE : -1;
-    const source = entry >= 0 ? this.vodSubs.sourceOf(entry) : -1;
-    if (source >= 0) {
-      const sidecar = this.vodTextSidecars[source];
-      this.rememberSubtitle({ off: false, name: sidecarName(sidecar), lang: sidecar.lang, translateTo: option.lang });
+    const at = this.sidecarEntry(index);
+    const source = at ? this.sourceOf(at.kind, at.entry) : -1;
+    if (at && source >= 0) {
+      const sidecar = this.sidecarsOf(at.kind)[source];
+      this.rememberSubtitle({ off: false, name: this.optionName(at.kind, sidecar), lang: sidecar.lang, translateTo: option.lang });
     } else {
       this.rememberSubtitle({ off: false, name: option.name, lang: option.lang });
     }
@@ -1092,7 +1263,10 @@ export class PlayerTracks {
     if (this.options.getVod()) {
       const shownEntry = index >= VOD_SUBTITLE_BASE ? index - VOD_SUBTITLE_BASE : -1;
       // A translation stops when its subtitle is switched away; picking it again resumes.
-      this.translations.forEach((job, entry) => { if (entry !== shownEntry) job.stop(); });
+      this.translations.forEach((job, shown) => { if (shown !== index) job.stop(); });
+      const assEntry = index >= ASS_SUBTITLE_BASE && index < VOD_SUBTITLE_BASE ? index - ASS_SUBTITLE_BASE : -1;
+      const assSource = assEntry >= 0 ? this.assSources.get(assEntry) ?? assEntry : -1;
+      if (this.assParsed && this.assParsed.source !== assSource) this.assParsed = null;
       const list = this.options.getVideoElement()?.textTracks;
       if (index >= VOD_SUBTITLE_BASE) {
         if (list) for (let i = 0; i < list.length; i++) {
@@ -1106,7 +1280,7 @@ export class PlayerTracks {
         this.activeAssIndex = -1;
         this.assSubs.hide();
         void this.vodSubs.show(shownEntry);
-        void this.runTranslation(shownEntry);
+        void this.runTranslation(index);
         return;
       }
       if (index >= ASS_SUBTITLE_BASE) {
@@ -1117,9 +1291,21 @@ export class PlayerTracks {
             track.mode = 'disabled';
           }
         }
-        const sidecar = this.vodAssSidecars[index - ASS_SUBTITLE_BASE];
-        this.activeAssIndex = sidecar ? index - ASS_SUBTITLE_BASE : -1;
-        if (sidecar) void this.assSubs.show(index - ASS_SUBTITLE_BASE);
+        const entry = index - ASS_SUBTITLE_BASE;
+        // A repeated pick (each addtrack re-applies the saved one) would rebuild assjs for nothing.
+        if (this.activeAssIndex === entry && this.assSubs.isShowing(entry)) {
+          // A stopped translation picked again still resumes.
+          if (this.assSources.has(entry)) void this.runTranslation(index);
+          return;
+        }
+        const sidecar = this.vodAssSidecars[entry];
+        this.activeAssIndex = sidecar ? entry : -1;
+        if (!sidecar) return;
+        if (this.assSources.has(entry)) void this.showAssTranslation(entry);
+        else {
+          void this.assSubs.show(entry);
+          this.checkAssReadable(entry);
+        }
         return;
       }
       this.vodSubs.hide();

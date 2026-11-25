@@ -4,11 +4,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // assjs is loaded lazily via a dynamic import inside `show`; stub the whole
 // module so the real DOM renderer never runs and each instance is observable.
 const { fetchTextMock, assInstances, FakeASS } = vi.hoisted(() => {
-  const assInstances: Array<{ content: string; video: unknown; container: HTMLElement; destroyed: boolean; delay: number }> = [];
+  const assInstances: Array<{ content: string; video: unknown; container: HTMLElement; destroyed: boolean; delay: number; started: number }> = [];
   class FakeASS {
     private i: number;
-    constructor(public content: string, public video: unknown, public opt: { container: HTMLElement }) {
-      this.i = assInstances.push({ content, video, container: opt.container, destroyed: false, delay: 0 }) - 1;
+    constructor(public content: string, public video: HTMLVideoElement, public opt: { container: HTMLElement }) {
+      const i = assInstances.push({ content, video, container: opt.container, destroyed: false, delay: 0, started: 0 }) - 1;
+      this.i = i;
+      // Like assjs, frames start on a play event.
+      video.addEventListener('playing', () => { assInstances[i].started++; });
     }
     set delay(v: number) { assInstances[this.i].delay = v; }
     get delay() { return assInstances[this.i].delay; }
@@ -142,5 +145,31 @@ describe('AssSubtitles', () => {
     expect(assInstances[0].delay).toBe(3);
     subs.setOffset(-1.5);
     expect(assInstances[0].delay).toBe(-1.5);
+  });
+
+  it('fetches a sidecar once and redraws it with new text while shown', async () => {
+    fetchTextMock.mockResolvedValue('body');
+    subs.attach(video, container, [sidecar(), sidecar({ id: '2' })]);
+    expect(await subs.contentOf(0)).toBe('body');
+    subs.setOffset(2);
+    await subs.show(0);
+    expect(fetchTextMock).toHaveBeenCalledTimes(1);
+
+    subs.setText(1, 'hidden');
+    expect(assInstances).toHaveLength(1);
+    subs.setText(0, 'translated');
+    expect(assInstances).toHaveLength(2);
+    expect(assInstances[0].destroyed).toBe(true);
+    expect(assInstances[1]).toMatchObject({ content: 'translated', delay: 2, destroyed: false });
+    expect(await subs.contentOf(0)).toBe('translated');
+  });
+
+  it('starts drawing frames for an instance made while the video plays', async () => {
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
+    subs.attach(video, container, [{ id: 'a1', name: 'Alpha', lang: 'l1', url: '', text: 'body' }]);
+    await subs.show(0);
+    subs.setText(0, 'again');
+    expect(assInstances.map(instance => instance.started)).toEqual([1, 1]);
+    expect(Object.prototype.hasOwnProperty.call(video, 'addEventListener')).toBe(false);
   });
 });

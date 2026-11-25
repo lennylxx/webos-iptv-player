@@ -173,6 +173,31 @@ describe('SubtitleTranslation', () => {
     expect(logged().join('\n')).toMatch(/event=subtitle\.translate\.done done=3 kept=0 cached=0 requested=1 total=3/);
   });
 
+  it('asks to keep tag markers only for an ASS batch that has them, and logs the extra fields', async () => {
+    runText.mockImplementation(translate);
+    const ass = (text: string): SubtitleTranslation => new SubtitleTranslation([{ start: 0, end: 1, text }], 'de', () => 0, vi.fn(), () => {},
+      { tagMarkers: true, start: ['format=ass', 'skipped=2'], finish: () => ['tags_dropped=0'] });
+    await ass('A <x1/>B').start();
+    await ass('A <i>B</i>').start();
+    await ass('A B').start();
+    await job(cues(1, () => 'A <i>B</i>')).start();
+
+    const systems = runText.mock.calls.map(([task]) => (task as LlmTextTask).system);
+    const keep = 'Keep tags such as <i>, </i> and <x1/> exactly, moving them with the words they mark.';
+    expect(systems.map(system => system.includes(keep))).toEqual([true, true, false, false]);
+    // SRT prompts stay as they were, so their cached batches still match.
+    expect(systems[3]).toBe([
+      'You translate film and TV subtitles into German.',
+      'Each input line is one subtitle: its number in square brackets, then its text. <br> marks a line break within a subtitle.',
+      'Reply with one line per subtitle, in the same order, each starting with the same number in square brackets. Write nothing else.',
+      'Never merge, split, skip, or reorder subtitles. Keep <br>, formatting tags such as <i>, and leading dashes.',
+      'Write natural, concise subtitles. Keep names as they are, and copy a subtitle already in German unchanged.',
+    ].join('\n'));
+    expect(systems[2]).toBe(systems[3]);
+    expect(logged().join('\n')).toMatch(/event=subtitle\.translate\.start target=de lines=1 batches=1 remaining=1 resume=false format=ass skipped=2/);
+    expect(logged().join('\n')).toMatch(/event=subtitle\.translate\.done done=1 .* total=1 tags_dropped=0/);
+  });
+
   it('keeps the original for lines missing from a usable reply', async () => {
     runText.mockResolvedValueOnce({ text: '[1] A\n[2] B', cached: true });
     const onLines = vi.fn<(indices: number[], texts: string[]) => void>();

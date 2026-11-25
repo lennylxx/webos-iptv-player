@@ -64,6 +64,16 @@ vi.mock('../services/subtitle-search/ai-title', () => ({
 vi.mock('../services/llm/llm-service', () => ({
   LlmService: { isReady: vi.fn(() => false), runText: vi.fn(), contextTokens: () => 16000 },
 }));
+// The ASS overlay's renderer: each instance records the file it draws.
+const { assContents } = vi.hoisted(() => ({ assContents: [] as string[] }));
+vi.mock('assjs', () => ({
+  default: class {
+    constructor(content: string) { assContents.push(content); }
+    destroy(): void {}
+    show(): void {}
+    hide(): void {}
+  },
+}));
 vi.mock('../services/idb-cache', () => ({
   getCachedSubtitle: vi.fn(),
   setCachedSubtitle: vi.fn(),
@@ -74,6 +84,7 @@ import { getCachedSubtitle } from '../services/idb-cache';
 import { LlmError } from '../services/llm/client';
 import { LlmService, type LlmTextTask } from '../services/llm/llm-service';
 import { showToast } from './toast';
+import { AssTranslationDoc } from '../services/ass-translation';
 
 const CHANNEL: Channel = {
   id: 'ch1',
@@ -1425,6 +1436,7 @@ describe('PlayerTracks', () => {
       hide: ReturnType<typeof vi.fn>;
       destroy: ReturnType<typeof vi.fn>;
       setOffset: ReturnType<typeof vi.fn>;
+      isShowing: ReturnType<typeof vi.fn>;
     };
     const setup = (opts: { text?: unknown[]; ass?: unknown[] } = {}) => {
       assSubs = {
@@ -1433,6 +1445,7 @@ describe('PlayerTracks', () => {
         hide: vi.fn(),
         destroy: vi.fn(),
         setOffset: vi.fn(),
+        isShowing: vi.fn(() => false),
       };
       vod = {
         accountId: 'x1',
@@ -2209,6 +2222,8 @@ describe('PlayerTracks subtitle translation', () => {
       textTracks: [renderer] as unknown as TextTrackList,
       currentTime: 0,
       addTextTrack: vi.fn(() => renderer),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     } as unknown as HTMLVideoElement;
     vi.mocked(StorageService.getSubtitlePref).mockReturnValue(null);
     vi.mocked(StorageService.getSubtitleOffset).mockReturnValue(0);
@@ -2450,5 +2465,156 @@ describe('PlayerTracks subtitle translation', () => {
     await vi.waitFor(() => expect(LlmService.runText).toHaveBeenCalledTimes(2));
     fail(new LlmError('cap', 'Daily cap reached'));
     await vi.waitFor(() => expect(showToast).toHaveBeenLastCalledWith('Daily AI limit reached. Translation paused.'));
+  });
+
+  describe('of an ASS sidecar', () => {
+    const ASS = [
+      '[Script Info]',
+      'ScriptType: v4.00+',
+      '',
+      '[Events]',
+      'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+      'Dialogue: 0,0:00:01.00,0:00:02.00,Sign,,0,0,0,,{\\an8\\pos(320,40)}Bravo Store',
+      'Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,I {\\i1}really{\\i0} mean {\\c&H0000FF&}it{\\c}.',
+      'Comment: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Alpha note',
+    ].join('\n');
+    const ass = { id: '2', name: 'Track 2', lang: 'l1', url: 'http://host/a.ass', text: ASS };
+    const lastDrawn = (): string[] => assContents[assContents.length - 1].split('\n').slice(-3);
+
+    beforeEach(() => {
+      assContents.length = 0;
+      vod = vodRequest({ subtitles: [ass] });
+      tracks.attachVod(vod);
+    });
+
+    async function showAss(): Promise<void> {
+      tracks.selectSubtitleTrack(ASS_SUBTITLE_BASE);
+      await vi.waitFor(() => expect(assContents).toHaveLength(1));
+    }
+
+    it('translates the dialogue text, keeping its tags, and remembers it by its source', async () => {
+      expect(tracks.subtitleTranslationLabel()).toBeNull();
+      await showAss();
+      expect(tracks.subtitleTranslationLabel()).toBe('Translate to Deutsch');
+
+      tracks.translateSubtitles();
+
+      await vi.waitFor(() => expect(lastDrawn()).toEqual([
+        'Dialogue: 0,0:00:01.00,0:00:02.00,Sign,,0,0,0,,{\\an8\\pos(320,40)}Bravo Store (de)',
+        'Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,I {\\i1}really{\\i0} mean {\\c&H0000FF&}it{\\c}. (de)',
+        'Comment: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Alpha note',
+      ]));
+      const task = vi.mocked(LlmService.runText).mock.calls[0][0] as LlmTextTask;
+      expect(task.user).toBe('[1] Bravo Store\n[2] I <i>really</i> mean <x1/>it<x2/>.');
+      expect(task.system).toContain('<x1/>');
+      // The test video's renderer track lists first, as an in-container track would.
+      expect(tracks.getSubtitleTracks().slice(1).map(item => [item.label, item.active, item.aiSource, item.aiCode])).toEqual([
+        ['Track 2', false, undefined, undefined],
+        ['Track 2 · AI translation (Deutsch)', true, 'Track 2', 'DE'],
+      ]);
+      expect(StorageService.setSubtitlePref).toHaveBeenLastCalledWith(
+        'vod:x1:vod:10',
+        { off: false, name: 'Track 2', lang: 'l1', translateTo: 'de' },
+      );
+      expect(vi.mocked(console.log).mock.calls.map(args => args.join(' ')).join('\n'))
+        .toMatch(/event=subtitle\.translate\.start target=de lines=2 batches=1 remaining=1 resume=false format=ass skipped=0/);
+      expect(tracks.subtitleTranslationLabel()).toBeNull();
+    });
+
+    it('parses a shown source once for its check and its translation', async () => {
+      const parse = vi.spyOn(AssTranslationDoc, 'parse');
+      await showAss();
+      await vi.waitFor(() => expect(parse).toHaveBeenCalledTimes(1));
+      tracks.translateSubtitles();
+      await vi.waitFor(() => expect(lastDrawn()[0]).toMatch(/Bravo Store \(de\)$/));
+      expect(parse).toHaveBeenCalledTimes(1);
+      parse.mockRestore();
+    });
+
+    it('parses a shown source only once a translation could be offered', async () => {
+      const parse = vi.spyOn(AssTranslationDoc, 'parse');
+      vi.mocked(LlmService.isReady).mockReturnValue(false);
+      await showAss();
+      expect(tracks.subtitleTranslationLabel()).toBeNull();
+      await Promise.resolve();
+      expect(parse).not.toHaveBeenCalled();
+
+      vi.mocked(LlmService.isReady).mockReturnValue(true);
+      expect(tracks.subtitleTranslationLabel()).toBe('Translate to Deutsch');
+      await vi.waitFor(() => expect(parse).toHaveBeenCalledTimes(1));
+      parse.mockRestore();
+    });
+
+    it('restores a saved ASS translation over its source', async () => {
+      vi.mocked(StorageService.getSubtitlePref).mockReturnValue({ off: false, name: 'Track 2', lang: 'l1', translateTo: 'l2' });
+
+      tracks.applyNativeSubtitleSelection();
+
+      await vi.waitFor(() => expect(lastDrawn()[0]).toMatch(/Bravo Store \(de\)$/));
+      expect(tracks.getSubtitleTracks()[2]).toMatchObject({ index: ASS_SUBTITLE_BASE + 1, active: true });
+    });
+
+    it('shows the source for a saved translation of a file with nothing to translate', async () => {
+      const text = ASS.split('\n').slice(0, 5).concat(
+        'Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,{\\k20}Al{\\k30}pha',
+        'Comment: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Alpha note',
+      ).join('\n');
+      vod = vodRequest({ subtitles: [{ ...ass, text }] });
+      tracks.attachVod(vod);
+      vi.mocked(StorageService.getSubtitlePref).mockReturnValue({ off: false, name: 'Track 2', lang: 'l1', translateTo: 'l2' });
+
+      tracks.applyNativeSubtitleSelection();
+
+      await vi.waitFor(() => expect(tracks.getSubtitleTracks().slice(1)).toEqual([
+        expect.objectContaining({ index: ASS_SUBTITLE_BASE, label: 'Track 2', active: true, aiSource: undefined }),
+      ]));
+      expect(assContents[assContents.length - 1]).toBe(text);
+      expect(vi.mocked(console.log).mock.calls.map(args => args.join(' ')).join('\n'))
+        .toMatch(/event=subtitle\.translate\.restore outcome=nothing_to_translate target=l2/);
+      tracks.applyNativeSubtitleSelection();
+      expect(tracks.getSubtitleTracks().slice(1)).toHaveLength(1);
+      expect(LlmService.runText).not.toHaveBeenCalled();
+      expect(StorageService.setSubtitlePref).not.toHaveBeenCalled();
+    });
+
+    it('resumes a stopped translation picked again while it shows', async () => {
+      vi.mocked(LlmService.runText).mockRejectedValueOnce(new LlmError('auth', 'HTTP 401', 401));
+      await showAss();
+      tracks.translateSubtitles();
+      await vi.waitFor(() => expect(showToast).toHaveBeenLastCalledWith('Subtitle translation failed'));
+      expect(tracks.subtitleTranslationLabel()).toBe('Translate to Deutsch');
+
+      tracks.translateSubtitles();
+
+      await vi.waitFor(() => expect(lastDrawn()[0]).toMatch(/Bravo Store \(de\)$/));
+      expect(tracks.subtitleTranslationLabel()).toBeNull();
+    });
+
+    it('draws a shown pick once when each new track re-applies it', async () => {
+      vi.mocked(StorageService.getSubtitlePref).mockReturnValue({ off: false, name: 'Track 2', lang: 'l1', translateTo: 'l2' });
+      tracks.applyNativeSubtitleSelection();
+      await vi.waitFor(() => expect(lastDrawn()[0]).toMatch(/Bravo Store \(de\)$/));
+      const drawn = assContents.length;
+
+      tracks.applyNativeSubtitleSelection();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(assContents).toHaveLength(drawn);
+
+      vi.mocked(StorageService.getSubtitlePref).mockReturnValue({ off: false, name: 'Track 2', lang: 'l1' });
+      tracks.selectSubtitleTrack(ASS_SUBTITLE_BASE);
+      await vi.waitFor(() => expect(assContents).toHaveLength(drawn + 1));
+      tracks.applyNativeSubtitleSelection();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(assContents).toHaveLength(drawn + 1);
+    });
+
+    it('offers no translation for a file with no events', async () => {
+      vod = vodRequest({ subtitles: [{ ...ass, text: '[Script Info]\nTitle: Alpha\n' }] });
+      tracks.attachVod(vod);
+      await showAss();
+      await vi.waitFor(() => expect(tracks.subtitleTranslationLabel()).toBeNull());
+      tracks.translateSubtitles();
+      expect(LlmService.runText).not.toHaveBeenCalled();
+    });
   });
 });

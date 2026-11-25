@@ -8,7 +8,7 @@ ASS/SSA through an `assjs` overlay.
 
 | | |
 |---|---|
-| **Code** | `src/components/player-tracks.ts`, `src/components/player-pipeline.ts`, `src/services/vod-subtitles.ts`, `src/services/subtitle-translation.ts`, `src/services/ass-subtitles.ts`, `src/utils/srt.ts`, `src/services/xtream-client.ts`, `src/utils/subtitle-tracks.ts` |
+| **Code** | `src/components/player-tracks.ts`, `src/components/player-pipeline.ts`, `src/services/vod-subtitles.ts`, `src/services/subtitle-translation.ts`, `src/services/ass-translation.ts`, `src/services/ass-subtitles.ts`, `src/utils/srt.ts`, `src/services/xtream-client.ts`, `src/utils/subtitle-tracks.ts` |
 | **Live/HLS counterpart** | [`hls-subtitles.md`](hls-subtitles.md) |
 | **Audio counterpart** | [`audio-track-selection.md`](audio-track-selection.md) |
 
@@ -26,8 +26,9 @@ ASS/SSA through an `assjs` overlay.
   offered for VOD once a provider is configured, not only when the bundled tracks come up empty;
   downloaded results reuse the in-memory-text paths for SRT/WebVTT/ASS and are cached to
   avoid re-fetching on replay.
-- With AI features on, a shown SRT/WebVTT sidecar (bundled or downloaded) can be **translated**
-  into the preferred subtitle language; only cue text is sent, timings stay on the TV.
+- With AI features on, a shown SRT/WebVTT or ASS/SSA sidecar (bundled or downloaded) can be
+  **translated** into the preferred subtitle language; only cue text is sent, timings and ASS
+  styling stay on the TV.
 
 ## In-container subtitles
 
@@ -81,7 +82,8 @@ the `-1` Off / `-2` CC sentinels). `applySubtitleChoice` routes by range: an ASS
 sidecar (`AssSubtitles.show(i)`) and disables every native track; a native index or Off calls
 `AssSubtitles.hide()` — **one path draws at a time**. A `gen` counter guards a race where a newer
 selection/stop lands mid-fetch; `stop` calls `AssSubtitles.destroy()` to tear down the instance
-and drop the overlay.
+and drop the overlay. `assjs` starts drawing frames only on a `play`/`playing` event, so an instance made
+while the video already plays (a pick or a redraw mid-playback) is started at once.
 
 Memory is unchanged: an ASS pick is remembered by name/lang under the same
 `vod:<account>:<kind>:<itemId>` key, and `chooseSubtitleIndex` matches it across all options
@@ -207,9 +209,9 @@ OpenSubtitles password lives only in the TV's `localStorage`.
 
 With **Use AI features** on (see the AI features settings), the Subtitles menu adds
 **"Translate to {language}"** under the subtitle list while the shown subtitle is an SRT/WebVTT
-sidecar, bundled or downloaded, whose language differs from the target. The target is the
+or ASS/SSA sidecar, bundled or downloaded, whose language differs from the target. The target is the
 **Preferred subtitle language**, else the UI language; Traditional and Simplified Chinese count as
-different languages. In-container tracks, ASS/SSA, and live subtitles are not translated. The row
+different languages. In-container tracks and live subtitles are not translated. The row
 stays hidden while AI features are off.
 
 - Picking it adds a picker entry next to its source (a `VodSubtitles.addTranslation` entry that
@@ -250,11 +252,42 @@ stays hidden while AI features are off.
 - The pick is remembered with the other subtitle choices as the **source** subtitle plus
   `translateTo`, and restored over its source on replay while AI features are on (otherwise the
   source shows).
+- **ASS/SSA** (`src/services/ass-translation.ts`) translates only the visible text of `Dialogue`
+  events. Everything before the Text field (timings, style, margins), the Script Info and Styles
+  sections, and `Comment` lines stay byte for byte. Override blocks before and after the text stay
+  in place; a block inside it travels as a marker: `<i>`/`</i>` (and `b`, `u`, `s`) for a block that
+  only toggles that and has its other half in the line, `<x1/>`, `<x2/>`, … for any other block,
+  a lone toggle, or a drawing. A toggle right at the
+  text's edge whose other half sits inside the line (`{\i1}Title{\i0} said …`) travels as a
+  marker too. Only an ASS batch with markers gets one more system-prompt sentence asking to keep
+  them; SRT prompts never change, and an ASS batch without markers is the same request as for SRT
+  and shares its cache. A reply whose markers don't add up, or whose closing marker comes before
+  its opening one, keeps its text without the line-internal styling and without any edge toggle
+  turning a style on whose other half was inside, so no style is left switched on (an edge block that also sets
+  other tags, like `{\pos(1,2)\i1}`, keeps them and loses only that toggle; a `\r` inside turns
+  every toggle off, and `\b` is bold at 1 or a weight from 700); an edge toggle turning a
+  style off stays, and so does a whole-line toggle; an edge toggle facing away from the text (`{\i0}` before it, `{\i1}` after it) is never sent. A line
+  with more than four line-internal blocks
+  (typesetting) is sent as plain text the same way, keeping only its drawings as markers.
+  `\N` (and `\n` under `\q2`) is a line break, other `\n` and `\h` a space,
+  and `{`, `}`, and `\` are removed from replies so they can't form tags. Karaoke lines (`\k`),
+  drawings (`\p1` until `\p0`), and lines with no visible text are not sent; signs are. One
+  text repeated across layers or events (border and fill layers, tracked signs) is sent once and
+  translated alike; units go in time order, a repeated one at its earliest showing. The
+  translation is a synthetic ASS entry that `assjs` draws from the rebuilt file, which leaves out
+  the sections `assjs` doesn't read (`[Fonts]`, `[Graphics]`, …). A shown source is parsed only
+  while a translation could be offered (AI features on, VOD, no MSE), once, and kept while it or
+  one of its translations shows. Since a redraw rebuilds the whole instance,
+  translated batches redraw within a second only when one of their events shows between 5 s
+  before and 60 s after the playback position, else at most every 60 s, and at once on a seek or
+  when the run ends (a rebuild of a 10k-event file takes 150–250 ms in the Chromium 53
+  simulation). A file with no Dialogue text to translate shows no Translate row, and a saved
+  translation of it shows the source instead, with no translation entry in the menu.
 - Diagnostics (no subtitle text): `subtitle.translate.start` (target, lines, batches, remaining,
-  resume), `subtitle.translate.retry` (reason, status, attempt, wait), and once per run that
+  resume; for ASS also `format=ass` and the `skipped` events), `subtitle.translate.retry` (reason, status, attempt, wait), and once per run that
   wasn't stopped either `subtitle.translate.done` or `subtitle.translate.incomplete` (reason `lines_kept`,
   `unusable_reply`, or the failure; failed batches; done/kept/cached/requested/total lines and
-  batches); `subtitle.translate.restore` (`restored` or `ai_off`) once per opening of an item, a reload such
+  batches; for ASS `tags_dropped`, the lines that lost their line-internal styling); `subtitle.translate.restore` (`restored` or `ai_off`, then `nothing_to_translate` when a restored ASS source has no text to translate) once per opening of an item, a reload such
   as a quality change included.
   Request failures also log `llm.request.failed`.
 
