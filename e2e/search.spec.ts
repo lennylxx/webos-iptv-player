@@ -7,6 +7,7 @@ import {
   enterTab,
   readUserDataStore,
   settled,
+  routeFakeAi,
 } from './helpers';
 
 function xmltvDate(date: Date): string {
@@ -1440,4 +1441,114 @@ test('AI search sits on the first heading\'s line, and its summary shares a line
   expect(Math.abs(await middle(ask) - await middle(empty))).toBeLessThanOrEqual(4);
   await input.press('Enter');
   await expect(ask).toHaveClass(/\bfocused\b/);
+});
+
+// AI program genres off, one upcoming program without a category and one
+// with, and a fake AI server: genres for the genre requests, `filter` for AI search.
+async function seedGenreSearch(
+  page: import('@playwright/test').Page,
+  filter: Record<string, unknown>,
+): Promise<string[]> {
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const stop = new Date(start.getTime() + 60 * 60 * 1000);
+  const m3u = [
+    '#EXTM3U',
+    '#EXTINF:-1 tvg-id="c1" group-title="Group A",Alpha One', 'http://host/a',
+    '#EXTINF:-1 tvg-id="c2" group-title="Group B",Bravo Two', 'http://host/b',
+  ].join('\n');
+  const epg = `<tv>
+    <channel id="c1"><display-name>Alpha One</display-name></channel>
+    <channel id="c2"><display-name>Bravo Two</display-name></channel>
+    <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+      <title>Alpha Show Time Cup</title><desc>Synthetic description.</desc>
+    </programme>
+    <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+      <title>Alpha Show Time Talk</title><category>Genre B</category>
+    </programme>
+  </tv>`;
+  await page.route('**/playlist.m3u', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: m3u }));
+  await page.route('**/guide.xml', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/guide.xml', playlistIds: [] }]));
+  });
+  const server = await routeFakeAi(page, (user) => {
+    const sent = JSON.parse(user) as { items?: Array<{ i: number }> };
+    return sent.items ? { items: sent.items.map(item => ({ i: item.i, g: 'sports' })) } : filter;
+  });
+  return server.sent;
+}
+
+// The prompt grows with the text size, so at 150 a Chinese line doesn't split a word.
+test('the AI program genres estimate keeps each line whole at the largest text size', async ({ page }) => {
+  await seedGenreSearch(page, {});
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_locale', JSON.stringify('zh-CN'));
+    localStorage.setItem('iptv_text_size', JSON.stringify('150'));
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'settings');
+  await page.locator('#view-settings .settings-nav-item[data-settings-target="ai"]').click();
+  await page.locator('#ai-program-genres .toggle-option[data-value="on"]').click();
+  const message = page.locator('.confirmation-prompt .confirmation-message');
+  await expect(page.locator('.confirmation-prompt [data-confirm-action="confirm"]')).toBeEnabled();
+  const lines = await message.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return Math.round(el.getBoundingClientRect().height / parseFloat(style.lineHeight));
+  });
+  expect(lines).toBe(2);
+});
+
+test('AI program genres ask before the first run, then Search shows and filters by them', async ({ page }) => {
+  const sent = await seedGenreSearch(page, {
+    types: ['program'], keywords: [], groups: [], genres: ['Sports'], time: 'any', from_hour: -1, to_hour: -1,
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'settings');
+  await page.locator('#view-settings .settings-nav-item[data-settings-target="ai"]').click();
+  await page.locator('#ai-program-genres .toggle-option[data-value="on"]').click();
+  const prompt = page.locator('.confirmation-prompt');
+  await expect(prompt.locator('.confirmation-title')).toHaveText('AI program genres');
+  await expect(prompt.locator('.confirmation-message')).toHaveText(
+    'Programs without a genre in the next 24 hours: 1 About 1 request will be sent to your AI server.');
+  // Cancel leaves it off.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#ai-program-genres .toggle-option.active')).toHaveAttribute('data-value', 'off');
+  await page.locator('#ai-program-genres .toggle-option[data-value="on"]').click();
+  await prompt.locator('[data-confirm-action="confirm"]').click();
+  await expect(page.locator('#ai-program-genres .toggle-option.active')).toHaveAttribute('data-value', 'on');
+  expect(sent).toEqual([]);
+  await page.locator('#save-settings').click();
+
+  await expect.poll(() => sent.length).toBe(1);
+  // Only the program without a category is sent: its title and description.
+  expect((JSON.parse(sent[0]) as { items: unknown }).items)
+    .toEqual([{ i: 0, t: 'Alpha Show Time Cup', d: 'Synthetic description.' }]);
+  expect(sent[0]).not.toContain('Alpha One');
+  await expect(page.locator('#ai-program-genres-status')).toHaveText('Programs with an AI genre: 1');
+
+  await enterSearch(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('alpha show time');
+  const rows = page.locator('#view-search .search-program-row');
+  await expect(rows).toHaveCount(2);
+  const cup = rows.filter({ hasText: 'Alpha Show Time Cup' }).locator('.search-program-channel');
+  await expect(cup).toHaveText('Alpha One · Sports');
+  await expect(cup.locator('.ai-icon svg')).toHaveCount(1);
+  const talk = rows.filter({ hasText: 'Alpha Show Time Talk' }).locator('.search-program-channel');
+  await expect(talk).toHaveText('Bravo Two · Genre B');
+  await expect(talk.locator('.ai-icon')).toHaveCount(0);
+
+  // AI search offers the AI genre with the guide's and filters by it.
+  await input.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('#view-search .search-ask-action')).toHaveClass(/\bfocused\b/);
+  await page.keyboard.press('Enter');
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText('Alpha Show Time Cup');
+  expect((JSON.parse(sent[1]) as { genres: string[] }).genres.sort()).toEqual(['Genre B', 'Sports']);
 });

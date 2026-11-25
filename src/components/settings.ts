@@ -31,6 +31,7 @@ import type { SettingsChanges } from '../services/setup-client';
 import { LlmService } from '../services/llm/llm-service';
 import { LlmError } from '../services/llm/client';
 import { SEARCH_EXPANSION_FEATURE } from '../services/search-expansion';
+import { PROGRAM_GENRES_FEATURE, ProgramGenres } from '../services/program-genres';
 import {
   completeServerUrl,
   DEFAULT_CONTEXT_TOKENS,
@@ -312,6 +313,12 @@ function aiFailureText(error: unknown): string {
     case 'http': return t('settings.aiServerError', { status: error instanceof LlmError ? error.status : 0 });
     default: return t('settings.aiUnreachable');
   }
+}
+
+function programGenresStatus(): Safe {
+  const text = ProgramGenres.statusText();
+  return html`<div class="settings-item-hint" id="ai-program-genres-status"
+                   data-key="ai-program-genres-status"${raw(text ? '' : ' hidden')}>${text}</div>`;
 }
 
 function aiUsageText(): string {
@@ -653,6 +660,12 @@ export class Settings {
     this.onManageReminders = onManageReminders;
     this.onManageParentalControls = onManageParentalControls;
     this.nav = new SpatialNav(container, (el) => this.onNavFocus(el), { follow: false });
+    ProgramGenres.subscribe(() => {
+      const status = $('#ai-program-genres-status', this.container);
+      if (!status) return;
+      status.textContent = ProgramGenres.statusText();
+      status.hidden = !status.textContent;
+    });
     this.focusScope = Focus.register({
       id: 'view.settings',
       root: container,
@@ -1207,6 +1220,12 @@ export class Settings {
                   ${toggleGroup('ai-search-expansion', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], ai.features[SEARCH_EXPANSION_FEATURE] === true ? 'on' : 'off')}
                   <div class="settings-item-hint">${t('settings.aiSearchExpansionHint')}</div>
                 </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.aiProgramGenres')}</div>
+                  ${toggleGroup('ai-program-genres', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], ai.features[PROGRAM_GENRES_FEATURE] === true ? 'on' : 'off')}
+                  <div class="settings-item-hint">${t('settings.aiProgramGenresHint')}</div>
+                  ${programGenresStatus()}
+                </div>
               </div>
             </div>
 
@@ -1715,6 +1734,9 @@ export class Settings {
       this.toggleDropdown(el.closest<HTMLElement>('.dropdown'));
     } else if (el.classList.contains('dropdown-option')) {
       this.selectDropdownOption(el);
+    } else if (el.classList.contains('toggle-option') && el.parentElement?.id === 'ai-program-genres'
+      && el.dataset.value === 'on' && !el.classList.contains('active')) {
+      void this.confirmProgramGenres(el);
     } else if (el.classList.contains('toggle-option')) {
       // Single-select toggle group: clear the siblings, activate the chosen option.
       el.parentElement?.querySelectorAll('.toggle-option').forEach(b => b.classList.remove('active'));
@@ -2015,8 +2037,11 @@ export class Settings {
         this.cancelChannelHealthCheck();
         await activeCheck;
       }
+      // Stopped first, so a batch finishing meanwhile can't write genres back.
+      ProgramGenres.cancel();
       await clearAllCachedData();
       ChannelHealthService.reset();
+      ProgramGenres.reset();
       this.updateChannelHealthPanel();
       this.onChannelsChanged();
       await this.loadCacheUsage();
@@ -2921,6 +2946,40 @@ export class Settings {
     }
   }
 
+  // Turning genres on first says how much will be sent, counting in the
+  // prompt; with nothing to send it just turns on.
+  private async confirmProgramGenres(option: HTMLElement): Promise<void> {
+    if (this.isPromptVisible) return;
+    const turnOn = () => {
+      option.parentElement?.querySelectorAll('.toggle-option').forEach(b => b.classList.remove('active'));
+      option.classList.add('active');
+    };
+    let open = true;
+    this.confirmationPrompt.show({
+      title: t('settings.aiProgramGenres'),
+      message: t('settings.checking'),
+      confirmLabel: t('parental.turnOn'),
+      cancelLabel: t('common.cancel'),
+      danger: false,
+      busy: true,
+      onConfirm: () => { open = false; turnOn(); },
+      onCancel: () => { open = false; },
+    });
+    const estimate = await ProgramGenres.estimate();
+    if (!open || !option.isConnected) return;
+    if (!estimate.programs) {
+      open = false;
+      this.confirmationPrompt.hide();
+      turnOn();
+      return;
+    }
+    this.confirmationPrompt.update({
+      message: `${t('settings.aiProgramGenresEstimate', { count: formatNumber(estimate.programs) })}\n${
+        tp('parental.aiRequests', estimate.requests)}`,
+      busy: false,
+    });
+  }
+
   /** The AI section as edited, merged over the stored config. */
   private aiFormConfig(): LlmConfig {
     const stored = StorageService.getLlmConfig();
@@ -2931,6 +2990,7 @@ export class Settings {
     };
     const enabled = $('#ai-enabled .toggle-option.active', this.container)?.getAttribute('data-value');
     const searchExpansion = $('#ai-search-expansion .toggle-option.active', this.container)?.getAttribute('data-value');
+    const programGenres = $('#ai-program-genres .toggle-option.active', this.container)?.getAttribute('data-value');
     const next: LlmConfig = {
       ...stored,
       enabled: enabled === undefined || enabled === null ? stored.enabled : enabled === 'on',
@@ -2942,9 +3002,11 @@ export class Settings {
       detectedContextTokens: this.aiDetectedContext ?? stored.detectedContextTokens,
       dailyRequestCap: choice('ai-daily-requests', stored.dailyRequestCap),
       dailyTokenCap: choice('ai-daily-tokens', stored.dailyTokenCap),
-      features: searchExpansion
-        ? { ...stored.features, [SEARCH_EXPANSION_FEATURE]: searchExpansion === 'on' }
-        : stored.features,
+      features: {
+        ...stored.features,
+        ...(searchExpansion ? { [SEARCH_EXPANSION_FEATURE]: searchExpansion === 'on' } : {}),
+        ...(programGenres ? { [PROGRAM_GENRES_FEATURE]: programGenres === 'on' } : {}),
+      },
     };
     const signature = endpointSignature(next);
     // A test of these exact values replaces what an earlier detection saved.
@@ -3428,6 +3490,10 @@ export class Settings {
     });
 
     StorageService.setLlmConfig(this.aiFormConfig());
+    // Turned on here: the first run starts now, as the prompt said.
+    const genresWereOn = ProgramGenres.active;
+    ProgramGenres.sync();
+    if (ProgramGenres.active && !genresWereOn) ProgramGenres.schedule(0);
     this.aiTested = null;
     this.aiDetectedContext = null;
 

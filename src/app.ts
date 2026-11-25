@@ -4,6 +4,7 @@ import { CONFIG } from './config';
 import { KeyHandler } from './navigation/key-handler';
 import { PlaylistService } from './services/playlist-service';
 import { EpgService } from './services/epg-service';
+import { ProgramGenres } from './services/program-genres';
 import { ChannelHealthService } from './services/channel-health';
 import { StorageService } from './services/storage-service';
 import {
@@ -147,6 +148,7 @@ class App {
           this.livePreview.selectChannel(idx, catchup, scope, mode),
         onChannelsChanged: () => {
           this.player.syncCurrentIndex();
+          ProgramGenres.scopeChanged();
           this.scheduleEpgReload();
         },
         onEpgMappingChanged: () => this.scheduleEpgReload(),
@@ -209,7 +211,10 @@ class App {
     this.settings = new Settings(
       this.views.settings,
       (action) => this.onSettingsSaved(action),
-      () => this.player.syncCurrentIndex(),
+      () => {
+        this.player.syncCurrentIndex();
+        ProgramGenres.scopeChanged();
+      },
       () => this.openReminderManager('settings'),
       () => this.openParentalControls(),
       (name, proceed) => this.authorizeLiveEditing(name, proceed),
@@ -1412,6 +1417,7 @@ class App {
     this.player.refreshOsd();
     void this.search.refreshPrograms();
     this.searchPrewarm.schedule('epg');
+    ProgramGenres.schedule();
   }
 
   private openReminderManager(origin: 'settings' | 'epg'): void {
@@ -1583,6 +1589,7 @@ class App {
       this.player.syncCurrentIndex();
       this.search.invalidateCatalog();
     }
+    ProgramGenres.scopeChanged();
     const current = this.viewStack[this.viewStack.length - 1];
     if (current === 'channels') this.channelList.render();
     else if (current === 'epg') this.epgGrid.render();

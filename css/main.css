@@ -476,7 +476,8 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 40px 48px;
-  max-width: 720px;
+  /* Grows with the text size, so a line keeps its words together at 150. */
+  max-width: calc(720px * var(--font-scale));
   text-align: center;
 }
 
@@ -486,6 +487,11 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   color: var(--text-primary);
   font-size: 30px;
   margin: 0 0 32px;
+}
+
+/* A message of two sentences breaks between them. */
+.confirmation-message {
+  white-space: pre-line;
 }
 
 .reminder-buttons,
@@ -525,6 +531,11 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
 
 .confirmation-btn.danger {
   color: var(--danger);
+}
+
+.confirmation-btn:disabled {
+  cursor: default;
+  opacity: 0.38;
 }
 
 /* EPG reminder bell badge — dim on any future program (affordance), accent once set */

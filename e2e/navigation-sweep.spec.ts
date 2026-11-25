@@ -707,6 +707,26 @@ const SCREENS: Screen[] = [
     },
   },
   {
+    name: 'AI program genres prompt',
+    root: '.confirmation-prompt',
+    focusables: '[data-focusable]',
+    columns: [],
+    tags: [],
+    cross: [],
+    async seed(page) {
+      await routeFakeAi(page, () => ({ items: [] }));
+    },
+    async open(page) {
+      await openTab(page, 'settings');
+      await page.locator('#view-settings .settings-nav-item[data-settings-target="ai"]').click();
+      await page.locator('#ai-program-genres .toggle-option[data-value="on"]').click();
+      await expect(page.locator('.confirmation-prompt .confirmation-title')).toHaveText('AI program genres');
+      await expect(page.locator('.confirmation-prompt [data-confirm-action="confirm"]')).toBeEnabled();
+      await page.mouse.move(1, 1);
+      await expect(page.locator('.confirmation-prompt .focused')).toHaveCount(1);
+    },
+  },
+  {
     name: 'Guide timeline',
     root: '#view-epg',
     // The timeline paints its own cells and one ring over the focused one.

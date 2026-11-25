@@ -299,6 +299,10 @@ the largest preset that fits (the smallest, 2048, when none does): it is always 
 raised only from the default or from a size an earlier test set (saved as `detectedContextTokens`),
 so a smaller size the user picked stays. `llm.context.detected` logs the source and size.
 The default is 16000 for every server. Saved sizes clamp to 2048–128000, the presets' range. Subtitle batches stay at 40 lines at any size.
+The background batch jobs (AI program genres, parental suggestions) send at most 200 items a
+batch at 16000 and more in step with a larger context, as long as a reply covering every item
+fits 8192 tokens: up to 580 titles for genres and 338 groups for parental suggestions at 128000
+(1000 titles: 5 requests at 16000, 2 at 128000).
 
 ## Subtitle offset (sync)
 

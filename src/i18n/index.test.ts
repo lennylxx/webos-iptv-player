@@ -294,4 +294,21 @@ describe('i18n', () => {
     }
     expect(t('preview.timeLeft', { minutes: 5 })).toBe('5 min left');
   });
+
+  it('keeps the AI genres estimate\'s counts from wrapping apart from their units in every locale', () => {
+    try {
+      for (const { value } of localeOptions()) {
+        setLocale(value);
+        const estimate = t('settings.aiProgramGenresEstimate', { count: 6 });
+        // "24 hours" stays one unit, and the count never starts a line alone.
+        expect(estimate, value).toMatch(/24\u00a0\S/);
+        expect(estimate, value).toMatch(/(\u00a0|：)6$/);
+        for (const count of [1, 2, 5]) {
+          expect(tp('parental.aiRequests', count), value).not.toMatch(/\d /);
+        }
+      }
+    } finally {
+      setLocale(DEFAULT_LOCALE);
+    }
+  });
 });

@@ -292,6 +292,7 @@ import { CONFIG } from '../config';
 import { ParentalControlService } from '../services/parental-control';
 import { defaultLlmConfig } from '../services/llm/config';
 import { LlmError } from '../services/llm/client';
+import { ProgramGenres } from '../services/program-genres';
 
 let container: HTMLElement;
 let onSave: Mock<ConstructorParameters<typeof Settings>[1]>;
@@ -1557,6 +1558,43 @@ describe('Settings editing', () => {
     expect(activeVal()).toBe('off');
     click('#auto-play [data-value="on"]');
     expect(activeVal()).toBe('on');
+  });
+
+  it('stops AI program genres before it clears the cache, so a finishing batch writes nothing back', async () => {
+    const cancel = vi.spyOn(ProgramGenres, 'cancel');
+    click('#clear-cache');
+    settings.handleAction('left');
+    settings.handleAction('select');
+    await vi.waitFor(() => expect(cacheMock.clearAllCachedData).toHaveBeenCalled());
+    expect(cancel).toHaveBeenCalled();
+    expect(cancel.mock.invocationCallOrder[0])
+      .toBeLessThan(cacheMock.clearAllCachedData.mock.invocationCallOrder[0]);
+    cancel.mockRestore();
+  });
+
+  it('asks before turning on AI program genres, counting in the prompt', async () => {
+    let finish: (value: { programs: number; requests: number }) => void = () => undefined;
+    const estimate = vi.spyOn(ProgramGenres, 'estimate')
+      .mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const active = () => container.querySelector('#ai-program-genres .toggle-option.active')!.getAttribute('data-value');
+    click('#ai-program-genres [data-value="on"]');
+    expect(document.querySelector('.confirmation-title')?.textContent).toBe('AI program genres');
+    expect(document.querySelector('.confirmation-message')?.textContent).toBe('Checking…');
+    const confirm = document.querySelector<HTMLButtonElement>('[data-confirm-action="confirm"]')!;
+    expect(confirm.disabled).toBe(true);
+    settings.handleAction('left');
+    settings.handleAction('select');
+    expect(active()).toBe('off');
+
+    click('#ai-program-genres [data-value="on"]');
+    finish({ programs: 1234, requests: 3 });
+    await vi.waitFor(() => expect(document.querySelector('.confirmation-message')?.textContent)
+      .toBe('Programs without a genre in the next 24\u00a0hours:\u00a01,234\nAbout 3\u00a0requests will be sent to your AI server.'));
+    expect(document.querySelector<HTMLButtonElement>('[data-confirm-action="confirm"]')!.disabled).toBe(false);
+    settings.handleAction('left');
+    settings.handleAction('select');
+    expect(active()).toBe('on');
+    estimate.mockRestore();
   });
 
   it('explains the cache scope and requires confirmation before clearing', async () => {

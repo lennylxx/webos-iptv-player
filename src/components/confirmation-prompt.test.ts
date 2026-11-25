@@ -51,6 +51,19 @@ describe('ConfirmationPrompt', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
+  it('keeps focus on Cancel when a busy prompt turns ready, so OK still cancels', () => {
+    prompt.show({
+      title: 'Turn on?', message: 'Checking', confirmLabel: 'Turn on', cancelLabel: 'Cancel',
+      danger: false, busy: true, onConfirm, onCancel,
+    });
+    prompt.update({ message: 'About 5 requests', busy: false });
+    expect(Array.from(document.querySelectorAll('.focused')).map((el) => el.getAttribute('data-key')))
+      .toEqual(['cancel']);
+    prompt.handleAction('select');
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   it('cancels on Back', () => {
     prompt.handleAction('back');
     expect(onCancel).toHaveBeenCalledTimes(1);

@@ -132,6 +132,8 @@ export interface ProgramSource {
   // The guide channel id a channel's programs are listed under, or null.
   guideId: (channel: Channel) => string | null;
   programmes: (guideId: string) => Programme[] | null;
+  // The genre a program is filtered by; its category when left out.
+  genre?: (programme: Programme) => string;
 }
 
 export interface ProgramCollector {
@@ -153,6 +155,7 @@ export function collectPrograms(
   // Channels that share a guide id list its programs once.
   const listed = new Set<string>();
   let channelIndex = 0;
+  const genreOf = source.genre ?? ((programme: Programme) => programme.category);
   return {
     candidates,
     step(): boolean {
@@ -164,7 +167,7 @@ export function collectPrograms(
       if (!id || listed.has(id)) return false;
       listed.add(id);
       for (const programme of source.programmes(id) ?? []) {
-        if (filter.genres.length && filter.genres.indexOf(programme.category.trim()) < 0) continue;
+        if (filter.genres.length && filter.genres.indexOf(genreOf(programme).trim()) < 0) continue;
         if (windows && !inWindows(windows, programme.start.getTime(), programme.stop.getTime())) continue;
         candidates.push({ channel, channelIndex: index, programme });
       }

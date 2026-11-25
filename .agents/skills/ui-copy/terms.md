@@ -93,6 +93,9 @@ a new term after review, add a row here.
 | AI-translated program info (label) | AI translation | AI 翻译 |
 | Translation progress / failure | Translating… / Translation failed | 正在翻译… / 翻译失败 |
 | Movie and series plot text (Settings AI intro) | movie and series descriptions | 电影和剧集的简介 |
+| AI program genres (setting; prompt title) | AI program genres | AI 节目类型 |
+| Program genre labels (Search rows, AI search; ✦ marks an AI one) | Movie / Series / News / Sports / Kids / Documentary / Entertainment / Music / Lifestyle / Cooking / Arts / Religion / Shopping / Business | 电影 / 电视剧 / 新闻 / 体育 / 少儿 / 纪录片 / 综艺 / 音乐 / 生活 / 美食 / 文化 / 宗教 / 购物 / 财经 |
+| Genre run estimate / progress / result (label: count, no plurals) | Programs without a genre in the next 24 hours: {count} / Adding genres… {done}/{total} / Programs with an AI genre: {count} | 未来 24 小时内没有类型的节目：{count} / 正在补充类型… {done}/{total} / 已由 AI 补充类型的节目：{count} |
 | AI help in EPG mapping and parental controls (Settings AI intro) | AI suggestions for EPG mapping and parental controls | EPG 映射和家长控制的 AI 推荐 |
 | Account credentials never sent to AI (AI privacy hint) | login details | 登录信息 |
 | Channel stream addresses never sent to AI (AI privacy hint) | stream URLs | 播放网址 |
@@ -147,5 +150,10 @@ Never reintroduce these for the concept named.
 | AI-translated label | Translated / 已翻译 | AI translation / AI 翻译 |
 | Translation language row / list title | More languages… (reads as more subtitle tracks), Change language (reads as the UI language), Other language…, Auto-translate (clashes with AI translation); title Translate to (a dangling preposition) | Translate to another language… / Translation language |
 | AI-translated subtitle target | AI translation to {language} (case agreement with a native name), {language} AI translation, AI translation: {language}, a bare · {language} (source or target?), {name} >> {language}; full language names in the menu suffix; ZH-CN / ZH-TW / ZH-HANS / ZH-HANT in the menu suffix | Menu: · AI · EN, · AI · 简中 / 繁中; toast/OSD: AI translation ({language}) |
+| AI program genres setting | Smart genres / 智能类型, Genre detection / 类型识别, Auto genres / 自动类型, Classify programs / 节目分类 (zh 分类 is Xtream categories), 节目体裁 | AI program genres / AI 节目类型 |
+| Program genre labels | 综合, Culture | 综艺 / Arts |
+| Genre run result | Genres added to {count} programs (needs plurals and counters) | Programs with an AI genre: {count} |
+| AI program genres hint | "so Search and AI search can find them by genre" (plain Search doesn't match AI genres) | "shown in Search results and usable as an AI search filter" / “显示在搜索结果中，并可用于 AI 搜索筛选” |
+| AI genre mark | an "AI" pill, "· AI" text | the ✦ AI icon before the genre |
 | Movie and series plot text | plot / synopsis / summary, 剧情简介 / 描述 / 情节 | description / 简介 |
 | Info translation action | Translate (doesn't say AI), AI translate (noun used as a verb), AI 翻译 (reads as the AI translation mark) | Translate with AI / 用 AI 翻译 |

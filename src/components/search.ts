@@ -2,7 +2,7 @@ import type { Action, CatchupInfo, Channel, PlaylistEntry, Programme, VodItem, S
 import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { Focus, type FocusScope } from '../navigation/focus-scope';
 import { InputMode } from '../navigation/input-mode';
-import { fontScale, html, raw } from '../utils/dom';
+import { fontScale, html, raw, type Safe } from '../utils/dom';
 import { channelLockBadge, seriesLockBadge, vodLockBadge } from './parental-badge';
 import { morph } from '../utils/morph';
 import { PlaylistService } from '../services/playlist-service';
@@ -44,7 +44,7 @@ import { showToast } from './toast';
 import { CatchupResumePrompt } from './catchup-resume-prompt';
 import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
-import { t } from '../i18n';
+import { getLocale, t } from '../i18n';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard, type VirtualScrollAxis } from '../utils/virtual-scroll';
 import { runInFrameSlices } from '../utils/frame-slices';
@@ -109,6 +109,7 @@ import {
   type AskCatalogCategories,
 } from '../services/ask-search/catalog-source';
 import { AI_ICON } from './icons';
+import { ProgramGenres, genreLabel, programGenre, programGenreName } from '../services/program-genres';
 
 const log = createLogger('Search');
 const SEARCH_LIST_VIEWPORT = 420;
@@ -119,6 +120,13 @@ const SEARCH_ROW_OVERSCAN = 6;
 // and the part that doesn't.
 const SEARCH_PROGRAM_ROW_TEXT = 69;
 const SEARCH_PROGRAM_ROW_FIXED = 40;
+
+// The guide's category, else the AI model's genre behind the AI mark.
+function programGenreText(programme: Programme): Safe | string {
+  if (programme.category) return html` · ${programme.category}`;
+  const genre = programGenre(programme);
+  return genre ? html` · <span class="ai-icon">${raw(AI_ICON)}</span>${genreLabel(genre)}` : '';
+}
 
 function programRowStride(scale: number): number {
   return SEARCH_PROGRAM_ROW_FIXED + SEARCH_PROGRAM_ROW_TEXT * scale;
@@ -2321,7 +2329,7 @@ export class Search {
         <div class="search-program-time">${day.weekday} ${day.date}<br>${formatTime(programme.start)}</div>
         <div class="search-program-body">
           <div class="search-program-title">${programme.title}</div>
-          <div class="search-program-channel">${channel.name}${programme.category ? html` · ${programme.category}` : ''}</div>
+          <div class="search-program-channel">${channel.name}${programGenreText(programme)}</div>
         </div>
         <div class="search-program-action">${action}</div>
       </div>
@@ -2836,6 +2844,9 @@ export class Search {
     const key = [
       EpgService.guideRevision,
       EpgService.mappingRevision,
+      ProgramGenres.revision,
+      // The AI genres are named in the UI language.
+      getLocale(),
       ParentalControlService.rulesRevision,
       ParentalControlService.enabled ? 1 : 0,
       // A source locked again changes no rule, only the approved list.
@@ -2858,7 +2869,8 @@ export class Search {
       if (!id || listed.has(id)) return false;
       listed.add(id);
       for (const programme of EpgService.getProgrammes(id) ?? []) {
-        if (programme.category) categories.push(programme.category);
+        const genre = programGenreName(programme);
+        if (genre) categories.push(genre);
       }
       return false;
     }, { shouldContinue: current });
@@ -2912,6 +2924,7 @@ export class Search {
           channels: channelList,
           guideId: channel => EpgService.findChannelId(channel),
           programmes: id => EpgService.getProgrammes(id),
+          genre: programGenreName,
         }, filter, windows);
         if (!await runInFrameSlices(collector.step, { shouldContinue: current })) return null;
         const matcher = matchPrograms(collector.candidates, filter.keywords);

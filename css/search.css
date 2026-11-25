@@ -146,6 +146,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The AI mark before an AI genre sits as close as the separator's spaces. */
+.search-program-channel .ai-icon {
+  margin-right: 0.25em;
+}
 .search-program-action {
   flex: none;
   padding: 8px 14px;

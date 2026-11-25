@@ -148,6 +148,7 @@ import { SEARCH_INDEX_FORMAT } from '../workers/search-source-index';
 import { resetSearchExpansionForTests } from '../services/search-expansion';
 import { LlmError } from '../services/llm/client';
 import type { AskFilter, AskReply } from '../services/ask-search/ask-query';
+import { setLocale } from '../i18n';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -4136,6 +4137,29 @@ describe('Search AI search', () => {
     } finally {
       enabled.mockRestore();
       protects.mockRestore();
+      walk.mockRestore();
+    }
+  });
+
+  it('lists the genre names again after the UI language changes, as AI genres are named in it', async () => {
+    const now = Date.now();
+    playlistMock.channels = [grouped('ch1', 'Group A')];
+    epgMock.programmes = { ch1: [prog('Alpha Cup', now + hour, now + 2 * hour)] };
+    const walk = vi.spyOn(epgMock, 'getProgrammes');
+    askMock.mockResolvedValue(reply({ types: ['channel'], groups: ['Group A'] }));
+    try {
+      const { view } = await openReady();
+      await view.setQuery('group a channels');
+      pressAsk(view);
+      await asked(view, 'shown');
+      const walked = walk.mock.calls.length;
+      setLocale('de');
+      await view.setQuery('group a channels again');
+      pressAsk(view);
+      await asked(view, 'shown');
+      expect(walk.mock.calls.length).toBeGreaterThan(walked);
+    } finally {
+      setLocale('en');
       walk.mockRestore();
     }
   });

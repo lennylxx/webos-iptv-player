@@ -173,6 +173,8 @@ export const CONFIG = {
     MAX_RETAINED_PROGRAMMES: 120_000,
     // Visibility and mapping edits arrive one per keypress; coalesce them.
     CHANNEL_CHANGE_RELOAD_DELAY: 2000,
+    // AI program genres stopped by a channel or lock edit start over once edits pause this long.
+    GENRE_RESTART_DELAY_MS: 5000,
     // Longest stretch of reading the cached guide before input gets a turn.
     CACHE_DECODE_SLICE_MS: 16,
     // A guide whose feed ended early is fetched again no sooner than this,

@@ -63,6 +63,12 @@ describe('execute', () => {
       .toEqual(['Alpha next']);
   });
 
+  it('filters by the genre the source gives a program, in place of its category', () => {
+    const genre = (p: Programme): string => (p.title === 'Charlie later' ? 'Genre C' : p.category);
+    expect(titles(askPrograms({ ...source, genre }, filter({ genres: ['Genre C'] }), null, NOW, 10)))
+      .toEqual(['Charlie later']);
+  });
+
   it('narrows by keywords with only a time, and ranks them first with a topic', () => {
     expect(titles(askPrograms(source, filter({ keywords: ['alpha'] }), [[0, 30000]], NOW, 10)))
       .toEqual(['Alpha next', 'Alpha past']);
