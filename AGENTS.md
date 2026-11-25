@@ -192,6 +192,14 @@ build constant; `scripts/sync-version.mjs` runs on `npm version`.
   (auto-escapes); wrap only genuinely trusted markup in `raw(...)`. A URL in
   a CSS `url('…')` also goes through `cssUrl()`: the escaper's entities are
   decoded before CSS parses the string. E2E tests guard this.
+- **AI calls send plain text.** Requests to the model (`src/services/llm/`)
+  carry only the words to transform (subtitle lines, titles, descriptions,
+  names), never markup or file formats; the app splits and rebuilds any
+  format itself. Treat replies as untrusted plain text: validate them
+  strictly (numbered lines, a JSON schema with allowed values) and fall
+  back to the original or a simplified result on any mismatch. Inline
+  markers, such as ASS translation's mid-line style tags, are allowed only
+  where a mismatch falls back safely.
 - **TS strictness.** `strict`, `noUnusedLocals`, `noUnusedParameters`,
   `noImplicitReturns` are on — unused symbols fail `typecheck`/CI.
 - **Tests** are colocated as `*.test.ts`. Vitest defaults to `node`;
