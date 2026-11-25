@@ -58,3 +58,28 @@ describe('parseSubtitleFile', () => {
     expect(parseSubtitleFile(srt)).toEqual([{ start: 1, end: 2.5, text: 'Hi' }]);
   });
 });
+
+describe('SRT position tags', () => {
+  const srt = (...texts: string[]): string => texts
+    .map((text, k) => `${k + 1}\n00:00:0${k},000 --> 00:00:0${k},500\n${text}\n`).join('\n');
+
+  it('moves {\\anN} into the cue positioning and out of the text', () => {
+    const cues = parseSubtitleFile(srt('{\\an8}Top', '{\\an5}Middle', '{\\an1}Bottom left', '{\\an9}Top right', 'Plain {\\an7}late'));
+    expect(cues.map(cue => [cue.text, cue.settings])).toEqual([
+      ['Top', { line: 0, snapToLines: true }],
+      ['Middle', { line: 50, snapToLines: false, lineAlign: 'center' }],
+      ['Bottom left', { align: 'left' }],
+      ['Top right', { line: 0, snapToLines: true, align: 'right' }],
+      ['Plain late', { line: 0, snapToLines: true, align: 'left' }],
+    ]);
+  });
+
+  it('keeps {\\an2}, the default, out of the text with no positioning, and drops a tag on its own line', () => {
+    const cues = parseSubtitleFile(srt('{\\an2}Bottom', '{\\an8}\nTop'));
+    expect(cues.map(cue => [cue.text, cue.settings])).toEqual([['Bottom', undefined], ['Top', { line: 0, snapToLines: true }]]);
+  });
+
+  it('leaves a WebVTT file as it is', () => {
+    expect(parseSubtitleFile('WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n{\\an8}Top\n')[0].text).toBe('{\\an8}Top');
+  });
+});

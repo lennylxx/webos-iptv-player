@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { CueTranslationDoc } from './cue-translation';
 import { planBatches } from './subtitle-translation';
+import { parseSubtitleFile } from '../utils/srt';
 
 function doc(...texts: string[]): CueTranslationDoc {
   return new CueTranslationDoc(texts.map((text, k) => ({ start: k, end: k + 1, text })));
@@ -16,6 +17,14 @@ describe('CueTranslationDoc', () => {
     const cues = doc(' Alpha said hi.\nSee you later. ', '>> Bravo');
     expect(cues.units.map(unit => unit.text)).toEqual([' Alpha said hi.\nSee you later. ', '>> Bravo']);
     expect(cues.texts([0, 1], ['A < B & C\nD', '>> <i>Bravo'])).toEqual(['A &lt; B &amp; C\nD', '&gt;&gt; Bravo']);
+  });
+
+  it('sends an SRT cue placed by {\\an8} without the tag, which became its positioning', () => {
+    const [cue] = parseSubtitleFile('1\n00:00:01,000 --> 00:00:02,000\n{\\an8}<i>Alpha</i>\n');
+    expect(cue.settings).toEqual({ line: 0, snapToLines: true });
+    const cues = new CueTranslationDoc([cue]);
+    expect(cues.units[0].text).toBe('Alpha');
+    expect(cues.texts([0], ['Alfa'])).toEqual(['<i>Alfa</i>']);
   });
 
   it('keeps a position block and edge styling on the device', () => {

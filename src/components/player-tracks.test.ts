@@ -2305,7 +2305,7 @@ describe('PlayerTracks subtitle translation', () => {
     tracks.translateSubtitles();
 
     await vi.waitFor(() => expect(cueList.map(cue => cue.text)).toEqual([
-      '{\\an8}<font color="#ffff00">Alpha</font> &amp; Bravo (de)',
+      '<font color="#ffff00">Alpha</font> &amp; Bravo (de)',
       'Charlie (de)',
     ]));
     expect((vi.mocked(LlmService.runText).mock.calls[0][0] as LlmTextTask).user).toBe('[1] Alpha<x1/> & Bravo\n[2] Charlie');

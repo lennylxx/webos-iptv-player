@@ -61,7 +61,10 @@ video is paused, Chromium keeps drawing a removed or rewritten cue until the tra
 so after a switch, and after a translated batch rewrites a cue on screen, the track goes
 `hidden` and back to `showing` in one task (`WebVttCueTrack.redraw`), with no blank frame. Parsed cues
 stay cached for the current VOD item. A `WEBVTT` file is parsed directly; anything else is treated
-as SRT and converted first (`srtToVtt` / `parseSubtitleFile` in `src/utils/srt.ts`).
+as SRT and converted first (`srtToVtt` / `parseSubtitleFile` in `src/utils/srt.ts`). An SRT
+`{\an1}`–`{\an9}` tag becomes the cue's positioning and leaves its text: `{\an7}`–`{\an9}` at
+the top (`line` 0), `{\an4}`–`{\an6}` in the middle (`line` 50%), the rest at the bottom, with
+the keypad's left and right columns aligning the text `left` or `right`.
 
 ### ASS / SSA — `assjs` overlay
 
@@ -235,7 +238,7 @@ stays hidden while AI features are off.
   keeps only that line in the original language. The reply limit is at least 2048 tokens or three
   times the batch, capped by the room the context size leaves. Blank cues are not sent.
 - Only the words of a cue are sent (`src/services/cue-translation.ts`, over the splitter shared
-  with ASS in `subtitle-markers.ts`). Markup at a cue's edges (`{\an8}`, `<font …>`, `<c.…>`,
+  with ASS in `subtitle-markers.ts`). Markup at a cue's edges (a WebVTT file's `{\an8}`, `<font …>`, `<c.…>`,
   `<v …>`, `<lang …>`, edge `<i>`) stays on the device; markup between the words travels as a
   marker: `<i>`/`<b>`/`<u>` paired inside the cue as such, anything else (inline timestamps,
   `<font>`, a lone toggle) as `<x1/>`, `<x2/>`, …. Ruby readings describe the source words, so a
