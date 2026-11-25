@@ -24,6 +24,7 @@ import {
   VOLUME_MUTED_ICON,
 } from './icons';
 import { liveBadge } from './live-badge';
+import { liveSource, ProgramTranslation, programTitle, programView } from './program-translation';
 import type { Player } from './player';
 import { PlayerPresentation } from './player-presentation';
 import { showToast } from './toast';
@@ -58,6 +59,8 @@ export class LivePreview {
   private channelSet: Channel[] | null = null;
   private channelKey = '';
   private channelAvailable = true;
+  // What airs now, then next, as the last render showed them.
+  private shownPrograms: Array<Programme | null> = [];
 
   constructor(
     private readonly container: HTMLElement,
@@ -70,6 +73,9 @@ export class LivePreview {
       () => options.player.getAspectRatio(),
     );
     options.player.onAspectRatioChange(() => this.presentation.refresh());
+    ProgramTranslation.subscribe(() => {
+      if (this.state) this.render();
+    });
     container.setAttribute('data-self-activate', '');
     container.addEventListener('nav:hover', event => {
       const target = event.target;
@@ -233,13 +239,18 @@ export class LivePreview {
 
   refreshLayout(): void {
     this.presentation.refresh();
-    if (this.state) this.fitPrograms();
+    if (this.state) {
+      this.fitPrograms();
+      this.gatherTranslations();
+    }
   }
 
   private applyState(state: LivePlaybackSnapshot | null): void {
     this.state = state;
     if (!state) {
       this.control = null;
+      this.shownPrograms = [];
+      this.options.channelList.showPreviewTranslations([]);
       hide(this.container);
       this.stopRefreshTimer();
       return;
@@ -368,7 +379,7 @@ export class LivePreview {
     return `${formatTime(program.start)}\u2013${formatTime(program.stop)}`;
   }
 
-  private renderUpcoming(upcoming: Programme[], now: Date): Safe {
+  private renderUpcoming(upcoming: Programme[], now: Date, channel: Channel): Safe {
     let previousDay = displayDayKey(now);
     const tomorrow = displayDayKey(addDisplayDays(now, 1));
     return html`${upcoming.map(item => {
@@ -383,7 +394,7 @@ export class LivePreview {
           </div>` : ''}
         <div class="live-preview-program"
              data-key="program:${item.start.getTime()}:${item.stop.getTime()}">
-          <time>${this.programTimeRange(item)}</time><span>${item.title}</span>
+          <time>${this.programTimeRange(item)}</time><span>${programTitle(programView(liveSource(channel), item))}</span>
         </div>`;
     })}`;
   }
@@ -405,6 +416,9 @@ export class LivePreview {
       ? Math.max(0, Math.ceil((program.stop.getTime() - now.getTime()) / 60000)) : 0;
     const favorite = this.options.isFavorite(state.channel);
     const muteLabel = t(state.muted ? 'preview.unmute' : 'preview.mute');
+    const source = liveSource(state.channel);
+    this.shownPrograms = [program, ...upcoming];
+    const title = program ? programTitle(programView(source, program)) : '';
     const message = state.status === 'loading' ? t('common.loading')
       : state.status === 'buffering' ? t('preview.connecting')
       : state.status === 'error' ? t('player.streamError') : '';
@@ -444,7 +458,7 @@ export class LivePreview {
           </div>` : ''}
       </div>
       <div class="live-preview-details" data-key="preview-details">
-        ${program ? html`<h2 class="live-preview-title">${program.title}</h2>` : ''}
+        ${program ? html`<h2 class="live-preview-title">${title}</h2>` : ''}
         ${program && length > 0 ? html`
           <div class="live-preview-schedule">
             <time class="live-preview-time-range">${this.programTimeRange(program)}</time>
@@ -457,11 +471,26 @@ export class LivePreview {
         ${upcoming.length ? html`
           <div class="live-preview-upcoming">
             <h3>${t('player.upNext')}</h3>
-            ${this.renderUpcoming(upcoming, now)}
+            ${this.renderUpcoming(upcoming, now, state.channel)}
           </div>` : program ? html`<p class="live-preview-empty">${t('preview.noUpcoming')}</p>` : ''}
       </div>
     `);
     this.fitPrograms();
+    this.gatherTranslations();
+  }
+
+  // What airs now and the next programs that fit show translated while
+  // translation is on; Live sends them with its rows.
+  private gatherTranslations(): void {
+    const state = this.state;
+    if (!state) return;
+    const source = liveSource(state.channel);
+    const [program, ...upcoming] = this.shownPrograms;
+    const rows = this.container.querySelectorAll<HTMLElement>('.live-preview-upcoming .live-preview-program');
+    const shown = [program, ...upcoming.filter((_, i) => rows[i] && rows[i].style.display !== 'none')];
+    this.options.channelList.showPreviewTranslations(shown
+      .filter((text): text is Programme => !!text && !!text.title.trim())
+      .map(text => ({ source, text })));
   }
 
   private fitPrograms(): void {

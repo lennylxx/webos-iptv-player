@@ -1552,3 +1552,128 @@ test('AI program genres ask before the first run, then Search shows and filters 
   await expect(rows).toContainText('Alpha Show Time Cup');
   expect((JSON.parse(sent[1]) as { genres: string[] }).genres.sort()).toEqual(['Genre B', 'Sports']);
 });
+
+// Two upcoming programs that match "report" and one that matches "movie", and an AI server that adds " (de)"
+// to every "[Tn]"/"[Dn]" line it is sent.
+async function seedTranslatedSearch(page: import('@playwright/test').Page): Promise<string[]> {
+  await seedSearch(page);
+  await routeLiveManifest(page);
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const stop = new Date(start.getTime() + 60 * 60 * 1000);
+  const epg = `<tv>
+    <channel id="one"><display-name>Channel One</display-name></channel>
+    <channel id="two"><display-name>Channel Two</display-name></channel>
+    <programme channel="one" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>Future Report</title></programme>
+    <programme channel="two" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>Later Report</title></programme>
+    <programme channel="two" start="${xmltvDate(stop)}" stop="${xmltvDate(new Date(stop.getTime() + 60 * 60 * 1000))}"><title>Movie Night</title></programme>
+  </tv>`;
+  await page.route('**/xmltv.php*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_llm', JSON.stringify({
+      enabled: true,
+      baseUrl: 'http://ai.test/v1',
+      model: 'm1',
+      capabilities: {
+        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
+        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
+      },
+    }));
+  });
+  const sent: string[] = [];
+  await page.route('http://ai.test/v1/chat/completions', (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const body = JSON.parse(route.request().postData() || '{}') as { messages: Array<{ role: string; content: string }> };
+    const user = body.messages.find(m => m.role === 'user')?.content || '';
+    sent.push(user);
+    const content = user.split('\n').map(line => `${line} (de)`).join('\n');
+    return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
+      body: JSON.stringify({ choices: [{ message: { content } }] }) });
+  });
+  return sent;
+}
+
+// Translate on a movie result's detail turns on the session's translation; Back returns to Search.
+async function translateFromMovieResult(page: import('@playwright/test').Page): Promise<void> {
+  await enterSearch(page);
+  await openMovieResult(page, 'movie');
+  const button = page.locator('#view-movies [data-key="translate"]');
+  for (let i = 0; i < 6 && !(await button.evaluate((el) => el.classList.contains('focused'))); i++) {
+    await page.keyboard.press('ArrowRight');
+  }
+  await page.keyboard.press('Enter');
+  await expect(button).toHaveAttribute('aria-label', 'Show original');
+  // The movie's own translation lands first, so nothing it brings re-renders Search.
+  await expect(page.locator('#view-movies .detail-title')).toHaveText('Movie One (de)');
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
+  await expect(page.locator('#view-search')).toBeVisible();
+}
+
+test('with translation on, the program rows on screen translate in one request once typing settles', async ({ page }) => {
+  const sent = await seedTranslatedSearch(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  await translateFromMovieResult(page);
+  const programRequests = () => sent.filter(user => user.includes('Report'));
+
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('');
+  await input.pressSequentially('report', { delay: 60 });
+  const titles = page.locator('#view-search .search-program-title');
+  await expect(titles).toHaveCount(2);
+  await expect.poll(async () => (await titles.allTextContents()).sort())
+    .toEqual(['Future Report (de)', 'Later Report (de)']);
+  expect(programRequests()).toHaveLength(1);
+  expect(programRequests()[0]).toMatch(/^\[T1\] (Future|Later) Report\n\[T2\] (Future|Later) Report$/);
+
+  // The AI mark is the title's size, half of it from the title, in the title's color.
+  const mark = await titles.first().locator('.ai-icon.is-title-mark').evaluate((el) => {
+    const style = getComputedStyle(el);
+    const title = getComputedStyle(el.parentElement!);
+    return { width: style.width, height: style.height, gap: style.marginRight, title: title.fontSize, sameColor: style.color === title.color };
+  });
+  expect(mark).toEqual({ width: '28px', height: '28px', gap: '14px', title: '28px', sameColor: true });
+  await expect(titles.locator('.ai-icon svg')).toHaveCount(2);
+
+  // The same rows again come from what was kept: nothing is sent.
+  await input.fill('');
+  await input.fill('report');
+  await expect.poll(async () => (await titles.allTextContents()).sort())
+    .toEqual(['Future Report (de)', 'Later Report (de)']);
+  await page.waitForTimeout(600);
+  expect(programRequests()).toHaveLength(1);
+});
+
+test('after a reload, program rows translated before come back without a request', async ({ page }) => {
+  const sent = await seedTranslatedSearch(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  await translateFromMovieResult(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('report');
+  const titles = page.locator('#view-search .search-program-title');
+  await expect.poll(async () => (await titles.allTextContents()).sort())
+    .toEqual(['Future Report (de)', 'Later Report (de)']);
+  const before = sent.length;
+
+  await page.reload();
+  await liveLoaded(page);
+  await translateFromMovieResult(page);
+  await input.fill('report');
+  await expect.poll(async () => (await titles.allTextContents()).sort())
+    .toEqual(['Future Report (de)', 'Later Report (de)']);
+  await page.waitForTimeout(600);
+  expect(sent).toHaveLength(before);
+});
+
+// Regression: rows rendered while translation was off stayed untranslated on return to Search.
+test('translation turned on in a result\'s detail translates the Search rows on return', async ({ page }) => {
+  const sent = await seedTranslatedSearch(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  await translateFromMovieResult(page);
+  const title = page.locator('#view-search .search-program-title', { hasText: 'Movie Night' });
+  await expect(title).toHaveText('Movie Night (de)');
+  expect(sent.filter(user => user.includes('Movie Night'))).toHaveLength(1);
+});

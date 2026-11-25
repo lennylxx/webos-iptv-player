@@ -48,11 +48,15 @@ const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() =>
     toastMock: { showToast: vi.fn() },
   };
 });
-const { llmMock } = vi.hoisted(() => ({
-  llmMock: { isReady: vi.fn(() => false), translateVod: vi.fn() },
-}));
+const { llmMock } = vi.hoisted(() => {
+  const translateVod = vi.fn();
+  // Each item of a batch answered as the tests set the one-item answer.
+  const translateVods = vi.fn((items: unknown[], target: string, signal: AbortSignal) => Promise.all(items.map(item =>
+    Promise.resolve(translateVod(item, target, signal)).then((text: unknown) => ({ text }), (error: unknown) => ({ error })))));
+  return { llmMock: { isReady: vi.fn(() => false), translateVod, translateVods } };
+});
 vi.mock('../services/llm/llm-service', () => ({ LlmService: { isReady: llmMock.isReady } }));
-vi.mock('../services/vod-translation', () => ({ translateVod: llmMock.translateVod }));
+vi.mock('../services/vod-translation', () => ({ translateVods: llmMock.translateVods }));
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
@@ -1136,25 +1140,26 @@ describe('Series detail translation', () => {
     vi.useRealTimers();
   });
 
-  it('translates the series, then the episode the focus rests on', async () => {
+  it('translates the series and its episodes on screen in one request', async () => {
     const { view } = await openWith();
     await openDetail(view);
     view.focusScope.track(JSON.stringify(['detail', '', 'translate']));
     view.handleAction('select');
     expect(ProgramTranslation.active).toBe(true);
     await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
-    expect(llmMock.translateVod.mock.calls.map(call => call[0])).toEqual([{ title: 'Series One', description: 'Series plot.' }]);
+    expect(llmMock.translateVods.mock.calls.map(call => call[0])).toEqual([[
+      { title: 'Series One', description: 'Series plot.' },
+      { title: 'Episode One', description: 'Ep plot.' },
+    ]]);
     expect(container.querySelector('.series-detail .detail-title')!.textContent).toBe('Series One (de)');
     expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('AI translation · Series plot. (de)');
-
-    container.querySelector('[data-episode-id="e1"]')!.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
-    expect(llmMock.translateVod).toHaveBeenLastCalledWith({ title: 'Episode One', description: 'Ep plot.' }, 'en', expect.anything());
     expect(container.querySelector('[data-episode-id="e1"] .episode-name')!.textContent).toBe('Episode One (de)');
     expect(container.querySelector('[data-episode-id="e1"] .episode-plot')!.textContent).toBe('AI translation · Ep plot. (de)');
-    // The series' own translation stays shown.
-    expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('AI translation · Series plot. (de)');
-    expect(llmMock.translateVod).toHaveBeenCalledTimes(2);
+
+    // The focus moving onto an episode already translated asks for nothing more.
+    container.querySelector('[data-episode-id="e1"]')!.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(llmMock.translateVods).toHaveBeenCalledTimes(1);
   });
 
   const translateButton = () => container.querySelector<HTMLElement>('.series-detail [data-key="translate"]');
@@ -1228,7 +1233,7 @@ describe('Series detail translation', () => {
     expect(llmMock.translateVod).not.toHaveBeenCalled();
   });
 
-  it('sends only the episode the focus rests on after a fast pass down the list', async () => {
+  it('sends the episodes on screen once, however fast the focus moves among them', async () => {
     catalogMock.loadSeriesInfo.mockResolvedValue(manyEpisodes);
     ProgramTranslation.toggle();
     const { view } = await openWith();
@@ -1244,7 +1249,9 @@ describe('Series detail translation', () => {
     }
     expect(view.focusScope.focusKey).toBe(JSON.stringify(['detail', '', 'ep:e4']));
     await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
-    expect(llmMock.translateVod.mock.calls.map(call => call[0])).toEqual([{ title: 'Episode 4', description: 'Plot 4.' }]);
+    expect(llmMock.translateVods).toHaveBeenCalledTimes(1);
+    expect((llmMock.translateVods.mock.calls[0][0] as Array<{ title: string }>).map(item => item.title))
+      .toEqual(['Series One', 'Episode 1', 'Episode 2', 'Episode 3', 'Episode 4']);
   });
 
   for (const [reason, message] of [['cap', 'Daily AI limit reached. Translation paused.'], ['auth', 'AI setup problem. Translation paused.']] as const) {
@@ -1271,13 +1278,14 @@ describe('Series detail translation', () => {
     expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('Translation failed · Series plot.');
     expect(translateButton()!.getAttribute('aria-label')).toBe('Translate with AI');
 
+    const seriesCalls = () => llmMock.translateVod.mock.calls.filter(call => (call[0] as { title: string }).title === 'Series One');
     select(view, 'translate');
     expect(ProgramTranslation.active).toBe(true);
     // The press asks again at once, without the focus pause.
-    expect(llmMock.translateVod).toHaveBeenCalledTimes(2);
+    expect(seriesCalls()).toHaveLength(2);
     expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('Translating… · Series plot.');
     await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
-    expect(llmMock.translateVod).toHaveBeenCalledTimes(2);
+    expect(seriesCalls()).toHaveLength(2);
     expect(container.querySelector('.series-detail .detail-plot')!.textContent).toBe('AI translation · Series plot. (de)');
     expect(translateButton()!.getAttribute('aria-label')).toBe('Show original');
   });

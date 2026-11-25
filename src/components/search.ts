@@ -2,7 +2,8 @@ import type { Action, CatchupInfo, Channel, PlaylistEntry, Programme, VodItem, S
 import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { Focus, type FocusScope } from '../navigation/focus-scope';
 import { InputMode } from '../navigation/input-mode';
-import { fontScale, html, raw, type Safe } from '../utils/dom';
+import { fontScale, html, inShownView, raw, type Safe } from '../utils/dom';
+import { liveSource, ProgramTranslation, programTitle, programView } from './program-translation';
 import { channelLockBadge, seriesLockBadge, vodLockBadge } from './parental-badge';
 import { morph } from '../utils/morph';
 import { PlaylistService } from '../services/playlist-service';
@@ -497,6 +498,9 @@ export class Search {
   private askNameCache: { key: string; list: Channel[]; channels: Channel[]; genres: string[] } | null = null;
 
   constructor(private container: HTMLElement, private handlers: SearchHandlers) {
+    ProgramTranslation.subscribe(() => {
+      if (this.active && inShownView(this.container)) this.render();
+    });
     this.focusScope = Focus.register({
       id: 'view.search',
       root: container,
@@ -860,8 +864,19 @@ export class Search {
     this.recordFallback = null;
   }
 
+  /** Search shows again: rows rendered while translation was off elsewhere translate now. */
+  syncTranslation(): void {
+    if (this.active && ProgramTranslation.active && inShownView(this.container)) this.render();
+  }
+
+  /** Search no longer shows: what its rows showed is not sent. */
+  releaseTranslation(): void {
+    ProgramTranslation.release(this);
+  }
+
   deactivate(): void {
     this.active = false;
+    this.releaseTranslation();
     this.expansion.cancel();
     this.cancelAsk();
     this.abortRecordFallback();
@@ -2328,7 +2343,7 @@ export class Search {
            data-program-index="${String(index)}">
         <div class="search-program-time">${day.weekday} ${day.date}<br>${formatTime(programme.start)}</div>
         <div class="search-program-body">
-          <div class="search-program-title">${programme.title}</div>
+          <div class="search-program-title">${programTitle(programView(liveSource(channel), programme))}</div>
           <div class="search-program-channel">${channel.name}${programGenreText(programme)}</div>
         </div>
         <div class="search-program-action">${action}</div>
@@ -2413,6 +2428,20 @@ export class Search {
       };
     }
     this.handlers.onPlayChannel(channelIndex, catchup);
+  }
+
+  // The program rows on screen translate once the results stop changing; a
+  // pending query shows none, so typing sends nothing.
+  private showTranslations(): void {
+    const scroller = this.container.querySelector<HTMLElement>('[data-search-virtual="programmes"]');
+    if (!scroller || !ProgramTranslation.active || !this.active || !inShownView(this.container)) {
+      this.releaseTranslation();
+      return;
+    }
+    const viewport = scroller.clientHeight || SEARCH_LIST_VIEWPORT;
+    const range = this.programVirtualizer.getVisibleRange(this.visiblePrograms.length, viewport);
+    ProgramTranslation.show(this, this.visiblePrograms.slice(range.start, range.end)
+      .map(result => ({ source: liveSource(result.channel), text: result.programme })));
   }
 
   private render(): void {
@@ -2508,6 +2537,7 @@ export class Search {
         : ''}
     `);
     this.restoreVirtualOffsets();
+    this.showTranslations();
   }
 
   private static readonly SECTION_ORDER = ['channels-rail', 'programmes', 'movies', 'series'];

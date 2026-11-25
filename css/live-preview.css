@@ -192,6 +192,12 @@
   overflow-wrap: break-word;
 }
 
+/* The title's AI mark grows with the title, as the label's mark does with its text. */
+.live-preview-title .ai-icon.is-title-mark {
+  font-size: inherit;
+  vertical-align: -0.15em;
+}
+
 .live-preview-schedule {
   margin-top: 16px;
   display: flex;

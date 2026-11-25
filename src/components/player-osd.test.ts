@@ -11,7 +11,11 @@ import { ParentalControlService } from '../services/parental-control';
 import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
 
 const { translateProgram } = vi.hoisted(() => ({ translateProgram: vi.fn() }));
-vi.mock('../services/epg-translation', () => ({ EPG_TRANSLATION_FEATURE: 'epg-translation', translateProgram }));
+vi.mock('../services/epg-translation', () => ({
+  EPG_TRANSLATION_FEATURE: 'epg-translation',
+  translatePrograms: (items: unknown[], target: string, signal: AbortSignal) => Promise.all(items.map(item =>
+    Promise.resolve(translateProgram(item, target, signal)).then((text: unknown) => ({ text }), (error: unknown) => ({ error })))),
+}));
 
 const CHANNEL: Channel = {
   id: 'ch1',
@@ -559,24 +563,27 @@ describe('PlayerOsd program translation', () => {
     document.body.innerHTML = '';
   });
 
-  const title = () => container.querySelector('.osd-programme-title')?.textContent;
+  const title = () => container.querySelector('.osd-programme-title-text')?.textContent;
   const description = () => container.querySelector('.osd-description')?.textContent;
   const hint = () => container.querySelector('[data-osd-translate]')?.textContent?.trim();
 
   it('translates the shown program on Green and shows the original on Green again', async () => {
+    state = snapshot({ nowPlaying: PROGRAMME, upcoming: { ...PROGRAMME, title: 'Programme 2' } });
     osd.show();
-    expect(hint()).toBe('Translate with AI');
+    expect(hint()).toBe('Translate program info with AI');
     osd.toggleTranslation();
     expect(hint()).toBe('Show original');
     await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
     expect(translateProgram).toHaveBeenCalledWith({ title: 'Programme 1', description: 'Description 1' }, 'en', expect.anything());
     expect(title()).toBe('Programm 1');
     expect(description()).toBe('AI translation · Beschreibung 1');
+    expect(translateProgram).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.osd-next-title')?.firstChild?.textContent?.trim()).toBe('Programme 2');
 
     osd.toggleTranslation();
     expect(title()).toBe('Programme 1');
     expect(description()).toBe('Description 1');
-    expect(hint()).toBe('Translate with AI');
+    expect(hint()).toBe('Translate program info with AI');
   });
 
   it('takes a click on its hint', () => {
@@ -628,7 +635,7 @@ describe('PlayerOsd program translation', () => {
 
     taken = false;
     osd.render();
-    expect(hint()).toBe('Translate with AI');
+    expect(hint()).toBe('Translate program info with AI');
   });
 
   it('ignores Green on a movie-file channel, whose info shows no program', () => {
@@ -670,8 +677,40 @@ describe('PlayerOsd program translation', () => {
     osd.show();
     osd.toggleTranslation();
     await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
-    expect(title()).toBe('Programm 1AI translation');
+    expect(title()).toBe('Programm 1');
+    const row = Array.from(container.querySelector('.osd-programme-title')!.children).map(child => child.className);
+    expect(row).toEqual(['osd-programme-title-text', 'program-translation-label is-title', 'osd-translate']);
+    expect(container.querySelector('.osd-programme-title .program-translation-label')?.textContent).toBe('AI translation');
     expect(container.querySelector('.osd-description')).toBeNull();
+  });
+
+  it('puts its hint at the end of the title row, after a title that truncates', () => {
+    const titleRow = () => {
+      const row = container.querySelector('.osd-programme-title')!;
+      return {
+        children: Array.from(row.children).map(child => child.className),
+        title: row.querySelector('.osd-programme-title-text')?.textContent,
+        hint: row.querySelector('.osd-translate [data-osd-translate]')?.textContent?.trim(),
+      };
+    };
+    osd.show();
+    expect(titleRow()).toEqual({
+      children: ['osd-programme-title-text', 'osd-translate'],
+      title: 'Programme 1',
+      hint: 'Translate program info with AI',
+    });
+    expect(container.querySelector('.osd-programme-time [data-osd-translate]')).toBeNull();
+
+    state = snapshot({
+      playback: playback(120, 30),
+      catchup: { start: 1_000_000, end: 1_000_120, title: 'Programme 2', description: 'Description 2', icon: '' },
+    });
+    osd.render();
+    expect(titleRow()).toEqual({
+      children: ['osd-programme-title-text', 'osd-translate'],
+      title: 'Programme 2',
+      hint: 'Translate program info with AI',
+    });
   });
 
   it('offers nothing and ignores Green while hidden or without AI', () => {

@@ -298,6 +298,7 @@ export const DE_MESSAGES = {
   'ai.translateLimit': 'Tägliches KI-Limit erreicht. Übersetzung pausiert.',
   'ai.setupProblem': 'Problem mit der KI-Einrichtung. Übersetzung pausiert.',
   'ai.translate': 'Mit KI übersetzen',
+  'ai.translateProgramInfo': 'Sendungsinfos mit KI übersetzen',
   'ai.showOriginal': 'Original anzeigen',
   'ai.translation': 'KI-Übersetzung',
   'ai.translating': 'Wird übersetzt…',

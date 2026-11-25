@@ -146,6 +146,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The AI mark before a translated title grows with the title, as a label's mark does. */
+.search-program-title .ai-icon.is-title-mark {
+  font-size: 1em;
+  vertical-align: -0.15em;
+}
 /* The AI mark before an AI genre sits as close as the separator's spaces. */
 .search-program-channel .ai-icon {
   margin-right: 0.25em;

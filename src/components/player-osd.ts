@@ -286,11 +286,13 @@ export class PlayerOsd {
           <div class="osd-programme-detail">
             ${this.programmeIcon(catchup.icon)}
             <div class="osd-programme-info">
-              <div class="osd-programme-title">${view.title}${programTitleLabel(view)}</div>
+              <div class="osd-programme-title">
+                <span class="osd-programme-title-text">${view.title}</span>${programTitleLabel(view)}
+                ${this.translateHint(state.channel, catchup)}
+              </div>
               <div class="osd-programme-time">
                 <span>${formatTime(start)} - ${formatTime(end)}</span>
                 <span class="osd-remaining">${formatDuration(end.getTime() - start.getTime())}</span>
-                ${this.translateHint(state.channel, catchup)}
               </div>
             </div>
           </div>
@@ -322,13 +324,15 @@ export class PlayerOsd {
         <div class="osd-programme-detail">
           ${this.programmeIcon(nowPlaying.icon)}
           <div class="osd-programme-info">
-            <div class="osd-programme-title">${view.title}${programTitleLabel(view)}</div>
+            <div class="osd-programme-title">
+              <span class="osd-programme-title-text">${view.title}</span>${programTitleLabel(view)}
+              ${this.translateHint(state.channel, nowPlaying)}
+            </div>
             <div class="osd-programme-time">
               <span>${formatTime(nowPlaying.start)} - ${formatTime(nowPlaying.stop)}</span>
               <span class="osd-remaining">${t('player.remaining', {
                 duration: formatDuration(nowPlaying.stop.getTime() - Date.now()),
               })}</span>
-              ${this.translateHint(state.channel, nowPlaying)}
             </div>
           </div>
         </div>

@@ -498,14 +498,17 @@
 }
 
 .preview-list-hints {
-  height: 62px;
+  /* Grows with the text, and hints that no longer fit one line wrap. */
+  min-height: calc(62px * var(--font-scale));
 }
 
 .preview-list-context {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 24px;
+  gap: 6px 24px;
 }
 
 .preview-list-hints svg {
@@ -530,6 +533,25 @@
 .edit-action.focused {
   color: var(--text-primary);
   background: var(--bg-tertiary);
+}
+
+/* The AI mark stands where a color key's cap would. */
+.preview-list-hints .ai-icon {
+  width: 22px;
+  height: 22px;
+  margin-right: 0;
+}
+
+.preview-list-hints .ai-icon svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Hovers like the Guide's clickable hint (epg.css); its box overhangs so its
+   label sits where a plain hint's would. */
+.preview-list-hints .preview-list-translate {
+  margin-right: -10px;
+  margin-left: -10px;
 }
 
 .edit-action[data-edit-action="yellow"] {

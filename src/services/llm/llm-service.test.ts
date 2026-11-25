@@ -319,6 +319,21 @@ describe('LlmService', () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
+  it('answers a plain-text task from a stored reply without sending it, apart per model', async () => {
+    save({ capabilities: { signature: SIGNATURE, structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 } });
+    const spy = vi.spyOn(globalThis, 'fetch');
+    await expect(LlmService.cachedText(task)).resolves.toBeUndefined();
+    await LlmService.storeText(task, '[1] A');
+
+    await expect(LlmService.cachedText(task)).resolves.toBe('[1] A');
+    await expect(LlmService.cachedText({ ...task, user: 'ch0' })).resolves.toBeUndefined();
+    await expect(LlmService.runText(task)).resolves.toEqual({ text: '[1] A', cached: true });
+    expect(spy).not.toHaveBeenCalled();
+
+    save({ model: 'm2', capabilities: { signature: `${REMOTE}|m2`, structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 } });
+    await expect(LlmService.cachedText(task)).resolves.toBeUndefined();
+  });
+
   it('answers an identical plain-text request still out without sending it again', async () => {
     save({ capabilities: { signature: SIGNATURE, structured: 'json_schema', thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 } });
     let answer: (response: Response) => void = () => {};

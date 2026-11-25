@@ -300,6 +300,7 @@ export const EN_MESSAGES = {
   'ai.translateLimit': 'Daily AI limit reached. Translation paused.',
   'ai.setupProblem': 'AI setup problem. Translation paused.',
   'ai.translate': 'Translate with AI',
+  'ai.translateProgramInfo': 'Translate program info with AI',
   'ai.showOriginal': 'Show original',
   'ai.translation': 'AI translation',
   'ai.translating': 'Translating…',

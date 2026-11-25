@@ -495,8 +495,11 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   protected handleExtraScroll(_target: HTMLElement): boolean { return false; }
   // The detail's own title and description, which Translate acts on.
   protected abstract translationHeader(): TranslationTarget | null;
-  // The title and description the detail's focus rests on, to translate.
-  protected translationTarget(): TranslationTarget | null { return this.translationHeader(); }
+  // Every title and description the detail shows, to translate.
+  protected translationTargets(): TranslationTarget[] {
+    const header = this.translationHeader();
+    return header ? [header] : [];
+  }
   protected onTranslationChanged(): void { this.renderDetail(false); }
   protected onRequestSessionReset(): void {}
   protected abstract collectionEntries(kind: CollectionKind): CollectionEntry[];
@@ -1471,8 +1474,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   // Only a detail on screen asks for a translation; a hidden one lets its title go.
   protected syncTranslation(): void {
     const shown = this.container.isConnected && inShownView(this.container);
-    const target = this.mode === 'detail' && shown ? this.translationTarget() : null;
-    if (target) ProgramTranslation.want(this, target.source, target.text);
+    if (this.mode === 'detail' && shown) ProgramTranslation.show(this, this.translationTargets());
     else ProgramTranslation.release(this);
   }
 

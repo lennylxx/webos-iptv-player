@@ -90,7 +90,7 @@ const { storageMock } = vi.hoisted(() => ({
     getCatchupProgressList: vi.fn((): CatchupProgressEntry[] => []),
     clearCatchupProgress: vi.fn(),
     getGuideLayout: vi.fn((): GuideLayout => 'schedule'),
-    getLlmConfig: vi.fn(() => ({ enabled: false })),
+    getLlmConfig: vi.fn((): { enabled: boolean; baseUrl?: string; model?: string } => ({ enabled: false })),
     getCustomThemes: vi.fn(() => []),
     getTheme: vi.fn(() => 'midnight'),
     getThemeCss: vi.fn(() => ''),
@@ -98,6 +98,14 @@ const { storageMock } = vi.hoisted(() => ({
   },
 }));
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
+const { translatePrograms } = vi.hoisted(() => ({
+  translatePrograms: vi.fn((items: Array<{ title: string; description: string }>) =>
+    Promise.resolve(items.map(text => ({ text })))),
+}));
+vi.mock('../services/epg-translation', async importOriginal => ({
+  ...await importOriginal<typeof import('../services/epg-translation')>(),
+  translatePrograms,
+}));
 const { workerMock } = vi.hoisted(() => ({ workerMock: { failIndexes: false } }));
 vi.mock('../workers/app-worker-client', async () => {
   const { ScopedSearchIndex } = await import('../workers/scoped-search-index');
@@ -126,6 +134,8 @@ import { CONFIG } from '../config';
 import { channelKey } from '../utils/channel';
 import { ParentalControlService } from '../services/parental-control';
 import { installEdgeScroll } from '../navigation/edge-scroll';
+import { LlmService } from '../services/llm/llm-service';
+import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
 
 const Y = 2024, M = 5, D = 15; // Sat Jun 15 2024, 12:00 local = "now"
 
@@ -2785,5 +2795,40 @@ describe('EpgGrid timeline layout', () => {
     Focus.pop(modal);
 
     expect(focusedChannel()).toBe('Chan A');
+  });
+});
+
+describe('EpgGrid program translation', () => {
+  const sentTitles = () => translatePrograms.mock.calls.map(call => call[0].map(item => item.title));
+
+  let ready: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // Grids of earlier tests still listen, and would send what they show.
+    resetProgramTranslationForTests();
+    vi.restoreAllMocks();
+    Focus.uninstall();
+    grid = new EpgGrid(container, onSelect, undefined, onManageReminders);
+    Focus.setBase(() => grid.focusScope);
+    storageMock.getGuideLayout.mockReturnValue('schedule');
+    ready = vi.spyOn(LlmService, 'isReady').mockReturnValue(true);
+    storageMock.getLlmConfig.mockReturnValue({ enabled: true, baseUrl: 'http://host/v1', model: 'm1' });
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    ProgramTranslation.toggle();
+  });
+
+  afterEach(() => {
+    resetProgramTranslationForTests();
+    ready.mockRestore();
+    storageMock.getLlmConfig.mockReturnValue({ enabled: false });
+  });
+
+  it('sends only the timeline\'s cells once the Guide turns from the schedule to the timeline', async () => {
+    grid.render();
+    storageMock.getGuideLayout.mockReturnValue('timeline');
+    grid.render(true);
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    // The timeline opens on now, so the schedule's earlier Morning is not among its cells.
+    expect(sentTitles()).toEqual([['Noon Show', 'Afternoon']]);
   });
 });

@@ -308,6 +308,7 @@ export const UK_MESSAGES = {
   'ai.translateLimit': 'Досягнуто денного ліміту ШІ. Переклад призупинено.',
   'ai.setupProblem': 'Проблема з налаштуванням ШІ. Переклад призупинено.',
   'ai.translate': 'Перекласти з ШІ',
+  'ai.translateProgramInfo': 'Перекласти опис з ШІ',
   'ai.showOriginal': 'Показати оригінал',
   'ai.translation': 'Переклад ШІ',
   'ai.translating': 'Перекладаю…',

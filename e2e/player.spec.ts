@@ -5,6 +5,7 @@ import {
   type Page,
   routePlaylist,
   routeLiveManifest,
+  routeFakeAi,
   seedPlaylist,
   neuterVideo,
   measureRowTextFit,
@@ -1429,4 +1430,58 @@ test('the channel panel opened by pointer shows the far channel that is playing'
   // The ring follows the resting pointer, which sits over a row of this window.
   await expect(page.locator('.focused')).toHaveCount(1);
   await expect(sidebar.locator('.sidebar-ch-item.focused')).toHaveCount(1);
+});
+
+test('the info OSD puts its translate hint at the end of the title row, which truncates the title', async ({ page }) => {
+  await neuterVideo(page);
+  await routePlaylist(page, ['#EXTM3U', '#EXTINF:-1 tvg-id="ch1",Channel 1', 'http://host/a.m3u8'].join('\n'));
+  const title = `Program 1 ${'with a very long title '.repeat(6)}`.trim();
+  await page.route('**/epg.xml', route => route.fulfill({ status: 200, contentType: 'application/xml',
+    body: '<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/>'
+      + `<programme channel="ch1" start="20240309120000 +0000" stop="20240309130000 +0000"><title>${title}</title><desc>Episode 1.</desc></programme>`
+      + '<programme channel="ch1" start="20240309130000 +0000" stop="20240309140000 +0000"><title>Program 2</title></programme></tv>' }));
+  await routeFakeAi(page, () => ({}));
+  // Program info comes back as tagged lines of plain text, which routeFakeAi would quote.
+  await page.route('http://ai.test/v1/chat/completions', route => route.request().method() === 'OPTIONS'
+    ? route.fallback()
+    : route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: 'application/json',
+      body: JSON.stringify({ choices: [{ message: { content: '[T1] Programm 1\n[D1] Folge 1.' } }] }) }));
+  await page.clock.setFixedTime(new Date('2024-03-09T12:10:00Z'));
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
+    localStorage.setItem('iptv_locale', JSON.stringify('de'));
+    localStorage.setItem('iptv_text_size', JSON.stringify('150'));
+  });
+  await page.goto('/');
+  await liveLoaded(page);
+  await page.keyboard.press('Enter');
+  const row = page.locator('#player-osd .osd-programme-title');
+  const hint = row.locator('[data-osd-translate]');
+  await expect(hint).toHaveText('Sendungsinfos mit KI übersetzen');
+
+  const layout = () => row.evaluate((el) => {
+    const text = el.querySelector<HTMLElement>('.osd-programme-title-text')!;
+    const box = el.getBoundingClientRect();
+    const hintBox = el.querySelector('.osd-translate')!.getBoundingClientRect();
+    const textBox = text.getBoundingClientRect();
+    return {
+      hintAtEnd: Math.abs(box.right - hintBox.right) < 1,
+      // Centered on the title line, without making the row taller than the title.
+      hintOnRow: Math.abs((hintBox.top + hintBox.bottom) / 2 - (textBox.top + textBox.bottom) / 2) < 2
+        && Math.abs(box.height - textBox.height) < 1,
+      titleBeforeHint: textBox.right <= hintBox.left,
+      titleTruncated: text.scrollWidth > text.clientWidth && getComputedStyle(text).textOverflow === 'ellipsis',
+      rowFits: el.scrollWidth <= el.clientWidth,
+    };
+  });
+  const expected = { hintAtEnd: true, hintOnRow: true, titleBeforeHint: true, titleTruncated: true, rowFits: true };
+  expect(await layout()).toEqual(expected);
+
+  // Only the program airing now is translated: the Next line keeps its title.
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 404, bubbles: true })));
+  await expect(row.locator('.osd-programme-title-text')).toHaveText('Programm 1');
+  await expect(hint).toHaveText('Original anzeigen');
+  await expect(page.locator('#player-osd .osd-next-title')).toContainText('Program 2');
+  expect({ ...await layout(), titleTruncated: true }).toEqual(expected);
 });

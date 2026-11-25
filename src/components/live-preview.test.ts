@@ -9,6 +9,21 @@ import type { LivePlaybackSnapshot, Programme } from '../types';
 import { setDisplayTz } from '../utils/time';
 import type { ChannelList } from './channel-list';
 import type { Player } from './player';
+import { normalizeLlmConfig } from '../services/llm/config';
+import {
+  liveSource,
+  ProgramTranslation,
+  resetProgramTranslationForTests,
+  TRANSLATION_DWELL_MS,
+  type TranslationItem,
+} from './program-translation';
+
+const { translateProgram } = vi.hoisted(() => ({ translateProgram: vi.fn() }));
+vi.mock('../services/epg-translation', () => ({
+  EPG_TRANSLATION_FEATURE: 'epg-translation',
+  translatePrograms: (items: unknown[]) => Promise.all(items.map(item =>
+    Promise.resolve(translateProgram(item)).then((text: unknown) => ({ text }), (error: unknown) => ({ error })))),
+}));
 
 vi.mock('../services/epg-service', () => ({
   EpgService: {
@@ -66,6 +81,7 @@ describe('LivePreview', () => {
     onReturn: Mock<ChannelList['restoreFocus']>;
     onHighlightEntryPoint: Mock<ChannelList['highlightEntryPoint']>;
     onSetPlaying: Mock<ChannelList['setPlaying']>;
+    onTranslations: Mock<ChannelList['showPreviewTranslations']>;
   };
 
   beforeEach(() => {
@@ -87,6 +103,7 @@ describe('LivePreview', () => {
       onClose: vi.fn(), onMute: vi.fn(), onExpand: vi.fn(), onFocus: vi.fn(),
       onPlayFullscreen: vi.fn(), onBlur: vi.fn(), onReturn: vi.fn(),
       onHighlightEntryPoint: vi.fn(), onSetPlaying: vi.fn(),
+      onTranslations: vi.fn(),
     };
     playerPlay = vi.fn<Player['play']>();
     liveSnapshot = vi.fn<Player['getLivePlaybackSnapshot']>(() => null);
@@ -115,6 +132,7 @@ describe('LivePreview', () => {
       render: vi.fn(),
       handleBack: vi.fn(() => false),
       setPlaying: actions.onSetPlaying,
+      showPreviewTranslations: actions.onTranslations,
     } as unknown as ChannelList;
     preview = new LivePreview(root, {
       channelView: document.createElement('div'),
@@ -478,5 +496,64 @@ describe('LivePreview', () => {
     view.applyState(null);
     expect(root.classList.contains('hidden')).toBe(true);
     expect(view.focus()).toBe(false);
+  });
+
+  describe('program translation', () => {
+    const titles = (items: TranslationItem[] | undefined) => (items ?? []).map(item => item.text?.title);
+    const lastSent = () => titles(actions.onTranslations.mock.calls[actions.onTranslations.mock.calls.length - 1]?.[0]);
+
+    afterEach(() => {
+      resetProgramTranslationForTests();
+      localStorage.clear();
+    });
+
+    it('hands Live what airs now and the Up next rows that fit, never a program without a title', () => {
+      vi.mocked(EpgService.getUpcoming).mockReturnValue([
+        program(24, 74, 'Program 2'), program(74, 114, ''), program(114, 174, 'Program 4'),
+        program(174, 234, 'Program 5'),
+      ]);
+      view.applyState(state());
+      expect(lastSent()).toEqual(['Program 1', 'Program 2', 'Program 4', 'Program 5']);
+
+      const rect = (bottom: number, height: number): DOMRect => ({
+        x: 0, y: bottom - height, top: bottom - height, right: 100,
+        bottom, left: 0, width: 100, height, toJSON: () => ({}),
+      });
+      const details = root.querySelector<HTMLElement>('.live-preview-details')!;
+      vi.spyOn(details, 'getBoundingClientRect').mockReturnValue(rect(300, 300));
+      root.querySelectorAll<HTMLElement>('.live-preview-program').forEach((row, index) => {
+        vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(rect(200 + index * 40, 40));
+      });
+      preview.refreshLayout();
+      expect(lastSent()).toEqual(['Program 1', 'Program 2', 'Program 4']);
+
+      view.applyState(null);
+      expect(lastSent()).toEqual([]);
+    });
+
+    it('marks only the titles the translation changed', async () => {
+      StorageService.setLlmConfig(normalizeLlmConfig({ enabled: true, baseUrl: 'http://host/v1', model: 'm1' }));
+      translateProgram.mockImplementation((item: { title: string; description: string }) => ({
+        title: item.title === 'Program 3' ? item.title : item.title.replace('Program', 'Programm'),
+        description: item.description,
+      }));
+      view.applyState(state());
+      ProgramTranslation.toggle();
+      const source = liveSource(state().channel);
+      ProgramTranslation.show(actions, ['Program 1', 'Program 2', 'Program 3'].map((title, i) => ({
+        source, text: i === 0 ? program(-36, 24) : program(24 + (i - 1) * 50, 74 + (i - 1) * 40, title),
+      })));
+      await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+
+      const title = root.querySelector('.live-preview-title');
+      expect(title?.textContent).toBe('Programm 1');
+      expect(title?.querySelector('.ai-icon.is-title-mark')).not.toBeNull();
+      const rows = root.querySelectorAll('.live-preview-program > span');
+      expect(rows[0].textContent).toBe('Programm 2');
+      expect(rows[0].querySelector('.ai-icon.is-title-mark')).not.toBeNull();
+      expect(rows[1].textContent).toBe('Program 3');
+      expect(rows[1].querySelector('.ai-icon')).toBeNull();
+      expect(root.querySelector('[role="progressbar"]')?.getAttribute('aria-label')).toBe('Program 1');
+    });
   });
 });

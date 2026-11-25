@@ -13,7 +13,7 @@ import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { KeyHandler } from '../navigation/key-handler';
 import { InputMode } from '../navigation/input-mode';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
-import { html, raw, type Safe } from '../utils/dom';
+import { html, inShownView, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { channelKey, groupDisplayLabel } from '../utils/channel';
 import { formatPosition } from '../utils/time';
@@ -23,13 +23,14 @@ import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { ChannelHealthService } from '../services/channel-health';
 import { groupIcon, playlistLanguage } from './group-icon';
-import { NAV_HORIZONTAL_ICON, PLAYING_ICON, favoriteIcon } from './icons';
+import { AI_ICON, NAV_HORIZONTAL_ICON, PLAYING_ICON, favoriteIcon } from './icons';
 import { backKey, okHint } from './key-hints';
 import { channelLockBadge, liveGroupLockBadge } from './parental-badge';
 import { showToast } from './toast';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { ChannelListEditor } from './channel-list-editor';
 import { VirtualList } from '../utils/virtual-list';
+import { liveSource, ProgramTranslation, programTitle, programView, type TranslationItem } from './program-translation';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { CONFIG } from '../config';
 
@@ -97,6 +98,14 @@ export class ChannelList {
   private recentItems: RecentlyWatchedItem[] = [];
   private footerReturnRow: string | null = null;
   private failedLogos = new Set<string>();
+  // What the visible rows and the preview show, sent as one surface so one
+  // request translates both.
+  private rowTranslations: TranslationItem[] = [];
+  private previewTranslations: TranslationItem[] = [];
+  // Something Live shows could be translated, so its legend offers to.
+  private translatableShown = false;
+  private recentTranslationFrame: number | null = null;
+  private readonly stopTranslationUpdates: () => void;
   private readonly channelVirtualizer = new VirtualList({
     itemSize: CHANNEL_ROW_STRIDE,
     overscan: CHANNEL_OVERSCAN,
@@ -158,6 +167,9 @@ export class ChannelList {
     // One list per app; a new instance takes the id over.
     liveList?.dispose();
     liveList = this;
+    this.stopTranslationUpdates = ProgramTranslation.subscribe(() => {
+      if (inShownView(this.container)) this.render(false);
+    });
     this.focusScope = Focus.register({
       id: 'live.channels',
       root: () => this.container.closest<HTMLElement>('.view') ?? this.container,
@@ -237,6 +249,10 @@ export class ChannelList {
     this.container.setAttribute('data-self-activate', '');
     this.container.addEventListener('click', (e: MouseEvent) => {
       if (e.target instanceof HTMLInputElement) return;
+      if (e.target instanceof Element && e.target.closest('[data-live-translate]')) {
+        ProgramTranslation.toggle();
+        return;
+      }
       if (this.editor.consumePointerClick()) return;
       this.onPointerRelease(e.clientX, e.clientY);
     });
@@ -267,7 +283,15 @@ export class ChannelList {
       }
       if (!target.classList.contains('channel-main')) return;
       this.showChannelScrollbar(target);
-      if (this.currentGroup === 'builtin:recently-watched') return;
+      if (this.currentGroup === 'builtin:recently-watched') {
+        // Recently Watched renders every row, so only what it shows changes.
+        if (this.recentTranslationFrame !== null) return;
+        this.recentTranslationFrame = requestAnimationFrame(() => {
+          this.recentTranslationFrame = null;
+          this.gatherRowTranslations(true, []);
+        });
+        return;
+      }
       const offset = this.scrollGuard.readUserOffset(target, 'vertical');
       if (offset === null) return;
       this.channelVirtualizer.setScrollOffset(offset);
@@ -499,6 +523,7 @@ export class ChannelList {
     if (this.previewFocused) this.ringHidden = true;
     if (ensureFocus && showingRecent) this.recentToReveal = this.nav.focused?.dataset.key ?? null;
     this.syncScope(ensureFocus ? 'key' : 'render');
+    this.gatherRowTranslations(showingRecent, filteredChannels);
   }
 
   private showChannelScrollbar(main: HTMLElement): void {
@@ -594,12 +619,27 @@ export class ChannelList {
   // Release the scope id and the listeners kept outside the container.
   dispose(): void {
     if (liveList === this) liveList = null;
+    this.stopTranslationUpdates();
+    ProgramTranslation.release(this);
     this.focusScope.dispose();
     this.editor.dispose();
   }
 
   get isEditing(): boolean {
     return this.editor.isEditing;
+  }
+
+  // A pointer's way to turn translation over here; the keys turn it over in
+  // the Guide or the player's info, as every color key has a meaning in Live.
+  // It takes no focus, so the D-pad never stops on it.
+  private translateHint(): Safe | '' {
+    if (!ProgramTranslation.active && !this.translatableShown) return '';
+    return html`
+      <button type="button" class="edit-hint edit-action preview-list-translate" data-key="live-translate"
+              tabindex="-1" data-self-activate data-live-translate>
+        <span class="ai-icon">${raw(AI_ICON)}</span>
+        <span>${t(ProgramTranslation.active ? 'ai.showOriginal' : 'ai.translateProgramInfo')}</span>
+      </button>`;
   }
 
   private renderPreviewHints(): Safe | string {
@@ -614,12 +654,13 @@ export class ChannelList {
               ${raw(NAV_HORIZONTAL_ICON)}
               <span>${t('preview.controls')}</span>
             </span>` : ''}
+          ${this.translateHint()}
+          ${state === 'active' ? html`
+            <span class="edit-hint preview-list-close" data-preview-list-close>
+              ${backKey()}
+              <span>${t('common.close')}</span>
+            </span>` : ''}
         </div>
-        ${state === 'active' ? html`
-          <span class="edit-hint preview-list-close" data-preview-list-close>
-            ${backKey()}
-            <span>${t('common.close')}</span>
-          </span>` : ''}
       </div>
     `;
   }
@@ -1023,6 +1064,67 @@ export class ChannelList {
     return row?.dataset.key ?? null;
   }
 
+  /** Live no longer shows: what its rows showed is not sent. */
+  releaseTranslation(): void {
+    ProgramTranslation.release(this);
+  }
+
+  /** What the live preview shows now and next, sent with the rows' programs. */
+  showPreviewTranslations(items: TranslationItem[]): void {
+    this.previewTranslations = items;
+    this.publishTranslations();
+  }
+
+  // The rows on screen show what airs now on each channel, which translation translates.
+  private gatherRowTranslations(showingRecent: boolean, channels: Channel[]): void {
+    const main = this.container.querySelector<HTMLElement>('.channel-main');
+    let shown: Channel[];
+    if (showingRecent) {
+      shown = this.visibleRecentChannels(main);
+    } else {
+      const visible = this.channelVirtualizer.getVisibleRange(
+        channels.length,
+        main?.clientHeight || CHANNEL_VIEWPORT_FALLBACK,
+      );
+      shown = channels.slice(visible.start, visible.end);
+    }
+    const items: TranslationItem[] = [];
+    for (const channel of shown) {
+      const epgId = EpgService.findChannelId(channel);
+      const now = epgId ? EpgService.getNowPlaying(epgId) : null;
+      // A row shows only the title, so a program without one has nothing to translate.
+      if (now && now.title.trim()) items.push({ source: liveSource(channel), text: now });
+    }
+    this.rowTranslations = items;
+    this.publishTranslations();
+  }
+
+  // Recently Watched renders every row, so it asks the layout which show.
+  private visibleRecentChannels(main: HTMLElement | null): Channel[] {
+    if (!main) return [];
+    const bounds = main.getBoundingClientRect();
+    const laidOut = bounds.height > 0;
+    const shown: Channel[] = [];
+    main.querySelectorAll<HTMLElement>('.recent-live[data-recent-index]').forEach(row => {
+      const item = this.recentItems[Number(row.dataset.recentIndex)];
+      if (!item || item.kind !== 'live') return;
+      const rect = row.getBoundingClientRect();
+      if (!laidOut || (rect.bottom > bounds.top && rect.top < bounds.bottom)) shown.push(item.channel);
+    });
+    return shown;
+  }
+
+  private publishTranslations(): void {
+    const showing = inShownView(this.container) && !this.editor.isEditing;
+    const items = showing ? this.rowTranslations.concat(this.previewTranslations) : [];
+    ProgramTranslation.show(this, items);
+    const translatable = items.some(item => ProgramTranslation.translatable(item.source, item.text));
+    if (translatable === this.translatableShown) return;
+    this.translatableShown = translatable;
+    // The legend's offer comes or goes with what is shown.
+    if (showing && !ProgramTranslation.active && this.getPreviewHintState() !== 'off') this.render(false);
+  }
+
   private renderChannel(ch: Channel, favs: string[], position: number, top: number): Safe {
     const globalIdx = PlaylistService.indexOf(ch);
     const epgId = EpgService.findChannelId(ch);
@@ -1052,7 +1154,7 @@ export class ChannelList {
           ${this.editor.isChannelEditing && ch.sourceName
             ? html`<div class="channel-now channel-source-name">${ch.sourceName}</div>`
             : (nowPlaying
-                ? html`<div class="channel-now">${nowPlaying.title}</div>`
+                ? html`<div class="channel-now">${programTitle(programView(liveSource(ch), nowPlaying))}</div>`
                 : '')}
         </div>
         ${this.editor.renderChannelEditStatus(ch)}
@@ -1083,7 +1185,7 @@ export class ChannelList {
             <div class="channel-name">${raw(channelLockBadge(item.channel))}${
               isFav ? raw(favoriteIcon(true)) : ''
             }${item.channel.name}</div>
-            ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
+            ${nowPlaying ? html`<div class="channel-now">${programTitle(programView(liveSource(item.channel), nowPlaying))}</div>` : ''}
           </div>
           ${this.renderHealth(item.channel)}
           <div class="recent-kind-badge live">${t('common.live')}</div>

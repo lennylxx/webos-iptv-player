@@ -58,6 +58,7 @@ const {
         return index < 0;
       }),
       getShowHiddenChannels: () => false,
+      getLlmConfig: () => ({ baseUrl: 'http://host/v1', model: 'm1' }),
       getChannelCustomization: () => customization.record,
       setChannelCustomization: vi.fn((d: unknown) => { customization.record = d; }),
       clearChannelCustomization: vi.fn(() => { customization.record = null; }),
@@ -84,6 +85,15 @@ vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../services/recently-watched', () => ({ RecentlyWatchedService: recentMock }));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 vi.mock('../services/channel-health', () => ({ ChannelHealthService: healthMock }));
+const { aiMock } = vi.hoisted(() => ({
+  aiMock: { ready: false, translate: vi.fn<(item: { title: string; description: string }) => unknown>() },
+}));
+vi.mock('../services/llm/llm-service', () => ({ LlmService: { isReady: () => aiMock.ready } }));
+vi.mock('../services/epg-translation', () => ({
+  EPG_TRANSLATION_FEATURE: 'epg-translation',
+  translatePrograms: (items: Array<{ title: string; description: string }>) => Promise.all(items.map(item =>
+    Promise.resolve(aiMock.translate(item)).then((text: unknown) => ({ text }), (error: unknown) => ({ error })))),
+}));
 
 import { ChannelList, type ChannelListOptions } from './channel-list';
 import { groupIcon } from './group-icon';
@@ -96,6 +106,12 @@ import { setLocale } from '../i18n';
 import { channelKey } from '../utils/channel';
 import { UNCATEGORIZED_GROUP } from '../types';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
+import {
+  ProgramTranslation,
+  resetProgramTranslationForTests,
+  TRANSLATION_DWELL_MS,
+  type TranslationItem,
+} from './program-translation';
 
 playlistMock.indexOfKey = (key: string): number => data.channels
   .findIndex(ch => channelKey(ch) === key);
@@ -1435,5 +1451,108 @@ describe('ChannelList focus scope off the keys', () => {
     } finally {
       bar.dispose();
     }
+  });
+});
+
+describe('ChannelList program translation', () => {
+  const programs: Record<string, string> = { a: 'Program A', b: 'Program B', c: '' };
+  const original = { find: epgMock.findChannelId, now: epgMock.getNowPlaying };
+  let shown: TranslationItem[][];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    aiMock.ready = true;
+    aiMock.translate.mockReset();
+    aiMock.translate.mockImplementation(item => ({
+      title: item.title === 'Program A' ? 'Programm A' : item.title,
+      description: item.description,
+    }));
+    Object.assign(epgMock, {
+      findChannelId: (channel: Channel) => channel.id,
+      getNowPlaying: (id: string) => ({
+        start: new Date(0), stop: new Date(1), title: programs[id], description: `About ${id}`, category: '', icon: '',
+      }),
+    });
+    shown = [];
+    const show = ProgramTranslation.show.bind(ProgramTranslation);
+    vi.spyOn(ProgramTranslation, 'show').mockImplementation((owner, items) => {
+      shown.push(items.slice());
+      show(owner, items);
+    });
+    list.dispose();
+    container.remove();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    list = new ChannelList(container, { onChannelSelect: onSelect, getPreviewHintState: () => 'ready' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetProgramTranslationForTests();
+    Object.assign(epgMock, { findChannelId: original.find, getNowPlaying: original.now });
+    aiMock.ready = false;
+    vi.useRealTimers();
+  });
+
+  const titles = (items: TranslationItem[] | undefined) => (items ?? []).map(item => item.text?.title);
+  const nowLine = (id: string) => container.querySelector(`.channel-main [data-channel-index="${'abc'.indexOf(id)}"] .channel-now`);
+  const hint = () => container.querySelector<HTMLElement>('[data-live-translate]');
+
+  it('sends only the rows on screen, never a program without a title', () => {
+    list.render();
+    expect(container.querySelectorAll('.channel-main .channel-item')).toHaveLength(3);
+    expect(titles(shown[shown.length - 1])).toEqual(['Program A', 'Program B']);
+
+    const main = container.querySelector<HTMLElement>('.channel-main')!;
+    Object.defineProperty(main, 'clientHeight', { configurable: true, value: 88 });
+    list.render(false);
+    expect(container.querySelectorAll('.channel-main .channel-item')).toHaveLength(3);
+    expect(titles(shown[shown.length - 1])).toEqual(['Program A']);
+  });
+
+  it('sends nothing while the list is being edited', () => {
+    list.render();
+    list.enterEditMode('builtin:all');
+    expect(list.isEditing).toBe(true);
+    expect(shown[shown.length - 1]).toEqual([]);
+  });
+
+  it('sends the preview with the rows, in one surface', async () => {
+    list.render();
+    const preview = { source: null, text: { title: 'Program D', description: '' } };
+    list.showPreviewTranslations([preview]);
+    expect(titles(shown[shown.length - 1])).toEqual(['Program A', 'Program B', 'Program D']);
+    hint()!.click();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(aiMock.translate).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks only a title the translation changed', async () => {
+    list.render();
+    hint()!.click();
+    await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+    expect(nowLine('a')?.textContent).toBe('Programm A');
+    expect(nowLine('a')?.querySelector('.ai-icon.is-title-mark')).not.toBeNull();
+    expect(nowLine('b')?.textContent).toBe('Program B');
+    expect(nowLine('b')?.querySelector('.ai-icon')).toBeNull();
+  });
+
+  it('offers translation in the preview legend, and its hint turns it over without taking focus', () => {
+    list.render();
+    expect(hint()?.textContent?.trim()).toBe('Translate program info with AI');
+    expect(hint()?.hasAttribute('data-focusable')).toBe(false);
+    hint()!.click();
+    expect(ProgramTranslation.active).toBe(true);
+    expect(hint()?.textContent?.trim()).toBe('Show original');
+    hint()!.click();
+    expect(ProgramTranslation.active).toBe(false);
+    expect(hint()?.textContent?.trim()).toBe('Translate program info with AI');
+  });
+
+  it('offers no translation when nothing shown could be translated', () => {
+    aiMock.ready = false;
+    list.render();
+    expect(container.querySelector('.preview-list-hints')).not.toBeNull();
+    expect(hint()).toBeNull();
   });
 });

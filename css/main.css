@@ -286,6 +286,11 @@ button:not(:disabled):not(.account-avatar):not(.toggle-option):not(.source-toggl
   margin-right: 0.5em;
   vertical-align: -0.15em;
 }
+.ai-icon.is-title-mark {
+  /* The mark before a translated title matches the "✦ AI translation" label's. */
+  font-size: 16px;
+  vertical-align: middle;
+}
 .ai-icon svg {
   display: block;
   width: 100%;

@@ -5,6 +5,7 @@ import { CELL_GAP, CELLS_X, type Cell, type GuideTimeline, type TimelineRow } fr
 import { BELL_PATH, REPLAY_PATH } from './icons';
 import { graphemeEnds } from '../utils/graphemes';
 import { lockBadge } from './parental-badge';
+import type { Programme } from '../types';
 
 // Shows a GuideTimeline with pooled, absolutely positioned elements: rows are
 // virtualized, cells are windowed by cellsOf, and one layer moved by a
@@ -32,6 +33,14 @@ const CH_NUM_W = 44;
 const CH_GAP = 16;
 // Canvas ignores tabular-nums, so the widest number gets some room.
 const CH_NUM_SLACK = 2;
+
+// The title a cell shows for a programme, a translation in its place; the
+// revision changes whenever any title may have. A cell shows no AI mark: the
+// details below say the text is a translation.
+export interface TimelineTitles {
+  revision(): number;
+  title(row: number, programme: Programme): string;
+}
 
 export interface TimelineTextStyle {
   fontFamily: string;
@@ -163,7 +172,10 @@ export class TimelineView {
   private readonly fitCache = new Map<string, string>();
   // Each cell's fitted title and time, kept until its cell is computed again
   // or the font changes.
-  private fitted = new WeakMap<Cell, { title: string; time: string }>();
+  private fitted = new WeakMap<Cell, { title: string; time: string; from: string }>();
+  private titles: TimelineTitles | null = null;
+  // The rows on screen at the last draw, overscan aside.
+  private shownRows: [number, number] = [0, -1];
   private style: TimelineTextStyle | null = null;
   private fonts = { title: '', time: '', name: '', ruler: '', num: '' };
   private numW = CH_NUM_W;
@@ -182,6 +194,15 @@ export class TimelineView {
 
   setStyle(style: TimelineTextStyle): void {
     this.style = style;
+  }
+
+  setTitles(titles: TimelineTitles | null): void {
+    this.titles = titles;
+  }
+
+  /** The first and last rows the last draw showed; last < first when none. */
+  visibleRows(): [number, number] {
+    return this.shownRows;
   }
 
   // Shows a frame in host; true while the scroll still needs frames.
@@ -224,6 +245,7 @@ export class TimelineView {
     const bottom = Math.max(scrollY, goal) + rowsH - 1;
     const first = Math.max(0, Math.floor(top / this.rowH) - OVERSCAN);
     const last = Math.min(count - 1, Math.floor(bottom / this.rowH) + OVERSCAN);
+    this.shownRows = [Math.max(0, Math.floor(scrollY / this.rowH)), Math.min(count - 1, Math.floor((scrollY + rowsH - 1) / this.rowH))];
     const released: RowNode[] = [];
     this.active.forEach((node, index) => {
       if (index < first || index > last) {
@@ -232,7 +254,7 @@ export class TimelineView {
       }
     });
     for (const node of released) this.free.push(node);
-    const stamp = `${Math.floor(now / 60000)}|${nowX}`;
+    const stamp = `${Math.floor(now / 60000)}|${nowX}|${this.titles ? this.titles.revision() : 0}`;
     for (let i = first; i <= last; i++) {
       let node = this.active.get(i);
       const label = this.tl.rowLabel(i);
@@ -490,12 +512,15 @@ export class TimelineView {
       const bell = marks.reminder && inner > iconSize * 3 ? iconSize + 8 : 0;
       const replay = marks.replay && inner > iconSize * 3 ? this.replaySize + 6 : 0;
       // A cell too narrow for its whole time shows its title alone, centered.
+      const title = this.titles ? this.titles.title(index, cell.programme) : cell.programme.title;
       let fit = this.fitted.get(cell);
-      if (!fit) {
+      if (!fit || fit.from !== title) {
+        // A translation came, or went with translation turned off: the title fits again, the time stays.
         const label = `${formatTime(cell.programme.start)} – ${formatTime(cell.programme.stop)}`;
         fit = {
-          time: this.width(this.fonts.time, label) <= inner - bell - replay ? label : '',
-          title: inner < CELL_TEXT_MIN ? '' : this.fit(this.fonts.title, cell.programme.title, inner - bell),
+          time: fit ? fit.time : this.width(this.fonts.time, label) <= inner - bell - replay ? label : '',
+          title: inner < CELL_TEXT_MIN ? '' : this.fit(this.fonts.title, title, inner - bell),
+          from: title,
         };
         this.fitted.set(cell, fit);
       }

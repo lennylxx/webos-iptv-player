@@ -193,6 +193,70 @@ describe('TimelineView', () => {
     expect(two.style.left).not.toBe(left);
   });
 
+  it('writes a translated title into its cell Text node, and the original into a reused node', () => {
+    rows = Array.from({ length: 20 }, (_, i) => [prog(12, 0, 13, 0, `P${i}`)]);
+    const translated = new Set(['P1']);
+    let rev = 0;
+    const { tl, view, draw } = setup(52 + 80 * 4);
+    view.setTitles({ revision: () => rev, title: (_row, p) => (translated.has(p.title) ? `${p.title} (de)` : p.title) });
+    draw();
+    const cell = cellTitled(rowAt(1), 'P1 (de)')!;
+    const text = cell.querySelector('.tl-title')!.firstChild;
+    expect(cellTitled(rowAt(0), 'P0')).toBeDefined();
+
+    // A translation that comes later writes the same node, with no AI mark in the cell.
+    translated.add('P0');
+    rev++;
+    draw();
+    expect(cellTitled(rowAt(0), 'P0 (de)')).toBeDefined();
+    expect(cell.querySelector('.tl-title')!.firstChild).toBe(text);
+    expect(host.querySelector('.ai-icon')).toBeNull();
+
+    // Rows scroll past: the pooled nodes show the other programs as they are.
+    for (let i = 0; i < 3; i++) tl.move('page-down', false);
+    draw();
+    for (const row of shownRows()) {
+      for (const c of shownCells(row)) expect(c.querySelector('.tl-title')!.textContent).not.toContain('(de)');
+    }
+    expect(host.querySelectorAll('.tl-row').length).toBeLessThanOrEqual(6);
+
+    translated.clear();
+    rev++;
+    for (let i = 0; i < 3; i++) tl.move('page-up', false);
+    draw();
+    expect(cellTitled(rowAt(1), 'P1')).toBeDefined();
+  });
+
+  it('asks the titles once per cell and revision, not on every frame', () => {
+    rows = Array.from({ length: 20 }, (_, i) => [prog(12, 0, 13, 0, `P${i}`), prog(13, 0, 14, 0, `Q${i}`)]);
+    const title = vi.fn((_row: number, p: Programme) => p.title);
+    const { tl, view, draw } = setup(52 + 80 * 4);
+    view.setTitles({ revision: () => 0, title });
+    draw();
+    const first = title.mock.calls.length;
+    // Six rows bound (four on screen and overscan), two cells each.
+    expect(first).toBeLessThanOrEqual(12);
+    title.mockClear();
+    draw();
+    draw();
+    expect(title).not.toHaveBeenCalled();
+    tl.move('down', false);
+    draw();
+    expect(title.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it('names the rows on screen, overscan aside', () => {
+    rows = Array.from({ length: 30 }, (_, i) => [prog(12, 0, 13, 0, `P${i}`)]);
+    const { tl, view, draw } = setup(52 + 80 * 4);
+    draw();
+    expect(view.visibleRows()).toEqual([0, 3]);
+    for (let i = 0; i < 2; i++) tl.move('page-down', false);
+    draw();
+    const [first, last] = view.visibleRows();
+    expect(last - first).toBe(3);
+    expect(first).toBe(Math.floor(tl.scrollOffset / 80));
+  });
+
   it('binds only the rows on screen and reuses their nodes as the rows scroll', () => {
     rows = Array.from({ length: 100 }, (_, i) => [prog(12, 0, 13, 0, `P${i}`)]);
     const { tl, draw } = setup(52 + 80 * 6);

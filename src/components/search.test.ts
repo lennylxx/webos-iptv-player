@@ -16,6 +16,7 @@ const {
   persistMock,
   llmMock,
   askMock,
+  translateMock,
 } = vi.hoisted(() => ({
   llmMock: { isReady: vi.fn((_feature?: string) => false), run: vi.fn() },
   persistMock: vi.fn(async (_candidates?: Array<{ key: string; prefix: string }>) => undefined),
@@ -61,6 +62,7 @@ const {
     clearCatchupProgress: vi.fn(),
     addSearchHistory: vi.fn(),
     getShowHiddenChannels: vi.fn(() => false),
+    getLlmConfig: vi.fn(() => ({ baseUrl: 'http://host/v1', model: 'm1' })),
   },
   archiveMock: {
     load: vi.fn(async () => null as Set<number> | null),
@@ -82,10 +84,16 @@ const {
     refs: new WeakMap<object, unknown>(),
   },
   askMock: vi.fn(),
+  translateMock: vi.fn(async (items: ReadonlyArray<{ title: string; description: string }>) =>
+    items.map(item => ({ text: { title: `${item.title} (de)`, description: item.description } }))),
 }));
 vi.mock('../services/ask-search/ask-query', async importOriginal => ({
   ...await importOriginal<typeof import('../services/ask-search/ask-query')>(),
   askSearch: askMock,
+}));
+vi.mock('../services/epg-translation', async importOriginal => ({
+  ...await importOriginal<typeof import('../services/epg-translation')>(),
+  translatePrograms: translateMock,
 }));
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/playlist-service', () => ({ PlaylistService: playlistMock }));
@@ -149,6 +157,7 @@ import { resetSearchExpansionForTests } from '../services/search-expansion';
 import { LlmError } from '../services/llm/client';
 import type { AskFilter, AskReply } from '../services/ask-search/ask-query';
 import { setLocale } from '../i18n';
+import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -3791,6 +3800,79 @@ describe('Search with worker-held catalog records', () => {
     expect(catalogMock.loadAllVodStreams).not.toHaveBeenCalled();
     expect(workerMock.run.mock.calls.filter(([task, payload]) =>
       task === 'search.index' && (payload as SearchIndexRequest).catalogMovies)).toHaveLength(2);
+  });
+});
+
+describe('Search program translation', () => {
+  const hour = 60 * 60 * 1000;
+  const sentTitles = () => translateMock.mock.calls.map(([items]) => items.map(item => item.title).sort());
+  const titles = () => Array.from(container.querySelectorAll('.search-program-title'), el => el.textContent).sort();
+  const settle = () => new Promise(resolve => setTimeout(resolve, TRANSLATION_DWELL_MS + 50));
+
+  beforeEach(() => {
+    resetProgramTranslationForTests();
+    llmMock.isReady.mockImplementation((feature?: string) => feature === 'epg-translation');
+    playlistMock.channels = [chan('Alpha'), chan('Bravo')];
+    epgMock.programmes = {
+      Alpha: [prog('Evening Report', Date.now() + hour, Date.now() + 2 * hour)],
+      Bravo: [prog('Late Report', Date.now() + 3 * hour, Date.now() + 4 * hour)],
+    };
+  });
+  afterEach(() => resetProgramTranslationForTests());
+
+  it('translates the program rows on screen in one request once typing settles', async () => {
+    ProgramTranslation.toggle();
+    const { view } = await openWith();
+    for (const query of ['r', 're', 'rep', 'report']) await view.setQuery(query);
+    expect(translateMock).not.toHaveBeenCalled();
+
+    await settle();
+    expect(sentTitles()).toEqual([['Evening Report', 'Late Report']]);
+    await vi.waitFor(() => expect(titles()).toEqual(['Evening Report (de)', 'Late Report (de)']));
+    expect(container.querySelectorAll('.search-program-title .ai-icon.is-title-mark')).toHaveLength(2);
+  });
+
+  it('sends nothing for results a pending query has taken off the screen', async () => {
+    ProgramTranslation.toggle();
+    const { view } = await openWith();
+    await view.setQuery('report');
+    const hold = holdWorkerTask(task => task === 'search.query');
+    const late = view.setQuery('late');
+    await settle();
+    expect(translateMock).not.toHaveBeenCalled();
+
+    hold.release();
+    await late;
+    hold.restore();
+    await settle();
+    expect(sentTitles()).toEqual([['Late Report']]);
+  });
+
+  it('shows a translation it already has without asking again', async () => {
+    ProgramTranslation.toggle();
+    const { view } = await openWith();
+    await view.setQuery('report');
+    await settle();
+    await vi.waitFor(() => expect(titles()).toEqual(['Evening Report (de)', 'Late Report (de)']));
+
+    await view.setQuery('late');
+    expect(titles()).toEqual(['Late Report (de)']);
+    await settle();
+    expect(translateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends nothing while translation is off or once Search closes', async () => {
+    const { view } = await openWith();
+    await view.setQuery('report');
+    await settle();
+    expect(translateMock).not.toHaveBeenCalled();
+    expect(container.querySelector('.search-program-title .ai-icon')).toBeNull();
+
+    ProgramTranslation.toggle();
+    await view.setQuery('late');
+    view.deactivate();
+    await settle();
+    expect(translateMock).not.toHaveBeenCalled();
   });
 });
 

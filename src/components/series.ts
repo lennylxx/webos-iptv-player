@@ -50,6 +50,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   private episodeList: { info: SeriesInfo; episodes: Episode[] } | null = null;
   private measuredEpisodes = new Set<number>();
   private detailController: AbortController | null = null;
+  private episodeViewport = EPISODE_VIEWPORT_FALLBACK;
   private readonly episodeVirtualizer = new VirtualList({
     overscan: EPISODE_OVERSCAN,
     fallbackViewportSize: EPISODE_VIEWPORT_FALLBACK,
@@ -559,11 +560,15 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     return source && text ? { source, text } : null;
   }
 
-  // The focused episode's text, or else the series' own.
-  protected override translationTarget(): TranslationTarget | null {
+  // The series' own text and the episodes on screen.
+  protected override translationTargets(): TranslationTarget[] {
+    const targets = super.translationTargets();
     const source = this.seriesSource();
-    const ep = this.episodeOfKey(this.focusedKey());
-    return source && ep ? { source, text: episodeText(ep) } : this.translationHeader();
+    if (!source || this.detailLoading) return targets;
+    const episodes = this.selectedEpisodes();
+    const range = this.episodeVirtualizer.getVisibleRange(episodes.length, this.episodeViewport);
+    for (const ep of episodes.slice(range.start, range.end)) targets.push({ source, text: episodeText(ep) });
+    return targets;
   }
 
   // A translated plot may take another line, so the shown rows are measured again.
@@ -643,6 +648,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       this.episodeVirtualizer.setScrollOffset(previousScroller.scrollTop);
     }
     const episodeViewport = previousScroller?.clientHeight || EPISODE_VIEWPORT_FALLBACK;
+    this.episodeViewport = episodeViewport;
     const focusedEpisodeIndex = focusedKey === null ? -1 : this.episodeIndexOf(focusedKey);
     if (restoreFocus && focusedEpisodeIndex >= 0) this.episodeFocusIndex = focusedEpisodeIndex;
     this.episodeFocusIndex = Math.max(0, Math.min(this.episodeFocusIndex, episodes.length - 1));

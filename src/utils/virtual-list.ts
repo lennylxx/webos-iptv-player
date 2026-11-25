@@ -101,6 +101,22 @@ export class VirtualList {
     return { start, end };
   }
 
+  /** The items any part of which shows in the viewport, without the overscan. */
+  getVisibleRange(itemCount: number, viewportSize = this.fallbackViewportSize): VirtualRange {
+    const count = this.itemSize === null
+      ? Math.min(Math.max(0, itemCount), this.offsets.length - 1)
+      : Math.max(0, itemCount);
+    const top = Math.max(0, this.viewStart);
+    const bottom = this.viewStart + viewportSize;
+    if (count === 0 || bottom <= 0) return { start: 0, end: 0 };
+    if (this.itemSize !== null) {
+      const start = Math.min(count, Math.floor(top / this.itemSize));
+      return { start, end: Math.min(count, Math.ceil(bottom / this.itemSize)) };
+    }
+    if (top >= this.offsets[count]) return { start: count, end: count };
+    return { start: this.itemAtOffset(top, count), end: this.firstOffsetAtOrAfter(bottom, count) };
+  }
+
   getItemOffset(index: number): number {
     if (this.itemSize !== null) return Math.max(0, index) * this.itemSize;
     return this.offsets[Math.min(Math.max(0, index), this.offsets.length - 1)];

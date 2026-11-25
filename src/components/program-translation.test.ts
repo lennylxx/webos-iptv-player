@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Channel } from '../types';
 
-const { translate, isReady, protects, showToast, llmConfig } = vi.hoisted(() => ({
-  llmConfig: { baseUrl: 'http://host/v1', model: 'm1' },
-  translate: vi.fn(),
+const { translate, batch, isReady, protects, showToast, llmConfig } = vi.hoisted(() => {
+  // One item's translation, as the tests set it; the batch answers each item with it.
+  const translate = vi.fn();
+  return {
+    llmConfig: { baseUrl: 'http://host/v1', model: 'm1' },
+    translate,
+    batch: vi.fn((items: unknown[], target: string, signal: AbortSignal) => Promise.all(items.map(item =>
+      Promise.resolve(translate(item, target, signal)).then(text => ({ text }), (error: unknown) => ({ error }))))),
   isReady: vi.fn(() => true),
-  protects: vi.fn(() => false),
-  showToast: vi.fn(),
-}));
-vi.mock('../services/epg-translation', () => ({ EPG_TRANSLATION_FEATURE: 'epg-translation', translateProgram: translate }));
+    protects: vi.fn((_request: { target: string }) => false),
+    showToast: vi.fn(),
+  };
+});
+vi.mock('../services/epg-translation', () => ({ EPG_TRANSLATION_FEATURE: 'epg-translation', translatePrograms: batch }));
 vi.mock('../services/llm/llm-service', () => ({ LlmService: { isReady } }));
 vi.mock('../services/parental-control', () => ({
   ParentalControlService: { protects },
@@ -42,6 +48,7 @@ async function dwell(): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers();
   translate.mockReset();
+  batch.mockClear();
   isReady.mockReturnValue(true);
   protects.mockReturnValue(false);
   showToast.mockReset();
@@ -122,7 +129,7 @@ describe('ProgramTranslation', () => {
     expect(ProgramTranslation.available(live1)).toBe(false);
   });
 
-  it('marks a failure and tries again once the focus comes back', async () => {
+  it('marks a failure and asks again only once translation is turned on again', async () => {
     translate.mockRejectedValueOnce(new LlmError('network', 'offline'));
     ProgramTranslation.toggle();
     ProgramTranslation.want(owner, live1, alpha);
@@ -132,6 +139,13 @@ describe('ProgramTranslation', () => {
 
     translate.mockResolvedValue({ title: 'Programm Alpha', description: 'Eine Folge.' });
     ProgramTranslation.want(owner, live1, null);
+    ProgramTranslation.want(owner, live1, alpha);
+    await dwell();
+    expect(translate).toHaveBeenCalledTimes(1);
+    expect(programView(live1, alpha).label).toBe('Translation failed');
+
+    ProgramTranslation.toggle();
+    ProgramTranslation.toggle();
     ProgramTranslation.want(owner, live1, alpha);
     await dwell();
     expect(translate).toHaveBeenCalledTimes(2);
@@ -285,6 +299,140 @@ describe('ProgramTranslation', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(programView(live1, alpha).label).toBe('AI translation');
     expect(ProgramTranslation.retry(owner, live1, alpha)).toBe(false);
+  });
+});
+
+describe('a surface that shows several programs', () => {
+  const program = (i: number) => ({ title: `Program ${i}`, description: `Episode ${i}.` });
+  const items = (from: number, to: number, source = live1) =>
+    Array.from({ length: to - from }, (_, k) => ({ source, text: program(from + k) }));
+  const sentTitles = () => batch.mock.calls.map(call => (call[0] as Array<{ title: string }>).map(item => item.title));
+
+  beforeEach(() => {
+    translate.mockImplementation(async (text: { title: string; description: string }) =>
+      ({ title: text.title.replace('Program', 'Programm'), description: text.description.replace('Episode', 'Folge') }));
+    ProgramTranslation.toggle();
+  });
+
+  it('sends everything it shows in one request once it settles', async () => {
+    ProgramTranslation.show(owner, items(0, 5));
+    await dwell();
+    expect(sentTitles()).toEqual([['Program 0', 'Program 1', 'Program 2', 'Program 3', 'Program 4']]);
+    expect(programView(live1, program(3))).toEqual({ title: 'Programm 3', description: 'Folge 3.', label: 'AI translation', ai: true });
+  });
+
+  it('sends nothing while it scrolls, then only what it shows once it rests', async () => {
+    for (let step = 0; step < 6; step++) {
+      ProgramTranslation.show(owner, items(step, step + 4));
+      await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS / 2);
+    }
+    expect(batch).not.toHaveBeenCalled();
+    await dwell();
+    expect(sentTitles()).toEqual([['Program 5', 'Program 6', 'Program 7', 'Program 8']]);
+  });
+
+  it('sends only what has no translation yet or on its way, so a scroll asks for the new rows alone', async () => {
+    ProgramTranslation.show(owner, items(0, 4));
+    await dwell();
+    ProgramTranslation.show(owner, items(2, 6));
+    await dwell();
+    expect(sentTitles()).toEqual([['Program 0', 'Program 1', 'Program 2', 'Program 3'], ['Program 4', 'Program 5']]);
+
+    // A program another surface already sent goes out once, even while its answer is still on its way.
+    translate.mockReturnValue(new Promise(() => undefined));
+    const other = {};
+    ProgramTranslation.show(owner, items(6, 8));
+    await dwell();
+    ProgramTranslation.show(other, items(7, 9));
+    await dwell();
+    expect(sentTitles().slice(2)).toEqual([['Program 6', 'Program 7'], ['Program 8']]);
+  });
+
+  it('asks again for nothing it shows once it shows the same programs again', async () => {
+    ProgramTranslation.show(owner, items(0, 3));
+    await dwell();
+    ProgramTranslation.show(owner, items(0, 3));
+    await dwell();
+    expect(batch).toHaveBeenCalledTimes(1);
+  });
+
+  it('never sends the programs of a channel a parental rule guards', async () => {
+    const ch2 = { name: 'ch2', url: 'http://host/b' } as Channel;
+    protects.mockImplementation(request => request.target === ch2.url);
+    ProgramTranslation.show(owner, [...items(0, 2), ...items(5, 7, liveSource(ch2))]);
+    await dwell();
+    expect(sentTitles()).toEqual([['Program 0', 'Program 1']]);
+  });
+
+  it('sends nothing once it no longer shows, and drops a request still waiting in the queue', async () => {
+    ProgramTranslation.show(owner, items(0, 3));
+    ProgramTranslation.release(owner);
+    await dwell();
+    expect(batch).not.toHaveBeenCalled();
+
+    translate.mockImplementation((_text: unknown, _target: unknown, signal: AbortSignal) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(new LlmError('cancelled', 'Request was cancelled')));
+    }));
+    ProgramTranslation.show(owner, items(0, 3));
+    await dwell();
+    expect(programView(live1, program(1)).label).toBe('Translating…');
+    ProgramTranslation.release(owner);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(programView(live1, program(1)).label).toBe('');
+  });
+
+  it('keeps a request waiting in the queue while it shows some of its programs, and sends only the new ones', async () => {
+    const aborted = vi.fn();
+    translate.mockImplementation((_text: unknown, _target: unknown, signal: AbortSignal) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => {
+        aborted();
+        reject(new LlmError('cancelled', 'Request was cancelled'));
+      });
+    }));
+    ProgramTranslation.show(owner, items(0, 3));
+    await dwell();
+    ProgramTranslation.show(owner, items(1, 4));
+    await dwell();
+    expect(aborted).not.toHaveBeenCalled();
+    expect(sentTitles()).toEqual([['Program 0', 'Program 1', 'Program 2'], ['Program 3']]);
+
+    ProgramTranslation.show(owner, items(5, 6));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(aborted).toHaveBeenCalledTimes(4);
+  });
+
+  it('sends at once what another settled surface shows when the surface that sent it lets go while it waits in the queue', async () => {
+    translate.mockImplementation((_text: unknown, _target: unknown, signal: AbortSignal) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(new LlmError('cancelled', 'Request was cancelled')));
+    }));
+    const other = {};
+    ProgramTranslation.show(owner, items(0, 3));
+    await dwell();
+    ProgramTranslation.show(other, items(1, 4));
+    await dwell();
+    expect(sentTitles()).toEqual([['Program 0', 'Program 1', 'Program 2'], ['Program 3']]);
+
+    translate.mockImplementation(async (text: { title: string; description: string }) =>
+      ({ title: text.title.replace('Program', 'Programm'), description: text.description }));
+    ProgramTranslation.release(owner);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentTitles()[2]).toEqual(['Program 1', 'Program 2']);
+    expect(programView(live1, program(2)).title).toBe('Programm 2');
+  });
+
+  it('marks each program of a failed request failed, and sends only the new ones when the surface moves', async () => {
+    translate.mockRejectedValueOnce(new LlmError('network', 'offline'));
+    translate.mockRejectedValueOnce(new LlmError('network', 'offline'));
+    ProgramTranslation.show(owner, items(0, 2));
+    await dwell();
+    expect(programView(live1, program(0)).label).toBe('Translation failed');
+    expect(programView(live1, program(1)).label).toBe('Translation failed');
+    ProgramTranslation.show(owner, items(0, 3));
+    await dwell();
+    expect(sentTitles()[1]).toEqual(['Program 2']);
+    ProgramTranslation.show(owner, items(0, 2));
+    await dwell();
+    expect(sentTitles()).toHaveLength(2);
   });
 });
 

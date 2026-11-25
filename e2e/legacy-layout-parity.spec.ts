@@ -1036,12 +1036,7 @@ async function routeParityAi(page: Page): Promise<void> {
 }
 
 function answerAi(user: string, state: FakeAi): unknown {
-  if (user.startsWith('[1] ')) return user.split('\n').map((line) => `${line} (l2)`).join('\n');
-  const title = /^Title: (.*)$/m.exec(user);
-  if (title) {
-    const description = /^Description: (.*)$/m.exec(user)?.[1] ?? '';
-    return { title: `${title[1]} (l2)`, description: description ? `${description} (l2)` : '' };
-  }
+  if (/^\[[TD]?1\] /.test(user)) return user.split('\n').map((line) => `${line} (l2)`).join('\n');
   if (/^Channel: /m.test(user)) return { matches: [{ number: 1, confidence: 'high' }] };
   if (user.indexOf('Return ok=true') >= 0) return state.failProbe ? 500 : { ok: true, word: 'bravo' };
   let sent: { items?: Array<{ i: number; name?: string }>; types?: unknown; query?: unknown } = {};

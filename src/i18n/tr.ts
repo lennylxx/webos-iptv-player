@@ -293,6 +293,7 @@ export const TR_MESSAGES = {
   'ai.translateLimit': 'Günlük yapay zeka sınırına ulaşıldı. Çeviri duraklatıldı.',
   'ai.setupProblem': 'Yapay zeka ayarlarında sorun var. Çeviri duraklatıldı.',
   'ai.translate': 'Yapay zeka ile çevir',
+  'ai.translateProgramInfo': 'Bilgileri yapay zeka ile çevir',
   'ai.showOriginal': 'Orijinali göster',
   'ai.translation': 'Yapay zeka çevirisi',
   'ai.translating': 'Çevriliyor…',

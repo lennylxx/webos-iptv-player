@@ -13,12 +13,10 @@ async function setup(page: Page): Promise<string[]> {
     const body = JSON.parse(route.request().postData() || '{}') as { messages: Array<{ role: string; content: string }> };
     const user = body.messages.find(m => m.role === 'user')?.content || '';
     sent.push(user);
-    const title = /^Title: (.*)$/m.exec(user)?.[1] ?? '';
-    const description = /^Description: (.*)$/m.exec(user)?.[1] ?? '';
+    // Every "[Tn]"/"[Dn]" line comes back with " (de)" added.
+    const content = user.split('\n').map(line => `${line} (de)`).join('\n');
     return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
-      body: JSON.stringify({ choices: [{ message: { content: JSON.stringify({
-        title: `${title} (de)`, description: description ? `${description} (de)` : '',
-      }) } }] }) });
+      body: JSON.stringify({ choices: [{ message: { content } }] }) });
   });
   await page.addInitScript(() => {
     localStorage.setItem('iptv_llm', JSON.stringify({
@@ -74,7 +72,7 @@ test('Translate on a movie translates its title and plot, and shows the original
   await expect(view.locator('.detail-title')).toHaveText('Movie One (de)');
   await expect(view.locator('.detail-plot')).toHaveText('AI translation · A plot. (de)');
   await expect(view.locator('.detail-plot .program-translation-label .ai-icon svg')).toHaveCount(1);
-  expect(sent).toEqual(['Title: Movie One\nDescription: A plot.']);
+  expect(sent).toEqual(['[T1] Movie One\n[D1] A plot.']);
   await expect(view.locator('.focused')).toHaveCount(1);
 
   await page.keyboard.press('Enter');
@@ -84,23 +82,24 @@ test('Translate on a movie translates its title and plot, and shows the original
   expect(sent).toHaveLength(1);
 });
 
-test('a series translates its own info, then the episode the focus rests on', async ({ page }) => {
+test('a series translates its own info and the episodes on screen in one request', async ({ page }) => {
   const sent = await setup(page);
   await openDetail(page, 'series', '20');
   const view = page.locator('#view-series');
   await pressTranslate(page, 'series');
   await expect(view.locator('.detail-plot')).toHaveText('AI translation · A series plot. (de)');
-  expect(sent).toEqual(['Title: Series One\nDescription: A series plot.']);
-
-  // Down past the seasons onto the episode.
   const row = view.locator('.episode-row[data-episode-id="11"]');
+  await expect(row.locator('.episode-name')).toHaveText('Episode 1 (de)');
+  await expect(row.locator('.episode-plot')).toHaveText('AI translation · An episode. (de)');
+  expect(sent).toEqual(['[T1] Series One\n[D1] A series plot.\n[T2] Episode 1\n[D2] An episode.']);
+
+  // Down past the seasons onto the episode, already translated: nothing more is sent.
   for (let i = 0; i < 4 && !(await row.evaluate((el) => el.classList.contains('focused'))); i++) {
     await page.keyboard.press('ArrowDown');
   }
   await expect(row).toHaveClass(/\bfocused\b/);
-  await expect(row.locator('.episode-name')).toHaveText('Episode 1 (de)');
-  await expect(row.locator('.episode-plot')).toHaveText('AI translation · An episode. (de)');
-  expect(sent).toEqual(['Title: Series One\nDescription: A series plot.', 'Title: Episode 1\nDescription: An episode.']);
+  await page.waitForTimeout(600);
+  expect(sent).toHaveLength(1);
   await expect(view.locator('.detail-plot')).toHaveText('AI translation · A series plot. (de)');
 });
 

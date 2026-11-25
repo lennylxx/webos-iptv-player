@@ -30,6 +30,14 @@ function reply(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 2 } }), { status: 200 });
 }
 
+// A server that translates every line it gets, keeping the lines' tags.
+function answerAll() {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    const body = JSON.parse(String((init as RequestInit).body)) as { messages: Array<{ content: string }> };
+    return reply(body.messages[1].content.replace(/Program/g, 'Programm'));
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   localStorage.clear();
@@ -51,11 +59,7 @@ afterEach(() => {
 });
 
 it('brings a translation dropped from memory back from the cache without a new AI request', async () => {
-  const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
-    const body = JSON.parse(String((init as RequestInit).body)) as { messages: Array<{ content: string }> };
-    const n = /Program (\d+)/.exec(body.messages[1].content)?.[1];
-    return reply(JSON.stringify({ title: `Programm ${n}`, description: '' }));
-  });
+  const fetch = answerAll();
   ProgramTranslation.toggle();
   for (let i = 0; i <= MAX_REMEMBERED_TRANSLATIONS; i++) {
     ProgramTranslation.want(owner, live1, program(i));
@@ -68,4 +72,24 @@ it('brings a translation dropped from memory back from the cache without a new A
   await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
   expect(programView(live1, program(0))).toEqual({ title: 'Programm 0', description: '', label: 'AI translation', ai: true });
   expect(fetch).toHaveBeenCalledTimes(MAX_REMEMBERED_TRANSLATIONS + 1);
+});
+
+it('shows programs a batch translated on their own later, and a batch reuses what one asked alone', async () => {
+  const fetch = answerAll();
+  ProgramTranslation.toggle();
+  ProgramTranslation.want(owner, live1, program(1));
+  await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+  ProgramTranslation.show(owner, [0, 1, 2].map(i => ({ source: live1, text: program(i) })));
+  await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  const second = JSON.parse(String((fetch.mock.calls[1][1] as RequestInit).body)) as { messages: Array<{ content: string }> };
+  expect(second.messages[1].content).toBe('[T1] Program 0\n[T2] Program 2');
+
+  // Dropped from memory, each comes back from its own cached answer.
+  resetProgramTranslationForTests();
+  ProgramTranslation.toggle();
+  ProgramTranslation.want(owner, live1, program(2));
+  await vi.advanceTimersByTimeAsync(TRANSLATION_DWELL_MS);
+  expect(programView(live1, program(2)).title).toBe('Programm 2');
+  expect(fetch).toHaveBeenCalledTimes(2);
 });

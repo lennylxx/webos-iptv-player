@@ -42,7 +42,7 @@ import { rankByName } from '../utils/channel-search';
 import { CONFIG } from '../config';
 import { bellIcon, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON, REPLAY_ICON, SEARCH_ICON } from './icons';
 import { clickHint, okHint } from './key-hints';
-import { liveSource, ProgramTranslation, programDescription, programTitleLabel, programView, translateHint } from './program-translation';
+import { liveSource, ProgramTranslation, programDescription, programTitleLabel, programView, translateHint, type TranslationItem } from './program-translation';
 import { channelLockBadge, channelLockState } from './parental-badge';
 import { getLocale, t, tp, type SupportedLocale } from '../i18n';
 import { VirtualList, type VirtualRange } from '../utils/virtual-list';
@@ -291,6 +291,10 @@ export class EpgGrid {
     });
     this.timeline = new GuideTimeline(this.timelineSource());
     this.timelineView = new TimelineView(this.timeline, this.container);
+    this.timelineView.setTitles({
+      revision: () => ProgramTranslation.revision,
+      title: (row, programme) => programView(liveSource(this.timelineRows()[row]?.channel), programme).title,
+    });
     // The Reminder Manager or a fired alert may drop a bell the timeline shows.
     ReminderService.onChange(() => this.refreshTimelineMarks());
     // A parental lock or unlock changes the rows' lock badges.
@@ -300,8 +304,15 @@ export class EpgGrid {
     });
     ProgramTranslation.subscribe(() => {
       if (!inShownView(this.container)) return;
-      if (this.timelineLayout) this.refreshTimelineDetail();
-      else this.render();
+      if (this.timelineLayout) {
+        this.refreshTimelineDetail();
+        // The cells write their titles again for the new revision.
+        this.requestTimelineFrame();
+      } else {
+        // A translation or its label may take another line, so rows measure again.
+        this.measuredProgrammes.clear();
+        this.render();
+      }
     });
     this.bindEvents();
   }
@@ -652,6 +663,8 @@ export class EpgGrid {
     }
     if (!showTabs && this.focusCol === 'playlists') this.focusCol = 'filters';
     if (this.timelineLayout) {
+      // The schedule's rows are gone; the timeline asks for its own cells.
+      ProgramTranslation.release(this);
       this.renderTimeline(tabs, groups, placeFocus);
       return;
     }
@@ -723,6 +736,7 @@ export class EpgGrid {
       channelViewport,
     );
     const programmeRange = this.programmeVirtualizer.getRange(programmes.length, programmeViewport);
+    this.showScheduleTranslations(channel, programmes, programmeViewport);
     const groupViewport = previousGroupList?.clientHeight || 400;
     if (this.groupOpen && placeFocus) {
       this.groupVirtualizer.ensureVisible(this.groupFocusIdx, groupViewport);
@@ -969,6 +983,7 @@ export class EpgGrid {
     this.detailFrozen = null;
     this.clearRing();
     this.timelineView.detach();
+    ProgramTranslation.release(this.timelineView);
   }
 
   // Reading the computed style is costly; redo it only when the text size,
@@ -1181,8 +1196,7 @@ export class EpgGrid {
     // While the search box has the caret, OK leaves it rather than acting here.
     const keys = this.focusCol === 'timeline' && !this.searchInputFocused();
     const p = this.timeline.focusedProgramme();
-    // The details follow the ring, so the program they show is the one to translate.
-    ProgramTranslation.want(this, liveSource(item?.channel), item && keys ? p : null);
+    // The details show the ring's cell, which the cells on screen already translate.
     if (!item) return html``;
     const when = (content: Safe | string) => html`
       <div class="epg-tl-when">${content}</div>`;
@@ -1246,6 +1260,7 @@ export class EpgGrid {
     this.timelineDrawnHost = host;
     this.timelineDrawnStamp = this.timelineStamp();
     if (animating) this.requestTimelineFrame();
+    else this.showTimelineTranslations();
     this.scheduleTimelineTick(now);
   }
 
@@ -2274,14 +2289,22 @@ export class EpgGrid {
   // then the color keys. It follows the ring, hover included.
   private hintsMarkup(): Safe {
     const ok = this.okHintLabel();
-    const ring = this.ringProgramme();
-    // The legend follows the ring, so the program it rests on is the one to translate.
-    ProgramTranslation.want(this, liveSource(ring.channel), ring.programme);
     return html`
       ${ok ? okHint(ok) : ''}
       ${clickHint('red', t('epg.backToNow'), 'epg-hint-now', { 'data-epg-now': '' })}
       ${this.canToggleTranslation() ? translateHint('epg-hint-translate', { 'data-epg-translate': '' }) : ''}
       <span class="edit-hint"><span class="edit-key key-yellow"></span><span>${t('common.search')}</span></span>`;
+  }
+
+  // The schedule's rows on screen are what it translates, whichever column has the keys.
+  private showScheduleTranslations(channel: Channel | undefined, programmes: Programme[], viewport: number): void {
+    if (!inShownView(this.container)) {
+      ProgramTranslation.release(this);
+      return;
+    }
+    const source = liveSource(channel);
+    const range = this.programmeVirtualizer.getVisibleRange(programmes.length, viewport);
+    ProgramTranslation.show(this, programmes.slice(range.start, range.end).map(text => ({ source, text })));
   }
 
   // The program the ring rests on, when the keys rest on one.
@@ -2310,9 +2333,28 @@ export class EpgGrid {
     return ProgramTranslation.translatable(liveSource(ring.channel), ring.programme);
   }
 
-  /** The Guide no longer shows: the program its ring rests on is not sent. */
+  /** The Guide no longer shows: what it showed is not sent. */
   releaseTranslation(): void {
     ProgramTranslation.release(this);
+    ProgramTranslation.release(this.timelineView);
+  }
+
+  // The cells on screen once a scroll or page turn has come to rest; the
+  // cells take their titles from the translations as they come.
+  private showTimelineTranslations(): void {
+    if (!inShownView(this.container)) {
+      ProgramTranslation.release(this.timelineView);
+      return;
+    }
+    if (!ProgramTranslation.active) return;
+    const rows = this.timelineRows();
+    const [first, last] = this.timelineView.visibleRows();
+    const items: TranslationItem[] = [];
+    for (let i = first; i <= last; i++) {
+      const source = liveSource(rows[i]?.channel);
+      for (const cell of this.timeline.cellsOf(i)) items.push({ source, text: cell.programme });
+    }
+    ProgramTranslation.show(this.timelineView, items);
   }
 
   private okHintLabel(): string | null {

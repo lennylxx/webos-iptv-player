@@ -298,6 +298,7 @@ export const ES_MESSAGES = {
   'ai.translateLimit': 'Límite diario de IA alcanzado. Traducción en pausa.',
   'ai.setupProblem': 'Problema con la configuración de IA. Traducción en pausa.',
   'ai.translate': 'Traducir con IA',
+  'ai.translateProgramInfo': 'Traducir la información con IA',
   'ai.showOriginal': 'Mostrar original',
   'ai.translation': 'Traducción con IA',
   'ai.translating': 'Traduciendo…',

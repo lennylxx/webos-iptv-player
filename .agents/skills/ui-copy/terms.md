@@ -89,7 +89,8 @@ a new term after review, add a row here.
 | Stop a running AI check, keeping finished results (after the OK key) | Stop | 停止 |
 | Daily cap with nothing to fall back on | Daily AI limit reached. | 已达到每日 AI 上限。 |
 | Held-back review joined after a reason | {reason} Review groups to lock ({count}) (no space after a full-width stop) | {reason}审阅建议锁定的分组（{count}） |
-| Program, movie, and series info translation (Guide / player info green key; detail-page AI button) | Translate with AI / Show original | 用 AI 翻译 / 显示原文 |
+| Movie and series info translation (detail-page AI button) | Translate with AI / Show original | 用 AI 翻译 / 显示原文 |
+| Program info translation (Guide legend, schedule and timeline; player info green key). Rejected: "Translate title and description with AI" (too long); "Translate program with AI" (reads as translating the program itself); a "Translate" row in the player action menu (reads as translating the whole program) | Translate program info with AI / Show original | 用 AI 翻译节目信息 / 显示原文 |
 | AI-translated program info (label) | AI translation | AI 翻译 |
 | Translation progress / failure | Translating… / Translation failed | 正在翻译… / 翻译失败 |
 | Movie and series plot text (Settings AI intro) | movie and series descriptions | 电影和剧集的简介 |

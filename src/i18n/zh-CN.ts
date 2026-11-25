@@ -293,6 +293,7 @@ export const ZH_CN_MESSAGES = {
   'ai.translateLimit': '已达到每日 AI 上限，翻译已暂停。',
   'ai.setupProblem': 'AI 设置有问题，翻译已暂停。',
   'ai.translate': '用 AI 翻译',
+  'ai.translateProgramInfo': '用 AI 翻译节目信息',
   'ai.showOriginal': '显示原文',
   'ai.translation': 'AI 翻译',
   'ai.translating': '正在翻译…',

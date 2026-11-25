@@ -207,9 +207,20 @@
 }
 
 .osd-programme-title {
+  display: flex;
+  align-items: center;
   font-size: 30px;
   font-weight: 500;
   margin-bottom: 2px;
+}
+
+/* The title gives way to the translate hint at the row's end, never the hint to it. */
+.osd-programme-title-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .osd-programme-time {
@@ -226,7 +237,15 @@
 }
 
 .osd-translate {
+  flex: none;
   margin-left: auto;
+  padding-left: 24px;
+}
+
+/* The button's padding and border overhang the title line, so the row keeps its height. */
+.osd-programme-title .osd-translate {
+  margin-top: -8px;
+  margin-bottom: -8px;
 }
 
 .osd-programme-title .program-translation-label {

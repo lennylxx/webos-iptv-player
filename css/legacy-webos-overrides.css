@@ -37,6 +37,7 @@ html.q-no-flex-gap .epg-prog-title > .epg-bell-glyph { margin-left: 18px; }
 html.q-no-flex-gap .settings-field > .settings-item-hint { margin-top: 14px; }
 html.q-no-flex-gap .live-preview-favorite { margin-right: 20px; }
 html.q-no-flex-gap .detail-actions > .detail-btn:last-of-type { margin-right: 24px; }
+html.q-no-flex-gap .preview-list-context > .preview-list-translate { margin-right: 14px; margin-bottom: -2px; }
 
 /* Absolutely placed along the button's foot, the progress bar takes no gap. */
 html.q-no-flex-gap .detail-btn > .detail-btn-progress { margin-left: 0; }

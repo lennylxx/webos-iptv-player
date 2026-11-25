@@ -32,7 +32,8 @@ html.q-no-flex-gap .channel-list-scroll.recent-list > * + * { margin-top: 4px; }
 html.q-no-flex-gap .channel-item > * + * { margin-left: 16px; }
 html.q-no-flex-gap .edit-hints > * + * { margin-left: 24px; }
 html.q-no-flex-gap .edit-hint > * + * { margin-left: 8px; }
-html.q-no-flex-gap .preview-list-context > * + * { margin-left: 24px; }
+html.q-no-flex-gap .preview-list-context { margin-bottom: -6px; }
+html.q-no-flex-gap .preview-list-context > * { margin-bottom: 6px; margin-right: 24px; }
 html.q-no-flex-gap .edit-action[data-edit-action="yellow"] > * + * { margin-left: 0; }
 html.q-no-flex-gap .epg-mapping-search-wrap > * + * { margin-left: 12px; }
 html.q-no-flex-gap .epg-mapping-option > * + * { margin-top: 3px; }

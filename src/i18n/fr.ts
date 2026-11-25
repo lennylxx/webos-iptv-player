@@ -298,6 +298,7 @@ export const FR_MESSAGES = {
   'ai.translateLimit': 'Limite quotidienne d’IA atteinte. Traduction suspendue.',
   'ai.setupProblem': 'Problème de configuration de l’IA. Traduction suspendue.',
   'ai.translate': 'Traduire avec l’IA',
+  'ai.translateProgramInfo': 'Traduire les infos avec l’IA',
   'ai.showOriginal': 'Afficher l’original',
   'ai.translation': 'Traduction par IA',
   'ai.translating': 'Traduction en cours…',

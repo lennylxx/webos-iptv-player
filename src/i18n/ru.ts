@@ -308,6 +308,7 @@ export const RU_MESSAGES = {
   'ai.translateLimit': 'Достигнут дневной лимит ИИ. Перевод приостановлен.',
   'ai.setupProblem': 'Проблема с настройкой ИИ. Перевод приостановлен.',
   'ai.translate': 'Перевести с ИИ',
+  'ai.translateProgramInfo': 'Перевести описание с ИИ',
   'ai.showOriginal': 'Показать оригинал',
   'ai.translation': 'Перевод ИИ',
   'ai.translating': 'Перевожу…',

@@ -969,8 +969,10 @@
   min-height: 47px;
 }
 
-/* The clickable hint keeps the legend's height. */
-.epg-hints .edit-action {
+/* The clickable hint keeps the legend's height. Live's translate hint
+   shares the look. */
+.epg-hints .edit-action,
+.preview-list-hints .edit-action {
   margin-top: -8px;
   margin-bottom: -8px;
   outline: 0;
@@ -979,7 +981,8 @@
 }
 
 /* Pointer hover only: under the D-pad the ring belongs to the focused item. */
-html:not(.keyboard-nav) .epg-hints .edit-action:hover {
+html:not(.keyboard-nav) .epg-hints .edit-action:hover,
+html:not(.keyboard-nav) .preview-list-hints .edit-action:hover {
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--focus-glow), 0 0 20px var(--focus-glow);
 }

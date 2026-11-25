@@ -1216,6 +1216,8 @@ class App {
     this.player.closeSubtitleOffset(); // never let the subtitle-sync overlay linger across a view change
     this.epgGrid.dismissPrompt(); // never let the catch-up prompt linger across a view change
     if (name !== 'epg') this.epgGrid.releaseTranslation();
+    if (name !== 'channels') this.channelList.releaseTranslation();
+    if (name !== 'search') this.search.releaseTranslation();
     this.search.dismissPrompt();
     this.settings.dismissPrompt();
     this.reminderManager.dismissPrompt();
@@ -1224,6 +1226,7 @@ class App {
       else hide(el);
     }
     syncTabBarOverArt();
+    if (name === 'search') this.search.syncTranslation();
 
     if (name === 'player') {
       if (this.viewStack[this.viewStack.length - 1] !== name) this.viewStack.push(name);

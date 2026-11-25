@@ -50,7 +50,11 @@ const { llmMock } = vi.hoisted(() => ({
   llmMock: { isReady: vi.fn(() => false), translateVod: vi.fn() },
 }));
 vi.mock('../services/llm/llm-service', () => ({ LlmService: { isReady: llmMock.isReady } }));
-vi.mock('../services/vod-translation', () => ({ translateVod: llmMock.translateVod }));
+// Each item of a batch answered as the tests set the one-item answer.
+vi.mock('../services/vod-translation', () => ({
+  translateVods: (items: unknown[], target: string, signal: AbortSignal) => Promise.all(items.map(item =>
+    Promise.resolve(llmMock.translateVod(item, target, signal)).then((text: unknown) => ({ text }), (error: unknown) => ({ error })))),
+}));
 vi.mock('../services/xtream-catalog', () => catalogMock);
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('./toast', () => ({ showToast: toastMock.showToast }));

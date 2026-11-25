@@ -20,6 +20,20 @@ describe('VirtualList', () => {
     expect(list.getRange(20)).toEqual({ start: 4, end: 11 });
   });
 
+  it('names the items on screen without the overscan, for fixed and measured sizes', () => {
+    const list = createList();
+    list.setScrollOffset(650);
+    expect(list.getVisibleRange(20)).toEqual({ start: 6, end: 10 });
+
+    const measured = new VirtualList({ overscan: 3, fallbackViewportSize: 100 });
+    measured.setItemSizes([40, 40, 80, 40, 40, 40]);
+    measured.setLeadingSize(20);
+    expect(measured.getVisibleRange(6)).toEqual({ start: 0, end: 2 });
+    measured.setScrollOffset(120);
+    expect(measured.getVisibleRange(6)).toEqual({ start: 2, end: 4 });
+    expect(measured.getVisibleRange(0)).toEqual({ start: 0, end: 0 });
+  });
+
   it('keeps the rendered window bounded for 50,000 items', () => {
     const list = createList();
     list.setScrollOffset(2_500_000);

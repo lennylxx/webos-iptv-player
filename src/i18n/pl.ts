@@ -308,6 +308,7 @@ export const PL_MESSAGES = {
   'ai.translateLimit': 'Osiągnięto dzienny limit AI. Tłumaczenie wstrzymane.',
   'ai.setupProblem': 'Problem z konfiguracją AI. Tłumaczenie wstrzymane.',
   'ai.translate': 'Przetłumacz z AI',
+  'ai.translateProgramInfo': 'Przetłumacz opis z AI',
   'ai.showOriginal': 'Pokaż oryginał',
   'ai.translation': 'Tłumaczenie AI',
   'ai.translating': 'Tłumaczenie…',

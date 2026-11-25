@@ -350,6 +350,10 @@ async function reportedContext(config: LlmConfig, list: ModelList): Promise<numb
   return tokens;
 }
 
+function textKey(config: LlmConfig, task: LlmTextTask): string {
+  return contentHash([endpointSignature(config), task.feature, String(task.promptVersion), 'text', task.system, task.user]);
+}
+
 // Plain-text requests in flight, by cache key.
 const pendingTexts = new Map<string, Promise<string>>();
 
@@ -446,7 +450,7 @@ export const LlmService = {
     const ignoreCap = task.ignoreCap === true;
     try {
       gate(config, task.feature, true);
-      const key = contentHash([endpointSignature(config), task.feature, String(task.promptVersion), 'text', task.system, task.user]);
+      const key = textKey(config, task);
       const hit = await getCachedLlmResult(key);
       if (typeof hit === 'string') return { text: hit, cached: true };
       // The same request already out (e.g. a job rebuilt after a reload) answers this caller too.
@@ -474,6 +478,17 @@ export const LlmService = {
       logUnlessExpected(task.feature, error);
       throw error;
     }
+  },
+
+  /** The reply `runText` keeps for the task, without sending anything; undefined when none is kept. */
+  async cachedText(task: LlmTextTask): Promise<string | undefined> {
+    const hit = await getCachedLlmResult(textKey(StorageService.getLlmConfig(), task)).catch(() => undefined);
+    return typeof hit === 'string' ? hit : undefined;
+  },
+
+  /** Keeps a reply as `runText` would for the task, e.g. one part of a reply that answered several at once. */
+  async storeText(task: LlmTextTask, text: string): Promise<void> {
+    await setCachedLlmResult(textKey(StorageService.getLlmConfig(), task), text).catch(() => undefined);
   },
 
   /** Lists models and re-detects structured output for the given, possibly unsaved, config. */
