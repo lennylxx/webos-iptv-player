@@ -136,6 +136,7 @@ import { ParentalControlService } from '../services/parental-control';
 import { installEdgeScroll } from '../navigation/edge-scroll';
 import { LlmService } from '../services/llm/llm-service';
 import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
+import { retains } from '../test/retains';
 
 const Y = 2024, M = 5, D = 15; // Sat Jun 15 2024, 12:00 local = "now"
 
@@ -398,6 +399,32 @@ describe('EpgGrid.render', () => {
       playlistMock.getGroupCount = originalCount;
       playlistMock.groupsRevision++;
     }
+  });
+});
+
+describe('EpgGrid playlist replacement', () => {
+  it('lets go of a playlist replaced while the guide is hidden, then lists the new one', () => {
+    grid.render();
+    const replaced = state.channels[0];
+    state.channels = [
+      { name: 'Chan C', group: 'News', url: 'http://host/c', playlistIds: ['p1'] },
+      { name: 'Chan D', group: 'Sports', url: 'http://host/d', playlistIds: ['p2'] },
+    ];
+
+    grid.releaseStaleChannels();
+
+    expect(retains(grid, replaced)).toBe(false);
+    grid.render();
+    expect(channelItems().map(el => el.querySelector('.epg-ch-name')!.textContent)).toEqual(['Chan C', 'Chan D']);
+  });
+
+  it('keeps the lists it built while the playlist is unchanged', () => {
+    grid.render();
+    const shown = state.channels[0];
+
+    grid.releaseStaleChannels();
+
+    expect(retains(grid, shown)).toBe(true);
   });
 });
 

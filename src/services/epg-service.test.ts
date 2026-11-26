@@ -1288,6 +1288,34 @@ describe('EpgService channel pre-filter', () => {
     )!)?.title).toBe('Program');
   });
 
+  it('fetches a truncated guide again on schedule or for a changed selection, not on every refresh', async () => {
+    const truncated = () => ({
+      data: parsed('a', 'Alpha', 'Program'),
+      stats: {
+        channelsKept: 1,
+        programmesSeen: 500,
+        programmesMatched: 500,
+        programmesKept: 1,
+        droppedBudget: 499,
+      },
+    }) as never;
+    for (let i = 0; i < 3; i++) vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(truncated());
+    const alpha = channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] });
+    const bravo = channel({ id: 'b', name: 'Bravo', playlistIds: ['a'] });
+    await EpgService.load([source('http://a', ['a'])], [alpha, bravo]);
+    expect(fetchXmlMock).toHaveBeenCalledTimes(1);
+
+    await EpgService.refresh();
+    expect(fetchXmlMock).toHaveBeenCalledTimes(1);
+
+    await EpgService.load([source('http://a', ['a'])], [alpha]);
+    expect(fetchXmlMock).toHaveBeenCalledTimes(2);
+
+    vi.setSystemTime(Date.now() + 6 * 3600_000);
+    await EpgService.refresh();
+    expect(fetchXmlMock).toHaveBeenCalledTimes(3);
+  });
+
   it('caches a guide that stayed under the retention ceiling', async () => {
     vi.mocked(parseXMLTVWithStats).mockReturnValueOnce({
       data: parsed('a', 'Alpha', 'Program'),

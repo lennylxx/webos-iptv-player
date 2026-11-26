@@ -158,6 +158,7 @@ import { LlmError } from '../services/llm/client';
 import type { AskFilter, AskReply } from '../services/ask-search/ask-query';
 import { setLocale } from '../i18n';
 import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
+import { retains } from '../test/retains';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -3117,6 +3118,72 @@ describe('Search', () => {
     epgMock.programmes = { Alpha: [prog('Late Report', Date.now() + 3600000, Date.now() + 7200000)] };
     await view.refreshPrograms();
     expect(container.querySelector('.search-program-row')?.textContent).toContain('Late Report');
+  });
+
+  it('lets go of a guide replaced while Search is closed, then finds the new one', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    const replaced = prog('Old Report', Date.now() + 3600000, Date.now() + 7200000);
+    epgMock.programmes = { Alpha: [replaced] };
+    const { view } = await openWith();
+    await view.setQuery('report');
+    expect(container.querySelector('.search-program-row')?.textContent).toContain('Old Report');
+    view.deactivate();
+
+    epgMock.programmes = { Alpha: [prog('New Report', Date.now() + 3600000, Date.now() + 7200000)] };
+    await view.refreshPrograms();
+
+    expect(retains(view, replaced)).toBe(false);
+    await view.open(account);
+    await indexReady(view);
+    await view.setQuery('report');
+    const rows = Array.from(container.querySelectorAll('.search-program-row'), row => row.textContent);
+    expect(rows).toEqual([expect.stringContaining('New Report')]);
+  });
+
+  it('lets go of a replaced guide when Search closed while rebuilding its index', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    const replaced = prog('Old Report', Date.now() + 3600000, Date.now() + 7200000);
+    epgMock.programmes = { Alpha: [replaced] };
+    const { view } = await openWith();
+    await view.setQuery('report');
+    view.deactivate();
+    // An idle worker was stopped, so the reopen rebuilds; it closes mid-build.
+    workerMock.terminate();
+    const hold = holdWorkerTask((task, payload) => task === 'search.index' && payload.chunk?.source === 'channels');
+    try {
+      const reopening = view.open(account, 'report');
+      await vi.waitFor(() => expect(hold.held).toBe(true));
+      view.deactivate();
+      hold.release();
+      await reopening;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } finally {
+      hold.release();
+      hold.restore();
+    }
+
+    epgMock.programmes = { Alpha: [prog('New Report', Date.now() + 3600000, Date.now() + 7200000)] };
+    await view.refreshPrograms();
+
+    expect(retains(view, replaced)).toBe(false);
+    await view.open(account);
+    await indexReady(view);
+    await view.setQuery('report');
+    const rows = Array.from(container.querySelectorAll('.search-program-row'), row => row.textContent);
+    expect(rows).toEqual([expect.stringContaining('New Report')]);
+  });
+
+  it('keeps its index for a reopen while the guide and channels stay the same', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    const kept = prog('Late Report', Date.now() + 3600000, Date.now() + 7200000);
+    epgMock.programmes = { Alpha: [kept] };
+    const { view } = await openWith();
+    await view.setQuery('report');
+    view.deactivate();
+
+    await view.refreshPrograms();
+
+    expect(retains(view, kept)).toBe(true);
   });
 
   it('refreshes a query typed while the initial program index is building', async () => {

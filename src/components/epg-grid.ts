@@ -466,6 +466,22 @@ export class EpgGrid {
     return true;
   }
 
+  // A playlist replaced while the guide is hidden would otherwise stay in
+  // memory beside the new one until the guide next renders.
+  releaseStaleChannels(): void {
+    if (this.groupOptionsChannels !== PlaylistService.channels) this.groupOptionsChannels = null;
+    if (this.visibleChannelRoot === null || this.visibleChannelRoot === PlaylistService.channels) return;
+    this.visibleChannelRoot = null;
+    this.visibleChannels = [];
+    this.channelSearchGeneration++;
+    this.channelSearchResults = null;
+    this.channelSearchResultSource = null;
+    this.channelSearchResultQuery = '';
+    this.channelSearch.release();
+    this.timelineRowsRef = null;
+    this.timelineMaxNumber = null;
+  }
+
   private getVisibleChannels(): VisibleChannel[] {
     const scopeChanged = this.visibleChannelRoot !== PlaylistService.channels
       || this.visibleChannelGroup !== this.selectedGroup

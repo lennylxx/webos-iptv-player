@@ -1416,6 +1416,7 @@ class App {
     this.channelList.render();
     // A Guide opened before its programs arrived shows none until redrawn.
     if (this.isCurrentView('epg')) this.epgGrid.render();
+    else this.epgGrid.releaseStaleChannels();
     this.livePreview.refresh();
     this.player.refreshOsd();
     void this.search.refreshPrograms();

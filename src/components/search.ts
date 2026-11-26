@@ -715,7 +715,14 @@ export class Search {
     this.programIndexGeneration++;
     this.indexedChannels = null;
     this.indexedGuideRevision = null;
-    if (!this.active) return;
+    if (!this.active) {
+      // A rebuild or repost still running after the close finishes on its own
+      // lists; an initial build stops at the close and never settles.
+      const building = this.recovery || this.channelRepost;
+      if (!building && (this.workerIndexedGuideRevision !== EpgService.guideRevision
+        || this.workerIndexedChannels !== PlaylistService.channels)) this.releasePrograms();
+      return;
+    }
     const sessionId = this.workerSession;
     // A settle this build caused runs the query itself; otherwise the
     // results shown may come from the index this build replaced. A build a
@@ -739,6 +746,23 @@ export class Search {
       && this.query.trim()) {
       await this.startQuery(++this.queryGeneration);
     }
+  }
+
+  // Closed over a guide or playlist since replaced, Search cannot reuse its
+  // index on reopen, so it lets the old programmes and channels go.
+  private releasePrograms(): void {
+    // The build the close abandoned left its sources pending; a late settle
+    // of the old session must not land on the next one.
+    this.pendingIndex = null;
+    this.completingPartial = null;
+    this.workerSession++;
+    this.invalidateWorkerIndex();
+    this.programIndex = [];
+    this.programRuns = new ProgrammeRuns();
+    this.workerPrograms = null;
+    this.pageProgrammesFor = null;
+    this.workerChannels = null;
+    this.clearResults();
   }
 
   beginChannelLoad(): void {

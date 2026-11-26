@@ -1134,7 +1134,10 @@ class EpgServiceImpl {
       const state: SourceState = {
         data: result,
         timestamp: Date.now(),
-        needsRefresh: truncated,
+        // The same feed and selection truncate the same way again, so it is
+        // not refetched before its schedule; a changed selection reloads it,
+        // and a cut-off feed retries after INCOMPLETE_RETRY_MS.
+        needsRefresh: false,
         catchupIdsKnown: true,
         ...(stats.incomplete ? { incomplete: true } : {}),
         ...(filter ? { filterKey: filter.key } : {}),
