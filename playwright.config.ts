@@ -20,6 +20,8 @@ export default defineConfig({
   use: {
     baseURL,
     trace: 'on-first-retry',
+    // The time zone CI runs in, so a test sees the same day on every machine.
+    timezoneId: 'UTC',
   },
   projects: [
     {

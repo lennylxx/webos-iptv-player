@@ -1,8 +1,5 @@
-import { test, expect, type Page, liveLoaded } from './helpers';
+import { test, expect, type Page, liveLoaded, NOW, pinClock } from './helpers';
 
-test.use({ timezoneId: 'UTC' });
-
-const NOW = new Date('2024-03-09T12:00:00Z');
 const M3U = [
   '#EXTM3U',
   '#EXTINF:-1 tvg-id="ch1" group-title="News",Channel 1',
@@ -32,7 +29,7 @@ function key(page: Page, keyCode: number): Promise<void> {
 }
 
 async function setup(page: Page, hasArchive = true): Promise<void> {
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await page.route('**/get.php*', route =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: M3U }));
   await page.route('**/xmltv.php*', route =>

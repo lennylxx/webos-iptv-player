@@ -1,6 +1,7 @@
 import {
   PLAYLIST_URL, test, expect, enterTab, routeLiveManifest, routePlaylist, seedPlaylist, type Page,
   afterQueuedTasks, settled, routeFakeAi,
+  pinClock,
 } from './helpers';
 import { startFaultServer } from './fixtures/fault-server';
 
@@ -457,7 +458,7 @@ test('settings saved while the channels arrive leave the background refresh for 
 test('a Guide opened while the channels arrive shows the programs that load after them', async ({ page }) => {
   const playlist = await serveHeldPlaylist('#EXTM3U url-tvg="http://host/guide.xml"');
   try {
-    await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
+    await pinClock(page);
     await page.route('**/guide.xml', route => route.fulfill({
       status: 200,
       contentType: 'application/xml',

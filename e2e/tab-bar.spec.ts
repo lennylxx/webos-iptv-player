@@ -1,8 +1,7 @@
-import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, liveLoaded } from './helpers';
+import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, liveLoaded, NOW, pinClock, xmltvTime } from './helpers';
 
 // The Guide lists a day's programs by start, so the Guide tests below pin
 // the clock away from midnight.
-const NOW = new Date('2024-03-09T12:00:00Z');
 
 // Seed one Xtream account so the tab bar is enabled; its get.php serves the
 // sample M3U so the channels view loads normally.
@@ -757,20 +756,19 @@ test.describe('switching sections from the bar with the D-pad', () => {
 });
 
 test('a hover on the Guide under its open group menu hands the bar\'s keys back without moving the grid', async ({ page }) => {
-  const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
   const now = NOW.getTime();
   const hour = 3_600_000;
   const xmltv = `<?xml version="1.0" encoding="UTF-8"?><tv>
 <channel id="one"><display-name>Channel One</display-name></channel>
-<programme channel="one" start="${stamp(now - hour)}" stop="${stamp(now + hour)}"><title>Show 1</title></programme>
-<programme channel="one" start="${stamp(now + hour)}" stop="${stamp(now + 2 * hour)}"><title>Show 2</title></programme>
-<programme channel="one" start="${stamp(now + 2 * hour)}" stop="${stamp(now + 3 * hour)}"><title>Show 3</title></programme>
+<programme channel="one" start="${xmltvTime(now - hour)}" stop="${xmltvTime(now + hour)}"><title>Show 1</title></programme>
+<programme channel="one" start="${xmltvTime(now + hour)}" stop="${xmltvTime(now + 2 * hour)}"><title>Show 2</title></programme>
+<programme channel="one" start="${xmltvTime(now + 2 * hour)}" stop="${xmltvTime(now + 3 * hour)}"><title>Show 3</title></programme>
 </tv>`;
   await seedXtream(page);
   await page.route('**/xmltv.php*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/xml', body: xmltv }));
   await routeLiveManifest(page);
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'epg');
@@ -802,20 +800,19 @@ test('a hover on the Guide under its open group menu hands the bar\'s keys back 
 });
 
 test('a hover under the account menu stays out of the Guide while its group menu is open', async ({ page }) => {
-  const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
   const now = NOW.getTime();
   const hour = 3_600_000;
   const xmltv = `<?xml version="1.0" encoding="UTF-8"?><tv>
 <channel id="one"><display-name>Channel One</display-name></channel>
-<programme channel="one" start="${stamp(now - hour)}" stop="${stamp(now + hour)}"><title>Show 1</title></programme>
-<programme channel="one" start="${stamp(now + hour)}" stop="${stamp(now + 2 * hour)}"><title>Show 2</title></programme>
-<programme channel="one" start="${stamp(now + 2 * hour)}" stop="${stamp(now + 3 * hour)}"><title>Show 3</title></programme>
+<programme channel="one" start="${xmltvTime(now - hour)}" stop="${xmltvTime(now + hour)}"><title>Show 1</title></programme>
+<programme channel="one" start="${xmltvTime(now + hour)}" stop="${xmltvTime(now + 2 * hour)}"><title>Show 2</title></programme>
+<programme channel="one" start="${xmltvTime(now + 2 * hour)}" stop="${xmltvTime(now + 3 * hour)}"><title>Show 3</title></programme>
 </tv>`;
   await seedXtream(page);
   await page.route('**/xmltv.php*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/xml', body: xmltv }));
   await routeLiveManifest(page);
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'epg');

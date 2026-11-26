@@ -9,11 +9,13 @@ import {
   routePlaylist,
   seedPlaylist,
   expectSelectionVisibleInEveryTheme,
+  pinClock,
+  NOW,
+  xmltvTime,
+  startClock,
 } from './helpers';
 
-// EPG guide: the LIVE badge and the day/time-zone handling. Both need a fixed
-// clock and a UTC device zone so wall-clock == absolute time.
-test.use({ timezoneId: 'UTC' });
+// EPG guide: the LIVE badge and the day/time-zone handling, on a pinned clock.
 
 // The guide shows before its cache write lands, so this waits for the entry.
 async function ageCachedGuide(page: Page, url: string, timestamp: number): Promise<void> {
@@ -77,7 +79,7 @@ test('stale cached EPG stays visible while a refresh is in flight', async ({ pag
 
   await routePlaylist(page);
   await seedPlaylist(page);
-  await page.clock.setFixedTime(now);
+  await pinClock(page, now);
   await page.route('**/guide.xml', async (route) => {
     epgRequests++;
     if (epgRequests > 1) await refreshGate;
@@ -109,7 +111,7 @@ test('stale cached EPG stays visible while a refresh is in flight', async ({ pag
 test('the channel list opens before the cached guide is read', async ({ page }) => {
   await routePlaylist(page);
   await seedPlaylist(page);
-  await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
+  await pinClock(page);
   await page.route('**/guide.xml', route => route.fulfill({
     status: 200,
     contentType: 'application/xml',
@@ -139,7 +141,7 @@ test('the auto-played channel shows its programme once the cached guide is read'
   await routePlaylist(page);
   await routeLiveManifest(page);
   await seedPlaylist(page);
-  await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
+  await pinClock(page);
   await page.route('**/guide.xml', route => route.fulfill({
     status: 200,
     contentType: 'application/xml',
@@ -169,7 +171,7 @@ test('a Guide opened while the cached guide is read shows it once read', async (
   let guideRequests = 0;
   await routePlaylist(page);
   await seedPlaylist(page);
-  await page.clock.setFixedTime(now);
+  await pinClock(page, now);
   await page.route('**/guide.xml', async (route) => {
     // Only the first launch downloads; the refresh of the aged copy hangs.
     if (++guideRequests > 1) return;
@@ -201,7 +203,6 @@ test.describe('EPG live badge', () => {
   // Fixed "now" placed inside the middle program so exactly one row is airing.
   // UTC device + +0000 EPG keeps wall-clock == absolute time, so the live/past/
   // future split is unambiguous regardless of timezone mode.
-  const NOW = new Date('2024-03-09T12:00:00Z');
 
   const M3U = [
     '#EXTM3U',
@@ -221,7 +222,7 @@ test.describe('EPG live badge', () => {
   async function setup(page: Page): Promise<void> {
     await routePlaylist(page, M3U);
     await page.route('**/epg.xml', r => r.fulfill({ status: 200, contentType: 'application/xml', body: EPG }));
-    await page.clock.setFixedTime(NOW);
+    await pinClock(page);
     await page.addInitScript(() => {
       localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
       localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
@@ -351,7 +352,7 @@ test.describe('EPG time zone', () => {
   async function setup(page: Page, tzMode: 'device' | 'feed'): Promise<void> {
     await routePlaylist(page, M3U);
     await page.route('**/epg.xml', r => r.fulfill({ status: 200, contentType: 'application/xml', body: EPG }));
-    await page.clock.setFixedTime(NOW);
+    await pinClock(page, NOW);
     await page.addInitScript((mode) => {
       localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
       localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
@@ -431,7 +432,7 @@ test('Down from the tab bar resumes the Guide on the day and channel Up left', a
   ].join('\n'));
   await page.route('**/epg.xml', (r) => r.fulfill({ status: 200, contentType: 'application/xml',
     body: `<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/><channel id="ch2"/>${programmes.join('')}</tv>` }));
-  await page.clock.setFixedTime(new Date('2024-03-10T06:00:00Z'));
+  await pinClock(page, new Date('2024-03-10T06:00:00Z'));
   await page.addInitScript(() => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
@@ -478,7 +479,7 @@ test('Right on a channel with no programmes keeps the ring on the channel', asyn
   ].join('\n'));
   await page.route('**/epg.xml', (r) => r.fulfill({ status: 200, contentType: 'application/xml',
     body: `<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/>${programmes.join('')}</tv>` }));
-  await page.clock.setFixedTime(new Date('2024-03-10T06:00:00Z'));
+  await pinClock(page, new Date('2024-03-10T06:00:00Z'));
   await page.addInitScript(() => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
@@ -508,10 +509,7 @@ test.describe('Guide pointer and keys', () => {
   // A day of half-hour programmes on two channels, so the programme column
   // runs past the bottom of the screen.
   async function openGuide(page: Page, describe?: (i: number) => string): Promise<void> {
-    const at = (slot: number) => {
-      const d = new Date(Date.UTC(2024, 2, 9) + slot * 30 * 60 * 1000);
-      return `${d.toISOString().replace(/[-:T]/g, '').slice(0, 14)} +0000`;
-    };
+    const at = (slot: number) => xmltvTime(Date.UTC(2024, 2, 9) + slot * 30 * 60 * 1000);
     const programmes = ['ch1', 'ch2'].flatMap((ch) => Array.from({ length: 48 }, (_, i) =>
       `<programme channel="${ch}" start="${at(i)}" stop="${at(i + 1)}"><title>Show ${i}</title>${
         describe ? `<desc>${describe(i)}</desc>` : ''}</programme>`));
@@ -524,7 +522,7 @@ test.describe('Guide pointer and keys', () => {
     ].join('\n'));
     await page.route('**/epg.xml', (r) => r.fulfill({ status: 200, contentType: 'application/xml',
       body: `<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/><channel id="ch2"/>${programmes.join('')}</tv>` }));
-    await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
+    await pinClock(page);
     await page.addInitScript(() => {
       localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
       localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
@@ -815,7 +813,7 @@ test.describe('Guide pointer and keys', () => {
           + '<programme channel="ch150" start="20240309110000 +0000" stop="20240309130000 +0000">'
           + '<title>Show</title></programme></tv>' });
     });
-    await page.clock.setFixedTime(new Date('2024-03-09T12:00:00Z'));
+    await pinClock(page);
     await page.addInitScript(() => {
       localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
       localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
@@ -857,7 +855,7 @@ async function openTimelineGuide(page: Page): Promise<void> {
   await routePlaylist(page);
   await seedPlaylist(page);
   await page.addInitScript(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));
-  await page.clock.setFixedTime(new Date('2024-03-09T12:10:00Z'));
+  await pinClock(page, new Date('2024-03-09T12:10:00Z'));
   await page.route('**/guide.xml', route => route.fulfill({
     status: 200,
     contentType: 'application/xml',
@@ -1182,15 +1180,15 @@ test('the timeline pages and scrolls while the pointer rests at its edges, and s
     `#EXTINF:-1 tvg-id="c${String(i + 1)}",Channel ${String(i + 1)}\nhttp://streams.example.com/${String(i + 1)}.m3u8`);
   await routePlaylist(page, ['#EXTM3U url-tvg="http://epg.example.com/guide.xml"', ...channels].join('\n'));
   // Hourly programs from six hours back to a day ahead, so there are pages to turn.
-  const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
-  const hour = Math.floor(Date.now() / 3600_000) * 3600_000;
+  const hour = NOW.getTime();
   const programmes = Array.from({ length: 20 }, (_, c) => Array.from({ length: 30 }, (_, h) =>
-    `<programme channel="c${String(c + 1)}" start="${stamp(hour + (h - 6) * 3600_000)}" stop="${stamp(hour + (h - 5) * 3600_000)}"><title>Show ${String(h)}</title></programme>`).join('')).join('');
+    `<programme channel="c${String(c + 1)}" start="${xmltvTime(hour + (h - 6) * 3600_000)}" stop="${xmltvTime(hour + (h - 5) * 3600_000)}"><title>Show ${String(h)}</title></programme>`).join('')).join('');
   await page.route('**/guide.xml', route => route.fulfill({
     status: 200, contentType: 'application/xml', body: `<?xml version="1.0" encoding="UTF-8"?><tv>${programmes}</tv>`,
   }));
   await seedPlaylist(page);
   await page.addInitScript(() => localStorage.setItem('iptv_guide_layout', JSON.stringify('timeline')));
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'epg');

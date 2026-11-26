@@ -1,4 +1,4 @@
-import { endHoldingUpNext, enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, routeFakeAi, type FakeAiServer, type Page, liveLoaded, settled } from './helpers';
+import { endHoldingUpNext, enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, routeFakeAi, type FakeAiServer, type Page, liveLoaded, settled, pinClock, NOW, HOUR_MS, xmltvTime } from './helpers';
 import { type Browser } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { findGappedLooseText, measureLooseText, newLegacyPage, pixelDiff } from './pixel-parity';
@@ -76,12 +76,10 @@ async function hoverCircle(p: Page, button: string): Promise<void> {
 // percentages.
 const DIFF_DIR = 'test-output/legacy-parity';
 
-// A fixed clock keeps the EPG's "now" marker, the header time and every
+// A pinned clock keeps the EPG's "now" marker, the header time and every
 // relative timestamp identical between the two pages.
-const NOW = new Date('2024-03-05T12:00:00.000Z');
 
-const at = (hours: number): string =>
-  new Date(NOW.getTime() + hours * 3600_000).toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
+const at = (hours: number): string => xmltvTime(NOW.getTime() + hours * HOUR_MS);
 
 const EPG = `<?xml version="1.0" encoding="UTF-8"?><tv>
 <channel id="one"><display-name>Channel One</display-name></channel>
@@ -150,7 +148,7 @@ async function stubLanService(page: Page): Promise<void> {
 }
 
 async function prepareM3U(page: Page): Promise<void> {
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await routePlaylist(page, [
     '#EXTM3U url-tvg="http://epg.example.com/guide.xml"',
     '#EXTINF:-1 tvg-id="one" group-title="News" catchup="default" catchup-source="http://streams.example.com/one.m3u8?start=${start}",Channel One',
@@ -226,7 +224,7 @@ async function imagesLoaded(p: Page, selector: string): Promise<void> {
 }
 
 async function prepareXtream(page: Page): Promise<void> {
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await seedXtream(page, { catalog: 'large' });
   await routeSeriesEpisodes(page);
   await stubLanService(page);
@@ -1093,7 +1091,7 @@ const AI_EPG = `<?xml version="1.0" encoding="UTF-8"?><tv>
 </tv>`;
 
 async function prepareAiM3U(page: Page): Promise<void> {
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await routePlaylist(page, [
     '#EXTM3U',
     '#EXTINF:-1 tvg-id="c1" group-title="Group A",Alpha One', 'http://host/a.m3u8',
@@ -1398,7 +1396,7 @@ const AI_ASS = [
 ].join('\n');
 
 async function prepareAiXtream(page: Page): Promise<void> {
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await seedXtream(page);
   // No preferred subtitle language, so subtitles translate into the UI's.
   await page.addInitScript(() => {

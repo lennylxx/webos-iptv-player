@@ -1,14 +1,11 @@
-import { fakeAiConfig, expect, liveLoaded, neuterVideo, routePlaylist, test, type Page } from './helpers';
+import { fakeAiConfig, expect, liveLoaded, neuterVideo, routePlaylist, test, type Page, pinClock, xmltvTime } from './helpers';
 
 // Program info translation in Live: the legend's hint turns it on, and the
 // visible rows, the preview's program, and its Up next go in one request.
-test.use({ timezoneId: 'UTC' });
-
 const CHANNELS = 30;
 
 function at(slot: number): string {
-  const d = new Date(Date.UTC(2024, 2, 9) + slot * 30 * 60 * 1000);
-  return `${d.toISOString().replace(/[-:T]/g, '').slice(0, 14)} +0000`;
+  return xmltvTime(Date.UTC(2024, 2, 9) + slot * 30 * 60 * 1000);
 }
 
 // Program N on chC airs in the Nth half hour; ch2's current program has no title.
@@ -35,7 +32,7 @@ async function setup(page: Page): Promise<string[]> {
     return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
       body: JSON.stringify({ choices: [{ message: { content: reply } }] }) });
   });
-  await page.clock.setFixedTime(new Date('2024-03-09T12:10:00Z'));
+  await pinClock(page, new Date('2024-03-09T12:10:00Z'));
   await page.addInitScript((config) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));

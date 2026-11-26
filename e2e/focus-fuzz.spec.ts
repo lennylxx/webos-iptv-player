@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, enterTab, type Page, type RingAuditApi } from './helpers';
+import { test, expect, routeLiveManifest, enterTab, NOW, startClock, type Page, type RingAuditApi } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 import { channelPlaylist, guide } from './fixtures/live';
 import { KEYS, hover } from './navigation-helpers';
@@ -136,7 +136,7 @@ function pick<T>(rand: () => number, list: T[]): T {
 
 const HALF_HOUR = 30 * 60 * 1000;
 // The guide's first programme, four before the one airing now.
-const GUIDE_START = Math.floor(Date.now() / HALF_HOUR) * HALF_HOUR - 4 * HALF_HOUR;
+const GUIDE_START = NOW.getTime() - 4 * HALF_HOUR;
 // Part-watched aired programmes, the first one the catchup enter opens.
 const CATCHUP_PROGRAMMES = [2, 0, 1, 3];
 const GUIDE_CHANNELS = 12;
@@ -308,7 +308,7 @@ async function seed(page: Page, needs: Need[], pseudo: boolean): Promise<void> {
   if (has('search-history')) {
     await page.addInitScript(() => localStorage.setItem('iptv_search_history', JSON.stringify(['ch', 'show', 'movie'])));
   }
-  const now = Date.now();
+  const now = NOW.getTime();
   const reminders: unknown[] = [];
   // Spread over three days, so the manager groups them by day.
   if (has('reminders')) {
@@ -878,6 +878,8 @@ async function runWalk(page: Page, label: string,
   const pseudo = !!surface?.pseudo && (opts.seed ?? 0) % 2 === 1;
   const avoid = surface?.avoid ?? [];
   await seed(page, surface?.needs ?? [], pseudo);
+  // From NOW, as the guide is built, but running: the walk's key timing reads it.
+  await startClock(page);
   await page.goto(pseudo ? '/?pseudo=1' : '/');
   await expect(page.locator('#view-channels')).toBeVisible();
   await expect(page.locator('#view-channels [data-list-position="0"]')).toBeVisible();

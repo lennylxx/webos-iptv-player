@@ -9,11 +9,11 @@ import {
   settled,
   routeFakeAi,
   fakeAiConfig,
+  NOW,
+  HOUR_MS,
+  startClock,
+  xmltvTime,
 } from './helpers';
-
-function xmltvDate(date: Date): string {
-  return date.toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
-}
 
 // Seed one Xtream account (enables the tab bar) and stub the player_api.php
 // catalog calls + the get.php/xmltv.php the live path uses. get_vod_streams /
@@ -22,11 +22,12 @@ function xmltvDate(date: Date): string {
 // that are substrings of others are routed most-specific-first (get_series_*
 // before get_series, get_vod_info/get_vod_categories before get_vod_streams).
 async function seedSearch(page: import('@playwright/test').Page): Promise<void> {
-  const start = new Date(Date.now() + 60 * 60 * 1000);
+  await startClock(page);
+  const start = new Date(NOW.getTime() + HOUR_MS);
   const stop = new Date(start.getTime() + 60 * 60 * 1000);
   const epg = `<tv>
     <channel id="one"><display-name>Channel One</display-name></channel>
-    <programme channel="one" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+    <programme channel="one" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">
       <title>Future Report</title><category>News</category>
     </programme>
   </tv>`;
@@ -78,11 +79,12 @@ async function enterSearch(page: import('@playwright/test').Page): Promise<void>
 }
 
 test('M3U channel results retain visible space above matching programmes', async ({ page }) => {
-  const start = new Date(Date.now() + 60 * 60 * 1000);
+  await startClock(page);
+  const start = new Date(NOW.getTime() + HOUR_MS);
   const stop = new Date(start.getTime() + 60 * 60 * 1000);
   const epg = `<tv>
     <channel id="one"><display-name>Channel One</display-name></channel>
-    <programme channel="one" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+    <programme channel="one" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">
       <title>Programme One</title>
     </programme>
   </tv>`;
@@ -115,13 +117,14 @@ test('M3U channel results retain visible space above matching programmes', async
 });
 
 test('M3U-only results show channels as a rail, one Down above the programs', async ({ page }) => {
-  const start = new Date(Date.now() + 60 * 60 * 1000);
+  await startClock(page);
+  const start = new Date(NOW.getTime() + HOUR_MS);
   const stop = new Date(start.getTime() + 60 * 60 * 1000);
   const lines = ['#EXTM3U'];
   for (let i = 1; i <= 40; i++) lines.push(`#EXTINF:-1 tvg-id="c${i}",Show ${i}`, `http://host/${i}.m3u8`);
   const programmes = [1, 2, 3].map(i => `
     <channel id="c${i}"><display-name>Show ${i}</display-name></channel>
-    <programme channel="c${i}" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+    <programme channel="c${i}" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">
       <title>Show Hour ${i}</title>
     </programme>`).join('');
   await page.route('**/playlist.m3u', (route) =>
@@ -299,11 +302,12 @@ test('program search shows XMLTV metadata and toggles a future reminder', async 
 });
 
 test('program results at the largest text size do not overlap, and Down keeps the focused one in view', async ({ page }) => {
-  const base = Date.now() + 60 * 60 * 1000;
+  await startClock(page);
+  const base = NOW.getTime() + HOUR_MS;
   const programmes = Array.from({ length: 6 }, (_, i) => {
     const start = new Date(base + i * 60 * 60 * 1000);
     const stop = new Date(start.getTime() + 60 * 60 * 1000);
-    return `<programme channel="one" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+    return `<programme channel="one" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">
       <title>Report ${i}</title><category>News</category></programme>`;
   }).join('');
   await seedSearch(page);
@@ -967,7 +971,8 @@ test('Down from the box after Up rings a result at once, and one Right moves', a
 
 test('Left and Right keep a program result on its line, past the channel tiles above', async ({ page }) => {
   await seedSearch(page);
-  const start = new Date(Date.now() + 60 * 60 * 1000);
+  await startClock(page);
+  const start = new Date(NOW.getTime() + HOUR_MS);
   const stop = new Date(start.getTime() + 60 * 60 * 1000);
   const lines = ['#EXTM3U'];
   for (let i = 1; i <= 8; i++) lines.push(`#EXTINF:-1 tvg-id="c${i}" group-title="News",One ${i}`, `http://host/${i}.m3u8`);
@@ -975,7 +980,7 @@ test('Left and Right keep a program result on its line, past the channel tiles a
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: lines.join('\n') }));
   await page.route('**/xmltv.php*', (route) => route.fulfill({ status: 200, contentType: 'application/xml', body: `<tv>
     <channel id="c1"><display-name>One 1</display-name></channel>
-    <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>One Show</title></programme>
+    <programme channel="c1" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}"><title>One Show</title></programme>
   </tv>` }));
   await page.goto('/');
   await liveLoaded(page);
@@ -1127,12 +1132,13 @@ test('a Cyrillic query finds a channel written in Latin letters without AI', asy
 async function seedGrowingResults(page: import('@playwright/test').Page, zorbChannel = false): Promise<void> {
   await seedSearch(page);
   await routeLiveManifest(page);
-  const start = new Date(Date.now() + 60 * 60 * 1000);
+  await startClock(page);
+  const start = new Date(NOW.getTime() + HOUR_MS);
   const titles = ['Zorb Report', 'Quix Report 1', 'Quix Report 2', 'Quix Report 3', 'Quix Report 4', 'Quix Report 5'];
   const programmes = titles.map((title, i) => {
     const from = new Date(start.getTime() + i * 30 * 60 * 1000);
     const to = new Date(from.getTime() + 30 * 60 * 1000);
-    return `<programme channel="q1" start="${xmltvDate(from)}" stop="${xmltvDate(to)}"><title>${title}</title></programme>`;
+    return `<programme channel="q1" start="${xmltvTime(from)}" stop="${xmltvTime(to)}"><title>${title}</title></programme>`;
   }).join('');
   await page.route('**/get.php*', (route) => route.fulfill({
     status: 200, contentType: 'application/x-mpegurl',
@@ -1287,7 +1293,8 @@ async function seedAiSearch(
   page: import('@playwright/test').Page,
   reply: { status?: number; filter?: Record<string, unknown> },
 ): Promise<string[]> {
-  const start = new Date(Date.now() + 60 * 60 * 1000);
+  await startClock(page);
+  const start = new Date(NOW.getTime() + HOUR_MS);
   const stop = new Date(start.getTime() + 60 * 60 * 1000);
   const m3u = [
     '#EXTM3U',
@@ -1297,10 +1304,10 @@ async function seedAiSearch(
   const epg = `<tv>
     <channel id="c1"><display-name>Alpha One</display-name></channel>
     <channel id="c2"><display-name>Bravo Two</display-name></channel>
-    <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+    <programme channel="c1" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">
       <title>Alpha Show Time Cup</title><category>Genre A</category>
     </programme>
-    <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+    <programme channel="c2" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">
       <title>Alpha Show Time Talk</title><category>Genre B</category>
     </programme>
   </tv>`;
@@ -1433,7 +1440,8 @@ async function seedGenreSearch(
   page: import('@playwright/test').Page,
   filter: Record<string, unknown>,
 ): Promise<string[]> {
-  const start = new Date(Date.now() + 60 * 60 * 1000);
+  await startClock(page);
+  const start = new Date(NOW.getTime() + HOUR_MS);
   const stop = new Date(start.getTime() + 60 * 60 * 1000);
   const m3u = [
     '#EXTM3U',
@@ -1443,10 +1451,10 @@ async function seedGenreSearch(
   const epg = `<tv>
     <channel id="c1"><display-name>Alpha One</display-name></channel>
     <channel id="c2"><display-name>Bravo Two</display-name></channel>
-    <programme channel="c1" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+    <programme channel="c1" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">
       <title>Alpha Show Time Cup</title><desc>Synthetic description.</desc>
     </programme>
-    <programme channel="c2" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}">
+    <programme channel="c2" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">
       <title>Alpha Show Time Talk</title><category>Genre B</category>
     </programme>
   </tv>`;
@@ -1542,14 +1550,15 @@ test('AI program genres ask before the first run, then Search shows and filters 
 async function seedTranslatedSearch(page: import('@playwright/test').Page): Promise<string[]> {
   await seedSearch(page);
   await routeLiveManifest(page);
-  const start = new Date(Date.now() + 60 * 60 * 1000);
+  await startClock(page);
+  const start = new Date(NOW.getTime() + HOUR_MS);
   const stop = new Date(start.getTime() + 60 * 60 * 1000);
   const epg = `<tv>
     <channel id="one"><display-name>Channel One</display-name></channel>
     <channel id="two"><display-name>Channel Two</display-name></channel>
-    <programme channel="one" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>Future Report</title></programme>
-    <programme channel="two" start="${xmltvDate(start)}" stop="${xmltvDate(stop)}"><title>Later Report</title></programme>
-    <programme channel="two" start="${xmltvDate(stop)}" stop="${xmltvDate(new Date(stop.getTime() + 60 * 60 * 1000))}"><title>Movie Night</title></programme>
+    <programme channel="one" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}"><title>Future Report</title></programme>
+    <programme channel="two" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}"><title>Later Report</title></programme>
+    <programme channel="two" start="${xmltvTime(stop)}" stop="${xmltvTime(new Date(stop.getTime() + 60 * 60 * 1000))}"><title>Movie Night</title></programme>
   </tv>`;
   await page.route('**/xmltv.php*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));

@@ -8,6 +8,9 @@ import {
   routePlaylist,
   seedPlaylist,
   type Page,
+  NOW,
+  startClock,
+  xmltvTime,
 } from './helpers';
 import type { Locator } from '@playwright/test';
 import type { ResumeEntry, WatchlistEntry } from '../src/types';
@@ -626,8 +629,8 @@ test('player sidebar tabs scroll without switching playlists and stop when the p
 });
 
 test('Guide dates scroll to their end and back without selecting a day', async ({ page }) => {
-  const xmltv = (d: Date) => `${d.toISOString().replace(/[-:T]/g, '').slice(0, 14)} +0000`;
-  const today = new Date();
+  await startClock(page);
+  const today = new Date(NOW);
   today.setUTCHours(0, 0, 0, 0);
   const programmes: string[] = [];
   for (const ch of ['ch1', 'ch2']) {
@@ -635,7 +638,7 @@ test('Guide dates scroll to their end and back without selecting a day', async (
       for (const hour of [0, 12]) {
         const start = new Date(today.getTime() + (day * 24 + hour) * 3_600_000);
         const stop = new Date(start.getTime() + 12 * 3_600_000);
-        programmes.push(`<programme channel="${ch}" start="${xmltv(start)}" stop="${xmltv(stop)}">`
+        programmes.push(`<programme channel="${ch}" start="${xmltvTime(start)}" stop="${xmltvTime(stop)}">`
           + `<title>${hour ? 'Bravo' : 'Alpha'}</title></programme>`);
       }
     }

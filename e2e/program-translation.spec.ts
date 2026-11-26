@@ -7,13 +7,13 @@ import {
   routePlaylist,
   test,
   type Page,
+  pinClock,
+  xmltvTime,
 } from './helpers';
 
 // Program info translation: Green turns it on in the Guide and the player's
 // info, and every program a surface shows comes back translated, in one
 // request per surface once it settles.
-test.use({ timezoneId: 'UTC' });
-
 const RED = 403;
 const GREEN = 404;
 const YELLOW = 405;
@@ -26,8 +26,7 @@ function key(page: Page, keyCode: number): Promise<void> {
 }
 
 function at(slot: number): string {
-  const d = new Date(Date.UTC(2024, 2, 9) + slot * 60 * 60 * 1000);
-  return `${d.toISOString().replace(/[-:T]/g, '').slice(0, 14)} +0000`;
+  return xmltvTime(Date.UTC(2024, 2, 9) + slot * 60 * 60 * 1000);
 }
 
 // Program N airs from N:00 to N+1:00 on ch1; the AI server answers each
@@ -52,7 +51,7 @@ async function setup(page: Page, options: { ai?: boolean; layout?: 'schedule' | 
     return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
       body: JSON.stringify({ choices: [{ message: { content } }] }) });
   });
-  await page.clock.setFixedTime(new Date('2024-03-09T12:10:00Z'));
+  await pinClock(page, new Date('2024-03-09T12:10:00Z'));
   await page.addInitScript(({ ai, layout }) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));

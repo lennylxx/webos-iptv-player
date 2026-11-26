@@ -6,6 +6,31 @@ import { capabilitySignature, normalizeLlmConfig } from '../src/services/llm/con
 
 export { expect, type Page };
 
+// The E2E wall clock. The Guide lists a day's programs by start, and aired,
+// upcoming, and reminder due times all read the clock, so a test whose data
+// depends on the time pins the page to NOW, noon in the UTC the browser runs
+// in (playwright.config.ts), and passes at any hour on any machine. Fixtures
+// and expected values may spell out times on NOW's day; no test reads the
+// real clock for them.
+export const NOW = new Date('2024-03-09T12:00:00Z');
+export const HOUR_MS = 3_600_000;
+
+// Holds Date.now() at a moment for a test that shows one; timers still run.
+export function pinClock(page: Page, at: Date | number | string = NOW): Promise<void> {
+  return page.clock.setFixedTime(at);
+}
+
+// Starts the clock at a moment and lets it run, for a test whose keys, waits,
+// or retries read the time that passes, as the D-pad's held-key check does.
+export function startClock(page: Page, at: Date | number | string = NOW): Promise<void> {
+  return page.clock.install({ time: at });
+}
+
+// An XMLTV programme time, in UTC.
+export function xmltvTime(at: Date | number): string {
+  return `${new Date(at).toISOString().replace(/[-:T]/g, '').slice(0, 14)} +0000`;
+}
+
 export const PLAYLIST_URL = 'http://host.example.com/playlist.m3u';
 
 export const SAMPLE_M3U = [

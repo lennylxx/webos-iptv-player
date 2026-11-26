@@ -9,6 +9,9 @@ import {
   enterTab,
   type Page,
   fakeAiConfig,
+  NOW,
+  startClock,
+  xmltvTime,
 } from './helpers';
 
 // Channel customization: the in-place edit mode on the Live channel list —
@@ -29,13 +32,6 @@ function key(page: Page, keyCode: number): Promise<void> {
     (k) => { document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: k, bubbles: true })); },
     keyCode,
   );
-}
-
-function xmltvDate(date: Date): string {
-  const part = (value: number): string => String(value).padStart(2, '0');
-  return `${String(date.getUTCFullYear())}${part(date.getUTCMonth() + 1)}${
-    part(date.getUTCDate())
-  }${part(date.getUTCHours())}${part(date.getUTCMinutes())}${part(date.getUTCSeconds())} +0000`;
 }
 
 function names(page: Page): Promise<string[]> {
@@ -354,7 +350,8 @@ test('back cancels an open rename without changing the name', async ({ page }) =
 });
 
 test('maps a channel to an XMLTV entry and keeps the override after reload', async ({ page }) => {
-  const now = Date.now();
+  await startClock(page);
+  const now = NOW.getTime();
   const playlist = SEARCH_M3U.replace('#EXTM3U', '#EXTM3U url-tvg="http://host/guide.xml"');
   const guideChannels = Array.from({ length: 120 }, (_, index) => {
     const number = String(index + 1).padStart(3, '0');
@@ -367,8 +364,8 @@ test('maps a channel to an XMLTV entry and keeps the override after reload', asy
     body: `<?xml version="1.0" encoding="UTF-8"?><tv>
 <channel id="guide-beta"><display-name>Guide Beta</display-name></channel>
 ${guideChannels}
-<programme channel="guide-beta" start="${xmltvDate(new Date(now - 86_400_000))}"
-           stop="${xmltvDate(new Date(now + 86_400_000))}">
+<programme channel="guide-beta" start="${xmltvTime(new Date(now - 86_400_000))}"
+           stop="${xmltvTime(new Date(now + 86_400_000))}">
   <title>Beta Programme</title>
 </programme>
 </tv>`,

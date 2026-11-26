@@ -2,6 +2,10 @@ import {
   liveLoaded,
   enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist,
   seedPlaylist, type Page,
+  startClock,
+  NOW,
+  HOUR_MS,
+  xmltvTime,
 } from './helpers';
 import { POLYFILLED_APIS } from '../scripts/polyfilled-apis.mjs';
 import { seedXtream } from './fixtures/xtream';
@@ -194,9 +198,9 @@ test('no flex-gap container separates an element from loose text', async ({ page
     'http://streams.example.com/ch1.m3u8',
   ].join('\n');
   // Relative to now so the aired / airing / upcoming variants all render — the
-  // LIVE badge and the replay glyph are gap containers of their own.
-  const at = (hours: number) => new Date(Date.now() + hours * 3600_000)
-    .toISOString().replace(/[-:T]/g, '').slice(0, 14) + ' +0000';
+  // LIVE badge and the replay glyph are gap containers of their own. The Guide
+  // lists a day's programs by start, so the clock is pinned away from midnight.
+  const at = (hours: number) => xmltvTime(NOW.getTime() + hours * HOUR_MS);
   const EPG = `<?xml version="1.0" encoding="UTF-8"?><tv>
 <channel id="ch1"><display-name>Channel 1</display-name></channel>
 <programme channel="ch1" start="${at(-3)}" stop="${at(-2)}"><title>Earlier Show</title></programme>
@@ -226,6 +230,7 @@ test('no flex-gap container separates an element from loose text', async ({ page
     localStorage.setItem('iptv_favorites',
       JSON.stringify([(h >>> 0).toString(16).padStart(8, '0')]));
   });
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
 

@@ -8,6 +8,7 @@ import {
   routeLiveManifest,
   SAMPLE_M3U,
   type Page,
+  startClock,
 } from './helpers';
 
 // channelKey mirrors src/utils/channel.ts (fnv1a of the URL sans query/fragment).
@@ -21,6 +22,7 @@ function channelKey(url: string): string {
 const CHAN_ONE = 'http://streams.example.com/one.m3u8';
 
 async function seedDueReminder(page: Page): Promise<void> {
+  await startClock(page);
   await page.addInitScript((k) => {
     const now = Date.now();
     localStorage.setItem('iptv_reminders', JSON.stringify([
@@ -85,6 +87,7 @@ test('the EPG reminder legend opens management and Back returns to it', async ({
 test('long reminder text stays on one line inside the card', async ({ page }) => {
   await routePlaylist(page);
   await seedPlaylist(page);
+  await startClock(page);
   await page.addInitScript((k) => {
     const now = Date.now();
     localStorage.setItem('iptv_reminders', JSON.stringify([{
@@ -136,6 +139,7 @@ test('long reminder text stays on one line inside the card', async ({ page }) =>
 test('reminder manager icons scale with the text size', async ({ page }) => {
   await routePlaylist(page);
   await seedPlaylist(page);
+  await startClock(page);
   await page.addInitScript((k) => {
     const now = Date.now();
     localStorage.setItem('iptv_reminders', JSON.stringify([
@@ -174,6 +178,7 @@ test('reminder manager icons scale with the text size', async ({ page }) => {
 test('reminder card columns fit their text at text size 150', async ({ page }) => {
   await routePlaylist(page);
   await seedPlaylist(page);
+  await startClock(page);
   await page.addInitScript((k) => {
     localStorage.setItem('iptv_locale', JSON.stringify('de'));
     localStorage.setItem('iptv_text_size', JSON.stringify('150'));
@@ -230,6 +235,7 @@ test('reminders opened while the playlist loads survive and list once it arrives
     await route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U });
   });
   await seedPlaylist(page);
+  await startClock(page);
   await page.addInitScript((k) => {
     if (localStorage.getItem('iptv_reminders')) return;
     const now = Date.now();

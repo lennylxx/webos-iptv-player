@@ -6,11 +6,10 @@ import {
   enterTab,
   LIVE_MANIFEST,
   readUserDataStore,
+  NOW,
+  pinClock,
 } from './helpers';
 
-test.use({ timezoneId: 'UTC' });
-
-const NOW = new Date('2024-03-09T12:00:00Z');
 const LIVE_URL = 'http://host/b.m3u8';
 const CATCHUP_CHANNEL_URL = 'http://host/a.m3u8';
 const CATCHUP_URL = 'http://host/catchup.m3u8?start={utc}&end={utcend}';
@@ -37,7 +36,7 @@ function stableChannelKey(url: string): string {
 }
 
 async function setup(page: Page, seedHistory = true): Promise<void> {
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await page.route('**/playlist.m3u', route =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: M3U }));
   await page.route('**/*.m3u8*', route =>

@@ -1,8 +1,5 @@
-import { test, expect, type Page, liveLoaded } from './helpers';
+import { test, expect, type Page, liveLoaded, pinClock } from './helpers';
 
-test.use({ timezoneId: 'UTC' });
-
-const NOW = new Date('2024-03-09T12:00:00Z');
 
 function playlist(name: string, stream: string, epgUrl = '', group = 'News'): string {
   return [
@@ -22,7 +19,7 @@ function epg(name: string, title: string): string {
 }
 
 async function setup(page: Page): Promise<void> {
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await page.route('**/list.m3u', (route) => route.fulfill({
     status: 200,
     contentType: 'application/x-mpegurl',

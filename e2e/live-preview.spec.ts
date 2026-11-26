@@ -7,6 +7,7 @@ import {
   routeLiveManifest,
   routePlaylist,
   type Page,
+  pinClock,
 } from './helpers';
 import { THEMES, TEXT_SIZES } from '../src/config/themes';
 
@@ -48,13 +49,11 @@ interface MediaProbe {
 }
 type ProbeWindow = Window & { previewProbe: MediaProbe };
 
-test.use({ timezoneId: 'UTC' });
-
 async function setup(
   page: Page,
   options: { enabled?: boolean; stub?: boolean; epg?: boolean | string; now?: string; playlist?: string } = {},
 ): Promise<void> {
-  await page.clock.setFixedTime(new Date(options.now || '2026-09-15T12:00:00Z'));
+  await pinClock(page, new Date(options.now || '2026-09-15T12:00:00Z'));
   await routePlaylist(page, options.playlist ?? CHANNELS);
   await routeLiveManifest(page);
   await page.route('http://host/guide.xml', route => route.fulfill({
@@ -826,7 +825,7 @@ test('EPG shows current program, up to four future rows, and favorite action', a
     overflow: 'ellipsis',
     favoriteBeforeClock: true,
   });
-  await page.clock.setFixedTime(new Date('2026-09-15T12:01:59Z'));
+  await pinClock(page, new Date('2026-09-15T12:01:59Z'));
   await page.locator(FAVORITE).click();
   await expect(page.locator(`${PANEL} .live-preview-clock`)).toHaveText('12:01');
   await page.locator(ROW).nth(1).click();

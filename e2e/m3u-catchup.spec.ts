@@ -1,10 +1,7 @@
-import { liveLoaded, test, expect, type Page, routePlaylist, LIVE_MANIFEST } from './helpers';
+import { liveLoaded, test, expect, type Page, routePlaylist, LIVE_MANIFEST, NOW, pinClock } from './helpers';
 
 // A legacy `timeshift="7"` channel has shift catch-up: a past program plays
 // the live URL with utc (program start) and lutc (now) added.
-test.use({ timezoneId: 'UTC' });
-
-const NOW = new Date('2024-03-09T12:00:00Z');
 const PAST_START = Date.parse('2024-03-09T10:00:00Z') / 1000;
 
 const M3U = [
@@ -27,7 +24,7 @@ async function setup(page: Page, m3u = M3U, epg = EPG): Promise<string[]> {
     return route.fulfill({ status: 200, contentType: 'application/vnd.apple.mpegurl', body: LIVE_MANIFEST });
   });
   await page.route('**/epg.xml', (r) => r.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await page.addInitScript(() => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));

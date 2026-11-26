@@ -1,12 +1,9 @@
-import { test, expect, type Page, liveLoaded } from './helpers';
+import { test, expect, type Page, liveLoaded, pinClock } from './helpers';
 import {
   XtreamReferenceServer,
   type XtreamReferenceProfile,
 } from './fixtures/xtream-reference-server';
 
-test.use({ timezoneId: 'UTC' });
-
-const NOW = new Date('2024-03-09T12:00:00Z');
 const servers: XtreamReferenceServer[] = [];
 
 async function startServer(profile: XtreamReferenceProfile): Promise<XtreamReferenceServer> {
@@ -96,7 +93,7 @@ test('constructs an HLS live URL when categories are unsupported', async ({ page
 test('supports XC M3U catch-up and the legacy action spelling', async ({ page }) => {
   const server = await startServer('legacy-xc');
   await seedAccount(page, server, 'm3u8');
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
 
   await page.goto('/');
   await liveLoaded(page);
@@ -121,7 +118,7 @@ test('supports XC M3U catch-up and the legacy action spelling', async ({ page })
 test('falls through failed timeshift path variants in order', async ({ page }) => {
   const server = await startServer('catchup-variants');
   await seedAccount(page, server);
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
 
   await page.goto('/');
   await liveLoaded(page);

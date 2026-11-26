@@ -14,6 +14,7 @@ import {
   pressStepsAndReadPlayer,
   seedPointer,
   settled,
+  pinClock,
 } from './helpers';
 
 // The player view: playback start, sidebar, action menu, OSD, and live DVR.
@@ -1446,7 +1447,7 @@ test('the info OSD puts its translate hint at the end of the title row, which tr
     ? route.fallback()
     : route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: 'application/json',
       body: JSON.stringify({ choices: [{ message: { content: '[T1] Programm 1\n[D1] Folge 1.' } }] }) }));
-  await page.clock.setFixedTime(new Date('2024-03-09T12:10:00Z'));
+  await pinClock(page, new Date('2024-03-09T12:10:00Z'));
   await page.addInitScript(() => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));

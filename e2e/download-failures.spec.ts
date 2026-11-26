@@ -1,4 +1,4 @@
-import { test, expect, enterTab, routePlaylist, seedPlaylist, liveLoaded, type Page } from './helpers';
+import { test, expect, enterTab, routePlaylist, seedPlaylist, liveLoaded, type Page, pinClock } from './helpers';
 import { startFaultServer } from './fixtures/fault-server';
 import { routeFault } from './fixtures/fault-route';
 
@@ -95,7 +95,7 @@ const GUIDE = '<?xml version="1.0" encoding="UTF-8"?><tv><channel id="ch1"/>'
 
 async function openGuide(page: Page, guideUrl: string): Promise<void> {
   await routePlaylist(page, '#EXTM3U\n#EXTINF:-1 tvg-id="ch1",Channel 1\nhttp://streams.example.com/ch1.m3u8\n');
-  await page.clock.setFixedTime(new Date('2024-03-10T06:00:00Z'));
+  await pinClock(page, new Date('2024-03-10T06:00:00Z'));
   await page.addInitScript((url) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url, playlistIds: [] }]));

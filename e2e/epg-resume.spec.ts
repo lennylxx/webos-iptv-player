@@ -2,14 +2,12 @@ import {
   liveLoaded,
   test, expect, type Page, routePlaylist, routeLiveManifest, LIVE_MANIFEST, enterTab, neuterVideo,
   pressStepsAndReadPlayer,
+  pinClock,
 } from './helpers';
 
-// Catch-up resume markers + resume prompt. A fixed clock and a UTC device zone
-// keep wall-clock == absolute time so the past/live/future split is unambiguous.
-test.use({ timezoneId: 'UTC' });
+// Catch-up resume markers + resume prompt.
 
 // "Now" sits inside the middle program: Earlier (past, catch-up-able), Live, Later.
-const NOW = new Date('2024-03-09T12:00:00Z');
 const PAST_START = Date.parse('2024-03-09T10:00:00Z');
 const PAST_END = Date.parse('2024-03-09T11:00:00Z');
 
@@ -37,7 +35,7 @@ async function setup(page: Page, seed?: Seed): Promise<void> {
   await page.route('**/catchup.m3u8**', (r) =>
     r.fulfill({ status: 200, contentType: 'application/vnd.apple.mpegurl', body: LIVE_MANIFEST }));
   await page.route('**/epg.xml', (r) => r.fulfill({ status: 200, contentType: 'application/xml', body: EPG }));
-  await page.clock.setFixedTime(NOW);
+  await pinClock(page);
   await page.addInitScript(({ url, s }) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));

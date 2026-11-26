@@ -7,6 +7,7 @@ import {
   PLAYLIST_URL,
   SAMPLE_M3U,
   type Page,
+  startClock,
 } from './helpers';
 
 interface StartupProbe {
@@ -225,6 +226,7 @@ test('dev-mode query replaces the reminder fallback activity', async ({ page }) 
     route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
   await routePlaylist(page);
   await seedPlaylist(page);
+  await startClock(page);
   await page.addInitScript(() => {
     const now = Date.now();
     localStorage.setItem('iptv_reminders', JSON.stringify([{

@@ -9,6 +9,7 @@ import {
   seedPlaylist,
   PLAYLIST_URL,
   type Page,
+  startClock,
 } from './helpers';
 
 // channelKey mirrors src/utils/channel.ts (fnv1a of the URL sans query/fragment).
@@ -33,7 +34,7 @@ async function seedLaterReminder(page: Page): Promise<void> {
 }
 
 async function setup(page: Page): Promise<void> {
-  await page.clock.install();
+  await startClock(page);
   await neuterVideo(page);
   await routePlaylist(page);
   await routeLiveManifest(page);
