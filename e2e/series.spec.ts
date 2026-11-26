@@ -728,6 +728,13 @@ test('Down from the tab bar resumes the Series detail Up left', async ({ page })
   await expect(page.locator('#view-series .focused')).toHaveCount(1);
 });
 
+// The first rail's titles, once they replace its loading placeholders.
+async function firstTitle(page: import('@playwright/test').Page) {
+  const first = page.locator('#view-series .catalog-tile').first();
+  await expect(first).toHaveAttribute('data-item-id', /./);
+  return page.locator(`#view-series .catalog-tile[data-key="${(await first.getAttribute('data-key'))!}"]`);
+}
+
 const settled = (page: import('@playwright/test').Page) => page.evaluate(() =>
   new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
@@ -751,7 +758,7 @@ test('a key that only shows the ring brings a clipped tile into view', async ({ 
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'series');
-  const tile = page.locator('#view-series .catalog-tile').first();
+  const tile = await firstTitle(page);
   await expect(tile).toBeVisible();
   await settled(page);
 
@@ -784,7 +791,7 @@ test('opening the section with the pointer leaves the catalog where it loads', a
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'series');
-  const first = page.locator('#view-series .catalog-tile').first();
+  const first = await firstTitle(page);
   await expect(first).toBeVisible();
   await settled(page);
   await settled(page);

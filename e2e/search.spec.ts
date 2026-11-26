@@ -119,6 +119,53 @@ test('M3U channel results retain visible space above matching programmes', async
   }).toBe(true);
 });
 
+// A guide source that lands after a program row took the ring reruns the
+// query; the row keeps the ring through the rerun.
+test('a focused program row keeps the ring when a late guide source reruns the query', async ({ page }) => {
+  await startClock(page);
+  const at = (hours: number): string => xmltvTime(NOW.getTime() + hours * HOUR_MS);
+  const guide = (channel: string, title: string, from: number): string => `<tv>
+    <channel id="${channel}"><display-name>${channel}</display-name></channel>
+    <programme channel="${channel}" start="${at(from)}" stop="${at(from + 1)}"><title>${title}</title></programme>
+  </tv>`;
+  const m3u = ['#EXTM3U', '#EXTINF:-1 tvg-id="c1",Alpha', 'http://host/a', '#EXTINF:-1 tvg-id="c2",Bravo', 'http://host/b'];
+  await page.route('**/playlist.m3u', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: m3u.join('\n') }));
+  await page.route('**/guide.xml', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/xml', body: guide('c1', 'Report One', 1) }));
+  let releaseLate!: () => void;
+  const late = new Promise<void>((resolve) => { releaseLate = resolve; });
+  await page.route('**/late.xml', async (route) => {
+    await late;
+    await route.fulfill({ status: 200, contentType: 'application/xml', body: guide('c2', 'Report Two', 2) });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('iptv_playlists', JSON.stringify([
+      { id: 'p1', name: 'P', url: 'http://host/playlist.m3u' },
+    ]));
+    localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([
+      { url: 'http://host/guide.xml', playlistIds: [] },
+      { url: 'http://host/late.xml', playlistIds: [] },
+    ]));
+  });
+  await page.goto('/');
+  await expect(page.locator('#view-channels')).toBeVisible();
+  await enterSearch(page);
+  const input = page.locator('.tab-bar-search-input');
+  await input.fill('report');
+  const rows = page.locator('#view-search .search-program-row');
+  const first = rows.filter({ hasText: 'Report One' });
+  await expect(rows).toHaveCount(1);
+  await input.press('ArrowDown');
+  await expect(first).toHaveClass(/\bfocused\b/);
+
+  releaseLate();
+  // The rerun's results carry the late program.
+  await expect(rows.filter({ hasText: 'Report Two' })).toHaveCount(1);
+  await expect(first).toHaveClass(/\bfocused\b/);
+  await expect(page.locator('.focused:visible')).toHaveCount(1);
+});
+
 test('M3U-only results show channels as a rail, one Down above the programs', async ({ page }) => {
   await startClock(page);
   const start = new Date(NOW.getTime() + HOUR_MS);

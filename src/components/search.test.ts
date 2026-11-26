@@ -3120,6 +3120,34 @@ describe('Search', () => {
     expect(container.querySelector('.search-program-row')?.textContent).toContain('Late Report');
   });
 
+  it('keeps the focused program row while a guide refresh reruns the query', async () => {
+    playlistMock.channels = [chan('Alpha')];
+    epgMock.programmes = { Alpha: [prog('Late Report', Date.now() + 3600000, Date.now() + 7200000)] };
+    const { view } = await openWith();
+    Focus.setBase(() => view.focusScope);
+    await view.setQuery('report');
+    view.focusFirstResult();
+    Focus.flush();
+    const row = (): Element | null => container.querySelector('.search-program-row.focused');
+    const key = row()?.getAttribute('data-key');
+    expect(key).toBeTruthy();
+
+    const hold = holdWorkerTask(task => task === 'search.query');
+    try {
+      const refresh = view.refreshPrograms();
+      await vi.waitFor(() => expect(hold.held).toBe(true));
+      Focus.flush();
+      expect(row()?.getAttribute('data-key')).toBe(key);
+      hold.release();
+      await refresh;
+    } finally {
+      hold.restore();
+    }
+    Focus.flush();
+    expect(view.focusScope.focusKey).toBe(key);
+    expect(row()?.getAttribute('data-key')).toBe(key);
+  });
+
   it('lets go of a guide replaced while Search is closed, then finds the new one', async () => {
     playlistMock.channels = [chan('Alpha')];
     const replaced = prog('Old Report', Date.now() + 3600000, Date.now() + 7200000);

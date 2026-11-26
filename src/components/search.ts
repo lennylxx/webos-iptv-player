@@ -742,9 +742,11 @@ export class Search {
       log.error('Search program index failed', 'event=search.worker.index.failed', 'scope=programmes', error);
       this.indexLost(sessionId, 'error', 'programmes');
     }
+    // The same query reruns: its results, and the focus on them, stay up until
+    // the new ones replace them, so a guide landing never blanks the focused row.
     if (!requeried && this.active && sessionId === this.workerSession && !this.pendingIndex
       && this.query.trim()) {
-      await this.startQuery(++this.queryGeneration);
+      await this.startQuery(++this.queryGeneration, true);
     }
   }
 

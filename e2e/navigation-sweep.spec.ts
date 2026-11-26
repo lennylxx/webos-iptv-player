@@ -464,6 +464,14 @@ async function searchFor(page: Page, query: string): Promise<void> {
   await page.locator('.tab-bar-search-input').fill(query);
 }
 
+// Down from the box while a query or a source is still in flight races the
+// re-rank that replaces the results, and can leave the focus nowhere.
+async function leaveSearchBox(page: Page): Promise<void> {
+  await expect(page.locator('#view-search .search-view[data-search-pending="false"][data-search-partial="false"]'))
+    .toHaveCount(1);
+  await page.locator('.tab-bar-search-input').press('ArrowDown');
+}
+
 // A fake AI server whose filter searches the keyword alone, so AI search
 // shows its filter above every kind of result.
 async function seedAiSearch(page: Page): Promise<void> {
@@ -782,7 +790,7 @@ const SCREENS: Screen[] = [
       await expect(view.locator('.search-program-row').first()).toBeVisible();
       await expect(view.locator('.catalog-tile[data-stream-id="10"]')).toHaveCount(1);
       await expect(view.locator('.catalog-tile[data-series-id="20"]')).toHaveCount(1);
-      await page.locator('.tab-bar-search-input').press('ArrowDown');
+      await leaveSearchBox(page);
     },
   },
   {
@@ -812,7 +820,7 @@ const SCREENS: Screen[] = [
       await expect(view.locator('.search-ask-action')).toBeVisible();
       await expect(view.locator('.search-channel-tile').first()).toBeVisible();
       await expect(view.locator('.search-program-row').first()).toBeVisible();
-      await page.locator('.tab-bar-search-input').press('ArrowDown');
+      await leaveSearchBox(page);
     },
   },
   {
@@ -824,7 +832,7 @@ const SCREENS: Screen[] = [
       const view = page.locator('#view-search');
       await expect(view.locator('.search-channel-rail .search-channel-tile').first()).toBeVisible();
       await expect(view.locator('.search-program-row').first()).toBeVisible();
-      await page.locator('.tab-bar-search-input').press('ArrowDown');
+      await leaveSearchBox(page);
     },
   },
   {
