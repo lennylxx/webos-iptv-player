@@ -16,11 +16,11 @@
 
 | Channel list | Live preview |
 | --- | --- |
-| ![Channel list](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![Live preview](https://github.com/user-attachments/assets/a10915a7-cdea-4bfc-bb12-f6e3054b4b51) |
+| ![Channel list](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![Live preview](https://github.com/user-attachments/assets/0f753d68-be34-4dc5-8c08-5cd6688feca9) |
 
 | Recently watched | Program guide |
 | --- | --- |
-| ![Recently watched](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![Program guide](https://github.com/user-attachments/assets/63eb2cf3-af90-4e47-870c-51a913be2e74) |
+| ![Recently watched](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![Program guide](https://github.com/user-attachments/assets/7c57fa0b-c2fe-4a47-aaa2-ff9cdc71ba1a) |
 
 | Catch-up resume | Channel info |
 | --- | --- |
@@ -36,19 +36,19 @@
 
 | Movie detail | Series detail |
 | --- | --- |
-| ![Movie detail](https://github.com/user-attachments/assets/87e7dbce-0e70-4619-af1b-62f512c907a0) | ![Series detail](https://github.com/user-attachments/assets/d773b92d-26c0-4b37-893e-95810a146ea6) |
+| ![Movie detail](https://github.com/user-attachments/assets/51231a97-9fc2-4f17-9512-7f4d1cdc0731) | ![Series detail](https://github.com/user-attachments/assets/d773b92d-26c0-4b37-893e-95810a146ea6) |
 
 | Search | Settings |
 | --- | --- |
-| ![Search](https://github.com/user-attachments/assets/0c6c54e2-6fb3-4fb2-a0da-7f6459815390) | ![Settings](https://github.com/user-attachments/assets/b15ac979-37d9-4877-a50d-9f9c2e6d02d7) |
+| ![Search](https://github.com/user-attachments/assets/0c6c54e2-6fb3-4fb2-a0da-7f6459815390) | ![Settings](https://github.com/user-attachments/assets/b4933b0f-b64a-427d-a612-539cf4c099a1) |
 
 | Theme picker | Reminder manager |
 | --- | --- |
-| ![Theme picker](https://github.com/user-attachments/assets/56629752-46dd-462e-9640-8cb6f6dd32ce) | ![Reminder manager](https://github.com/user-attachments/assets/76ed121f-61eb-4c36-93a9-9aa6abdb0132) |
+| ![Theme picker](https://github.com/user-attachments/assets/80b0daa3-cdef-4335-bdcc-8689386b76fd) | ![Reminder manager](https://github.com/user-attachments/assets/76ed121f-61eb-4c36-93a9-9aa6abdb0132) |
 
 | Parental controls | LAN setup |
 | --- | --- |
-| ![Parental controls](https://github.com/user-attachments/assets/7f22d1c3-97bf-4118-a19f-3699bf2779ba) | ![LAN setup](https://github.com/user-attachments/assets/a618e22f-6dae-474d-870e-13aebc22bf63) |
+| ![Parental controls](https://github.com/user-attachments/assets/4ad9c1fe-df4c-4820-b180-903b0c44f612) | ![LAN setup](https://github.com/user-attachments/assets/23f59103-d638-483e-a2c1-cc181f6118b9) |
 
 ## Features
 
@@ -105,6 +105,15 @@
 - **Adjustable text size** — scale text from 80%–150% without resizing controls
 - **Animation mode** — Essential turns off costly motion on older TVs, Reduced keeps visual effects but scrolls instantly, and Full smooth-scrolls single navigation steps
 - **Multilingual interface** — available in English, Deutsch, Español, Français, Italiano, Polski, Português (Brasil), Русский, Türkçe, Українська, and 简体中文; follows the TV language by default or can be selected explicitly in Settings
+
+**AI features**
+
+Off by default: turn on **Use AI features** and enter an OpenAI-compatible server — an online AI service or a local model on your home network — plus an API key if it needs one.
+
+- **Translation** — subtitles (SRT, WebVTT, and ASS, keeping their styling), program info in the Guide, Live, Search, and the player, and movie and series descriptions
+- **AI search** — find channels, programs, movies, and series from a request such as "football tonight", with AI-enhanced multilingual search and AI program genres
+- **AI suggestions** — for EPG mapping and parental controls, and cleaner titles for online subtitle search
+- **Privacy** — each feature sends only the text it needs, never viewing history, login details, stream URLs, or hidden or locked items; daily limits cap usage
 
 **Development**
 
@@ -270,7 +279,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
 - **Xtream Accounts** — add, edit, remove, or temporarily disable accounts; check credentials, connection usage, and expiry; choose TS, HLS, or Auto for live streams; and pick the **Live categories** to load, optionally showing new ones automatically. The playlist and EPG are derived from the account credentials on Save.
 - **Playlists** — add, edit, remove, or temporarily disable M3U URLs. Re-applied on Save.
 - **Upload Playlists** — lists playlists uploaded through Device Setup, with controls to temporarily disable or remove each upload. New uploads appear automatically through Luna push.
-- **Channels** — check live-stream health; reorder, hide, rename, regroup, manually map entries to XMLTV channels, or correct one channel's EPG time; show hidden channels or reset customizations.
+- **Channels** — check live-stream health; reorder, hide, rename, regroup, manually map entries to XMLTV channels (similar names are listed when no name contains the search, and with AI features on, AI suggestions come first), or correct one channel's EPG time; show hidden channels or reset customizations.
 - **Manual XMLTV sources** — add several program guide URLs, prioritized from top to bottom, and apply each to all playlists or to specific ones. Guide URLs are also discovered automatically from `url-tvg`, `x-tvg-url`, or `tvg-url` in M3U playlists.
 - **Program guide layout** — **Channel schedule** shows one channel's programs for the day; **Timeline** shows many channels side by side.
 - **EPG time zone** — show guide times in the TV's **Device** time zone or the guide **Feed** time zone.
@@ -281,6 +290,7 @@ Open with the **Blue** key or the **Settings** tab in the top bar. Sections:
   Up/Down cycles the global list or stays within the active group, Favorites,
   or playlist.
 - **Online Subtitles** — choose a preferred subtitle language and configure SubDL, OpenSubtitles, and Assrt credentials for online search.
+- **AI Features** — turn on AI features, enter the server URL, model, and API key if needed, test the connection, choose AI-enhanced multilingual search and AI program genres, and set daily request and token limits.
 - **Advanced** — customize advanced interface, playback, and background refresh behavior.
 - **Data Management** — refresh data, clear caches or viewing lists, or reset the app.
 - **Save Changes** applies preferences and reloads playlist and guide data when their sources change. **Cancel** discards edits.

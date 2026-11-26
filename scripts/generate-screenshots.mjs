@@ -8,7 +8,8 @@
 //   channel-list.png   channel list (the README hero)
 //   live-preview.png   Pastel Latte live preview with the Mute hint focused
 //   recently-watched.png  mixed live and resumable catch-up history
-//   epg-guide.png      three-pane program guide, with catch-up resume markers
+//   epg-guide.png      three-pane program guide, with catch-up resume markers and
+//                      three earlier programs' info shown as AI translations
 //   epg-catchup-resume.png  the Resume / Start Over / Cancel resume prompt
 //   settings.png       settings incl. LAN setup QR and manual pairing
 //   themes.png         theme picker on a custom theme made in the editor
@@ -25,11 +26,15 @@
 //   movies.png         Movies section — cinematic hero + content rails, with the
 //                      account-switcher dropdown open (picks the active Xtream account)
 //   movie-detail.png   Movie detail — plot/cast/rating + Resume / Play, and the
-//                      round actions with Add to Watchlist's name slid out
+//                      round actions with Add to Watchlist's name slid out; the
+//                      plot is an AI translation, so Translate reads Show original
 //   series-detail.png  Series detail — season selector + episode list, with
 //                      a watched episode above a resumable one
 //   search.png         unified Search — Channels · Movies · Series results,
 //                      with the recent-searches dropdown over them
+//
+// The two AI shots talk to a fake OpenAI-compatible server inside this script;
+// every other shot runs with AI features off.
 //
 // Nothing here ships in the app or the .ipk; it is a dev-only tool.
 
@@ -513,6 +518,32 @@ function epgXml() {
 
 const EPG_XML = epgXml();
 
+// What the fake AI server answers for the AI shots: three of the hero
+// channel's early programs and movie 100's plot in Simplified Chinese.
+const AI_TRANSLATIONS = {
+  'Country Escapes': '田园寻居',
+  'A couple search for their dream rural home with a generous budget and a long wish list.':
+    '一对夫妇带着充裕的预算和一长串心愿清单，寻找梦想中的乡间住宅。',
+  'Brain Game': '头脑竞技',
+  'Quiz show in which contestants try to find the most obscure correct answers.':
+    '益智问答节目，参赛者要设法找出最冷门的正确答案。',
+  'Evening News': '晚间新闻',
+  'The latest national and international news, plus sport and weather.': '最新国内外新闻，以及体育和天气资讯。',
+  [PLOTS[0]]: '一次例行交货出了差错，一名不情不愿的快递员被卷入一场席卷全城的阴谋。',
+};
+
+// The capability probe's prompt in src/services/llm/llm-service.ts.
+const AI_PROBE_PROMPT = 'Return ok=true and word="bravo".';
+
+// Answers like the model would: each "[T1] title" / "[D1] description" line
+// back with its tag, translated when AI_TRANSLATIONS has it, else unchanged.
+function aiReply(user) {
+  return user.split('\n').map((line) => {
+    const [, tag, text] = /^(\[[TD]\d+\]) (.*)$/.exec(line);
+    return `${tag} ${AI_TRANSLATIONS[text] ?? text}`;
+  }).join('\n');
+}
+
 // Two demo uploaded playlists for the settings screenshot.
 const UPLOADS = [
   { id: 'living-room', name: 'Living Room', count: 84, createdAt: NOW - 3_600_000, url: `http://127.0.0.1:${UPLOAD_PORT}/uploads/living-room.m3u` },
@@ -600,6 +631,8 @@ async function setupPage(page, {
   recently = false,
   reminderManager = false,
   customization = false,
+  // AI on, against the fake server.
+  ai = false,
 } = {}) {
   // Freeze the clock before any app code runs (real timers keep working).
   await page.addInitScript((fixed) => {
@@ -763,6 +796,26 @@ async function setupPage(page, {
     await page.route('https://api.opensubtitles.com/**', json(OS_SUBS_JSON));
     await page.route('https://api.subdl.com/**', json(SUBDL_SUBS_JSON));
     await page.route('https://api.assrt.net/**', json(ASSRT_SUBS_JSON));
+  }
+
+  if (ai) {
+    await page.addInitScript(() => {
+      localStorage.setItem('iptv_llm', JSON.stringify({
+        enabled: true,
+        baseUrl: 'http://ai.demo.local/v1',
+        model: 'demo',
+      }));
+    });
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+    await page.route('http://ai.demo.local/v1/chat/completions', (route) => {
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      const { messages } = JSON.parse(route.request().postData() || '{}');
+      const user = messages.find((m) => m.role === 'user')?.content || '';
+      // The app checks what the server supports before its first request.
+      const content = user === AI_PROBE_PROMPT ? '{"ok":true,"word":"bravo"}' : aiReply(user);
+      return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
+        body: JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }) });
+    });
   }
 
   // Fake the Luna service bus so the LAN service "runs" (settings QR).
@@ -986,7 +1039,7 @@ try {
 
   // 1b) Live Preview — Pastel Latte with the Mute control focused and its hint visible.
   {
-    const { context, page } = await newPage({ fakeStream: true });
+    const { context, page } = await newPage({ fakeStream: true, ai: true });
     await page.addInitScript(() => {
       localStorage.setItem('iptv_theme', JSON.stringify('pastel-latte'));
       localStorage.setItem('iptv_live_preview', JSON.stringify(true));
@@ -997,6 +1050,7 @@ try {
     await remote(page, 39); // RIGHT -> focus Mute and show its hint
     await page.locator('[data-preview-action="mute"].focused').waitFor({ state: 'visible' });
     await page.locator('.live-preview-legend').waitFor({ state: 'visible' });
+    await page.locator('.preview-list-hints [data-live-translate]').waitFor({ state: 'visible' });
     await page.locator('#video-player').evaluate((video, poster) => {
       video.poster = poster;
       video.style.objectFit = 'cover';
@@ -1037,7 +1091,9 @@ try {
   //    and a "Resume" badge + progress bar on a partly-watched one. Focus the
   //    partly-watched row so the markers and the live row below are centered.
   {
-    const { context, page } = await newPage({ catchup: true });
+    const { context, page } = await newPage({ catchup: true, ai: true });
+    // Green turns translation on for every program in view; only 16:00,
+    // 17:15, and 18:00 come back changed, so only they are labeled.
     await gotoChannels(page, base);
     await remote(page, KEY.RED); // open EPG
     await page.locator('#view-epg').waitFor({ state: 'visible' });
@@ -1045,6 +1101,13 @@ try {
     await page.locator('.epg-catchup-badge').first().waitFor({ state: 'visible', timeout: 10_000 });
     await remote(page, 39); // RIGHT → focus the programmes column (first row)
     for (let n = 0; n < 6; n++) await remote(page, 40); // DOWN → "The Evening Debate" (21:00, Resume)
+    await remote(page, KEY.GREEN); // translate what's in view
+    // Every row in view reads "Translating…" until the one reply lands.
+    await page.waitForFunction(() => {
+      const labels = document.querySelectorAll('#epg-programmes .program-translation-label');
+      return labels.length === 3 && Array.from(labels).every((l) => l.textContent.includes('AI translation'));
+    });
+    await page.locator('#view-epg .epg-hints [data-epg-translate]', { hasText: 'Show original' }).waitFor();
     await page.waitForTimeout(300);
     await clearToasts(page);
     await page.waitForTimeout(400);
@@ -1152,7 +1215,7 @@ try {
 
   // 3c2) Parental controls — Live on two Xtream accounts (Live / Movies / Series
   //      toggle, account avatar, playlist column). Two adult-named groups show
-  //      the Suggested marker and the "Lock suggested groups" row; Movies is
+  //      the Suggested marker and the "Review groups to lock" row; Movies is
   //      locked with one channel set separately.
   {
     const { context, page } = await newPage({ xtream: true });
@@ -1532,9 +1595,10 @@ try {
 
   // 9) Movie detail — plot/cast/genre/duration + Resume / Play, opened from the
   //    first (Continue Watching) poster, which carries a seeded resume point.
-  //    Focus moves on to the first round action, so its name slides out.
+  //    Focus moves on to the first round action, so its name slides out, after
+  //    Translate turned the plot into Chinese.
   {
-    const { context, page } = await newPage({ xtream: true });
+    const { context, page } = await newPage({ xtream: true, ai: true });
     await gotoChannels(page, base);
     await enterTab(page, 'movies');
     const movieTile = page.locator('#view-movies .catalog-tile[data-item-id="100"]').first();
@@ -1545,6 +1609,14 @@ try {
     await page.locator('#view-movies .movies-detail .detail-plot').waitFor({ state: 'visible', timeout: 15_000 });
     await page.keyboard.press('ArrowRight'); // Play from start
     await page.keyboard.press('ArrowRight'); // Add to Watchlist
+    for (let n = 0; n < 3; n++) await page.keyboard.press('ArrowRight'); // Watched, Hide, Translate
+    await page.locator('#view-movies .detail-icon-btn[data-key="translate"].focused').waitFor({ state: 'visible' });
+    await page.keyboard.press('Enter'); // translate the plot
+    // The label reads "Translating…" until the reply lands.
+    await page.waitForFunction(() => /[\u4e00-\u9fff]/.test(document.querySelector('#view-movies .detail-plot')?.textContent || ''),
+      null, { timeout: 15_000 });
+    await page.locator('#view-movies .detail-icon-btn[data-key="translate"][aria-label="Show original"]').waitFor();
+    for (let n = 0; n < 3; n++) await page.keyboard.press('ArrowLeft'); // back to Add to Watchlist
     await page.locator('#view-movies .detail-icon-btn[data-key="watchlist"].focused').waitFor({ state: 'visible' });
     await page.waitForTimeout(600);
     await clearToasts(page);

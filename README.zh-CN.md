@@ -16,11 +16,11 @@
 
 | 频道列表 | 直播预览 |
 | --- | --- |
-| ![频道列表](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![直播预览](https://github.com/user-attachments/assets/a10915a7-cdea-4bfc-bb12-f6e3054b4b51) |
+| ![频道列表](https://github.com/user-attachments/assets/adb1ff15-1da3-479f-8a2f-0486dca5b082) | ![直播预览](https://github.com/user-attachments/assets/0f753d68-be34-4dc5-8c08-5cd6688feca9) |
 
 | 最近观看 | 节目指南 |
 | --- | --- |
-| ![最近观看](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![节目指南](https://github.com/user-attachments/assets/63eb2cf3-af90-4e47-870c-51a913be2e74) |
+| ![最近观看](https://github.com/user-attachments/assets/ef7aa7a1-7c3e-4b59-8825-fe4a0a441a61) | ![节目指南](https://github.com/user-attachments/assets/7c57fa0b-c2fe-4a47-aaa2-ff9cdc71ba1a) |
 
 | 回看续播 | 频道信息 |
 | --- | --- |
@@ -36,19 +36,19 @@
 
 | 电影详情 | 剧集详情 |
 | --- | --- |
-| ![电影详情](https://github.com/user-attachments/assets/87e7dbce-0e70-4619-af1b-62f512c907a0) | ![剧集详情](https://github.com/user-attachments/assets/d773b92d-26c0-4b37-893e-95810a146ea6) |
+| ![电影详情](https://github.com/user-attachments/assets/51231a97-9fc2-4f17-9512-7f4d1cdc0731) | ![剧集详情](https://github.com/user-attachments/assets/d773b92d-26c0-4b37-893e-95810a146ea6) |
 
 | 搜索 | 设置 |
 | --- | --- |
-| ![搜索](https://github.com/user-attachments/assets/0c6c54e2-6fb3-4fb2-a0da-7f6459815390) | ![设置](https://github.com/user-attachments/assets/b15ac979-37d9-4877-a50d-9f9c2e6d02d7) |
+| ![搜索](https://github.com/user-attachments/assets/0c6c54e2-6fb3-4fb2-a0da-7f6459815390) | ![设置](https://github.com/user-attachments/assets/b4933b0f-b64a-427d-a612-539cf4c099a1) |
 
 | 主题选择器 | 节目提醒 |
 | --- | --- |
-| ![主题选择器](https://github.com/user-attachments/assets/56629752-46dd-462e-9640-8cb6f6dd32ce) | ![节目提醒](https://github.com/user-attachments/assets/76ed121f-61eb-4c36-93a9-9aa6abdb0132) |
+| ![主题选择器](https://github.com/user-attachments/assets/80b0daa3-cdef-4335-bdcc-8689386b76fd) | ![节目提醒](https://github.com/user-attachments/assets/76ed121f-61eb-4c36-93a9-9aa6abdb0132) |
 
 | 家长控制 | 局域网设置 |
 | --- | --- |
-| ![家长控制](https://github.com/user-attachments/assets/7f22d1c3-97bf-4118-a19f-3699bf2779ba) | ![局域网设置](https://github.com/user-attachments/assets/a618e22f-6dae-474d-870e-13aebc22bf63) |
+| ![家长控制](https://github.com/user-attachments/assets/4ad9c1fe-df4c-4820-b180-903b0c44f612) | ![局域网设置](https://github.com/user-attachments/assets/23f59103-d638-483e-a2c1-cc181f6118b9) |
 
 ## 功能
 
@@ -105,6 +105,15 @@
 - **文字大小可调** — 在不改变控件尺寸的前提下，可将文字缩放至 80%–150%
 - **动画模式** — “基础”在较旧的电视上关闭高开销的动态效果，“均衡”保留视觉效果但立即滚动到焦点项，“完整”在单次导航时平滑滚动
 - **多语言界面** — 支持 English、Deutsch、Español、Français、Italiano、Polski、Português (Brasil)、Русский、Türkçe、Українська 和简体中文；默认跟随电视的系统语言，也可在设置中手动指定
+
+**AI 功能**
+
+默认关闭：**开启 AI 功能**并填写兼容 OpenAI 的服务器（在线 AI 服务，或家庭网络中的本地模型），服务器需要时还需填写 API 密钥。
+
+- **翻译** — 字幕（SRT、WebVTT 和 ASS，保留原有样式）、节目指南/直播/搜索/播放器中的节目信息，以及电影和剧集简介
+- **AI 搜索** — 用“今晚的足球”这类描述查找频道、节目、电影和剧集，并支持 AI 增强多语言搜索和 AI 节目类型
+- **AI 推荐** — 用于 EPG 映射和家长控制，以及为在线字幕搜索提取更准确的片名
+- **隐私** — 每项功能只发送所需的文本，不会发送观看记录、登录信息、播放网址，以及已隐藏或已锁定的内容；每日上限可控制用量
 
 **开发**
 
@@ -271,7 +280,7 @@ mpegts.js 和 Shaka 播放相应格式的视频。
 - **Xtream 账号** — 添加、编辑、删除或临时停用账号；检查登录信息、连接占用和到期时间；为直播流选择 TS、HLS 或自动格式；还可在**直播分类**中只加载选中的分类，并可选择自动显示新分类。保存后，应用会根据账号信息自动获取播放列表和 EPG。
 - **播放列表** — 添加、编辑、删除或临时停用 M3U 播放列表地址；更改将在保存后生效。
 - **上传播放列表** — 显示通过“使用手机或电脑设置”上传的播放列表，并可临时停用或删除。新的上传会通过 Luna 消息自动同步到列表中。
-- **频道** — 检查直播流健康状态；调整频道顺序，隐藏、重命名或重新分组频道；手动匹配 XMLTV 频道，或校正单个频道的 EPG 时间；还可显示隐藏频道或重置所有自定义设置。
+- **频道** — 检查直播流健康状态；调整频道顺序，隐藏、重命名或重新分组频道；手动匹配 XMLTV 频道（搜索不到时列出相似名称，开启 AI 功能后 AI 推荐排在最前），或校正单个频道的 EPG 时间；还可显示隐藏频道或重置所有自定义设置。
 - **手动 XMLTV 源** — 可添加多个节目指南地址，按从上到下的顺序确定优先级，并为每个源选择适用于所有播放列表或指定播放列表。应用也会自动读取 M3U 播放列表中的 `url-tvg`、`x-tvg-url` 或 `tvg-url`。
 - **节目指南布局** — **频道节目单**显示一个频道全天的节目；**时间轴**同时显示多个频道在同一时段的节目。
 - **节目指南时区** — 选择以电视的**设备**时区或节目指南的**节目源**时区显示节目时间。
@@ -281,6 +290,7 @@ mpegts.js 和 Shaka 播放相应格式的视频。
 - **播放** — 控制启动时自动播放和直播预览，并选择频道上/下键是在全局频道列表中
   切换，还是限制在当前分组、收藏或播放列表内。
 - **在线字幕** — 选择首选字幕语言，并配置 SubDL、OpenSubtitles 和 Assrt 的在线搜索凭据。
+- **AI 功能** — 开启 AI 功能，填写服务器网址、模型和 API 密钥（服务器需要时）并测试连接，选择是否使用 AI 增强多语言搜索和 AI 节目类型，以及设置每日请求上限和每日 Token 上限。
 - **高级设置** — 自定义高级界面、播放和后台刷新行为。
 - **数据管理** — 刷新数据、清除缓存或观看记录，以及重置应用。
 - **保存更改**会应用当前设置；播放源发生变化时，还会重新加载播放列表和节目指南。选择**取消**则放弃本次修改。
