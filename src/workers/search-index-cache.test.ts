@@ -889,6 +889,24 @@ describe('SearchWorkerIndex with catalog records', () => {
     })).toBeNull();
   });
 
+  it.each(['read', 'written'] as const)('delivers %s record items with exactly their stored fields', async (path) => {
+    const stored = [
+      { accountId: 'a', streamId: '1', name: 'Alpha One', categoryId: 'c1', rating: '7', containerExtension: 'mp4' },
+      { accountId: 'a', streamId: '2', name: 'Alpha Two', categoryId: '7', rating: 7, genre: 'Drama' },
+      { accountId: 'a', streamId: '3', name: 'Alpha Three', categoryId: null, containerExtension: 'mp4', genre: 'Drama' },
+    ];
+    const record = { key: 'a|vod_all', timestamp: 30, data: structuredClone(stored) };
+    const index = new SearchWorkerIndex(new MemoryReader(new Map<string, CachedRecord>(
+      path === 'read' ? [['catalog-cache|a|vod_all', record]] : [],
+    )));
+    if (path === 'written') index.retainCatalogRecord('catalog-cache', record);
+    index.index({ sessionId: 1, reset: true });
+    await index.index({ sessionId: 1, catalogMovies: { record: VOD_REF, concealment: null } });
+
+    const delivered = (await index.query(query(1, 'alpha')))?.items?.movies ?? [];
+    expect(delivered.sort((a, b) => a[0] - b[0])).toStrictEqual(stored.map((item, i) => [i, item]));
+  });
+
   it('starts a new epoch when the page lost a delivery', async () => {
     const index = new SearchWorkerIndex(catalogReader());
     index.index({ sessionId: 1, reset: true });

@@ -15,6 +15,7 @@ import {
 } from '../utils/channel-search';
 import { CONFIG } from '../config';
 import { catalogConcealmentTest } from '../utils/catalog-concealment';
+import { shareCatalogFields } from './catalog-fields';
 import type { SeriesItem, VodItem } from '../types';
 import {
   cacheEntryMetaId,
@@ -467,6 +468,8 @@ export class SearchWorkerIndex {
   // moved backwards gave it an older timestamp.
   retainCatalogRecord(store: string, record: CachedRecord): void {
     if (store !== CATALOG_RECORD_STORE || !Array.isArray(record.data)) return;
+    // The put has already cloned the record, so sharing in place is safe.
+    shareCatalogFields(record.data);
     const prefix = sourceIndexPrefix(store, String(record.key));
     this.catalogRecords.delete(prefix);
     this.keepCatalogRecord(prefix, record);
@@ -503,6 +506,7 @@ export class SearchWorkerIndex {
     }
     if (!raw) throw new SearchCacheError('record_missing');
     if (!Array.isArray(raw.data)) throw new SearchCacheError('record_invalid');
+    shareCatalogFields(raw.data);
     return raw;
   }
 

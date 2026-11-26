@@ -228,7 +228,9 @@ export function prepareFoldedSearchItem<T>(item: T, folded: string[]): PreparedS
     for (const token of tokens) fieldTokens.push(token);
     fieldTokenOffsets.push(fieldTokens.length);
   }
-  return { item, values, fieldTokens, fieldTokenOffsets };
+  // slice() copies to exact length; push() leaves spare capacity that a
+  // large index pays for on every item.
+  return { item, values, fieldTokens: fieldTokens.slice(), fieldTokenOffsets: fieldTokenOffsets.slice() };
 }
 
 export function prepareSearchItems<T>(items: T[], fields: (item: T) => string[]): PreparedSearchItem<T>[] {
