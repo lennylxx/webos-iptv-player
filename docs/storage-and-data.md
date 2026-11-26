@@ -265,6 +265,32 @@ Xtream credentials and source URLs are stored in the app's private webOS
 storage. They are isolated from other normal TV apps, but the app does not add
 its own encryption layer.
 
+### Program guide size limit
+
+One guide parse keeps at most `CONFIG.EPG.MAX_RETAINED_PROGRAMMES` programs
+(120,000), so a five-figure channel count cannot exhaust a TV's memory. Past
+the limit the guide keeps the programs nearest the present: one airing now
+first, then the others by how far they start ahead or ended ago, an ended one
+counting `CONFIG.EPG.RETAINED_PAST_WEIGHT` (2) times as far. A full guide
+therefore holds about twice as many hours ahead as behind, whether the feed
+lists its programs by time or by channel, and the channels late in the feed
+still show what is on. The parse reads the feed once; a program it gives back
+is freed as it goes.
+
+A guide that hit the limit logs `event=epg.budget.exhausted` and is shown but
+not cached. It is fetched again on its refresh schedule, when the channel
+selection changes, since hiding channels lets the same limit cover more of the
+rest, and before the hours it kept run out: an hour
+(`CONFIG.EPG.TRUNCATED_REFRESH_LEAD_MS`) before the latest start it could have
+kept, which for a feed that has gone stale lies past its real end, so the
+schedule comes first. That fetch waits at least
+`CONFIG.EPG.TRUNCATED_REFRESH_MIN_MS` (2 hours) after the previous one, since
+a very large feed keeps only an hour or two and reloading it more often would
+stall playback; its now and next may stay blank for a while until then. A
+refresh that fails is retried no sooner than `CONFIG.EPG.INCOMPLETE_RETRY_MS`.
+With the refresh schedule off, the refetch waits for the next time the Guide
+opens or the app starts, as it does for a guide whose feed ended early.
+
 ## Why the app uses a cache
 
 Program guides and catalogs can be much larger than settings or favorites.

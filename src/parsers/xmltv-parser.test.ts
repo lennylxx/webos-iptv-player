@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
+import { describe, it, expect, vi } from 'vitest';
 import {
+  ProgrammeLists,
   parseXMLTVWithStats,
   XMLTVStreamParser,
 } from './xmltv-parser';
@@ -371,6 +374,29 @@ describe('parseXMLTV channel filter', () => {
 });
 
 
+describe('ProgrammeLists', () => {
+  it('gives programmes back by position, before and after trimming the oldest', () => {
+    const lists = new ProgrammeLists();
+    const at = (index: number) => ({
+      start: new Date(index), stop: new Date(index + 1), title: `P${String(index)}`, description: '', category: '', icon: '',
+    });
+    for (let index = 0; index < 100; index++) lists.add('c1', at(index));
+    lists.add('c2', at(0));
+    for (let index = 0; index < 50; index++) lists.remove('c1', index);
+    lists.remove('c1', 75);
+    lists.add('c1', at(100));
+    lists.remove('c1', 100);
+    lists.remove('c2', 0);
+
+    const titles = lists.finish().c1.map(entry => entry.title);
+    expect(titles).toHaveLength(49);
+    expect(titles[0]).toBe('P50');
+    expect(titles).not.toContain('P75');
+    expect(titles).not.toContain('P100');
+    expect(lists.finish().c2).toBeUndefined();
+  });
+});
+
 describe('parseXMLTV retention ceiling', () => {
   const now = Date.now();
   const feed = (count: number): string => {
@@ -406,5 +432,214 @@ describe('parseXMLTV retention ceiling', () => {
 
     expect(stats.programmesKept).toBe(10);
     expect(stats.droppedBudget).toBe(0);
+  });
+
+  // Ten channels with hourly slots from three hours ago to three ahead;
+  // `now` sits inside slot 3, so slots 0-2 have ended.
+  const HOUR = 3_600_000;
+  const base = Date.UTC(2024, 5, 15, 12);
+  const nowMs = base + HOUR / 2;
+  const SLOTS = 6;
+  const slotStart = (slot: number) => base + (slot - 3) * HOUR;
+  const programme = (channel: number, slot: number): string =>
+    `<programme channel="c${String(channel)}" start="${xmltvDate(new Date(slotStart(slot)))}"`
+    + ` stop="${xmltvDate(new Date(slotStart(slot) + HOUR))}"><title>c${String(channel)}s${String(slot)}</title></programme>`;
+  const grid = (order: 'time' | 'channel'): string => {
+    let xml = '<tv>';
+    for (let c = 0; c < 10; c++) xml += `<channel id="c${String(c)}"><display-name>Ch ${String(c)}</display-name></channel>`;
+    for (let outer = 0; outer < (order === 'time' ? SLOTS : 10); outer++) {
+      for (let inner = 0; inner < (order === 'time' ? 10 : SLOTS); inner++) {
+        xml += order === 'time' ? programme(inner, outer) : programme(outer, inner);
+      }
+    }
+    return xml + '</tv>';
+  };
+  const titles = (programmes: Record<string, Array<{ title: string }>>, id: string) =>
+    (programmes[id] ?? []).map(entry => entry.title);
+  const budget = { nowMs, maxProgrammes: 30, pastWeight: 2 };
+  // Nearest now: airing slot 3, slot 4 starting in half an hour, then slot 2,
+  // which ended half an hour ago but counts double.
+  const nearest = (c: number) => [`c${String(c)}s2`, `c${String(c)}s3`, `c${String(c)}s4`];
+
+  it('keeps what airs now and next on every channel of a time-sorted feed over the ceiling', () => {
+    const { data, stats } = parseXMLTVWithStats(grid('time'), budget);
+
+    for (let c = 0; c < 10; c++) expect(titles(data.programmes, `c${String(c)}`)).toEqual(nearest(c));
+    expect(stats.programmesKept).toBe(30);
+    expect(stats.droppedBudget).toBe(30);
+    // The farthest kept, slot 2, ended half an hour ago and counts double.
+    expect(stats.keptUntil).toBe(nowMs + HOUR);
+  });
+
+  it('reaches the last channels of a channel-sorted feed over the ceiling', () => {
+    const { data, stats } = parseXMLTVWithStats(grid('channel'), budget);
+
+    for (let c = 0; c < 10; c++) expect(titles(data.programmes, `c${String(c)}`)).toEqual(nearest(c));
+    expect(stats.programmesKept).toBe(30);
+  });
+
+  it('hands a full guide only the programmes it still keeps at the end', () => {
+    const given: string[] = [];
+    let evicted = 0;
+    const parser = new XMLTVStreamParser({ ...budget, maxProgrammes: 10 }, {
+      channel: () => undefined,
+      programme: (_id, entry) => { given.push(entry.title); },
+      evict: () => { evicted++; },
+    });
+    parser.write(grid('time'));
+    parser.finish();
+
+    // Slot 0 fills the guide; slots 1 and 2 each displace the farthest, only
+    // to make way for airing slot 3, so they are never built or given.
+    expect(given.filter(title => title.endsWith('s0'))).toHaveLength(10);
+    expect(given.filter(title => title.endsWith('s3'))).toHaveLength(10);
+    expect(given).toHaveLength(20);
+    expect(evicted).toBe(10);
+    expect(parser.stats.programmesKept).toBe(10);
+  });
+
+  it('survives a channel whose out-of-order programmes were all given back', () => {
+    const at = (channel: string, from: number, title: string) =>
+      `<programme channel="${channel}" start="${xmltvDate(new Date(from))}"`
+      + ` stop="${xmltvDate(new Date(from + HOUR))}"><title>${title}</title></programme>`;
+    const xml = '<tv>'
+      + at('x', nowMs + 5 * HOUR, 'Later') + at('x', nowMs + 4 * HOUR, 'Earlier')
+      + at('y', base, 'Now 1') + at('y', base, 'Now 2')
+      + '</tv>';
+
+    const { data } = parseXMLTVWithStats(xml, { nowMs, maxProgrammes: 2 });
+
+    expect(data.programmes.x).toBeUndefined();
+    expect(titles(data.programmes, 'y')).toEqual(['Now 1', 'Now 2']);
+  });
+
+  it('keeps no slice of the feed for the channel ids it keeps', () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const pad = `<credits>${'x'.repeat(2000)}</credits>`;
+    const parse = (maxProgrammes?: number) => {
+      // A sink that keys nothing by id, as the page's decode does later.
+      const parser = new XMLTVStreamParser({ nowMs, ...(maxProgrammes ? { maxProgrammes } : {}) }, {
+        channel: () => undefined,
+        programme: () => undefined,
+        evict: () => undefined,
+      });
+      let chunk = '<tv>';
+      for (let index = 0; index < 4000; index++) {
+        chunk += `<programme channel="Synthetic.Channel.Name.${String(index % 10)}"`
+          + ` start="${xmltvDate(new Date(base + index * 60_000))}"`
+          + ` stop="${xmltvDate(new Date(base + (index + 1) * 60_000))}"><title>P</title>${pad}</programme>`;
+        if (chunk.length > 64 * 1024) {
+          parser.write(chunk);
+          chunk = '';
+        }
+      }
+      parser.write(`${chunk}</tv>`);
+      gc();
+      gc();
+      const retained = process.memoryUsage().heapUsed;
+      parser.finish();
+      return retained;
+    };
+    gc();
+    const before = process.memoryUsage().heapUsed;
+    const unlimited = parse() - before;
+    gc();
+    const before2 = process.memoryUsage().heapUsed;
+    const limited = parse(120_000) - before2;
+
+    // The feed is 8 MB; its programmes and ids alone are well under 1 MB.
+    expect(limited - unlimited).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it('keeps only the text it builds from for programmes waiting in a full guide', () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const credits = `<credits>${'x'.repeat(2000)}</credits>`;
+    const count = 4000;
+    const parser = new XMLTVStreamParser({ nowMs, maxProgrammes: count }, {
+      channel: () => undefined,
+      programme: () => undefined,
+      evict: () => undefined,
+    });
+    const at = (from: number, inner: string) =>
+      `<programme channel="c1" start="${xmltvDate(new Date(from))}"`
+      + ` stop="${xmltvDate(new Date(from + 60_000))}">${inner}</programme>`;
+    gc();
+    const before = process.memoryUsage().heapUsed;
+    let chunk = '<tv>';
+    // Far programmes fill the guide; the nearer ones then wait in it.
+    for (let index = 0; index < 2 * count; index++) {
+      const far = index < count;
+      chunk += at(far ? base - (count + index) * 60_000 : base + (index - count) * 60_000,
+        far ? '<title>Far</title>' : `<title>P</title>${credits}`);
+      if (chunk.length > 64 * 1024) {
+        parser.write(chunk);
+        chunk = '';
+      }
+    }
+    parser.write(`${chunk}</tv>`);
+    chunk = '';
+    gc();
+    gc();
+    const held = process.memoryUsage().heapUsed - before;
+    parser.finish();
+
+    // Their credits alone would be 8 MB.
+    expect(held).toBeLessThan(3 * 1024 * 1024);
+  });
+
+  it('reports the ceiling with its counts', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      parseXMLTVWithStats(grid('time'), budget);
+      const line = warn.mock.calls.map(call => call.join(' ')).find(text => text.includes('event=epg.budget.exhausted'));
+      expect(line).toContain('farthest from now');
+      expect(line).toContain('kept=30 dropped=30');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('builds a programme kept after the guide filled exactly as one kept before', () => {
+    const bodies = [
+      '<title>A &amp; B &#x263A;</title><desc>x &lt;y&gt; &quot;q&quot;</desc>',
+      '<title><![CDATA[Fish & <Chips>]]></title><desc>plain</desc>',
+      '<title lang="en">English</title><title lang="de">Deutsch</title><desc lang="de">dd</desc><desc>ee</desc>',
+      '<title>Only a title</title>',
+      '<title>Icons</title><icon src="http://host/a.png"/><icon src="http://host/b.png"/>',
+      "<title>Quoted</title><icon width='1' src='http://host/c?x=1&amp;y=2'></icon>",
+      '<desc>Hello <b>bold</b> <!-- note --> end</desc><title>Late title</title>',
+      '<title><![CDATA[open</title><desc>]]>rest</desc>',
+      '<title>T<!-- open</title><desc>-->after</desc>',
+      '<category lang="en">News</category><category>Second</category><title>Cats</title>',
+      '<credits><director>Someone</director></credits><title>After credits</title><episode-num>1</episode-num>',
+      '<title/><desc></desc><category/>',
+      '<titles>not a title</titles><title>Real</title>',
+      // Past a few hundred characters only the parts read are kept.
+    ].flatMap(inner => [inner, `${inner}<credits>${'x'.repeat(400)}</credits>`]);
+    const at = (channel: string, from: number, inner: string, extra = '') =>
+      `<programme channel="${channel}" start="${xmltvDate(new Date(from))}"`
+      + ` stop="${xmltvDate(new Date(from + HOUR))}"${extra}>${inner}</programme>`;
+    const xml = '<tv>'
+      + bodies.map((_, index) => at('far', base - (100 + index) * HOUR, '<title>Far</title>')).join('')
+      + bodies.map((inner, index) => at('t', base + index * 60_000, inner, index === 0 ? ' catchup-id="c1"' : '')).join('')
+      + '</tv>';
+
+    const kept = parseXMLTVWithStats(xml, { nowMs, maxProgrammes: bodies.length });
+    const whole = parseXMLTVWithStats(xml, { nowMs });
+
+    expect(kept.stats.droppedBudget).toBe(bodies.length);
+    expect(kept.data.programmes.far).toBeUndefined();
+    expect(kept.data.programmes.t).toEqual(whole.data.programmes.t);
+  });
+
+  it('keeps a feed under the ceiling whole, ended programmes included', () => {
+    const whole = parseXMLTVWithStats(grid('channel'), { nowMs });
+    const { data, stats } = parseXMLTVWithStats(grid('channel'), { ...budget, maxProgrammes: 60 });
+
+    expect(stats.droppedBudget).toBe(0);
+    expect(stats.keptUntil).toBeUndefined();
+    expect(data.programmes).toEqual(whole.data.programmes);
   });
 });

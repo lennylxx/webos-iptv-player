@@ -1125,6 +1125,7 @@ describe('EpgService channel pre-filter', () => {
     await EpgService.load([source('http://a', ['a'])]);
     expect(vi.mocked(parseXMLTVWithStats).mock.calls[0][1]).toEqual({
       maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES,
+      pastWeight: CONFIG.EPG.RETAINED_PAST_WEIGHT,
     });
   });
 
@@ -1314,6 +1315,76 @@ describe('EpgService channel pre-filter', () => {
     vi.setSystemTime(Date.now() + 6 * 3600_000);
     await EpgService.refresh();
     expect(fetchXmlMock).toHaveBeenCalledTimes(3);
+  });
+
+  describe('a guide trimmed to the ceiling', () => {
+    const HOUR = 3600_000;
+    const trimmed = (keptUntil: number) => ({
+      data: parsed('a', 'Alpha', 'Program'),
+      stats: {
+        channelsKept: 1,
+        programmesSeen: 500,
+        programmesMatched: 500,
+        programmesKept: 1,
+        droppedBudget: 499,
+        keptUntil,
+      },
+    }) as never;
+    const alpha = channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] });
+
+    it('is fetched again an hour before the programmes it kept run out', async () => {
+      vi.mocked(parseXMLTVWithStats)
+        .mockReturnValueOnce(trimmed(Date.now() + 5 * HOUR))
+        .mockReturnValueOnce(trimmed(Date.now() + 9 * HOUR));
+      await EpgService.load([source('http://a', ['a'])], [alpha]);
+      expect(EpgService.getNextRefreshDelayMs(6 * HOUR)).toBe(4 * HOUR);
+
+      vi.setSystemTime(Date.now() + 3 * HOUR);
+      expect(await EpgService.refresh()).toBe(true);
+      expect(fetchXmlMock).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + HOUR);
+      expect(await EpgService.refresh()).toBe(true);
+      expect(fetchXmlMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('waits at least two hours when it kept only minutes ahead', async () => {
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(trimmed(Date.now() + 10 * 60_000));
+      await EpgService.load([source('http://a', ['a'])], [alpha]);
+
+      expect(CONFIG.EPG.TRUNCATED_REFRESH_MIN_MS).toBe(2 * HOUR);
+      expect(EpgService.getNextRefreshDelayMs(6 * HOUR)).toBe(2 * HOUR);
+    });
+
+    it('times the refresh after one that failed elsewhere by its own due time', async () => {
+      vi.mocked(parseXMLTVWithStats).mockReturnValueOnce(trimmed(Date.now() + 5 * HOUR));
+      await EpgService.load([source('http://a', ['a'])], [alpha]);
+
+      expect(EpgService.getRefreshDelayAfterMs(6 * HOUR, true)).toBe(4 * HOUR);
+      // Another source failing must not push this guide's refetch to a full interval.
+      expect(EpgService.getRefreshDelayAfterMs(6 * HOUR, false)).toBe(4 * HOUR);
+    });
+
+    it('retries a source that never loaded after a pause, not at once', async () => {
+      fetchXmlMock.mockRejectedValueOnce(new Error('down'));
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await EpgService.load([source('http://a', ['a'])], [alpha]);
+
+      expect(EpgService.getNextRefreshDelayMs(6 * HOUR)).toBe(0);
+      expect(EpgService.getRefreshDelayAfterMs(6 * HOUR, false)).toBe(CONFIG.EPG.INCOMPLETE_RETRY_MS);
+    });
+
+    it('is fetched again before it runs out with scheduled refresh off', async () => {
+      epgRefreshIntervalMock.mockReturnValue(null);
+      vi.mocked(parseXMLTVWithStats)
+        .mockReturnValueOnce(trimmed(Date.now() + 5 * HOUR))
+        .mockReturnValueOnce(trimmed(Date.now() + 9 * HOUR));
+      await EpgService.load([source('http://a', ['a'])], [alpha]);
+
+      vi.setSystemTime(Date.now() + 4 * HOUR);
+      await EpgService.refresh();
+      expect(fetchXmlMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('caches a guide that stayed under the retention ceiling', async () => {

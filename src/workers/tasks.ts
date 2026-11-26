@@ -116,6 +116,7 @@ export interface XMLTVWorkerRequest {
     channelNames?: string[];
     retainChannelCatalog?: boolean;
     maxProgrammes?: number;
+    pastWeight?: number;
     catchupIdChannelIds?: string[];
     catchupIdChannelNames?: string[];
   };

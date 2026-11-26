@@ -73,6 +73,31 @@ describe('fetchAndParseXMLTV', () => {
     expect(guide.programmes.ch1[0].title).toBe('Bravo é');
   });
 
+  it('gives the page the programmes nearest now when the guide is over its ceiling', async () => {
+    // Sorted by time: two ended programmes per channel come before the airing ones.
+    const slot = (channel: string, title: string, from: string, to: string) =>
+      `<programme channel="${channel}" start="${from}" stop="${to}"><title>${title}</title></programme>`;
+    const xml = '<tv>'
+      + slot('ch1', 'A1', '20260814170000 +0000', '20260814180000 +0000')
+      + slot('ch2', 'B1', '20260814170000 +0000', '20260814180000 +0000')
+      + slot('ch1', 'A2', '20260814180000 +0000', '20260814190000 +0000')
+      + slot('ch2', 'B2', '20260814180000 +0000', '20260814190000 +0000')
+      + slot('ch1', 'A3', start, stop)
+      + slot('ch2', 'B3', start, stop)
+      + '</tv>';
+    vi.stubGlobal('fetch', vi.fn(async () => responseInChunks(strToU8(xml), 64)));
+
+    const { result, guide } = await load({
+      url: 'http://host/a',
+      timeout: 1000,
+      options: { nowMs: new Date('2026-08-14T19:30:00Z').getTime(), maxProgrammes: 4, pastWeight: 2 },
+    });
+
+    expect(guide.programmes.ch1.map(entry => entry.title)).toEqual(['A2', 'A3']);
+    expect(guide.programmes.ch2.map(entry => entry.title)).toEqual(['B2', 'B3']);
+    expect(result.stats.droppedBudget).toBe(2);
+  });
+
   it('carries program catch-up ids to the page', async () => {
     const xml = `<tv><programme channel="ch1" start="${start}" stop="${stop}" catchup-id="p1">`
       + '<title>Bravo</title></programme></tv>';

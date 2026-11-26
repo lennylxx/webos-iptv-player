@@ -817,15 +817,22 @@ class App {
       EpgService.refresh(() => this.refreshEpgDependentViews())
         .then((complete) => {
           this.refreshEpgDependentViews();
-          this.scheduleEpgRefresh(
-            true,
-            complete ? undefined : StorageService.getEpgRefreshIntervalMs() ?? undefined,
-          );
+          this.scheduleEpgRefreshAfter(complete);
         }, (err) => {
           log.error('EPG refresh failed:', err);
-          this.scheduleEpgRefresh(true, StorageService.getEpgRefreshIntervalMs() ?? undefined);
+          this.scheduleEpgRefreshAfter(false);
         });
     }, delayMs);
+  }
+
+  // After a refresh ran, timed by when each source is next due, so a trimmed
+  // guide is fetched again before it runs out.
+  private scheduleEpgRefreshAfter(complete: boolean): void {
+    const intervalMs = StorageService.getEpgRefreshIntervalMs();
+    this.scheduleEpgRefresh(
+      true,
+      intervalMs === null ? undefined : EpgService.getRefreshDelayAfterMs(intervalMs, complete),
+    );
   }
 
   private stopPlaylistRefresh(): void {
@@ -1147,18 +1154,12 @@ class App {
   private startEpgRefresh(force: boolean): void {
     if (force) {
       EpgService.refresh(() => this.refreshEpgDependentViews(), true)
-        .then(() => {
+        .then((complete) => {
           this.refreshEpgDependentViews();
-          this.scheduleEpgRefresh(
-            true,
-            StorageService.getEpgRefreshIntervalMs() ?? undefined,
-          );
+          this.scheduleEpgRefreshAfter(complete);
         }, (err) => {
           log.error('EPG load failed:', err);
-          this.scheduleEpgRefresh(
-            true,
-            StorageService.getEpgRefreshIntervalMs() ?? undefined,
-          );
+          this.scheduleEpgRefreshAfter(false);
         });
     } else if (StorageService.getEpgRefreshIntervalMs() === null) {
       EpgService.refresh(() => this.refreshEpgDependentViews())

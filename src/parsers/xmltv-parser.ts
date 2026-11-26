@@ -19,6 +19,9 @@ export interface XMLTVParseOptions {
   retainChannelCatalog?: boolean;
   /** Stop retaining programmes past this many; unlimited when absent. */
   maxProgrammes?: number;
+  /** Past the ceiling the programmes nearest now stay; one that ended
+   *  counts this many times as far as one starting as long ahead (1). */
+  pastWeight?: number;
   /** Keep program catch-up ids only for these channels (ids, and lowercased
    *  display names as in `channelNames`); every channel's when both are absent. */
   catchupIdChannelIds?: ReadonlySet<string>;
@@ -28,6 +31,50 @@ export interface XMLTVParseOptions {
 export interface XMLTVRecordSink {
   channel(id: string, channel: EpgChannel): void;
   programme(id: string, programme: Programme): void;
+  /** Takes back, to make room under the ceiling, the programme at this
+   *  position among those given for the channel. */
+  evict(id: string, position: number): void;
+}
+
+const TRIM_HOLES = 32;
+
+// Per-channel programme lists that give a programme back by its position,
+// freeing it at once, when a full guide makes room for a nearer one.
+export class ProgrammeLists {
+  private readonly lists: Record<string, Array<Programme | undefined>> = {};
+  private readonly trimmed = new Map<string, number>();
+  private readonly holed = new Set<string>();
+
+  add(id: string, programme: Programme): void {
+    (this.lists[id] ?? (this.lists[id] = [])).push(programme);
+  }
+
+  remove(id: string, position: number): void {
+    const list = this.lists[id];
+    const offset = this.trimmed.get(id) ?? 0;
+    list[position - offset] = undefined;
+    this.holed.add(id);
+    // The oldest go first in a feed sorted by time; trimming them keeps the
+    // holes bounded.
+    let lead = 0;
+    while (lead < list.length && lead < TRIM_HOLES && list[lead] === undefined) lead++;
+    if (lead === TRIM_HOLES || lead === list.length) {
+      list.splice(0, lead);
+      this.trimmed.set(id, offset + lead);
+    }
+  }
+
+  finish(): Record<string, Programme[]> {
+    const programmes: Record<string, Programme[]> = {};
+    for (const id in this.lists) {
+      const list = this.lists[id];
+      const kept = this.holed.has(id)
+        ? list.filter((programme): programme is Programme => programme !== undefined)
+        : list as Programme[];
+      if (kept.length) programmes[id] = kept;
+    }
+    return programmes;
+  }
 }
 
 export interface XMLTVParseStats {
@@ -40,11 +87,14 @@ export interface XMLTVParseStats {
   skippedDate: number;
   skippedRange: number;
   skippedFilter: number;
-  /** Dropped because `maxProgrammes` was already reached. */
+  /** Dropped, or given back to make room, because `maxProgrammes` was reached. */
   droppedBudget: number;
   malformed: number;
   /** The feed ended before its closing </tv>: cut off, or never closed. */
   incomplete: boolean;
+  /** Set when the ceiling dropped programmes: none starting later was kept,
+   *  so the guide runs out by then at the latest. */
+  keptUntil?: number;
 }
 
 interface ElementRange {
@@ -88,16 +138,35 @@ export class XMLTVStreamParser {
   private ended = false;
   private rootClosed = false;
   private readonly channels: Record<string, EpgChannel> = {};
-  private readonly programmes: Record<string, Programme[]> = {};
+  private readonly lists = new ProgrammeLists();
+  private programmes: Record<string, Programme[]> = {};
   private readonly lastStartByChannel = new Map<string, number>();
   private readonly unsortedChannels = new Set<string>();
   private readonly declaredIds = new Set<string>();
   private readonly programmesBeforeDeclaration = new Set<string>();
+  // One copy of each kept channel id: a sliced id would pin the XML buffer
+  // it came from for as long as any of its programmes is kept.
+  private readonly channelIdCopies = new Map<string, string>();
   /** Ids the filter accepts: the configured ids plus name-matched channels. */
   private readonly acceptedIds: Set<string> | null;
   private readonly minTime: number;
   private readonly maxTime: number;
   private readonly maxProgrammes: number;
+  private readonly pastWeight: number;
+  private readonly nowMs: number;
+  // Under a ceiling, every kept programme by its distance from now, as a
+  // max-heap, so a full guide gives back the farthest first. A programme
+  // given to the sink has its position; one kept after the guide first
+  // filled waits as its raw body, built only if it is still kept at finish.
+  private kept: KeptProgramme[] = [];
+  // The heap's distances, read on every comparison, kept apart from the entries.
+  private keptDistances = new Float64Array(0);
+  // Until the guide first fills nothing can be given back, so the heap is
+  // built only then, from these.
+  private readonly fillDistances: number[] = [];
+  private readonly fillIds: string[] = [];
+  private filled = false;
+  private pendingSeq = 0;
   // Channels whose program catch-up ids are kept; null keeps every channel's.
   private readonly catchupIdChannels: Set<string> | null;
   private readonly readsCatchupIds: boolean;
@@ -109,9 +178,11 @@ export class XMLTVStreamParser {
     private readonly sink?: XMLTVRecordSink,
   ) {
     const now = options.nowMs ?? Date.now();
+    this.nowMs = now;
     this.minTime = now - 7 * DAY_MS;
     this.maxTime = now + 7 * DAY_MS;
     this.maxProgrammes = options.maxProgrammes ?? Number.POSITIVE_INFINITY;
+    this.pastWeight = options.pastWeight ?? 1;
     const { channelIds, channelNames } = options;
     const filtering = (channelIds?.size ?? 0) > 0 || (channelNames?.size ?? 0) > 0;
     this.acceptedIds = filtering ? new Set(channelIds ?? []) : null;
@@ -134,8 +205,18 @@ export class XMLTVStreamParser {
     if (this.ended) throw new Error('XMLTV parser already finished');
     this.ended = true;
     this.drain(true);
+    // When the farthest kept programme ended long ago (a stale feed, deep
+    // catch-up), this lies well past the guide's real end; the refresh
+    // schedule then comes first.
+    if (this.stats.droppedBudget && this.kept.length) this.stats.keptUntil = this.nowMs + this.keptDistances[0];
+    this.givePending();
+    this.fillDistances.length = 0;
+    this.fillIds.length = 0;
     this.stats.incomplete = !this.rootClosed;
-    if (!this.sink) this.sortUnorderedProgrammes();
+    if (!this.sink) {
+      this.programmes = this.lists.finish();
+      this.sortUnorderedProgrammes();
+    }
     this.logStats();
     this.buffer = '';
     this.cursor = 0;
@@ -328,7 +409,9 @@ export class XMLTVStreamParser {
       return;
     }
     if (this.acceptedIds && !this.acceptedIds.has(channelId)) {
-      if (!this.declaredIds.has(channelId)) this.programmesBeforeDeclaration.add(channelId);
+      if (!this.declaredIds.has(channelId) && !this.programmesBeforeDeclaration.has(channelId)) {
+        this.programmesBeforeDeclaration.add(copyString(channelId));
+      }
       this.stats.skippedFilter++;
       return;
     }
@@ -347,54 +430,157 @@ export class XMLTVStreamParser {
     if (this.tzOffsetMinutes === null && start.offsetMinutes !== null) {
       this.tzOffsetMinutes = start.offsetMinutes;
     }
-    // Checked before the body is sliced and read: past the ceiling the
-    // element costs nothing but a counter, so the channel catalog and the
-    // statistics still come out complete.
+    // Checked before the body is sliced and read: past the ceiling a
+    // programme that makes no room costs nothing but a counter, so the
+    // channel catalog and the statistics still come out complete.
+    const distance = this.distanceFromNow(start.time, stop.time);
     if (this.stats.programmesKept >= this.maxProgrammes) {
-      this.stats.droppedBudget++;
-      return;
+      const farthest = this.kept[0];
+      if (!farthest || this.keptDistances[0] <= distance) {
+        this.stats.droppedBudget++;
+        return;
+      }
+      this.giveBack(farthest);
     }
 
-    const body = this.buffer.slice(element.bodyStart, element.bodyEnd);
     const keptCatchupId = attributes.catchupId
       && (!this.catchupIdChannels || this.catchupIdChannels.has(channelId))
       ? attributes.catchupId
       : '';
-    const texts = [
-      readElementText(body, 'title'),
-      readElementText(body, 'desc'),
-      readElementText(body, 'category'),
-      readElementAttribute(body, 'icon', 'src') ?? '',
-    ];
-    // Copied with the texts, so it no longer pins the XML buffer.
-    if (keptCatchupId) texts.push(keptCatchupId);
-    const [title, description, category, icon, catchupId] = copyStrings(texts);
-    const programme: Programme = {
-      start: new Date(start.time),
-      stop: new Date(stop.time),
-      title,
-      description,
-      category,
-      icon,
-    };
-    if (catchupId) programme.catchupId = catchupId;
+    const id = this.keptChannelId(channelId);
+    if (this.filled) {
+      // A full guide may give this one back before the feed ends, so only
+      // the raw text its programme is built from is copied now.
+      this.stats.programmesKept++;
+      this.keptDistances[0] = distance;
+      this.kept[0] = {
+        id,
+        position: -1,
+        seq: this.pendingSeq++,
+        start: start.time,
+        stop: stop.time,
+        raw: rawProgrammeText(this.buffer.slice(element.bodyStart, element.bodyEnd)),
+        catchupId: copyString(keptCatchupId),
+      };
+      this.siftDown();
+      return;
+    }
+    const programme = buildProgramme(
+      start.time,
+      stop.time,
+      this.buffer.slice(element.bodyStart, element.bodyEnd),
+      keptCatchupId,
+    );
+    this.giveProgramme(id, programme);
+    this.stats.programmesKept++;
+    if (this.maxProgrammes !== Number.POSITIVE_INFINITY) {
+      this.fillDistances.push(distance);
+      this.fillIds.push(id);
+      if (this.stats.programmesKept >= this.maxProgrammes) this.fill();
+    }
+  }
+
+  private keptChannelId(id: string): string {
+    let copy = this.channelIdCopies.get(id);
+    if (copy === undefined) {
+      copy = copyString(id);
+      this.channelIdCopies.set(copy, copy);
+    }
+    return copy;
+  }
+
+  private giveProgramme(channelId: string, programme: Programme): void {
+    const start = programme.start.getTime();
     const previousStart = this.lastStartByChannel.get(channelId);
-    if (previousStart !== undefined && start.time < previousStart) {
+    if (previousStart !== undefined && start < previousStart) {
       this.unsortedChannels.add(channelId);
     }
-    this.lastStartByChannel.set(channelId, start.time);
-    if (this.sink) {
-      this.sink.programme(channelId, programme);
-    } else {
-      const list = this.programmes[channelId] ?? (this.programmes[channelId] = []);
-      list.push(programme);
+    this.lastStartByChannel.set(channelId, start);
+    if (this.sink) this.sink.programme(channelId, programme);
+    else this.lists.add(channelId, programme);
+  }
+
+  // The programmes still kept that waited as raw bodies, in feed order.
+  private givePending(): void {
+    const pending = this.kept.filter(entry => entry.raw !== null);
+    this.kept.length = 0;
+    this.keptDistances = new Float64Array(0);
+    pending.sort((a, b) => a.seq - b.seq);
+    for (const entry of pending) {
+      const raw = entry.raw!;
+      const programme = typeof raw === 'string'
+        ? buildProgramme(entry.start, entry.stop, raw, entry.catchupId)
+        : buildProgrammeFromRaw(entry.start, entry.stop, raw, entry.catchupId);
+      // Its raw text goes as its programme is built, so the two never all
+      // coexist.
+      entry.raw = null;
+      this.giveProgramme(entry.id, programme);
     }
-    this.stats.programmesKept++;
+  }
+
+  // Airing is 0; an ended programme is as far as it ended ago, weighted,
+  // and an upcoming one as far as it starts ahead.
+  private distanceFromNow(start: number, stop: number): number {
+    if (stop <= this.nowMs) return (this.nowMs - stop) * this.pastWeight;
+    return start > this.nowMs ? start - this.nowMs : 0;
+  }
+
+  // A full guide gives its farthest programme back for a nearer one, so a
+  // feed sorted by time keeps what airs now and a feed sorted by channel
+  // reaches its last channels, without a second pass over the feed. The
+  // nearer one takes its place at the top of the heap.
+  private giveBack(farthest: KeptProgramme): void {
+    if (farthest.position >= 0) {
+      if (this.sink) this.sink.evict(farthest.id, farthest.position);
+      else this.lists.remove(farthest.id, farthest.position);
+    }
+    this.stats.programmesKept--;
+    this.stats.droppedBudget++;
+  }
+
+  private fill(): void {
+    this.filled = true;
+    // Each was given to the sink in feed order, so its position is how many
+    // of its channel came before it.
+    const given = new Map<string, number>();
+    const kept = this.fillIds.map((id): KeptProgramme => {
+      const position = given.get(id) ?? 0;
+      given.set(id, position + 1);
+      return { id, position, seq: 0, start: 0, stop: 0, raw: null, catchupId: '' };
+    });
+    this.keptDistances = Float64Array.from(this.fillDistances);
+    this.fillDistances.length = 0;
+    this.fillIds.length = 0;
+    this.kept = kept;
+    for (let index = (kept.length >> 1) - 1; index >= 0; index--) this.siftDown(index);
+  }
+
+  private siftDown(from = 0): void {
+    const kept = this.kept;
+    const distances = this.keptDistances;
+    const length = kept.length;
+    const entry = kept[from];
+    const distance = distances[from];
+    let index = from;
+    for (;;) {
+      const left = index * 2 + 1;
+      if (left >= length) break;
+      const right = left + 1;
+      const child = right < length && distances[right] > distances[left] ? right : left;
+      if (distances[child] <= distance) break;
+      kept[index] = kept[child];
+      distances[index] = distances[child];
+      index = child;
+    }
+    kept[index] = entry;
+    distances[index] = distance;
   }
 
   private sortUnorderedProgrammes(): void {
     for (const id of this.unsortedChannels) {
       const list = this.programmes[id];
+      // A full guide may have given back every programme of the channel.
+      if (!list) continue;
       const ordered = list.map((programme, index) => ({ programme, index }));
       ordered.sort((a, b) =>
         a.programme.start.getTime() - b.programme.start.getTime() || a.index - b.index);
@@ -421,7 +607,7 @@ export class XMLTVStreamParser {
     }
     if (this.stats.droppedBudget) {
       log.warn(
-        'Retention ceiling reached; later programmes were dropped',
+        'Retention ceiling reached; the programmes farthest from now were dropped',
         'event=epg.budget.exhausted',
         `kept=${String(this.stats.programmesKept)}`,
         `dropped=${String(this.stats.droppedBudget)}`,
@@ -780,6 +966,96 @@ function decodeEntities(value: string): string {
       default: return whole;
     }
   });
+}
+
+// A kept programme: given to the sink at `position`, or waiting as its
+// `raw` text (position -1) until finish builds it.
+interface KeptProgramme {
+  id: string;
+  position: number;
+  seq: number;
+  start: number;
+  stop: number;
+  raw: string | RawProgrammeText | null;
+  catchupId: string;
+}
+
+// A body this short is mostly the text a programme is built from, and one
+// copy of it costs less than finding each part.
+const WHOLE_BODY_CHARS = 384;
+
+// The undecoded text of the elements a programme is built from, in one flat
+// string: title, desc, and category contents, then the icon start tag. The
+// rest of a long body (credits, ratings, other languages) is not kept.
+interface RawProgrammeText {
+  text: string;
+  titleEnd: number;
+  descEnd: number;
+  categoryEnd: number;
+}
+
+function elementContent(body: string, target: string): string {
+  const range = findChildElement(body, target);
+  return range ? body.slice(range.bodyStart, range.bodyEnd) : '';
+}
+
+function rawProgrammeText(body: string): string | RawProgrammeText {
+  if (body.length <= WHOLE_BODY_CHARS) return [body, ''].join(' ').slice(0, body.length);
+  const title = elementContent(body, 'title');
+  const desc = elementContent(body, 'desc');
+  const category = elementContent(body, 'category');
+  const icon = findChildElement(body, 'icon');
+  // Joining copies, so the text no longer pins the XML buffer.
+  const text = [title, desc, category, icon ? body.slice(icon.tagStart, icon.tagEnd + 1) : ''].join('');
+  const titleEnd = title.length;
+  const descEnd = titleEnd + desc.length;
+  return { text, titleEnd, descEnd, categoryEnd: descEnd + category.length };
+}
+
+// Reads each part as readElementText and readElementAttribute read it in the
+// whole body: neither looks past an element's own range.
+function buildProgrammeFromRaw(
+  start: number,
+  stop: number,
+  raw: RawProgrammeText,
+  catchupIdText: string,
+): Programme {
+  const { text, titleEnd, descEnd, categoryEnd } = raw;
+  const content = (from: number, to: number): string => (from === to
+    ? ''
+    : readRangeText(text, { name: 'programme', tagStart: from, tagEnd: from, bodyStart: from, bodyEnd: to, elementEnd: to }));
+  const texts = [
+    content(0, titleEnd),
+    content(titleEnd, descEnd),
+    content(descEnd, categoryEnd),
+    categoryEnd < text.length ? readAttribute(text, 'src', categoryEnd + 1, text.length) ?? '' : '',
+  ];
+  return programmeFrom(start, stop, texts, catchupIdText);
+}
+
+function buildProgramme(start: number, stop: number, body: string, catchupIdText: string): Programme {
+  return programmeFrom(start, stop, [
+    readElementText(body, 'title'),
+    readElementText(body, 'desc'),
+    readElementText(body, 'category'),
+    readElementAttribute(body, 'icon', 'src') ?? '',
+  ], catchupIdText);
+}
+
+function programmeFrom(start: number, stop: number, texts: string[], catchupIdText: string): Programme {
+  // Copied with the texts, so it no longer pins the XML buffer.
+  if (catchupIdText) texts.push(catchupIdText);
+  const [title, description, category, icon, catchupId] = copyStrings(texts);
+  const programme: Programme = {
+    start: new Date(start),
+    stop: new Date(stop),
+    title,
+    description,
+    category,
+    icon,
+  };
+  if (catchupId) programme.catchupId = catchupId;
+  return programme;
 }
 
 function copyString(value: string): string {

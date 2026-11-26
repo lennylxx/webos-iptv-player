@@ -171,6 +171,11 @@ export const CONFIG = {
     // Retention ceiling for one XMLTV parse. A five-figure channel count
     // otherwise retains hundreds of MB, which a 1 GB TV cannot survive.
     MAX_RETAINED_PROGRAMMES: 120_000,
+    // Past the ceiling the guide keeps the programmes nearest now. An ended
+    // one counts twice as far as an upcoming one, so a full guide keeps about
+    // twice as many hours ahead, for browsing and reminders, as behind, for
+    // replay, which is mostly of the last hours.
+    RETAINED_PAST_WEIGHT: 2,
     // Visibility and mapping edits arrive one per keypress; coalesce them.
     CHANNEL_CHANGE_RELOAD_DELAY: 2000,
     // AI program genres stopped by a channel or lock edit start over once edits pause this long.
@@ -181,6 +186,15 @@ export const CONFIG = {
     // unless forced: a feed that always ends early would otherwise reload on
     // every Guide visit.
     INCOMPLETE_RETRY_MS: 30 * 60 * 1000,
+    // A guide trimmed to the ceiling covers only the hours around its fetch;
+    // it is fetched again this long before the last of them, so the next
+    // program is still there when the refresh lands.
+    TRUNCATED_REFRESH_LEAD_MS: 60 * 60 * 1000,
+    // ...but never sooner than this after its fetch: a feed of 20,000+
+    // channels keeps only an hour or two, and fetching, parsing, and
+    // re-indexing it that often would stall playback and hold two guides at
+    // once. Its now and next may go blank for a while before the refetch.
+    TRUNCATED_REFRESH_MIN_MS: 2 * 60 * 60 * 1000,
   },
 
   // Xtream Movies/Series catalog + resume tuning.

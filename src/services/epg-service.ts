@@ -51,6 +51,8 @@ interface SourceState {
   filterKey?: string;
   /** A feed that ended early was turned away; refresh no sooner than this unless forced. */
   retryAfter?: number;
+  /** A guide trimmed to the ceiling kept no programme starting after this. */
+  keptUntil?: number;
 }
 
 /** Where a channel's programmes live in the epg-cache store. */
@@ -427,6 +429,17 @@ class EpgServiceImpl {
     });
     this.derivedEntries.forEach(entry => visit(entry.programmes, 0));
     return min === Infinity ? null : { min, max };
+  }
+
+  /**
+   * When the next scheduled refresh is due after one that ran: a refresh
+   * that failed or left a source partial waits at least INCOMPLETE_RETRY_MS,
+   * since a source without data is always due, but no longer than the
+   * interval, and never past a trimmed guide's own due time.
+   */
+  getRefreshDelayAfterMs(intervalMs: number, complete: boolean): number {
+    const due = this.getNextRefreshDelayMs(intervalMs);
+    return complete ? due : Math.min(intervalMs, Math.max(due, CONFIG.EPG.INCOMPLETE_RETRY_MS));
   }
 
   getNextRefreshDelayMs(intervalMs: number): number {
@@ -1099,8 +1112,12 @@ class EpgServiceImpl {
             catchupIdChannelNames: filter.catchupNames,
             retainChannelCatalog: true,
             maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES,
+            pastWeight: CONFIG.EPG.RETAINED_PAST_WEIGHT,
           }
-        : { maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES }, true);
+        : {
+            maxProgrammes: CONFIG.EPG.MAX_RETAINED_PROGRAMMES,
+            pastWeight: CONFIG.EPG.RETAINED_PAST_WEIGHT,
+          }, true);
       result = loaded.data;
       const { stats } = loaded;
       if (revision !== this.revision) {
@@ -1129,17 +1146,19 @@ class EpgServiceImpl {
         return false;
       }
       // A truncated or cut-off parse is usable for this session, but it is not
-      // the guide the filter asked for — so it must not settle as the answer.
+      // the guide the filter asked for — so it is never cached as the answer.
       const truncated = stats.droppedBudget > 0 || stats.incomplete;
       const state: SourceState = {
         data: result,
         timestamp: Date.now(),
-        // The same feed and selection truncate the same way again, so it is
-        // not refetched before its schedule; a changed selection reloads it,
-        // and a cut-off feed retries after INCOMPLETE_RETRY_MS.
+        // The same feed and selection truncate the same way again, so a
+        // trimmed guide is fetched again only on its schedule or before the
+        // hours it kept run out; a changed selection reloads it, and a
+        // cut-off feed retries after INCOMPLETE_RETRY_MS.
         needsRefresh: false,
         catchupIdsKnown: true,
         ...(stats.incomplete ? { incomplete: true } : {}),
+        ...(stats.droppedBudget > 0 && stats.keptUntil !== undefined ? { keptUntil: stats.keptUntil } : {}),
         ...(filter ? { filterKey: filter.key } : {}),
       };
       if (!await this.setState(source.url, state, revision)) {
@@ -1180,7 +1199,9 @@ class EpgServiceImpl {
         log.warn('EPG has 0 programmes — not caching:', source.url);
       }
       done();
-      return !truncated;
+      // A trimmed guide is as whole as this selection allows; refreshDueAt
+      // fetches it again before it runs out.
+      return !stats.incomplete;
     } catch (err) {
       log.error('Failed to load EPG:', source.url, err);
       done();
@@ -1214,7 +1235,16 @@ class EpgServiceImpl {
       return intervalMs === null ? retryAt : Math.min(retryAt, state.timestamp + intervalMs);
     }
     if (state.needsRefresh) return 0;
-    return intervalMs === null ? Number.POSITIVE_INFINITY : state.timestamp + intervalMs;
+    const scheduled = intervalMs === null ? Number.POSITIVE_INFINITY : state.timestamp + intervalMs;
+    if (state.keptUntil === undefined) return scheduled;
+    // Before a trimmed guide runs out, even with refresh off, as a cut-off
+    // one retries: it would otherwise go blank. Never sooner than
+    // TRUNCATED_REFRESH_MIN_MS after its fetch.
+    const runsOut = Math.max(
+      state.keptUntil - CONFIG.EPG.TRUNCATED_REFRESH_LEAD_MS,
+      state.timestamp + CONFIG.EPG.TRUNCATED_REFRESH_MIN_MS,
+    );
+    return Math.min(scheduled, runsOut);
   }
 
   private hasProgrammes(url: string): boolean {

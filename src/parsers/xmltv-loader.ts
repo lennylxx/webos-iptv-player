@@ -1,5 +1,6 @@
 import { Gunzip } from 'fflate';
 import {
+  ProgrammeLists,
   XMLTVStreamParser,
   type XMLTVParseOptions,
   type XMLTVRecordSink,
@@ -58,6 +59,7 @@ export async function fetchAndParseXMLTV(
         channelNames: options.channelNames ? Array.from(options.channelNames) : undefined,
         retainChannelCatalog: options.retainChannelCatalog,
         maxProgrammes: options.maxProgrammes,
+        pastWeight: options.pastWeight,
         catchupIdChannelIds: options.catchupIdChannelIds
           ? Array.from(options.catchupIdChannelIds)
           : undefined,
@@ -443,25 +445,31 @@ async function parsePass(
 
 class XMLTVAccumulator implements XMLTVRecordSink {
     private channels: Record<string, EpgChannel> = {};
-    private programmes: Record<string, Programme[]> = {};
+    private readonly programmes = new ProgrammeLists();
     private unsortedChannels = new Set<string>();
+    private lastStart = new Map<string, number>();
 
     channel(id: string, channel: EpgChannel): void {
       this.channels[id] = channel;
     }
 
     programme(id: string, programme: Programme): void {
-      const list = this.programmes[id] ?? (this.programmes[id] = []);
-      const previous = list[list.length - 1];
-      if (previous && programme.start.getTime() < previous.start.getTime()) {
-        this.unsortedChannels.add(id);
-      }
-      list.push(programme);
+      const start = programme.start.getTime();
+      const previous = this.lastStart.get(id);
+      if (previous !== undefined && start < previous) this.unsortedChannels.add(id);
+      this.lastStart.set(id, start);
+      this.programmes.add(id, programme);
+    }
+
+    evict(id: string, position: number): void {
+      this.programmes.remove(id, position);
     }
 
     complete(metadata: ParsedEpg): ParsedEpg {
+      const programmes = this.programmes.finish();
       for (const id of this.unsortedChannels) {
-        const list = this.programmes[id];
+        const list = programmes[id];
+        if (!list) continue;
         const ordered = list.map((programme, index) => ({ programme, index }));
         ordered.sort((left, right) =>
           left.programme.start.getTime() - right.programme.start.getTime()
@@ -473,7 +481,7 @@ class XMLTVAccumulator implements XMLTVRecordSink {
       return {
         ...metadata,
         channels: this.channels,
-        programmes: this.programmes,
+        programmes,
       };
     }
 }
