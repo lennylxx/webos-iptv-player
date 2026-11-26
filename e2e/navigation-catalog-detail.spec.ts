@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, fakeAiConfig, type Page } from './helpers';
 import {
   KEYS, OPPOSITE, DIRECTIONS, seededRandom, installNavBox, focusedKey as focusedKeyIn, hover, hoverKey,
   type Direction, type NavBoxWindow,
@@ -78,11 +78,7 @@ async function seed(page: Page, setup: Setup): Promise<void> {
     if (s.textSize) localStorage.setItem('iptv_text_size', JSON.stringify(s.textSize));
     if (s.locale) localStorage.setItem('iptv_locale', JSON.stringify(s.locale));
     if (s.ai) {
-      localStorage.setItem('iptv_llm', JSON.stringify({
-        enabled: true, baseUrl: 'http://ai.test/v1', model: 'm1',
-        capabilities: { signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-          thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
-      }));
+      localStorage.setItem('iptv_llm', s.ai);
     }
     if (!s.resume) return;
     localStorage.setItem('iptv_resume', JSON.stringify(s.kind === 'movie'
@@ -91,7 +87,7 @@ async function seed(page: Page, setup: Setup): Promise<void> {
       : { 'x1|episode|1001': { accountId: 'x1', kind: 'episode', itemId: '1001', name: 'Series One — S1E1', poster: '',
         ext: 'mp4', position: 100, duration: 600, updatedAt: 1, season: 1, episode: 1, categoryId: '2',
         watchlistOwner: { kind: 'series', itemId: '20', name: 'Series One', poster: '' } } }));
-  }, setup);
+  }, { ...setup, ai: setup.ai ? fakeAiConfig() : '' });
   await routeLiveManifest(page);
   await neuterVideo(page);
   await installNavBox(page);

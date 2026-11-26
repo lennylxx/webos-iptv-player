@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, routeFakeAi, enterTab, liveLoaded, type Page } from './helpers';
+import { fakeAiConfig, test, expect, routeLiveManifest, routeFakeAi, enterTab, liveLoaded, type Page } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 import { channelPlaylist, guide } from './fixtures/live';
 import {
@@ -465,17 +465,9 @@ async function searchFor(page: Page, query: string): Promise<void> {
 // A fake AI server whose filter searches the keyword alone, so AI search
 // shows its filter above every kind of result.
 async function seedAiSearch(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true,
-      baseUrl: 'http://ai.test/v1',
-      model: 'm1',
-      capabilities: {
-        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-      },
-    }));
-  });
+  await page.addInitScript((config) => {
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig());
   await page.route('http://ai.test/v1/chat/completions', (route) => {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
     if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });

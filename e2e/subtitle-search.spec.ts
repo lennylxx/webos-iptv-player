@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page, pressAndReadPlayer, liveLoaded } from './helpers';
+import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, fakeAiConfig, type Page, pressAndReadPlayer, liveLoaded } from './helpers';
 import { routeFault } from './fixtures/fault-route';
 import { seedXtream } from './fixtures/xtream';
 
@@ -436,18 +436,10 @@ async function seedTranslation(page: Page, name: string, media?: Buffer): Promis
   await routeAssrtSearch(page, () => [
     assrtSub({ id: '201', langDesc: '英', name, downloads: 100 }),
   ]);
-  await page.addInitScript(() => {
+  await page.addInitScript((config) => {
     localStorage.setItem('iptv_online_subtitles', JSON.stringify({ preferredLanguage: 'de' }));
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true,
-      baseUrl: 'http://ai.test/v1',
-      model: 'm1',
-      capabilities: {
-        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-      },
-    }));
-  });
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig());
   const sent: string[] = [];
   await page.route('http://ai.test/v1/chat/completions', (route) => {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };

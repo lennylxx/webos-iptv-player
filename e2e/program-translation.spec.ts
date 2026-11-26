@@ -1,6 +1,7 @@
 import {
   enterTab,
   expect,
+  fakeAiConfig,
   liveLoaded,
   neuterVideo,
   routePlaylist,
@@ -58,17 +59,9 @@ async function setup(page: Page, options: { ai?: boolean; layout?: 'schedule' | 
     localStorage.setItem('iptv_tz_mode', JSON.stringify('device'));
     localStorage.setItem('iptv_guide_layout', JSON.stringify(layout));
     if (ai) {
-      localStorage.setItem('iptv_llm', JSON.stringify({
-        enabled: true,
-        baseUrl: 'http://ai.test/v1',
-        model: 'm1',
-        capabilities: {
-          signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-          thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-        },
-      }));
+      localStorage.setItem('iptv_llm', ai);
     }
-  }, { ai: options.ai !== false, layout: options.layout ?? 'schedule' });
+  }, { ai: options.ai !== false ? fakeAiConfig() : '', layout: options.layout ?? 'schedule' });
   return sent;
 }
 

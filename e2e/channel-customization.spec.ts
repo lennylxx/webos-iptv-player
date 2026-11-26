@@ -8,6 +8,7 @@ import {
   SEARCH_M3U,
   enterTab,
   type Page,
+  fakeAiConfig,
 } from './helpers';
 
 // Channel customization: the in-place edit mode on the Live channel list —
@@ -538,17 +539,9 @@ test('the EPG picker lists similar names and an AI suggestion when no name conta
       body: JSON.stringify({ choices: [{ message: { content: '{"matches":[{"number":1,"confidence":"high"}]}' } }] }) });
   });
   await seedPlaylist(page);
-  await page.addInitScript(() => {
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true,
-      baseUrl: 'http://ai.test/v1',
-      model: 'm1',
-      capabilities: {
-        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-      },
-    }));
-  });
+  await page.addInitScript((config) => {
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig());
   const guideResponse = page.waitForResponse('**/guide.xml');
   await page.goto('/');
   await guideResponse;

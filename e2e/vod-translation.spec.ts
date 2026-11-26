@@ -1,4 +1,4 @@
-import { enterTab, expect, liveLoaded, test, type Page } from './helpers';
+import { enterTab, expect, fakeAiConfig, liveLoaded, test, type Page } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // Movie and series info translation: Translate on a detail page turns on the
@@ -18,17 +18,9 @@ async function setup(page: Page): Promise<string[]> {
     return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
       body: JSON.stringify({ choices: [{ message: { content } }] }) });
   });
-  await page.addInitScript(() => {
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true,
-      baseUrl: 'http://ai.test/v1',
-      model: 'm1',
-      capabilities: {
-        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-      },
-    }));
-  });
+  await page.addInitScript((config) => {
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig());
   return sent;
 }
 

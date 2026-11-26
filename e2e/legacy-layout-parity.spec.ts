@@ -1050,7 +1050,7 @@ function answerAi(user: string, state: FakeAi): unknown {
         : item.name === 'Group A' ? [{ i: item.i, verdict: 'mature', confidence: 'low' }] : []) };
   }
   if (sent.types) {
-    if (sent.query === 'talk') return 500;
+    if (sent.query === 'talk') return 400;
     return { types: ['program'], keywords: [], groups: [], genres: ['Sports'], time: 'any', from_hour: -1, to_hour: -1 };
   }
   if (typeof sent.query === 'string' && Object.keys(sent).length === 1) {

@@ -2,6 +2,7 @@ import { appendFileSync } from 'node:fs';
 import { test as base, expect, type Locator, type Page } from '@playwright/test';
 import { postTargetApis, removeApis } from '../scripts/chromium-53-simulation.mjs';
 import { THEMES } from '../src/config/themes';
+import { capabilitySignature, normalizeLlmConfig } from '../src/services/llm/config';
 
 export { expect, type Page };
 
@@ -438,6 +439,16 @@ export async function expectSelectionVisibleInEveryTheme(
   }
 }
 
+// The stored AI settings for the fake server at http://ai.test/v1, with its
+// capabilities already detected so no request probes them first.
+export function fakeAiConfig(overrides: Record<string, unknown> = {}): string {
+  const config = normalizeLlmConfig({ enabled: true, baseUrl: 'http://ai.test/v1', model: 'm1', ...overrides });
+  return JSON.stringify({ ...config, capabilities: {
+    signature: capabilitySignature(config), structured: 'json_schema', effort: '',
+    thinkingFields: false, maxCompletionTokens: false, maxOutputTokens: 0, checkedAt: Date.now(),
+  } });
+}
+
 export interface FakeAiServer {
   // The user message of every chat request, in order.
   sent: string[];
@@ -452,17 +463,9 @@ export async function routeFakeAi(
   page: Page,
   reply: (user: string) => unknown,
 ): Promise<FakeAiServer> {
-  await page.addInitScript(() => {
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true,
-      baseUrl: 'http://ai.test/v1',
-      model: 'm1',
-      capabilities: {
-        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-      },
-    }));
-  });
+  await page.addInitScript((config) => {
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig());
   const server: FakeAiServer = { sent: [] };
   await page.route('http://ai.test/v1/chat/completions', async (route) => {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };

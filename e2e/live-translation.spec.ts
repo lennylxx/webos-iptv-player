@@ -1,4 +1,4 @@
-import { expect, liveLoaded, neuterVideo, routePlaylist, test, type Page } from './helpers';
+import { fakeAiConfig, expect, liveLoaded, neuterVideo, routePlaylist, test, type Page } from './helpers';
 
 // Program info translation in Live: the legend's hint turns it on, and the
 // visible rows, the preview's program, and its Up next go in one request.
@@ -36,17 +36,13 @@ async function setup(page: Page): Promise<string[]> {
       body: JSON.stringify({ choices: [{ message: { content: reply } }] }) });
   });
   await page.clock.setFixedTime(new Date('2024-03-09T12:10:00Z'));
-  await page.addInitScript(() => {
+  await page.addInitScript((config) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
     localStorage.setItem('iptv_tz_mode', JSON.stringify('device'));
     localStorage.setItem('iptv_live_preview', JSON.stringify(true));
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true, baseUrl: 'http://ai.test/v1', model: 'm1',
-      capabilities: { signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1 },
-    }));
-  });
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig());
   return sent;
 }
 

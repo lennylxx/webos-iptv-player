@@ -1714,7 +1714,7 @@ test('the request estimate opens on its action', async ({ page }) => {
 });
 
 test('a failed run says only what it can show', async ({ page }) => {
-  await routeFakeAi(page, () => 500);
+  await routeFakeAi(page, () => 400);
   await neuterVideo(page);
   await routeLiveManifest(page);
   await routeVodCatalog(page, AI_CATEGORIES.slice(1), () => []);
@@ -1883,7 +1883,7 @@ test('a failure behind the Options tab says suggestions wait', async ({ page }) 
   const held = new Promise<void>(resolve => { release = resolve; });
   await routeFakeAi(page, async () => {
     await held;
-    return 500;
+    return 400;
   });
   await openVodRules(page);
   const view = page.locator('#view-parental-controls');

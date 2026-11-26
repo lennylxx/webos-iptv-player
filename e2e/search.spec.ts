@@ -8,6 +8,7 @@ import {
   readUserDataStore,
   settled,
   routeFakeAi,
+  fakeAiConfig,
 } from './helpers';
 
 function xmltvDate(date: Date): string {
@@ -1034,18 +1035,9 @@ async function routeSearchAi(
   alternatives: string[] | null,
   features: Record<string, boolean> = { 'search-expansion': true },
 ): Promise<string[]> {
-  await page.addInitScript((enabled) => {
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true,
-      baseUrl: 'http://ai.test/v1',
-      model: 'm1',
-      features: enabled,
-      capabilities: {
-        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-      },
-    }));
-  }, features);
+  await page.addInitScript((config) => {
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig({ features }));
   const sent: string[] = [];
   await page.route('http://ai.test/v1/chat/completions', (route) => {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
@@ -1316,19 +1308,11 @@ async function seedAiSearch(
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: m3u }));
   await page.route('**/guide.xml', (route) =>
     route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
-  await page.addInitScript(() => {
+  await page.addInitScript((config) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/guide.xml', playlistIds: [] }]));
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true,
-      baseUrl: 'http://ai.test/v1',
-      model: 'm1',
-      capabilities: {
-        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-      },
-    }));
-  });
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig());
   const sent: string[] = [];
   await page.route('http://ai.test/v1/chat/completions', (route) => {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
@@ -1387,7 +1371,7 @@ test('AI search shows the programs of the named group and sets a reminder from t
 });
 
 test('a failed AI search keeps all results and says so', async ({ page }) => {
-  await seedAiSearch(page, { status: 500 });
+  await seedAiSearch(page, { status: 400 });
   await page.goto('/');
   await liveLoaded(page);
   await enterSearch(page);
@@ -1569,17 +1553,9 @@ async function seedTranslatedSearch(page: import('@playwright/test').Page): Prom
   </tv>`;
   await page.route('**/xmltv.php*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/xml', body: epg }));
-  await page.addInitScript(() => {
-    localStorage.setItem('iptv_llm', JSON.stringify({
-      enabled: true,
-      baseUrl: 'http://ai.test/v1',
-      model: 'm1',
-      capabilities: {
-        signature: 'http://ai.test/v1|m1', structured: 'json_schema',
-        thinkingOff: false, effortOff: false, reasoningParams: false, checkedAt: 1,
-      },
-    }));
-  });
+  await page.addInitScript((config) => {
+    localStorage.setItem('iptv_llm', config);
+  }, fakeAiConfig());
   const sent: string[] = [];
   await page.route('http://ai.test/v1/chat/completions', (route) => {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
