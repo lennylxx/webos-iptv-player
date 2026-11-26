@@ -100,6 +100,10 @@ a new term after review, add a row here.
 | AI help in EPG mapping and parental controls (Settings AI intro) | AI suggestions for EPG mapping and parental controls | EPG 映射和家长控制的 AI 推荐 |
 | Account credentials never sent to AI (AI privacy hint) | login details | 登录信息 |
 | Channel stream addresses never sent to AI (AI privacy hint) | stream URLs | 播放网址 |
+| Open a title's YouTube trailer (detail action) | Watch trailer | 观看预告片 |
+| First-trailer notice (prompt title) | Watch on YouTube? | 在 YouTube 中观看？ |
+| First-trailer notice confirm button | Open YouTube | 打开 YouTube |
+| Trailer launch failure (toast) | Couldn't open YouTube. | 无法打开 YouTube。 |
 
 ## Rejected wordings
 

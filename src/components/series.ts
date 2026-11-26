@@ -611,6 +611,8 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   // Art that loads later must not pull the episode list back to the focus.
   protected override onArtSettled(): void { this.renderDetail(false); }
 
+  protected trailerId(): string { return this.currentInfo?.trailer ?? ''; }
+
   protected renderDetail(restoreFocus = true): void {
     const series = this.currentSeries;
     const a = this.account;
@@ -684,6 +686,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
                   ${this.resumeBar(resumed.position, resumed.duration)}
                 </button>` : ''}
               ${this.detailIconRow('actions', [
+                this.trailerButton(),
                 this.detailIconButton('watchlist', watchlistIcon(watchlisted),
                   t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist'), watchlisted ? 'on' : ''),
                 this.allEpisodes().length ? this.detailIconButton('watched', CHECK_ICON,

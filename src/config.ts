@@ -185,6 +185,7 @@ export const CONFIG = {
 
   // Xtream Movies/Series catalog + resume tuning.
   XTREAM: {
+    YOUTUBE_CHECK_TIMEOUT_MS: 3000,      // an unanswered YouTube app check then shows the trailer anyway
     DEFAULT_CATALOG_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
     CATALOG_RETRY_DELAY_MS: 60 * 1000,
     CATALOG_LOAD_BUDGET_MS: 60 * 1000,

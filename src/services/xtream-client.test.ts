@@ -595,8 +595,19 @@ describe('XtreamClient VOD', () => {
     expect(info).toEqual({
       plot: 'A plot', cast: 'Actor', director: 'Dir', genre: 'Drama',
       releaseDate: '2020-01-01', durationSecs: 5400, poster: 'http://host/p.png', backdrop: '', subtitles: [],
-      imdbId: '', tmdbId: '', year: 2020,
+      imdbId: '', tmdbId: '', year: 2020, trailer: '',
     });
+  });
+
+  it.each([
+    [{ youtube_trailer: 'abcDEF12_-z' }],
+    [{ youtube_trailer: '', trailer: 'https://www.youtube.com/watch?v=abcDEF12_-z' }],
+    [{ youtube_trailer: 'n/a', trailer_url: 'https://youtu.be/abcDEF12_-z' }],
+  ])('reads the YouTube trailer from %j', async (fields) => {
+    fetchTextMock.mockResolvedValue(JSON.stringify({ info: fields }));
+    expect((await createXtreamClient(creds).getVodInfo('10'))!.trailer).toBe('abcDEF12_-z');
+    fetchTextMock.mockResolvedValue(JSON.stringify({ info: fields, episodes: {} }));
+    expect((await createXtreamClient(creds).getSeriesInfo('7'))!.trailer).toBe('abcDEF12_-z');
   });
 
   it('takes the first non-empty series backdrop', async () => {
@@ -894,6 +905,7 @@ describe('XtreamClient Series', () => {
       imdbId: '',
       tmdbId: '',
       year: 0,
+      trailer: '',
       seasons: [],
       episodesBySeason: {},
     });

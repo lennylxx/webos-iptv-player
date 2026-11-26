@@ -70,6 +70,7 @@
 - **Movies & Series** — browse an Xtream account's VOD catalogs, with Continue Watching and account-scoped Watchlist rails
 - **Catalog sorting** — sort Movies and Series by name, date added, rating, or year in either direction; each section remembers its choice
 - **Category filters, watched & hidden** — narrow a category by genre or by a search within it; a movie or episode is marked watched when it plays to the end, and you can mark a movie, a whole series, a season, or one episode (Green) by hand; hide a movie or series from browsing and find it again under Show: Hidden
+- **Trailers** — when the Xtream panel lists a YouTube trailer, a movie's or series' details page opens it in the TV's YouTube app
 - **Continue Watching & Watchlist management** — remove individual titles, clear a whole list, or clear a movie's saved progress from its details page
 - **Automatic VOD queues** — continue through series episodes or remaining Watchlist movies, removing completed titles from the Watchlist; an Up Next card counts down to the next title, and the player menu jumps to the previous or next episode
 - **Catch-up & Live DVR** — replay past programs, and pause / rewind / return to the live edge on live streams; M3U catch-up supports the `default`, `append`, `shift`, `archive`, `timeshift`, `vod` (XMLTV `catchup-id`), Flussonic, and Xtream (`xc`) formats ([details](docs/catchup-formats.md))

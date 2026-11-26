@@ -1319,6 +1319,14 @@ export const StorageService = {
     else remove('aspect_dirty');
   },
 
+  // The user has read that a trailer opens in YouTube and Back won't return here.
+  getTrailerNoticeSeen(): boolean {
+    return get<unknown>('trailer_notice_seen', false) === true;
+  },
+  setTrailerNoticeSeen(): void {
+    set('trailer_notice_seen', true);
+  },
+
   // 'device' = the device's timezone (default), 'feed' = the EPG feed's timezone.
   getTzMode(): TzMode {
     return get<TzMode>('tz_mode', 'device');

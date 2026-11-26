@@ -278,6 +278,8 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     return source && text ? { source, text } : null;
   }
 
+  protected trailerId(): string { return this.currentInfo?.trailer ?? ''; }
+
   protected renderDetail(): void {
     const vod = this.currentVod;
     const a = this.account;
@@ -319,6 +321,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
               <span class="detail-btn-icon">${raw(PLAY_ICON)}</span><span>${t(saved ? 'catalog.playFromStart' : 'catalog.play')}</span>
             </button>
             ${this.detailIconRow('actions', [
+              this.trailerButton(),
               this.detailIconButton('watchlist', watchlistIcon(watchlisted),
                 t(watchlisted ? 'catalog.removeWatchlist' : 'catalog.addWatchlist'), watchlisted ? 'on' : ''),
               this.detailIconButton('watched', CHECK_ICON,

@@ -38,6 +38,8 @@ interface Setup {
   textSize?: string;
   // AI features are set up, so the round actions offer Translate.
   ai?: boolean;
+  // The title has a YouTube trailer, so the round actions offer it first.
+  trailer?: boolean;
 }
 
 const episodeId = (season: number, index: number) => season * 1000 + index + 1;
@@ -54,7 +56,8 @@ async function seed(page: Page, setup: Setup): Promise<void> {
     if (url.includes('get_vod_streams')) {
       return json([{ stream_id: 10, name: 'Movie One', stream_icon: '', container_extension: 'mp4', category_id: '1' }]);
     }
-    if (url.includes('get_vod_info')) return json({ info: { plot: 'A plot.', duration_secs: 3600 } });
+    const trailer = setup.trailer ? 'abcDEF12_-z' : '';
+    if (url.includes('get_vod_info')) return json({ info: { plot: 'A plot.', duration_secs: 3600, youtube_trailer: trailer } });
     if (url.includes('get_series_categories')) return json([{ category_id: '2', category_name: 'Cat B' }]);
     if (url.includes('get_series_info')) {
       if (setup.loading) return new Promise<void>(() => {});
@@ -66,7 +69,7 @@ async function seed(page: Page, setup: Setup): Promise<void> {
           container_extension: 'mp4', info: { duration_secs: 1500 },
         }));
       }
-      return json({ info: { name: 'Series One', plot: 'A series plot.' }, episodes });
+      return json({ info: { name: 'Series One', plot: 'A series plot.', youtube_trailer: trailer }, episodes });
     }
     if (url.includes('get_series')) return json([{ series_id: 20, name: 'Series One', cover: '', category_id: '2' }]);
     return json({});
@@ -102,6 +105,7 @@ async function openDetail(page: Page, setup: Setup): Promise<string> {
   await hover(page.locator(`${view} .catalog-tile[data-item-id="${setup.kind === 'movie' ? '10' : '20'}"]`).last());
   await page.keyboard.press('Enter');
   await expect(page.locator(`${view} .detail-actions`)).toBeVisible();
+  if (setup.trailer) await expect(page.locator(`${view} .detail-actions [data-key="trailer"]`)).toBeVisible();
   if (setup.kind === 'series') {
     const settled = setup.loading || !setup.seasons ? `${view} .catalog-hint`
       : setup.emptySeasons?.includes(1) ? `${view} .series-episodes .catalog-hint` : `${view} .episode-row`;
@@ -328,6 +332,8 @@ const SETUPS: Array<[string, Setup]> = [
   ['a resumed movie in Polish at 140%', { kind: 'movie', resume: true, wraps: true, locale: 'pl', textSize: '140' }],
   ['a resumed movie in Turkish at 130%', { kind: 'movie', resume: true, wraps: true, locale: 'tr', textSize: '130' }],
   ['a resumed movie with AI features', { kind: 'movie', resume: true, wraps: false, ai: true }],
+  ['a resumed movie with a trailer and AI features', { kind: 'movie', resume: true, wraps: true, ai: true, trailer: true }],
+  ['a resumed movie with a trailer and AI features in German at 130%', { kind: 'movie', resume: true, wraps: true, ai: true, trailer: true, locale: 'de', textSize: '130' }],
   ['a resumed movie with AI features in Russian at 130%', { kind: 'movie', resume: true, wraps: true, ai: true, locale: 'ru', textSize: '130' }],
   ['a series still loading', { kind: 'series', resume: true, wraps: false, seasons: 1, loading: true }],
   ['a series with no seasons', { kind: 'series', resume: false, wraps: false, seasons: 0 }],
@@ -340,6 +346,7 @@ const SETUPS: Array<[string, Setup]> = [
   ['a resumed series whose round actions wrap', { kind: 'series', resume: true, wraps: true, seasons: 2, markAlone: true,
     pseudo: true, textSize: '150' }],
   ['a resumed series in Turkish at 150%', { kind: 'series', resume: true, wraps: true, seasons: 2, locale: 'tr', textSize: '150' }],
+  ['a resumed series of two seasons with a trailer', { kind: 'series', resume: true, wraps: false, seasons: 2, trailer: true }],
   ['a resumed series of two seasons with AI features', { kind: 'series', resume: true, wraps: false, seasons: 2, ai: true }],
 ];
 

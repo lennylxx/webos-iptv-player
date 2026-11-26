@@ -1,6 +1,7 @@
 import { FetchTextError, fetchLimitedText } from '../utils/fetch-helper';
 import { xtreamPlayerApi, type XtreamCredentials } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
+import { firstYoutubeVideoId } from '../utils/youtube';
 import type { VodCategory, VodItem, VodInfo, SeriesCategory, SeriesItem, SeriesInfo, Episode, SidecarSubtitle } from '../types';
 import { CONFIG } from '../config';
 import { runAppWorkerTask } from '../workers/app-worker-client';
@@ -807,6 +808,7 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         imdbId: toStr(i.imdb_id ?? i.imdb).replace(/^tt/i, ''),
         tmdbId: toStr(i.tmdb_id ?? i.tmdb),
         year: Number(toStr(i.releasedate ?? i.release_date).slice(0, 4)) || 0,
+        trailer: firstYoutubeVideoId(i.youtube_trailer, i.trailer, i.trailer_url),
       };
     },
 
@@ -918,6 +920,7 @@ export function createXtreamClient(creds: XtreamCredentials, accountId = '') {
         imdbId: firstNonEmptyString(info.imdb_id, info.imdb).replace(/^tt/i, ''),
         tmdbId: firstNonEmptyString(info.tmdb_id, info.tmdb),
         year: yearMatch ? Number(yearMatch[0]) : 0,
+        trailer: firstYoutubeVideoId(info.youtube_trailer, info.trailer, info.trailer_url),
         seasons,
         episodesBySeason,
       };

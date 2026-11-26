@@ -15,7 +15,7 @@ import { cleanUrl, cssUrl, html, inShownView, raw, Safe, withInstantScroll } fro
 import { syncTabBarOverArt } from './tab-bar';
 import { backdropUrl } from '../utils/artwork';
 import { categoryLockBadge, lockBadge } from './parental-badge';
-import { AI_ICON, SORT_ASCENDING_ICON, SORT_DESCENDING_ICON, SEE_ALL_ICON, REMOVE_ICON, CHECK_ICON, TRASH_ICON, PENCIL_ICON, SEARCH_ICON } from './icons';
+import { AI_ICON, TRAILER_ICON, SORT_ASCENDING_ICON, SORT_DESCENDING_ICON, SEE_ALL_ICON, REMOVE_ICON, CHECK_ICON, TRASH_ICON, PENCIL_ICON, SEARCH_ICON } from './icons';
 import { catalogSource, ProgramTranslation, programTitleLabel, translateLabel, type ProgramView, type TranslationSource } from './program-translation';
 import type { ProgramText } from '../services/epg-translation';
 import { foldSearchText } from '../utils/channel-search';
@@ -25,6 +25,7 @@ import { showToast } from './toast';
 import { dropdown, toggleDropdown, closeDropdown, commitDropdownOption } from './dropdown';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
+import { openYoutubeTrailer, youtubeReady } from '../services/youtube-trailer';
 import {
   catalogParentalRequest,
   isResumeConcealed,
@@ -212,6 +213,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private collection: CollectionKind | null = null;
   private managing = false;
   private readonly clearPrompt: ConfirmationPrompt;
+  private readonly trailerPrompt: ConfirmationPrompt;
   protected deepLinkBack: (() => void) | null = null;
   private gridFocusIndex = 0;
   private gridReturnKey: string | null = null;
@@ -303,6 +305,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.nav = new SpatialNav(container, (el) => this.onFocusChanged(el), { follow: false });
     this.nav.setRestrict(this.layers.browse);
     this.clearPrompt = new ConfirmationPrompt(`prompt.${this.scopeName()}.collection`);
+    this.trailerPrompt = new ConfirmationPrompt(`prompt.${this.scopeName()}.trailer`);
     this.focusScope = Focus.register({
       id: `${this.scopeName()}.catalog`,
       root: container,
@@ -823,6 +826,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   setAccount(account: PlaylistEntry): void {
     if (this.account?.id !== account.id) {
       this.clearPrompt.hide();
+      this.trailerPrompt.hide();
       this.dismissSort(null);
       this.requestController?.abort();
       this.onRequestSessionReset();
@@ -872,6 +876,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     if (this.heroTimer !== null) clearTimeout(this.heroTimer);
     this.heroTimer = null;
     this.clearPrompt.hide();
+    this.trailerPrompt.hide();
     this.dismissSort(null);
     this.requestController?.abort();
     this.requestController = null;
@@ -881,6 +886,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   async open(account: PlaylistEntry): Promise<void> {
     ProgramTranslation.release(this);
     this.clearPrompt.hide();
+    this.trailerPrompt.hide();
     this.collection = null;
     this.managing = false;
     this.dismissSort(null);
@@ -1198,6 +1204,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       void this.openGrid(el.dataset.categoryId);
       return;
     }
+    if (el.dataset.action === 'trailer' && this.mode === 'detail') {
+      this.watchTrailer();
+      return;
+    }
     if (el.dataset.action === 'translate' && this.mode === 'detail') {
       const header = this.translationHeader();
       if (!ProgramTranslation.retry(this, header?.source, header?.text)) ProgramTranslation.toggle();
@@ -1312,6 +1322,51 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         if (InputMode.current === 'keys') this.request(returnKey, 'back');
       },
     });
+  }
+
+  // The detail's YouTube trailer, if the panel gave one.
+  protected trailerId(): string { return ''; }
+
+  // The YouTube app takes over and Back never returns here, so the first
+  // trailer says so before it leaves.
+  private watchTrailer(): void {
+    const videoId = this.trailerId();
+    if (!videoId) return;
+    const open = (): void => openYoutubeTrailer(videoId, () => {
+      showToast(t('catalog.trailerFailed'));
+      this.onYoutubeSettled();
+    });
+    if (StorageService.getTrailerNoticeSeen()) {
+      open();
+      return;
+    }
+    const returnKey = this.focusScope.focusKey;
+    const settle = (): void => {
+      if (InputMode.current === 'keys') this.request(returnKey, 'back');
+    };
+    this.trailerPrompt.show({
+      title: t('catalog.trailerPromptTitle'),
+      message: t('catalog.trailerPromptMessage'),
+      confirmLabel: t('catalog.openYoutube'),
+      cancelLabel: t('common.cancel'),
+      danger: false,
+      onConfirm: () => {
+        StorageService.setTrailerNoticeSeen();
+        settle();
+        open();
+      },
+      onCancel: settle,
+    });
+  }
+
+  private readonly onYoutubeSettled = (): void => {
+    if (this.mode === 'detail' && this.trailerId()) this.renderDetail(false);
+  };
+
+  // Shown only when the detail has a trailer and the TV has YouTube.
+  protected trailerButton(): Safe | '' {
+    if (!this.trailerId() || !youtubeReady(this.onYoutubeSettled)) return '';
+    return this.detailIconButton('trailer', TRAILER_ICON, t('catalog.watchTrailer'));
   }
 
   private collectionTitle(kind: CollectionKind): string {

@@ -587,6 +587,8 @@ export interface VodInfo {
   imdbId: string;
   tmdbId: string;
   year: number;
+  // A YouTube video ID; absent from details cached before trailers existed.
+  trailer?: string;
 }
 
 export interface SeriesCategory {
@@ -632,6 +634,7 @@ export interface SeriesInfo {
   imdbId: string;
   tmdbId: string;
   year: number;
+  trailer?: string;
   seasons: number[];
   episodesBySeason: Record<number, Episode[]>;
 }
