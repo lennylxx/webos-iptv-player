@@ -1,7 +1,8 @@
 import {
   PLAYLIST_URL, test, expect, enterTab, routeLiveManifest, routePlaylist, seedPlaylist, type Page,
   afterQueuedTasks, settled, routeFakeAi,
-  pinClock,
+  pinClock, runTimers, startClock,
+  CONFIG,
 } from './helpers';
 import { startFaultServer } from './fixtures/fault-server';
 
@@ -10,6 +11,8 @@ import { startFaultServer } from './fixtures/fault-server';
 
 const HEAD_CHANNELS = 3000;
 const TOTAL_CHANNELS = 6000;
+// Arriving channels redraw at most this often.
+const ARRIVAL_RENDER_MS = CONFIG.PLAYLIST_ARRIVAL_RENDER_MS;
 
 function channelLines(from: number, to: number, name = 'Channel'): string {
   let text = '';
@@ -74,12 +77,23 @@ const headShown = (page: Page) =>
 const focusedKey = (page: Page) =>
   page.locator('.channel-main .channel-item.focused').getAttribute('data-key');
 
+// CHANNEL_BATCH_SIZE in src/parsers/m3u-loader.ts: the head arrives in
+// whole batches, and the rest of the last one waits for the tail.
+const HEAD_ARRIVED = Math.floor(HEAD_CHANNELS / 512) * 512;
+
+// Every batch of the head is in and redrawn, so no batched redraw is pending.
+const headRedrawn = (page: Page) => expect.poll(async () => {
+  await runTimers(page, ARRIVAL_RENDER_MS);
+  return (await page.locator('.channel-count').textContent() ?? '').replace(/\D/g, '');
+}).toBe(String(HEAD_ARRIVED));
+
 test('the arriving channel list takes keys and keeps its place over auto-play', async ({ page }) => {
   const playlist = await serveHeldPlaylist();
   try {
     await routeLiveManifest(page);
     await seedAutoPlay(page);
     await seedPlaylist(page, playlist.url);
+    await startClock(page);
     await page.goto('/');
 
     await expect(page.locator('#view-channels')).toBeVisible();
@@ -97,7 +111,7 @@ test('the arriving channel list takes keys and keeps its place over auto-play', 
     await expect(page.locator('.channel-count')).toContainText(/6\D?000/);
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
     // Auto-play would have taken the screen from the user who started browsing.
-    await page.waitForTimeout(500);
+    await runTimers(page, 500);
     await expect(page.locator('#view-player')).toBeHidden();
     expect(await focusedKey(page)).toBe(moved);
   } finally {
@@ -240,6 +254,7 @@ test('a list that starts over under an early auto-play marks nothing as playing'
 test('a reminder launch tunes its channel instead of an early auto-play', async ({ page }) => {
   const playlist = await serveHeldPlaylist();
   try {
+    await startClock(page);
     await playChannelFive(page, playlist);
     await page.addInitScript(() => {
       const params = sessionStorage.getItem('launchParams');
@@ -263,7 +278,8 @@ test('a reminder launch tunes its channel instead of an early auto-play', async 
 
     await expect.poll(() => playlist.requests()).toBe(2);
     await headShown(page);
-    await page.waitForTimeout(500);
+    // An early auto-play would have opened the player by now.
+    await runTimers(page, 500);
     await expect(page.locator('#view-player')).toBeHidden();
     playlist.releaseRequest(1);
     await expect(page.locator('.osd-channel-name')).toHaveText('Channel 5');
@@ -343,6 +359,7 @@ test('a pointer click while the channels arrive also keeps auto-play away', asyn
     await routeLiveManifest(page);
     await seedAutoPlay(page);
     await seedPlaylist(page, playlist.url);
+    await startClock(page);
     await page.goto('/');
 
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
@@ -351,7 +368,7 @@ test('a pointer click while the channels arrive also keeps auto-play away', asyn
 
     playlist.release();
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
-    await page.waitForTimeout(500);
+    await runTimers(page, 500);
     await expect(page.locator('#view-player')).toBeHidden();
     await expect(page.locator('#view-settings')).toBeVisible();
   } finally {
@@ -365,6 +382,7 @@ test('a wheel scroll over the arriving channels also keeps auto-play away', asyn
     await routeLiveManifest(page);
     await seedAutoPlay(page);
     await seedPlaylist(page, playlist.url);
+    await startClock(page);
     await page.goto('/');
 
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
@@ -374,7 +392,7 @@ test('a wheel scroll over the arriving channels also keeps auto-play away', asyn
 
     playlist.release();
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
-    await page.waitForTimeout(500);
+    await runTimers(page, 500);
     await expect(page.locator('#view-player')).toBeHidden();
   } finally {
     await playlist.close();
@@ -437,18 +455,20 @@ test('settings saved while the channels arrive leave the background refresh for 
   const playlist = await serveHeldPlaylist();
   try {
     await seedPlaylist(page, playlist.url);
+    await startClock(page);
     await page.goto('/');
 
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(1);
     await page.locator('.tab-bar-item[data-section="settings"]').click();
     await page.locator('#save-settings').click();
     await expect(page.locator('#view-channels')).toBeVisible();
-    await page.waitForTimeout(1000);
+    // A refresh the save scheduled is due at once: it never refreshed.
+    await runTimers(page, 1000);
     expect(playlist.requests()).toBe(1);
 
     playlist.release();
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
-    await page.waitForTimeout(500);
+    await runTimers(page, 500);
     expect(playlist.requests()).toBe(1);
   } finally {
     await playlist.close();
@@ -584,10 +604,11 @@ test('a source that fails partway takes its channels off the list at once', asyn
       localStorage.setItem('iptv_playlists', JSON.stringify(
         urls.map((url, i) => ({ id: `p${String(i + 1)}`, name: `Source ${String(i + 1)}`, url }))));
     }, [failing.url, waiting.url]);
+    await startClock(page);
     await page.goto('/');
     await headShown(page);
     // Past the batched redraw of the head, which would clear the rows anyway.
-    await page.waitForTimeout(1500);
+    await headRedrawn(page);
 
     failing.failRequest(0);
     await expect.poll(waiting.requests).toBe(1);
@@ -607,9 +628,10 @@ test('the source after a failed one shows its first channels at once and focuses
       localStorage.setItem('iptv_playlists', JSON.stringify(
         urls.map((url, i) => ({ id: `p${String(i + 1)}`, name: `Source ${String(i + 1)}`, url }))));
     }, [failing.url, next.url]);
+    await startClock(page);
     await page.goto('/');
     await headShown(page);
-    await page.waitForTimeout(1500);
+    await headRedrawn(page);
 
     failing.failRequest(0);
     const focused = page.locator('.channel-main .channel-item.focused .channel-name');
@@ -734,6 +756,7 @@ test('settings applied during a reload leave a due guide refresh for after it', 
         JSON.stringify([{ url: 'http://host/guide.xml', playlistIds: [] }]));
     });
     await seedPlaylist(page, playlist.url);
+    await startClock(page);
     await page.goto('/');
     playlist.release();
     await expect(page.locator('.tab-bar-progress.active')).toHaveCount(0);
@@ -748,7 +771,7 @@ test('settings applied during a reload leave a due guide refresh for after it', 
     await page.locator('.tab-bar-item[data-section="settings"]').click();
     await page.locator('#save-settings').click();
     await expect(page.locator('#view-channels')).toBeVisible();
-    await page.waitForTimeout(1000);
+    await runTimers(page, 1000);
     expect(guideRequests).toBe(before);
 
     // The running load owns the guide refresh, so it comes once the reload is done.

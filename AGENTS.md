@@ -106,7 +106,8 @@ and `tsc` strictness are real gates.
 `.github/workflows/build.yml` runs a `check` job (`typecheck:all` —
 app, `tests`, `service`, **and** `benchmarks`; `npm run lint` and the
 compat gate; `vitest run`) in parallel with Playwright E2E split across
-four `e2e` shards; once both pass, `package` runs the esbuild bundle,
+five `e2e` jobs, three shards plus two for the slow `@sweep` navigation
+sweeps; once both pass, `package` runs the esbuild bundle,
 `service:smoke:matrix`, and packages the IPK. Pushes/PRs to `main`
 build; tagged `v*` pushes publish a GitHub release with the `.ipk`.
 
@@ -186,7 +187,8 @@ build constant; `scripts/sync-version.mjs` runs on `npm version`.
 
 - **Build-time constants** `__APP_VERSION__`, `__APP_ID__`, `__SERVICE_ID__`
   are injected via esbuild `define`. Keep all three in lockstep across
-  `esbuild.config.mjs`, `vitest.config.ts`, and `src/globals.d.ts`.
+  `esbuild.config.mjs`, `vitest.config.ts`, `e2e/build-defines.ts`, and
+  `src/globals.d.ts`.
 - **XSS safety.** Channel names, program titles, group titles, and logo URLs
   come from untrusted M3U/XMLTV. Always interpolate them through `html`
   (auto-escapes); wrap only genuinely trusted markup in `raw(...)`. A URL in

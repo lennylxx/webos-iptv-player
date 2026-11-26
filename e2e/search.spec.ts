@@ -13,6 +13,9 @@ import {
   HOUR_MS,
   startClock,
   xmltvTime,
+  runAiTimers,
+  TRANSLATION_DWELL_MS,
+  CONFIG,
 } from './helpers';
 
 // Seed one Xtream account (enables the tab bar) and stub the player_api.php
@@ -1033,6 +1036,11 @@ test('Left and Right keep a recent search on its line', async ({ page }) => {
   await expect(tiles.nth(lineStarts[1] - 1)).toHaveClass(/\bfocused\b/);
 });
 
+// AI query expansion waits for typing to pause this long.
+const EXPANSION_DELAY_MS = CONFIG.SEARCH.EXPANSION_DELAY_MS;
+// The AI client retries a server error twice, after about 2 s and 4 s.
+const AI_RETRIES_MS = 10_000;
+
 // An OpenAI-compatible server at http://ai.test/v1 that offers `alternatives`
 // for every query (or fails), recording the user messages it was sent.
 async function routeSearchAi(
@@ -1092,7 +1100,7 @@ test('a failing AI server leaves the search results as they were', async ({ page
   await page.locator('.tab-bar-search-input').fill('movie');
   await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toContainText('Movie One');
   await expect.poll(() => sent.length).toBeGreaterThan(0);
-  await page.waitForTimeout(300);
+  await runAiTimers(page, AI_RETRIES_MS);
   await expect(page.locator('#view-search .search-expanded')).toHaveCount(0);
   await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toContainText('Movie One');
 });
@@ -1106,7 +1114,7 @@ test('search sends nothing to the AI server until Search in other languages is o
   await enterSearch(page);
   await page.locator('.tab-bar-search-input').fill('movie');
   await expect(page.locator('#view-search .catalog-tile[data-stream-id="10"]')).toContainText('Movie One');
-  await page.waitForTimeout(1000);
+  await runAiTimers(page, 2 * EXPANSION_DELAY_MS);
   expect(sent).toEqual([]);
 
   await enterTab(page, 'settings');
@@ -1545,6 +1553,7 @@ test('AI program genres ask before the first run, then Search shows and filters 
   expect((JSON.parse(sent[1]) as { genres: string[] }).genres.sort()).toEqual(['Genre B', 'Sports']);
 });
 
+
 // Two upcoming programs that match "report" and one that matches "movie", and an AI server that adds " (de)"
 // to every "[Tn]"/"[Dn]" line it is sent.
 async function seedTranslatedSearch(page: import('@playwright/test').Page): Promise<string[]> {
@@ -1604,7 +1613,13 @@ test('with translation on, the program rows on screen translate in one request o
 
   const input = page.locator('.tab-bar-search-input');
   await input.fill('');
-  await input.pressSequentially('report', { delay: 60 });
+  // Typed 60 ms apart on held time, so no partial query outlasts the dwell on a slow machine.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 2000));
+  for (const letter of 'report') {
+    await input.press(letter);
+    await page.clock.runFor(60);
+  }
+  await page.clock.resume();
   const titles = page.locator('#view-search .search-program-title');
   await expect(titles).toHaveCount(2);
   await expect.poll(async () => (await titles.allTextContents()).sort())
@@ -1626,7 +1641,7 @@ test('with translation on, the program rows on screen translate in one request o
   await input.fill('report');
   await expect.poll(async () => (await titles.allTextContents()).sort())
     .toEqual(['Future Report (de)', 'Later Report (de)']);
-  await page.waitForTimeout(600);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(programRequests()).toHaveLength(1);
 });
 
@@ -1648,7 +1663,7 @@ test('after a reload, program rows translated before come back without a request
   await input.fill('report');
   await expect.poll(async () => (await titles.allTextContents()).sort())
     .toEqual(['Future Report (de)', 'Later Report (de)']);
-  await page.waitForTimeout(600);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toHaveLength(before);
 });
 

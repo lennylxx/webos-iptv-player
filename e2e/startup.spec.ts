@@ -8,6 +8,7 @@ import {
   SAMPLE_M3U,
   type Page,
   startClock,
+  runTimers,
 } from './helpers';
 
 interface StartupProbe {
@@ -141,6 +142,7 @@ test('channels render while service startup is pending without duplicate work', 
   await routePlaylist(page);
   await seedPlaylist(page);
   await installStartupHarness(page, { visibility: 'hidden' });
+  await startClock(page);
 
   await page.goto('/');
   await liveLoaded(page);
@@ -158,7 +160,8 @@ test('channels render while service startup is pending without duplicate work', 
   await releaseServiceStart(page);
   await expect.poll(async () => (await startupProbe(page)).subscriptions).toBe(1);
   await expect.poll(() => uploadLists).toBe(1);
-  await page.waitForTimeout(250);
+  // A duplicate start or upload list would have followed by now.
+  await runTimers(page, 250);
   expect(await startupProbe(page)).toMatchObject({ starts: 1, subscriptions: 1 });
   expect(uploadLists).toBe(1);
 });

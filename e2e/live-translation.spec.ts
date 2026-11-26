@@ -1,4 +1,4 @@
-import { fakeAiConfig, expect, liveLoaded, neuterVideo, routePlaylist, test, type Page, pinClock, xmltvTime } from './helpers';
+import { fakeAiConfig, expect, liveLoaded, neuterVideo, routePlaylist, test, type Page, startClock, xmltvTime, runAiTimers, TRANSLATION_DWELL_MS } from './helpers';
 
 // Program info translation in Live: the legend's hint turns it on, and the
 // visible rows, the preview's program, and its Up next go in one request.
@@ -32,7 +32,7 @@ async function setup(page: Page): Promise<string[]> {
     return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
       body: JSON.stringify({ choices: [{ message: { content: reply } }] }) });
   });
-  await pinClock(page, new Date('2024-03-09T12:10:00Z'));
+  await startClock(page, new Date('2024-03-09T12:10:00Z'));
   await page.addInitScript((config) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
@@ -135,10 +135,14 @@ test('the legend hint translates the visible rows, the preview, and Up next in o
   await hint(page).click();
   await expect(rowTitle(page, 1)).toHaveText('Ch1 Program 24');
   await expect(rowTitle(page, 1).locator('.ai-icon')).toHaveCount(0);
+  // Held time: they show without the dwell running out. The pause point
+  // leaves room for the running clock to move before it lands.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 2000));
   await hint(page).click();
-  await expect(rowTitle(page, 1)).toHaveText('Ch1 Programm 24', { timeout: 300 });
-  await expect(page.locator('#live-preview .live-preview-title')).toHaveText('Ch1 Programm 24', { timeout: 300 });
-  await page.waitForTimeout(800);
+  await expect(rowTitle(page, 1)).toHaveText('Ch1 Programm 24');
+  await expect(page.locator('#live-preview .live-preview-title')).toHaveText('Ch1 Programm 24');
+  await page.clock.resume();
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toHaveLength(1);
 });
 
@@ -148,7 +152,7 @@ test('after a relaunch the stored translations come back without a request', asy
   await openPreview(page);
   await hint(page).click();
   await expect(page.locator('#live-preview .live-preview-title')).toHaveText('Ch1 Programm 24');
-  await page.waitForTimeout(800);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toHaveLength(1);
 
   await openPreview(page);
@@ -156,6 +160,6 @@ test('after a relaunch the stored translations come back without a request', asy
   await hint(page).click();
   await expect(rowTitle(page, 1)).toHaveText('Ch1 Programm 24');
   await expect(page.locator('#live-preview .live-preview-program').first()).toContainText('Ch1 Programm 25');
-  await page.waitForTimeout(800);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toHaveLength(1);
 });

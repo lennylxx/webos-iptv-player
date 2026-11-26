@@ -9,8 +9,11 @@ import {
   seedPlaylist,
   type Page,
   NOW,
+  runTimers,
   startClock,
   xmltvTime,
+  holdClock,
+  CONFIG,
 } from './helpers';
 import type { Locator } from '@playwright/test';
 import type { ResumeEntry, WatchlistEntry } from '../src/types';
@@ -19,18 +22,37 @@ import type { ResumeEntry, WatchlistEntry } from '../src/types';
 // scrolls itself while the pointer rests near one of its ends, after a dwell,
 // and stops on anything that is not that pointer resting there.
 
+// Every test starts the page clock, so the edge scroll's frames and timers
+// can be held and run: what a test measures is clock time, not machine speed.
+
 const EDGE_INSET = 20;
-const DWELL_MS = 400;
-const DWELL_PROBE_MS = 150;
+const DWELL_MS = CONFIG.NAVIGATION.EDGE_SCROLL_DWELL_MS;
+const MIN_SPEED = CONFIG.NAVIGATION.EDGE_SCROLL_MIN_SPEED_PX_PER_SECOND;
+const MAX_SPEED = CONFIG.NAVIGATION.EDGE_SCROLL_MAX_SPEED_PX_PER_SECOND;
+const DWELL_PROBE_MS = 100;
 const STILL_MS = 800;
-// The controller eases from 600px/s up to 2400px/s; anything well past the
-// top speed is extra motion (stacked smooth scrolls or hover-driven
+const RATE_SAMPLE_MS = 500;
+// The controller eases from its slowest to its fastest speed; anything well
+// past the top speed is extra motion (stacked smooth scrolls or hover-driven
 // scrollIntoView) riding along.
-const MAX_RATE = 3000;
-const MIN_RATE = 450;
+const MAX_RATE = MAX_SPEED * 1.25;
+const MIN_RATE = MIN_SPEED * 0.75;
 type EdgeSide = 'left' | 'right' | 'outer-left' | 'outer-right';
 
 const left = (track: Locator): Promise<number> => track.evaluate((el) => el.scrollLeft);
+
+// Reads until two reads agree: with the clock held, only a native smooth
+// scroll can still be moving the track.
+async function settledLeft(track: Locator): Promise<number> {
+  let last = Number.NaN;
+  await expect.poll(async () => {
+    const now = await left(track);
+    const settled = now === last;
+    last = now;
+    return settled;
+  }, { intervals: [100], timeout: 5000 }).toBe(true);
+  return last;
+}
 const maxLeft = (track: Locator): Promise<number> =>
   track.evaluate((el) => el.scrollWidth - el.clientWidth);
 const ownerScope = (page: Page) =>
@@ -84,7 +106,9 @@ async function nudge(page: Page, at: { x: number; y: number }): Promise<void> {
   await page.mouse.move(at.x, at.y);
 }
 
+// Lets the clock run again and waits for the track to move on.
 async function expectScrolling(track: Locator, dir: 'left' | 'right', from: number, by = 24): Promise<number> {
+  await track.page().clock.resume();
   await expect.poll(() => left(track), { timeout: 5000 })[dir === 'right' ? 'toBeGreaterThan' : 'toBeLessThan'](
     dir === 'right' ? from + by : from - by);
   return left(track);
@@ -107,12 +131,13 @@ async function expectLeftBleed(track: Locator): Promise<void> {
 }
 
 async function expectSteadyRate(page: Page, track: Locator): Promise<void> {
+  await holdClock(page);
   const from = await left(track);
   const room = await maxLeft(track) - from;
-  const started = Date.now();
-  await page.waitForTimeout(500);
-  const moved = Math.abs(await left(track) - from);
-  const rate = (moved * 1000) / (Date.now() - started);
+  await runTimers(page, RATE_SAMPLE_MS);
+  const moved = Math.abs(await settledLeft(track) - from);
+  await page.clock.resume();
+  const rate = (moved * 1000) / RATE_SAMPLE_MS;
   expect(rate, 'edge scroll ran faster than its own speed').toBeLessThan(MAX_RATE);
   expect(moved).toBeGreaterThan(0);
   if (room > 600) expect(rate, 'edge scroll fell behind its own speed').toBeGreaterThan(MIN_RATE);
@@ -143,31 +168,23 @@ async function expectStopped(page: Page, track: Locator): Promise<number> {
     last = now;
     return settled;
   }, { intervals: [150], timeout: 5000 }).toBe(true);
-  await page.waitForTimeout(STILL_MS);
+  await runTimers(page, STILL_MS);
   expect(await left(track), 'the track restarted without real pointer movement').toBe(last);
   return last;
 }
 
 // Inside the edge, the dwell holds the track still before it moves. Hovering
-// a clipped tab may first bring it into view once, so compare two samples
-// taken inside the dwell rather than the position before the move. On a
-// machine too slow to sample inside the dwell the probe is skipped rather
-// than flake; edge-scroll.test.ts pins the dwell on a fake clock.
+// a clipped tab may first bring it into view once, so compare two positions
+// inside the dwell rather than the position before the move. The clock stays
+// held, short of the dwell, until the caller runs it.
 async function enterEdgeAndDwell(page: Page, track: Locator, side: EdgeSide) {
+  await holdClock(page);
   const at = await pointAt(page, track, side);
-  const arrived = Date.now();
-  let from = await left(track);
-  while (Date.now() - arrived < DWELL_MS - 60) {
-    await page.waitForTimeout(40);
-    const now = await left(track);
-    if (now === from) break;
-    from = now;
-  }
-  const spare = DWELL_MS - 60 - (Date.now() - arrived);
-  if (spare > 80) {
-    await page.waitForTimeout(Math.min(DWELL_PROBE_MS, spare));
-    expect(await left(track), 'the track scrolled before the dwell').toBe(from);
-  }
+  await settledLeft(track);
+  await runTimers(page, DWELL_PROBE_MS);
+  const from = await settledLeft(track);
+  await runTimers(page, DWELL_MS - DWELL_PROBE_MS - 20);
+  expect(await left(track), 'the track scrolled before the dwell').toBe(from);
   return { at, from };
 }
 
@@ -281,6 +298,7 @@ for (const section of ['movies', 'series'] as const) {
         localStorage.setItem('iptv_text_size', JSON.stringify('150'));
       });
     }
+    await startClock(page);
     await page.goto('/');
     await liveLoaded(page);
     await enterTab(page, section);
@@ -338,6 +356,7 @@ for (const section of ['movies', 'series'] as const) {
 test('a category rail cancels before the dwell, stops on a key or a window blur, and restarts only on real movement', async ({ page }) => {
   test.setTimeout(60_000);
   await seedCatalog(page);
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'movies');
@@ -351,7 +370,7 @@ test('a category rail cancels before the dwell, stops on a key or a window blur,
   await pointAt(page, track, 'center');
   await enterEdgeAndDwell(page, track, 'right');
   await pointAt(page, track, 'center');
-  await page.waitForTimeout(STILL_MS);
+  await runTimers(page, STILL_MS);
   expect(await left(track)).toBe(0);
 
   // A remote key stops it, and the resting pointer does not restart it.
@@ -377,6 +396,7 @@ test('a category rail cancels before the dwell, stops on a key or a window blur,
 test('All categories scrolls through its virtual window without opening a category, and a wheel stops it', async ({ page }) => {
   test.setTimeout(60_000);
   await seedCatalog(page, { categories: 40, perCategory: 4 });
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'movies');
@@ -440,7 +460,8 @@ async function scrollFarThenKey(
     const b = tile.getBoundingClientRect();
     return b.left >= r.left - 1 && b.right <= r.right + 1;
   }), { message: 'the ring is on screen in the rail' }).toBe(true);
-  await page.waitForTimeout(STILL_MS);
+  await runTimers(page, STILL_MS);
+  await settledLeft(track);
   expect(await left(track), 'the remote jumped back from where the rail was')
     .toBeGreaterThan(far - 300);
 }
@@ -448,6 +469,7 @@ async function scrollFarThenKey(
 test('after a long edge scroll, a key or a hidden cursor then a key continues from the pointed tile of a category rail', async ({ page }) => {
   test.setTimeout(90_000);
   await seedCatalog(page, { perCategory: 60 });
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'movies');
@@ -464,6 +486,7 @@ test('after a long edge scroll, a key or a hidden cursor then a key continues fr
 test('after a long edge scroll, the remote continues from the pointed result of a virtual Search rail', async ({ page }) => {
   test.setTimeout(90_000);
   await seedCatalog(page, { categories: 2, perCategory: 150 });
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'search');
@@ -485,6 +508,7 @@ test('after a long edge scroll, the remote continues from the pointed result of 
 test('Search: a virtual results rail scrolls far and keeps a usable ring; a hidden cursor or document stops a rail', async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   await seedCatalog(page, { categories: 2, perCategory: 150, channels: 60 });
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'search');
@@ -560,6 +584,7 @@ test('Search: a virtual results rail scrolls far and keeps a usable ring; a hidd
 test('Live playlist tabs scroll and reverse without selecting a playlist, and a press stops them', async ({ page }) => {
   test.setTimeout(60_000);
   await seedPlaylists(page);
+  await startClock(page);
   await page.goto('/');
   await expect(page.locator('#view-channels .channel-item').first()).toBeVisible();
   const tabs = page.locator('#view-channels .playlist-tabs');
@@ -598,6 +623,7 @@ test('player sidebar tabs scroll without switching playlists and stop when the p
   await neuterVideo(page);
   await routeLiveManifest(page);
   await seedPlaylists(page);
+  await startClock(page);
   await page.goto('/');
   await expect(page.locator('#view-channels .channel-item.focused')).toHaveCount(1);
   await page.keyboard.press('Enter');
@@ -670,6 +696,7 @@ test('Guide dates scroll to their end and back without selecting a day', async (
 
   await pointAt(page, dates, 'center');
   await enterEdgeAndDwell(page, dates, 'right');
+  await page.clock.resume();
   const end = await maxLeft(dates);
   await expect.poll(() => left(dates), { timeout: 10_000 }).toBeGreaterThanOrEqual(end - 1);
   await expectStopped(page, dates);
@@ -698,6 +725,7 @@ test('a prompt that takes the keys stops the scroll, and the pointer cannot scro
   await neuterVideo(page);
   await routeLiveManifest(page);
   await seedPlaylists(page);
+  await startClock(page);
   await page.goto('/');
   await expect(page.locator('#view-channels .channel-item').first()).toBeVisible();
 
@@ -731,7 +759,7 @@ test('a prompt that takes the keys stops the scroll, and the pointer cannot scro
 
   // Real movement in the edge of a track the prompt covers does nothing.
   await nudge(page, at);
-  await page.waitForTimeout(1000);
+  await runTimers(page, DWELL_MS + STILL_MS);
   expect(await left(tabs)).toBe(stopped);
   await expect(prompt).toBeVisible();
 });

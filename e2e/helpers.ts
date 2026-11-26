@@ -1,6 +1,9 @@
+import './build-defines';
 import { appendFileSync } from 'node:fs';
 import { test as base, expect, type Locator, type Page } from '@playwright/test';
 import { postTargetApis, removeApis } from '../scripts/chromium-53-simulation.mjs';
+import { E2E_ENV } from '../playwright.config';
+import { CONFIG } from '../src/config';
 import { THEMES } from '../src/config/themes';
 import { capabilitySignature, normalizeLlmConfig } from '../src/services/llm/config';
 
@@ -26,10 +29,57 @@ export function startClock(page: Page, at: Date | number | string = NOW): Promis
   return page.clock.install({ time: at });
 }
 
+// Runs the timers due in the next `ms` at once, on a clock startClock started,
+// so a check that nothing more happens doesn't depend on how fast the machine is.
+export async function runTimers(page: Page, ms: number): Promise<void> {
+  await page.clock.runFor(ms);
+  // A round trip, so requests those timers sent have reached the routes.
+  await page.evaluate(() => 0);
+}
+
+// Stops a started clock where it is, so a read after runTimers can't race a
+// timer. The pause lands a little ahead, as the clock runs until it is set.
+export async function holdClock(page: Page): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    const now = await page.evaluate(() => Date.now());
+    try {
+      await page.clock.pauseAt(now + 50);
+      return;
+    } catch (error) {
+      // The running clock passed that moment before the pause reached it.
+      if (attempt >= 10) throw error;
+    }
+  }
+}
+
+// TRANSLATION_DWELL_MS in src/components/program-translation.ts: a surface
+// sends what it shows once it has shown it this long.
+export const TRANSLATION_DWELL_MS = 400;
+
+// runTimers, then waits out the AI cache lookups those timers started: a write
+// on the cache store waits for every earlier lookup, so a request a lookup
+// leads to has gone out by the time this returns.
+export async function runAiTimers(page: Page, ms: number): Promise<void> {
+  await runTimers(page, ms);
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    const open = indexedDB.open('iptv');
+    open.onerror = () => resolve();
+    open.onsuccess = () => {
+      const tx = open.result.transaction('llm-cache', 'readwrite');
+      tx.oncomplete = tx.onabort = () => {
+        open.result.close();
+        setTimeout(() => requestAnimationFrame(() => resolve()), 0);
+      };
+    };
+  }));
+}
+
 // An XMLTV programme time, in UTC.
 export function xmltvTime(at: Date | number): string {
   return `${new Date(at).toISOString().replace(/[-:T]/g, '').slice(0, 14)} +0000`;
 }
+
+export { CONFIG };
 
 export const PLAYLIST_URL = 'http://host.example.com/playlist.m3u';
 
@@ -238,15 +288,26 @@ const POST_TARGET_APIS = postTargetApis();
 
 // Every spec imports `test` from here; it auto-stubs the service probe
 // before each test so no file has to repeat it.
-export const test = base.extend({
-  page: async ({ page }, use, testInfo) => {
+export interface E2EOptions {
+  // How many times slower the page runs, through CDP CPU throttling; set in
+  // playwright.config.ts.
+  cpuThrottle: number;
+}
+
+export const test = base.extend<E2EOptions>({
+  cpuThrottle: [1, { option: true }],
+  page: async ({ page, cpuThrottle }, use, testInfo) => {
     // The simulation project strips every API Chromium 53 lacks before the app
     // loads, so unguarded use fails here instead of on a TV.
     if (testInfo.project.name === 'chromium-53-simulation') {
       await page.addInitScript(removeApis, POST_TARGET_APIS);
     }
     await stubUploadService(page);
-    const ringFailures = await auditRings(page, process.env.RING_AUDIT,
+    if (cpuThrottle > 1) {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpuThrottle });
+    }
+    const ringFailures = await auditRings(page, E2E_ENV.ringAuditFile,
       `${testInfo.project.name} › ${testInfo.titlePath.slice(1).join(' › ')}`);
     await use(page);
     if (!page.isClosed()) {

@@ -1,10 +1,12 @@
-import { enterTab, expect, fakeAiConfig, liveLoaded, test, type Page } from './helpers';
+import { enterTab, expect, fakeAiConfig, liveLoaded, startClock, test, type Page, runAiTimers, TRANSLATION_DWELL_MS } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // Movie and series info translation: Translate on a detail page turns on the
 // session's translation, and the title and description come back labeled.
 
+
 async function setup(page: Page): Promise<string[]> {
+  await startClock(page);
   await seedXtream(page);
   const sent: string[] = [];
   await page.route('http://ai.test/v1/chat/completions', (route) => {
@@ -90,7 +92,7 @@ test('a series translates its own info and the episodes on screen in one request
     await page.keyboard.press('ArrowDown');
   }
   await expect(row).toHaveClass(/\bfocused\b/);
-  await page.waitForTimeout(600);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toHaveLength(1);
   await expect(view.locator('.detail-plot')).toHaveText('AI translation · A series plot. (de)');
 });

@@ -8,7 +8,12 @@ import {
   readUserDataStore,
   type Page,
   settled,
+  startClock,
+  runTimers,
+  CONFIG,
 } from './helpers';
+
+const { FOCUS_REPEAT_WINDOW_MS, ICON_NAME_HOLD_MS } = CONFIG.NAVIGATION;
 
 // Resume, Play, and the round title actions share one row and one midline.
 const DETAIL_ACTIONS = '#view-movies .detail-btn[data-action="resume"], #view-movies .detail-btn[data-action="play"], #view-movies .detail-icon-circle';
@@ -331,6 +336,23 @@ async function circleCenter(page: Page, action: string): Promise<{ x: number; y:
   });
 }
 
+// Each round action's name: open (its class opens it and it has slid all the
+// way), closed, or still sliding; open or closed, no slide is left to start.
+async function nameStates(page: Page): Promise<Record<string, string>> {
+  return page.locator('#view-movies .detail-icon-row').first().evaluate((row) => {
+    const full = parseFloat(row.style.getPropertyValue('--name-width')) + 22;
+    const states: Record<string, string> = {};
+    for (const btn of Array.from(row.querySelectorAll<HTMLElement>('.detail-icon-btn'))) {
+      const width = parseFloat(getComputedStyle(btn.querySelector('.detail-icon-label')!).width);
+      const opens = btn.classList.contains('focused') || btn.classList.contains('name-held');
+      states[btn.dataset.action ?? ''] = opens
+        ? (Math.abs(width - full) < 0.5 ? 'open' : 'sliding')
+        : (width === 0 ? 'closed' : 'sliding');
+    }
+    return states;
+  });
+}
+
 async function actionAt(page: Page, point: { x: number; y: number }): Promise<string | null> {
   return page.evaluate(({ x, y }) =>
     document.elementFromPoint(x, y)?.closest('[data-action]')?.getAttribute('data-action') ?? null, point);
@@ -361,23 +383,29 @@ test('every name in a row opens to the longest one\'s width, with the keys and t
 });
 
 test('the pointer moving from a long name to a short one under full animation stays on its target', async ({ page }) => {
+  await startClock(page);
   await openResumedMovie(page, 'full');
   await page.mouse.move(960, 950);
   const watched = await circleCenter(page, 'watched');
   await page.mouse.move(watched.x, watched.y, { steps: 4 });
   await expect(page.locator('#view-movies [data-action="watched"]')).toHaveClass(/focused/);
+  const closedNames = Object.fromEntries(Object.keys(await nameStates(page)).map((action) => [action, 'closed']));
   // Resting between the open name and the next circle keeps the name open.
   const hideBefore = await settled(() => circleCenter(page, 'hide'));
   const between = { x: hideBefore.x - 31 - 6, y: hideBefore.y };
   await page.mouse.move(between.x, between.y, { steps: 2 });
-  await page.waitForTimeout(400);
+  // Past the hold a name gets once the pointer slips off onto nothing.
+  await runTimers(page, ICON_NAME_HOLD_MS);
+  await expect.poll(() => nameStates(page)).toEqual({ ...closedNames, watched: 'open' });
   expect(await actionAt(page, between)).toBe('watched');
   await expect(page.locator('#view-movies [data-action="watched"]')).toHaveClass(/focused/);
   expect(await circleCenter(page, 'hide')).toEqual(hideBefore);
   const hide = await circleCenter(page, 'hide');
   await page.mouse.move(hide.x, hide.y, { steps: 2 });
   await expect(page.locator('#view-movies [data-action="hide"]')).toHaveClass(/focused/);
-  await page.waitForTimeout(400);
+  // Once the slides end, with any hold on the name left behind run out.
+  await runTimers(page, ICON_NAME_HOLD_MS);
+  await expect.poll(() => nameStates(page)).toEqual({ ...closedNames, hide: 'open' });
   expect(await actionAt(page, hide)).toBe('hide');
   await expect(page.locator('#view-movies [data-action="hide"]')).toHaveClass(/focused/);
 });
@@ -455,10 +483,12 @@ test('a name opened before the text grew fits again when the keys come back from
 });
 
 test('a name still opening when the next one takes focus switches at once', async ({ page }) => {
+  await startClock(page);
   await openResumedMovie(page, 'full');
   await page.keyboard.press('ArrowRight');
   await expect(page.locator('#view-movies [data-action="play"]')).toHaveClass(/focused/);
-  await page.waitForTimeout(300);
+  // Apart from the earlier press, so the next is no held key.
+  await page.clock.runFor(FOCUS_REPEAT_WINDOW_MS + 120);
   // One frame apart, so the first name starts opening and the second press still
   // lands within its slide however slow the machine.
   await page.evaluate(() => new Promise<void>((resolve) => {

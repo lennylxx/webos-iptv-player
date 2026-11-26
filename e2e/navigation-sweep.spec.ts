@@ -1,4 +1,5 @@
 import { fakeAiConfig, test, expect, routeLiveManifest, routeFakeAi, enterTab, liveLoaded, type Page } from './helpers';
+import { E2E_ENV } from '../playwright.config';
 import { seedXtream } from './fixtures/xtream';
 import { channelPlaylist, guide } from './fixtures/live';
 import {
@@ -171,8 +172,9 @@ function installProbe(): void {
       tag,
     };
   };
+  // The frames a key renders, then the zero-delay work it queued.
   const settle = () => new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 30)));
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)));
   });
   const focus = (s: ProbeScreen): Focus => {
     const owner = document.querySelector('[data-ring-owner]');
@@ -1097,7 +1099,7 @@ function watchErrors(page: Page): string[] {
 // NAV_REPORT=1 prints what each test covered.
 function report(s: Screen, kind: string, lines: string[]): void {
   test.info().annotations.push({ type: `${s.name} ${kind}`, description: lines.join('\n') });
-  if (process.env.NAV_REPORT) console.log(`[${test.info().project.name}] ${s.name} ${kind}\n  ${lines.join('\n  ')}`);
+  if (E2E_ENV.navReport) console.log(`[${test.info().project.name}] ${s.name} ${kind}\n  ${lines.join('\n  ')}`);
 }
 
 function expectClean(s: Screen, run: Run, errors: string[], requireKnown: boolean): void {
@@ -1117,7 +1119,7 @@ const WALK_PRESSES = 150;
 
 for (const s of SCREENS) {
   test.describe(s.name, () => {
-    test(`every arrow key from what ${s.name} shows, and arrow keys reach all of it`, async ({ page }) => {
+    test(`every arrow key from what ${s.name} shows, and arrow keys reach all of it`, { tag: '@sweep' }, async ({ page }) => {
       test.setTimeout(240_000);
       const errors = watchErrors(page);
       await seed(page);
@@ -1232,7 +1234,7 @@ for (const s of SCREENS) {
       });
     }
 
-    test(`a seeded keyboard-only walk on ${s.name}`, async ({ page }, testInfo) => {
+    test(`a seeded keyboard-only walk on ${s.name}`, { tag: '@sweep' }, async ({ page }, testInfo) => {
       // The per-key sweep covers the legacy engine; the walk adds no engine-specific path.
       test.skip(testInfo.project.name === 'chromium-53-simulation', 'walks run in chromium only');
       test.setTimeout(240_000);

@@ -1,5 +1,7 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page, pressStepsAndReadPlayer, seedPointer, liveLoaded } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page, pressStepsAndReadPlayer, seedPointer, liveLoaded, startClock, runTimers, afterQueuedTasks, CONFIG } from './helpers';
 import { seedXtream } from './fixtures/xtream';
+
+const FOCUS_REPEAT_WINDOW_MS = CONFIG.NAVIGATION.FOCUS_REPEAT_WINDOW_MS;
 
 // A minimal ASS body with one dialogue active from t=0, so assjs renders it as
 // soon as it initializes over the (paused, t=0) video.
@@ -121,6 +123,7 @@ test('keeps the focus ring clear of the rail edge at See all', async ({ page }) 
 test('Back to See all jumps straight to it under full animation', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('iptv_animation_mode', JSON.stringify('full')));
   await seedXtream(page, { catalog: 'large' });
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'movies');
@@ -147,7 +150,7 @@ test('Back to See all jumps straight to it under full animation', async ({ page 
   await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat D');
   // Linger past FOCUS_REPEAT_WINDOW_MS, inside which SpatialNav scrolls
   // instantly anyway, as a held key would.
-  await page.waitForTimeout(400);
+  await page.clock.runFor(FOCUS_REPEAT_WINDOW_MS * 2);
   // Read the layout in the same task as Back: the resident browse must have
   // the tile in place already, with no scroll left to replay.
   const placement = await page.evaluate(() => {
@@ -216,8 +219,9 @@ test('holds the rails on screen still when the rail at the top fails', async ({ 
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
   await expect(fifth).toHaveClass(/focused/);
   const topOf = () => fifth.evaluate((el) => Math.round(el.getBoundingClientRect().top));
-  await expect.poll(async () => { const a = await topOf(); await page.waitForTimeout(150); return a === await topOf(); })
-    .toBe(true);
+  // The rails stand where they stay once every rail but the held one has loaded.
+  await expect(movies.locator('[data-rail-pending]')).toHaveCount(1);
+  await expect(movies.locator('[data-rail-key="cat:3"]')).toHaveAttribute('data-rail-pending', '');
   // The loading rail is the topmost one on screen, so it anchors the scroll.
   const anchored = await movies.locator('.catalog-rails').evaluate((rails) => {
     const top = rails.getBoundingClientRect().top;
@@ -278,8 +282,9 @@ test('Back holds the rails still when a rail above failed while a detail was ope
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
   await expect(fifth).toHaveClass(/focused/);
   const topOf = () => fifth.evaluate((el) => Math.round(el.getBoundingClientRect().top));
-  await expect.poll(async () => { const a = await topOf(); await page.waitForTimeout(150); return a === await topOf(); })
-    .toBe(true);
+  // The rails stand where they stay once every rail but the held one has loaded.
+  await expect(movies.locator('[data-rail-pending]')).toHaveCount(1);
+  await expect(movies.locator('[data-rail-key="cat:3"]')).toHaveAttribute('data-rail-pending', '');
   const before = await topOf();
   await page.keyboard.press('Enter');
   await expect(movies.locator('.catalog-layer-detail')).not.toHaveClass(/catalog-layer-hidden/);
@@ -305,8 +310,8 @@ test('Back holds the rails still when the detail added the Watchlist rail above'
   await page.keyboard.press('ArrowUp');
   await expect(fourth).toHaveClass(/focused/);
   const topOf = () => fourth.evaluate((el) => Math.round(el.getBoundingClientRect().top));
-  await expect.poll(async () => { const a = await topOf(); await page.waitForTimeout(150); return a === await topOf(); })
-    .toBe(true);
+  // The rails stand where they stay once every rail has loaded.
+  await expect(movies.locator('[data-rail-pending]')).toHaveCount(0);
   const before = await topOf();
   await page.keyboard.press('Enter');
   const watchlist = movies.locator('.catalog-layer-detail .detail-icon-btn[data-key="watchlist"]');
@@ -342,10 +347,11 @@ test('a rail that lands under the open sort menu shows once a click closes it', 
   const rail = movies.locator('[data-rail-key="cat:2"]');
   await trigger.click();
   await expect(movies.locator('.catalog-sort .dropdown.open')).toHaveCount(1);
-  const landed = page.waitForResponse((r) => r.url().includes('category_id=2'));
+  // The catalog logs the rail's list once it has it, just before handing it on.
+  const landed = page.waitForEvent('console', (msg) => /\bfetched \S+\|vod_streams[^|]*\|2 \(/.test(msg.text()));
   releaseRail();
   await landed;
-  await page.waitForTimeout(300);
+  await afterQueuedTasks(page);
   await expect(rail).toHaveAttribute('data-rail-pending', '');
   await trigger.click();
   await expect(movies.locator('.catalog-sort .dropdown.open')).toHaveCount(0);
@@ -552,6 +558,7 @@ test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu
   // Keep VOD alive in the player: neuter the <video> so the empty mock movie
   // file doesn't fire `error` and eject back to Movies before we probe the edges.
   await neuterVideo(page);
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
 
@@ -574,7 +581,7 @@ test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu
   // wait) — the sidebar auto-hides, which would mask a wrong show.
   await seedPointer(page);
   await page.mouse.move(10, 540);
-  await page.waitForTimeout(200);
+  await runTimers(page, 200);
   expect(await page.locator('#player-sidebar.visible').count()).toBe(0);
 
   // The right edge opens the VOD menu with playback speed, but never the live
@@ -689,8 +696,7 @@ test('the pointer at the right edge opens the VOD player menu', async ({ page })
 });
 
 const [ENTER, RIGHT, BACK, YELLOW] = [13, 39, 461, 405];
-// CONFIG.PLAYER.SEEK_COMMIT_DELAY; src/config.ts needs build-time globals, so it can't be imported here.
-const SEEK_COMMIT_DELAY_MS = 800;
+const SEEK_COMMIT_DELAY_MS = CONFIG.PLAYER.SEEK_COMMIT_DELAY;
 
 test('VOD Back leaves playback even with the OSD up', async ({ page }) => {
   await startFakeVod(page);
@@ -701,13 +707,14 @@ test('VOD Back leaves playback even with the OSD up', async ({ page }) => {
 });
 
 test('VOD Back drops a pending seek and keeps playing in place', async ({ page }) => {
+  await startClock(page);
   await startFakeVod(page);
   const [, marked, dropped] = await pressStepsAndReadPlayer(page, [[YELLOW], [RIGHT, RIGHT], [BACK]]);
   expect(marked).toMatchObject({ osd: true, menu: false, currentTime: 0 });
   expect(dropped).toMatchObject({ osd: true, player: true, currentTime: 0 });
   const osd = page.locator('#player-osd');
   await expect(osd.locator('.osd-scrub')).toHaveCount(0);
-  await page.waitForTimeout(SEEK_COMMIT_DELAY_MS * 2); // well past the commit delay
+  await runTimers(page, SEEK_COMMIT_DELAY_MS * 2); // well past the commit delay
   expect(await page.locator('#video-player').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
 });
 

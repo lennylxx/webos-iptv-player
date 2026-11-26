@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, liveLoaded, endHoldingUpNext, expectSelectionVisibleInEveryTheme } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, liveLoaded, endHoldingUpNext, expectSelectionVisibleInEveryTheme, startClock, runTimers } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 import { THEMES } from '../src/config/themes';
 
@@ -670,6 +670,7 @@ test('episode playback suppresses the live channel sidebar and shows a VOD-only 
     P.play = function () { return Promise.resolve(); };
     Object.defineProperty(P, 'src', { configurable: true, set() { /* no-op */ }, get() { return ''; } });
   });
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
 
@@ -690,7 +691,7 @@ test('episode playback suppresses the live channel sidebar and shows a VOD-only 
   // has no channels, so the pointer must not summon it. Check once (not a
   // retrying wait) — the sidebar auto-hides, which would mask a wrong show.
   await page.mouse.move(10, 540);
-  await page.waitForTimeout(200);
+  await runTimers(page, 200);
   expect(await page.locator('#player-sidebar.visible').count()).toBe(0);
 
   // The right edge opens the VOD menu for an episode too, including playback

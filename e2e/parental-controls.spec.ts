@@ -11,8 +11,9 @@ import {
   routePlaylist,
   seedPlaylist,
   scrollAndRender,
+  afterQueuedTasks,
 } from './helpers';
-import type { Page } from '@playwright/test';
+import type { Page, Request } from '@playwright/test';
 
 async function openManagerWithNewPin(page: Page): Promise<void> {
   await neuterVideo(page);
@@ -1478,6 +1479,20 @@ function flagByName(user: string): unknown {
   };
 }
 
+// The next request to the fake AI server.
+function nextAiRequest(page: Page): Promise<Request> {
+  return page.waitForRequest(request => request.url() === 'http://ai.test/v1/chat/completions'
+    && request.method() === 'POST');
+}
+
+// Returns once a released reply has reached the page and the tasks it queued
+// have run, or once the page has dropped the request, so no reply can arrive.
+async function afterReply(page: Page, request: Request): Promise<void> {
+  const response = await request.response();
+  if (response) await response.finished();
+  await afterQueuedTasks(page);
+}
+
 const AI_CATEGORIES = [
   { category_id: '1', category_name: 'Adult' },
   { category_id: '2', category_name: 'Cat Bravo' },
@@ -1653,13 +1668,14 @@ test('a run that ends behind the Remove all prompt waits, and Remove all drops i
   await view.locator('[data-parental-suggest]').click();
   await page.locator('.suggestion-review [data-review-all]').click();
   await page.keyboard.press('Escape');
+  const request = nextAiRequest(page);
   await findWithAi(page);
   await expect.poll(() => ai.sent.length).toBe(1);
   await view.locator('[data-parental-tab="options"]').click();
   await view.locator('[data-parental-remove-all]').click();
   await prompt.locator('[data-confirm-action="confirm"]').click();
   releaseAgain();
-  await page.waitForTimeout(300);
+  await afterReply(page, await request);
   await view.locator('[data-parental-tab="rules"]').click();
   await expect(view.locator('[data-parental-suggest]')).toContainText('(1)');
 });
@@ -1914,8 +1930,9 @@ test('stopping before any batch finished claims nothing', async ({ page }) => {
   await findWithAi(page);
   await expect(view.locator('[data-parental-ai]')).toContainText('Stop');
   await view.locator('[data-parental-ai]').click();
+  // The label returns as the run ends, right after it picks its toast.
   await expect(view.locator('[data-parental-ai]')).toHaveText('Find with AI');
-  await page.waitForTimeout(300);
+  await afterQueuedTasks(page);
   // Read once: a retrying check would pass once the toast times out.
   expect(await page.locator('.toast.visible').allTextContents()).not.toContain('No suggestions');
   await expect(page.locator('.suggestion-review')).toHaveCount(0);
@@ -1977,11 +1994,12 @@ test('switching source during a run drops it quietly', async ({ page }) => {
   await routeFakeAi(page, ai.answer);
   await openVodRules(page);
   const view = page.locator('#view-parental-controls');
+  const request = nextAiRequest(page);
   await findWithAi(page);
   await expect(view.locator('[data-parental-ai]')).toContainText('0/1');
   await view.locator('#parental-kind [data-value="live"]').click();
   ai.release();
-  await page.waitForTimeout(300);
+  await afterReply(page, await request);
   // Read once: a retrying check would pass once the toast times out.
   expect((await page.locator('.toast.visible').allTextContents()).join()).not.toMatch(/suggestions/i);
   await expect(page.locator('.suggestion-review')).toHaveCount(0);
@@ -2054,6 +2072,13 @@ function reviewThumb(page: Page) {
   });
 }
 
+// Waits for a wheel scroll of `delta` from `from` to land: the list moves by
+// the delta, up to its end.
+async function wheelLanded(page: Page, from: number, delta: number): Promise<void> {
+  await expect.poll(() => page.locator('.suggestion-review-list').evaluate((list, target) =>
+    list.scrollTop === Math.min(target, list.scrollHeight - list.clientHeight), from + delta)).toBe(true);
+}
+
 test('a long review shows a scrollbar, starts on whole lines, and shows the next caption', async ({ page }) => {
   await openLongReview(page);
   const review = page.locator('.suggestion-review');
@@ -2073,7 +2098,8 @@ test('a long review shows a scrollbar, starts on whole lines, and shows the next
 
   // Deep in the list, the first line starts whole under the pinned buttons.
   for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowDown');
-  await page.waitForTimeout(300);
+  // Keys scroll the list at once; the frame after them has drawn it.
+  await afterQueuedTasks(page);
   const deep = await layout();
   expect(deep.lines[0].top).toBeGreaterThanOrEqual(deep.top);
   const moved = await thumb();
@@ -2093,18 +2119,20 @@ test('a click decides its own row without moving the list', async ({ page }) => 
   const list = page.locator('.suggestion-review-list');
   const box = (await list.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const from = (await reviewLayout(page)).scrollTop;
   await page.mouse.wheel(0, 300);
-  await expect.poll(async () => (await reviewLayout(page)).scrollTop).toBeGreaterThan(200);
-  await page.waitForTimeout(300);
+  await wheelLanded(page, from, 300);
+  await afterQueuedTasks(page);
   const before = await reviewLayout(page);
+  expect(before.scrollTop).toBeGreaterThan(200);
   // A Lock fully in view, partway down the list.
   const row = page.locator('.suggestion-review-row').filter({ has: page.locator('[data-key^="a|"]') })
     .filter({ hasText: before.lines[3].text.split(/\s+/).slice(0, 2).join(' ') }).first();
   const key = (await row.getAttribute('data-key'))!.slice('row|'.length);
   await row.locator('[data-key^="a|"]').click();
-  await page.waitForTimeout(300);
-  expect((await reviewLayout(page)).scrollTop).toBe(before.scrollTop);
   await expect(page.locator(`.suggestion-review [data-key="u|${key}"]`)).toHaveClass(/\bfocused\b/);
+  await afterQueuedTasks(page);
+  expect((await reviewLayout(page)).scrollTop).toBe(before.scrollTop);
 });
 
 test('a wheel scroll moves the thumb, and the next key starts the list on a whole line', async ({ page }) => {
@@ -2113,12 +2141,14 @@ test('a wheel scroll moves the thumb, and the next key starts the list on a whol
   const list = page.locator('.suggestion-review-list');
   const box = (await list.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const from = (await reviewLayout(page)).scrollTop;
   await page.mouse.wheel(0, 1000);
+  await wheelLanded(page, from, 1000);
   await expect.poll(async () => (await reviewThumb(page)).top).toBeGreaterThan(start.top + 50);
   // Off the rows, so hover doesn't pick the line the key moves from.
   await page.mouse.move(1, 1);
   await page.keyboard.press('ArrowDown');
-  await page.waitForTimeout(300);
+  await afterQueuedTasks(page);
   const after = await reviewLayout(page);
   expect(after.lines[0].top).toBeCloseTo(after.top + 4, 0);
 });
@@ -2126,7 +2156,7 @@ test('a wheel scroll moves the thumb, and the next key starts the list on a whol
 test('at text size 150 the scrolled list still starts on a whole line', async ({ page }) => {
   await openLongReview(page, () => localStorage.setItem('iptv_text_size', JSON.stringify('150')));
   for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowDown');
-  await page.waitForTimeout(300);
+  await afterQueuedTasks(page);
   const layout = await reviewLayout(page);
   expect(layout.scrollTop).toBeGreaterThan(0);
   expect(layout.lines[0].top).toBeCloseTo(layout.top + 4, 0);

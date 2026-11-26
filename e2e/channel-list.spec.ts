@@ -428,10 +428,14 @@ test('a stationary pointer over the channel list does not trap D-pad Down', asyn
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await expect(start).toHaveClass(/\bfocused\b/);
 
+  const pointer = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   for (let i = 0; i < 20; i++) {
     await page.keyboard.press('ArrowDown');
-    // Leave time for the hover the browser fires as rows slide under the pointer.
-    await page.waitForTimeout(150);
+    // Wait for the hover the browser fires as rows slide under the pointer.
+    await page.waitForFunction(({ x, y }) => {
+      const row = document.elementFromPoint(x, y)?.closest('[data-list-position]');
+      return !!row && row.matches(':hover');
+    }, pointer, { polling: 'raf' });
   }
   await expect(main.locator('[data-list-position="25"]')).toHaveClass(/\bfocused\b/);
 
@@ -456,7 +460,8 @@ test('rapid D-pad under full animation moves one row per key press', async ({ pa
   for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowDown');
   await expect(main.locator('[data-list-position="10"]')).toHaveClass(/\bfocused\b/);
 
-  // Each press lands while the previous smooth scroll is still running.
+  // Each press lands while the previous smooth scroll is still running. A real
+  // pause: the native scroll runs on wall time, which a fake clock can't move.
   for (let i = 0; i < 12; i++) {
     await page.keyboard.press('ArrowDown');
     await page.waitForTimeout(250);

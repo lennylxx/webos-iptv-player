@@ -484,11 +484,11 @@ test.describe('Settings navigation', () => {
     await expect(page.locator('#view-settings')).toBeVisible();
     await page.locator('#cancel-settings').click();
 
-    // Give the document-level deferred select (setTimeout 0) a chance to fire,
-    // then assert we still land on the channel list rather than the player.
-    // Before the fix, that second select fired on the channels view and played
-    // the focused channel.
-    await page.waitForTimeout(50);
+    // Let the document-level deferred select (setTimeout 0) fire, then assert
+    // we still land on the channel list rather than the player. Before the fix,
+    // that second select fired on the channels view and played the focused
+    // channel.
+    await afterQueuedTasks(page);
     await liveLoaded(page);
     await expect(page.locator('#view-player')).toBeHidden();
     await expect(page.locator('#view-settings')).toBeHidden();
@@ -1288,7 +1288,7 @@ test.describe('Settings playlists', () => {
   // Regression: a global document click handler fired a deferred "select" after
   // the clicked Remove button detached (its `.settings-view` ancestor gone, so
   // the guard missed it), deleting a second row — clicking Remove on row N wiped
-  // out N and N+1. waitForTimeout lets that deferred select fire.
+  // out N and N+1. afterQueuedTasks lets that deferred select fire.
   test.describe('playlist removal', () => {
     // Seed three playlists and stub their URLs so the app boots into the channel
     // list without real network.

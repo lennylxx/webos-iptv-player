@@ -15,6 +15,9 @@ import {
   seedPointer,
   settled,
   pinClock,
+  startClock,
+  runTimers,
+  holdClock,
 } from './helpers';
 
 // The player view: playback start, sidebar, action menu, OSD, and live DVR.
@@ -723,6 +726,7 @@ test('the channel panel lights the channel it slides out under', async ({ page }
   await routeLiveManifest(page);
   await neuterVideo(page);
   await seedPlaylist(page);
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await page.keyboard.press('Enter');
@@ -745,8 +749,9 @@ test('the channel panel lights the channel it slides out under', async ({ page }
   await expect(sidebar).toBeVisible();
   await expect(target).toHaveClass(/focused/);
   await expect(page.locator('.focused')).toHaveCount(1);
-  // Resting there neither opens the groups nor takes the ring away.
-  await page.waitForTimeout(1000);
+  // Resting there, twice the groups' 500 ms edge dwell, neither opens the
+  // groups nor takes the ring away.
+  await runTimers(page, 1000);
   await expect(sidebar).not.toHaveClass(/groups-expanded/);
   await expect(target).toHaveClass(/focused/);
 });
@@ -766,8 +771,10 @@ test('the channel panel keeps one ring while its search box has the caret', asyn
   await expect(page.locator('.focused')).toHaveCount(1);
 
   // Another hovered row is only tracked: the box goes dark and nothing lights.
-  await moveOnto(page, sidebar.locator('.sidebar-ch-item').filter({ hasText: 'Alpha News' }));
-  await page.waitForTimeout(100);
+  const hovered = sidebar.locator('.sidebar-ch-item').filter({ hasText: 'Alpha News' });
+  await moveOnto(page, hovered);
+  // FocusRing marks the hover before the panel handles it.
+  await expect(hovered).toHaveAttribute('data-ring-hover', '');
   await expect(sidebar.locator('.sidebar-ch-item.focused')).toHaveCount(0);
   await expect(page.locator('.focused')).toHaveCount(0);
   // Down leaves the box for the first channel, not the hovered row.
@@ -829,6 +836,7 @@ test('the live subtitle sync adjuster keeps the channel panel shut at the screen
   }));
   await neuterVideo(page);
   await seedPlaylist(page);
+  await startClock(page);
   await page.goto('/');
   await liveLoaded(page);
   await page.keyboard.press('Enter');
@@ -847,11 +855,12 @@ test('the live subtitle sync adjuster keeps the channel panel shut at the screen
   const owner = page.locator('[data-ring-owner]');
   await expect(owner).toHaveAttribute('data-focus-scope', 'player.subtitle_offset');
 
+  // Time holds past the slide-in, so the panel can't open and close on its
+  // own before the read.
+  await holdClock(page);
   await page.mouse.move(400, 540);
   await page.mouse.move(10, 540);
-  // Past the slide-in, read once: a retrying check would also pass once the
-  // panel closes on its own.
-  await page.waitForTimeout(400);
+  await runTimers(page, 400);
   expect(await sidebar.isVisible()).toBe(false);
   await expect(owner).toHaveAttribute('data-focus-scope', 'player.subtitle_offset');
 });

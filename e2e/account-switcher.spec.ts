@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page, liveLoaded } from './helpers';
+import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page, liveLoaded, afterQueuedTasks } from './helpers';
 
 // Two Xtream accounts on distinct hosts so player_api.php can serve a different
 // catalog per account: Alpha (a1) -> "Alpha Movie" under "Cat Alpha"; Bravo (a2)
@@ -220,14 +220,17 @@ test('an account menu opened while the search box slides out keeps recent search
   await page.addInitScript(() => {
     localStorage.setItem('iptv_search_history', JSON.stringify(['movie']));
   });
+  const events: string[] = [];
+  page.on('console', (msg) => events.push(msg.text()));
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'search');
   await openAccountMenu(page);
   await expect(page.locator('.search-history-panel')).toBeHidden();
 
-  // Past the slide and its fallback timer.
-  await page.waitForTimeout(600);
+  // Past the slide, whether its transition or its fallback timer ended it.
+  await expect.poll(() => events.some((text) => text.includes('event=search.box.expand.settled'))).toBe(true);
+  await afterQueuedTasks(page);
   await expect(page.locator('.account-menu')).toBeVisible();
   await expect(page.locator('.search-history-panel')).toBeHidden();
 });

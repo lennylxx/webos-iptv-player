@@ -13,6 +13,7 @@ import {
   NOW,
   xmltvTime,
   startClock,
+  runTimers,
 } from './helpers';
 
 // EPG guide: the LIVE badge and the day/time-zone handling, on a pinned clock.
@@ -1198,7 +1199,7 @@ test('the timeline pages and scrolls while the pointer rests at its edges, and s
   const firstTime = page.locator('.tl-ruler-label').first();
   const layer = page.locator('.tl-layer');
   const transform = () => layer.evaluate(el => el.style.transform);
-  // Reads until two reads 400 ms apart agree, then checks nothing moves on.
+  // Reads until two reads 400 ms apart agree, then runs the clock to check nothing moves on.
   const expectStill = async (read: () => Promise<string | null>) => {
     let last: string | null = null;
     await expect.poll(async () => {
@@ -1207,7 +1208,7 @@ test('the timeline pages and scrolls while the pointer rests at its edges, and s
       last = now;
       return still;
     }, { intervals: [400], timeout: 5000 }).toBe(true);
-    await page.waitForTimeout(800);
+    await runTimers(page, 800);
     expect(await read()).toBe(last);
   };
 

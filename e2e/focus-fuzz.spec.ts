@@ -1,4 +1,5 @@
-import { test, expect, routeLiveManifest, enterTab, NOW, startClock, type Page, type RingAuditApi } from './helpers';
+import { test, expect, routeLiveManifest, enterTab, NOW, startClock, runTimers, type Page, type RingAuditApi } from './helpers';
+import { E2E_ENV } from '../playwright.config';
 import { seedXtream } from './fixtures/xtream';
 import { channelPlaylist, guide } from './fixtures/live';
 import { KEYS, hover } from './navigation-helpers';
@@ -359,6 +360,20 @@ async function seed(page: Page, needs: Need[], pseudo: boolean): Promise<void> {
       for (const r of records) if (r.target instanceof Element && r.target.classList.contains('toast')) w.__toasts++;
     }).observe(document, { subtree: true, childList: true });
   });
+}
+
+// Probes until two probes a few frames apart agree, so a transition or smooth
+// scroll has landed however slow the machine is; a state that never holds
+// still is taken as it last stood.
+async function stillState(read: () => Promise<Probe>): Promise<Probe> {
+  let last = await read();
+  for (let i = 0; i < 20; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const next = await read();
+    if (JSON.stringify(next) === JSON.stringify(last)) return next;
+    last = next;
+  }
+  return last;
 }
 
 async function settle(page: Page): Promise<void> {
@@ -889,7 +904,7 @@ async function runWalk(page: Page, label: string,
   const findings: Finding[] = [];
   const warned = new Map<string, { count: number; step: number }>();
   const seen = new Set<string>();
-  const keepGoing = process.env.FOCUS_FUZZ_CONTINUE === '1';
+  const keepGoing = E2E_ENV.fuzzContinue;
   let pointerSinceKey = false;
   let pointer: { x: number; y: number } | null = null;
   let playerSteps = 0;
@@ -909,9 +924,10 @@ async function runWalk(page: Page, label: string,
     let state = await probe(page, describeStep(step), pointer, avoid);
     let found = violations(step, state, pointerSinceKey && !still);
     if (found.length) {
-      // Panels slide and smooth scrolls land; only a state that stays wrong counts.
-      await page.waitForTimeout(600);
-      state = await probe(page, describeStep(step), pointer, avoid);
+      // Panels slide and smooth scrolls land; only a state that stays wrong
+      // counts. The app's timers run at once; CSS and scrolls run until still.
+      await runTimers(page, 600);
+      state = await stillState(() => probe(page, describeStep(step), pointer, avoid));
       found = violations(step, state, pointerSinceKey && !still);
     }
     for (const v of found) record(v, state);
@@ -992,14 +1008,10 @@ async function runWalk(page: Page, label: string,
   }
 }
 
-const replay = process.env.FOCUS_FUZZ_REPLAY;
-const stepCount = Number(process.env.FOCUS_FUZZ_STEPS) || DEFAULT_STEPS;
-const chosenSeeds = process.env.FOCUS_FUZZ_SEED
-  ? process.env.FOCUS_FUZZ_SEED.split(',').map((s) => Number(s.trim()))
-  : null;
-const families = process.env.FOCUS_FUZZ_SURFACE
-  ? process.env.FOCUS_FUZZ_SURFACE.split(',').map((s) => s.trim())
-  : ['walk', ...Object.keys(SURFACES)];
+const replay = E2E_ENV.fuzzReplay;
+const stepCount = E2E_ENV.fuzzSteps || DEFAULT_STEPS;
+const chosenSeeds = E2E_ENV.fuzzSeeds;
+const families = E2E_ENV.fuzzSurfaces ?? ['walk', ...Object.keys(SURFACES)];
 
 test.describe('focus fuzz', () => {
   if (replay) {

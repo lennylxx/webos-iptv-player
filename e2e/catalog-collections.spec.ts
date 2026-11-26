@@ -1,4 +1,4 @@
-import { test, expect, enterTab, readUserDataStore, type Page } from './helpers';
+import { test, expect, enterTab, readUserDataStore, type Page, startClock, runTimers } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 import { THEMES } from '../src/config/themes';
 import type { ResumeEntry, WatchlistEntry } from '../src/types';
@@ -266,6 +266,7 @@ test('keeps one ring through virtualized deletion, tab-bar handoff, and manageme
 
 test('leaves a managed collection where each spaced wheel step stops it', async ({ page }) => {
   await seedCollections(page, 35);
+  await startClock(page);
   await page.goto('/');
   await enterTab(page, 'series');
   await page.locator('#view-series [data-collection-manage="continue"]').click();
@@ -299,7 +300,7 @@ test('leaves a managed collection where each spaced wheel step stops it', async 
     await page.mouse.wheel(0, step);
     await expect.poll(scrollTop).toBe(expected);
     // Longer than any settle delay, so a late correction would show.
-    await page.waitForTimeout(250);
+    await runTimers(page, 250);
     expect(await scrollTop()).toBe(expected);
   }
   expect(expected).toBe(max);

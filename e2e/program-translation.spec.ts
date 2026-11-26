@@ -7,8 +7,10 @@ import {
   routePlaylist,
   test,
   type Page,
-  pinClock,
+  startClock,
   xmltvTime,
+  runAiTimers,
+  TRANSLATION_DWELL_MS,
 } from './helpers';
 
 // Program info translation: Green turns it on in the Guide and the player's
@@ -51,7 +53,7 @@ async function setup(page: Page, options: { ai?: boolean; layout?: 'schedule' | 
     return route.fulfill({ status: 200, headers: cors, contentType: 'application/json',
       body: JSON.stringify({ choices: [{ message: { content } }] }) });
   });
-  await pinClock(page, new Date('2024-03-09T12:10:00Z'));
+  await startClock(page, new Date('2024-03-09T12:10:00Z'));
   await page.addInitScript(({ ai, layout }) => {
     localStorage.setItem('iptv_playlists', JSON.stringify([{ id: 'p1', name: 'P', url: 'http://host/playlist.m3u' }]));
     localStorage.setItem('iptv_manual_epg_sources', JSON.stringify([{ url: 'http://host/epg.xml', playlistIds: [] }]));
@@ -134,7 +136,7 @@ test('Green translates every program the schedule shows in one request and shows
   await page.keyboard.press('ArrowDown');
   const next = page.locator('#epg-programmes .epg-programme-item.focused');
   await expect(next.locator('.epg-prog-desc')).toHaveText('AI translation · Folge 13.');
-  await page.waitForTimeout(600);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toHaveLength(1);
 
   await key(page, GREEN);
@@ -178,7 +180,7 @@ test('Green does nothing where the Guide\'s ring rests on no program', async ({ 
 
   await key(page, RED);
   await expect(hint).toHaveText('Translate program info with AI');
-  await page.waitForTimeout(600);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toEqual([]);
 });
 
@@ -189,7 +191,7 @@ test('leaving the Guide before the schedule settles sends nothing', async ({ pag
   await expect(page.locator('#view-epg .epg-hints [data-epg-translate]')).toHaveText('Show original');
   await key(page, BLUE);
   await expect(page.locator('#view-settings')).toBeVisible();
-  await page.waitForTimeout(800);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toEqual([]);
 });
 
@@ -242,7 +244,7 @@ test('the timeline translates the cells it shows in one request, unmarked, and i
   await expect(detail.locator('.epg-tl-no-info')).toBeVisible();
   // Green still turns translation off from here, so its key shows.
   await expect(detail.locator('[data-epg-translate]')).toHaveText('Show original');
-  await page.waitForTimeout(800);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toHaveLength(1);
 
   await key(page, GREEN);
@@ -310,7 +312,7 @@ test('a translation kept from an earlier session sends nothing, alone or in a li
   await expect(page.locator('.osd-programme-title-text')).toHaveText('Program 12');
   await key(page, GREEN);
   await expect(page.locator('.osd-programme-title-text')).toHaveText('Programm 12');
-  await page.waitForTimeout(600);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   expect(sent).toHaveLength(1);
 
   // The list may come to rest a row higher than in the first launch; only a
@@ -318,7 +320,7 @@ test('a translation kept from an earlier session sends nothing, alone or in a li
   await openSchedule(page);
   await key(page, GREEN);
   await expect.poll(async () => (await shownScheduleRows(page)).every(one => /Programm/.test(one.title))).toBe(true);
-  await page.waitForTimeout(600);
+  await runAiTimers(page, 2 * TRANSLATION_DWELL_MS);
   const unseen = programsOf(await shownScheduleRows(page)).filter(n => !firstShown.includes(n));
   expect(sent.slice(1).map(sentPrograms)).toEqual(unseen.length ? [unseen] : []);
 });

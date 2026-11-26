@@ -176,6 +176,20 @@ degrades both axes from `scripts/chromium-53-simulation.mjs`:
   exercising app behavior — with `isChromium53()` from `e2e/helpers.ts`.
 - Playwright reuses a running preview server. After source changes, rebuild
   with `node esbuild.config.mjs --preview` before rerunning against it.
+- Never wait on wall time; a test that sleeps fails on a loaded machine.
+  - What depends on the time of day pins it: `pinClock(page)` holds
+    `NOW`, `startClock(page)` starts it there and lets it run. Fixtures may
+    spell out times on `NOW`'s day; every test runs in UTC.
+  - To show nothing more happens, run the app's own timers with
+    `runTimers(page, ms)` (or `runAiTimers` for AI requests) on a started
+    clock; `holdClock` stops it before a read that must beat an auto-hide.
+  - Otherwise wait for a signal: a state, a log event, a request, or
+    `afterQueuedTasks`. Take delays from `CONFIG` (exported by
+    `e2e/helpers.ts`), never copied numbers.
+  - `E2E_CPU_THROTTLE=4` runs pages at a quarter speed to find tests that
+    only pass on a fast machine.
+- E2E reads environment variables only in `playwright.config.ts`, which
+  lists each in `E2E_ENV`; specs and helpers import from there.
 - The simulation removes what the source declares but cannot reproduce
   layout or V8 differences at equal feature support; engine-level checks
   still need a real device (see the `webos-device` skill).
