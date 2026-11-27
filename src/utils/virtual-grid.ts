@@ -49,6 +49,11 @@ export class VirtualGrid {
     this.rows.setScrollOffset(offset);
   }
 
+  // See VirtualList.setLeadingSize: the scroll offset is the container's.
+  setLeadingSize(size: number): void {
+    this.rows.setLeadingSize(size);
+  }
+
   getColumnCount(viewportWidth = this.fallbackViewportWidth): number {
     return Math.max(1, Math.floor(viewportWidth / this.columnStride));
   }
@@ -89,9 +94,10 @@ export class VirtualGrid {
     index: number,
     viewportWidth = this.fallbackViewportWidth,
     viewportHeight = this.fallbackViewportHeight,
+    margin = 0,
   ): boolean {
     const row = Math.floor(index / this.getColumnCount(viewportWidth));
-    return this.rows.ensureVisible(row, viewportHeight);
+    return this.rows.ensureVisible(row, viewportHeight, margin);
   }
 
   centerOn(

@@ -23,6 +23,9 @@ import { KEYS, hover } from './navigation-helpers';
 //
 //   detail             Movie and Series details, resumed so every round action
 //                      shows; odd seeds use long names at 150%
+//   catalog-grid       a Movies or Series category grid and its sidebar, opened
+//                      from All Categories, or Movies' Continue Watching or
+//                      managed Watchlist; odd seeds use long names at 150%
 //   search             typed queries, results, and the recent-searches dropdown
 //   settings           every category; only SETTINGS_SAFE controls activate
 //   parental           the parental-control manager behind a created PIN
@@ -53,12 +56,12 @@ const MAX_ENTER_MISSES = 3;
 // blocks them. The change that fixes a bug clears its entries here.
 const KNOWN_FAILING: Record<string, string> = {};
 
-type SurfaceName = 'detail' | 'search' | 'settings' | 'parental' | 'parental-accounts' | 'parental-pin' | 'reminders'
+type SurfaceName = 'detail' | 'catalog-grid' | 'search' | 'settings' | 'parental' | 'parental-accounts' | 'parental-pin' | 'reminders'
   | 'reminder-prompt' | 'confirm' | 'catchup' | 'live-categories' | 'subtitle-search'
   | 'subtitle-offset' | 'channel-editor';
 
 // Data a surface needs on top of the shared Xtream setup.
-type Need = 'resume' | 'catchup' | 'reminders' | 'due-reminders' | 'second-account'
+type Need = 'resume' | 'watchlist' | 'catchup' | 'reminders' | 'due-reminders' | 'second-account'
   | 'live-categories' | 'search-history';
 
 type Step =
@@ -175,6 +178,15 @@ const SURFACES: Record<SurfaceName, Surface> = {
   'detail': {
     shows: '#view-movies .detail-actions, #view-series .detail-actions',
     from: TAB_BAR, needs: ['resume'], enter: enterDetail, variants: ['movies', 'series'], avoid: [], pseudo: true,
+  },
+  'catalog-grid': {
+    shows: '#view-movies .catalog-sidebar, #view-series .catalog-sidebar',
+    from: TAB_BAR, needs: ['resume', 'watchlist'], enter: enterCatalogGrid,
+    variants: ['movies', 'series', 'continue', 'watchlist'],
+    // A title opens its detail, which leaves the grid; Clear and Remove
+    // empty the rows the walk came for.
+    avoid: ['.catalog-grid .catalog-tile', '[data-collection-action="clear"]', '[data-collection-action="remove"]'],
+    pseudo: true,
   },
   'search': {
     shows: '.tab-bar-search.expanded',
@@ -305,6 +317,17 @@ async function seed(page: Page, needs: Need[], pseudo: boolean): Promise<void> {
     await page.route('**/player_api.php*action=get_live_categories*', (r) => r.fulfill({
       status: 200, contentType: 'application/json', body: JSON.stringify(categories),
     }));
+  }
+  if (has('watchlist')) {
+    // Enough to scroll the Watchlist grid, so managing it has rows to walk.
+    await page.addInitScript(() => {
+      const watchlist: Record<string, unknown> = {};
+      for (let i = 0; i < 14; i++) {
+        watchlist[`x1|vod|w${String(i)}`] = { accountId: 'x1', kind: 'vod', itemId: `w${String(i)}`, name: `Title ${String(i)}`,
+          poster: '', rating: '', categoryId: '1', containerExtension: 'mp4', addedAt: 14 - i };
+      }
+      localStorage.setItem('iptv_watchlist', JSON.stringify(watchlist));
+    });
   }
   if (has('search-history')) {
     await page.addInitScript(() => localStorage.setItem('iptv_search_history', JSON.stringify(['ch', 'show', 'movie'])));
@@ -492,7 +515,8 @@ async function probe(page: Page, input: string, pointer: { x: number; y: number 
           inModal: !!owner && modal && owner.contains(f),
           inTabBar: !!f.closest('.tab-bar'),
           cssHover: !!f.closest('#epg-channels, #epg-dates, #view-epg .epg-filter-control'),
-          behindMenu: !!document.querySelector('#view-epg .epg-group-button[aria-expanded="true"]'),
+          behindMenu: !!document.querySelector('#view-epg .epg-group-button[aria-expanded="true"]')
+            || [...document.querySelectorAll('.catalog-sort .dropdown.open')].some((menu) => !menu.contains(f)),
           caret: document.activeElement instanceof HTMLInputElement && document.activeElement !== f
             && !!owner && owner.contains(document.activeElement),
         };
@@ -548,8 +572,8 @@ function violations(step: Step, p: Probe, pointerSinceKey: boolean): string[] {
     // hover with :hover rather than a ring.
     // A text box with the caret keeps the list ring dark; hover only tracks.
     // The guide's channel and date columns and its filters, like the tab
-    // bar, show pointer hover with :hover, and its open group menu keeps the
-    // hover to itself.
+    // bar, show pointer hover with :hover, and its open group menu, like a
+    // catalog's open sort or filter menu, keeps the hover to itself.
     const exempt = (p.modal && !u.inModal) || u.inTabBar || u.cssHover || u.behindMenu || u.caret;
     if (!exempt && !u.lit) out.push(`hover.not_lit: ${u.desc} (rings ${p.rings.map((r) => r.desc).join(' + ') || 'none'})`);
   }
@@ -611,6 +635,36 @@ async function enterDetail(page: Page, section: string | undefined): Promise<voi
     await page.keyboard.press('Enter');
     await waitShown(page, `#view-${view} .detail-actions`);
   }
+}
+
+// `continue` and `watchlist` go on to that sidebar row, and the Watchlist
+// grid on to managing it.
+async function enterCatalogGrid(page: Page, variant: string | undefined): Promise<void> {
+  const view = variant === 'series' ? 'series' : 'movies';
+  if (!await openTab(page, view)) return;
+  const entry = page.locator(`#view-${view} [data-all-categories]`);
+  if (!await entry.waitFor({ timeout: 5000 }).then(() => true, () => false)) return;
+  await hover(entry);
+  await page.keyboard.press('Enter');
+  // After a click on the shown section's tab, the first key only shows the ring.
+  if (!await waitShown(page, `#view-${view} .catalog-sidebar`, 1500)) {
+    await page.keyboard.press('Enter');
+    if (!await waitShown(page, `#view-${view} .catalog-sidebar`)) return;
+  }
+  if (variant !== 'continue' && variant !== 'watchlist') return;
+  // The sidebar alone would count as the surface; a variant that fell short
+  // of its collection would walk a category grid unnoticed.
+  const row = page.locator(`#view-movies [data-sidebar-key="side:${variant}"]`);
+  await expect(row, `the ${variant} sidebar row`).toBeVisible();
+  await hover(row);
+  await page.keyboard.press('Enter');
+  await expect(row, `the ${variant} grid`).toHaveClass(/active/);
+  if (variant !== 'watchlist') return;
+  const manage = page.locator('#view-movies [data-collection-action="manage"]');
+  await expect(manage, 'Manage').toBeVisible();
+  await hover(manage);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .catalog-grid.catalog-managing'), 'managing').toHaveCount(1);
 }
 
 async function enterSearch(page: Page): Promise<void> {

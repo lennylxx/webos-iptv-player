@@ -10,7 +10,13 @@ interface ExpectedScroll {
   offset: number;
   token: number;
   instant: boolean;
+  // A smooth scroll the caller waits out: its own events until it lands
+  // (or stalls) are not the user's.
+  settle: { from: number; until: number } | null;
 }
+
+// Longer than Chromium's smooth scroll over a list's viewport.
+const SMOOTH_SETTLE_MS = 800;
 
 export class VirtualScrollGuard {
   private readonly expected = new WeakMap<HTMLElement, ExpectedScroll>();
@@ -18,6 +24,19 @@ export class VirtualScrollGuard {
 
   readUserOffset(element: HTMLElement, axis: VirtualScrollAxis): number | null {
     const expected = this.expected.get(element);
+    if (expected?.axis === axis && expected.settle) {
+      const offset = this.readOffset(element, axis);
+      const { from, until } = expected.settle;
+      if (Math.abs(offset - expected.offset) < 1) {
+        this.expected.delete(element);
+        return null;
+      }
+      const between = offset >= Math.min(from, expected.offset) - 1
+        && offset <= Math.max(from, expected.offset) + 1;
+      if (between && Date.now() < until) return null;
+      this.expected.delete(element);
+      return offset;
+    }
     if (expected?.axis === axis) {
       this.writeOffset(element, expected);
       return null;
@@ -25,7 +44,15 @@ export class VirtualScrollGuard {
     return this.readOffset(element, axis);
   }
 
-  syncOffset(element: HTMLElement, axis: VirtualScrollAxis, offset: number, instant = false): void {
+  // `settle`: a smooth scroll stays the caller's until it reaches `offset`,
+  // so its in-between offsets never read as user scrolls.
+  syncOffset(
+    element: HTMLElement,
+    axis: VirtualScrollAxis,
+    offset: number,
+    instant = false,
+    settle = false,
+  ): void {
     const safeOffset = Math.max(0, offset);
     const current = this.readOffset(element, axis);
     if (current === safeOffset) {
@@ -35,14 +62,26 @@ export class VirtualScrollGuard {
       }
       return;
     }
+    const jump = instant || this.needsInstantJump(element, axis, Math.abs(safeOffset - current));
     const state: ExpectedScroll = {
       axis,
       offset: safeOffset,
       token: ++this.nextToken,
-      instant: instant || this.needsInstantJump(element, axis, Math.abs(safeOffset - current)),
+      instant: jump,
+      settle: settle && !jump ? { from: current, until: Date.now() + SMOOTH_SETTLE_MS } : null,
     };
     this.expected.set(element, state);
     this.writeOffset(element, state);
+    if (state.settle) {
+      // Writing again mid-scroll would restart its easing; only an element
+      // that did not take the offset (still hidden) gets it again.
+      requestAnimationFrame(() => {
+        if (this.expected.get(element)?.token === state.token && this.readOffset(element, axis) === current) {
+          this.writeOffset(element, state);
+        }
+      });
+      return;
+    }
     requestAnimationFrame(() => {
       if (this.expected.get(element)?.token !== state.token) return;
       this.writeOffset(element, state);

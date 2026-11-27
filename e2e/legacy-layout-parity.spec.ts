@@ -696,15 +696,15 @@ const XTREAM_SCREENS: Screen[] = [
     },
   },
   {
-    name: 'movies-all-categories',
+    // A rail head with its See all, which Up from the rail's tiles reaches.
+    name: 'movies-rail-see-all',
     budget: 0,
     go: async (p) => {
-      const cat = p.locator('#view-movies .catalog-cat[data-category-id="1"]');
-      await cat.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-      await p.keyboard.press('ArrowRight');
-      await expect(p.locator('#view-movies .catalog-cat[data-category-id="2"]')).toHaveClass(/focused/);
+      const tile = p.locator('#view-movies [data-rail-key="cat:2"] .catalog-tile').first();
+      await tile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+      await p.keyboard.press('ArrowUp');
+      await expect(p.locator('#view-movies [data-rail-see-all][data-category-id="2"]')).toHaveClass(/focused/);
       await railAtRest(p, '#view-movies .catalog-rails');
-      await railAtRest(p, '#view-movies .catalog-category-rail');
     },
   },
   {

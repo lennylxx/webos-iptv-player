@@ -326,6 +326,9 @@ interface Cross {
   from: string; direction: Direction; to: string; why: string;
   // The target must share the source's tag, when the source has one.
   sameTag?: boolean;
+  // Only from the end of the source's line: nothing navigable that way in
+  // its own nav container.
+  fromEdge?: boolean;
 }
 
 interface Screen extends ProbeScreen {
@@ -458,6 +461,80 @@ const SEARCH: Omit<Screen, 'name' | 'open'> = {
   tags: [],
   cross: [],
 };
+
+// A catalog grid beside its category sidebar. Browse stays resident under
+// the grid with the same title keys; only the shown layer's elements are
+// navigable, and so keep unique ids.
+const CATALOG_GRID: Omit<Screen, 'name' | 'open'> = {
+  ...SEARCH,
+  root: '#view-movies',
+  focusables: '.catalog-layer:not(.catalog-layer-hidden) [data-focusable]',
+  columns: [['categories', '.catalog-sidebar'], ['grid', '.catalog-grid']],
+  cross: [
+    { from: 'categories', direction: 'right', to: 'grid', why: 'Right enters the grid where it was left' },
+    { from: 'grid', direction: 'left', to: 'categories', why: 'Left from the start of a line returns to the category shown', fromEdge: true },
+  ],
+};
+
+async function openSeeAll(page: Page, s: Screen, section: 'movies' | 'series', id: string, title: string): Promise<void> {
+  const seeAll = page.locator(`#view-${section} .catalog-see-all[data-category-id="${id}"]`);
+  await expect(seeAll).toHaveCount(1);
+  await ownKeys(page, s);
+  await hover(seeAll);
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#view-${section} .catalog-grid-title`)).toHaveText(title);
+  await expect(page.locator(`#view-${section} .catalog-grid .catalog-tile`).first()).toBeVisible();
+}
+
+// Continue Watching and Watchlist titles in the first movie category, so
+// browse leads with their rails and the grid's sidebar lists them.
+async function seedCollections(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const watchlist: Record<string, unknown> = {};
+    const resume: Record<string, unknown> = {};
+    for (let i = 0; i < 8; i++) {
+      watchlist[`x1|vod|w${String(i)}`] = { accountId: 'x1', kind: 'vod', itemId: `w${String(i)}`, name: `Title ${String(i)}`,
+        poster: '', rating: '', categoryId: '1', containerExtension: 'mp4', addedAt: 8 - i };
+      resume[`x1|vod|r${String(i)}`] = { accountId: 'x1', kind: 'vod', itemId: `r${String(i)}`, name: `Title ${String(i)}`,
+        poster: '', ext: 'mp4', categoryId: '1', position: 100, duration: 600, updatedAt: 8 - i };
+    }
+    localStorage.setItem('iptv_watchlist', JSON.stringify(watchlist));
+    localStorage.setItem('iptv_resume', JSON.stringify(resume));
+  });
+}
+
+// The grid of a sidebar row: the row OK switches to, from category 1's grid.
+async function openSidebarRow(page: Page, s: Screen, key: string): Promise<void> {
+  await openTab(page, 'movies');
+  // The rail's own See all, as the collection rails push its titles below.
+  const link = page.locator('#view-movies [data-rail-see-all][data-category-id="1"]');
+  await expect(link).toHaveCount(1);
+  await ownKeys(page, s);
+  await hover(link);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
+  await hover(page.locator(`#view-movies [data-sidebar-key="${key}"]`));
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .catalog-collection-actions')).toBeVisible();
+}
+
+// Sixty movie categories of 24, so the grid's sidebar scrolls its window.
+async function seedManyCategories(page: Page): Promise<void> {
+  await page.route('**/player_api.php*', (route) => {
+    const url = new URL(route.request().url());
+    const json = (body: unknown) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (url.searchParams.get('action') === 'get_vod_categories') {
+      return json(Array.from({ length: 60 }, (_, i) => ({ category_id: String(i + 1), category_name: `Category ${String(i + 1)}` })));
+    }
+    if (url.searchParams.get('action') === 'get_vod_streams') {
+      const id = url.searchParams.get('category_id') ?? '1';
+      return json(Array.from({ length: 24 }, (_, i) => ({
+        stream_id: Number(id) * 100 + i, name: `Movie ${id}-${String(i)}`, stream_icon: '', container_extension: 'mp4', category_id: id,
+      })));
+    }
+    return route.fallback();
+  });
+}
 
 async function searchFor(page: Page, query: string): Promise<void> {
   await openTab(page, 'search');
@@ -867,20 +944,133 @@ const SCREENS: Screen[] = [
       await openTab(page, 'movies');
       await expect(page.locator('#view-movies .catalog-see-all[data-category-id="2"]')).toHaveCount(1);
     },
+    async check(page) {
+      const focused = page.locator('#view-movies .catalog-browse .focused');
+      const tile = (rail: string, n: number) =>
+        page.locator(`#view-movies [data-rail-key="cat:${rail}"] .catalog-rail-track [data-focusable]`).nth(n);
+      // Down from a rail passes the See all of the rail below; Up stops on it
+      // and Up again goes back to the column it came from.
+      await hover(tile('1', 2));
+      await page.keyboard.press('ArrowDown');
+      await expect(focused).toHaveCount(1);
+      expect(await focused.evaluate((el) => !!el.closest('[data-rail-key="cat:2"] .catalog-rail-track'))).toBe(true);
+      await page.keyboard.press('ArrowUp');
+      await expect(focused).toHaveAttribute('data-rail-see-all', '');
+      await page.keyboard.press('ArrowUp');
+      await expect(tile('1', 2)).toHaveClass(/focused/);
+      // All Categories holds its own row: Left and Right stay on it.
+      const entry = page.locator('#view-movies [data-all-categories]');
+      await hover(entry);
+      for (const key of ['ArrowLeft', 'ArrowRight']) {
+        await page.keyboard.press(key);
+        await expect(entry).toHaveClass(/focused/);
+      }
+    },
   },
   {
     ...SEARCH,
-    name: 'Movies See all',
+    name: 'Movies with collections',
     root: '#view-movies',
+    seed: seedCollections,
     async open(page) {
       await openTab(page, 'movies');
-      const seeAll = page.locator('#view-movies .catalog-see-all[data-category-id="1"]');
-      await expect(seeAll).toHaveCount(1);
-      await ownKeys(page, this);
-      await hover(seeAll);
+      await expect(page.locator('#view-movies [data-rail-key="continue"]')).toHaveCount(1);
+      await expect(page.locator('#view-movies [data-rail-key="watchlist"]')).toHaveCount(1);
+    },
+  },
+  {
+    ...CATALOG_GRID,
+    name: 'Movies Continue Watching grid',
+    seed: seedCollections,
+    async open(page) {
+      await openSidebarRow(page, this, 'side:continue');
+    },
+  },
+  {
+    ...CATALOG_GRID,
+    name: 'Movies Watchlist managing',
+    seed: seedCollections,
+    // The sidebar takes no keys while the grid is managed.
+    cross: [],
+    async open(page) {
+      await openSidebarRow(page, this, 'side:watchlist');
+      await hover(page.locator('#view-movies [data-collection-action="manage"]'));
       await page.keyboard.press('Enter');
-      await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
+      await expect(page.locator('#view-movies .catalog-grid.catalog-managing')).toHaveCount(1);
+    },
+  },
+  {
+    ...CATALOG_GRID,
+    name: 'Movies grid at 150%',
+    async seed(page) {
+      await page.addInitScript(() => localStorage.setItem('iptv_text_size', JSON.stringify('150')));
+    },
+    async open(page) {
+      await openTab(page, 'movies');
+      await openSeeAll(page, this, 'movies', '1', 'Cat A');
+    },
+  },
+  {
+    ...CATALOG_GRID,
+    name: 'Movies See all',
+    async open(page) {
+      await openTab(page, 'movies');
+      await openSeeAll(page, this, 'movies', '1', 'Cat A');
+    },
+  },
+  {
+    ...CATALOG_GRID,
+    name: 'Movies sidebar of many categories',
+    seed: seedManyCategories,
+    // Up and Down scroll the virtualized sidebar past what it first shows.
+    followScroll: true,
+    async open(page) {
+      await openTab(page, 'movies');
+      await openSeeAll(page, this, 'movies', '1', 'Category 1');
+      await page.keyboard.press('ArrowLeft');
+      await expect(page.locator('#view-movies .catalog-sidebar-item.focused')).toHaveAttribute('data-sidebar-key', 'side:c:1');
+    },
+  },
+  {
+    ...CATALOG_GRID,
+    name: 'Movies sidebar far category',
+    seed: seedManyCategories,
+    followScroll: true,
+    async open(page) {
+      await openTab(page, 'movies');
+      await openSeeAll(page, this, 'movies', '1', 'Category 1');
+      const ring = page.locator('#view-movies .catalog-sidebar-item.focused');
+      await page.keyboard.press('ArrowLeft');
+      for (let i = 0; i < 44; i++) await page.keyboard.press('ArrowDown');
+      await expect(ring).toHaveAttribute('data-sidebar-key', 'side:c:45');
+      await page.keyboard.press('Enter');
+      await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Category 45');
       await expect(page.locator('#view-movies .catalog-grid .catalog-tile').first()).toBeVisible();
+      await page.keyboard.press('ArrowRight');
+      await expect(page.locator('#view-movies .catalog-grid .catalog-tile.focused')).toHaveCount(1);
+    },
+    async check(page) {
+      // Left from the grid finds the far row after the list scrolled away.
+      const list = page.locator('#view-movies .catalog-sidebar-list');
+      await list.evaluate((el) => { el.scrollTop = 0; });
+      await page.keyboard.press('ArrowLeft');
+      const ring = page.locator('#view-movies .catalog-sidebar-item.focused');
+      await expect(ring).toHaveAttribute('data-sidebar-key', 'side:c:45');
+      expect(await ring.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const l = el.closest('.catalog-sidebar-list')!.getBoundingClientRect();
+        return r.top >= l.top && r.bottom <= l.bottom;
+      })).toBe(true);
+    },
+  },
+  {
+    ...CATALOG_GRID,
+    name: 'Series See all',
+    root: '#view-series',
+    seed: seedSeries,
+    async open(page) {
+      await openTab(page, 'series');
+      await openSeeAll(page, this, 'series', '2', 'Cat B');
     },
   },
   {
@@ -927,15 +1117,9 @@ function judge(s: Screen, from: Item, direction: Direction, pre: Item[], focus: 
   const cy = (b: Box) => (b.top + b.bottom) / 2;
   if (to.id === from.id) {
     if (lineInvariant !== 'B') return { violations, allowed };
-    // As the key found it: anything navigable on the line that way, within
-    // the source's own nav container, is where Left or Right should have
-    // gone. A screen that moves its own focus (the guide) has none.
-    const source = pre.find((i) => i.id === from.id) ?? from;
-    const S = source.box;
-    const ahead = source.container && pre.find((i) => i.id !== source.id && i.navigable && i.container === source.container
-      && Math.min(S.bottom, i.box.bottom) - Math.max(S.top, i.box.top) > 0.5
-      && (direction === 'right' ? cx(i.box) - cx(S) > 5 : cx(S) - cx(i.box) > 5));
-    if (ahead) fail('B', `stayed, with ${ahead.label} on its line that way (${fmt(S)} to ${fmt(ahead.box)})`);
+    // Anything on the line that way is where Left or Right should have gone.
+    const ahead = aheadOnLine(from, direction, pre);
+    if (ahead) fail('B', `stayed, with ${ahead.label} on its line that way (${fmt(ahead.from)} to ${fmt(ahead.box)})`);
     return { violations, allowed };
   }
   // Both boxes as the key found them, so a pane scrolling its new focus into
@@ -961,8 +1145,25 @@ function judge(s: Screen, from: Item, direction: Direction, pre: Item[], focus: 
   if (!rule) fail(lineInvariant, `-> ${to.label} [${to.column}], ${wrong}`);
   else if (rule.sameTag && from.tag && to.tag !== from.tag) {
     fail(lineInvariant, `-> ${to.label} [${to.column}], which is ${to.tag || 'untagged'}, not ${from.tag}`);
+  } else if (rule.fromEdge && aheadOnLine(from, direction, pre)) {
+    const ahead = aheadOnLine(from, direction, pre)!;
+    fail(lineInvariant, `-> ${to.label} [${to.column}], past ${ahead.label} on its line that way`);
   } else allowed.push(`${from.label} ${direction} -> ${to.label} (${rule.from} -> ${rule.to})`);
   return { violations, allowed };
+}
+
+// As the key found it: anything navigable on the source's line that way,
+// within the source's own nav container. A screen that moves its own focus
+// (the guide) has none.
+function aheadOnLine(from: Item, direction: Direction, pre: Item[]): { label: string; box: Box; from: Box } | null {
+  if (direction !== 'left' && direction !== 'right') return null;
+  const source = pre.find((i) => i.id === from.id) ?? from;
+  const S = source.box;
+  const cx = (b: Box) => (b.left + b.right) / 2;
+  const ahead = source.container ? pre.find((i) => i.id !== source.id && i.navigable && i.container === source.container
+    && Math.min(S.bottom, i.box.bottom) - Math.max(S.top, i.box.top) > 0.5
+    && (direction === 'right' ? cx(i.box) - cx(S) > 5 : cx(S) - cx(i.box) > 5)) : undefined;
+  return ahead ? { label: ahead.label, box: ahead.box, from: S } : null;
 }
 
 interface Run {

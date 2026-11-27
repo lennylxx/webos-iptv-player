@@ -21,7 +21,6 @@ async function expectNoScrollbars(scrollers: Scroller[]): Promise<void> {
 
 const expectNoRailScrollbars = (page: Page) => expectNoScrollbars([
   [page.locator('#view-movies .catalog-rails'), 'y'],
-  [page.locator('#view-movies .catalog-category-rail'), 'x'],
   [page.locator('#view-movies [data-rail-key^="cat:"] .catalog-rail-track').first(), 'x'],
 ]);
 

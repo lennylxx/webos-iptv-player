@@ -78,8 +78,9 @@ for (const section of ['movies', 'series'] as const) {
     const layer = browse(page, section);
     await expect(layer.locator('[data-rail-key="cat:1"] .catalog-tile').first()).toBeAttached();
     const order = await layer.locator('.catalog-rails-body').evaluate(el => Array.from(el.children)
-      .map(row => row.classList.contains('catalog-sort') ? 'sort' : row.getAttribute('data-rail-key')));
-    expect(order.slice(0, 4)).toEqual(['continue', 'watchlist', 'sort', 'cat:1']);
+      .map(row => row.classList.contains('catalog-sort') ? 'sort'
+        : row.classList.contains('catalog-entry-row') ? 'entry' : row.getAttribute('data-rail-key')));
+    expect(order.slice(0, 5)).toEqual(['entry', 'continue', 'watchlist', 'sort', 'cat:1']);
     const savedNames = () => layer.locator(
       '[data-rail-key="continue"] .catalog-tile-name, [data-rail-key="watchlist"] .catalog-tile-name',
     ).allTextContents();
@@ -93,6 +94,8 @@ for (const section of ['movies', 'series'] as const) {
     await expect(trigger).toHaveClass(/focused/);
     await page.keyboard.press('ArrowDown');
     await expect(layer.locator('[data-rail-key="cat:1"] .catalog-tile.focused')).toHaveCount(1);
+    await page.keyboard.press('ArrowUp');
+    await expect(layer.locator('[data-rail-key="cat:1"] [data-rail-see-all].focused')).toHaveCount(1);
     await page.keyboard.press('ArrowUp');
     await expect(layer.locator('.catalog-sort .focused')).toHaveCount(1);
     await page.keyboard.press('ArrowUp');
@@ -185,6 +188,9 @@ test('traps only the open menu, restores the trigger, and navigates both radios 
   await expect(desc).toHaveClass(/focused/);
   await page.keyboard.press('ArrowDown');
   await expect(layer.locator('.catalog-tile.focused')).toHaveCount(1);
+  // Up from a rail's tiles stops on its See all first.
+  await page.keyboard.press('ArrowUp');
+  await expect(layer.locator('[data-rail-see-all].focused')).toHaveCount(1);
   await page.keyboard.press('ArrowUp');
   await expect(layer.locator('.catalog-sort .focused')).toHaveCount(1);
   await trigger.click();
@@ -202,16 +208,24 @@ test('keeps virtual grids and newly loaded categories sorted, independently for 
   const layer = browse(page);
   await layer.locator('.dropdown-trigger').click();
   await layer.locator('[data-dropdown-value="name"]').click();
-  await layer.locator('[data-category-id="7"].catalog-cat').click();
+  // A category past the rails opens from All Categories, through the sidebar.
+  await layer.locator('[data-all-categories]').click();
   const full = grid(page);
+  await full.locator('.catalog-sidebar-item[data-sidebar-key="side:c:7"]').click();
   await expect(full.locator('.catalog-grid-title')).toHaveText('Category 7');
   await expect(full.locator('.catalog-tile-name').first()).toHaveText('Title 1');
   await full.locator('.catalog-tile').first().hover();
-  for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown');
-  await expect(full.locator('.catalog-tile.focused .catalog-tile-name')).toHaveText('Title 43');
+  // Down the first column to the last row, whatever the grid's width.
+  const columns = await full.locator('.catalog-grid-cell').evaluateAll(cells => {
+    const top = cells[0].getBoundingClientRect().top;
+    return cells.filter(cell => Math.abs(cell.getBoundingClientRect().top - top) < 1).length;
+  });
+  const lastRow = Math.floor(49 / columns);
+  for (let i = 0; i < lastRow - 1; i++) await page.keyboard.press('ArrowDown');
+  await expect(full.locator('.catalog-tile.focused .catalog-tile-name')).toHaveText(`Title ${String((lastRow - 1) * columns + 1)}`);
   await page.keyboard.press('ArrowDown');
-  await expect(full.locator('.catalog-tile.focused .catalog-tile-name')).toHaveText('Title 50');
-  for (let i = 0; i < 7; i++) await page.keyboard.press('ArrowUp');
+  await expect(full.locator('.catalog-tile.focused .catalog-tile-name')).toHaveText(`Title ${String(lastRow * columns + 1)}`);
+  for (let i = 0; i < lastRow; i++) await page.keyboard.press('ArrowUp');
   await page.keyboard.press('ArrowUp');
   await expect(full.locator('.catalog-sort .focused')).toHaveCount(1);
   await full.getByRole('radio', { name: 'Z–A' }).click();
@@ -259,6 +273,8 @@ for (const mode of ['browse', 'grid']) {
     const focused = content.locator('.catalog-tile.focused');
     await expect(focused).toHaveAttribute('data-item-id', String(100 + offset));
     await page.keyboard.press('ArrowUp');
+    // In browse, Up stops on the rail's See all before the sort row.
+    if (mode === 'browse') await page.keyboard.press('ArrowUp');
     await expect(layer.locator('.catalog-sort .focused')).toHaveCount(1);
     await page.keyboard.press('ArrowDown');
     await expect(focused).toHaveAttribute('data-item-id', String(100 + offset));

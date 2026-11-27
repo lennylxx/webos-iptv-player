@@ -21,6 +21,29 @@ describe('VirtualScrollGuard', () => {
     expect(guard.readUserOffset(element, 'vertical')).toBeNull();
   });
 
+  it('keeps a settling smooth scroll its own until it lands, without rewriting it', () => {
+    const guard = new VirtualScrollGuard();
+    const element = document.createElement('div');
+    guard.syncOffset(element, 'vertical', 300, false, true);
+    // Mid-scroll, past the two correction frames.
+    vi.advanceTimersByTime(100);
+    element.scrollTop = 120;
+    expect(guard.readUserOffset(element, 'vertical')).toBeNull();
+    expect(element.scrollTop).toBe(120);
+    element.scrollTop = 300;
+    expect(guard.readUserOffset(element, 'vertical')).toBeNull();
+    element.scrollTop = 250;
+    expect(guard.readUserOffset(element, 'vertical')).toBe(250);
+  });
+
+  it('reads an offset past a settling scroll\'s path as the user\'s', () => {
+    const guard = new VirtualScrollGuard();
+    const element = document.createElement('div');
+    guard.syncOffset(element, 'vertical', 300, false, true);
+    element.scrollTop = 500;
+    expect(guard.readUserOffset(element, 'vertical')).toBe(500);
+  });
+
   it('accepts user offsets after the programmatic correction frames', () => {
     const guard = new VirtualScrollGuard();
     const element = document.createElement('div');

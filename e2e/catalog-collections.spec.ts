@@ -3,6 +3,14 @@ import { seedXtream } from './fixtures/xtream';
 import { THEMES } from '../src/config/themes';
 import type { ResumeEntry, WatchlistEntry } from '../src/types';
 
+// Cells per row, as the grid laid them out beside its sidebar.
+function gridColumns(grid: ReturnType<Page['locator']>): Promise<number> {
+  return grid.locator('.catalog-grid-cell').evaluateAll(cells => {
+    const top = cells[0].getBoundingClientRect().top;
+    return cells.filter(cell => Math.abs(cell.getBoundingClientRect().top - top) < 1).length;
+  });
+}
+
 async function seedCollections(page: Page, count = 30): Promise<void> {
   await seedXtream(page);
   await page.route('http://host/poster/**', route => route.fulfill({
@@ -248,8 +256,10 @@ test('keeps one ring through virtualized deletion, tab-bar handoff, and manageme
   await page.locator('#view-movies [data-collection-manage="watchlist"]').click();
   const grid = layer(page);
   await grid.locator('[data-collection-action="remove"]').first().hover();
-  for (let i = 0; i < 32; i++) await page.keyboard.press('ArrowDown');
-  await expect(grid.locator('.catalog-remove-mark.focused')).toHaveAttribute('data-key', 'w:vod196');
+  const columns = await gridColumns(grid);
+  const lastRow = Math.floor(199 / columns);
+  for (let i = 0; i < lastRow; i++) await page.keyboard.press('ArrowDown');
+  await expect(grid.locator('.catalog-remove-mark.focused')).toHaveAttribute('data-key', `w:vod${String(lastRow * columns)}`);
   for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
   await expect(grid.locator('.catalog-remove-mark.focused')).toHaveAttribute('data-key', 'w:vod199');
   expect(await grid.locator('.catalog-remove-mark').count()).toBeLessThan(50);
@@ -312,7 +322,9 @@ test('rejects a full Watchlist without replacing saved titles and shows an actio
   await seedCollections(page, 200);
   await page.goto('/');
   await enterTab(page, 'movies');
-  await page.locator('#view-movies [data-rail-key="cat:1"] .catalog-tile').first().click();
+  // The rail below the collections loads once scrolled near the screen.
+  await page.locator('#view-movies [data-rail-key="cat:1"]').scrollIntoViewIfNeeded();
+  await page.locator('#view-movies [data-rail-key="cat:1"] .catalog-tile[data-item-id]').first().click();
   await page.locator('#view-movies [data-action="watchlist"]').click();
   await expect(page.locator('.toast').filter({ hasText: 'Watchlist is full' })).toBeVisible();
   await expect(page.locator('#view-movies [data-action="watchlist"]')).toContainText('Add to Watchlist');
@@ -358,7 +370,9 @@ test('keeps the independent red-and-white remove icon aligned in every theme and
         const range = document.createRange();
         range.selectNodeContents(label);
         const posters = button.closest('.catalog-grid')!.querySelectorAll('.catalog-grid-cell');
-        const posterRight = posters[6].getBoundingClientRect().right;
+        const rowTop = posters[0].getBoundingClientRect().top;
+        const firstRow = Array.from(posters).filter(p => Math.abs(p.getBoundingClientRect().top - rowTop) < 1);
+        const posterRight = firstRow[firstRow.length - 1].getBoundingClientRect().right;
         return {
           width: rect.width, height: rect.height,
           fill: getComputedStyle(button.querySelector('circle')!).fill,
@@ -383,4 +397,19 @@ test('keeps the independent red-and-white remove icon aligned in every theme and
       await expect(remove).not.toHaveClass(/focused/);
     }
   }
+});
+
+test('the manage hints sit under the grid sidebar and beside it, not over it', async ({ page }) => {
+  await seedCollections(page);
+  await page.goto('/');
+  await enterTab(page, 'movies');
+  await page.locator('#view-movies [data-collection-manage="watchlist"]').click();
+  const grid = layer(page);
+  await expect(grid.locator('.catalog-grid.catalog-managing')).toBeVisible();
+  const side = (await grid.locator('.catalog-sidebar').boundingBox())!;
+  const hints = (await grid.locator('.catalog-manage-hints').boundingBox())!;
+  expect(side.y + side.height).toBeLessThanOrEqual(hints.y);
+  const hintLeft = await grid.locator('.catalog-manage-hints > *').first().evaluate(el => el.getBoundingClientRect().left);
+  const cellLeft = await grid.locator('.catalog-grid-cell').first().evaluate(el => el.getBoundingClientRect().left);
+  expect(Math.abs(hintLeft - cellLeft)).toBeLessThanOrEqual(1);
 });

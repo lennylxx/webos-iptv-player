@@ -122,7 +122,8 @@ export class VirtualList {
     return this.offsets[Math.min(Math.max(0, index), this.offsets.length - 1)];
   }
 
-  ensureVisible(index: number, viewportSize = this.fallbackViewportSize): boolean {
+  // `margin` keeps that much room past the item, e.g. for a focus ring's glow.
+  ensureVisible(index: number, viewportSize = this.fallbackViewportSize, margin = 0): boolean {
     if (index < 0) return false;
     const itemStart = this.getItemOffset(index);
     const itemEnd = this.itemSize !== null
@@ -131,10 +132,13 @@ export class VirtualList {
     if (itemEnd <= itemStart) return false;
     // Compare in container coordinates so the leading content counts against
     // the viewport instead of leaving rows it covers inside the range.
-    const start = this.leading + itemStart;
-    const end = this.leading + itemEnd;
+    const start = this.leading + itemStart - margin;
+    const end = this.leading + itemEnd + margin;
     let nextOffset = this.offset;
-    if (start < nextOffset) {
+    // The first item brings the leading content back with it, if both fit.
+    if (index === 0 && end <= viewportSize) {
+      nextOffset = 0;
+    } else if (start < nextOffset) {
       nextOffset = start;
     } else if (end > nextOffset + viewportSize) {
       nextOffset = end - viewportSize;

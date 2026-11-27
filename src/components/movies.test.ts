@@ -62,6 +62,7 @@ vi.mock('./toast', () => ({ showToast: toastMock.showToast }));
 import { Movies } from './movies';
 import { Focus, Tier } from '../navigation/focus-scope';
 import { FocusRing } from '../navigation/focus-ring';
+import { setInputMode } from '../navigation/input-mode';
 import { VirtualGrid } from '../utils/virtual-grid';
 import { ParentalControlService } from '../services/parental-control';
 import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
@@ -75,6 +76,9 @@ const vod = (id: string, name: string, categoryId = '1'): VodItem => ({
 });
 
 let container: HTMLElement;
+// The grid's width beside its 296px category sidebar, and the columns that fit.
+const GRID_WIDTH = 1920 - 40 - 296 - 32 - 60;
+const GRID_COLUMNS = Math.floor(GRID_WIDTH / 244);
 function eventLines(spy: { mock: { calls: unknown[][] } }, code: string): string[] {
   return spy.mock.calls.map((args) => args.join(' ')).filter((l) => l.includes(`event=${code} `));
 }
@@ -135,6 +139,20 @@ async function openWith(cats = [{ id: '1', name: 'Cat A' }], streams = [vod('10'
   Focus.setBase(() => view.focusScope);
   await view.open(account);
   return { view, handlers };
+}
+
+const microtasks = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+
+// The way to a category without a rail: All Categories, then its sidebar row.
+async function openFromSidebar(view: Movies, id: string): Promise<void> {
+  container.querySelector<HTMLElement>('[data-all-categories]')!
+    .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+  view.handleAction('select');
+  await microtasks();
+  container.querySelector<HTMLElement>(`[data-sidebar-key="side:c:${id}"]`)!
+    .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+  view.handleAction('select');
+  await microtasks();
 }
 
 describe('Movies browse + grid', () => {
@@ -219,6 +237,29 @@ describe('Movies browse + grid', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('brings Manage into view when Back ends managing a grid scrolled down', async () => {
+      savedTitles(80);
+      const { view } = await openWith();
+      container.querySelector<HTMLElement>('[data-collection-manage="watchlist"]')!.click();
+      const grid = container.querySelector<HTMLElement>('.catalog-layer-grid .catalog-grid.catalog-managing')!;
+      const track = grid.querySelector<HTMLElement>('.catalog-grid-track')!;
+      let top = 0;
+      Object.defineProperty(grid, 'scrollTop', {
+        configurable: true, get: () => top, set: (value: number) => { top = value; },
+      });
+      Object.defineProperty(grid, 'clientHeight', { value: 900, configurable: true });
+      grid.getBoundingClientRect = () => ({ top: 0 } as DOMRect);
+      track.getBoundingClientRect = () => ({ top: 180 - top } as DOMRect);
+      grid.querySelector<HTMLElement>('[data-grid-index="0"] [data-collection-action="remove"]')!
+        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      for (let row = 0; row < 4; row++) pressKey(view, 'down');
+      expect(top).toBeGreaterThan(180);
+
+      pressKey(view, 'back');
+      expect(container.querySelector('.catalog-layer-grid .focused')?.getAttribute('data-collection-action')).toBe('manage');
+      expect(top).toBe(0);
     });
 
     it('caps collection previews and opens a counted virtual grid without sorting controls', async () => {
@@ -427,8 +468,9 @@ describe('Movies browse + grid', () => {
       }));
       const { view } = await openWith(undefined, streams());
       const rows = Array.from(browse().querySelector('.catalog-rails-body')!.children);
-      expect(rows.map(row => row.classList.contains('catalog-sort') ? 'sort' : row.getAttribute('data-rail-key')))
-        .toEqual(['continue', 'watchlist', 'sort', 'cat:1']);
+      expect(rows.map(row => row.classList.contains('catalog-sort') ? 'sort'
+        : row.classList.contains('catalog-entry-row') ? 'entry' : row.getAttribute('data-rail-key')))
+        .toEqual(['entry', 'continue', 'watchlist', 'sort', 'cat:1']);
       const special = () => ['continue', 'watchlist'].map(key =>
         browse().querySelector(`[data-rail-key="${key}"]`)!.textContent);
       const before = special();
@@ -440,6 +482,8 @@ describe('Movies browse + grid', () => {
       pressKey(view, 'down');
       expect(browse().querySelector('.focused')?.closest('[data-rail-key]')?.getAttribute('data-rail-key'))
         .toBe('cat:1');
+      pressKey(view, 'up');
+      expect(browse().querySelector('[data-rail-see-all].focused')).not.toBeNull();
       pressKey(view, 'up');
       expect(browse().querySelector('.catalog-sort .focused')).not.toBeNull();
       pressKey(view, 'down');
@@ -496,10 +540,7 @@ describe('Movies browse + grid', () => {
       catalogMock.loadVodStreams.mockResolvedValue([
         vod('1', 'Title 1', '7'), vod('10', 'Title 10', '7'), vod('2', 'Title 2', '7'),
       ]);
-      const cat = browse().querySelector<HTMLElement>('[data-category-id="7"]')!;
-      cat.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-      view.handleAction('select');
-      await Promise.resolve(); await Promise.resolve();
+      await openFromSidebar(view, '7');
       const grid = container.querySelector<HTMLElement>('.catalog-layer-grid')!;
       expect(Array.from(grid.querySelectorAll<HTMLElement>('.catalog-tile'))
         .map(el => el.dataset.itemId)).toEqual(['10', '2', '1']);
@@ -754,7 +795,7 @@ describe('Movies browse + grid', () => {
     async function openGrid() {
       catalogMock.loadVodInfo.mockResolvedValue(null);
       const opened = await openWith([{ id: '1', name: 'Cat A' }], titles);
-      container.querySelector<HTMLElement>('.catalog-see-all[data-category-id="1"], .catalog-cat[data-category-id="1"]')
+      container.querySelector<HTMLElement>('.catalog-see-all[data-category-id="1"], [data-rail-see-all][data-category-id="1"]')
         ?.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
       opened.view.focusScope.track(JSON.stringify(['browse', 'cat:1', 'all:1']));
       (opened.view as unknown as { openGrid(id: string): Promise<void> }).openGrid('1');
@@ -1020,10 +1061,118 @@ describe('Movies browse + grid', () => {
   it('reveals the tab bar when Up cannot move within the view', async () => {
     const { view, handlers } = await openWith();
     view.handleAction('up');
+    expect(container.querySelector('[data-rail-see-all].focused')).not.toBeNull();
+    view.handleAction('up');
     expect(container.querySelector('.catalog-sort .focused')).not.toBeNull();
     expect(handlers.onRevealTabBar).not.toHaveBeenCalled();
     view.handleAction('up');
     expect(handlers.onRevealTabBar).toHaveBeenCalled();
+  });
+
+  describe('category entry points', () => {
+    const twoCategories = async () => {
+      catalogMock.loadVodCategories.mockResolvedValue([{ id: '1', name: 'Cat A' }, { id: '2', name: 'Cat B' }]);
+      catalogMock.loadVodStreams.mockImplementation((_account: PlaylistEntry, categoryId: string) =>
+        Promise.resolve(Array.from({ length: 5 }, (_, i) => vod(`${categoryId}${String(i)}`, `Movie ${String(i)}`, categoryId))));
+      tallScreen();
+      const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
+      Focus.setBase(() => view.focusScope);
+      await view.open(account);
+      return view;
+    };
+    const hover = (el: Element) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    const button = () => container.querySelector<HTMLElement>('[data-all-categories]')!;
+    const browseKey = () => container.querySelector<HTMLElement>('.catalog-browse .focused')?.dataset.key;
+    const gridFocused = () => container.querySelector<HTMLElement>('.catalog-layer-grid .focused');
+    // Each rail's See all sits above its column 2 tile, whose rail is a 500px row.
+    function layOutRails(): void {
+      const at = (el: HTMLElement, left: number, top: number, width: number, height: number) => {
+        el.getBoundingClientRect = () => ({
+          left, top, right: left + width, bottom: top + height, width, height, x: left, y: top, toJSON: () => ({}),
+        });
+      };
+      ['1', '2'].forEach((id, row) => {
+        const rail = container.querySelector<HTMLElement>(`[data-rail-key="cat:${id}"]`)!;
+        at(rail.querySelector<HTMLElement>('[data-rail-see-all]')!, 40 + 2 * 244, row * 500, 200, 50);
+        rail.querySelectorAll<HTMLElement>('.catalog-rail-track [data-focusable]')
+          .forEach((tile, column) => at(tile, 40 + column * 244, row * 500 + 100, 220, 330));
+      });
+    }
+
+    it('sets All Categories in its own row above the sort row, and opens the first category on its sidebar row', async () => {
+      const view = await twoCategories();
+      const rows = Array.from(container.querySelector('.catalog-rails-body')!.children);
+      expect(rows[0].classList.contains('catalog-entry-row')).toBe(true);
+      expect(rows[0].contains(button())).toBe(true);
+      expect(rows[1].classList.contains('catalog-sort')).toBe(true);
+      expect(button().querySelector('.catalog-all-categories-count')?.textContent).toBe('2');
+      hover(button());
+      view.handleAction('select');
+      await microtasks();
+      expect(container.querySelector('.catalog-grid-title')?.textContent).toBe('Cat A');
+      expect(gridFocused()?.dataset.sidebarKey).toBe('side:c:1');
+    });
+
+    it('sets All Categories in its own row above Continue Watching', async () => {
+      storageMock.getResumeList.mockReturnValue([
+        { accountId: 'x1', kind: 'vod', itemId: '10', name: 'Movie 0', poster: '', ext: 'mp4', position: 100, duration: 600, updatedAt: 1 },
+      ]);
+      await twoCategories();
+      const rows = Array.from(container.querySelector('.catalog-rails-body')!.children);
+      expect(rows[0].classList.contains('catalog-entry-row')).toBe(true);
+      expect(rows[0].contains(button())).toBe(true);
+      expect(rows[1].getAttribute('data-rail-key')).toBe('continue');
+      expect(container.querySelector('.catalog-sort [data-all-categories]')).toBeNull();
+    });
+
+    it('stops Up on a rail\'s See all and passes it going Down from the rail above', async () => {
+      const view = await twoCategories();
+      layOutRails();
+      hover(container.querySelector<HTMLElement>('[data-key="i:1:12"]')!);
+      pressKey(view, 'down');
+      expect(browseKey()).toBe('i:2:22');
+      pressKey(view, 'up');
+      expect(browseKey()).toBe('see-all:2');
+      pressKey(view, 'down');
+      expect(browseKey()).toBe('i:2:22');
+    });
+
+    it('takes the sort row back to the rail of the See all it left, not a tile Up left elsewhere', async () => {
+      const view = await twoCategories();
+      layOutRails();
+      hover(container.querySelector<HTMLElement>('[data-key="i:2:24"]')!);
+      pressKey(view, 'up');
+      expect(browseKey()).toBe('see-all:2');
+      hover(container.querySelector<HTMLElement>('[data-rail-see-all][data-category-id="1"]')!);
+      pressKey(view, 'up');
+      expect(container.querySelector('.catalog-sort .focused')).not.toBeNull();
+      pressKey(view, 'down');
+      expect(browseKey()).toMatch(/^(see-all:1|i:1:)/);
+    });
+
+    it('keeps the column going Up through a rail\'s See all to the rail above', async () => {
+      const view = await twoCategories();
+      layOutRails();
+      // The link sits by the rail title, left of the tile Up started from.
+      const link = container.querySelector<HTMLElement>('[data-rail-key="cat:2"] [data-rail-see-all]')!;
+      link.getBoundingClientRect = () => ({
+        left: 240, top: 500, right: 440, bottom: 550, width: 200, height: 50, x: 240, y: 500, toJSON: () => ({}),
+      });
+      hover(container.querySelector<HTMLElement>('[data-key="i:2:24"]')!);
+      pressKey(view, 'up');
+      expect(browseKey()).toBe('see-all:2');
+      pressKey(view, 'up');
+      expect(browseKey()).toBe('i:1:14');
+    });
+
+    it('opens a category\'s grid from its rail\'s See all', async () => {
+      const view = await twoCategories();
+      hover(container.querySelector<HTMLElement>('[data-rail-see-all][data-category-id="2"]')!);
+      view.handleAction('select');
+      await microtasks();
+      expect(container.querySelector('.catalog-grid-title')?.textContent).toBe('Cat B');
+      expect(gridFocused()?.dataset.itemId).toBe('20');
+    });
   });
 
   // One failing rail category must not blank every other rail.
@@ -1051,12 +1200,8 @@ describe('Movies browse + grid', () => {
     warns.mockRestore();
 
     // The failed category stays reachable from All Categories and retries.
-    const cat = container.querySelector<HTMLElement>('.catalog-cat[data-category-id="3"]')!;
-    expect(cat).not.toBeNull();
     catalogMock.loadVodStreams.mockResolvedValue([vod('30', 'Movie 3', '3')]);
-    cat.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-    view.handleAction('select');
-    await Promise.resolve(); await Promise.resolve();
+    await openFromSidebar(view, '3');
     expect(container.querySelector('.catalog-grid .catalog-tile[data-item-id="30"]')).not.toBeNull();
   });
 
@@ -1064,12 +1209,7 @@ describe('Movies browse + grid', () => {
     const cats = Array.from({ length: 7 }, (_, i) => ({ id: String(i + 1), name: `Cat ${i + 1}` }));
     const { view } = await openWith(cats, [vod('10', 'Movie One')]);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const openCategory = async () => {
-      container.querySelector<HTMLElement>('.catalog-cat[data-category-id="7"]')!
-        .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-      view.handleAction('select');
-      await Promise.resolve(); await Promise.resolve();
-    };
+    const openCategory = () => openFromSidebar(view, '7');
     catalogMock.loadVodStreams.mockRejectedValue(new Error('timeout'));
     await openCategory();
     expect(container.querySelector('.catalog-grid .catalog-tile[data-item-id]')).toBeNull();
@@ -1083,20 +1223,17 @@ describe('Movies browse + grid', () => {
   });
 
   it('drills into a non-rail category grid and back to browse', async () => {
-    // 7 categories: the first RAIL_CATEGORIES (6) become poster rails; the 7th
-    // is a non-rail tile in the "All Categories" rail — the drill-in target.
+    // 7 categories: the first RAIL_CATEGORIES (6) become poster rails; the
+    // 7th has none and opens from the grid sidebar.
     const cats = Array.from({ length: 7 }, (_, i) => ({ id: String(i + 1), name: `Cat ${i + 1}` }));
     const { view, handlers } = await openWith(cats, [vod('10', 'Movie One')]);
-    const cat = container.querySelector('.catalog-cat[data-category-id="7"]') as HTMLElement;
-    expect(cat).not.toBeNull();
-    cat.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     catalogMock.loadVodStreams.mockResolvedValue([vod('20', 'Movie Two', '7')]);
-    view.handleAction('select');
-    await Promise.resolve(); await Promise.resolve();
+    await openFromSidebar(view, '7');
     expect(container.querySelector('.catalog-grid')).not.toBeNull();
     expect(container.querySelector('.catalog-tile[data-item-id="20"]')).not.toBeNull();
     view.handleAction('back');
     expect(container.querySelector('.catalog-browse')).not.toBeNull();
+    expect(container.querySelector('.catalog-browse .focused')?.hasAttribute('data-all-categories')).toBe(true);
     expect(handlers.onBack).not.toHaveBeenCalled();
   });
 
@@ -1104,9 +1241,8 @@ describe('Movies browse + grid', () => {
     const cats = Array.from({ length: 7 }, (_, i) => ({ id: String(i + 1), name: `Cat ${i + 1}` }));
     const { view } = await openWith(cats, [vod('10', 'Movie One')]);
     const browse = container.querySelector('.catalog-browse');
-    const cat = container.querySelector('.catalog-cat[data-category-id="7"]') as HTMLElement;
-    cat.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-    catalogMock.loadVodStreams.mockResolvedValue([vod('20', 'Movie Two', '7')]);
+    const link = container.querySelector('[data-rail-see-all][data-category-id="1"]') as HTMLElement;
+    link.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     view.handleAction('select');
     await Promise.resolve(); await Promise.resolve();
 
@@ -1114,11 +1250,11 @@ describe('Movies browse + grid', () => {
     expect(container.querySelector('.catalog-layer-browse')!.classList)
       .toContain('catalog-layer-hidden');
     expect(container.querySelector('.catalog-layer-grid .focused')?.getAttribute('data-item-id'))
-      .toBe('20');
+      .toBe('10');
     view.handleAction('back');
     expect(container.querySelector('.catalog-browse')).toBe(browse);
-    expect(cat.isConnected).toBe(true);
-    expect(cat.classList).toContain('focused');
+    expect(link.isConnected).toBe(true);
+    expect(link.classList).toContain('focused');
     expect(container.querySelector('.catalog-grid')).toBeNull();
   });
 
@@ -1362,20 +1498,22 @@ describe('Movies browse + grid', () => {
   it('stays in browse when Back cancels a category grid that is still loading', async () => {
     const cats = Array.from({ length: 7 }, (_, i) => ({ id: String(i + 1), name: `Cat ${i + 1}` }));
     const { view } = await openWith(cats, [vod('10', 'Movie One')]);
-    const cat = container.querySelector('.catalog-cat[data-category-id="7"]') as HTMLElement;
-    cat.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    // Rail 6 is still a placeholder: its See all loads the category.
     let resolve!: (items: unknown[]) => void;
     catalogMock.loadVodStreams.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    const cat = container.querySelector('[data-rail-see-all][data-category-id="6"]') as HTMLElement;
+    cat.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
     view.handleAction('select');
+    expect(catalogMock.loadVodStreams).toHaveBeenLastCalledWith(account, '6', expect.anything());
     expect(container.querySelector('.catalog-layer-grid .catalog-loading')).not.toBeNull();
-    // The hidden category tile no longer takes OK while the grid loads.
+    // The hidden See all no longer takes OK while the grid loads.
     expect(container.querySelector('.focused')).toBeNull();
     const loads = catalogMock.loadVodStreams.mock.calls.length;
     view.handleAction('select');
     expect(catalogMock.loadVodStreams).toHaveBeenCalledTimes(loads);
     view.handleAction('back');
     const logs = vi.spyOn(console, 'log');
-    resolve([vod('20', 'Movie Two', '7')]);
+    resolve([vod('20', 'Movie Two', '6')]);
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(eventLines(logs, 'xtream.view.load.superseded')).toEqual([
       expect.stringMatching(/operation=category mode=vod reason=left$/),
@@ -1429,9 +1567,9 @@ describe('Movies browse + grid', () => {
   it('opens the full grid of every category from browse', async () => {
     const view = await eightFullCategories();
     const fullHeight = new VirtualGrid({
-      columnStride: 244, rowStride: 395, overscanRows: 0, fallbackViewportWidth: 1760, fallbackViewportHeight: 900,
+      columnStride: 244, rowStride: 395, overscanRows: 0, fallbackViewportWidth: GRID_WIDTH, fallbackViewportHeight: 900,
     })
-      .getTotalSize(50, 1760);
+      .getTotalSize(50, GRID_WIDTH);
 
     for (let id = 1; id <= 6; id++) {
       const rail = container.querySelector<HTMLElement>(`.catalog-see-all[data-category-id="${String(id)}"]`)!
@@ -1447,11 +1585,17 @@ describe('Movies browse + grid', () => {
       view.handleAction('back');
     }
 
-    const tiles = Array.from(container.querySelectorAll<HTMLElement>('.catalog-cat'))
+    const links = Array.from(container.querySelectorAll<HTMLElement>('[data-rail-see-all]'))
       .map((el) => el.dataset.categoryId);
-    expect(tiles).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
-    await selectAndSettle(view, container.querySelector<HTMLElement>('.catalog-cat[data-category-id="2"]')!);
+    expect(links).toEqual(['1', '2', '3', '4', '5', '6']);
+    await selectAndSettle(view, container.querySelector<HTMLElement>('[data-rail-see-all][data-category-id="2"]')!);
     expect(container.querySelector('.catalog-grid-title')?.textContent).toBe('Cat 2');
+    view.handleAction('back');
+
+    await openFromSidebar(view, '8');
+    expect(Array.from(container.querySelectorAll<HTMLElement>('.catalog-sidebar-item'))
+      .map((el) => el.dataset.sidebarKey)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8'].map(id => `side:c:${id}`));
+    expect(container.querySelector('.catalog-grid-title')?.textContent).toBe('Cat 8');
   });
 
   it('returns focus to See all when backing out of its grid', async () => {
@@ -1530,24 +1674,25 @@ describe('Movies browse + grid', () => {
       .toBe('continue');
   });
 
-  it('returns focus to an All Categories tile beyond the first rendered window', async () => {
+  it('opens a category beyond the sidebar\'s first rendered window and returns to All Categories', async () => {
     const cats = Array.from({ length: 60 }, (_, i) => ({ id: String(i + 1), name: `Cat ${String(i + 1)}` }));
     catalogMock.loadVodCategories.mockResolvedValue(cats);
-    catalogMock.loadVodStreams.mockResolvedValue([]);
+    catalogMock.loadVodStreams.mockResolvedValue([vod('10', 'Movie One')]);
     const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
     Focus.setBase(() => view.focusScope);
     await view.open(account);
-    container.querySelector<HTMLElement>('.catalog-cat[data-category-id="1"]')!
+    container.querySelector<HTMLElement>('[data-all-categories]')!
       .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-    for (let i = 0; i < 40; i++) view.handleAction('right');
-    expect(focusedKey()).toBe('c:41');
-    expect(container.querySelector('.catalog-cat[data-category-id="1"]')).toBeNull();
     view.handleAction('select');
-    await Promise.resolve();
-    await Promise.resolve();
+    await microtasks();
+    for (let i = 0; i < 40; i++) view.handleAction('down');
+    expect(focusedKey()).toBe('side:c:41');
+    expect(container.querySelector('[data-sidebar-key="side:c:1"]')).toBeNull();
+    view.handleAction('select');
+    await microtasks();
     expect(container.querySelector('.catalog-grid-title')?.textContent).toBe('Cat 41');
     view.handleAction('back');
-    expect(focusedKey()).toBe('c:41');
+    expect(focusedKey()).toBe('all-categories');
   });
 
   describe('rail edge gutter', () => {
@@ -1605,10 +1750,11 @@ describe('Movies browse + grid', () => {
     });
   });
 
-  it('omits See all when a rail already shows the whole category', async () => {
+  it('ends a rail that shows the whole category without a See all tile, keeping the See all by its title', async () => {
     await openWith([{ id: '1', name: 'Cat A' }], Array.from({ length: 20 }, (_, i) => vod(String(i), `Movie ${String(i)}`)));
     expect(container.querySelectorAll('.catalog-tile[data-item-id]').length).toBe(20);
     expect(container.querySelector('.catalog-see-all')).toBeNull();
+    expect(container.querySelector('[data-rail-key="cat:1"] [data-rail-see-all]')).not.toBeNull();
   });
 
   it('virtualizes 50,000 categories and a 50,000-item grid', async () => {
@@ -1621,40 +1767,348 @@ describe('Movies browse + grid', () => {
       (_, i) => vod(String(i), `Movie ${String(i)}`, '7'),
     );
     const { view } = await openWith(cats, streams);
+    await openFromSidebar(view, '7');
 
-    expect(container.querySelectorAll('.catalog-category-rail-cell').length).toBeLessThan(20);
-    expect(container.querySelector<HTMLElement>('.catalog-category-rail-spacer')?.style.width)
-      .toBe(`${String(50_000 * 320)}px`);
-
-    const category = container.querySelector<HTMLElement>(
-      '.catalog-cat[data-category-id="7"]',
-    )!;
-    category.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-    view.handleAction('select');
-    await Promise.resolve();
-    await Promise.resolve();
-
+    expect(container.querySelectorAll('.catalog-sidebar-item').length).toBeLessThan(40);
     expect(container.querySelectorAll('.catalog-grid-cell').length).toBeLessThan(60);
     expect(container.querySelector<HTMLElement>('.catalog-grid-track')?.style.height)
-      .toBe('2821485px');
+      .toBe(`${String(Math.ceil(50_000 / GRID_COLUMNS) * 395)}px`);
   });
 
-  it('re-renders a scrolled All categories rail only when its window changes', async () => {
-    const cats = Array.from({ length: 200 }, (_, i) => ({ id: String(i + 1), name: `Category ${String(i + 1)}` }));
-    const { view } = await openWith(cats, [vod('1', 'Movie 1', '1')]);
-    const rail = container.querySelector<HTMLElement>('.catalog-category-rail')!;
-    const render = vi.spyOn(view as unknown as { renderBrowse(restore?: boolean): void }, 'renderBrowse');
-    const scrollTo = async (left: number): Promise<void> => {
-      rail.scrollLeft = left;
-      rail.dispatchEvent(new Event('scroll', { bubbles: true }));
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  describe('grid sidebar', () => {
+    const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+    const focusedKey = () => container.querySelector<HTMLElement>('.catalog-layer-grid .focused')?.dataset.key;
+    const title = () => container.querySelector('.catalog-grid-title')?.textContent?.trim();
+    const cats = (count: number) => Array.from({ length: count }, (_, i) => ({ id: String(i + 1), name: `Cat ${String(i + 1)}` }));
+
+    async function openCategory(count: number, id: string, streams: VodItem[]) {
+      catalogMock.loadVodCategories.mockResolvedValue(cats(count));
+      catalogMock.loadVodStreams.mockImplementation((_account: unknown, categoryId: string) =>
+        Promise.resolve(streams.filter(item => item.categoryId === categoryId)));
+      const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
+      Focus.setBase(() => view.focusScope);
+      await view.open(account);
+      await (view as unknown as { openGrid(categoryId: string): Promise<void> }).openGrid(id);
+      await settle();
+      return { view };
+    }
+
+    it('places the selected row by the list\'s measured height on first open', async () => {
+      const height = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')!;
+      Object.defineProperty(Element.prototype, 'clientHeight', {
+        configurable: true,
+        get(this: Element) { return this.classList.contains('catalog-sidebar-list') ? 1016 : height.get!.call(this) as number; },
+      });
+      try {
+        const { view } = await openCategory(20, '13', [vod('11', 'Movie 1', '13')]);
+        // Row 13 ends at 872px: past the 860px fallback, inside the measured 1008px.
+        expect((view as unknown as { sidebarRows: { scrollOffset: number } }).sidebarRows.scrollOffset).toBe(0);
+      } finally {
+        Object.defineProperty(Element.prototype, 'clientHeight', height);
+      }
+    });
+
+    it('reopens the sidebar from its top, with Continue Watching in view', async () => {
+      storageMock.getResumeList.mockReturnValue([
+        { accountId: 'x1', kind: 'vod', itemId: '10', name: 'Movie 0', poster: '', ext: 'mp4', position: 100, duration: 600, updatedAt: 1 },
+      ]);
+      const { view } = await openCategory(60, '1', [vod('11', 'Movie 1', '1')]);
+      const sidebarOffset = () => (view as unknown as { sidebarRows: { scrollOffset: number } }).sidebarRows.scrollOffset;
+      pressKey(view, 'left');
+      for (let i = 0; i < 30; i++) pressKey(view, 'down');
+      expect(sidebarOffset()).toBeGreaterThan(0);
+      pressKey(view, 'back');
+      await settle();
+      await (view as unknown as { openAllCategories(): Promise<void> }).openAllCategories();
+      await settle();
+      expect(sidebarOffset()).toBe(0);
+      expect(container.querySelector('[data-sidebar-key="side:continue"]')).not.toBeNull();
+    });
+
+    it('scrolls the sidebar window without reading the collections again', async () => {
+      const { view } = await openCategory(60, '1', [vod('11', 'Movie 1', '1')]);
+      pressKey(view, 'left');
+      const reads = storageMock.getWatchlist.mock.calls.length;
+      for (let i = 0; i < 30; i++) pressKey(view, 'down');
+      expect(container.querySelector('.catalog-sidebar-item.focused')?.getAttribute('data-sidebar-key')).toBe('side:c:31');
+      expect(storageMock.getWatchlist.mock.calls.length).toBe(reads);
+    });
+
+    it('lists every category but renders only the rows around the selected one', async () => {
+      await openCategory(5000, '3000', [vod('10', 'Movie One', '3000')]);
+      const rows = container.querySelectorAll('.catalog-sidebar-item');
+      expect(rows.length).toBeLessThan(40);
+      expect(container.querySelector('.catalog-sidebar-item.active')?.getAttribute('data-sidebar-key')).toBe('side:c:3000');
+    });
+
+    it('moves through rows without changing the grid; OK shows the row and keeps the focus on it', async () => {
+      const streams = ['1', '2', '3'].map(cat => vod(`1${cat}`, `Movie ${cat}`, cat));
+      const { view } = await openCategory(3, '1', streams);
+      expect(focusedKey()).toBe('i:1:11');
+      pressKey(view, 'left');
+      expect(focusedKey()).toBe('side:c:1');
+      const loads = catalogMock.loadVodStreams.mock.calls.length;
+      pressKey(view, 'down');
+      pressKey(view, 'down');
+      await new Promise(resolve => setTimeout(resolve, 450));
+      await settle();
+      expect(focusedKey()).toBe('side:c:3');
+      expect(title()).toBe('Cat 1');
+      expect(catalogMock.loadVodStreams.mock.calls.length).toBe(loads);
+      pressKey(view, 'up');
+      pressKey(view, 'select');
+      await settle();
+      expect(title()).toBe('Cat 2');
+      expect(focusedKey()).toBe('side:c:2');
+      expect(container.querySelector('.catalog-sidebar-item.active')?.getAttribute('data-sidebar-key')).toBe('side:c:2');
+      pressKey(view, 'right');
+      expect(focusedKey()).toBe('i:2:12');
+      pressKey(view, 'left');
+      expect(focusedKey()).toBe('side:c:2');
+    });
+
+    it('steps over the divider between the collections and the categories', async () => {
+      watchlistState.entries = [{ accountId: 'x1', kind: 'vod', itemId: '11', name: 'Movie 1', poster: '', rating: '',
+        categoryId: '1', containerExtension: 'mp4', addedAt: 1 }];
+      const { view } = await openCategory(2, '1', ['1', '2'].map(cat => vod(`1${cat}`, `Movie ${cat}`, cat)));
+      pressKey(view, 'left');
+      expect(focusedKey()).toBe('side:c:1');
+      pressKey(view, 'up');
+      expect(focusedKey()).toBe('side:watchlist');
+      pressKey(view, 'select');
+      await settle();
+      expect(title()).toContain('Watchlist');
+      pressKey(view, 'down');
+      expect(focusedKey()).toBe('side:c:1');
+    });
+
+    it('stays on the grid when the last title leaves a collection its sidebar row opened', async () => {
+      watchlistState.entries = [{
+        accountId: 'x1', kind: 'vod', itemId: 'm0', name: 'Title 0',
+        poster: '', rating: '', categoryId: '1', containerExtension: 'mp4', addedAt: 1,
+      }];
+      const { view } = await openCategory(3, '2', [vod('20', 'Movie 20', '2'), vod('10', 'Movie 10', '1')]);
+      const hover = (el: Element) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      hover(container.querySelector<HTMLElement>('[data-sidebar-key="side:watchlist"]')!);
+      pressKey(view, 'select');
+      await settle();
+      container.querySelector<HTMLElement>('[data-collection-action="manage"]')!.click();
+      hover(container.querySelector<HTMLElement>('.catalog-grid [data-collection-action="remove"]')!);
+      pressKey(view, 'select');
+      await settle();
+      expect(container.querySelector('.catalog-layer-grid')?.classList.contains('catalog-layer-hidden')).toBe(false);
+      expect(title()).toBe('Cat 1');
+      expect(focusedKey()).toBe('side:c:1');
+    });
+
+    for (const [how, empty] of [
+      ['Clear all', async () => {
+        container.querySelector<HTMLElement>('[data-collection-action="manage"]')!.click();
+        container.querySelector<HTMLElement>('[data-collection-action="clear"]')!.click();
+        document.querySelector<HTMLElement>('.confirmation-prompt:not(.hidden) [data-confirm-action="confirm"]')!.click();
+      }],
+      ['its detail', async (view: Movies) => {
+        catalogMock.loadVodInfo.mockResolvedValue(null);
+        container.querySelector<HTMLElement>('.catalog-layer-grid .catalog-tile[data-focusable]')!
+          .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+        pressKey(view, 'select');
+        await Promise.resolve();
+        container.querySelector<HTMLElement>('[data-action="watchlist"]')!
+          .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+        pressKey(view, 'select');
+        pressKey(view, 'back');
+      }],
+    ] as Array<[string, (view: Movies) => Promise<void>]>) {
+      it(`stays on the grid when ${how} empties a collection its sidebar row opened`, async () => {
+        watchlistState.entries = [{
+          accountId: 'x1', kind: 'vod', itemId: 'm0', name: 'Title 0',
+          poster: '', rating: '', categoryId: '1', containerExtension: 'mp4', addedAt: 1,
+        }];
+        const { view } = await openCategory(3, '2', [vod('20', 'Movie 20', '2'), vod('10', 'Movie 10', '1')]);
+        container.querySelector<HTMLElement>('[data-sidebar-key="side:watchlist"]')!
+          .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+        pressKey(view, 'select');
+        await settle();
+        await empty(view);
+        await settle();
+        expect(container.querySelector('.catalog-layer-grid')?.classList.contains('catalog-layer-hidden')).toBe(false);
+        expect(title()).toBe('Cat 1');
+      });
+    }
+
+    it('gives the emptied collection\'s place to the first category without a reveal for the pointer', async () => {
+      watchlistState.entries = [{
+        accountId: 'x1', kind: 'vod', itemId: 'm0', name: 'Title 0',
+        poster: '', rating: '', categoryId: '1', containerExtension: 'mp4', addedAt: 1,
+      }];
+      const { view } = await openCategory(3, '2', [vod('20', 'Movie 20', '2'), vod('10', 'Movie 10', '1')]);
+      const hover = (el: Element) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      hover(container.querySelector<HTMLElement>('[data-sidebar-key="side:watchlist"]')!);
+      pressKey(view, 'select');
+      await settle();
+      setInputMode('pointer');
+      try {
+        container.querySelector<HTMLElement>('[data-collection-action="manage"]')!.click();
+        Focus.flush();
+        const reveal = vi.spyOn(view as unknown as { revealKey(key: string): unknown }, 'revealKey');
+        container.querySelector<HTMLElement>('.catalog-grid [data-collection-action="remove"]')!.click();
+        await settle();
+        Focus.flush();
+        expect(title()).toBe('Cat 1');
+        expect(view.focusScope.focusKey).toBe(JSON.stringify(['grid', 'sidebar', 'side:c:1']));
+        // A pointer pick lights the row where it is; only a key one reveals it.
+        expect(reveal.mock.calls.filter(([key]) => key.indexOf('side:') >= 0)).toEqual([]);
+      } finally {
+        setInputMode('keys');
+      }
+    });
+
+    it('unlinks a finished sidebar load from the view\'s requests', async () => {
+      const { view } = await openCategory(12, '1', [vod('10', 'Movie 10', '1'), vod('80', 'Movie 80', '8')]);
+      const session = (view as unknown as { requestSignal: AbortSignal }).requestSignal;
+      const add = vi.spyOn(session, 'addEventListener');
+      const remove = vi.spyOn(session, 'removeEventListener');
+      pressKey(view, 'left');
+      for (let i = 0; i < 7; i++) pressKey(view, 'down');
+      pressKey(view, 'select');
+      await settle();
+      expect(title()).toBe('Cat 8');
+      const added = add.mock.calls.filter(([type]) => type === 'abort').map(([, fn]) => fn);
+      expect(added).toHaveLength(1);
+      expect(remove.mock.calls.filter(([type, fn]) => type === 'abort' && fn === added[0])).toHaveLength(1);
+    });
+
+    it('cancels a sidebar load another row replaced', async () => {
+      // Past the rails browse loads, so each row loads on its own.
+      const { view } = await openCategory(12, '1', [vod('10', 'Movie 10', '1')]);
+      const signals: Record<string, AbortSignal | undefined> = {};
+      catalogMock.loadVodStreams.mockImplementation((_account: unknown, categoryId: string, signal?: AbortSignal) => {
+        signals[categoryId] = signal;
+        return new Promise(() => {});
+      });
+      pressKey(view, 'left');
+      for (let i = 0; i < 7; i++) pressKey(view, 'down');
+      for (const id of ['8', '9', '10']) {
+        if (id !== '8') pressKey(view, 'down');
+        pressKey(view, 'select');
+        await settle();
+        expect(signals[id]).toBeDefined();
+      }
+      expect(signals['8']?.aborted).toBe(true);
+      expect(signals['9']?.aborted).toBe(true);
+      expect(signals['10']?.aborted).toBe(false);
+    });
+
+    it('loads a category again when a Search deep link cut its sidebar load short', async () => {
+      const streams = ['1', '12'].map(cat => vod(`1${cat}`, `Movie ${cat}`, cat));
+      const { view } = await openCategory(12, '1', streams);
+      let first = true;
+      catalogMock.loadVodStreams.mockImplementation((_account: unknown, categoryId: string) => {
+        if (categoryId === '12' && first) {
+          first = false;
+          return new Promise(() => {});
+        }
+        return Promise.resolve(streams.filter(item => item.categoryId === categoryId));
+      });
+      catalogMock.loadVodInfo.mockResolvedValue({
+        plot: '', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0,
+        poster: '', imdbId: '', tmdbId: '', year: 0,
+      });
+      pressKey(view, 'left');
+      for (let i = 0; i < 11; i++) pressKey(view, 'down');
+      pressKey(view, 'select');
+      await settle();
+      expect(container.querySelector('.catalog-grid .catalog-hint')?.textContent).toBe('Loading…');
+      await view.openItem(account, vod('99', 'Found Movie'), vi.fn());
+      pressKey(view, 'back');
+      await settle();
+      expect(title()).toBe('Cat 12');
+      expect(container.querySelector('.catalog-grid .catalog-hint')).toBeNull();
+      expect(container.querySelector('.catalog-grid .catalog-tile[data-item-id="112"]')).not.toBeNull();
+    });
+
+    it('repaints the lock badges on the rows when the locks change', async () => {
+      let locked = false;
+      const lockState = vi.spyOn(ParentalControlService, 'groupLockState').mockImplementation((targets) =>
+        (locked && targets.some(target => 'categoryId' in target && target.categoryId === '2') ? 'locked' : null));
+      try {
+        const { view } = await openCategory(2, '1', [vod('11', 'Movie 1')]);
+        const badge = () => container.querySelector('.catalog-sidebar-item[data-sidebar-key="side:c:2"] .lock-badge.is-locked');
+        expect(badge()).toBeNull();
+        locked = true;
+        view.refreshLocks();
+        expect(badge()).not.toBeNull();
+      } finally {
+        lockState.mockRestore();
+      }
+    });
+
+    it('starts the grid of an empty category in the grid, not on a sidebar row', async () => {
+      await openCategory(2, '2', [vod('11', 'Movie 1', '1')]);
+      const focused = container.querySelector<HTMLElement>('.catalog-layer-grid .focused');
+      expect(focused?.closest('.catalog-grid')).not.toBeNull();
+    });
+
+    // A wheel moves the list at once, but its scroll event comes a frame later.
+    const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const wheelTo = async (el: HTMLElement, top: number) => {
+      // Past the frames that guard the view's own scroll.
+      await frame();
+      await frame();
+      el.scrollTop = top;
     };
-    // An edge scroll moves a few pixels a frame; the same cells stay.
-    for (const left of [10, 20, 30]) await scrollTo(left);
-    expect(render).not.toHaveBeenCalled();
-    await scrollTo(320 * 50);
-    expect(render).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('[data-category-virtual-index="50"]')).not.toBeNull();
+    const scrollEventLands = async (el: HTMLElement) => {
+      el.dispatchEvent(new Event('scroll'));
+      await frame();
+    };
+
+    it('finds a sidebar row by where the list is when a key lands before its scroll event', async () => {
+      const { view } = await openCategory(60, '45', [vod('11', 'Movie 1', '45')]);
+      const list = container.querySelector<HTMLElement>('.catalog-sidebar-list')!;
+      expect(list.scrollTop).toBeGreaterThan(0);
+      await wheelTo(list, 0);
+      pressKey(view, 'left');
+      await scrollEventLands(list);
+      expect(focusedKey()).toBe('side:c:45');
+    });
+
+    it('keeps the keys on a sidebar row the list scrolled out of the DOM', async () => {
+      const { view } = await openCategory(60, '1', [vod('11', 'Movie 1')]);
+      pressKey(view, 'left');
+      expect(focusedKey()).toBe('side:c:1');
+      const internals = view as unknown as { sidebarRows: { setScrollOffset(offset: number): void }; renderSidebar(nav: HTMLElement): void };
+      internals.sidebarRows.setScrollOffset(40 * 66);
+      internals.renderSidebar(container.querySelector<HTMLElement>('.catalog-sidebar')!);
+      expect(container.querySelector('[data-sidebar-key="side:c:1"]')).toBeNull();
+      pressKey(view, 'down');
+      expect(focusedKey()).toBe('side:c:2');
+    });
+
+    it('reads the collections for the sidebar only when it may change, not per grid step', async () => {
+      const streams = Array.from({ length: 60 }, (_, i) => vod(`1${String(i)}`, `Movie ${String(i)}`, '1'));
+      const { view } = await openCategory(2, '1', streams);
+      const reads = vi.spyOn(view as unknown as { collectionEntries(kind: string): unknown[] }, 'collectionEntries');
+      for (let i = 0; i < 4; i++) pressKey(view, 'down');
+      expect(reads).not.toHaveBeenCalled();
+      reads.mockRestore();
+    });
+
+    it('leaves the rows dark while a collection is managed, so Left stays in the grid', async () => {
+      watchlistState.entries = ['11', '12'].map((itemId, i) => ({ accountId: 'x1', kind: 'vod', itemId, name: `Movie ${itemId}`,
+        poster: '', rating: '', categoryId: '1', containerExtension: 'mp4', addedAt: i }));
+      const { view } = await openCategory(1, '1', [vod('11', 'Movie 11'), vod('12', 'Movie 12')]);
+      pressKey(view, 'left');
+      pressKey(view, 'up');
+      pressKey(view, 'select');
+      await settle();
+      container.querySelector<HTMLElement>('.catalog-layer-grid [data-collection-action="manage"]')!.click();
+      await settle();
+      expect(container.querySelector('.catalog-grid.catalog-managing')).not.toBeNull();
+      expect(container.querySelectorAll('.catalog-sidebar-item[data-focusable]').length).toBe(0);
+      const before = focusedKey();
+      pressKey(view, 'left');
+      expect(focusedKey()).toBe(before);
+    });
   });
 
   // The grid virtualizer is only measured while rendering, so a call to
@@ -1669,11 +2123,8 @@ describe('Movies browse + grid', () => {
       (_, index) => ({ id: String(index + 1), name: `Cat ${String(index + 1)}` }),
     );
     const { view } = await openWith(cats, streams);
-    container.querySelector<HTMLElement>('.catalog-cat[data-category-id="7"]')!
-      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-    view.handleAction('select');
-    await Promise.resolve();
-    await Promise.resolve();
+    await openFromSidebar(view, '7');
+    view.handleAction('right');
     return view;
   };
 
@@ -1708,9 +2159,28 @@ describe('Movies browse + grid', () => {
     view.handleAction('down');
     expect(rendered).toHaveBeenCalled();
     expect(container.querySelector(
-      '[data-grid-index="14"] [data-focusable].focused',
+      `[data-grid-index="${String(2 * GRID_COLUMNS)}"] [data-focusable].focused`,
     )).not.toBeNull();
     rendered.mockRestore();
+  });
+
+  it('scrolls a row the header pushes below the screen fully into view', async () => {
+    const view = await openGrid();
+    const grid = container.querySelector<HTMLElement>('.catalog-grid')!;
+    const track = container.querySelector<HTMLElement>('.catalog-grid-track')!;
+    let top = 0;
+    Object.defineProperty(grid, 'scrollTop', { configurable: true, get: () => top, set: (value: number) => { top = value; } });
+    Object.defineProperty(grid, 'clientHeight', { configurable: true, value: 900 });
+    grid.getBoundingClientRect = () => ({ top: 0 } as DOMRect);
+    // A sort row wrapped at a large text size: the cells start 330px down.
+    track.getBoundingClientRect = () => ({ top: 330 - grid.scrollTop } as DOMRect);
+    pressKey(view, 'down');
+    const index = Number(container.querySelector<HTMLElement>('.catalog-grid .focused')!
+      .closest<HTMLElement>('[data-grid-index]')!.dataset.gridIndex);
+    expect(index).toBeGreaterThan(0);
+    const cell = container.querySelector<HTMLElement>(`[data-grid-index="${String(index)}"]`)!;
+    const cellBottom = 330 + parseFloat(cell.style.top) + 395;
+    expect(top).toBeGreaterThanOrEqual(cellBottom - 900);
   });
 
   it('renders the window once per step while Down is held, keeping one ring', async () => {
@@ -1765,13 +2235,7 @@ describe('Movies browse + grid', () => {
       (_, index) => vod(String(index), `Movie ${String(index)}`, '7'),
     );
     const { view } = await openWith(cats, streams);
-    const category = container.querySelector<HTMLElement>(
-      '.catalog-cat[data-category-id="7"]',
-    )!;
-    category.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-    view.handleAction('select');
-    await Promise.resolve();
-    await Promise.resolve();
+    await openFromSidebar(view, '7');
 
     vi.useFakeTimers();
     try {
@@ -2468,9 +2932,7 @@ describe('Movies progressive rails', () => {
     void view.open(account);
     await settle();
     catalogMock.loadVodStreams.mockResolvedValue([vod('70', 'Movie 7', '7')]);
-    hover(container.querySelector<HTMLElement>('.catalog-cat[data-category-id="7"]')!);
-    view.handleAction('select');
-    await settle();
+    await openFromSidebar(view, '7');
     expect(container.querySelector('.catalog-layer-grid')?.classList.contains('catalog-layer-hidden')).toBe(false);
 
     resolve('2');
@@ -2520,35 +2982,38 @@ describe('Movies progressive rails', () => {
     expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:3', 'i:3:30']));
   });
 
-  it('moves the focus to All Categories when the last rail landed empty', async () => {
+  it('moves the focus to All Categories once the last rail with titles landed empty', async () => {
     tallScreen();
     catalogMock.loadVodCategories.mockResolvedValue(cats(2));
-    const resolve = deferLoads(['2']);
+    const resolve = deferLoads(['1', '2']);
     const view = newView();
     void view.open(account);
     await settle();
     hover(container.querySelector<HTMLElement>('[data-key="pending:2:0"]')!);
+    resolve('1', []);
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:2', 'pending:2:0']));
 
     resolve('2', []);
     await settle();
-    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'all-categories', 'c:1']));
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', '', 'all-categories']));
   });
 
-  it('drops a rail that landed empty and lists its category under All Categories', async () => {
+  it('drops a rail that landed empty and lists its category in the grid sidebar', async () => {
     tallScreen();
     catalogMock.loadVodCategories.mockResolvedValue(cats(3));
     const resolve = deferLoads(['2']);
     const view = newView();
     const opening = view.open(account);
     await settle();
-    expect(container.querySelector('[data-rail-key="all-categories"]')).toBeNull();
 
     resolve('2', []);
     await opening;
     await settle();
     expect(railKeys()).toEqual(['cat:1', 'cat:3']);
-    expect(container.querySelector('[data-rail-key="all-categories"]')).not.toBeNull();
-    expect(container.querySelector('.catalog-cat[data-category-id="2"]')).not.toBeNull();
+    await openFromSidebar(view, '2');
+    expect(container.querySelector('.catalog-sidebar-item[data-sidebar-key="side:c:2"]')).not.toBeNull();
+    expect(container.querySelector('.catalog-grid-title')?.textContent).toBe('Cat 2');
   });
 
   it('measures the rails once a frame however often they scroll', async () => {
@@ -2581,6 +3046,58 @@ describe('Movies progressive rails', () => {
     expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:2', 'i:2:24']));
   });
 
+  it('counts a category in the grid sidebar as soon as its rail lands behind the grid', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    const resolve = deferLoads(['2']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    hover(container.querySelector<HTMLElement>('[data-all-categories]')!);
+    view.handleAction('select');
+    await settle();
+    const count = () => container.querySelector('[data-sidebar-key="side:c:2"] .catalog-sidebar-count')?.textContent;
+    expect(count()).toBeUndefined();
+
+    resolve('2', [vod('20', 'Movie 20', '2'), vod('21', 'Movie 21', '2')]);
+    await settle();
+    expect(count()).toBe('2');
+  });
+
+  it('opens All Categories on its sidebar row at once while the first category still loads', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    const resolve = deferLoads(['1']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    hover(container.querySelector<HTMLElement>('[data-all-categories]')!);
+    view.handleAction('select');
+    expect(container.querySelector('.catalog-loading')).toBeNull();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['grid', 'sidebar', 'side:c:1']));
+
+    resolve('1');
+    await settle();
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['grid', 'sidebar', 'side:c:1']));
+    expect(container.querySelector('.catalog-grid .catalog-tile[data-item-id="10"]')).not.toBeNull();
+  });
+
+  it('keeps the focus on the next rail when a loading rail it rested on the See all of comes back empty', async () => {
+    tallScreen();
+    catalogMock.loadVodCategories.mockResolvedValue(cats(3));
+    const resolve = deferLoads(['2']);
+    const view = newView();
+    void view.open(account);
+    await settle();
+    hover(container.querySelector<HTMLElement>('[data-rail-see-all][data-category-id="2"]')!);
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:2', 'see-all:2']));
+
+    resolve('2', []);
+    await settle();
+    expect(railKeys()).toEqual(['cat:1', 'cat:3']);
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'cat:3', 'i:3:30']));
+  });
+
   it('moves the focus to All Categories when every rail fails', async () => {
     tallScreen();
     catalogMock.loadVodCategories.mockResolvedValue(cats(3));
@@ -2596,7 +3113,7 @@ describe('Movies progressive rails', () => {
     await opening;
     await settle();
     expect(railKeys()).toEqual([]);
-    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', 'all-categories', 'c:1']));
+    expect(view.focusScope.focusKey).toBe(JSON.stringify(['browse', '', 'all-categories']));
   });
 
   it('opens a grid on the request of the rail still loading for its category', async () => {
@@ -2607,7 +3124,7 @@ describe('Movies progressive rails', () => {
     void view.open(account);
     await settle();
     expect(requested().filter(id => id === '2')).toHaveLength(1);
-    hover(container.querySelector<HTMLElement>('.catalog-cat[data-category-id="2"]')!);
+    hover(container.querySelector<HTMLElement>('[data-rail-see-all][data-category-id="2"]')!);
     view.handleAction('select');
     await settle();
     expect(container.querySelector('.catalog-layer-grid')?.classList.contains('catalog-layer-hidden')).toBe(false);

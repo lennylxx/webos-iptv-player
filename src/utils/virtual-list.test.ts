@@ -61,6 +61,39 @@ describe('VirtualList', () => {
     expect(list.scrollOffset).toBe(0);
   });
 
+  it('brings the leading content back with the first item', () => {
+    const list = createList();
+    list.setLeadingSize(150);
+    list.setScrollOffset(400);
+    expect(list.ensureVisible(0)).toBe(true);
+    expect(list.scrollOffset).toBe(0);
+
+    // Even when the item itself is already in view.
+    list.setScrollOffset(100);
+    expect(list.ensureVisible(0)).toBe(true);
+    expect(list.scrollOffset).toBe(0);
+  });
+
+  it('keeps the first item in view when it and the leading content do not fit together', () => {
+    const list = createList();
+    list.setLeadingSize(250);
+    list.setScrollOffset(400);
+
+    expect(list.ensureVisible(0)).toBe(true);
+    expect(list.scrollOffset).toBe(250);
+    expect(list.ensureVisible(0)).toBe(false);
+  });
+
+  it('keeps a margin past the item it reveals', () => {
+    const list = createList();
+
+    expect(list.ensureVisible(3, undefined, 6)).toBe(true);
+    expect(list.scrollOffset).toBe(106);
+    list.setScrollOffset(200);
+    expect(list.ensureVisible(2, undefined, 6)).toBe(true);
+    expect(list.scrollOffset).toBe(194);
+  });
+
   it('centers an item and clamps offsets at the start', () => {
     const list = createList();
 

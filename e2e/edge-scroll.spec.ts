@@ -393,48 +393,6 @@ test('a category rail cancels before the dwell, stops on a key or a window blur,
   expect((await pageScroll(page)).y).toBe(before.y);
 });
 
-test('All categories scrolls through its virtual window without opening a category, and a wheel stops it', async ({ page }) => {
-  test.setTimeout(60_000);
-  await seedCatalog(page, { categories: 40, perCategory: 4 });
-  await startClock(page);
-  await page.goto('/');
-  await liveLoaded(page);
-  await enterTab(page, 'movies');
-  const track = page.locator('#view-movies .catalog-category-rail');
-  await expect(track.locator('.catalog-cat').first()).toBeAttached();
-  await track.evaluate((el) => el.scrollIntoView({ block: 'center' }));
-  await expectEdgeTrack(track);
-  const indices = () => track.locator('[data-category-virtual-index]').evaluateAll((cells) =>
-    cells.map((cell) => Number(cell.getAttribute('data-category-virtual-index'))));
-  const first = await indices();
-  expect(Math.min(...first)).toBe(0);
-  const scope = await ownerScope(page);
-  const before = await pageScroll(page);
-
-  await pointAt(page, track, 'center');
-  await expectScrolling(track, 'right', (await enterEdgeAndDwell(page, track, 'outer-right')).from);
-  await expectSteadyRate(page, track);
-  await expect.poll(() => left(track), { timeout: 20_000 }).toBeGreaterThan(3000);
-  // The virtual window followed the scroll, and the visible part is not blank.
-  await expect.poll(async () => Math.min(...await indices())).toBeGreaterThan(0);
-  expect(Math.max(...await indices())).toBeGreaterThan(Math.max(...first));
-  expect(await track.evaluate((el) => {
-    const r = el.getBoundingClientRect();
-    return Array.from(el.querySelectorAll('.catalog-cat')).filter((cat) => {
-      const box = cat.getBoundingClientRect();
-      return box.right > r.left && box.left < r.right;
-    }).length;
-  })).toBeGreaterThan(2);
-  // The page around the rail stayed where it was while the rail scrolled.
-  expect(await pageScroll(page)).toEqual(before);
-
-  await page.mouse.wheel(0, 100);
-  const stopped = await expectStopped(page, track);
-  expect(stopped).toBeLessThan(await maxLeft(track));
-  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveCount(0);
-  expect(await ownerScope(page)).toBe(scope);
-});
-
 // After a long edge scroll the remote carries on from what the pointer rests
 // on, not from a tile the scroll left far behind.
 async function scrollFarThenKey(

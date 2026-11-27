@@ -306,12 +306,15 @@ test('Back holds the rails still when the detail added the Watchlist rail above'
   const fourth = movies.locator('[data-rail-key="cat:4"] .catalog-tile[data-item-id]').first();
   await expect(movies.locator('[data-rail-key="cat:1"] .catalog-tile[data-item-id]').first()).toBeVisible();
   // Scrolled, with the focused title mid-screen where no reveal moves it.
-  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('ArrowUp');
+  const onFourth = () => movies.locator('[data-rail-key="cat:4"] .catalog-rail-track .focused').count();
+  for (let i = 0; i < 6 && !(await onFourth()); i++) await page.keyboard.press('ArrowDown');
   await expect(fourth).toHaveClass(/focused/);
   const topOf = () => fourth.evaluate((el) => Math.round(el.getBoundingClientRect().top));
-  // The rails stand where they stay once every rail has loaded.
-  await expect(movies.locator('[data-rail-pending]')).toHaveCount(0);
+  // The rails stand where they stay once every rail down to the fourth has
+  // loaded; those below it load only when scrolled near.
+  for (let n = 1; n <= 4; n++) {
+    await expect(movies.locator(`[data-rail-key="cat:${n}"]`)).not.toHaveAttribute('data-rail-pending', '');
+  }
   const before = await topOf();
   await page.keyboard.press('Enter');
   const watchlist = movies.locator('.catalog-layer-detail .detail-icon-btn[data-key="watchlist"]');
@@ -359,33 +362,28 @@ test('a rail that lands under the open sort menu shows once a click closes it', 
   await expect(rail.locator('.catalog-tile[data-item-id]').first()).toBeAttached();
 });
 
-test('Left and Right stop at the ends of All categories', async ({ page }) => {
+test('the See all of a rail takes Up from its tiles and gives Down back, and Down between rails skips it', async ({ page }) => {
   await seedXtream(page, { catalog: 'large' });
   await page.goto('/');
   await liveLoaded(page);
   await enterTab(page, 'movies');
-  const cats = page.locator('#view-movies .catalog-category-rail .catalog-cat');
-  await expect(cats).toHaveCount(8);
   const focusedKey = () => page.locator('#view-movies .focused').getAttribute('data-key');
-  await cats.first().evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  await expect.poll(focusedKey).toBe('c:1');
-  // SpatialNav would otherwise carry focus off the rail to another rail's tile.
+  const tile = page.locator('#view-movies [data-rail-key="cat:2"] .catalog-tile[data-item-id]').nth(2);
+  await tile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  const key = await tile.getAttribute('data-key');
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(focusedKey).toBe('see-all:2');
+  // Alone on its line, Left and Right keep it.
   await page.keyboard.press('ArrowLeft');
-  await expect.poll(focusedKey).toBe('c:1');
-  // The rail bleeds under the left margin; a cell revealed on the right
-  // must still end inside the rail, ring included.
-  const clearOfRightEdge = () => page.locator('#view-movies .catalog-category-rail .focused').evaluate((el) => {
-    const rail = el.closest<HTMLElement>('.catalog-category-rail')!;
-    const right = rail.getBoundingClientRect().left + rail.clientLeft + rail.clientWidth;
-    return Math.round(right - el.getBoundingClientRect().right);
-  });
-  for (let i = 2; i <= 8; i++) {
-    await page.keyboard.press('ArrowRight');
-    await expect.poll(focusedKey).toBe(`c:${String(i)}`);
-    await expect.poll(clearOfRightEdge).toBeGreaterThanOrEqual(11);
-  }
   await page.keyboard.press('ArrowRight');
-  await expect.poll(focusedKey).toBe('c:8');
+  await expect.poll(focusedKey).toBe('see-all:2');
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(focusedKey).toBe(key);
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#view-movies [data-rail-key="cat:3"] .catalog-rail-track .focused')).toHaveCount(1);
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat C');
 });
 
 test('gives a scroll-end spacer only to flex containers', async ({ page }) => {
@@ -403,7 +401,7 @@ test('gives a scroll-end spacer only to flex containers', async ({ page }) => {
     })
     .map((el) => el.className));
   await enterTab(page, 'movies');
-  await expect(page.locator('#view-movies .catalog-category-rail')).toBeVisible();
+  await expect(page.locator('#view-movies [data-rail-key^="cat:"] .catalog-rail-track').first()).toBeVisible();
   expect(await misplaced()).toEqual([]);
   await enterTab(page, 'epg');
   await expect(page.locator('#view-epg .epg-date-list')).toBeVisible();
@@ -943,7 +941,7 @@ test('Up into the tab bar takes the ring off the catalog tile', async ({ page })
   await expect(page.locator('#view-movies .focused')).toHaveCount(0);
 });
 
-test('Down from the tab bar rings the remembered control, and one Down reaches a tile', async ({ page }) => {
+test('Down from the tab bar rings the remembered control, and Down walks on to a tile', async ({ page }) => {
   await seedMovies(page, { streams: 30 });
   await page.goto('/');
   await liveLoaded(page);
@@ -960,9 +958,12 @@ test('Down from the tab bar rings the remembered control, and one Down reaches a
   const focused = page.locator('#view-movies .focused');
   await expect(focused).toHaveCount(1);
   const first = await focused.getAttribute('data-key');
+  // All Categories, then the sort row, then the first rail.
+  expect(first).toBe('all-categories');
   await page.keyboard.press('ArrowDown');
   await expect(focused).toHaveCount(1);
   await expect(focused).not.toHaveAttribute('data-key', first ?? '');
+  await page.keyboard.press('ArrowDown');
   await expect(page.locator('#view-movies .catalog-tile.focused')).toHaveCount(1);
 });
 
@@ -1096,4 +1097,191 @@ test('a tile the pointer left under the account menu stays dark once the menu cl
   await page.evaluate(() => new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await expect(page.locator('#view-movies .focused:not(.focused-parked)')).toHaveCount(0);
+});
+
+async function openCatalogGrid(page: Page, seed: (page: Page) => Promise<unknown> = async () => {}): Promise<void> {
+  await seedXtream(page, { catalog: 'large' });
+  await seed(page);
+  await page.goto('/');
+  await liveLoaded(page);
+  await enterTab(page, 'movies');
+  const seeAll = page.locator('#view-movies .catalog-see-all[data-category-id="1"]');
+  await seeAll.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
+  await expect(page.locator('#view-movies .catalog-grid .catalog-tile.focused')).toHaveCount(1);
+}
+
+const sidebarRing = (page: Page) => page.locator('#view-movies .catalog-sidebar-item.focused');
+const gridRing = (page: Page) => page.locator('#view-movies .catalog-grid .focused');
+
+test('the grid sidebar stays clear of the grid and switches category on OK', async ({ page }) => {
+  await openCatalogGrid(page);
+  const title = page.locator('#view-movies .catalog-grid-title');
+  const side = (await page.locator('#view-movies .catalog-sidebar').boundingBox())!;
+  const cells = page.locator('#view-movies .catalog-grid-cell');
+  const first = (await cells.first().boundingBox())!;
+  // The grid starts a fixed gap past the sidebar's measured width.
+  expect(Math.round(first.x - (side.x + side.width))).toBe(40);
+  const lastRight = await cells.evaluateAll(els => Math.max(...els.map(el => el.getBoundingClientRect().right)));
+  expect(lastRight).toBeLessThanOrEqual(1920 - 56);
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:1');
+  await page.keyboard.press('ArrowDown');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:2');
+  await page.waitForTimeout(600);
+  await expect(title).toHaveText('Cat A');
+  await page.keyboard.press('Enter');
+  await expect(title).toHaveText('Cat B');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:2');
+  await expect(page.locator('#view-movies .catalog-sidebar-item.active')).toHaveAttribute('data-sidebar-key', 'side:c:2');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#view-movies .catalog-grid .catalog-tile.focused')).toHaveAttribute('data-category-id', '2');
+});
+
+test('the grid sidebar hands the keys to the tab bar, the sort row, a detail, and browse and back', async ({ page }) => {
+  await openCatalogGrid(page);
+  // Up from the first row reaches the tab bar; Down returns to that row.
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.tab-bar-item.focused')).toHaveCount(1);
+  await expect(sidebarRing(page)).toHaveCount(0);
+  await page.keyboard.press('ArrowDown');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:1');
+
+  // Left from the sort row's first control returns to the category shown.
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('#view-movies .catalog-sort .focused')).toHaveCount(1);
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:1');
+
+  // A detail opened from the grid returns to its tile, the sidebar beside it.
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  const tile = await gridRing(page).getAttribute('data-key');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .movies-detail .detail-plot')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(gridRing(page)).toHaveAttribute('data-key', tile!);
+  await expect(page.locator('#view-movies .catalog-sidebar-item.active')).toHaveAttribute('data-sidebar-key', 'side:c:1');
+
+  // Back from the sidebar leaves the grid for browse, on the See all it came from.
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebarRing(page)).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#view-movies .catalog-layer-browse:not(.catalog-layer-hidden) .catalog-see-all.focused'))
+    .toHaveAttribute('data-category-id', '1');
+});
+
+test('a grid row the header pushes below the screen scrolls in whole, and the first row brings the header back', async ({ page }) => {
+  await openCatalogGrid(page, (p) => p.addInitScript(() => localStorage.setItem('iptv_text_size', JSON.stringify('150'))));
+  const view = page.locator('#view-movies .catalog-grid');
+  const focusedBox = () => page.locator('#view-movies .catalog-grid .catalog-tile.focused').boundingBox();
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => {
+    const box = (await focusedBox())!;
+    return box.y + box.height <= 1080;
+  }).toBe(true);
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(() => view.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test('a scrolling grid sidebar takes no width for a scrollbar', async ({ page }) => {
+  await openCatalogGrid(page, (p) => p.route('**/player_api.php*', (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('action') !== 'get_vod_categories') return route.fallback();
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(
+      Array.from({ length: 40 }, (_, i) => ({ category_id: String(i + 1), category_name: i ? `Cat ${String(i + 1)}` : 'Cat A' }))) });
+  }));
+  const list = page.locator('#view-movies .catalog-sidebar-list');
+  // Headless Chromium hides scrollbars, so the rule hiding the list's is what shows.
+  const sizes = await list.evaluate((el: HTMLElement) => ({
+    scrolls: el.scrollHeight > el.clientHeight,
+    gutter: el.offsetWidth - el.clientWidth,
+    scrollbar: getComputedStyle(el).getPropertyValue('scrollbar-width'),
+  }));
+  expect(sizes.scrolls).toBe(true);
+  expect(sizes.gutter).toBe(0);
+  if (test.info().project.name === 'chromium') expect(sizes.scrollbar).toBe('none');
+});
+
+test('a held key steps the smooth-scrolling grid sidebar without blanking it or dropping the ring', async ({ page }) => {
+  await openCatalogGrid(page, async (p) => {
+    await p.addInitScript(() => localStorage.setItem('iptv_animation_mode', JSON.stringify('full')));
+    await p.route('**/player_api.php*', (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('action') !== 'get_vod_categories') return route.fallback();
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(
+        Array.from({ length: 40 }, (_, i) => ({ category_id: String(i + 1), category_name: i ? `Cat ${String(i + 1)}` : 'Cat A' }))) });
+    });
+  });
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:1');
+  // Every frame, a row covers the list's top and the focused row is in the DOM.
+  await page.evaluate(() => {
+    const win = window as unknown as { __sidebarFaults: string[]; __sidebarSampling: boolean };
+    win.__sidebarFaults = [];
+    win.__sidebarSampling = true;
+    const sample = (): void => {
+      if (!win.__sidebarSampling) return;
+      const list = document.querySelector<HTMLElement>('#view-movies .catalog-sidebar-list')!;
+      const probe = list.getBoundingClientRect().top + 24;
+      const covered = Array.from(list.querySelectorAll('.catalog-sidebar-slot')).some((slot) => {
+        const r = slot.getBoundingClientRect();
+        return r.top <= probe && r.bottom >= probe;
+      });
+      if (!covered) win.__sidebarFaults.push(`blank top at ${String(list.scrollTop)}`);
+      if (!list.querySelector('.catalog-sidebar-item.focused')) win.__sidebarFaults.push(`no ring at ${String(list.scrollTop)}`);
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  for (let i = 0; i < 20; i++) {
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(40);
+  }
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:21');
+  await page.waitForTimeout(400);
+  const faults = await page.evaluate(() => {
+    const win = window as unknown as { __sidebarFaults: string[]; __sidebarSampling: boolean };
+    win.__sidebarSampling = false;
+    return win.__sidebarFaults;
+  });
+  expect(faults).toEqual([]);
+});
+
+test('the grid sidebar keeps the whole ring of its first and a scrolled-to row in view', async ({ page }) => {
+  await openCatalogGrid(page, async (p) => {
+    await p.addInitScript(() => localStorage.setItem('iptv_text_size', JSON.stringify('150')));
+    await p.route('**/player_api.php*', (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('action') !== 'get_vod_categories') return route.fallback();
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(
+        Array.from({ length: 40 }, (_, i) => ({ category_id: String(i + 1), category_name: i ? `Cat ${String(i + 1)}` : 'Cat A' }))) });
+    });
+  });
+  // The ring's glow reaches past the row; the list clips whatever passes its padding box.
+  const ringClearance = () => page.evaluate(() => new Promise<{ top: number; bottom: number }>((resolve) => {
+    setTimeout(() => {
+      const list = document.querySelector('#view-movies .catalog-sidebar-list')!.getBoundingClientRect();
+      const ring = document.querySelector('#view-movies .catalog-sidebar-item.focused')!.getBoundingClientRect();
+      resolve({ top: ring.top - list.top, bottom: list.bottom - ring.bottom });
+    }, 400);
+  }));
+  await page.keyboard.press('ArrowLeft');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:1');
+  expect((await ringClearance()).top).toBeGreaterThanOrEqual(3);
+  for (let i = 0; i < 25; i++) await page.keyboard.press('ArrowDown');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:26');
+  expect((await ringClearance()).bottom).toBeGreaterThanOrEqual(3);
+  for (let i = 0; i < 12; i++) await page.keyboard.press('ArrowUp');
+  await expect(sidebarRing(page)).toHaveAttribute('data-sidebar-key', 'side:c:14');
+  expect((await ringClearance()).top).toBeGreaterThanOrEqual(3);
 });

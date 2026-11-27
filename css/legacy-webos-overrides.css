@@ -56,6 +56,7 @@ html.q-no-flex-gap .epg-page-info,
 html.q-no-flex-gap .epg-tl-hint,
 html.q-no-flex-gap .osd-translate,
 html.q-no-flex-gap .catalog-collection-actions > .catalog-collection-clear,
+html.q-no-flex-gap .btn.catalog-all-categories > .catalog-all-categories-count,
 html.q-no-flex-gap .live-category-account,
 html.q-no-flex-gap .live-category-row strong,
 html.q-no-flex-gap .live-preview-clock,
@@ -79,13 +80,6 @@ html.q-no-flex-gap .player-menu .menu-item-value { padding-left: 26px; }
  * overhang, so here the margin can be taken back without overflow.
  */
 html.q-no-flex-gap .xtream-fields { margin-right: -16px; }
-
-/*
- * The All categories rail shares .catalog-rail-track but is a block, not a
- * flex row: its generated scroll-end spacer would become an inline line box
- * and overflow the rail's fixed height.
- */
-html.q-scroll-end-padding .catalog-category-rail::after { content: none; }
 
 @supports not (backdrop-filter: blur(1px)) {
   .player-sidebar { background: rgb(20, 20, 35); }

@@ -269,6 +269,8 @@ describe('Series browse + grid', () => {
   it('reveals the tab bar when Up cannot move within the view', async () => {
     const { view, handlers } = await openWith();
     view.handleAction('up');
+    expect(container.querySelector('[data-rail-see-all].focused')).not.toBeNull();
+    view.handleAction('up');
     expect(container.querySelector('.catalog-sort .focused')).not.toBeNull();
     expect(handlers.onRevealTabBar).not.toHaveBeenCalled();
     view.handleAction('up');
@@ -276,20 +278,24 @@ describe('Series browse + grid', () => {
   });
 
   it('drills into a non-rail category grid and back to browse', async () => {
-    // 7 categories: the first RAIL_CATEGORIES (6) become poster rails; the 7th
-    // is a non-rail tile in the "All Categories" rail — the drill-in target.
+    // 7 categories: the first RAIL_CATEGORIES (6) become poster rails; the
+    // 7th has none and opens from the grid sidebar.
     const cats = Array.from({ length: 7 }, (_, i) => ({ id: String(i + 1), name: `Cat ${i + 1}` }));
     const { view, handlers } = await openWith(cats, [series('s1', 'Series One')]);
-    const cat = container.querySelector('.catalog-cat[data-category-id="7"]') as HTMLElement;
-    expect(cat).not.toBeNull();
-    cat.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+    const select = async (el: HTMLElement) => {
+      el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+      view.handleAction('select');
+      await settle();
+    };
     catalogMock.loadSeries.mockResolvedValue([series('s2', 'Series Two', '7')]);
-    view.handleAction('select');
-    await Promise.resolve(); await Promise.resolve();
+    await select(container.querySelector<HTMLElement>('[data-all-categories]')!);
+    await select(container.querySelector<HTMLElement>('[data-sidebar-key="side:c:7"]')!);
     expect(container.querySelector('.catalog-grid')).not.toBeNull();
     expect(container.querySelector('.catalog-tile[data-item-id="s2"]')).not.toBeNull();
     view.handleAction('back');
     expect(container.querySelector('.catalog-browse')).not.toBeNull();
+    expect(container.querySelector('.catalog-browse .focused')?.hasAttribute('data-all-categories')).toBe(true);
     expect(handlers.onBack).not.toHaveBeenCalled();
   });
 
@@ -590,6 +596,43 @@ describe('Series detail', () => {
     } finally {
       clock.mockRestore();
     }
+  });
+
+  it('keeps the first episode in view under a header too tall to show with it', async () => {
+    const episodes = Array.from({ length: 20 }, (_, index) => ({
+      id: `e${String(index)}`, title: `Episode ${String(index)}`, season: 1, episode: index + 1,
+      containerExtension: 'mp4', durationSecs: 1500, plot: '', poster: '', subtitles: [],
+    }));
+    catalogMock.loadSeriesInfo.mockResolvedValue({ seasons: [1], episodesBySeason: { 1: episodes } });
+    const { view } = await openWith();
+    await openDetail(view);
+    const detail = container.querySelector<HTMLElement>('.series-detail')!;
+    const list = container.querySelector<HTMLElement>('.series-episodes')!;
+    // The detail header leads the list by 900px of the 984px screen.
+    Object.defineProperty(list, 'offsetParent', { configurable: true, get: () => detail });
+    Object.defineProperty(list, 'offsetTop', { configurable: true, get: () => 900 });
+    Object.defineProperty(detail, 'clientHeight', { configurable: true, get: () => 984 });
+    let top = 0;
+    Object.defineProperty(detail, 'scrollTop', {
+      configurable: true, get: () => top, set: (value: number) => { top = value; },
+    });
+    const keyOf = (index: number): string => {
+      const row = container.querySelector<HTMLElement>(`[data-episode-index="${String(index)}"] [data-key]`)!;
+      const rail = row.closest<HTMLElement>('[data-rail-key]')?.dataset.railKey ?? '';
+      return JSON.stringify(['detail', rail, row.dataset.key]);
+    };
+    view.focusScope.focus(keyOf(1), 'key');
+    Focus.flush();
+    top = 900 + 138;
+    detail.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    view.handleAction('up');
+    Focus.flush();
+    expect(container.querySelector<HTMLElement>('.focused')?.closest('[data-episode-index]')?.getAttribute('data-episode-index')).toBe('0');
+    // Episode 0 spans 900 to 1038, so the view starts past 1038 - 984.
+    expect(top).toBeGreaterThanOrEqual(1038 - 984);
+    expect(top).toBeLessThanOrEqual(900);
   });
 
   it('scrolls smoothly again when a later input reveals the same episode a held key reached', async () => {
