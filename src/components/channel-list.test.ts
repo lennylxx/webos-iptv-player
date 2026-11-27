@@ -1416,7 +1416,7 @@ describe('ChannelList focus scope off the keys', () => {
     const bar = document.createElement('div');
     morph(bar, html`<div data-focusable data-key="t1"></div>`);
     document.body.appendChild(bar);
-    const scope = Focus.register({ id: 'tabbar', root: bar, tier: Tier.bar, defaultKey: () => 't1' });
+    const scope = Focus.register({ id: 'tabbar', mode: () => 'tabs', root: bar, tier: Tier.bar, defaultKey: () => 't1' });
     Focus.push(scope);
     return scope;
   }

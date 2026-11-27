@@ -14,7 +14,8 @@ const PARKED = 'focused-parked';
 
 // `modal`: a prompt over everything, where even the pointer's hover stays dark.
 // `id`: the owning focus scope, marked on the root for tests and diagnostics.
-export interface RingOwner { root: Element | null; modal?: boolean; id?: string }
+// `id` is read only to mark the owner, since a scope's mode may cost a query.
+export interface RingOwner { root: Element | null; modal?: boolean; id?: () => string | undefined }
 type OwnerResolver = () => RingOwner;
 
 // Marks the owner root so tests and on-device inspection can see who has the
@@ -216,7 +217,7 @@ export const FocusRing = {
     if (!owner) return;
     const mark = modal ? 'modal' : owner === deferredRoot ? 'deferred' : '';
     if (owner.getAttribute(OWNER_ATTR) !== mark) owner.setAttribute(OWNER_ATTR, mark);
-    const id = resolved?.id;
+    const id = resolved?.id?.();
     if (id === undefined) owner.removeAttribute(SCOPE_ATTR);
     else if (owner.getAttribute(SCOPE_ATTR) !== id) owner.setAttribute(SCOPE_ATTR, id);
     const shown = document.getElementsByClassName(FOCUSED);

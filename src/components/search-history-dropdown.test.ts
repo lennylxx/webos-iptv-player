@@ -13,6 +13,7 @@ vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 import { SearchHistoryDropdown } from './search-history-dropdown';
 import { SpatialNav } from '../navigation/spatial-nav';
 import { Focus } from '../navigation/focus-scope';
+import { scopeId } from '../test/scope-id';
 
 const anchor = { right: 1700, bottom: 74, width: 640 };
 
@@ -58,7 +59,7 @@ describe('SearchHistoryDropdown', () => {
   });
 
   it('owns the keys while open and hands them back when it closes', () => {
-    const below = Focus.register({ id: 'view.test', root: document.body });
+    const below = Focus.register({ id: scopeId('view.test'), root: document.body });
     Focus.setBase(() => below);
     const { dropdown } = mk();
     dropdown.open(anchor);

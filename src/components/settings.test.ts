@@ -293,6 +293,7 @@ import { ParentalControlService } from '../services/parental-control';
 import { capabilitySignature, defaultLlmConfig } from '../services/llm/config';
 import { LlmError } from '../services/llm/client';
 import { ProgramGenres } from '../services/program-genres';
+import { scopeId } from '../test/scope-id';
 
 let container: HTMLElement;
 let onSave: Mock<ConstructorParameters<typeof Settings>[1]>;
@@ -2784,7 +2785,7 @@ describe('Settings.handleAction', () => {
     const field = container.querySelector<HTMLInputElement>('#subdl-key')!;
     hover(field);
     settings.handleAction('select');
-    const elsewhere = Focus.register({ id: 'test.elsewhere', root: document.body });
+    const elsewhere = Focus.register({ id: scopeId('test.elsewhere'), root: document.body });
     Focus.push(elsewhere);
     Focus.flush();
     expect(document.activeElement).not.toBe(field);
@@ -2800,7 +2801,7 @@ describe('Settings.handleAction', () => {
     const before = settings.focusScope.focusKey;
     hover(swatch);
     themeMock.previewTheme.mockClear();
-    const elsewhere = Focus.register({ id: 'test.elsewhere', root: document.body });
+    const elsewhere = Focus.register({ id: scopeId('test.elsewhere'), root: document.body });
     Focus.push(elsewhere);
     Focus.flush();
     expect(document.activeElement).not.toBe(field);

@@ -137,6 +137,7 @@ import { installEdgeScroll } from '../navigation/edge-scroll';
 import { LlmService } from '../services/llm/llm-service';
 import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
 import { retains } from '../test/retains';
+import { scopeId } from '../test/scope-id';
 
 const Y = 2024, M = 5, D = 15; // Sat Jun 15 2024, 12:00 local = "now"
 
@@ -1107,7 +1108,7 @@ describe('EpgGrid group and channel filters', () => {
   it('drops the search caret when a prompt takes the keys', () => {
     const prompt = document.createElement('div');
     document.body.appendChild(prompt);
-    const scope = Focus.register({ id: 'test.prompt', root: prompt, restrict: 'self-only' });
+    const scope = Focus.register({ id: scopeId('test.prompt'), root: prompt, restrict: 'self-only' });
     grid.handleAction('yellow');
     const input = container.querySelector<HTMLInputElement>('.epg-search-input')!;
     expect(document.activeElement).toBe(input);
@@ -1122,7 +1123,7 @@ describe('EpgGrid group and channel filters', () => {
     Focus.uninstall();
     const tabBar = document.createElement('div');
     document.body.appendChild(tabBar);
-    const tabScope = Focus.register({ id: 'test.tabbar', root: tabBar });
+    const tabScope = Focus.register({ id: scopeId('test.tabbar'), root: tabBar });
     grid = new EpgGrid(container, onSelect, () => Focus.push(tabScope), onManageReminders);
     Focus.setBase(() => grid.focusScope);
     grid.render();
@@ -2815,7 +2816,7 @@ describe('EpgGrid timeline layout', () => {
   it('leaves the wheel to a modal prompt', () => {
     const prompt = document.createElement('div');
     document.body.appendChild(prompt);
-    const modal = Focus.register({ id: 'test.prompt', root: prompt, restrict: 'self-only' });
+    const modal = Focus.register({ id: scopeId('test.prompt'), root: prompt, restrict: 'self-only' });
     Focus.push(modal);
     vi.advanceTimersByTime(1000);
     fire('nav:wheel', { deltaY: 100 });

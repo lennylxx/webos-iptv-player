@@ -65,3 +65,16 @@ describe('ThemeEditor font weight', () => {
     editor.hide();
   });
 });
+
+describe('ThemeEditor focus scope', () => {
+  it('reports an open dropdown as its menu mode', () => {
+    const editor = new ThemeEditor();
+    editor.open({ theme: null, base: 'midnight', defaultName: 'Theme 1', onSave: () => true, onClose: () => {} });
+    Focus.flush();
+    expect(Focus.owner()?.surface).toBe('prompt.theme_editor_view:view');
+    document.querySelector<HTMLElement>('#te-font [data-dropdown-trigger]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(Focus.owner()?.surface).toBe('prompt.theme_editor_view:menu');
+    editor.hide();
+  });
+});

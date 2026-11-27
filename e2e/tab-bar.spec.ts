@@ -783,7 +783,7 @@ test('a hover on the Guide under its open group menu hands the bar\'s keys back 
   await page.keyboard.press('Escape');
   await expect(page.locator('.account-menu')).toHaveCount(0);
   const owner = page.locator('[data-ring-owner]');
-  await expect(owner).toHaveAttribute('data-focus-scope', 'tabbar');
+  await expect(owner).toHaveAttribute('data-focus-scope', 'tabbar:tabs');
 
   await cell.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
   await expect(page.locator('.epg-group-menu')).toBeVisible();
@@ -844,7 +844,7 @@ test('a hover under the account menu stays out of the Guide while its group menu
   await expect(owner).toHaveAttribute('data-focus-scope', 'guide.groups');
   await page.keyboard.press('Escape');
   await expect(page.locator('.epg-group-menu')).toHaveCount(0);
-  await expect(owner).toHaveAttribute('data-focus-scope', 'guide.grid');
+  await expect(owner).toHaveAttribute('data-focus-scope', 'guide.grid:schedule');
   await expect(page.locator('[data-epg-group-toggle]')).toHaveClass(/\bfocused\b/);
   await expect(cell).not.toHaveClass(/\bfocused\b/);
   await expect(page.locator('.focused:visible')).toHaveCount(1);

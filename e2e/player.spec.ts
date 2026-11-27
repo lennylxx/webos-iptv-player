@@ -648,7 +648,7 @@ test('the player menu reopens with one ring, on its first row', async ({ page })
 
   await page.keyboard.press('ArrowRight');
   await expect(menu).toHaveClass(/visible/);
-  await expect(page.locator('[data-ring-owner]')).toHaveAttribute('data-focus-scope', 'player.menu');
+  await expect(page.locator('[data-ring-owner]')).toHaveAttribute('data-focus-scope', 'player.menu:main');
   await expect(rows.nth(0)).toHaveClass(/focused/);
   await expect(page.locator('.focused')).toHaveCount(1);
 });

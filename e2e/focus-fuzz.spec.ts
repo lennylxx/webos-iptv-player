@@ -2,7 +2,8 @@ import { test, expect, routeLiveManifest, enterTab, NOW, startClock, runTimers, 
 import { E2E_ENV } from '../playwright.config';
 import { seedXtream } from './fixtures/xtream';
 import { channelPlaylist, guide } from './fixtures/live';
-import { KEYS, hover } from './navigation-helpers';
+import { KEYS, SURFACE_IDS, hover, type Gap } from './navigation-helpers';
+import type { SurfaceId } from '../src/navigation/scope-ids';
 
 // A seeded random walk of D-pad keys, pointer moves and clicks, and wheel
 // steps across every section, checking the focus invariants after each step.
@@ -41,7 +42,8 @@ import { KEYS, hover } from './navigation-helpers';
 //   channel-editor     the Live list's edit mode, with the color keys
 //
 // A failure prints the seed and the step log; its JSON steps replay verbatim.
-// Timing makes it too noisy for CI, so only `npm run test:fuzz` runs it.
+// Timing makes it too noisy for CI, so only `npm run test:fuzz` runs the
+// walks; CI runs only the check that every focus scope is fuzzed or a gap.
 
 const DEFAULT_SEEDS = [1, 2, 3, 6, 7];
 const DEFAULT_DETAIL_SEEDS = [1, 2, 3, 4];
@@ -55,6 +57,52 @@ const MAX_ENTER_MISSES = 3;
 // Tests that fail on a confirmed app bug, by title, with the finding that
 // blocks them. The change that fixes a bug clears its entries here.
 const KNOWN_FAILING: Record<string, string> = {};
+
+// Surfaces no family enters: a `todo` a family should cover, or covered
+// `elsewhere`.
+const FUZZ_GAPS: Partial<Record<SurfaceId, Gap>> = {
+  'tabbar.accounts': { todo: 'only the plain walk opens it, at random' },
+  'tabbar:tabs': { elsewhere: 'e2e/tab-bar.spec.ts walks it' },
+  'live.channels:browse': { todo: 'the plain walk starts on it, but asserts no scope' },
+  'live.channels:rename': { todo: 'the channel-editor family renames only at random' },
+  'live.channels:new-group': { todo: 'the channel-editor family opens it only at random' },
+  'live.channels:favorites': { todo: 'no family picks favorites' },
+  'guide.grid:schedule': { todo: 'only the plain walk and the reminders family pass through it' },
+  'guide.grid:timeline': { todo: 'no family sets the timeline layout' },
+  'movies.catalog:browse': { todo: 'the detail family only passes through it' },
+  'series.catalog:browse': { todo: 'the detail family only passes through it' },
+  'series.catalog:manage': { todo: 'no family manages a collection' },
+  'guide.groups': { todo: 'only the plain walk opens it, at random' },
+  'view.player': { todo: 'the walks leave the player after a few steps' },
+  'view.search': { todo: 'the search family enters at the box and reaches the results only by keys' },
+  'search.history': { todo: 'the search family enters at the box and drops it down only at random' },
+  'player.menu:main': { todo: 'the subtitle families only pass through the menu' },
+  'player.menu:audio': { todo: 'the subtitle families only pass through the menu' },
+  'player.menu:subtitles': { todo: 'the subtitle families only pass through the menu' },
+  'player.menu:translate': { todo: 'the subtitle families only pass through the menu' },
+  'player.menu:speed': { todo: 'the subtitle families only pass through the menu' },
+  'player.menu:aspect': { todo: 'the subtitle families only pass through the menu' },
+  'player.menu:quality': { todo: 'the subtitle families only pass through the menu' },
+  'live.channels:group-picker': { todo: 'the channel-editor family opens it only at random' },
+  'live.channels:guide-picker': { todo: 'the channel-editor family opens it only at random' },
+  'live.channels:guide-offset': { todo: 'the channel-editor family opens it only at random' },
+  'movies.catalog:menu': { todo: 'no family opens a catalog menu' },
+  'series.catalog:menu': { todo: 'no family opens a catalog menu' },
+  'view.settings:menu': { todo: 'the settings family opens dropdowns only at random' },
+  'player.sidebar': { todo: 'only the plain walk opens it, at random' },
+  'prompt.search': { todo: "no family for Search's resume prompt" },
+  'prompt.parental': { todo: 'the parental family avoids what asks it' },
+  'prompt.parental-review': { todo: 'no family opens the suggestion review' },
+  'prompt.live_categories.accounts': { todo: 'the live-categories family only opens it at random' },
+  'prompt.theme_editor': { todo: 'no family for the theme editor' },
+  'prompt.theme_editor_view:view': { todo: 'no family for the theme editor' },
+  'prompt.theme_editor_view:menu': { todo: 'no family for the theme editor' },
+  'prompt.theme_color_picker': { todo: 'no family for the theme editor' },
+  'prompt.movies.collection': { todo: 'no family for the prompt' },
+  'prompt.movies.trailer': { todo: 'no family for the prompt' },
+  'prompt.series.collection': { todo: 'no family for the prompt' },
+  'prompt.series.trailer': { todo: 'no family for the prompt' },
+};
 
 type SurfaceName = 'detail' | 'catalog-grid' | 'search' | 'settings' | 'parental' | 'parental-accounts' | 'parental-pin' | 'reminders'
   | 'reminder-prompt' | 'confirm' | 'catchup' | 'live-categories' | 'subtitle-search'
@@ -82,6 +130,9 @@ interface Surface {
   needs: Need[];
   enter: (page: Page, variant: string | undefined) => Promise<void>;
   variants?: string[];
+  // The scope that owns the keys once `enter` shows the surface, by variant
+  // where that differs.
+  scope: SurfaceId | Record<string, SurfaceId>;
   // Never clicked or activated with OK on this surface.
   avoid: string[];
   // Remote keys the walk adds there (REMOTE_KEYS).
@@ -176,10 +227,15 @@ const PARENTAL_AVOID = ['[data-parental-change-pin]', '#view-parental-controls .
 
 const SURFACES: Record<SurfaceName, Surface> = {
   'detail': {
+    scope: { movies: 'movies.catalog:detail', series: 'series.catalog:detail' },
     shows: '#view-movies .detail-actions, #view-series .detail-actions',
     from: TAB_BAR, needs: ['resume'], enter: enterDetail, variants: ['movies', 'series'], avoid: [], pseudo: true,
   },
   'catalog-grid': {
+    scope: {
+      movies: 'movies.catalog:grid', series: 'series.catalog:grid',
+      continue: 'movies.catalog:grid', watchlist: 'movies.catalog:manage',
+    },
     shows: '#view-movies .catalog-sidebar, #view-series .catalog-sidebar',
     from: TAB_BAR, needs: ['resume', 'watchlist'], enter: enterCatalogGrid,
     variants: ['movies', 'series', 'continue', 'watchlist'],
@@ -189,6 +245,8 @@ const SURFACES: Record<SurfaceName, Surface> = {
     pseudo: true,
   },
   'search': {
+    // The search box lives in the tab bar.
+    scope: 'tabbar:search',
     shows: '.tab-bar-search.expanded',
     from: TAB_BAR, needs: ['search-history'], enter: enterSearch,
     // Clearing the recent searches would leave nothing to drop down.
@@ -197,12 +255,14 @@ const SURFACES: Record<SurfaceName, Surface> = {
     text: { kind: 'fill', values: ['ch', 'Ch 1', 'show', 'Show 2', 'movie', 'Movie 1-', 'series', 'zz', '', '', ''] },
   },
   'settings': {
+    scope: 'view.settings:pane',
     shows: '#view-settings',
     from: TAB_BAR, needs: [], enter: enterSettings,
     variants: ['general', 'sources', 'guide', 'appearance', 'playback', 'subtitles', 'advanced', 'data'],
     avoid: [],
   },
   'parental': {
+    scope: 'view.parental-controls',
     shows: '#view-parental-controls',
     from: TAB_BAR, needs: ['second-account'], enter: enterParental,
     // Changing the PIN or switching the controls off ends the family.
@@ -210,53 +270,70 @@ const SURFACES: Record<SurfaceName, Surface> = {
     keys: ['Red', 'Green', 'Blue'],
   },
   'parental-accounts': {
+    scope: 'parental.account_menu',
     shows: '#view-parental-controls .account-menu',
     from: `#view-parental-controls, ${TAB_BAR}`, needs: ['second-account'], enter: enterParentalAccounts, avoid: PARENTAL_AVOID,
   },
   'parental-pin': {
+    scope: 'prompt.parental_pin',
     shows: '.parental-pin-prompt:not(.hidden)',
     from: TAB_BAR, needs: [], enter: enterParentalPin, avoid: [],
     // Wrong digits only, so the prompt errs and locks out but never opens.
     text: { kind: 'type', values: ['5', '7'] },
   },
   'reminders': {
+    scope: 'view.reminders',
     shows: '#view-reminders',
     from: TAB_BAR, needs: ['reminders'], enter: enterReminders, variants: ['settings', 'epg'], avoid: [CONFIRM],
   },
   'reminder-prompt': {
+    scope: 'prompt.reminder',
     shows: '.reminder-prompt:not(.hidden)',
     from: 'body', needs: ['due-reminders'], enter: enterReminderPrompt, avoid: [],
   },
   'confirm': {
+    scope: { settings: 'prompt.settings', reminders: 'prompt.reminder_manager' },
     shows: '.confirmation-prompt:not(.hidden)',
     from: TAB_BAR, needs: ['reminders'], enter: enterConfirm, variants: ['settings', 'reminders'], avoid: [CONFIRM],
   },
   'catchup': {
+    scope: 'prompt.epg',
     shows: '.catchup-resume-prompt:not(.hidden)',
     from: TAB_BAR, needs: ['catchup'], enter: enterCatchup,
     // Start over clears the progress the prompt needs.
     avoid: ['.catchup-resume-btn[data-action="start-over"]'],
   },
   'live-categories': {
+    scope: 'prompt.live_categories',
     shows: '.live-category-picker',
     from: TAB_BAR, needs: ['live-categories', 'second-account'], enter: enterLiveCategories, avoid: [],
     keys: ['Red', 'Green', 'Yellow'],
   },
   'subtitle-search': {
+    scope: 'player.subtitle_search',
     shows: '#subtitle-search .subs-overlay',
     from: `#view-player, ${TAB_BAR}`, player: true, needs: [], enter: enterSubtitleSearch, avoid: [],
     text: { kind: 'fill', values: ['Movie', 'one', ''] },
   },
   'subtitle-offset': {
+    scope: 'player.subtitle_offset',
     shows: '#subtitle-offset:not(.hidden)',
     from: `#view-player, ${TAB_BAR}`, player: true, needs: [], enter: enterSubtitleOffset, avoid: [],
   },
   'channel-editor': {
+    scope: 'live.channels:edit',
     shows: '#view-channels .channel-view.editing',
     from: TAB_BAR, needs: [], enter: enterChannelEditor, variants: ['live', 'settings'], avoid: [],
     keys: ['Red', 'Green', 'Blue', 'Yellow'],
   },
 };
+
+function scopeOf(surface: Surface, variant: string | undefined): SurfaceId {
+  if (typeof surface.scope === 'string') return surface.scope;
+  const scope = surface.scope[variant ?? ''];
+  if (!scope) throw new Error(`no scope for the ${variant ?? 'missing'} variant`);
+  return scope;
+}
 
 // Mirrors channelKey() in src/utils/channel.ts.
 function channelKey(url: string): string {
@@ -1010,8 +1087,16 @@ async function runWalk(page: Page, label: string,
     p = await check(step, still);
     playerSteps = p.shown.length === 1 && p.shown[0] === 'view-player' ? playerSteps + 1 : 0;
     if (step.kind === 'enter') {
-      enterMisses = await surfaceState(page, SURFACES[step.surface]) === 'present' ? 0 : enterMisses + 1;
+      const present = await surfaceState(page, SURFACES[step.surface]) === 'present';
+      enterMisses = present ? 0 : enterMisses + 1;
       if (enterMisses === MAX_ENTER_MISSES) record(`surface.unreachable: ${step.surface}`, p);
+      const scope = scopeOf(SURFACES[step.surface], step.variant);
+      if (present && p.scope !== scope) {
+        // An enter may still be landing: only a scope that stays wrong counts.
+        await runTimers(page, 600);
+        p = await stillState(() => probe(page, describeStep(step), pointer, avoid));
+        if (p.scope !== scope) record(`surface.scope: ${step.surface} is owned by ${p.scope ?? p.owner}, not ${scope}`, p);
+      }
     }
   };
 
@@ -1067,7 +1152,17 @@ const stepCount = E2E_ENV.fuzzSteps || DEFAULT_STEPS;
 const chosenSeeds = E2E_ENV.fuzzSeeds;
 const families = E2E_ENV.fuzzSurfaces ?? ['walk', ...Object.keys(SURFACES)];
 
-test.describe('focus fuzz', () => {
+// Runs in CI, where the walks don't.
+test('every focus scope is fuzzed or says why not', () => {
+  const fuzzed = new Set(Object.values(SURFACES).flatMap(({ scope }) => typeof scope === 'string' ? [scope] : Object.values(scope)));
+  expect(SURFACE_IDS.filter((id) => fuzzed.has(id) === id in FUZZ_GAPS), 'list each in a SURFACES scope or FUZZ_GAPS, not both')
+    .toEqual([]);
+  const unmatched = Object.entries(SURFACES).filter(([, { scope, variants }]) => typeof scope !== 'string'
+    && Object.keys(scope).sort().join() !== [...variants ?? []].sort().join());
+  expect(unmatched.map(([name]) => name), 'a scope by variant names each variant').toEqual([]);
+});
+
+if (E2E_ENV.fuzz) test.describe('focus fuzz', () => {
   if (replay) {
     test('replay', async ({ page }) => {
       test.setTimeout(0);

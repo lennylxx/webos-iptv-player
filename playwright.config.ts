@@ -1,6 +1,12 @@
+import { createHash } from 'crypto';
 import { defineConfig, devices } from '@playwright/test';
 import type { E2EOptions } from './e2e/helpers';
 import { LEGACY_HEADER } from './scripts/chromium-53-simulation.mjs';
+
+// A port of this worktree's own, so E2E runs in parallel worktrees never
+// meet on one server.
+const worktreePort = 3100
+  + parseInt(createHash('sha1').update(__dirname).digest('hex').slice(0, 8), 16) % 900;
 
 const list = (value: string | undefined): string[] | null =>
   value ? value.split(',').map((item) => item.trim()) : null;
@@ -9,8 +15,9 @@ const list = (value: string | undefined): string[] | null =>
 // import what they need from this file.
 export const E2E_ENV = {
   ci: !!process.env.CI,
-  // The preview server (scripts/serve.mjs) listens on port 3000 by default.
-  previewPort: Number(process.env.PREVIEW_PORT) || 3000,
+  // The E2E server's port: E2E_PORT=<port>, or one derived from the
+  // worktree's path.
+  port: Number(process.env.E2E_PORT) || worktreePort,
   // E2E_CPU_THROTTLE=4 runs pages at a quarter speed, to find tests that only
   // pass on a fast machine.
   cpuThrottle: Number(process.env.E2E_CPU_THROTTLE) || 1,
@@ -28,15 +35,13 @@ export const E2E_ENV = {
   fuzzContinue: process.env.FOCUS_FUZZ_CONTINUE === '1',
 };
 
-const baseURL = `http://localhost:${E2E_ENV.previewPort}`;
+const baseURL = `http://localhost:${E2E_ENV.port}`;
 
 // End-to-end tests drive the real app in headless Chromium (close to the
 // legacy webOS Chromium engine). The preview harness builds the app and serves
 // dist/ on baseURL.
 export default defineConfig<E2EOptions>({
   testDir: './e2e',
-  // The focus fuzz walk runs only through `npm run test:fuzz`.
-  testIgnore: E2E_ENV.fuzz ? [] : ['**/focus-fuzz.spec.ts'],
   fullyParallel: true,
   forbidOnly: E2E_ENV.ci,
   retries: E2E_ENV.ci ? 2 : 0,
@@ -70,10 +75,14 @@ export default defineConfig<E2EOptions>({
       },
     },
   ],
+  // A fresh build every run: a server already on the port, such as one an
+  // aborted run left, fails the run rather than serving an old build.
   webServer: {
     command: 'node esbuild.config.mjs --preview && node scripts/serve.mjs',
+    // serve.mjs reads its port as `npm run preview` gives it.
+    env: { PREVIEW_PORT: String(E2E_ENV.port) },
     url: baseURL,
-    reuseExistingServer: !E2E_ENV.ci,
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

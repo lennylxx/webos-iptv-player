@@ -131,6 +131,7 @@ import { channelKey } from '../utils/channel';
 import { ChannelCustomizationService, groupKeyOf } from '../services/channel-customization';
 import { Focus } from '../navigation/focus-scope';
 import { CONFIG } from '../config';
+import { scopeId } from '../test/scope-id';
 
 playlistMock.indexOfKey = (key: string): number => data.channels
   .findIndex(ch => channelKey(ch) === key);
@@ -788,6 +789,7 @@ describe('ChannelList edit mode', () => {
     list.handleAction('select');
 
     expect(container.querySelector('.epg-offset-current')?.textContent).toBe('+1 h');
+    expect(list.focusScope.surface).toBe('live.channels:guide-offset');
     expect(container.querySelector('.channel-edit-overlay-back')?.textContent)
       .toContain('Back');
     expect(container.querySelector('[data-epg-offset-reset]')?.textContent)
@@ -831,6 +833,7 @@ describe('ChannelList edit mode', () => {
     }));
     document.elementFromPoint = originalElementFromPoint;
     expect(container.querySelector('.edit-text-input')).not.toBeNull();
+    expect(list.focusScope.surface).toBe('live.channels:rename');
   });
 
   it('maps a selected channel to a searched XMLTV candidate and can restore automatic matching',
@@ -1527,7 +1530,7 @@ describe('ChannelList edit mode', () => {
       promptRoot = document.createElement('div');
       promptRoot.innerHTML = '<button data-key="ok" data-focusable>OK</button>';
       document.body.appendChild(promptRoot);
-      prompt = Focus.register({ id: 'test.prompt', root: promptRoot, restrict: 'self-only' });
+      prompt = Focus.register({ id: scopeId('test.prompt'), root: promptRoot, restrict: 'self-only' });
     });
 
     afterEach(() => {
@@ -1658,10 +1661,12 @@ describe('ChannelList edit mode', () => {
     hover(channelItems()[0]);
     list.handleAction('select');
     list.handleAction('red');
+    expect(list.focusScope.surface).toBe('live.channels:group-picker');
     const newOption = Array.from(container.querySelectorAll<HTMLElement>('.group-picker-option'))
       .find(el => el.dataset.groupChoice === 'new');
     hover(newOption!);
     list.handleAction('select');
+    expect(list.focusScope.surface).toBe('live.channels:new-group');
     container.querySelector<HTMLInputElement>('.edit-text-input')!.value = 'sports';
 
     list.handleAction('select');

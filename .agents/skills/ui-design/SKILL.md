@@ -144,7 +144,17 @@ broken.
   `SCREENS` in `e2e/navigation-sweep.spec.ts`: each arrow key from what it
   shows must stay on screen, keep Left/Right on the line, change line on
   Up/Down, and reach everything. Fix what it reports with the attributes
-  above, not by listing it in `KNOWN_FAILING`.
+  above, not by listing it in `KNOWN_FAILING`. A new focus scope goes in
+  `SCOPES` (`src/navigation/scope-ids.ts`), or it won't typecheck. A scope
+  whose root shows different surfaces by turns (an edit mode, a detail
+  page, a menu or picker that takes the keys inside it) lists its modes
+  there and reports one with `mode`, marked `id:mode`; `mode` is typed by
+  that list, so the state it reads can't take a value left out. Each
+  surface is then named by a sweep screen's `scope` and a focus fuzz
+  family's `scope` (`e2e/focus-fuzz.spec.ts`), or listed in
+  `SWEEP_GAPS`/`FUZZ_GAPS` as a `todo` or covered `elsewhere`. CI fails on
+  one left out. Each sweep screen asserts in CI that its surface owns the
+  keys; each fuzz family asserts it only under `npm run test:fuzz`.
 - **Styling.** Focus is the **`.focused` class**, not `:focus` or
   `:focus-visible` (Chromium 53, and the remote never moves DOM focus).
   The base ring lives in `css/navigation.css`: `--focus-ring` border plus a

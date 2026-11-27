@@ -12,6 +12,7 @@ import type { Action, NumberEvent } from '../types';
 import { createLogger } from '../utils/logger';
 import { FocusRing, hasRing, isHovered, ringShown, ringsIn, setRing, UNRESOLVED_ATTR } from './focus-ring';
 import { InputMode } from './input-mode';
+import { SCOPES, type ScopeId, type ScopeMode } from './scope-ids';
 
 const log = createLogger('Focus');
 
@@ -30,8 +31,10 @@ export const Tier = {
 } as const;
 type RepairReason = 'two_rings' | 'outside_owner' | 'unresolved' | 'clipped' | 'detached';
 
-export interface ScopeSpec {
-  id: string;
+export interface ScopeSpec<I extends ScopeId = ScopeId> {
+  id: I;
+  // Which of its SCOPES modes the root shows now; required when it lists any.
+  mode?: () => ScopeMode<I>;
   root: HTMLElement | (() => HTMLElement | null);
   // `self-only`: a modal that keeps every key and keeps hover outside it dark.
   restrict?: 'self-only' | 'self-first';
@@ -76,6 +79,8 @@ export interface ScopeSpec {
 
 export interface FocusScope {
   readonly id: string;
+  // The id, and the mode when the scope has modes: `id:mode`.
+  readonly surface: string;
   readonly modal: boolean;
   readonly logical: boolean;
   readonly tier: number;
@@ -160,6 +165,10 @@ class Scope implements FocusScope {
   constructor(readonly spec: ScopeSpec) {}
 
   get id(): string { return this.spec.id; }
+  get surface(): string {
+    const mode = this.spec.mode?.();
+    return mode ? `${this.spec.id}:${mode}` : this.spec.id;
+  }
   get modal(): boolean { return this.spec.restrict === 'self-only'; }
   get tier(): number { return this.spec.tier ?? (this.modal ? Tier.prompt : Tier.overlay); }
   get live(): boolean { return this.spec.when ? this.spec.when() : true; }
@@ -520,9 +529,11 @@ function resolveOwner(): { owner: FocusScope | null; best: Scope | null } {
 }
 
 export const Focus = {
-  register(spec: ScopeSpec): FocusScope {
+  register<I extends ScopeId>(spec: ScopeSpec<I>): FocusScope {
     if (registry.has(spec.id)) throw new Error(`Focus scope ${spec.id} is already registered`);
-    const scope = new Scope(spec);
+    const modes: readonly string[] | undefined = SCOPES[spec.id];
+    if (modes?.length && !spec.mode) throw new Error(`Focus scope ${spec.id} must report its mode`);
+    const scope = new Scope(spec as ScopeSpec);
     registry.set(spec.id, scope);
     return scope;
   },

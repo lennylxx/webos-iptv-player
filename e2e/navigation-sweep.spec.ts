@@ -1,9 +1,10 @@
 import { fakeAiConfig, test, expect, routeLiveManifest, routeFakeAi, enterTab, liveLoaded, type Page } from './helpers';
 import { E2E_ENV } from '../playwright.config';
 import { seedXtream } from './fixtures/xtream';
+import type { SurfaceId } from '../src/navigation/scope-ids';
 import { channelPlaylist, guide } from './fixtures/live';
 import {
-  KEYS, DIRECTIONS, seededRandom, installNavBox, hover, type Direction, type NavBoxWindow,
+  KEYS, DIRECTIONS, SURFACE_IDS, seededRandom, type Gap, installNavBox, hover, type Direction, type NavBoxWindow,
 } from './navigation-helpers';
 
 // Generic D-pad invariants on every main screen, with no rules of the
@@ -35,6 +36,55 @@ interface Known {
 }
 
 const KNOWN_FAILING: Known[] = [];
+
+// Surfaces no screen opens: a `todo` a screen should cover, or covered
+// `elsewhere`.
+const SWEEP_GAPS: Partial<Record<SurfaceId, Gap>> = {
+  'tabbar:tabs': { elsewhere: 'every screen reaches it with Up, and e2e/tab-bar.spec.ts walks it' },
+  'tabbar:search': { todo: "the tab bar's search box" },
+  'tabbar.accounts': { todo: "the tab bar's account menu" },
+  'live.channels:edit': { todo: 'the Live list in edit mode' },
+  'live.channels:rename': { todo: "the edit mode's rename field" },
+  'live.channels:new-group': { todo: "the edit mode's new group field" },
+  'series.catalog:manage': { todo: 'managing a Series collection' },
+  'live.channels:favorites': { todo: 'the Live list picking favorites' },
+  'live.channels:group-picker': { todo: "the edit mode's group picker" },
+  'live.channels:guide-picker': { todo: "the edit mode's guide channel picker" },
+  'live.channels:guide-offset': { todo: "the edit mode's guide time offset" },
+  'prompt.theme_editor_view:menu': { todo: "the theme editor's open dropdown menu" },
+  'movies.catalog:menu': { todo: "Movies' open filter or sort menu" },
+  'series.catalog:menu': { todo: "Series' open filter or sort menu" },
+  'view.settings:menu': { todo: "Settings' open dropdown menu" },
+  'player.menu:main': { todo: "the player menu's main page" },
+  'player.menu:audio': { todo: "the player menu's audio page" },
+  'player.menu:subtitles': { todo: "the player menu's subtitles page" },
+  'player.menu:speed': { todo: "the player menu's speed page" },
+  'player.menu:aspect': { todo: "the player menu's aspect ratio page" },
+  'player.menu:quality': { todo: "the player menu's quality page" },
+  'movies.catalog:detail': { todo: 'the Movies detail page' },
+  'series.catalog:detail': { todo: 'the Series detail page' },
+  'guide.groups': { todo: "the guide's group list" },
+  'view.player': { todo: 'the player controls' },
+  'view.parental-controls': { todo: 'the parental controls manager' },
+  'view.reminders': { todo: 'the reminder manager' },
+  'parental.account_menu': { todo: "the parental controls manager's account menu" },
+  'player.sidebar': { todo: 'the player sidebar; e2e/player.spec.ts walks it, but not by these rules' },
+  'player.subtitle_offset': { todo: 'the subtitle sync adjuster' },
+  'player.subtitle_search': { todo: 'the online subtitle results' },
+  'prompt.epg': { todo: "the guide's resume prompt" },
+  'prompt.search': { todo: "Search's resume prompt" },
+  'prompt.parental': { todo: "the parental controls manager's confirmation" },
+  'prompt.parental_pin': { todo: 'the parental PIN prompt' },
+  'prompt.reminder': { todo: 'the due reminder prompt' },
+  'prompt.reminder_manager': { todo: "the reminder manager's confirmation" },
+  'prompt.live_categories': { todo: 'the live category picker' },
+  'prompt.live_categories.accounts': { todo: "the live category picker's account menu" },
+  'prompt.theme_editor': { todo: "the theme editor's confirmation" },
+  'prompt.movies.collection': { todo: "Movies' collection confirmation" },
+  'prompt.movies.trailer': { todo: "Movies' trailer prompt" },
+  'prompt.series.collection': { todo: "Series' collection confirmation" },
+  'prompt.series.trailer': { todo: "Series' trailer prompt" },
+};
 
 interface Box { top: number; bottom: number; left: number; right: number }
 
@@ -333,6 +383,8 @@ interface Cross {
 
 interface Screen extends ProbeScreen {
   name: string;
+  // The scope that owns the keys once `open` shows the screen.
+  scope: SurfaceId;
   // Seeds more than the shared accounts, after them.
   seed?(page: Page): Promise<void>;
   open(page: Page): Promise<void>;
@@ -365,6 +417,15 @@ async function ownKeys(page: Page, s: Screen): Promise<void> {
   const first = await readFocus(page, s);
   if (deferred === 'deferred' || first.kind !== 'item') await page.keyboard.press('ArrowDown');
   await expect.poll(async () => (await readFocus(page, s)).kind, { timeout: 5000 }).toBe('item');
+}
+
+// Once `open` is done, the screen's scope, in its mode, owns the keys.
+async function opened(page: Page, s: Screen): Promise<void> {
+  await s.open(page);
+  await ownKeys(page, s);
+  // The mode's mark lands with the ring's next sync, maybe after the ring.
+  await expect.poll(async () => (await readFocus(page, s)).owner, { message: `${s.name} is owned by its scope`, timeout: 2000 })
+    .toBe(s.scope);
 }
 
 async function openTab(page: Page, section: 'epg' | 'settings' | 'movies' | 'series' | 'search'): Promise<void> {
@@ -406,7 +467,7 @@ async function seedSeries(page: Page): Promise<void> {
   });
 }
 
-const SETTINGS: Omit<Screen, 'name' | 'open'> = {
+const SETTINGS: Omit<Screen, 'name' | 'open' | 'scope'> = {
   root: '#view-settings',
   focusables: '[data-focusable]',
   columns: [['categories', '.settings-sidebar'], ['actions', '.settings-actions'], ['pane', '.settings-scroll']],
@@ -425,7 +486,7 @@ const SETTINGS: Omit<Screen, 'name' | 'open'> = {
 // controls are what is on screen.
 const SETTINGS_CATEGORIES = ['sources', 'guide', 'appearance', 'playback', 'subtitles', 'ai', 'advanced', 'data'];
 
-const LIVE: Omit<Screen, 'name' | 'open'> = {
+const LIVE: Omit<Screen, 'name' | 'open' | 'scope'> = {
   root: '#view-channels',
   focusables: '[data-focusable]',
   columns: [['groups', '.sidebar'], ['channels', '.channel-main']],
@@ -454,7 +515,7 @@ async function inGroupList(page: Page, selector: string): Promise<boolean> {
   }, selector);
 }
 
-const SEARCH: Omit<Screen, 'name' | 'open'> = {
+const SEARCH: Omit<Screen, 'name' | 'open' | 'scope'> = {
   root: '#view-search',
   focusables: '[data-focusable]',
   columns: [],
@@ -465,7 +526,7 @@ const SEARCH: Omit<Screen, 'name' | 'open'> = {
 // A catalog grid beside its category sidebar. Browse stays resident under
 // the grid with the same title keys; only the shown layer's elements are
 // navigable, and so keep unique ids.
-const CATALOG_GRID: Omit<Screen, 'name' | 'open'> = {
+const CATALOG_GRID: Omit<Screen, 'name' | 'open' | 'scope'> = {
   ...SEARCH,
   root: '#view-movies',
   focusables: '.catalog-layer:not(.catalog-layer-hidden) [data-focusable]',
@@ -570,6 +631,7 @@ const SCREENS: Screen[] = [
   {
     ...LIVE,
     name: 'Live',
+    scope: 'live.channels:browse',
     async open(page) {
       await page.goto('/');
       await liveLoaded(page);
@@ -579,6 +641,7 @@ const SCREENS: Screen[] = [
   {
     ...LIVE,
     name: 'Live many groups',
+    scope: 'live.channels:browse',
     followScroll: true,
     async seed(page) {
       const playlist = channelPlaylist(200, {
@@ -651,6 +714,7 @@ const SCREENS: Screen[] = [
   {
     ...LIVE,
     name: 'Live playlist tabs',
+    scope: 'live.channels:browse',
     seed: (page) => seedM3u(page, 3, 70),
     async open(page) {
       await page.goto('/');
@@ -661,6 +725,7 @@ const SCREENS: Screen[] = [
   },
   {
     name: 'Guide',
+    scope: 'guide.grid:schedule',
     root: '#view-epg',
     // The guide lights its own rows: no [data-focusable] there.
     focusables: '[data-hover-target], .epg-search-wrap, [data-epg-reminders]',
@@ -680,6 +745,7 @@ const SCREENS: Screen[] = [
   {
     ...SETTINGS,
     name: 'Settings',
+    scope: 'view.settings:pane',
     async open(page) {
       await openTab(page, 'settings');
       await expect(page.locator('#view-settings .settings-nav-item').first()).toBeVisible();
@@ -688,6 +754,7 @@ const SCREENS: Screen[] = [
   ...SETTINGS_CATEGORIES.map((category): Screen => ({
     ...SETTINGS,
     name: `Settings ${category}`,
+    scope: 'view.settings:pane',
     async open(page) {
       await openTab(page, 'settings');
       const item = page.locator(`#view-settings .settings-nav-item[data-settings-target="${category}"]`);
@@ -710,6 +777,7 @@ const SCREENS: Screen[] = [
   })),
   {
     name: 'Player translation language',
+    scope: 'player.menu:translate',
     root: '#player-menu',
     focusables: '.menu-item',
     columns: [],
@@ -758,6 +826,7 @@ const SCREENS: Screen[] = [
   },
   {
     name: 'Parental suggestion review',
+    scope: 'prompt.parental-review',
     root: '.suggestion-review',
     focusables: '[data-focusable]',
     columns: [['actions', '.suggestion-review-actions'], ['list', '.suggestion-review-list']],
@@ -787,6 +856,7 @@ const SCREENS: Screen[] = [
   },
   {
     name: 'AI program genres prompt',
+    scope: 'prompt.settings',
     root: '.confirmation-prompt',
     focusables: '[data-focusable]',
     columns: [],
@@ -807,6 +877,7 @@ const SCREENS: Screen[] = [
   },
   {
     name: 'Guide timeline',
+    scope: 'guide.grid:timeline',
     root: '#view-epg',
     // The timeline paints its own cells and one ring over the focused one.
     focusables: '[data-hover-target]:not(.epg-tl-surface), .epg-search-wrap, [data-epg-reminders], .tl-cell',
@@ -827,6 +898,7 @@ const SCREENS: Screen[] = [
   },
   {
     name: 'Theme editor',
+    scope: 'prompt.theme_editor_view:view',
     root: '.theme-editor-host',
     focusables: '[data-focusable]',
     columns: [['heading', '.theme-editor-heading'], ['list', '.theme-editor-list']],
@@ -843,6 +915,7 @@ const SCREENS: Screen[] = [
   },
   {
     name: 'Theme color picker',
+    scope: 'prompt.theme_color_picker',
     root: '.theme-color-picker',
     focusables: '[data-focusable]',
     columns: [['palette', '.theme-picker-grid'], ['fine', '.theme-picker-dialog']],
@@ -860,6 +933,7 @@ const SCREENS: Screen[] = [
   {
     ...SEARCH,
     name: 'Search',
+    scope: 'view.search',
     async open(page) {
       await searchFor(page, 'one');
       const view = page.locator('#view-search');
@@ -873,6 +947,7 @@ const SCREENS: Screen[] = [
   {
     ...SEARCH,
     name: 'Search AI search',
+    scope: 'view.search',
     seed: seedAiSearch,
     async open(page) {
       await searchFor(page, 'one tonight');
@@ -890,6 +965,7 @@ const SCREENS: Screen[] = [
   {
     ...SEARCH,
     name: 'Search with AI search offered',
+    scope: 'view.search',
     seed: seedAiSearch,
     async open(page) {
       await searchFor(page, 'one');
@@ -903,6 +979,7 @@ const SCREENS: Screen[] = [
   {
     ...SEARCH,
     name: 'Search M3U',
+    scope: 'view.search',
     seed: (page) => seedM3u(page, 1, 200),
     async open(page) {
       await searchFor(page, 'one');
@@ -914,6 +991,7 @@ const SCREENS: Screen[] = [
   },
   {
     name: 'Search Recent searches',
+    scope: 'search.history',
     root: '.search-history-dropdown',
     focusables: '[data-focusable]',
     columns: [['clear', '.search-history-clear'], ['searches', '.search-history-tiles']],
@@ -939,6 +1017,7 @@ const SCREENS: Screen[] = [
   {
     ...SEARCH,
     name: 'Movies',
+    scope: 'movies.catalog:browse',
     root: '#view-movies',
     async open(page) {
       await openTab(page, 'movies');
@@ -970,6 +1049,7 @@ const SCREENS: Screen[] = [
   {
     ...SEARCH,
     name: 'Movies with collections',
+    scope: 'movies.catalog:browse',
     root: '#view-movies',
     seed: seedCollections,
     async open(page) {
@@ -981,6 +1061,7 @@ const SCREENS: Screen[] = [
   {
     ...CATALOG_GRID,
     name: 'Movies Continue Watching grid',
+    scope: 'movies.catalog:grid',
     seed: seedCollections,
     async open(page) {
       await openSidebarRow(page, this, 'side:continue');
@@ -989,6 +1070,7 @@ const SCREENS: Screen[] = [
   {
     ...CATALOG_GRID,
     name: 'Movies Watchlist managing',
+    scope: 'movies.catalog:manage',
     seed: seedCollections,
     // The sidebar takes no keys while the grid is managed.
     cross: [],
@@ -1002,6 +1084,7 @@ const SCREENS: Screen[] = [
   {
     ...CATALOG_GRID,
     name: 'Movies grid at 150%',
+    scope: 'movies.catalog:grid',
     async seed(page) {
       await page.addInitScript(() => localStorage.setItem('iptv_text_size', JSON.stringify('150')));
     },
@@ -1013,6 +1096,7 @@ const SCREENS: Screen[] = [
   {
     ...CATALOG_GRID,
     name: 'Movies See all',
+    scope: 'movies.catalog:grid',
     async open(page) {
       await openTab(page, 'movies');
       await openSeeAll(page, this, 'movies', '1', 'Cat A');
@@ -1021,6 +1105,7 @@ const SCREENS: Screen[] = [
   {
     ...CATALOG_GRID,
     name: 'Movies sidebar of many categories',
+    scope: 'movies.catalog:grid',
     seed: seedManyCategories,
     // Up and Down scroll the virtualized sidebar past what it first shows.
     followScroll: true,
@@ -1034,6 +1119,7 @@ const SCREENS: Screen[] = [
   {
     ...CATALOG_GRID,
     name: 'Movies sidebar far category',
+    scope: 'movies.catalog:grid',
     seed: seedManyCategories,
     followScroll: true,
     async open(page) {
@@ -1066,6 +1152,7 @@ const SCREENS: Screen[] = [
   {
     ...CATALOG_GRID,
     name: 'Series See all',
+    scope: 'series.catalog:grid',
     root: '#view-series',
     seed: seedSeries,
     async open(page) {
@@ -1076,6 +1163,7 @@ const SCREENS: Screen[] = [
   {
     ...SEARCH,
     name: 'Series',
+    scope: 'series.catalog:browse',
     root: '#view-series',
     seed: seedSeries,
     async open(page) {
@@ -1326,6 +1414,12 @@ const CAP = 40;
 const SEARCH_PRESSES = 400;
 const WALK_PRESSES = 150;
 
+test('every focus scope is swept or says why not', () => {
+  const swept = new Set(SCREENS.map((s) => s.scope));
+  expect(SURFACE_IDS.filter((id) => swept.has(id) === id in SWEEP_GAPS), 'list each in a SCREENS scope or SWEEP_GAPS, not both')
+    .toEqual([]);
+});
+
 for (const s of SCREENS) {
   test.describe(s.name, () => {
     test(`every arrow key from what ${s.name} shows, and arrow keys reach all of it`, { tag: '@sweep' }, async ({ page }) => {
@@ -1333,8 +1427,7 @@ for (const s of SCREENS) {
       const errors = watchErrors(page);
       await seed(page);
       await s.seed?.(page);
-      await s.open(page);
-      await ownKeys(page, s);
+      await opened(page, s);
       await page.evaluate((q) => (window as unknown as ProbeWindow).__navProbe.home(q), probeOf(s));
       const visible = await onScreen(page, s);
       const start = (await readFocus(page, s)).item!;
@@ -1436,8 +1529,7 @@ for (const s of SCREENS) {
         const errors = watchErrors(page);
         await seed(page);
         await s.seed?.(page);
-        await s.open(page);
-        await ownKeys(page, s);
+        await opened(page, s);
         await s.check!(page);
         expect(errors, `${s.name}: page and console errors`).toEqual([]);
       });
@@ -1450,8 +1542,7 @@ for (const s of SCREENS) {
       const errors = watchErrors(page);
       await seed(page);
       await s.seed?.(page);
-      await s.open(page);
-      await ownKeys(page, s);
+      await opened(page, s);
       const run = newRun();
       const random = seededRandom(11);
       for (let i = 0; i < WALK_PRESSES; i++) {

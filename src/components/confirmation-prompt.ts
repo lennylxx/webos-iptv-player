@@ -1,5 +1,6 @@
 import type { Action } from '../types';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
+import type { ScopeId } from '../navigation/scope-ids';
 import { html, raw } from '../utils/dom';
 import { morph } from '../utils/morph';
 
@@ -23,7 +24,7 @@ export class ConfirmationPrompt {
   private scope: FocusScope | null = null;
 
   // `id` names the focus scope, registered on the first show.
-  constructor(private readonly id: string) {}
+  constructor(private readonly id: ScopeId) {}
 
   get visible(): boolean {
     return this.el !== null && !this.el.classList.contains('hidden');

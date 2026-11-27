@@ -408,7 +408,7 @@ class App {
     this.initFocusScopes();
     FocusRing.install(() => {
       const owner = Focus.owner();
-      return { root: owner?.root() ?? null, modal: !!owner?.modal, id: owner?.id };
+      return { root: owner?.root() ?? null, modal: !!owner?.modal, id: () => owner?.surface };
     });
     KeyHandler.setChannelCount(() => PlaylistService.channels.length);
 
@@ -1707,8 +1707,7 @@ class App {
   // subtitle search's keys); below them the shown view owns the keys.
   private initFocusScopes(): void {
     const current = () => this.viewStack[this.viewStack.length - 1];
-    const views = new Map<ViewName, FocusScope>();
-    const own: Partial<Record<ViewName, FocusScope>> = {
+    const views: Record<ViewName, FocusScope> = {
       epg: this.epgGrid.focusScope,
       channels: this.channelList.focusScope,
       settings: this.settings.focusScope,
@@ -1717,12 +1716,9 @@ class App {
       series: this.series.focusScope,
       search: this.search.focusScope,
       reminders: this.reminderManager.focusScope,
+      player: Focus.register({ id: 'view.player', root: this.views.player, leaveFor: { up: 'tabbar' } }),
     };
-    for (const name of Object.keys(this.views) as ViewName[]) {
-      views.set(name, own[name]
-        ?? Focus.register({ id: `view.${name}`, root: this.views[name], leaveFor: { up: 'tabbar' } }));
-    }
-    Focus.setBase(() => views.get(current()) ?? null);
+    Focus.setBase(() => views[current()] ?? null);
     Focus.install();
   }
 

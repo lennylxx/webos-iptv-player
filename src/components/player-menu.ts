@@ -175,6 +175,7 @@ export class PlayerMenu {
       const el = this.el;
       this.scope = Focus.register({
         id: 'player.menu',
+        mode: () => this.mode,
         hoverOnSettle: true,
         root: el,
         restrict: 'self-first',

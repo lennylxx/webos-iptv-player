@@ -337,10 +337,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.layers = { browse: layer('browse'), grid: layer('grid'), detail: layer('detail') };
     this.nav = new SpatialNav(container, (el) => this.onFocusChanged(el), { follow: false });
     this.nav.setRestrict(this.layers.browse);
-    this.clearPrompt = new ConfirmationPrompt(`prompt.${this.scopeName()}.collection`);
-    this.trailerPrompt = new ConfirmationPrompt(`prompt.${this.scopeName()}.trailer`);
+    this.clearPrompt = new ConfirmationPrompt(`prompt.${this.scopeName()}.collection` as const);
+    this.trailerPrompt = new ConfirmationPrompt(`prompt.${this.scopeName()}.trailer` as const);
     this.focusScope = Focus.register({
-      id: `${this.scopeName()}.catalog`,
+      id: `${this.scopeName()}.catalog` as const,
+      mode: () => this.layers[this.mode].querySelector('.dropdown.open') ? 'menu'
+        : this.managing && this.mode === 'grid' ? 'manage' : this.mode,
       root: container,
       leaveFor: { up: 'tabbar' },
       defaultKey: () => this.defaultKey(),
@@ -486,7 +488,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   // --- subclass configuration ---
   // The focus scope's prefix, e.g. 'movies'; a method, as the constructor reads it.
-  protected abstract scopeName(): string;
+  protected abstract scopeName(): 'movies' | 'series';
   protected abstract readonly kicker: string;             // hero/grid label, e.g. 'Movies'
   protected abstract readonly resumeKind: ResumeKind;     // which resume entries this section owns
   protected abstract readonly emptyMessage: string;       // no catalog on the account

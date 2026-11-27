@@ -2,11 +2,12 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { Focus } from '../navigation/focus-scope';
 import { CatchupResumePrompt } from './catchup-resume-prompt';
+import { scopeId } from '../test/scope-id';
 
 let prompt: CatchupResumePrompt;
 beforeEach(() => {
   document.body.innerHTML = '';
-  prompt = new CatchupResumePrompt('prompt.test');
+  prompt = new CatchupResumePrompt(scopeId('prompt.test'));
 });
 afterEach(() => Focus.uninstall());
 

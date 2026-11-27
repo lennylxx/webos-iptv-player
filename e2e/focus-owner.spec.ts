@@ -99,14 +99,14 @@ test('watching a reminder that comes due over the Clear all confirmation closes 
 test('a reminder takes the keys from the tab bar and gives them back', async ({ page }) => {
   await setup(page);
   await page.keyboard.press('ArrowUp');
-  await expect(owner(page)).toHaveAttribute('data-focus-scope', 'tabbar');
+  await expect(owner(page)).toHaveAttribute('data-focus-scope', 'tabbar:tabs');
 
   await reminderComesDue(page);
   await expect(owner(page)).toHaveAttribute('data-focus-scope', 'prompt.reminder');
 
   await page.keyboard.press('Escape');
   await expect(page.locator('.reminder-prompt:not(.hidden)')).toHaveCount(0);
-  await expect(owner(page)).toHaveAttribute('data-focus-scope', 'tabbar');
+  await expect(owner(page)).toHaveAttribute('data-focus-scope', 'tabbar:tabs');
 });
 
 const rings = (page: Page) => page.locator('.focused');

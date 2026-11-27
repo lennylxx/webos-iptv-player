@@ -21,6 +21,7 @@ import { WorkerMappingSearch } from '../workers/mapping-search-client';
 import { isIndexRetryPending } from '../workers/index-retry';
 import { createLogger } from '../utils/logger';
 import { Focus } from '../navigation/focus-scope';
+import type { ScopeMode } from '../navigation/scope-ids';
 import { LlmError } from '../services/llm/client';
 import { LlmService } from '../services/llm/llm-service';
 import { EPG_MATCH_CANDIDATES, EPG_MATCH_FEATURE, suggestGuideMatches } from '../services/epg-ai-match';
@@ -276,6 +277,17 @@ export class ChannelListEditor {
 
   get isManagingFavorites(): boolean {
     return this.favoriteSelection !== null;
+  }
+
+  // The list's mode, which its focus scope reports.
+  get mode(): ScopeMode<'live.channels'> {
+    // In the order renderGroupPicker draws them.
+    if (this.epgOffsetFor !== null) return 'guide-offset';
+    if (this.epgPickerFor !== null) return 'guide-picker';
+    if (this.newGroupOpen) return 'new-group';
+    if (this.groupPickerFor !== null) return 'group-picker';
+    if (this.renaming !== null) return 'rename';
+    return this.favoriteSelection !== null ? 'favorites' : this.editing ? 'edit' : 'browse';
   }
 
   get hasGrabbed(): boolean {

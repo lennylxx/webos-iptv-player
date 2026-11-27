@@ -5,6 +5,7 @@ import { SubtitleSearchOverlay } from './subtitle-search-overlay';
 import { Focus, Tier } from '../navigation/focus-scope';
 import { setInputMode } from '../navigation/input-mode';
 import type { OnlineSubtitleResult } from '../services/subtitle-search/types';
+import { scopeId } from '../test/scope-id';
 
 function res(over: Partial<OnlineSubtitleResult>): OnlineSubtitleResult {
   return { providerId: 'subdl', id: 'i', language: 'l1', releaseName: 'Rel', fileName: 'f.srt', format: 'srt', hearingImpaired: false, downloads: 0, ...over };
@@ -205,7 +206,7 @@ describe('SubtitleSearchOverlay', () => {
     overlay.handleAction('up');
     Focus.flush();
     expect(document.activeElement).toBe(input);
-    const above = Focus.register({ id: 'test.menu', root: menu, tier: Tier.overlay });
+    const above = Focus.register({ id: scopeId('test.menu'), root: menu, tier: Tier.overlay });
     Focus.push(above);
     Focus.flush();
     expect(document.activeElement).not.toBe(input);
@@ -229,7 +230,7 @@ describe('SubtitleSearchOverlay', () => {
       ({ top: 2000, bottom: 2050, left: 0, right: 100, width: 100, height: 50 } as DOMRect);
     const scrolled = vi.fn();
     row.scrollIntoView = scrolled;
-    const above = Focus.register({ id: 'test.menu', root: menu, tier: Tier.overlay });
+    const above = Focus.register({ id: scopeId('test.menu'), root: menu, tier: Tier.overlay });
     Focus.push(above);
     Focus.flush();
     expect(document.activeElement).not.toBe(container.querySelector('.subs-search-input'));

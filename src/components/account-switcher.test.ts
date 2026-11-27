@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import { AccountSwitcher } from './account-switcher';
 import { Focus } from '../navigation/focus-scope';
 import type { PlaylistEntry } from '../types';
+import { scopeId } from '../test/scope-id';
 
 type OnSelect = ConstructorParameters<typeof AccountSwitcher>[1]['onSelect'];
 
@@ -141,9 +142,9 @@ describe('AccountSwitcher with a focus scope', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="below"><div data-key="b1">b1</div></div><div id="slot2"></div>';
     slot = document.getElementById('slot2')!;
-    below = Focus.register({ id: 'test.below', root: document.getElementById('below')!, defaultKey: () => 'b1' });
+    below = Focus.register({ id: scopeId('test.below'), root: document.getElementById('below')!, defaultKey: () => 'b1' });
     Focus.setBase(() => below);
-    scoped = new AccountSwitcher(slot, { onSelect }, 'test.accounts');
+    scoped = new AccountSwitcher(slot, { onSelect }, scopeId('test.accounts'));
     scoped.init();
     scoped.setAccounts(A, 'a2');
   });

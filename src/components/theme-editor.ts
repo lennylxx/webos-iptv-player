@@ -257,6 +257,7 @@ export class ThemeEditor {
     editorScope?.dispose();
     const scope = this.scope = editorScope = Focus.register({
       id: 'prompt.theme_editor_view',
+      mode: () => view.querySelector('.dropdown.open') ? 'menu' : 'view',
       root: view,
       restrict: 'self-only',
       tier: Tier.prompt,

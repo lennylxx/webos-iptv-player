@@ -4,6 +4,7 @@ import { CONFIG } from '../config';
 import { StorageService } from '../services/storage-service';
 import type { Action, NumberEvent } from '../types';
 import { Focus, type FocusScope } from './focus-scope';
+import { scopeId } from '../test/scope-id';
 
 // KeyHandler attaches its listeners to `document` and keeps module-level singleton
 // state. init() must run only once (re-running would stack duplicate listeners),
@@ -954,7 +955,7 @@ describe('KeyHandler', () => {
         clientWidth: { value: 500 }, clientHeight: { value: 200 }, scrollWidth: { value: 2000 },
       });
       track.getBoundingClientRect = () => new DOMRect(0, 100, 500, 200);
-      const scope = Focus.register({ id: 'edge-hover', root });
+      const scope = Focus.register({ id: scopeId('edge-hover'), root });
       Focus.setBase(() => scope);
       onNext = vi.fn<(event: Event) => void>();
       next.addEventListener('nav:hover', onNext);
@@ -1082,7 +1083,7 @@ describe('KeyHandler', () => {
     it.each(['key', 'click', 'owner', 'hidden cursor'])('does not replay a stale hover after %s', cause => {
       if (cause === 'key') press(K.RIGHT);
       else if (cause === 'click') track.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      else if (cause === 'owner') Focus.push(Focus.register({ id: 'edge-menu', root: next }));
+      else if (cause === 'owner') Focus.push(Focus.register({ id: scopeId('edge-menu'), root: next }));
       else Focus.pointerGone();
       vi.advanceTimersByTime(80);
       expect(onNext).toHaveBeenCalledTimes(cause === 'key' ? 1 : 0);
@@ -1116,7 +1117,7 @@ describe('KeyHandler', () => {
       root.innerHTML = '<div data-focusable data-key="a"></div><div data-focusable data-key="b"></div>';
       root.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
       document.body.appendChild(root);
-      scope = Focus.register({ id: 'panel', root, hoverOnSettle: true, defaultKey: () => 'a' });
+      scope = Focus.register({ id: scopeId('panel'), root, hoverOnSettle: true, defaultKey: () => 'a' });
       root.addEventListener('nav:hover', (e) => {
         scope.focus((e.target as HTMLElement).getAttribute('data-key'), 'pointer');
       });

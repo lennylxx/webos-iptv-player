@@ -680,6 +680,7 @@ export class Settings {
     });
     this.focusScope = Focus.register({
       id: 'view.settings',
+      mode: () => container.querySelector('.dropdown.open') ? 'menu' : 'pane',
       root: container,
       leaveFor: { up: 'tabbar' },
       defaultKey: () => this.defaultKey(),

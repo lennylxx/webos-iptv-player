@@ -6,6 +6,7 @@ import type {
   Channel,
   ChannelGroupId,
   ChannelScope,
+  GuideLayout,
   Programme,
 } from '../types';
 import { html, inShownView, raw, type Safe } from '../utils/dom';
@@ -212,7 +213,8 @@ export class EpgGrid {
   } | null = null;
   private readonly timeline: GuideTimeline;
   private readonly timelineView: TimelineView;
-  private timelineLayout = false;
+  private layout: GuideLayout = 'schedule';
+  private get timelineLayout(): boolean { return this.layout === 'timeline'; }
   private timelineReady = false;
   private timelineRowsRef: VisibleChannel[] | null = null;
   private timelineRowsRev = 0;
@@ -262,6 +264,7 @@ export class EpgGrid {
     this.onManageReminders = onManageReminders;
     this.focusScope = Focus.register({
       id: 'guide.grid',
+      mode: () => this.layout,
       root: container,
       leaveFor: { up: 'tabbar' },
       defaultKey: () => this.gridKey(),
@@ -667,7 +670,7 @@ export class EpgGrid {
       this.selectedGroup = 'builtin:all';
     }
     this.groupFocusIdx = Math.max(0, Math.min(this.groupFocusIdx, groups.length - 1));
-    this.timelineLayout = StorageService.getGuideLayout() === 'timeline';
+    this.layout = StorageService.getGuideLayout();
     const visibleChannels = this.getVisibleChannels();
     // The timeline keeps its channel through a pending search, so the results
     // land on it again when it still matches.

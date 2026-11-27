@@ -95,6 +95,7 @@ import { setLocale } from '../i18n';
 import { Focus, Tier } from '../navigation/focus-scope';
 import { setInputMode } from '../navigation/input-mode';
 import { PlaylistService } from '../services/playlist-service';
+import { scopeId } from '../test/scope-id';
 
 let container: HTMLElement;
 let el: HTMLElement;
@@ -1102,7 +1103,7 @@ describe('Sidebar', () => {
       setInputMode('keys');
       const prompt = document.createElement('div');
       document.body.appendChild(prompt);
-      const above = Focus.register({ id: 'test.prompt', root: prompt, tier: Tier.prompt });
+      const above = Focus.register({ id: scopeId('test.prompt'), root: prompt, tier: Tier.prompt });
       Focus.push(above);
       Focus.flush();
       const reveal = vi.spyOn(sidebar as unknown as { reveal(key: string): boolean }, 'reveal');

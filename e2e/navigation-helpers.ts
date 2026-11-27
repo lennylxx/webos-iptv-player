@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { SCOPES, type ScopeId, type SurfaceId } from '../src/navigation/scope-ids';
 
 // Shared by the D-pad navigation specs: arrow keys, a seeded random, and
 // page queries and actions.
@@ -7,6 +8,17 @@ export type Direction = 'up' | 'down' | 'left' | 'right';
 export const KEYS: Record<Direction, string> = { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' };
 export const OPPOSITE: Record<Direction, Direction> = { up: 'down', down: 'up', left: 'right', right: 'left' };
 export const DIRECTIONS: Direction[] = ['up', 'down', 'left', 'right'];
+
+// Every surface a focus check must cover or list as a gap: each scope id, or
+// each of its modes.
+export const SURFACE_IDS = (Object.keys(SCOPES) as ScopeId[]).flatMap((id): string[] => {
+  const modes: readonly string[] = SCOPES[id];
+  return modes.length ? modes.map((mode) => `${id}:${mode}`) : [id];
+}) as SurfaceId[];
+
+// Why a focus check leaves a surface out: a `todo` it should cover, or a
+// surface covered `elsewhere`.
+export type Gap = { todo: string } | { elsewhere: string };
 
 export type NavBoxWindow = Window & { __navBox(el: Element): DOMRect };
 

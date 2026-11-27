@@ -389,7 +389,7 @@ test('the subtitle sync adjuster keeps the keys, and the screen edge keeps the m
   await page.mouse.move(1700, 540);
   await page.mouse.move(1900, 540);
   await expect(menu).toHaveClass(/visible/);
-  await expect(owner).toHaveAttribute('data-focus-scope', 'player.menu');
+  await expect(owner).toHaveAttribute('data-focus-scope', 'player.menu:main');
   await expect(page.locator('.focused')).toHaveCount(1);
 });
 

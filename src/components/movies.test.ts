@@ -67,6 +67,7 @@ import { VirtualGrid } from '../utils/virtual-grid';
 import { ParentalControlService } from '../services/parental-control';
 import { ProgramTranslation, resetProgramTranslationForTests, TRANSLATION_DWELL_MS } from './program-translation';
 import { LlmError } from '../services/llm/client';
+import { scopeId } from '../test/scope-id';
 
 const account: PlaylistEntry = {
   id: 'x1', name: 'X', url: 'http://host:8080', source: 'xtream', xtream: { username: 'u', password: 'p' },
@@ -195,6 +196,7 @@ describe('Movies browse + grid', () => {
       savedTitles(80);
       const { view } = await openWith();
       container.querySelector<HTMLElement>('[data-collection-manage="watchlist"]')!.click();
+      expect(view.focusScope.surface).toBe('movies.catalog:manage');
       vi.useFakeTimers();
       try {
         const grid = container.querySelector<HTMLElement>('.catalog-layer-grid .catalog-grid.catalog-managing')!;
@@ -884,7 +886,7 @@ describe('Movies browse + grid', () => {
       container.querySelector<HTMLElement>('.catalog-grid .catalog-tile[data-item-id="12"]')!
         .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
       const before = view.focusScope.focusKey;
-      const elsewhere = Focus.register({ id: 'test.elsewhere', root: document.body });
+      const elsewhere = Focus.register({ id: scopeId('test.elsewhere'), root: document.body });
       Focus.push(elsewhere);
       Focus.flush();
       expect(document.activeElement).not.toBe(input);
@@ -1344,7 +1346,7 @@ describe('Movies browse + grid', () => {
     bar.innerHTML = '<button data-focusable data-key="b1"></button>';
     document.body.appendChild(bar);
     let open = true;
-    Focus.push(Focus.register({ id: 'bar', root: bar, tier: Tier.bar, when: () => open }));
+    Focus.push(Focus.register({ id: scopeId('bar'), root: bar, tier: Tier.bar, when: () => open }));
     Focus.flush();
     return { close: () => { open = false; Focus.flush(); } };
   }

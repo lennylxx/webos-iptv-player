@@ -5,6 +5,7 @@ import { Focus, type FocusScope } from './focus-scope';
 import { applyAnimationMode } from '../services/motion-service';
 import { morph } from '../utils/morph';
 import { html } from '../utils/dom';
+import { scopeId } from '../test/scope-id';
 
 // jsdom implements no layout: scrollIntoView is missing and getBoundingClientRect
 // returns zeros. Stub both so focus()/move() can be exercised deterministically.
@@ -42,7 +43,7 @@ function bound(container: HTMLElement, options: SpatialNavOptions = {}): { nav: 
   });
   let nav: SpatialNav | null = null;
   const scope = Focus.register({
-    id: 'nav.test',
+    id: scopeId('nav.test'),
     root: container,
     defaultKey: () => nav?.focused?.dataset.key ?? null,
   });

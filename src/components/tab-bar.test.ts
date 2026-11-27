@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import type { Action, PlaylistEntry } from '../types';
 import { TabBar, SEARCH_INPUT_MAX_WIDTH } from './tab-bar';
 import { Focus, Tier } from '../navigation/focus-scope';
+import { scopeId } from '../test/scope-id';
 
 type Handlers = ConstructorParameters<typeof TabBar>[0];
 
@@ -177,7 +178,7 @@ describe('TabBar', () => {
   it('takes the keys when a content scope leaves upward, and only while shown', () => {
     const view = document.createElement('div');
     document.body.appendChild(view);
-    const content = Focus.register({ id: 'view.test', root: view, leaveFor: { up: 'tabbar' } });
+    const content = Focus.register({ id: scopeId('view.test'), root: view, leaveFor: { up: 'tabbar' } });
     Focus.setBase(() => content);
     bar.setActive('settings');
 
@@ -206,7 +207,7 @@ describe('TabBar', () => {
       document.body.appendChild(view);
       contentHover = vi.fn<(e: Event) => void>();
       view.addEventListener('nav:hover', contentHover);
-      const content = Focus.register({ id: 'view.test', root: view });
+      const content = Focus.register({ id: scopeId('view.test'), root: view });
       Focus.setBase(() => content);
     });
 
@@ -243,7 +244,7 @@ describe('TabBar', () => {
       const button = document.createElement('button');
       prompt.appendChild(button);
       document.body.appendChild(prompt);
-      const scope = Focus.register({ id: 'prompt.test', root: prompt, restrict: 'self-only', tier: Tier.prompt });
+      const scope = Focus.register({ id: scopeId('prompt.test'), root: prompt, restrict: 'self-only', tier: Tier.prompt });
       bar.focus();
       Focus.push(scope);
       hover(button);
@@ -257,7 +258,7 @@ describe('TabBar', () => {
       const menu = document.createElement('div');
       menu.appendChild(document.createElement('div'));
       document.body.appendChild(menu);
-      const scope = Focus.register({ id: 'menu.test', root: menu, restrict: 'self-only', tier: Tier.overlay });
+      const scope = Focus.register({ id: scopeId('menu.test'), root: menu, restrict: 'self-only', tier: Tier.overlay });
       Focus.push(scope);
       bar.focus();
       expect(Focus.owner()?.id).toBe('tabbar');
@@ -275,7 +276,7 @@ describe('TabBar', () => {
       const item = document.createElement('div');
       menu.appendChild(item);
       document.body.appendChild(menu);
-      const scope = Focus.register({ id: 'menu.test', root: menu, restrict: 'self-only', tier: Tier.overlay });
+      const scope = Focus.register({ id: scopeId('menu.test'), root: menu, restrict: 'self-only', tier: Tier.overlay });
       Focus.push(scope);
       bar.focus();
       expect(Focus.owner()?.id).toBe('tabbar');
@@ -352,10 +353,12 @@ describe('TabBar inline search', () => {
   it('Select on the Search tab expands the inline box (without switching views yet)', () => {
     bar.setActive('search');
     bar.focus();
+    expect(Focus.owner()?.surface).toBe('tabbar:tabs');
     press('select');
     expect(expanded()).toBe(true);
     expect(onEnter).toHaveBeenCalledWith('search', 'key');
     expect(bar.focused).toBe(true);
+    expect(Focus.owner()?.surface).toBe('tabbar:search');
   });
 
   it('typing in the box reports the query', () => {

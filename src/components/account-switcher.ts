@@ -5,6 +5,7 @@ import { avatarColor, firstLetter } from '../utils/avatar';
 import { t } from '../i18n';
 import { CHECK_ICON } from './icons';
 import { Focus, Tier, type FocusScope, type Via } from '../navigation/focus-scope';
+import type { ScopeId } from '../navigation/scope-ids';
 
 export type AccountMenuOpenMode = 'key' | 'pointer';
 // `outside` is a pointer click away from the switcher, `toggle` one on it;
@@ -38,7 +39,7 @@ export class AccountSwitcher {
   private menuIndex = 0;
   private readonly scope: FocusScope | null;
 
-  constructor(slot: HTMLElement, handlers: AccountSwitcherHandlers, scopeId?: string) {
+  constructor(slot: HTMLElement, handlers: AccountSwitcherHandlers, scopeId?: ScopeId) {
     this.slot = slot;
     this.handlers = handlers;
     this.scope = scopeId ? Focus.register({

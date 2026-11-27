@@ -174,8 +174,13 @@ degrades both axes from `scripts/chromium-53-simulation.mjs`:
   in both projects.
 - Guard a test that *introspects* through a newer API — rather than
   exercising app behavior — with `isChromium53()` from `e2e/helpers.ts`.
-- Playwright reuses a running preview server. After source changes, rebuild
-  with `node esbuild.config.mjs --preview` before rerunning against it.
+- Each run builds and serves the app afresh on a port derived from the
+  worktree's path (`E2E_PORT` overrides it), so runs in parallel worktrees
+  never share a server. A server already on the port fails the run, which
+  also stops a second run in the same worktree; never give one its own
+  `E2E_PORT`, as both would rebuild the one `dist/`. Parallel runs still
+  share the CPU, which turns timing into flakes: run one full suite per
+  machine at a time, or split the workers between them.
 - Never wait on wall time; a test that sleeps fails on a loaded machine.
   - What depends on the time of day pins it: `pinClock(page)` holds
     `NOW`, `startClock(page)` starts it there and lets it run. Fixtures may

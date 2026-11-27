@@ -5,6 +5,7 @@ import { FocusRing, hasRing, ringsIn, setRing } from './focus-ring';
 import { setInputMode } from './input-mode';
 import { morph } from '../utils/morph';
 import { hide, html, inShownView, show } from '../utils/dom';
+import { scopeId } from '../test/scope-id';
 
 let view: HTMLElement;
 let prompt: HTMLElement;
@@ -19,13 +20,13 @@ const shown = () => Array.from(document.querySelectorAll('.focused')).map((el) =
 const repairs = () => logs.filter((l) => l.includes('event=nav.focus.repaired'));
 
 function logical(id: string, root: HTMLElement, extra: Partial<ScopeSpec> = {}): FocusScope {
-  return Focus.register({ id, root, defaultKey: () => root.querySelector('[data-key]')?.getAttribute('data-key') ?? null, ...extra });
+  return Focus.register({ id: scopeId(id), root, defaultKey: () => root.querySelector('[data-key]')?.getAttribute('data-key') ?? null, ...extra });
 }
 
 function installRing(): void {
   FocusRing.install(() => {
     const owner = Focus.owner();
-    return { root: owner?.root() ?? null, modal: !!owner?.modal, id: owner?.id };
+    return { root: owner?.root() ?? null, modal: !!owner?.modal, id: () => owner?.surface };
   });
 }
 
@@ -48,12 +49,12 @@ afterEach(() => {
 
 describe('Focus owner stack', () => {
   it('counts a pushed scope only while its condition holds, above the base', () => {
-    const base = Focus.register({ id: 'view.a', root: view });
+    const base = Focus.register({ id: scopeId('view.a'), root: view });
     let tabBar = false;
     let menu = false;
-    const bar = Focus.register({ id: 'tabbar', root: view, tier: Tier.bar, when: () => tabBar });
+    const bar = Focus.register({ id: 'tabbar', mode: () => 'tabs', root: view, tier: Tier.bar, when: () => tabBar });
     const dropdown = Focus.register({
-      id: 'menu', root: view, restrict: 'self-only', tier: Tier.overlay, when: () => menu,
+      id: scopeId('menu'), root: view, restrict: 'self-only', tier: Tier.overlay, when: () => menu,
     });
     Focus.push(bar);
     Focus.push(dropdown);
@@ -65,7 +66,7 @@ describe('Focus owner stack', () => {
     tabBar = true;
     expect(Focus.owner()).toBe(bar);
 
-    const confirm = Focus.register({ id: 'prompt.confirm', root: prompt, restrict: 'self-only' });
+    const confirm = Focus.register({ id: scopeId('prompt.confirm'), root: prompt, restrict: 'self-only' });
     Focus.push(confirm);
     expect(Focus.owner()).toBe(confirm);
     expect(confirm.modal).toBe(true);
@@ -76,9 +77,9 @@ describe('Focus owner stack', () => {
   });
 
   it('keeps a higher tier on top of a later push, such as the PIN over a timed prompt', () => {
-    const pin = Focus.register({ id: 'prompt.pin', root: prompt, restrict: 'self-only', tier: Tier.critical });
+    const pin = Focus.register({ id: scopeId('prompt.pin'), root: prompt, restrict: 'self-only', tier: Tier.critical });
     const reminder = Focus.register({ id: 'prompt.reminder', root: prompt, restrict: 'self-only' });
-    const menu = Focus.register({ id: 'menu', root: view });
+    const menu = Focus.register({ id: scopeId('menu'), root: view });
     Focus.push(pin);
     Focus.push(reminder);
     Focus.push(menu);
@@ -89,20 +90,20 @@ describe('Focus owner stack', () => {
 
   it('ranks pushed scopes by tier before push order', () => {
     const history = Focus.register({ id: 'search.history', root: view, restrict: 'self-only', tier: Tier.overlay });
-    const bar = Focus.register({ id: 'tabbar', root: view, tier: Tier.bar });
+    const bar = Focus.register({ id: 'tabbar', mode: () => 'tabs', root: view, tier: Tier.bar });
     Focus.push(bar);
     Focus.push(history);
     expect(Focus.owner()).toBe(bar);
-    const confirm = Focus.register({ id: 'prompt.confirm', root: prompt, restrict: 'self-only' });
+    const confirm = Focus.register({ id: scopeId('prompt.confirm'), root: prompt, restrict: 'self-only' });
     Focus.push(confirm);
     expect(Focus.owner()).toBe(confirm);
-    const overlay = Focus.register({ id: 'player.menu', root: prompt });
+    const overlay = Focus.register({ id: scopeId('test.menu'), root: prompt });
     Focus.push(overlay);
     expect(Focus.owner()).toBe(confirm);
   });
 
   it('keeps an overlay above a panel pushed after it, such as the menu over the subtitle search', () => {
-    const menu = Focus.register({ id: 'player.menu', root: view });
+    const menu = Focus.register({ id: scopeId('test.menu'), root: view });
     const search = Focus.register({ id: 'player.subtitle_search', root: prompt, tier: Tier.panel });
     Focus.push(menu);
     Focus.push(search);
@@ -114,7 +115,7 @@ describe('Focus owner stack', () => {
   it('tells a scope once when it stops owning the keys', () => {
     const onRelease = vi.fn();
     const search = Focus.register({ id: 'player.subtitle_search', root: view, tier: Tier.panel, onRelease });
-    const menu = Focus.register({ id: 'player.menu', root: prompt });
+    const menu = Focus.register({ id: scopeId('test.menu'), root: prompt });
     Focus.push(search);
     expect(Focus.owner()).toBe(search);
     expect(onRelease).not.toHaveBeenCalled();
@@ -135,7 +136,7 @@ describe('Focus owner stack', () => {
       onAcquire: () => calls.push('search acquired'),
     });
     const menu = Focus.register({
-      id: 'player.menu', root: prompt,
+      id: scopeId('test.menu'), root: prompt,
       onRelease: () => calls.push('menu released'),
       onAcquire: () => calls.push('menu acquired'),
     });
@@ -155,7 +156,7 @@ describe('Focus owner stack', () => {
   it('tells the scope that owns the keys after an onRelease that changes the stack', () => {
     const calls: string[] = [];
     const sheet = Focus.register({
-      id: 'player.sheet', root: prompt,
+      id: scopeId('player.sheet'), root: prompt,
       onAcquire: () => calls.push('sheet acquired'),
     });
     const search = Focus.register({
@@ -164,7 +165,7 @@ describe('Focus owner stack', () => {
       onAcquire: () => calls.push('search acquired'),
     });
     const menu = Focus.register({
-      id: 'player.menu', root: prompt, tier: Tier.panel,
+      id: scopeId('test.menu'), root: prompt, tier: Tier.panel,
       onAcquire: () => calls.push('menu acquired'),
     });
     Focus.push(search);
@@ -312,9 +313,9 @@ describe('Focus owner stack', () => {
 
   it('skips a pushed scope while its view is not shown, and restores it after', () => {
     let shownView = 'player';
-    const base = Focus.register({ id: 'view.a', root: view });
+    const base = Focus.register({ id: scopeId('view.a'), root: view });
     Focus.setBase(() => base);
-    const menu = Focus.register({ id: 'player.menu', root: prompt, when: () => shownView === 'player' });
+    const menu = Focus.register({ id: scopeId('test.menu'), root: prompt, when: () => shownView === 'player' });
     Focus.push(menu);
     expect(Focus.owner()).toBe(menu);
     shownView = 'channels';
@@ -334,9 +335,9 @@ describe('Focus owner stack', () => {
     let current = 'channels';
     const released = vi.fn();
     const acquired = vi.fn();
-    const list1 = logical('live.channels', channels, { onRelease: released });
+    const list1 = logical('test.list', channels, { onRelease: released });
     const playerView = Focus.register({ id: 'view.player', root: player });
-    const menu = logical('player.menu', player, { when: () => inShownView(player), onAcquire: acquired });
+    const menu = logical('test.menu', player, { when: () => inShownView(player), onAcquire: acquired });
     Focus.setBase(() => (current === 'channels' ? list1 : playerView));
     Focus.push(menu);
     installRing();
@@ -351,13 +352,13 @@ describe('Focus owner stack', () => {
     await Promise.resolve();
     expect(released).toHaveBeenCalledTimes(1);
     expect(acquired).toHaveBeenCalledTimes(1);
-    expect(player.getAttribute('data-focus-scope')).toBe('player.menu');
+    expect(player.getAttribute('data-focus-scope')).toBe('test.menu');
     expect(shown()).toEqual(['m1']);
   });
 
   it('returns to the scope below when the top one pops', () => {
-    const a = Focus.register({ id: 'a', root: view });
-    const b = Focus.register({ id: 'b', root: prompt });
+    const a = Focus.register({ id: scopeId('a'), root: view });
+    const b = Focus.register({ id: scopeId('b'), root: prompt });
     Focus.push(a);
     Focus.push(b);
     Focus.push(a);
@@ -378,7 +379,7 @@ describe('Focus owner stack', () => {
 
     Focus.pop(p);
     expect(shown()).toEqual([]);
-    expect(() => Focus.register({ id: 'prompt.a', root: prompt })).toThrow(/already registered/);
+    expect(() => Focus.register({ id: scopeId('prompt.a'), root: prompt })).toThrow(/already registered/);
 
     Focus.push(p);
     Focus.flush();
@@ -388,8 +389,8 @@ describe('Focus owner stack', () => {
 
   it('routes keys to the owner only when it has a handler', () => {
     const onAction = vi.fn();
-    const withHandler = Focus.register({ id: 'prompt.pin', root: prompt, onAction });
-    const without = Focus.register({ id: 'view.a', root: view });
+    const withHandler = Focus.register({ id: scopeId('prompt.pin'), root: prompt, onAction });
+    const without = Focus.register({ id: scopeId('view.a'), root: view });
     expect(withHandler.handle('select')).toBe(true);
     expect(onAction).toHaveBeenCalledWith('select', undefined);
     expect(without.handle('select')).toBe(false);
@@ -399,7 +400,7 @@ describe('Focus owner stack', () => {
     list(prompt, ['t1', 't2']);
     let barShown = true;
     const bar = logical('bar', prompt, { tier: Tier.bar, when: () => barShown, enterTo: 'default' });
-    const a = Focus.register({ id: 'view.a', root: view, leaveFor: { up: 'bar', down: null } });
+    const a = Focus.register({ id: scopeId('view.a'), root: view, leaveFor: { up: 'bar', down: null } });
     bar.focus('t2', 'key');
 
     expect(a.leave('up')).toBe(true);
@@ -413,17 +414,17 @@ describe('Focus owner stack', () => {
 
   it('lets the scope left for take the keys its own way', () => {
     const onEnter = vi.fn();
-    Focus.register({ id: 'bar', root: prompt, onEnter });
-    const a = Focus.register({ id: 'view.a', root: view, leaveFor: { up: 'bar', left: 'missing' } });
+    Focus.register({ id: scopeId('bar'), root: prompt, onEnter });
+    const a = Focus.register({ id: scopeId('view.a'), root: view, leaveFor: { up: 'bar', left: 'missing' } });
     expect(a.leave('up')).toBe(true);
     expect(onEnter).toHaveBeenCalledWith('key');
     expect(a.leave('left')).toBe(false);
   });
 
   it('names the scope that would own the keys without a given one, even one above it', () => {
-    const base = Focus.register({ id: 'view.a', root: view });
-    const bar = Focus.register({ id: 'bar', root: prompt, tier: Tier.bar });
-    const menu = Focus.register({ id: 'menu', root: prompt, restrict: 'self-only' });
+    const base = Focus.register({ id: scopeId('view.a'), root: view });
+    const bar = Focus.register({ id: scopeId('bar'), root: prompt, tier: Tier.bar });
+    const menu = Focus.register({ id: scopeId('menu'), root: prompt, restrict: 'self-only' });
     Focus.setBase(() => base);
     Focus.push(bar);
     expect(Focus.ownerWithout(bar)).toBe(base);
@@ -436,13 +437,13 @@ describe('Focus owner stack', () => {
   });
 
   it('rejects a second scope with the same id', () => {
-    Focus.register({ id: 'a', root: view });
-    expect(() => Focus.register({ id: 'a', root: prompt })).toThrow(/already registered/);
+    Focus.register({ id: scopeId('a'), root: view });
+    expect(() => Focus.register({ id: scopeId('a'), root: prompt })).toThrow(/already registered/);
   });
 
   it('marks the owner root with its scope id for FocusRing', () => {
-    const a = Focus.register({ id: 'view.a', root: view });
-    const p = Focus.register({ id: 'prompt.confirm', root: prompt, restrict: 'self-only' });
+    const a = Focus.register({ id: scopeId('view.a'), root: view });
+    const p = Focus.register({ id: scopeId('prompt.confirm'), root: prompt, restrict: 'self-only' });
     Focus.setBase(() => a);
     installRing();
     expect(view.getAttribute('data-focus-scope')).toBe('view.a');
@@ -452,6 +453,21 @@ describe('Focus owner stack', () => {
     expect(prompt.getAttribute('data-focus-scope')).toBe('prompt.confirm');
     expect(prompt.getAttribute('data-ring-owner')).toBe('modal');
   });
+
+  it('marks a scope with modes by the mode it shows', () => {
+    let mode: 'schedule' | 'timeline' = 'schedule';
+    const grid = Focus.register({ id: 'guide.grid', root: view, mode: () => mode });
+    Focus.setBase(() => grid);
+    installRing();
+    expect(view.getAttribute('data-focus-scope')).toBe('guide.grid:schedule');
+    mode = 'timeline';
+    FocusRing.sync();
+    expect(view.getAttribute('data-focus-scope')).toBe('guide.grid:timeline');
+  });
+
+  it('refuses a scope with modes that does not report one', () => {
+    expect(() => Focus.register({ id: 'guide.grid', root: view })).toThrow(/must report its mode/);
+  });
 });
 
 describe('Focus reconcile', () => {
@@ -459,7 +475,7 @@ describe('Focus reconcile', () => {
     list(view, ['r1', 'r2']);
     setRing(row(view, 'r1'), true);
     setRing(row(view, 'r2'), true);
-    const a = Focus.register({ id: 'view.a', root: view });
+    const a = Focus.register({ id: scopeId('view.a'), root: view });
     Focus.setBase(() => a);
     Focus.reconcile();
     await Promise.resolve();
@@ -471,7 +487,7 @@ describe('Focus reconcile', () => {
   it('paints the ring on the focus key, once per microtask however often asked', async () => {
     list(view, ['r1', 'r2']);
     const resolve = vi.fn((key: string) => row(view, key));
-    const a = logical('live.channels', view, { resolve });
+    const a = logical('test.list', view, { resolve });
     Focus.setBase(() => a);
     a.focus('r2', 'key');
     Focus.reconcile();
@@ -484,7 +500,7 @@ describe('Focus reconcile', () => {
 
   it('moves the ring with the key without reporting a repair', () => {
     list(view, ['r1', 'r2']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     a.focus('r1', 'key');
     Focus.flush();
@@ -496,7 +512,7 @@ describe('Focus reconcile', () => {
 
   it('keeps the ring on the key across a re-render that replaces the node', () => {
     list(view, ['r1', 'r2']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     a.focus('r2', 'key');
     Focus.flush();
@@ -509,7 +525,7 @@ describe('Focus reconcile', () => {
 
   it('falls back to the entry point when the key no longer resolves', () => {
     list(view, ['r1', 'r2']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     a.focus('r2', 'key');
     Focus.flush();
@@ -517,11 +533,11 @@ describe('Focus reconcile', () => {
     Focus.flush();
     expect(a.focusKey).toBe('r1');
     expect(shown()).toEqual(['r1']);
-    expect(repairs()).toEqual([expect.stringContaining('reason=unresolved scope=live.channels')]);
+    expect(repairs()).toEqual([expect.stringContaining('reason=unresolved scope=test.list')]);
   });
 
   it('marks the owner root when not even the entry point resolves', () => {
-    const a = logical('live.channels', view, { defaultKey: () => 'gone' });
+    const a = logical('test.list', view, { defaultKey: () => 'gone' });
     Focus.setBase(() => a);
     a.focus('missing', 'key');
     Focus.flush();
@@ -535,17 +551,17 @@ describe('Focus reconcile', () => {
   it('refuses a key that resolves outside the owner root', () => {
     list(view, ['r1']);
     list(prompt, ['p1']);
-    const a = logical('live.channels', view, { resolve: (key) => document.querySelector(`[data-key="${key}"]`) });
+    const a = logical('test.list', view, { resolve: (key) => document.querySelector(`[data-key="${key}"]`) });
     Focus.setBase(() => a);
     a.focus('p1', 'key');
     Focus.flush();
     expect(shown()).toEqual(['r1']);
-    expect(repairs()).toEqual([expect.stringContaining('reason=outside_owner scope=live.channels')]);
+    expect(repairs()).toEqual([expect.stringContaining('reason=outside_owner scope=test.list')]);
   });
 
   it('clears a ring another writer left in the owner and reports it', () => {
     list(view, ['r1', 'r2']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     a.focus('r1', 'key');
     Focus.flush();
@@ -553,12 +569,12 @@ describe('Focus reconcile', () => {
     Focus.reconcile();
     Focus.flush();
     expect(shown()).toEqual(['r1']);
-    expect(repairs()).toEqual([expect.stringContaining('reason=two_rings scope=live.channels')]);
+    expect(repairs()).toEqual([expect.stringContaining('reason=two_rings scope=test.list')]);
   });
 
   it('applies the enter rule for how focus arrives', () => {
     list(view, ['r1', 'r2']);
-    const a = logical('guide.grid', view, { enterTo: (via) => (via === 'key' ? 'default' : 'last') });
+    const a = logical('test.grid', view, { enterTo: (via) => (via === 'key' ? 'default' : 'last') });
     Focus.setBase(() => a);
     a.focus('r2', 'key');
     a.enter('back');
@@ -569,7 +585,7 @@ describe('Focus reconcile', () => {
 
   it('leaves the ring parked while a pointer entry defers it', () => {
     list(view, ['r1']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     installRing();
     FocusRing.defer('channels');
@@ -584,7 +600,7 @@ describe('Focus reconcile', () => {
   it('paints when a pushed scope\'s condition hands it the keys at the next ring sync', async () => {
     list(view, ['r1']);
     list(prompt, ['p1']);
-    const a = Focus.register({ id: 'view.a', root: view });
+    const a = Focus.register({ id: scopeId('view.a'), root: view });
     let open = false;
     const sidebar = logical('player.sidebar', prompt, { when: () => open });
     Focus.push(sidebar);
@@ -602,7 +618,7 @@ describe('Focus reconcile', () => {
     const el = document.createElement('div');
     el.setAttribute('data-key', key);
     view.appendChild(el);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     a.focus(key, 'key');
     Focus.flush();
@@ -614,7 +630,7 @@ describe('Focus reconcile', () => {
     list(view, ['r1']);
     const escape = vi.fn((s: string) => s);
     vi.stubGlobal('CSS', { escape });
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     a.focus('r1', 'key');
     Focus.flush();
@@ -625,7 +641,7 @@ describe('Focus reconcile', () => {
   it('re-gates rings at once, so a modal above parks the view\'s ring', () => {
     list(view, ['r1']);
     list(prompt, ['p1']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     const p = logical('prompt.confirm', prompt, { restrict: 'self-only' });
     Focus.setBase(() => a);
     installRing();
@@ -644,7 +660,7 @@ describe('Focus reconcile', () => {
   it('restores a ring the view re-rendered under a modal once the keys return', () => {
     list(view, ['r1', 'r2']);
     list(prompt, ['p1']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     const p = logical('prompt.confirm', prompt, { restrict: 'self-only' });
     Focus.setBase(() => a);
     installRing();
@@ -662,7 +678,7 @@ describe('Focus reconcile', () => {
 
   it('reconciles after a morph into the owner root', async () => {
     list(view, ['r1', 'r2']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     a.focus('r2', 'key');
     Focus.flush();
@@ -677,7 +693,7 @@ describe('Focus reconcile', () => {
   // re-rendering on every scroll step does.
   it('keeps the ring the owner painted through a re-render, with no class write', () => {
     list(view, ['r1', 'r2']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     installRing();
     setInputMode('keys');
@@ -708,7 +724,7 @@ describe('Focus reconcile', () => {
   it('drops a ring a re-render kept once another scope takes the keys first', () => {
     list(view, ['r1', 'r2']);
     list(prompt, ['p1']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     installRing();
     setInputMode('keys');
@@ -729,7 +745,7 @@ describe('Focus reconcile', () => {
   it('drops a ring a re-render kept even after a nested morph in its patch threw', () => {
     list(view, ['r1', 'r2']);
     list(prompt, ['p1']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     installRing();
     setInputMode('keys');
@@ -787,7 +803,7 @@ describe('Focus reconcile', () => {
 
   it('keeps the template authoritative for a ring no scope painted', () => {
     list(view, ['r1', 'r2']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     a.focus('r2', 'key');
     Focus.flush();
@@ -801,7 +817,7 @@ describe('Focus reconcile', () => {
   it('skips the pass for a morph beside the owner, but still gates a ring it draws', () => {
     list(view, ['r1', 'r2']);
     const resolve = vi.fn((key: string) => row(view, key));
-    const a = logical('live.channels', view, { resolve });
+    const a = logical('test.list', view, { resolve });
     Focus.setBase(() => a);
     installRing();
     setInputMode('keys');
@@ -827,7 +843,7 @@ describe('Focus reconcile', () => {
     list(view, ['r1', 'r2']);
     morph(prompt, html`<div data-key="slot" data-morph-preserve><div class="row" data-key="p1"></div></div>`);
     const resolve = vi.fn((key: string) => row(view, key));
-    const a = logical('live.channels', view, { resolve });
+    const a = logical('test.list', view, { resolve });
     const b = logical('view.b', prompt, { defaultKey: () => 'p1' });
     let base: FocusScope = b;
     Focus.setBase(() => base);
@@ -853,7 +869,7 @@ describe('Focus reconcile', () => {
 
   it('reconciles after a pointer hover once installed', async () => {
     list(view, ['r1', 'r2']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     Focus.setBase(() => a);
     Focus.install();
     view.addEventListener('nav:hover', (e) => {
@@ -867,8 +883,8 @@ describe('Focus reconcile', () => {
   it('lights the pointer\'s pick off the keys only while the pointer rests on it', () => {
     list(view, ['r1', 'r2']);
     list(prompt, ['m1']);
-    const a = logical('view.settings', view);
-    const bar = logical('tabbar', prompt, { tier: Tier.bar });
+    const a = logical('test.settings', view);
+    const bar = logical('tabbar', prompt, { tier: Tier.bar, mode: () => 'tabs' });
     Focus.push(bar);
     Focus.setBase(() => a);
     Focus.install();
@@ -901,8 +917,8 @@ describe('Focus reconcile', () => {
   it('keeps the pointer\'s pick off the keys lit through a re-render of its view', () => {
     list(view, ['r1', 'r2']);
     list(prompt, ['m1']);
-    const a = logical('view.settings', view);
-    const bar = logical('tabbar', prompt, { tier: Tier.bar });
+    const a = logical('test.settings', view);
+    const bar = logical('tabbar', prompt, { tier: Tier.bar, mode: () => 'tabs' });
     Focus.push(bar);
     Focus.setBase(() => a);
     Focus.install();
@@ -924,8 +940,8 @@ describe('Focus reconcile', () => {
   it('stops relighting the pointer\'s pick off the keys once the keys take over', () => {
     list(view, ['r1', 'r2']);
     list(prompt, ['m1']);
-    const a = logical('view.settings', view);
-    const bar = logical('tabbar', prompt, { tier: Tier.bar });
+    const a = logical('test.settings', view);
+    const bar = logical('tabbar', prompt, { tier: Tier.bar, mode: () => 'tabs' });
     Focus.push(bar);
     Focus.setBase(() => a);
     Focus.install();
@@ -957,7 +973,7 @@ describe('Focus reconcile', () => {
   it('keeps hover behind a pushed modal from the surfaces below', () => {
     list(view, ['r1', 'r2']);
     list(prompt, ['ok', 'cancel']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     const modal = logical('prompt.confirm', prompt, { restrict: 'self-only' });
     Focus.setBase(() => a);
     Focus.install();
@@ -978,7 +994,7 @@ describe('Focus reconcile', () => {
   it('marks no hover behind a pushed modal for the ring', () => {
     list(view, ['r1', 'r2']);
     list(prompt, ['ok', 'cancel']);
-    const a = logical('live.channels', view);
+    const a = logical('test.list', view);
     const modal = logical('prompt.confirm', prompt, { restrict: 'self-only' });
     Focus.setBase(() => a);
     Focus.install();
@@ -1011,7 +1027,7 @@ describe('Focus reconcile', () => {
 
     it('reveals a clipped ring in key mode through the polyfilled call', () => {
       setInputMode('keys');
-      const a = logical('live.channels', view);
+      const a = logical('test.list', view);
       Focus.setBase(() => a);
       a.focus('r2', 'key');
       Focus.flush();
@@ -1023,7 +1039,7 @@ describe('Focus reconcile', () => {
     it('jumps a held key instead of restarting a smooth reveal', () => {
       setInputMode('keys');
       const now = vi.spyOn(Date, 'now').mockReturnValue(50_000);
-      const a = logical('live.channels', view);
+      const a = logical('test.list', view);
       Focus.setBase(() => a);
       for (const [key, at] of [['r1', 50_000], ['r2', 50_080], ['r1', 51_000]] as const) {
         clip = true;
@@ -1044,7 +1060,7 @@ describe('Focus reconcile', () => {
         vi.spyOn(el, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 90 - slide, 100, 40));
       }
       const now = vi.spyOn(Date, 'now').mockReturnValue(50_000);
-      const a = logical('live.channels', view);
+      const a = logical('test.list', view);
       Focus.setBase(() => a);
       a.focus('r2', 'key');
       Focus.flush();
@@ -1060,7 +1076,7 @@ describe('Focus reconcile', () => {
       a.focus('r2', 'key');
       Focus.flush();
       expect(row(scroller, 'r2').scrollIntoView).toHaveBeenCalledTimes(2);
-      expect(repairs()).toEqual([expect.stringContaining('reason=clipped scope=live.channels')]);
+      expect(repairs()).toEqual([expect.stringContaining('reason=clipped scope=test.list')]);
       now.mockRestore();
     });
 
@@ -1068,7 +1084,7 @@ describe('Focus reconcile', () => {
       setInputMode('keys');
       Element.prototype.scrollIntoView = vi.fn();
       const now = vi.spyOn(Date, 'now').mockReturnValue(50_000);
-      const a = logical('live.channels', view);
+      const a = logical('test.list', view);
       Focus.setBase(() => a);
       a.focus('r2', 'key');
       Focus.flush();
@@ -1082,7 +1098,7 @@ describe('Focus reconcile', () => {
     it('times a held key per surface, so another surface\'s reveal stays smooth', () => {
       setInputMode('keys');
       const now = vi.spyOn(Date, 'now').mockReturnValue(50_000);
-      const a = logical('live.channels', view);
+      const a = logical('test.list', view);
       const b = logical('live.sidebar', view);
       Focus.setBase(() => a);
       a.focus('r1', 'key');
@@ -1100,7 +1116,7 @@ describe('Focus reconcile', () => {
 
     it('reports a clip of unchanged focus, such as a key that moved nothing', () => {
       setInputMode('keys');
-      const a = logical('live.channels', view);
+      const a = logical('test.list', view);
       Focus.setBase(() => a);
       clip = false;
       a.focus('r2', 'key');
@@ -1109,13 +1125,13 @@ describe('Focus reconcile', () => {
       a.focus('r2', 'key');
       Focus.flush();
       expect(row(scroller, 'r2').scrollIntoView).toHaveBeenCalledTimes(1);
-      expect(repairs()).toEqual([expect.stringContaining('reason=clipped scope=live.channels')]);
+      expect(repairs()).toEqual([expect.stringContaining('reason=clipped scope=test.list')]);
     });
 
     it('uses the scope\'s own reveal when it has one', () => {
       setInputMode('keys');
       const reveal = vi.fn(() => true);
-      const a = logical('live.channels', view, { reveal });
+      const a = logical('test.list', view, { reveal });
       Focus.setBase(() => a);
       a.focus('r2', 'key');
       Focus.flush();
@@ -1124,7 +1140,7 @@ describe('Focus reconcile', () => {
     });
 
     it('lets the pointer light a clipped item where it is, and a later key reveal it', () => {
-      const a = logical('live.channels', view);
+      const a = logical('test.list', view);
       Focus.setBase(() => a);
       // A hover: KeyHandler switches to the pointer, then the item takes focus.
       setInputMode('pointer');
@@ -1143,7 +1159,7 @@ describe('Focus reconcile', () => {
       setInputMode('keys');
       Element.prototype.scrollIntoView = vi.fn();
       const resolve = vi.fn((key: string) => row(scroller, key));
-      const a = logical('live.channels', view, { resolve });
+      const a = logical('test.list', view, { resolve });
       Focus.setBase(() => a);
       a.focus('r2', 'key');
       Focus.flush();
@@ -1161,7 +1177,7 @@ describe('Focus reconcile', () => {
 
     it('falls back to the geometric reveal when the scope\'s own declines', () => {
       const reveal = vi.fn(() => false);
-      const a = logical('live.channels', view, { reveal });
+      const a = logical('test.list', view, { reveal });
       Focus.setBase(() => a);
       a.focus('r2', 'key');
       Focus.flush();
@@ -1172,7 +1188,7 @@ describe('Focus reconcile', () => {
     it('skips the geometric reveal, and reports no clip, when the scope keeps its key in view', () => {
       setInputMode('keys');
       const reveal = vi.fn((): boolean | null => null);
-      const a = logical('live.channels', view, { reveal });
+      const a = logical('test.list', view, { reveal });
       Focus.setBase(() => a);
       a.focus('r2', 'key');
       Focus.flush();
@@ -1185,7 +1201,7 @@ describe('Focus reconcile', () => {
     });
 
     it('reveals a key the pointer rests on only where the scope asks for it', () => {
-      const a = logical('live.channels', view, { revealOnHover: (key) => key === 'r2' });
+      const a = logical('test.list', view, { revealOnHover: (key) => key === 'r2' });
       Focus.setBase(() => a);
       Focus.install();
       for (const key of ['r1', 'r2']) {
@@ -1204,7 +1220,7 @@ describe('Focus reconcile', () => {
     });
 
     it('lets a wheel reveal in key mode only when no surface claimed it', () => {
-      const a = logical('live.channels', view);
+      const a = logical('test.list', view);
       Focus.setBase(() => a);
       Focus.install();
       setInputMode('pointer');
@@ -1224,7 +1240,7 @@ describe('Focus reconcile', () => {
 
     it('does not reveal a hovered item just because the hover arrived in key mode', () => {
       const reveal = vi.fn(() => false);
-      const a = logical('live.channels', view, { reveal });
+      const a = logical('test.list', view, { reveal });
       Focus.setBase(() => a);
       Focus.install();
       setInputMode('keys');
@@ -1242,7 +1258,7 @@ describe('Focus reconcile', () => {
 
     it('resumes scrolled-away focus where it is and reports it', () => {
       setInputMode('keys');
-      const a = logical('live.channels', view, { reveal: () => false });
+      const a = logical('test.list', view, { reveal: () => false });
       Focus.setBase(() => a);
       a.resume('r2', 3, 'list=channel', 'target=nearest');
       Focus.flush();
@@ -1250,7 +1266,7 @@ describe('Focus reconcile', () => {
       expect(row(scroller, 'r2').scrollIntoView).not.toHaveBeenCalled();
       expect(repairs()).toEqual([
         expect.stringContaining(
-          'reason=detached scope=live.channels distance=3 list=channel target=nearest'),
+          'reason=detached scope=test.list distance=3 list=channel target=nearest'),
       ]);
     });
   });

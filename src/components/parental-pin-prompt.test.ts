@@ -16,6 +16,7 @@ vi.mock('../services/parental-control', () => ({
 
 import { Focus, Tier } from '../navigation/focus-scope';
 import { ParentalPinPrompt } from './parental-pin-prompt';
+import { scopeId } from '../test/scope-id';
 
 describe('ParentalPinPrompt', () => {
   beforeEach(() => {
@@ -227,7 +228,7 @@ describe('ParentalPinPrompt', () => {
   it('keeps the keys over a prompt pushed after it, until it closes', () => {
     const prompt = new ParentalPinPrompt();
     prompt.showVerify('First', vi.fn());
-    const later = Focus.register({ id: 'prompt.later', root: document.body, restrict: 'self-only' });
+    const later = Focus.register({ id: scopeId('prompt.later'), root: document.body, restrict: 'self-only' });
     Focus.push(later);
     expect(Focus.owner()?.id).toBe('prompt.parental_pin');
     expect(Focus.owner()?.modal).toBe(true);

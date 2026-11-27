@@ -172,6 +172,7 @@ export class ChannelList {
     });
     this.focusScope = Focus.register({
       id: 'live.channels',
+      mode: () => this.editor.mode,
       root: () => this.container.closest<HTMLElement>('.view') ?? this.container,
       leaveFor: { up: 'tabbar' },
       defaultKey: () => this.defaultKey(),

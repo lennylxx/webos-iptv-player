@@ -112,6 +112,7 @@ export class TabBar {
     this.handlers = handlers;
     this.scope = Focus.register({
       id: 'tabbar',
+      mode: () => this.searchExpanded ? 'search' : 'tabs',
       root: () => this.el,
       restrict: 'self-first',
       tier: Tier.bar,

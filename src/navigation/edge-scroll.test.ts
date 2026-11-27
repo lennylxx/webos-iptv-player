@@ -6,6 +6,7 @@ import { morph } from '../utils/morph';
 import { edgeScrollSpeed, installEdgeScroll, recheckEdgeScroll, setEdgeScroller, type EdgeAxis } from './edge-scroll';
 import { Focus, Tier, type FocusScope } from './focus-scope';
 import { setInputMode } from './input-mode';
+import { scopeId } from '../test/scope-id';
 
 const N = CONFIG.NAVIGATION;
 let track: HTMLElement;
@@ -74,7 +75,7 @@ beforeEach(() => {
   Object.defineProperty(document, 'elementFromPoint', {
     configurable: true, value: () => hit,
   });
-  owner = Focus.register({ id: 'edge-test', root });
+  owner = Focus.register({ id: scopeId('edge-test'), root });
   Focus.setBase(() => owner);
   scrolled = vi.fn<(track: HTMLElement) => void>();
   dispose = installEdgeScroll(scrolled);
@@ -277,7 +278,7 @@ describe('pointer edge scrolling', () => {
     start();
     const prompt = document.createElement('div');
     root.appendChild(prompt);
-    const scope = Focus.register({ id: 'edge-prompt', root: prompt, restrict: 'self-only' });
+    const scope = Focus.register({ id: scopeId('edge-prompt'), root: prompt, restrict: 'self-only' });
     Focus.push(scope);
     expectStopped();
     Focus.pop(scope);
@@ -291,7 +292,7 @@ describe('pointer edge scrolling', () => {
   it('does not scroll the base view while an unrelated nonmodal owner is active', () => {
     const overlay = document.createElement('div');
     root.appendChild(overlay);
-    Focus.push(Focus.register({ id: 'edge-overlay', root: overlay }));
+    Focus.push(Focus.register({ id: scopeId('edge-overlay'), root: overlay }));
     move(1090);
     wait();
     expect(track.scrollLeft).toBe(0);
@@ -300,7 +301,7 @@ describe('pointer edge scrolling', () => {
   it('cancels a pending dwell if the owner changes', () => {
     move(1090);
     wait(200);
-    const scope = Focus.register({ id: 'edge-other', root: document.createElement('div') });
+    const scope = Focus.register({ id: scopeId('edge-other'), root: document.createElement('div') });
     Focus.push(scope);
     wait(32);
     Focus.pop(scope);
@@ -448,7 +449,7 @@ describe('pointer edge scrolling', () => {
   it('scrolls the content under the tab bar and asks the bar for the keys once', () => {
     const barRoot = document.createElement('div');
     document.body.appendChild(barRoot);
-    const bar = Focus.register({ id: 'edge-bar', root: barRoot, tier: Tier.bar, restrict: 'self-first' });
+    const bar = Focus.register({ id: scopeId('edge-bar'), root: barRoot, tier: Tier.bar, restrict: 'self-first' });
     Focus.push(bar);
     const asked = vi.fn();
     root.addEventListener('nav:edge-scroll', asked);

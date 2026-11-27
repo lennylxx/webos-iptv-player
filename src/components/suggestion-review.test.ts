@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { Focus } from '../navigation/focus-scope';
 import { SuggestionReview, type ReviewItem, type ReviewOptions } from './suggestion-review';
+import { scopeId } from '../test/scope-id';
 
 let review: SuggestionReview;
 let onDecide: Mock<ReviewOptions['onDecide']>;
@@ -37,7 +38,7 @@ const row = (key: string) => document.querySelector(`[data-key="row|${key}"]`)!;
 
 beforeEach(() => {
   document.body.innerHTML = '';
-  review = new SuggestionReview('prompt.review-test');
+  review = new SuggestionReview(scopeId('prompt.review-test'));
   onDecide = vi.fn<ReviewOptions['onDecide']>();
   onUndo = vi.fn<ReviewOptions['onUndo']>();
   onClose = vi.fn<ReviewOptions['onClose']>();

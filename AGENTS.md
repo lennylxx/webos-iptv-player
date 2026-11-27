@@ -53,7 +53,10 @@ Procedural workflows live in `.agents/skills/` (open Agent Skills format;
   every key, pointer move, push/pop, and `morph()`, so a re-render or a
   virtualized list never loses it. A new modal or overlay registers a
   scope at the right `Tier`, which both routes keys and picks the ring: a
-  prompt pushes itself while shown (as `ConfirmationPrompt` does). A
+  prompt pushes itself while shown (as `ConfirmationPrompt` does). Its id,
+  and the modes of a scope that shows different surfaces by turns, go in
+  `src/navigation/scope-ids.ts`; the `ui-design` skill covers the sweep
+  and fuzz coverage each then needs. A
   pushed modal keeps the pointer's hover outside it from the surfaces below.
   A `SpatialNav` only picks and hands its pick to its scope; it never
   paints. ESLint keeps the class behind

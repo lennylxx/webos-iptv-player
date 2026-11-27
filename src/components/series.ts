@@ -34,7 +34,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   protected readonly resumeKind: ResumeKind = 'episode';
   protected readonly continueCaptionLine = true;
   protected readonly parentalKind = 'series' as const;
-  protected scopeName(): string { return 'series'; }
+  protected scopeName(): 'series' { return 'series'; }
   protected get emptyMessage(): string { return t('catalog.noSeries'); }
   protected get gridEmptyMessage(): string { return t('catalog.noSeriesCategory'); }
   protected itemCount(count: number): string { return tp('catalog.seriesCount', count); }

@@ -36,6 +36,18 @@ afterEach(() => {
 });
 
 describe('FocusRing', () => {
+  it('reads the owner id only to mark it', () => {
+    const id = vi.fn(() => 'view.a');
+    FocusRing.install(() => ({ root: owner, modal, id }));
+    expect(lower.getAttribute('data-focus-scope')).toBe('view.a');
+    id.mockClear();
+    FocusRing.defer('test');
+    expect(id).toHaveBeenCalledTimes(1);
+    id.mockClear();
+    FocusRing.reveal('key', 'up');
+    expect(id).toHaveBeenCalledTimes(1);
+  });
+
   it('marks the hover target it exempts, and clears the mark when the pointer leaves', () => {
     const row = item(lower, 'r1');
     FocusRing.hover(row);
