@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG } from '../config';
 import { openYoutubeTrailer, resetYoutubeStatusForTests, youtubeReady, YOUTUBE_APP_ID } from './youtube-trailer';
@@ -170,4 +172,10 @@ describe('YouTube trailers', () => {
     expect(warn.mock.calls.flat().join(' ')).toContain('event=trailer.launch error=-101');
     expect(youtubeReady(vi.fn())).toBe(false);
   });
+});
+
+// LS2 denies both app-manager calls ("Denied method call") without these groups.
+it('requests the ACGs that getAppLoadStatus and launch need', () => {
+  const appinfo = JSON.parse(readFileSync(join(process.cwd(), 'appinfo.json'), 'utf8')) as { requiredACG: string[] };
+  expect(appinfo.requiredACG).toEqual(expect.arrayContaining(['application.query', 'application.launcher']));
 });

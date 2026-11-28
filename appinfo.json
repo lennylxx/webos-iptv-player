@@ -14,6 +14,8 @@
   "transparent": false,
   "requiredACG": [
     "activity.operation",
+    "application.launcher",
+    "application.query",
     "drm.operation",
     "drm.query"
   ]
