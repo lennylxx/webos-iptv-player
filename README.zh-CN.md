@@ -28,15 +28,15 @@
 
 | 播放浮层 | 字幕 |
 | --- | --- |
-| ![播放浮层](https://github.com/user-attachments/assets/212bb843-fe74-4cd3-be2a-c91d797bd170) | ![字幕](https://github.com/user-attachments/assets/5d1fab57-1087-414b-9a20-f900589eac4a) |
+| ![播放浮层](https://github.com/user-attachments/assets/212bb843-fe74-4cd3-be2a-c91d797bd170) | ![字幕](https://github.com/user-attachments/assets/781fe633-fed7-4cf1-9415-7b89f6c7ac01) |
 
 | 字幕搜索 | 电影 |
 | --- | --- |
-| ![字幕搜索](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) | ![电影](https://github.com/user-attachments/assets/58292e7a-7c64-4eaa-bbb0-0ac4e0bb6486) |
+| ![字幕搜索](https://github.com/user-attachments/assets/4ef9c97e-131b-4e4f-bf9a-c753d66f2956) | ![电影](https://github.com/user-attachments/assets/d7f96e75-6e9c-433e-8281-77932ebddb66) |
 
 | 电影详情 | 剧集详情 |
 | --- | --- |
-| ![电影详情](https://github.com/user-attachments/assets/51231a97-9fc2-4f17-9512-7f4d1cdc0731) | ![剧集详情](https://github.com/user-attachments/assets/d773b92d-26c0-4b37-893e-95810a146ea6) |
+| ![电影详情](https://github.com/user-attachments/assets/5ca33557-a326-4bf8-ad44-7d722546bd4c) | ![剧集详情](https://github.com/user-attachments/assets/46d324de-0671-42cf-809b-8e238d693a32) |
 
 | 搜索 | 设置 |
 | --- | --- |

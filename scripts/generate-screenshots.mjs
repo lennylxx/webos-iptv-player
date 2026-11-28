@@ -334,6 +334,8 @@ const SERIESES = [];
   SERIESES.push({ series_id: String(id), name: catTitle(id + 3), category_id: cat, hue: hueFor(id + 11) }); }
 
 const CAST = 'Ava Sterling, Marcus Vale, Lena Hoffmann, Diego Cruz';
+// Any well-formed video ID shows Watch trailer; off webOS no YouTube check runs.
+const TRAILER_ID = 'abcDEF12_-z';
 const DIRECTORS = ['R. Callahan', 'T. Okafor', 'M. Lindqvist', 'S. Nakamura'];
 const PLOTS = [
   'A reluctant courier is pulled into a citywide conspiracy after a routine drop goes wrong.',
@@ -362,7 +364,7 @@ function playerApiJson(url) {
         plot: PLOTS[n % PLOTS.length], cast: CAST, director: DIRECTORS[n % DIRECTORS.length],
         genre: catName(VOD_CATS, m.category_id), releasedate: `${2014 + (n % 11)}-06-12`,
         duration_secs: 5400 + (n % 4) * 900, movie_image: poster(m.hue), cover_big: poster(m.hue),
-        backdrop_path: [backdrop(MOVIE_BACKDROP)],
+        backdrop_path: [backdrop(MOVIE_BACKDROP)], youtube_trailer: TRAILER_ID,
       } };
     }
     case 'get_series_categories':
@@ -392,6 +394,7 @@ function playerApiJson(url) {
           cover: poster(s.hue),
           backdrop_path: [backdrop(s.hue)],
           rating: `${7 + (n % 3)}.0`,
+          youtube_trailer: TRAILER_ID,
         },
         episodes: { 1: mkEps(1, 8), 2: mkEps(2, 6) },
       };
@@ -1608,8 +1611,8 @@ try {
     await page.keyboard.press('Enter'); // open the focused movie's detail
     await page.locator('#view-movies .movies-detail .detail-plot').waitFor({ state: 'visible', timeout: 15_000 });
     await page.keyboard.press('ArrowRight'); // Play from start
-    await page.keyboard.press('ArrowRight'); // Add to Watchlist
-    for (let n = 0; n < 3; n++) await page.keyboard.press('ArrowRight'); // Watched, Hide, Translate
+    await page.keyboard.press('ArrowRight'); // Watch trailer
+    for (let n = 0; n < 4; n++) await page.keyboard.press('ArrowRight'); // Add to Watchlist, Watched, Hide, Translate
     await page.locator('#view-movies .detail-icon-btn[data-key="translate"].focused').waitFor({ state: 'visible' });
     await page.keyboard.press('Enter'); // translate the plot
     // The label reads "Translating…" until the reply lands.
@@ -1628,7 +1631,7 @@ try {
   // 10) Series detail — the season selector over the episode list, opened from the
   //     first series poster.
   {
-    const { context, page } = await newPage({ xtream: true });
+    const { context, page } = await newPage({ xtream: true, ai: true });
     await gotoChannels(page, base);
     await enterTab(page, 'series');
     // The first focusable is a Continue-Watching tile (resumes an episode directly),
@@ -1639,6 +1642,8 @@ try {
     await seriesTile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
     await page.keyboard.press('Enter'); // open the focused series' detail
     await page.locator('#view-series .series-detail .episode-row').first().waitFor({ state: 'visible', timeout: 15_000 });
+    await page.keyboard.press('ArrowRight'); // Watch trailer, its name slid out
+    await page.locator('#view-series .detail-icon-btn[data-key="trailer"].focused').waitFor({ state: 'visible' });
     await page.waitForTimeout(600);
     await clearToasts(page);
     await shoot(page, 'series-detail.png');
