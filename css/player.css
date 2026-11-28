@@ -106,6 +106,8 @@
   --bg-secondary: #eceef2;
   --bg-tertiary: #dfe4ea;
   --border: #cfd5dd;
+  /* Theme ambers read at under 3:1 on this glass; this one holds 4.5:1 over black video. */
+  --warning: #9a3412;
   --overlay-divider: rgba(0, 0, 0, 0.18);
   --overlay-chip: rgba(0, 0, 0, 0.08);
   color: var(--text-primary);

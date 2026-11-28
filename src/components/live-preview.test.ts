@@ -48,7 +48,7 @@ function state(): LivePlaybackSnapshot {
       group: '', extras: null, playlistIds: ['p1'],
       catchup: '', catchupSource: '', catchupDays: 0,
     },
-    status: 'playing', muted: false,
+    status: 'playing', muted: false, failure: null,
   };
 }
 
@@ -295,6 +295,20 @@ describe('LivePreview', () => {
     view.applyState({ ...state(), status: 'error' });
     expect(view.slot).toBe(slot);
     expect(root.querySelectorAll('button')).toHaveLength(3);
+  });
+
+  it('shows LIVE only once the channel plays', () => {
+    view.applyState({ ...state(), status: 'loading' });
+    expect(root.querySelector('.live-preview-badge')).toBeNull();
+    view.applyState({ ...state(), status: 'error' });
+    expect(root.querySelector('.live-preview-badge')).toBeNull();
+    view.applyState(state());
+    expect(root.querySelector('.live-preview-badge')).not.toBeNull();
+  });
+
+  it('says why a failed channel failed', () => {
+    view.applyState({ ...state(), status: 'error', failure: 'Reason 1' });
+    expect(root.querySelector('.live-preview-message')?.textContent).toContain('Reason 1');
   });
 
   it('routes mute/fullscreen separately, with one activation per click', () => {

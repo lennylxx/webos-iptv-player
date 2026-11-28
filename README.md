@@ -89,7 +89,7 @@
 - **Aspect ratio** — choose Auto, 16:9, 4:3, or Zoom from the player menu, remembered per channel, movie, or series; on the TV it sets the TV's own aspect ratio for the app, whose Aspect Ratio menu still offers finer adjustment
 - **Video quality** — a default in Settings (Auto, Highest, Up to 4K, Up to 1080p, Up to 720p, or Lowest), and a specific variant per channel, movie, or series from the player menu; it covers HLS and DASH on every playback path, including HTTP-header channels and DRM streams
 - **On-screen display** — program title, progress, and a live stream-info readout (resolution, HDR, frame rate, codec, audio channels), with adjustable auto-hide and number-entry timeouts
-- **Automatic playback recovery** — detect streams that fail to start or stall, reload transient failures, and advance to the next live channel after an adjustable number of reconnect attempts
+- **Automatic playback recovery** — detect streams that fail to start or stall, reload transient failures, and, after an adjustable number of reconnect attempts, stop on the channel with an error until you press OK to try again
 - **Resync A/V** (🔄) — one tap on the playback bar re-locks audio and video that drift apart during a long catch-up or on-demand stream
 
 **Navigation**

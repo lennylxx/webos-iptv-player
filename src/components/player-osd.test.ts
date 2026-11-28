@@ -48,6 +48,7 @@ function snapshot(overrides: Partial<PlayerOsdSnapshot> = {}): PlayerOsdSnapshot
     playback: null,
     channel: CHANNEL,
     channelNumber: 1,
+    failure: null,
     catchup: null,
     movieFile: false,
     vodTitle: null,

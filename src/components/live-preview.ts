@@ -421,7 +421,7 @@ export class LivePreview {
     const title = program ? programTitle(programView(source, program)) : '';
     const message = state.status === 'loading' ? t('common.loading')
       : state.status === 'buffering' ? t('preview.connecting')
-      : state.status === 'error' ? t('player.streamError') : '';
+      : state.status === 'error' ? state.failure ?? t('player.streamError') : '';
     morph(this.container, html`
       <div class="live-preview-heading" data-key="preview-heading">
         <span class="live-preview-channel">${state.channel.name}</span>
@@ -433,7 +433,7 @@ export class LivePreview {
         <time class="live-preview-clock" datetime="${formatTime(now)}">${formatTime(now)}</time>
       </div>
       <div class="live-preview-slot" data-key="preview-slot" aria-label="${t('preview.fullScreen')}">
-        ${liveBadge('live-preview-badge')}
+        ${message ? '' : liveBadge('live-preview-badge', 'preview-badge')}
         ${message ? html`
           <div class="live-preview-message"
                data-key="preview-message">${message}</div>` : ''}

@@ -31,6 +31,8 @@ export interface PlayerOsdSnapshot {
   } | null;
   channel: Channel | null;
   channelNumber: number;
+  /** A live channel that failed to play, shown until OK retries it. */
+  failure: string | null;
   catchup: CatchupInfo | null;
   /** A playlist channel playing a movie file of known length. */
   movieFile: boolean;
@@ -231,6 +233,15 @@ export class PlayerOsd {
     this.timer = null;
   }
 
+  private renderMessage(osd: HTMLElement, message: string, state: PlayerOsdSnapshot | null): void {
+    const channel = state && state.vodTitle === null ? state.channel : null;
+    morph(osd, html`
+      ${channel ? this.channelHeader(channel, state!.channelNumber) : ''}
+      <div class="osd-message">${message}</div>
+    `);
+    this.message = true;
+  }
+
   private cancelHoverFrame(): void {
     if (this.hoverFrame) cancelAnimationFrame(this.hoverFrame);
     this.hoverFrame = 0;
@@ -244,7 +255,8 @@ export class PlayerOsd {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     // Keep the OSD up while paused (live DVR or catch-up): nothing to fall behind.
-    if (this.callbacks.getSnapshot().playback?.paused) return;
+    const state = this.callbacks.getSnapshot();
+    if (state.playback?.paused || state.failure) return;
     this.timer = setTimeout(() => this.hide(), StorageService.getPlayerOsdTimeoutMs());
   }
 
@@ -261,6 +273,10 @@ export class PlayerOsd {
     if (!osd) return;
     this.message = false;
     const state = this.callbacks.getSnapshot();
+    if (state.failure) {
+      this.renderMessage(osd, state.failure, state);
+      return;
+    }
     if (state.vodTitle !== null) {
       this.renderVod(osd, state);
       return;
@@ -363,23 +379,30 @@ export class PlayerOsd {
     }
 
     morph(osd, html`
-      <div class="osd-channel">
-        <div class="osd-channel-number">${state.channelNumber}</div>
-        ${state.channel.logo
-          ? html`<img class="osd-channel-logo" src="${state.channel.logo}" alt="">`
-          : ''}
-        <div class="osd-channel-name">${state.channel.name}</div>
+      ${this.channelHeader(state.channel, state.channelNumber, html`
         ${this.renderStreamInfo(state.streamInfo)}
         ${programShown(state) ? '' : this.offHint()}
-      </div>
+      `)}
       ${programmeHtml}
     `);
   }
 
-  updateMessage(message: string): void {
+  private channelHeader(channel: Channel, number: number, extra: Safe | string = ''): Safe {
+    return html`
+      <div class="osd-channel">
+        <div class="osd-channel-number">${number}</div>
+        ${channel.logo ? html`<img class="osd-channel-logo" src="${channel.logo}" alt="">` : ''}
+        <div class="osd-channel-name">${channel.name}</div>
+        ${extra}
+      </div>
+    `;
+  }
+
+  // A retry or error keeps its channel's name where the OSD shows it; other notices don't.
+  updateMessage(message: string, nameChannel = false): void {
     const osd = $('#player-osd', this.container);
     if (!osd) return;
-    morph(osd, html`<div class="osd-message">${message}</div>`);
+    this.renderMessage(osd, message, nameChannel ? this.callbacks.getSnapshot() : null);
     this.message = true;
     ProgramTranslation.release(this);
     // Keep the OSD visible so metadata can repaint over this once the stream

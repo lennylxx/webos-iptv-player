@@ -163,19 +163,18 @@ watchdog reloading it.
   then fails reopens its [session](#sessions) once; if that reopen
   cannot start either, a live channel takes the normal reconnect
   attempts, as any live stream that loses its server does, instead of
-  moving to the next channel at once.
+  failing at once.
 
 ### What the viewer sees
 
-When a header channel fails for good, live TV shows the stream error
-and moves to the next channel after 2 s. In Off mode, when Media
+When a header channel fails for good, live TV stops on the channel
+and keeps the stream error on screen until OK retries it. In Off mode, when Media
 service would have sent the channel's headers, the error says that
 HTTP headers are off; in the other modes it is the generic stream
 error. A network error first shows Reconnecting: a `<video>`-only
 chain, or a channel that already played, then reloads up to the Live
 reconnect attempts setting. A header chain that never started
-shows Reconnecting for about 2 s and then moves to the next channel
-without a reload.
+shows Reconnecting for about 2 s and then fails without a reload.
 
 ### Remembered winner
 

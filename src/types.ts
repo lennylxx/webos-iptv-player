@@ -79,6 +79,8 @@ export interface LivePlaybackSnapshot {
   channel: Channel;
   muted: boolean;
   status: LivePlaybackStatus;
+  /** What a failed channel says, set while status is 'error' after recovery gave up. */
+  failure: string | null;
 }
 
 export type ChannelHealthStatus = 'healthy' | 'suspect' | 'unavailable';

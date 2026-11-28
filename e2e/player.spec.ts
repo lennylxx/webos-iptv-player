@@ -63,7 +63,7 @@ test('remote arrow keys move focus and Enter starts playback', async ({ page }) 
   await expect(page.locator('#view-player')).toBeVisible();
 });
 
-test('live playback retries the current channel before switching', async ({ page }) => {
+test('live playback retries the current channel, then stays on it until OK', async ({ page }) => {
   await neuterVideo(page);
   await routePlaylist(page);
   await seedPlaylist(page);
@@ -89,8 +89,13 @@ test('live playback retries the current channel before switching', async ({ page
   await expect(video).not.toHaveAttribute('data-original-stream', 'true');
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('iptv_last_channel')!).index)).toBe(0);
   await video.dispatchEvent('error');
-  await expect.poll(() =>
-    page.evaluate(() => JSON.parse(localStorage.getItem('iptv_last_channel')!).index)).toBe(1);
+  await expect(page.locator('#player-osd .osd-message')).toHaveText('Playback error');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('iptv_last_channel')!).index)).toBe(0);
+
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#player-osd .osd-message')).toHaveCount(0);
+  await expect(page.locator('.osd-channel-name')).toHaveText('Channel One');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('iptv_last_channel')!).index)).toBe(0);
 });
 
 test('player sidebar focuses the playing channel; search still filters', async ({ page }) => {

@@ -119,10 +119,10 @@ export const CONFIG = {
     SEEK_PREVIEW_DEBOUNCE: 150, // ms between preview image requests while the target moves
     SEEK_PREVIEW_FETCH_TIMEOUT: 8000, // ms for a thumbnail manifest or sidecar
     SUBTITLE_FETCH_TIMEOUT: 10000, // ms for one self-rendered subtitle playlist or segment
-    HLS_MAX_RECOVERIES: 3,      // bounded hls.js fatal-error retries before giving up → next channel
+    HLS_MAX_RECOVERIES: 3,      // bounded hls.js fatal-error retries before the stream fails
     STALL_POLL_MS: 2000,        // native stall watchdog: currentTime poll interval
     STALL_FREEZE_TICKS: 5,      // ~10s frozen before the first in-place reload
-    DEFAULT_LIVE_RECONNECT_ATTEMPTS: 3, // reconnect attempts before switching channels
+    DEFAULT_LIVE_RECONNECT_ATTEMPTS: 3, // reconnect attempts before stopping on the channel
     STARTUP_POLL_MS: 500,       // startup watchdog: readyState/networkState poll interval
     STARTUP_TIMEOUT: 15000,     // ms a stream may load without a frame before it counts as failed
     DVR_MIN_WINDOW: 10,         // live DVR: a seekable window must exceed this (s) to offer timeshift

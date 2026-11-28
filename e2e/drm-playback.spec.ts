@@ -211,7 +211,7 @@ for (const drm of [
     });
   }
 
-  test(`${drm.label}: rejected license advances to a clear channel without stale DRM`, async ({ page }) => {
+  test(`${drm.label}: rejected license stops on the channel; the next one plays without stale DRM`, async ({ page }) => {
     const diagnostics = await captureDiagnostics(page);
     await installShakaStub(page, { webOS: true, licenseNetwork: true, delayedDestroy: true });
     let licenses = 0;
@@ -220,6 +220,8 @@ for (const drm of [
       return route.fulfill({ status: 403, body: 'denied' });
     });
     await startDash(page, playlist + '\n#EXTINF:-1 tvg-id="ch2",Track 2\nhttp://host/b.mpd');
+    await expect(page.locator('#player-osd .osd-message')).toContainText('error', { ignoreCase: true });
+    await page.keyboard.press('ArrowUp');
     await expect(page.locator('#player-osd .osd-channel-name')).toHaveText('Track 2');
     await expect(page.locator('#video-player source')).toHaveCount(0);
     expect(await page.evaluate(() => (window as unknown as {
@@ -605,7 +607,7 @@ test.describe('PlayReady native webOS contract (no browser decryption)', () => {
   }
 
   for (const contentId of ['msg-1', 'msg-2']) {
-    test(`correlates rights errors with ${contentId} and clears DRM on channel fallback`, async ({ page }) => {
+    test(`correlates rights errors with ${contentId} and clears DRM on the next channel`, async ({ page }) => {
       await installPlayReadyLuna(page);
       const errors: string[] = [];
       page.on('console', message => {
@@ -622,6 +624,7 @@ test.describe('PlayReady native webOS contract (no browser decryption)', () => {
         __playReadyE2EControl: { rights(contentId: string): void };
       }).__playReadyE2EControl.rights(contentId), contentId);
       await expect(page.locator('#player-osd')).toContainText('error', { ignoreCase: true });
+      await page.keyboard.press('ArrowUp');
       await expect(page.locator('#video-player source')).toHaveAttribute('src', 'http://host/b.mpd');
       expect(errors).toHaveLength(1);
       expect((await playReadyProbe(page)).cancelledRights).toBe(1);

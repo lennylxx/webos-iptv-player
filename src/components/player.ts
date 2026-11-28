@@ -77,6 +77,8 @@ import { PlayerTracks } from './player-tracks';
 
 const log = createLogger('Player');
 
+type LiveFailureKey = 'player.streamError' | 'player.streamErrorHeadersOff';
+
 interface LunaResume {
   channel: Channel;
   position: number;
@@ -162,6 +164,8 @@ export class Player {
   private liveHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   private errorAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
   private errorRetryPending = false;
+  // Set while a live channel's recovery has failed: it stays until OK retries.
+  private liveFailure: LiveFailureKey | null = null;
   // Manual A/V resync (catch-up / VOD): true from the resync seek until playback
   // resumes, gating the "Resyncing…" message and debouncing repeat presses.
   private resyncing = false;
@@ -347,14 +351,12 @@ export class Player {
         this.reloadCurrentStream();
       },
       onEscalate: recovery => {
-        log.error('Live stream recovery exhausted; advancing channel',
+        log.error('Live stream recovery exhausted; stopping on the channel',
           'event=playback.recovery.exhausted', this.playbackLabel(),
           `cause=${recovery.cause}`,
           this.recoveryState(recovery),
           ...(this.chainUnstarted() ? ['chain=unstarted'] : []));
-        this.markLiveUnavailable(recovery.cause === 'stall' ? 'stall_exhausted' : 'playback_error');
-        this.osd.updateMessage(this.streamErrorMessage());
-        this.channelUp();
+        this.failLive(recovery.cause === 'stall' ? 'stall_exhausted' : 'playback_error');
       },
       // A step that hangs is the startup watchdog's to escalate.
       // A source still waiting on its master or MPD has not started to stall.
@@ -413,7 +415,7 @@ export class Player {
       });
     };
     const update = (status?: LivePlaybackStatus) => {
-      if (status && this.liveSessionActive) this.livePlaybackStatus = status;
+      if (status && this.liveSessionActive && !this.liveFailure) this.livePlaybackStatus = status;
       this.onPlaybackStateChanged();
     };
     onCurrent('pause', () => update('paused'));
@@ -1014,6 +1016,7 @@ export class Player {
     this.catchupInfo = catchup || null;
     this.liveSessionActive = !catchup;
     this.livePlaybackStatus = 'loading';
+    this.liveFailure = null;
     this.onTvPlaybackChanged(channelIndex, catchup ? catchup.start * 1000 : null);
     this.catchupSourceIndex = 0;
     this.catchupVariantConfirmed = false;
@@ -1126,6 +1129,7 @@ export class Player {
     this.currentIndex = -1;
     this.currentScope = null;
     this.catchupInfo = null;
+    this.liveFailure = null;
     this.vod = v;
     this.lunaResume = null;
     this.lunaRestore = null;
@@ -1330,7 +1334,7 @@ export class Player {
       const position = this.playbackPosition();
       if (position > 0) this.pendingResumeSecs = Math.max(this.pendingResumeSecs, position);
     }
-    if (announce) this.osd.updateMessage(t('player.reconnecting'));
+    if (announce) this.osd.updateMessage(t('player.reconnecting'), true);
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
     this.loadStream(
@@ -1408,18 +1412,13 @@ export class Player {
     this.saveCatchupProgress(); // save before the video element is torn down
     this.movieFile = false;
     this.releaseStream();
-    if (this.videoEl) {
-      this.videoEl.pause();
-      this.videoEl.removeAttribute('src');
-      this.videoEl.innerHTML = '';
-      this.videoEl.load();
-      this.videoEl.classList.remove('active');
-    }
+    this.emptyVideoEl();
     this.hideOSD();
     hide(this.container);
     this.preview.stop();
     this.previewUrl = null;
     this.vod = null;
+    this.liveFailure = null;
     this.pendingResumeSecs = 0;
     this.reopenResume = false;
     this.pendingSeekTarget = null;
@@ -1433,6 +1432,16 @@ export class Player {
     this.resyncing = false;
     if (this.resyncTimer) { clearTimeout(this.resyncTimer); this.resyncTimer = null; }
     this.onPlaybackStateChanged();
+  }
+
+  private emptyVideoEl(): void {
+    const v = this.videoEl;
+    if (!v) return;
+    v.pause();
+    v.removeAttribute('src');
+    v.innerHTML = '';
+    v.load();
+    v.classList.remove('active');
   }
 
   private releaseStream(): void {
@@ -1728,7 +1737,7 @@ export class Player {
   }
 
   private onError(reason?: 'unsupported'): void {
-    if (!this.playbackActive || this.wasPlayingBeforeHide) return;
+    if (!this.playbackActive || this.wasPlayingBeforeHide || this.liveFailure) return;
     if (this.errorAdvanceTimer !== null) return;
     if (this.escalateStartup()) return;
     if (this.reopenProxy()) return;
@@ -1762,7 +1771,7 @@ export class Player {
           `attempt=${nextIndex + 1}`,
           `total=${sources.length}`,
           this.playbackLabel());
-        this.osd.updateMessage(t('player.retryingCatchup'));
+        this.osd.updateMessage(t('player.retryingCatchup'), true);
         this.recreateVideoEl();
         this.videoEl?.classList.add('active');
         this.loadStream(
@@ -1795,7 +1804,7 @@ export class Player {
       this.errorRetryPending = true;
       this.livePlaybackStatus = 'buffering';
       this.onPlaybackStateChanged();
-      this.osd.updateMessage(t('player.reconnecting'));
+      this.osd.updateMessage(t('player.reconnecting'), true);
       this.errorAdvanceTimer = setTimeout(() => {
         this.errorAdvanceTimer = null;
         this.errorRetryPending = false;
@@ -1805,17 +1814,41 @@ export class Player {
       }, 2000);
       return;
     }
-    this.stallWatchdog.stop();
-    this.markLiveUnavailable('playback_error');
-    this.osd.updateMessage(this.streamErrorMessage());
-    this.errorAdvanceTimer = setTimeout(() => {
-      this.errorAdvanceTimer = null;
-      this.channelUp();
-    }, 2000);
+    this.failLive('playback_error');
   }
 
-  private streamErrorMessage(): string {
-    return t(this.pipeline.headersTurnedOff() ? 'player.streamErrorHeadersOff' : 'player.streamError');
+  // Another channel is not what the user picked, and a server that refused
+  // this one, as over a connection limit, refuses the next one too. A
+  // catch-up program stays the same way, and a retry resumes where it failed.
+  private failLive(reason: string): void {
+    this.markLiveUnavailable(reason);
+    this.cancelErrorAdvance();
+    this.liveFailure = this.pipeline.headersTurnedOff() ? 'player.streamErrorHeadersOff' : 'player.streamError';
+    // Before the element empties: a retry or the next tune resumes here.
+    this.saveChannelResume();
+    if (this.catchupInfo) {
+      this.saveCatchupProgress();
+      this.catchupInfo = { ...this.catchupInfo, resumeSecs: Math.max(this.playbackPosition(), this.pendingResumeSecs) };
+    }
+    this.releaseStream();
+    this.emptyVideoEl();
+    this.manifestVariants = [];
+    this.qualityTiers = [];
+    this.livePlaybackStatus = 'error';
+    this.onPlaybackStateChanged();
+    this.showOSD();
+  }
+
+  // A retry is a fresh tune of the same channel: new generation, budgets, and
+  // health. Backgrounding relocks parental controls, so it asks again.
+  private retryLive(): void {
+    const channel = this.currentChannel;
+    if (!channel) return;
+    const index = this.currentIndex;
+    const catchup = this.catchupInfo ?? undefined;
+    this.authorizeLive(channel, () => {
+      if (this.currentChannel === channel && this.liveFailure) this.playResolved(channel, index, catchup);
+    }, this.livePreviewMode, true);
   }
 
   private markLiveUnavailable(reason: string): void {
@@ -1939,6 +1972,7 @@ export class Player {
     if (!this.livePreviewMode) return;
     this.livePreviewMode = false;
     this.restoreLiveMute();
+    if (this.liveFailure) this.showOSD();
   }
 
   getLivePlaybackSnapshot(): LivePlaybackSnapshot | null {
@@ -1947,6 +1981,7 @@ export class Player {
       channel: this.currentChannel,
       muted: this.lunaRestoreMute ?? this.videoEl.muted,
       status: this.livePlaybackStatus,
+      failure: this.liveFailure ? t(this.liveFailure) : null,
     };
   }
 
@@ -2336,6 +2371,7 @@ export class Player {
       } : null,
       channel,
       channelNumber: this.currentIndexAnchor + 1,
+      failure: this.liveFailure ? t(this.liveFailure) : null,
       catchup: this.catchupInfo,
       movieFile: this.isMovieFile(),
       vodTitle: this.vod ? vodHeading(this.vod).title : null,
@@ -2692,6 +2728,7 @@ export class Player {
     if (JSON.stringify(before) === JSON.stringify(qualityRule(setting, pick))) return;
     this.keptQualityTiers = this.pipeline.engineQualityTiers() ?? this.qualityTiers;
     if (this.vod) this.reloadVod(this.vod);
+    else if (this.liveFailure) this.retryLive();
     else this.reloadCurrentStream(false);
   }
 
@@ -2768,6 +2805,7 @@ export class Player {
         this.onBack();
         break;
       case 'select':
+        if (this.liveFailure) { this.retryLive(); break; }
         if (this.commitScrub()) break;
         {
           const pointer = this.osd.pointerPosition();
@@ -2798,7 +2836,8 @@ export class Player {
         this.showOSD();
         break;
       case 'play':
-        if (this.videoEl?.paused) this.pauseToggle();
+        if (this.liveFailure) this.retryLive();
+        else if (this.videoEl?.paused) this.pauseToggle();
         break;
       case 'pause':
         if (this.videoEl && !this.videoEl.paused) this.pauseToggle();

@@ -168,7 +168,7 @@ describe('Player live preview', () => {
     expect(player.getVideoElement()).toBe(video);
     player.play(0);
     expect(player.getLivePlaybackSnapshot()).toEqual({
-      channel: channels[0], muted: false, status: 'loading',
+      channel: channels[0], muted: false, status: 'loading', failure: null,
     });
     player.enterLivePreview();
     expect(player.getLivePlaybackSnapshot()?.channel).toBe(channels[0]);
@@ -612,7 +612,7 @@ describe('Player live preview', () => {
     expect(osd.show).not.toHaveBeenCalled();
     expect(osd.resetTimer).not.toHaveBeenCalled();
     expect(player.getLivePlaybackSnapshot()).toEqual({
-      channel: channels[0], muted: false, status: 'loading',
+      channel: channels[0], muted: false, status: 'loading', failure: null,
     });
   });
 });
