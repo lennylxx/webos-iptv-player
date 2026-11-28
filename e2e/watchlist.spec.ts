@@ -228,6 +228,7 @@ test('keeps pseudo-localized detail actions unclipped, wrapping the round ones w
         updatedAt: 1000,
       },
     }));
+    localStorage.setItem('iptv_text_size', JSON.stringify('150'));
   });
   await routeLiveManifest(page);
   await page.goto('/?pseudo=1');
@@ -257,7 +258,7 @@ test('keeps pseudo-localized detail actions unclipped, wrapping the round ones w
     return { below: (row.querySelector('.detail-icon-row') as HTMLElement).offsetTop > resume,
       rowLeft: row.getBoundingClientRect().left, circleLeft: circle.left };
   });
-  // Pseudo-localized names leave the row short of room, so it starts a line of its own.
+  // Pseudo-localized names at 150% leave the row short of room, so it starts a line of its own.
   expect(placed.below).toBe(true);
   expect(placed.circleLeft).toBeCloseTo(placed.rowLeft, 0);
   await expect(page.locator('#view-movies [data-action="remove-resume"]')).toBeVisible();

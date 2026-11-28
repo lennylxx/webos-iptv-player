@@ -47,6 +47,10 @@ html.q-no-flex-gap .detail-btn > .detail-btn-progress { margin-left: 0; }
 html.q-no-flex-gap .detail-actions > .detail-icon-row,
 html.q-no-flex-gap .series-seasons > .detail-icon-row { margin-right: 0; }
 
+/* Equal season columns end each line with a known season, which takes no gap
+   margin, so its line ends where the modern engine's does. */
+html.q-no-flex-gap .series-seasons > .series-season-btn.season-line-end { margin-right: 0; }
+
 /*
  * The quirk class makes each generated margin more specific than the
  * component rule that pushes a child to the end with `margin-left: auto`.

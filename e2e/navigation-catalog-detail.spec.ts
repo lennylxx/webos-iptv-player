@@ -1,3 +1,4 @@
+import { localeOptions } from '../src/i18n';
 import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, fakeAiConfig, type Page } from './helpers';
 import {
   KEYS, OPPOSITE, DIRECTIONS, seededRandom, installNavBox, focusedKey as focusedKeyIn, hover, hoverKey,
@@ -40,13 +41,19 @@ interface Setup {
   ai?: boolean;
   // The title has a YouTube trailer, so the round actions offer it first.
   trailer?: boolean;
+  // The series has a cover and no backdrop, so a poster card shows.
+  poster?: boolean;
 }
+
+const COVER = 'http://host.example.com:8080/cover.svg';
 
 const episodeId = (season: number, index: number) => season * 1000 + index + 1;
 
 async function seed(page: Page, setup: Setup): Promise<void> {
   await page.route('**/get.php*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/x-mpegurl', body: SAMPLE_M3U }));
+  await page.route(COVER, (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="#888"/></svg>' }));
   await page.route('**/xmltv.php*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/xml', body: '<tv></tv>' }));
   await page.route('**/player_api.php*', (route) => {
@@ -69,9 +76,12 @@ async function seed(page: Page, setup: Setup): Promise<void> {
           container_extension: 'mp4', info: { duration_secs: 1500 },
         }));
       }
-      return json({ info: { name: 'Series One', plot: 'A series plot.', youtube_trailer: trailer }, episodes });
+      return json({ info: { name: 'Series One', plot: 'A series plot.', youtube_trailer: trailer,
+        cover: setup.poster ? COVER : '' }, episodes });
     }
-    if (url.includes('get_series')) return json([{ series_id: 20, name: 'Series One', cover: '', category_id: '2' }]);
+    if (url.includes('get_series')) {
+      return json([{ series_id: 20, name: 'Series One', cover: setup.poster ? COVER : '', category_id: '2' }]);
+    }
     return json({});
   });
   await page.addInitScript((s) => {
@@ -106,6 +116,7 @@ async function openDetail(page: Page, setup: Setup): Promise<string> {
   await page.keyboard.press('Enter');
   await expect(page.locator(`${view} .detail-actions`)).toBeVisible();
   if (setup.trailer) await expect(page.locator(`${view} .detail-actions [data-key="trailer"]`)).toBeVisible();
+  if (setup.poster) await expect(page.locator(`${view} .detail-poster-art img`)).toBeVisible();
   if (setup.kind === 'series') {
     const settled = setup.loading || !setup.seasons ? `${view} .catalog-hint`
       : setup.emptySeasons?.includes(1) ? `${view} .series-episodes .catalog-hint` : `${view} .episode-row`;
@@ -329,12 +340,12 @@ const SETUPS: Array<[string, Setup]> = [
   ['a movie with nothing to resume', { kind: 'movie', resume: false, wraps: false }],
   ['a resumed movie', { kind: 'movie', resume: true, wraps: false }],
   ['a resumed movie whose round actions wrap', { kind: 'movie', resume: true, wraps: true, pseudo: true, textSize: '150' }],
-  ['a resumed movie in Polish at 140%', { kind: 'movie', resume: true, wraps: true, locale: 'pl', textSize: '140' }],
-  ['a resumed movie in Turkish at 130%', { kind: 'movie', resume: true, wraps: true, locale: 'tr', textSize: '130' }],
+  ['a resumed movie in Polish at 140%', { kind: 'movie', resume: true, wraps: false, locale: 'pl', textSize: '140' }],
+  ['a resumed movie in Turkish at 130%', { kind: 'movie', resume: true, wraps: false, locale: 'tr', textSize: '130' }],
   ['a resumed movie with AI features', { kind: 'movie', resume: true, wraps: false, ai: true }],
-  ['a resumed movie with a trailer and AI features', { kind: 'movie', resume: true, wraps: true, ai: true, trailer: true }],
-  ['a resumed movie with a trailer and AI features in German at 130%', { kind: 'movie', resume: true, wraps: true, ai: true, trailer: true, locale: 'de', textSize: '130' }],
-  ['a resumed movie with AI features in Russian at 130%', { kind: 'movie', resume: true, wraps: true, ai: true, locale: 'ru', textSize: '130' }],
+  ['a resumed movie with a trailer and AI features', { kind: 'movie', resume: true, wraps: false, ai: true, trailer: true }],
+  ['a resumed movie with a trailer and AI features in German at 130%', { kind: 'movie', resume: true, wraps: false, ai: true, trailer: true, locale: 'de', textSize: '130' }],
+  ['a resumed movie with AI features in Russian at 130%', { kind: 'movie', resume: true, wraps: false, ai: true, locale: 'ru', textSize: '130' }],
   ['a series still loading', { kind: 'series', resume: true, wraps: false, seasons: 1, loading: true }],
   ['a series with no seasons', { kind: 'series', resume: false, wraps: false, seasons: 0 }],
   ['a series whose season shown has no episodes', { kind: 'series', resume: false, wraps: false, seasons: 2, emptySeasons: [1] }],
@@ -342,10 +353,10 @@ const SETUPS: Array<[string, Setup]> = [
   ['a series of one season, its round actions at 150%', { kind: 'series', resume: false, wraps: false, seasons: 1, pseudo: true, textSize: '150' }],
   ['a resumed series of two seasons', { kind: 'series', resume: true, wraps: false, seasons: 2 }],
   ['a resumed series of twenty episodes a season', { kind: 'series', resume: true, wraps: false, seasons: 2, episodes: 20 }],
-  ['a resumed series of twelve seasons', { kind: 'series', resume: true, wraps: false, seasons: 12, markAlone: true }],
-  ['a resumed series whose round actions wrap', { kind: 'series', resume: true, wraps: true, seasons: 2, markAlone: true,
+  ['a resumed series of twelve seasons', { kind: 'series', resume: true, wraps: false, seasons: 12 }],
+  ['a resumed series of twelve seasons in the pseudo-locale at 150%', { kind: 'series', resume: true, wraps: false, seasons: 12, markAlone: true,
     pseudo: true, textSize: '150' }],
-  ['a resumed series in Turkish at 150%', { kind: 'series', resume: true, wraps: true, seasons: 2, locale: 'tr', textSize: '150' }],
+  ['a resumed series in Turkish at 150%', { kind: 'series', resume: true, wraps: false, seasons: 2, locale: 'tr', textSize: '150' }],
   ['a resumed series of two seasons with a trailer', { kind: 'series', resume: true, wraps: false, seasons: 2, trailer: true }],
   ['a resumed series of two seasons with AI features', { kind: 'series', resume: true, wraps: false, seasons: 2, ai: true }],
 ];
@@ -371,6 +382,97 @@ for (const [name, setup] of SETUPS) {
   });
 }
 
+// At the default text size, every locale keeps a title's full set of round
+// actions beside its playback buttons; only a larger size may wrap them.
+for (const { value: locale } of localeOptions()) {
+  for (const textSize of ['100', '130']) {
+    test(`every action of a resumed movie and series fits one line in ${locale} at ${textSize}%`, async ({ page }) => {
+      for (const kind of ['movie', 'series'] as const) {
+        const setup: Setup = { kind, resume: true, wraps: false, ai: true, trailer: true, locale, textSize, seasons: 1 };
+        await expectLayout(page, await openDetail(page, setup), setup);
+      }
+    });
+  }
+}
+
+// The seasons end with the episode rows, short of their mark column. Beside a
+// poster card, the actions and seasons start below it, each on a full line.
+for (const poster of [false, true]) {
+  test(`a series ${poster ? 'with' : 'without'} a poster lines its seasons up with the episodes`, async ({ page }) => {
+    const setup: Setup = { kind: 'series', resume: true, wraps: false, seasons: 12, poster };
+    const detail = await openDetail(page, setup);
+    const box = await page.evaluate((root) => {
+      const r = (selector: string) => {
+        const el = document.querySelector(`${root} ${selector}`);
+        if (!el) return null;
+        const { left, top, right, bottom } = el.getBoundingClientRect();
+        return { left, top, right, bottom };
+      };
+      const seasons = Array.from(document.querySelectorAll(`${root} .series-season-btn`)).map((el) => el.getBoundingClientRect());
+      const firstLine = seasons.filter((season) => Math.round(season.top) === Math.round(seasons[0].top));
+      return { poster: r('.detail-poster-art'), intro: r('.series-detail-intro'), actions: r('.detail-actions'),
+        seasons: r('.series-seasons'), lineRight: firstLine[firstLine.length - 1].right, episode: r('.episode-row') };
+    }, detail);
+    expect(box.lineRight).toBeCloseTo(box.episode!.right, 0);
+    expect(!!box.poster).toBe(poster);
+    if (!box.poster) return;
+    expect(box.intro!.right).toBeLessThanOrEqual(box.poster.left);
+    expect(box.actions!.top).toBeGreaterThanOrEqual(box.poster.bottom);
+    expect(box.actions!.right).toBeGreaterThan(box.poster.left);
+    expect(box.seasons!.top).toBeGreaterThanOrEqual(box.poster.bottom);
+  });
+}
+
+// The seasons share one column width, so every full line of them ends with
+// the episode rows, whatever the labels' language and size.
+for (const [locale, textSize] of [['en', '100'], ['ru', '130']]) {
+  test(`twelve seasons in ${locale} at ${textSize}% fill their lines in equal columns`, async ({ page }) => {
+    const detail = await openDetail(page, { kind: 'series', resume: true, wraps: false, seasons: 12, locale, textSize });
+    const layout = await page.evaluate((root) => {
+      const boxes = Array.from(document.querySelectorAll(`${root} .series-season-btn`)).map((el) => el.getBoundingClientRect());
+      const lines = new Map<number, DOMRect[]>();
+      boxes.forEach((box) => lines.set(Math.round(box.top), [...(lines.get(Math.round(box.top)) ?? []), box]));
+      return {
+        widths: boxes.map((box) => box.width),
+        lineRights: Array.from(lines.values()).map((line) => ({ count: line.length, right: line[line.length - 1].right })),
+        episodeRight: document.querySelector(`${root} .episode-row`)!.getBoundingClientRect().right,
+      };
+    }, detail);
+    expect(new Set(layout.widths).size).toBe(1);
+    expect(layout.lineRights.length).toBeGreaterThan(1);
+    const full = layout.lineRights[0].count;
+    for (const line of layout.lineRights.filter((l) => l.count === full)) {
+      expect(line.right).toBeCloseTo(layout.episodeRight, 0);
+    }
+  });
+}
+
+// The movie body spans the screen for its actions; its meta line keeps the
+// title's column, clear of a poster card or a backdrop past the scrim.
+test('a long movie meta line wraps in the title column', async ({ page }) => {
+  const setup: Setup = { kind: 'movie', resume: true, wraps: false, textSize: '150' };
+  await seed(page, setup);
+  await page.route('**/player_api.php*', (route) => {
+    if (!route.request().url().includes('get_vod_info')) return route.fallback();
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ info: {
+      plot: 'A plot.', duration_secs: 5400, releasedate: '2015-06-12', rating: '8.5',
+      genre: 'Genre One, Genre Two, Genre Three, Genre Four, Genre Five, Genre Six, Genre Seven, Genre Eight',
+    } }) });
+  });
+  await page.goto('/');
+  await enterTab(page, 'movies');
+  await hover(page.locator('#view-movies .catalog-tile[data-item-id="10"]').last());
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#view-movies .detail-meta')).toContainText('Genre Eight');
+  const edges = await page.evaluate(() => {
+    const meta = document.querySelector('#view-movies .detail-meta')!;
+    const range = document.createRange();
+    range.selectNodeContents(meta);
+    return { text: range.getBoundingClientRect().right, title: document.querySelector('#view-movies .detail-title')!.getBoundingClientRect().left + 1280 };
+  });
+  expect(edges.text).toBeLessThanOrEqual(edges.title + 1);
+});
+
 // Landmarks written out by hand, so a mistake the rules' worked-out version
 // shares with the code still shows.
 const LANDMARKS: Array<[string, Setup, Array<[string, Direction, string]>]> = [
@@ -378,8 +480,8 @@ const LANDMARKS: Array<[string, Setup, Array<[string, Direction, string]>]> = [
     ['resume', 'right', 'play'], ['play', 'right', 'watchlist'], ['watchlist', 'left', 'play'],
     ['remove-resume', 'right', 'remove-resume'], ['resume', 'left', 'resume'], ['watched', 'down', 'watched'],
   ]],
-  ['a resumed movie in Turkish at 130%', { kind: 'movie', resume: true, wraps: true, locale: 'tr', textSize: '130' }, [
-    ['resume', 'down', 'watchlist'], ['play', 'down', 'watchlist'], ['remove-resume', 'up', 'play'],
+  ['a resumed movie whose round actions wrap', { kind: 'movie', resume: true, wraps: true, pseudo: true, textSize: '150' }, [
+    ['resume', 'down', 'watchlist'], ['play', 'down', 'watchlist'], ['remove-resume', 'up', 'resume'],
     ['watchlist', 'left', 'watchlist'], ['play', 'right', 'play'],
   ]],
   ['a resumed series of two seasons', { kind: 'series', resume: true, wraps: false, seasons: 2 }, [
@@ -408,7 +510,7 @@ for (const [name, setup, steps] of LANDMARKS) {
 }
 
 test('landmarks on the season mark alone on its line, among twelve seasons', async ({ page }) => {
-  const setup: Setup = { kind: 'series', resume: true, wraps: false, seasons: 12, markAlone: true };
+  const setup: Setup = { kind: 'series', resume: true, wraps: false, seasons: 12, markAlone: true, pseudo: true, textSize: '150' };
   const detail = await openDetail(page, setup);
   await expectLayout(page, detail, setup);
   const left = (key: string) => page.locator(`${detail} [data-key="${key}"]`).evaluate((el) => {
@@ -419,7 +521,7 @@ test('landmarks on the season mark alone on its line, among twelve seasons', asy
   // its left edge.
   const mark = await left('season-watched');
   let above = '';
-  for (let n = 12; n >= 1 && !above; n--) {
+  for (let n = setup.seasons!; n >= 1 && !above; n--) {
     const box = await left(`season:${n}`);
     if (box.left === mark.left && box.top < mark.top) above = `season:${n}`;
   }

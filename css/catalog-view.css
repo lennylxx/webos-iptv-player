@@ -314,9 +314,12 @@
 .movies-detail { position: relative; padding: 0; overflow: visible; }
 .movies-detail .detail-body {
   position: absolute;
-  left: 80px; bottom: 60px;
-  width: 1280px; max-width: none;
+  left: 80px; right: 80px; bottom: 60px;
+  max-width: none;
 }
+.movies-detail .detail-title,
+.movies-detail .detail-meta,
+.movies-detail .detail-title-label { max-width: 1280px; }
 .series-detail { position: relative; padding-top: 280px; }
 .detail-btn {
   display: inline-flex; align-items: center; gap: 10px;
@@ -394,15 +397,23 @@ button.detail-icon-btn.focused { box-shadow: none; }
    page scrolls in .catalog-view over the fixed art, so the header scrolls away
    with the episodes; the virtualizer treats it as leading size. */
 .series-detail { display: block; }
-/* Tall enough to clear the poster card (40 + 600px) whether or not it shows,
-   so the episodes never move when it comes or goes. */
+/* Tall enough to clear the poster card (40 + 600px) whether or not it shows.
+   A poster still pushes the actions and seasons below it once it loads. */
 .series-detail-head { display: flex; min-height: 352px; margin-bottom: 32px; }
+.series-detail-head .detail-body { max-width: none; }
+.series-detail-head .detail-title { max-width: 1280px; }
+/* Beside a poster card (40 + 600px), the intro stops short of it and the
+   actions and seasons start below it, each on a full line. */
+.detail-poster-art ~ .series-detail-head .series-detail-intro { max-width: 1320px; min-height: 352px; }
 
 .series-seasons { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
+/* Ends with the episode rows, short of their mark column (88px) and gap. */
+.series-detail-head .series-seasons { margin-right: 104px; }
 /* Loading, failure, and no-episode notes take the season row's slot. */
 .series-detail-head .catalog-hint { margin-top: 24px; font-size: 26px; }
 .series-episodes .catalog-hint { font-size: 26px; }
 .series-season-btn {
+  box-sizing: border-box; flex: 0 0 auto; width: var(--season-width, auto);
   padding: 12px 28px; border-radius: calc(var(--radius) * 1.25); border: 3px solid transparent;
   background: var(--catalog-control); color: var(--text-primary); font-size: 26px; font-weight: 600; cursor: pointer;
 }

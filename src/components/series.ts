@@ -14,6 +14,7 @@ import { t, tp } from '../i18n';
 import { VirtualList } from '../utils/virtual-list';
 
 const EPISODE_GAP = 16;
+const SEASON_GAP = 16;
 const EPISODE_NO_PLOT_ESTIMATE = 138;
 const EPISODE_PLOT_ESTIMATE = 216;
 const EPISODE_OVERSCAN = 5;
@@ -49,6 +50,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
   private watchedEpisodes = new Set<string>();
   private episodeList: { info: SeriesInfo; episodes: Episode[] } | null = null;
   private measuredEpisodes = new Set<number>();
+  private seasonFit = { key: '', width: 0, perLine: 0 };
   private detailController: AbortController | null = null;
   private episodeViewport = EPISODE_VIEWPORT_FALLBACK;
   private readonly episodeVirtualizer = new VirtualList({
@@ -670,12 +672,14 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
         ${this.detailPoster(art)}
         <div class="series-detail-head">
           <div class="detail-body">
+            <div class="series-detail-intro" data-key="detail-intro">
             <h1 class="detail-title">${view.title}</h1>
             ${this.titleLabel(view)}
             ${meta.length ? html`<div class="detail-meta">${meta.join('  ·  ')}</div>` : ''}
             ${programDescription('detail-plot', view)}
             ${info?.cast ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.cast')}</span> ${info.cast}</div>` : ''}
             ${info?.director ? html`<div class="detail-cast"><span class="detail-label">${t('catalog.director')}</span> ${info.director}</div>` : ''}
+            </div>
             <div class="detail-actions" data-key="detail-actions" data-nav-container data-nav-straight data-nav-remember
                  data-nav-leave-left="" data-nav-leave-right="" data-nav-leave-down=".series-season-btn.active">
               ${resumed ? html`
@@ -703,11 +707,12 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
                 : info.seasons.length === 0
                   ? html`<p class="catalog-hint">${t('catalog.noEpisodes')}</p>`
                   : html`
-                  <div class="series-seasons" data-nav-container data-nav-straight data-nav-remember
+                  <div class="series-seasons" style="${this.seasonFit.width ? `--season-width:${this.seasonFit.width}px` : ''}"
+                       data-nav-container data-nav-straight data-nav-remember
                        data-nav-leave-left="" data-nav-leave-right=""
                        data-nav-leave-down=".series-episode-cell[data-episode-index='0'] .episode-row">
-                    ${info.seasons.map((n) => html`
-                      <button class="series-season-btn ${n === this.selectedSeason ? 'active' : ''}"
+                    ${info.seasons.map((n, index) => html`
+                      <button class="series-season-btn ${n === this.selectedSeason ? 'active' : ''} ${this.seasonLineEnd(index) ? 'season-line-end' : ''}"
                               data-focusable data-key="season:${n}" data-season="${n}">${t('catalog.season', { number: n })}</button>
                     `)}
                     ${episodes.length ? this.detailIconRow('season', [this.detailIconButton('season-watched', CHECK_ICON,
@@ -743,6 +748,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       </div>
     `);
     syncTabBarOverArt();
+    this.fitSeasons();
     const measuredSizes = Array.from(
       this.layer('detail').querySelectorAll<HTMLElement>('.series-episode-cell'),
     ).map(cell => ({
@@ -775,6 +781,33 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     this.refreshIconRows();
     if (restoreFocus) this.settleDetailFocus();
     this.syncTranslation();
+  }
+
+  // The seasons share one column width: as many of the widest as fit a line,
+  // stretched to fill it, so every line's columns line up. Measured again only
+  // when the line, the text size, or the labels change.
+  private fitSeasons(): void {
+    const row = this.layer('detail').querySelector<HTMLElement>('.series-seasons');
+    const buttons = row ? row.querySelectorAll<HTMLElement>('.series-season-btn') : null;
+    const width = row?.clientWidth ?? 0;
+    if (!row || !buttons?.length || !width) return;
+    const key = [width, document.documentElement.dataset.textSize ?? '', buttons.length,
+      buttons[0].textContent, buttons[buttons.length - 1].textContent].join('|');
+    if (key === this.seasonFit.key) return;
+    row.style.removeProperty('--season-width');
+    let widest = 0;
+    for (let i = 0; i < buttons.length; i++) widest = Math.max(widest, buttons[i].getBoundingClientRect().width);
+    const perLine = Math.max(1, Math.floor((width + SEASON_GAP) / (widest + SEASON_GAP)));
+    const column = Math.floor((width - (perLine - 1) * SEASON_GAP) / perLine * 100) / 100;
+    row.style.setProperty('--season-width', `${column}px`);
+    this.seasonFit = { key, width: column, perLine };
+    for (let i = 0; i < buttons.length; i++) buttons[i].classList.toggle('season-line-end', this.seasonLineEnd(i));
+  }
+
+  // Without flex gap, each season's margin stands in for it; the one ending a
+  // line drops it, so the line ends where the modern engine's does.
+  private seasonLineEnd(index: number): boolean {
+    return this.seasonFit.perLine > 0 && (index + 1) % this.seasonFit.perLine === 0;
   }
 
   private selectedEpisodes(): Episode[] {

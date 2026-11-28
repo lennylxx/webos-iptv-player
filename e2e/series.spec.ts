@@ -195,7 +195,8 @@ test('keeps the selected season and an added round action distinct in every them
 test('the season mark\'s name opens whole beside many seasons, its row wrapping instead', async ({ page }) => {
   await seedSeries(page);
   const episodes: Record<string, unknown[]> = {};
-  for (let season = 1; season <= 6; season++) {
+  // A full line of equal columns leaves the mark no room beside the last season.
+  for (let season = 1; season <= 8; season++) {
     episodes[String(season)] = [{ id: season * 10, title: `Episode ${season}`, season, episode_num: 1,
       container_extension: 'mp4', info: { duration_secs: 1500 } }];
   }
@@ -209,7 +210,7 @@ test('the season mark\'s name opens whole beside many seasons, its row wrapping 
   const tile = view.locator('.catalog-tile[data-item-id="1"]').first();
   await tile.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
   await page.keyboard.press('Enter');
-  await expect(view.locator('[data-season="6"]')).toBeVisible();
+  await expect(view.locator('[data-season="8"]')).toBeVisible();
   const mark = view.locator('[data-action="season-watched"]');
   // Too little room is left beside the last season, so the mark wraps to a line
   // of its own, reached from the season straight above it.
@@ -305,9 +306,11 @@ test('Down into the seasons and back Up returns to the round action it left', as
 });
 
 test('a wrapped season row keeps Left and Right on each line and stops at its ends', async ({ page }) => {
+  // Two full lines of equal columns, so the season mark wraps to a line of its own.
+  const last = 16;
   await seedSeries(page);
   const episodes: Record<string, unknown[]> = {};
-  for (let season = 1; season <= 12; season++) {
+  for (let season = 1; season <= last; season++) {
     episodes[String(season)] = [10, 11, 12].map((n) => ({ id: season * 100 + n, title: `Episode ${n}`, season,
       episode_num: n - 9, container_extension: 'mp4', info: { duration_secs: 1500 } }));
   }
@@ -321,13 +324,13 @@ test('a wrapped season row keeps Left and Right on each line and stops at its en
   await view.locator('.catalog-tile[data-item-id="1"]').first()
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
   await page.keyboard.press('Enter');
-  await expect(view.locator('[data-season="12"]')).toBeVisible();
+  await expect(view.locator(`[data-season="${last}"]`)).toBeVisible();
   const season = (n: number) => view.locator(`[data-season="${n}"]`);
   const lineOf = (n: number) => season(n).evaluate((el) => Math.round(el.getBoundingClientRect().top));
-  expect(await lineOf(12)).toBeGreaterThan(await lineOf(1));
+  expect(await lineOf(last)).toBeGreaterThan(await lineOf(1));
   // The last season on the first line, and the first one on the second.
   let lastOnFirst = 1;
-  while (lastOnFirst < 12 && await lineOf(lastOnFirst + 1) === await lineOf(1)) lastOnFirst++;
+  while (lastOnFirst < last && await lineOf(lastOnFirst + 1) === await lineOf(1)) lastOnFirst++;
   await season(1).evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
   await keyTo(page, 'ArrowRight', season(2));
   await keyTo(page, 'ArrowLeft', season(1));
@@ -342,9 +345,9 @@ test('a wrapped season row keeps Left and Right on each line and stops at its en
   // last season line reaches it, and Down again goes on to the episodes.
   const mark = view.locator('[data-action="season-watched"]');
   const markTop = await mark.evaluate((el) => Math.round(el.getBoundingClientRect().top));
-  expect(markTop).toBeGreaterThan(await lineOf(12));
-  await season(12).evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  for (let i = 0; i < 2 && !await season(12).evaluate((el) => el.classList.contains('focused')); i++) {
+  expect(markTop).toBeGreaterThan(await lineOf(last));
+  await season(last).evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+  for (let i = 0; i < 2 && !await season(last).evaluate((el) => el.classList.contains('focused')); i++) {
     await page.keyboard.press('ArrowRight');
   }
   await keyTo(page, 'ArrowDown', mark);
@@ -364,6 +367,48 @@ test('a wrapped season row keeps Left and Right on each line and stops at its en
   await expect(row).toHaveClass(/\bfocused\b/);
   await page.keyboard.press('ArrowLeft');
   await expect(row).toHaveClass(/\bfocused\b/);
+});
+
+// The season columns are fitted to each title: a later series with wider
+// labels gets wider columns, not the earlier one's.
+test('a series opened after another fits its own season columns', async ({ page }) => {
+  await seedSeries(page);
+  const seasons = (numbers: number[]) => Object.fromEntries(numbers.map((season) => [String(season), [{
+    id: season * 10, title: 'Episode', season, episode_num: 1, container_extension: 'mp4', info: { duration_secs: 1500 },
+  }]]));
+  await page.route('**/player_api.php*', (route) => {
+    const url = route.request().url();
+    const json = (body: unknown) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (url.includes('get_series_info')) {
+      return json({ episodes: url.includes('series_id=2')
+        ? seasons([2020, 2021, 2022, 2023]) : seasons([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) });
+    }
+    if (url.includes('get_series') && !url.includes('categories')) {
+      return json([{ series_id: 1, name: 'Series One', cover: '', category_id: '1' },
+        { series_id: 2, name: 'Series Two', cover: '', category_id: '1' }]);
+    }
+    return route.fallback();
+  });
+  await page.addInitScript(() => localStorage.setItem('iptv_animation_mode', JSON.stringify('essential')));
+  await page.goto('/');
+  await enterTab(page, 'series');
+  const view = page.locator('#view-series');
+  const open = async (id: string, last: string) => {
+    await view.locator(`.catalog-tile[data-item-id="${id}"]`).first()
+      .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
+    await page.keyboard.press('Enter');
+    await expect(view.locator(`[data-season="${last}"]`)).toBeVisible();
+    return view.locator('.series-season-btn').evaluateAll((els) => els.map((el) => ({
+      width: Math.round(el.getBoundingClientRect().width), clipped: el.scrollWidth > el.clientWidth + 1,
+    })));
+  };
+  const first = await open('1', '12');
+  await page.keyboard.press('Escape');
+  await expect(view.locator('.catalog-layer-detail')).toBeHidden();
+  const second = await open('2', '2023');
+  expect(new Set(second.map((b) => b.width)).size).toBe(1);
+  expect(second[0].width).toBeGreaterThan(first[0].width);
+  expect(second.some((b) => b.clipped)).toBe(false);
 });
 
 test('Down from a season reaches the first episode even after the list scrolled it away', async ({ page }) => {
